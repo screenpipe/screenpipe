@@ -893,6 +893,7 @@ function errorTypeBadge(errorType: string | null) {
   if (!errorType) return null;
   const colors: Record<string, string> = {
     rate_limited: "bg-muted text-muted-foreground",
+    safety_refusal: "bg-muted text-muted-foreground",
     timeout: "bg-muted text-muted-foreground",
     timed_out: "bg-muted text-muted-foreground",
     auth_failed: "bg-foreground text-background",

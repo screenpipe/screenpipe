@@ -4,6 +4,14 @@
 
 import { tauriFetchWithDeadline } from "@/lib/http/tauri-fetch";
 import { aiEndpointUrl } from "@/lib/utils/ai-endpoint-url";
+import { testAiPresetConnection } from "@/lib/utils/ai-preset-connection";
+import {
+  aiPresetConnectionFingerprint,
+  isAiApiKeyRequired,
+  requiresAiPresetConnectionTest,
+  shouldRequireAiPresetConnectionTest,
+  validateAiPresetConnectionFields,
+} from "@/lib/utils/validation";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useModelUpsellGating } from "@/lib/hooks/use-model-upsell-gating";
 import { usePiModels } from "@/lib/hooks/use-pi-models";
@@ -230,6 +238,55 @@ export function AIProviderConfig({
     id: defaultPreset?.id || "",
     defaultPreset: defaultPreset?.defaultPreset || false,
   });
+  const [connectionTestStatus, setConnectionTestStatus] = useState<
+    "idle" | "testing" | "pass" | "fail"
+  >("idle");
+  const [connectionTestMessage, setConnectionTestMessage] = useState("");
+  const [lastTestedConnectionFingerprint, setLastTestedConnectionFingerprint] = useState<string | null>(null);
+  const [lastValidatedConnectionFingerprint, setLastValidatedConnectionFingerprint] = useState<string | null>(null);
+
+  const connectionFieldErrors = useMemo(
+    () => validateAiPresetConnectionFields(formData),
+    [formData],
+  );
+  const currentConnectionFingerprint = useMemo(
+    () => aiPresetConnectionFingerprint(formData),
+    [formData],
+  );
+  const originalPreset = defaultPreset && settings.aiPresets.some(
+    (preset) => preset.id === defaultPreset.id,
+  )
+    ? defaultPreset
+    : null;
+  const connectionTestRequired = shouldRequireAiPresetConnectionTest(
+    formData,
+    originalPreset,
+  );
+  const connectionTestPassed =
+    lastValidatedConnectionFingerprint === currentConnectionFingerprint;
+  const apiKeyRequired = isAiApiKeyRequired(formData);
+  const connectionTestResultIsCurrent =
+    lastTestedConnectionFingerprint === currentConnectionFingerprint;
+
+  const handleConnectionTest = async () => {
+    if (Object.keys(connectionFieldErrors).length > 0) return;
+    const testedFingerprint = currentConnectionFingerprint;
+    setLastTestedConnectionFingerprint(testedFingerprint);
+    setLastValidatedConnectionFingerprint(null);
+    setConnectionTestStatus("testing");
+    setConnectionTestMessage("checking endpoint, credentials, and model...");
+    try {
+      const result = await testAiPresetConnection(formData);
+      setLastValidatedConnectionFingerprint(testedFingerprint);
+      setConnectionTestStatus("pass");
+      setConnectionTestMessage(`connected in ${result.latencyMs}ms`);
+    } catch (error) {
+      setConnectionTestStatus("fail");
+      setConnectionTestMessage(
+        error instanceof Error ? error.message : "connection test failed",
+      );
+    }
+  };
 
   const validateId = (id: string | undefined): boolean => {
     if (!id?.trim()) {
@@ -264,14 +321,13 @@ export function AIProviderConfig({
     validateId(value);
   };
 
-  const fetchOpenAIModels = async (baseUrl: string, apiKey: string) => {
+  const fetchOpenAIModels = async (baseUrl: string, apiKey?: string | null) => {
     setIsLoadingModels(true);
     try {
-      const response = await fetch(aiEndpointUrl(baseUrl, "models"), {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
+      const response = await tauriFetchWithDeadline(aiEndpointUrl(baseUrl, "models"), {
+        headers: apiKey
+          ? { Authorization: `Bearer ${apiKey}` }
+          : {},
       });
 
       if (!response.ok) {
@@ -322,7 +378,7 @@ export function AIProviderConfig({
       (async () => {
         setIsLoadingModels(true);
         try {
-          const resp = await fetch("https://api.openai.com/v1/models", {
+          const resp = await tauriFetchWithDeadline("https://api.openai.com/v1/models", {
             headers: {
               Authorization: `Bearer ${formData.apiKey}`,
               "Content-Type": "application/json",
@@ -360,7 +416,7 @@ export function AIProviderConfig({
     } else if (
       selectedProvider === "custom" &&
       formData.url &&
-      formData.apiKey
+      !connectionFieldErrors.url
     ) {
       fetchOpenAIModels(formData.url, formData.apiKey);
     } else if (selectedProvider === "openai-chatgpt") {
@@ -370,7 +426,7 @@ export function AIProviderConfig({
         try {
           const tokenResult = await commands.chatgptOauthGetToken();
           if (tokenResult.status === "ok") {
-            const resp = await fetch("https://api.openai.com/v1/models", {
+            const resp = await tauriFetchWithDeadline("https://api.openai.com/v1/models", {
               headers: { Authorization: `Bearer ${tokenResult.data}` },
             });
             if (resp.ok) {
@@ -395,12 +451,24 @@ export function AIProviderConfig({
         setIsLoadingModels(false);
       })();
     }
-  }, [selectedProvider, formData.apiKey, formData.url]);
+  }, [selectedProvider, formData.apiKey, formData.url, connectionFieldErrors.url]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!validateId(formData.id)) {
+      return;
+    }
+
+    if (Object.keys(connectionFieldErrors).length > 0) {
+      toast.error("Fix the connection fields", {
+        description: Object.values(connectionFieldErrors)[0],
+      });
+      return;
+    }
+
+    if (connectionTestRequired && !connectionTestPassed) {
+      toast.error("Test the connection before saving");
       return;
     }
 
@@ -562,7 +630,9 @@ export function AIProviderConfig({
         {selectedProvider === "openai" && (
           <div className="space-y-1">
             <div className="space-y-1">
-              <Label htmlFor="apiKey" className="text-xs">api key</Label>
+              <Label htmlFor="apiKey" className="text-xs">
+                api key{apiKeyRequired && <span className="text-destructive"> *</span>}
+              </Label>
               <div className="relative">
                 <Input
                   id="apiKey"
@@ -863,6 +933,50 @@ export function AIProviderConfig({
           </div>
         )}
 
+        {requiresAiPresetConnectionTest(selectedProvider) && (
+          <div className="space-y-2 border p-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-medium">connection test</p>
+                <p className={cn(
+                  "text-[10px]",
+                  (connectionTestStatus === "fail" && connectionTestResultIsCurrent) ||
+                    (connectionTestRequired && !connectionTestPassed)
+                    ? "text-destructive"
+                    : "text-muted-foreground",
+                )}>
+                  {Object.values(connectionFieldErrors)[0] ||
+                    (connectionTestPassed
+                      ? connectionTestMessage
+                      : connectionTestStatus === "testing"
+                      ? connectionTestMessage
+                      : connectionTestStatus === "fail" && connectionTestResultIsCurrent
+                      ? connectionTestMessage
+                      : connectionTestRequired
+                      ? "required before saving"
+                      : "optional for unchanged settings")}
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={handleConnectionTest}
+                disabled={
+                  connectionTestStatus === "testing" ||
+                  Object.keys(connectionFieldErrors).length > 0
+                }
+              >
+                {connectionTestStatus === "testing" && (
+                  <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                )}
+                {connectionTestPassed ? "retest" : "test connection"}
+              </Button>
+            </div>
+          </div>
+        )}
+
         <button
           type="button"
           className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
@@ -932,7 +1046,9 @@ export function AIProviderConfig({
           className="w-full h-7 text-xs"
           disabled={
             isLoading ||
-            Boolean(!formData.id?.length || !formData.model?.length)
+            Boolean(!formData.id?.length || !formData.model?.length) ||
+            Object.keys(connectionFieldErrors).length > 0 ||
+            (connectionTestRequired && !connectionTestPassed)
           }
         >
           {isLoading ? (

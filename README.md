@@ -145,6 +145,7 @@ Thanks to all contributors:
 - [Português BR (Brazilian Portuguese)](docs/translations/README-pt_BR.md)
 - [Deutsch (German)](docs/translations/README-de.md)
 - [Українська (Ukrainian)](docs/translations/README-uk.md)
+- [한국어 (Korean)](docs/translations/README-ko.md)
 
 Want to translate screenpipe into another language? See [`docs/translations/`](docs/translations/README.md).
 

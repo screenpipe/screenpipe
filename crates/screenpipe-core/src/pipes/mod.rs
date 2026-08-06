@@ -1904,6 +1904,12 @@ fn parse_error_type(stderr: &str) -> (Option<String>, Option<String>) {
     if let Some(parsed) = parse_structured_llm_error(stderr) {
         return parsed;
     }
+    if has_safety_refusal_token(&lower) {
+        return (
+            Some("safety_refusal".to_string()),
+            Some("AI provider declined this Pipe under its safety policy".to_string()),
+        );
+    }
     if lower.contains("provider_protocol_error") {
         return (
             Some("provider_protocol".to_string()),
@@ -2032,6 +2038,14 @@ fn classify_llm_error_value(value: &serde_json::Value) -> Option<(Option<String>
     .join(" ")
     .to_lowercase();
 
+    if has_safety_refusal_token(&combined) {
+        return Some((
+            Some("safety_refusal".to_string()),
+            Some(message.unwrap_or_else(|| {
+                "AI provider declined this Pipe under its safety policy".to_string()
+            })),
+        ));
+    }
     if combined.contains("daily_cost_limit_exceeded") || combined.contains("daily_limit_exceeded") {
         return Some((
             Some("daily_limit".to_string()),
@@ -2072,6 +2086,16 @@ fn string_field(value: &serde_json::Value, key: &str) -> Option<String> {
     value.get(key).and_then(|v| v.as_str()).map(str::to_string)
 }
 
+fn has_safety_refusal_token(text: &str) -> bool {
+    text.contains("content_filter")
+        || text.contains("content filter")
+        || text.contains("safety_refusal")
+        || text.contains("safety refusal")
+        || ((text.contains("finish_reason") || text.contains("stop_reason"))
+            && text.contains("refusal"))
+        || text.contains("flagged for possible cybersecurity risk")
+}
+
 fn should_try_fallback_preset(error_type: Option<&str>) -> bool {
     !matches!(
         error_type,
@@ -2081,6 +2105,7 @@ fn should_try_fallback_preset(error_type: Option<&str>) -> bool {
                 | "daily_limit"
                 | "model_not_allowed"
                 | "quota_exhausted"
+                | "safety_refusal"
         )
     )
 }
@@ -8447,6 +8472,32 @@ mod tests {
     fn test_parse_error_type_rate_limited_429() {
         let (etype, _msg) = parse_error_type("429 rate limit exceeded");
         assert_eq!(etype.as_deref(), Some("rate_limited"));
+    }
+
+    #[test]
+    fn test_parse_error_type_safety_refusal_is_terminal() {
+        let (etype, msg) = parse_error_type("Error: Provider finish_reason: content_filter");
+        assert_eq!(etype.as_deref(), Some("safety_refusal"));
+        assert_eq!(
+            msg.as_deref(),
+            Some("AI provider declined this Pipe under its safety policy")
+        );
+        assert!(!should_try_fallback_preset(etype.as_deref()));
+
+        let (json_type, _) = parse_error_type(r#"{"choices":[{"finish_reason":"refusal"}]}"#);
+        assert_eq!(json_type.as_deref(), Some("safety_refusal"));
+    }
+
+    #[test]
+    fn test_parse_error_type_structured_safety_refusal() {
+        let (etype, msg) = parse_error_type(
+            r#"{"error":{"code":"content_filter","message":"Request blocked by provider safety policy"}}"#,
+        );
+        assert_eq!(etype.as_deref(), Some("safety_refusal"));
+        assert_eq!(
+            msg.as_deref(),
+            Some("Request blocked by provider safety policy")
+        );
     }
 
     #[test]

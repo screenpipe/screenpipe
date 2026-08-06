@@ -34,6 +34,11 @@ const FIXING_CONFIRM_TICKS: u32 = 2;
 /// so this must exceed that freshness window; otherwise one transient frame
 /// can falsely announce "recording again" while capture is still wedged.
 const PASSIVE_RECOVERY_CONFIRM_TICKS: u32 = 90;
+/// A user-triggered recovery must never remain in `fixing` forever while a
+/// checked-out SQLite connection prevents graceful pool close. Past this
+/// bound, a process relaunch is the only safe way to prove every connection is
+/// gone before recording resumes.
+const USER_RESTART_TEARDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn passive_recovery_confirm_ticks() -> u32 {
     if crate::stale_tier::capture_loop_silent_e2e_started() {
@@ -611,8 +616,28 @@ pub async fn restart_recording(app: tauri::AppHandle) {
     clear_simulated_break();
 
     info!("overlay health: user requested recording restart");
-    if let Err(e) = crate::recording::stop_screenpipe(app.state(), app.clone()).await {
-        warn!("overlay health: stop before restart failed: {}", e);
+    let teardown = crate::recording::bounded_teardown(
+        USER_RESTART_TEARDOWN_TIMEOUT,
+        crate::recording::stop_screenpipe(app.state(), app.clone()),
+    )
+    .await;
+    if recording_restart_action(&teardown) == RecordingRestartAction::RelaunchApp {
+        match teardown {
+            crate::recording::TeardownOutcome::Failed(error) => warn!(
+                "overlay health: stop before restart failed ({error}); relaunching app"
+            ),
+            crate::recording::TeardownOutcome::TimedOut => warn!(
+                "overlay health: stop before restart exceeded {:?}; relaunching app",
+                USER_RESTART_TEARDOWN_TIMEOUT
+            ),
+            crate::recording::TeardownOutcome::Completed => unreachable!(),
+        }
+        crate::process_exit::request_app_relaunch(
+            app,
+            "recording recovery teardown did not complete",
+            Duration::from_millis(250),
+        );
+        return;
     }
     tokio::time::sleep(Duration::from_secs(2)).await;
     if let Err(e) = crate::recording::spawn_screenpipe(app.state(), app.clone(), None).await {
@@ -626,6 +651,24 @@ pub async fn restart_recording(app: tauri::AppHandle) {
             OverlayHealthState::Failure,
             Some("recording did not restart"),
         );
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RecordingRestartAction {
+    SpawnInProcess,
+    RelaunchApp,
+}
+
+fn recording_restart_action(
+    outcome: &crate::recording::TeardownOutcome,
+) -> RecordingRestartAction {
+    match outcome {
+        crate::recording::TeardownOutcome::Completed => {
+            RecordingRestartAction::SpawnInProcess
+        }
+        crate::recording::TeardownOutcome::Failed(_)
+        | crate::recording::TeardownOutcome::TimedOut => RecordingRestartAction::RelaunchApp,
     }
 }
 
@@ -676,6 +719,7 @@ fn clear_simulated_break() {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recording::TeardownOutcome;
 
     fn test_inner(state: OverlayHealthState) -> Inner {
         Inner {
@@ -689,6 +733,22 @@ mod tests {
             not_broken_ticks: 0,
             last_detail: String::new(),
         }
+    }
+
+    #[test]
+    fn user_restart_relaunches_when_teardown_cannot_prove_pools_closed() {
+        assert_eq!(
+            recording_restart_action(&TeardownOutcome::Completed),
+            RecordingRestartAction::SpawnInProcess
+        );
+        assert_eq!(
+            recording_restart_action(&TeardownOutcome::TimedOut),
+            RecordingRestartAction::RelaunchApp
+        );
+        assert_eq!(
+            recording_restart_action(&TeardownOutcome::Failed("pool closed".to_string())),
+            RecordingRestartAction::RelaunchApp
+        );
     }
 
     #[test]

@@ -639,6 +639,16 @@
       "notes": "Seeds and opens a long meeting note, checks editor shell click focus behavior, then clicks the bottom editor line."
     },
     {
+      "spec": "meeting-workspace-tabs.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e", "local-api"],
+      "features": ["meeting-notes"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Seeds a meeting with notes and summary, switches persistent tabs, resizes to 640x560, checks footer separation and horizontal overflow, then captures a review screenshot."
+    },
+    {
       "spec": "meetings-only-audio-lifecycle.spec.ts",
       "platforms": ["windows", "macos"],
       "layers": ["audio-device", "local-api", "real-ui-e2e"],

@@ -41,6 +41,7 @@ interface TranscriptPanelProps {
   meeting: MeetingRecord;
   isOpen: boolean;
   onClose: () => void;
+  mode?: "drawer" | "surface";
   /** Refetch when the meeting is live so new chunks appear. */
   isLive: boolean;
   /** Incremented by the parent after a meeting-level retranscribe finishes. */
@@ -64,7 +65,10 @@ function clampPanelHeight(height: number): number {
     typeof window !== "undefined"
       ? Math.round(window.innerHeight * MAX_PANEL_HEIGHT_FRACTION)
       : 600;
-  return Math.max(MIN_PANEL_HEIGHT_PX, Math.min(height, Math.max(max, MIN_PANEL_HEIGHT_PX)));
+  return Math.max(
+    MIN_PANEL_HEIGHT_PX,
+    Math.min(height, Math.max(max, MIN_PANEL_HEIGHT_PX)),
+  );
 }
 
 function loadStoredPanelHeight(): number | null {
@@ -77,8 +81,7 @@ function loadStoredPanelHeight(): number | null {
 
 function isNearBottom(el: HTMLDivElement): boolean {
   return (
-    el.scrollHeight - el.scrollTop - el.clientHeight <=
-    AUTO_FOLLOW_THRESHOLD_PX
+    el.scrollHeight - el.scrollTop - el.clientHeight <= AUTO_FOLLOW_THRESHOLD_PX
   );
 }
 
@@ -140,9 +143,11 @@ export interface SpeakerBlock {
   speakerId: number | null;
   speakerName: string;
   startMs: number;
+  endMs: number;
   text: string;
   segmentCount: number;
   source: "background" | "live";
+  final: boolean;
   // First chunk in the block — what SpeakerAssignPopover needs to play the
   // audio preview and call /speakers/reassign.
   firstAudioChunkId: number;
@@ -183,8 +188,7 @@ function sortChunks(chunks: MeetingAudioChunk[]): MeetingAudioChunk[] {
 function compareBlocks(a: SpeakerBlock, b: SpeakerBlock): number {
   const byTime = a.startMs - b.startMs;
   if (byTime !== 0) return byTime;
-  const rank = (source: SpeakerBlock["source"]) =>
-    source === "live" ? 0 : 1;
+  const rank = (source: SpeakerBlock["source"]) => (source === "live" ? 0 : 1);
   const bySource = rank(a.source) - rank(b.source);
   if (bySource !== 0) return bySource;
   return a.key.localeCompare(b.key);
@@ -201,13 +205,12 @@ function groupBySpeaker(chunks: MeetingAudioChunk[]): SpeakerBlock[] {
     const speakerId = c.speakerId;
     const last = out[out.length - 1];
     const sameSpeaker =
-      last &&
-      last.speakerId === speakerId &&
-      last.speakerName === speakerName;
+      last && last.speakerId === speakerId && last.speakerName === speakerName;
     // Glue if same speaker AND within 30s of last segment — keeps long pauses
     // as paragraph breaks even when the same person is still talking.
-    if (sameSpeaker && ts - (last.startMs + last.text.length * 60) < 30_000) {
+    if (sameSpeaker && ts - last.endMs < 30_000) {
       last.text = `${last.text} ${text}`;
+      last.endMs = ts;
       last.segmentCount += 1;
     } else {
       out.push({
@@ -215,9 +218,11 @@ function groupBySpeaker(chunks: MeetingAudioChunk[]): SpeakerBlock[] {
         speakerId,
         speakerName,
         startMs: ts,
+        endMs: ts,
         text,
         segmentCount: 1,
         source: c.source ?? "background",
+        final: true,
         firstAudioChunkId: c.audioChunkId,
         firstAudioFilePath: c.audioFilePath,
       });
@@ -238,9 +243,11 @@ function liveBlockToSpeakerBlock(
     speakerId: null,
     speakerName: block.deviceType.toLowerCase() === "input" ? "me" : "speaker",
     startMs,
+    endMs: startMs,
     text,
     segmentCount: 1,
     source: "live",
+    final: block.final,
     firstAudioChunkId: 0,
     firstAudioFilePath: "",
   };
@@ -288,6 +295,7 @@ export function TranscriptPanel({
   meeting,
   isOpen,
   onClose,
+  mode = "drawer",
   isLive,
   refreshKey = 0,
   headerActions,
@@ -309,6 +317,7 @@ export function TranscriptPanel({
   const [hasUnseenLive, setHasUnseenLive] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const lastObservedBlockSignalRef = useRef<string | null>(null);
   // User-dragged height in px (null = responsive default). Drag the top grip to
   // shrink/grow the drawer so it takes less of the window.
   const [panelHeight, setPanelHeight] = useState<number | null>(() =>
@@ -325,7 +334,9 @@ export function TranscriptPanel({
     if (!state) return;
     // The drawer is docked above the control row and grows upward, so dragging
     // the grip up (smaller clientY) makes it taller.
-    setPanelHeight(clampPanelHeight(state.startHeight + (state.startY - e.clientY)));
+    setPanelHeight(
+      clampPanelHeight(state.startHeight + (state.startY - e.clientY)),
+    );
   }, []);
 
   const handleResizeEnd = useCallback(() => {
@@ -351,9 +362,7 @@ export function TranscriptPanel({
       // First drag from the default class height: measure the rendered panel so
       // resizing starts from where the eye sees it, not a guess.
       const startHeight =
-        panelHeight ??
-        panelRef.current?.getBoundingClientRect().height ??
-        360;
+        panelHeight ?? panelRef.current?.getBoundingClientRect().height ?? 360;
       resizeStateRef.current = { startY: e.clientY, startHeight };
       setIsResizing(true);
       window.addEventListener("pointermove", handleResizeMove);
@@ -378,11 +387,11 @@ export function TranscriptPanel({
       if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
       e.preventDefault();
       const base =
-        panelHeight ??
-        panelRef.current?.getBoundingClientRect().height ??
-        360;
+        panelHeight ?? panelRef.current?.getBoundingClientRect().height ?? 360;
       const step = e.shiftKey ? 40 : 16;
-      const next = clampPanelHeight(base + (e.key === "ArrowUp" ? step : -step));
+      const next = clampPanelHeight(
+        base + (e.key === "ArrowUp" ? step : -step),
+      );
       setPanelHeight(next);
       if (typeof window !== "undefined") {
         window.localStorage.setItem(PANEL_HEIGHT_STORAGE_KEY, String(next));
@@ -451,7 +460,6 @@ export function TranscriptPanel({
                 ? {
                     ...b,
                     text: event.payload.replace ? delta : `${b.text}${delta}`,
-                    capturedAt: event.payload.captured_at,
                   }
                 : b,
             );
@@ -491,7 +499,6 @@ export function TranscriptPanel({
                 ? {
                     ...b,
                     text: transcript,
-                    capturedAt: event.payload.captured_at,
                     final: true,
                   }
                 : b,
@@ -639,6 +646,12 @@ export function TranscriptPanel({
     const latest = displayBlocks[displayBlocks.length - 1];
     return latest ? `${latest.key}:${latest.text.length}` : "empty";
   }, [displayBlocks]);
+  const latestFinalLiveBlock = useMemo(
+    () =>
+      [...visibleLiveSpeakerBlocks].reverse().find((block) => block.final) ??
+      null,
+    [visibleLiveSpeakerBlocks],
+  );
 
   // Plain-text dump of the whole transcript (not the filtered view) for
   // clipboard. Each block becomes a "[hh:mm] name\ntext" paragraph.
@@ -674,7 +687,13 @@ export function TranscriptPanel({
     const el = containerRef.current;
     if (!el) return;
     requestAnimationFrame(() => {
-      el.scrollTo({ top: el.scrollHeight, behavior });
+      const reducedMotion =
+        behavior === "smooth" &&
+        window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      el.scrollTo({
+        top: el.scrollHeight,
+        behavior: reducedMotion ? "auto" : behavior,
+      });
       setIsFollowingLive(true);
       setHasUnseenLive(false);
     });
@@ -693,7 +712,8 @@ export function TranscriptPanel({
     if (!isOpen) return;
     setIsFollowingLive(true);
     setHasUnseenLive(false);
-  }, [isOpen, meeting.id, query]);
+    lastObservedBlockSignalRef.current = null;
+  }, [isOpen, meeting.id]);
 
   useEffect(() => {
     if (searchOpen) {
@@ -727,9 +747,28 @@ export function TranscriptPanel({
   }, [isOpen]);
 
   useEffect(() => {
-    if (!isOpen || !isLive || query.trim()) return;
+    const previousSignal = lastObservedBlockSignalRef.current;
+    const transcriptChanged =
+      previousSignal !== null && previousSignal !== latestBlockSignal;
+    lastObservedBlockSignalRef.current = latestBlockSignal;
+
+    if (!isOpen || !isLive) return;
+    if (previousSignal === null) {
+      if (!query.trim() && hasTranscriptContent) {
+        scrollToLatest(loaded ? "smooth" : "auto");
+      }
+      return;
+    }
+    if (query.trim()) {
+      // Searching is an explicit reading mode. Keep the viewport still and
+      // require a deliberate return to live after the search is cleared.
+      setIsFollowingLive(false);
+      if (transcriptChanged) setHasUnseenLive(true);
+      return;
+    }
+    if (!transcriptChanged) return;
     if (!isFollowingLive) {
-      setHasUnseenLive(hasTranscriptContent);
+      setHasUnseenLive(true);
       return;
     }
     scrollToLatest(loaded ? "smooth" : "auto");
@@ -778,6 +817,7 @@ export function TranscriptPanel({
   // Honor the user-dragged height only once there's real content — the empty
   // state stays compact (108px) so it isn't a tall blank box.
   const useCustomHeight = isOpen && !compactEmptyState && panelHeight != null;
+  const isSurface = mode === "surface";
   const showSearch = displayBlocks.length > 0 || Boolean(query.trim());
   const showFollowButton =
     isLive && !query.trim() && hasTranscriptContent && !isFollowingLive;
@@ -791,6 +831,17 @@ export function TranscriptPanel({
     : `Still recording; ${pendingTranscriptSegments} audio segment${
         pendingTranscriptSegments === 1 ? "" : "s"
       } waiting for background transcription.`;
+  const transcriptState = showRecoveryBanner
+    ? "recovering"
+    : !isLive
+      ? "saved transcript"
+      : visibleLiveBlocks.length > 0 || liveStatus?.active
+        ? "live transcript"
+        : captureState?.shortLabel || "listening";
+  const transcriptStateDetail =
+    displayBlocks.length > 0
+      ? `${displayBlocks.length} turn${displayBlocks.length === 1 ? "" : "s"}`
+      : null;
 
   return (
     <>
@@ -799,28 +850,42 @@ export function TranscriptPanel({
           closes via the keyboard handler below. */}
       <div
         ref={panelRef}
+        id={isSurface ? "meeting-panel-transcript" : undefined}
+        role={isSurface ? "tabpanel" : undefined}
+        aria-labelledby={isSurface ? "meeting-tab-transcript" : undefined}
+        data-testid={isSurface ? "meeting-transcript-surface" : undefined}
         className={cn(
-          "mb-3 flex flex-col border border-border bg-background",
+          "flex min-h-0 flex-col bg-background",
+          isSurface ? "h-full" : "mb-3 border border-border",
           // No transition while dragging so height tracks the pointer 1:1.
-          !isResizing && "transition-all duration-200 ease-out",
+          !isSurface && !isResizing && "transition-all duration-200 ease-out",
           !isOpen && "hidden",
-          isOpen && compactEmptyState && "min-h-[108px] translate-y-0 opacity-100",
           isOpen &&
+            !isSurface &&
+            compactEmptyState &&
+            "min-h-[108px] translate-y-0 opacity-100",
+          isOpen &&
+            !isSurface &&
             !compactEmptyState &&
             !useCustomHeight &&
             "h-[min(42vh,360px)] min-h-[220px] translate-y-0 opacity-100",
           isOpen &&
+            !isSurface &&
             !compactEmptyState &&
             useCustomHeight &&
             "min-h-0 translate-y-0 opacity-100",
         )}
-        style={useCustomHeight ? { height: panelHeight ?? undefined } : undefined}
+        style={
+          !isSurface && useCustomHeight
+            ? { height: panelHeight ?? undefined }
+            : undefined
+        }
         aria-hidden={!isOpen}
         onKeyDown={(e) => {
           if (e.key === "Escape") onClose();
         }}
       >
-        {!compactEmptyState && (
+        {!isSurface && !compactEmptyState && (
           <div
             role="separator"
             aria-orientation="horizontal"
@@ -853,7 +918,35 @@ export function TranscriptPanel({
               className="min-w-0 flex-1 bg-transparent text-xs px-2 h-7 border border-input focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
             />
           ) : (
-            <div className="flex-1" />
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <span
+                className="inline-flex min-w-0 items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-foreground"
+                role="status"
+                aria-label={`transcript status: ${transcriptState}`}
+                data-testid="transcript-stream-status"
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    "h-1.5 w-1.5 shrink-0 rounded-full",
+                    transcriptState === "recovering"
+                      ? "bg-amber-500"
+                      : isLive
+                        ? "bg-foreground"
+                        : "bg-muted-foreground/45",
+                    isLive &&
+                      transcriptState !== "recovering" &&
+                      "animate-pulse motion-reduce:animate-none",
+                  )}
+                />
+                <span className="truncate">{transcriptState}</span>
+              </span>
+              {transcriptStateDetail && (
+                <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
+                  {transcriptStateDetail}
+                </span>
+              )}
+            </div>
           )}
           {query.trim() && (
             <span
@@ -881,6 +974,9 @@ export function TranscriptPanel({
                   searchOpen && "bg-accent text-accent-foreground",
                 )}
                 title={searchOpen ? "hide search" : "search transcript (⌘F)"}
+                aria-label={
+                  searchOpen ? "hide transcript search" : "search transcript"
+                }
                 aria-pressed={searchOpen}
               >
                 <Search className="h-3.5 w-3.5" />
@@ -893,6 +989,7 @@ export function TranscriptPanel({
               disabled={displayBlocks.length === 0}
               className="h-7 w-7 p-0"
               title={copied ? "copied" : "copy transcript"}
+              aria-label={copied ? "transcript copied" : "copy transcript"}
             >
               {copied ? (
                 <Check className="h-3.5 w-3.5" />
@@ -900,15 +997,18 @@ export function TranscriptPanel({
                 <Copy className="h-3.5 w-3.5" />
               )}
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onClose}
-              className="h-7 w-7 p-0"
-              title="close transcript"
-            >
-              <X className="h-3.5 w-3.5" />
-            </Button>
+            {!isSurface && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onClose}
+                className="h-7 w-7 p-0"
+                title="close transcript"
+                aria-label="close transcript"
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            )}
           </div>
         </header>
 
@@ -922,7 +1022,8 @@ export function TranscriptPanel({
         <div className="relative min-h-0 flex-1">
           <div
             ref={containerRef}
-            className="h-full overflow-y-auto"
+            data-testid="meeting-transcript-scroll"
+            className="h-full overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable] [scroll-padding-block:24px]"
             style={{ contain: "layout paint" }}
             onScroll={handleTranscriptScroll}
           >
@@ -962,6 +1063,16 @@ export function TranscriptPanel({
                 onSpeakerAssigned={refetch}
               />
             )}
+            <span
+              className="sr-only"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              {latestFinalLiveBlock
+                ? `${latestFinalLiveBlock.speakerName}: ${latestFinalLiveBlock.text}`
+                : ""}
+            </span>
           </div>
           {showFollowButton && (
             <Button
@@ -974,7 +1085,10 @@ export function TranscriptPanel({
             >
               <ArrowDown className="h-3.5 w-3.5" />
               {hasUnseenLive && (
-                <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-foreground" />
+                <span
+                  data-testid="follow-live-unseen"
+                  className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-foreground"
+                />
               )}
             </Button>
           )}
@@ -994,11 +1108,13 @@ export const TranscriptRows = React.memo(function TranscriptRows({
   onSpeakerAssigned: () => void;
 }) {
   return (
-    <ol className="divide-y divide-border/50 pb-8">
-      {blocks.map((block) => (
+    <ol className="space-y-0.5 px-4 pb-10 pt-3" aria-label="meeting transcript">
+      {blocks.map((block, index) => (
         <SpeakerParagraph
           key={block.key}
           block={block}
+          continuation={isSpeakerContinuation(blocks[index - 1], block)}
+          continues={isSpeakerContinuation(block, blocks[index + 1])}
           query={query}
           onSpeakerAssigned={onSpeakerAssigned}
         />
@@ -1009,62 +1125,115 @@ export const TranscriptRows = React.memo(function TranscriptRows({
 
 export const SpeakerParagraph = React.memo(function SpeakerParagraph({
   block,
+  continuation = false,
+  continues = false,
   query,
   onSpeakerAssigned,
 }: {
   block: SpeakerBlock;
+  continuation?: boolean;
+  continues?: boolean;
   query: string;
   onSpeakerAssigned: () => void;
 }) {
   const [showPlayer, setShowPlayer] = useState(false);
+  const isSelf = block.speakerName.trim().toLowerCase() === "me";
   return (
     <li
-      className="group px-4 py-2.5 hover:bg-muted/30 transition-colors"
+      className={cn("group", continuation ? "pt-0.5" : "pt-3")}
       style={{ contain: "layout paint" }}
+      data-testid="transcript-row"
+      data-final={block.final ? "true" : "false"}
     >
-      <div className="flex items-baseline gap-2 mb-1">
-        {/* Gate on chunk id, not file path: reassignment only needs a real
+      {!continuation && (
+        <div className="mb-1.5 flex items-baseline gap-2 px-1">
+          {/* Gate on chunk id, not file path: reassignment only needs a real
             audio_chunk_id. firstAudioFilePath can legitimately be empty
             (e.g. a background chunk with a corrupted file_path) without
             that blocking renaming — it's only used for playback preview. */}
-        {block.firstAudioChunkId > 0 ? (
-          <SpeakerAssignPopover
-            audioChunkId={block.firstAudioChunkId}
-            speakerId={block.speakerId ?? undefined}
-            speakerName={block.speakerName}
-            audioFilePath={block.firstAudioFilePath}
-            onAssigned={onSpeakerAssigned}
-          >
+          {block.firstAudioChunkId > 0 ? (
+            <SpeakerAssignPopover
+              audioChunkId={block.firstAudioChunkId}
+              speakerId={block.speakerId ?? undefined}
+              speakerName={block.speakerName}
+              audioFilePath={block.firstAudioFilePath}
+              onAssigned={onSpeakerAssigned}
+            >
+              <span
+                className={cn(
+                  "inline-flex cursor-pointer items-center gap-1 text-[11px] font-semibold tracking-tight hover:underline underline-offset-2",
+                  isSelf
+                    ? "text-sky-700 dark:text-sky-300"
+                    : "text-violet-700 dark:text-violet-300",
+                )}
+                title={
+                  block.speakerId != null
+                    ? `speaker #${block.speakerId} — click to rename or reassign`
+                    : "click to assign a speaker"
+                }
+              >
+                <User className="h-3 w-3 text-muted-foreground/70 self-center" />
+                <span data-testid="transcript-speaker">
+                  {block.speakerName}
+                </span>
+              </span>
+            </SpeakerAssignPopover>
+          ) : (
             <span
-              className="inline-flex items-center gap-1 text-[11px] font-medium tracking-tight text-foreground/80 hover:text-foreground hover:underline underline-offset-2 cursor-pointer"
-              title={
-                block.speakerId != null
-                  ? `speaker #${block.speakerId} — click to rename or reassign`
-                  : "click to assign a speaker"
-              }
+              className={cn(
+                "inline-flex items-center gap-1 text-[11px] font-semibold tracking-tight",
+                isSelf
+                  ? "text-sky-700 dark:text-sky-300"
+                  : "text-violet-700 dark:text-violet-300",
+              )}
             >
               <User className="h-3 w-3 text-muted-foreground/70 self-center" />
-              {block.speakerName}
+              <span data-testid="transcript-speaker">{block.speakerName}</span>
             </span>
-          </SpeakerAssignPopover>
-        ) : (
-          <span className="inline-flex items-center gap-1 text-[11px] font-medium tracking-tight text-foreground/80">
-            <User className="h-3 w-3 text-muted-foreground/70 self-center" />
-            {block.speakerName}
+          )}
+          <span
+            className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60"
+            title={transcriptTimestampFormatter.format(block.startMs)}
+          >
+            {formatClock(block.startMs)}
+          </span>
+        </div>
+      )}
+      <div
+        className={cn(
+          "relative w-fit max-w-full rounded-2xl px-3 py-2 shadow-[0_1px_0_rgb(0_0_0/0.03)] transition-colors",
+          isSelf ? "bg-sky-500/[0.09] dark:bg-sky-400/[0.11]" : "bg-muted/80",
+          continuation && "rounded-tl-md",
+          continues && "rounded-bl-md",
+          !block.final && "ring-1 ring-inset ring-foreground/5",
+          block.firstAudioFilePath && "pr-9",
+        )}
+        title={transcriptTimestampFormatter.format(block.startMs)}
+        data-testid="transcript-bubble"
+      >
+        <p
+          className={cn(
+            "whitespace-pre-wrap break-words text-[13px] font-normal leading-5",
+            block.final ? "text-foreground/90" : "text-foreground/60",
+          )}
+        >
+          <HighlightedText text={block.text} query={query} />
+        </p>
+        {!block.final && (
+          <span
+            className="absolute -right-1 -top-1 flex h-3 w-3 items-center justify-center rounded-full bg-background shadow-sm ring-1 ring-border"
+            title="transcribing partial text"
+            aria-label="transcribing partial text"
+          >
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-500 motion-reduce:animate-none" />
           </span>
         )}
-        <span
-          className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60"
-          title={transcriptTimestampFormatter.format(block.startMs)}
-        >
-          {formatClock(block.startMs)}
-        </span>
         {block.firstAudioFilePath && (
           <button
             type="button"
             onClick={() => setShowPlayer((value) => !value)}
             className={cn(
-              "ml-auto inline-flex h-5 w-5 shrink-0 items-center justify-center self-center transition-opacity",
+              "absolute right-2 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center transition-opacity",
               "text-muted-foreground hover:text-foreground",
               showPlayer
                 ? "opacity-100"
@@ -1082,17 +1251,29 @@ export const SpeakerParagraph = React.memo(function SpeakerParagraph({
           </button>
         )}
       </div>
-      <p className="text-xs leading-relaxed text-foreground/90 whitespace-pre-wrap break-words">
-        <HighlightedText text={block.text} query={query} />
-      </p>
       {showPlayer && block.firstAudioFilePath && (
-        <div className="mt-2">
+        <div className="mt-2 max-w-xl">
           <MediaComponent filePath={block.firstAudioFilePath} />
         </div>
       )}
     </li>
   );
 });
+
+const SPEAKER_RUN_MAX_GAP_MS = 30_000;
+
+export function isSpeakerContinuation(
+  previous: SpeakerBlock | undefined,
+  current: SpeakerBlock | undefined,
+): boolean {
+  if (!previous || !current) return false;
+  return (
+    previous.speakerId === current.speakerId &&
+    previous.speakerName === current.speakerName &&
+    current.startMs >= previous.endMs &&
+    current.startMs - previous.endMs <= SPEAKER_RUN_MAX_GAP_MS
+  );
+}
 
 /** Body text with case-insensitive `<mark>` runs over search matches. */
 function HighlightedText({ text, query }: { text: string; query: string }) {
