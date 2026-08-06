@@ -314,10 +314,18 @@ describe("meeting note – bottom line is clickable", function () {
   }
 
   it("opens the seeded meeting note and the editor renders", async () => {
-    await browser.execute(() => {
-      window.location.href = "/home?section=meetings";
-    });
-    await waitForTestId("home-page", 25000);
+    // Use the app's section navigation so the already-resolved local API key
+    // stays in memory. A full document reload can mount Meetings before the
+    // auth config is restored, leaving the fixture behind a 403 response.
+    const meetingsNav = await waitForTestId("nav-meetings", 25_000);
+    await meetingsNav.click();
+    await browser.waitUntil(
+      async () => (await meetingsNav.getAttribute("aria-current")) === "page",
+      {
+        timeout: t(15_000),
+        timeoutMsg: "Meetings navigation did not become active",
+      },
+    );
 
     const row = await $(
       `//*[@role="button"][.//*[contains(text(), "${TITLE}")]]`,
@@ -331,61 +339,56 @@ describe("meeting note – bottom line is clickable", function () {
   });
 
   it("does not refocus editor-originated clicks from the note shell", async () => {
-    const result = (await browser.executeAsync(
-      (done: (v: EditorFocusProbe) => void) => {
-        const shell = document.querySelector(
-          '[data-testid="note-editor-shell"]',
-        ) as HTMLElement | null;
-        const editorEl = document.querySelector(
-          '[data-testid="note-editor"]',
-        ) as HTMLElement | null;
-        const firstParagraph = editorEl?.querySelector(
-          "p",
-        ) as HTMLElement | null;
-        if (!shell || !editorEl || !firstParagraph) {
-          done({ fail: "missing note editor shell, editor, or paragraph" });
-          return;
-        }
+    const result = (await browser.execute(() => {
+      const shell = document.querySelector(
+        '[data-testid="note-editor-shell"]',
+      ) as HTMLElement | null;
+      const editorEl = document.querySelector(
+        '[data-testid="note-editor"]',
+      ) as HTMLElement | null;
+      const firstParagraph = editorEl?.querySelector("p") as HTMLElement | null;
+      if (!shell || !editorEl || !firstParagraph) {
+        return { fail: "missing note editor shell, editor, or paragraph" };
+      }
 
-        let editorFocusCalls = 0;
-        const originalFocus = HTMLElement.prototype.focus;
-        HTMLElement.prototype.focus = function patchedFocus(
-          this: HTMLElement,
-          ...args: Parameters<HTMLElement["focus"]>
-        ) {
-          if (this === editorEl) editorFocusCalls += 1;
-          return originalFocus.apply(this, args);
-        };
+      let editorFocusCalls = 0;
+      const originalFocus = HTMLElement.prototype.focus;
+      HTMLElement.prototype.focus = function patchedFocus(
+        this: HTMLElement,
+        ...args: Parameters<HTMLElement["focus"]>
+      ) {
+        if (this === editorEl) editorFocusCalls += 1;
+        return originalFocus.apply(this, args);
+      };
 
-        const focusTrap = document.createElement("button");
-        focusTrap.type = "button";
-        focusTrap.textContent = "focus probe";
-        focusTrap.style.position = "fixed";
-        focusTrap.style.left = "-9999px";
-        focusTrap.style.top = "0";
-        document.body.appendChild(focusTrap);
-        focusTrap.focus();
+      const focusTrap = document.createElement("button");
+      focusTrap.type = "button";
+      focusTrap.textContent = "focus probe";
+      focusTrap.style.position = "fixed";
+      focusTrap.style.left = "-9999px";
+      focusTrap.style.top = "0";
+      document.body.appendChild(focusTrap);
+      focusTrap.focus();
 
-        firstParagraph.dispatchEvent(
-          new MouseEvent("click", {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-          }),
-        );
+      firstParagraph.dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+        }),
+      );
 
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            HTMLElement.prototype.focus = originalFocus;
-            focusTrap.remove();
-            done({
-              editorFocusCalls,
-              activeInEditor: editorEl.contains(document.activeElement),
-            });
-          });
-        });
-      },
-    )) as EditorFocusProbe;
+      // React dispatches this click handler synchronously. Returning in the
+      // same WebDriver script avoids waiting on requestAnimationFrame, which
+      // WebKit may suspend while an automated app window is backgrounded.
+      const probe = {
+        editorFocusCalls,
+        activeInEditor: editorEl.contains(document.activeElement),
+      };
+      HTMLElement.prototype.focus = originalFocus;
+      focusTrap.remove();
+      return probe;
+    })) as EditorFocusProbe;
 
     if (result.fail) throw new Error(result.fail);
     expect(result.editorFocusCalls).toBe(0);
