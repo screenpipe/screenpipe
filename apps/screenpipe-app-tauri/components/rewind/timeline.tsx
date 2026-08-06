@@ -43,6 +43,7 @@ import { useScrollZoom } from "@/components/rewind/hooks/use-scroll-zoom";
 import { useDateNavigation } from "@/components/rewind/hooks/use-date-navigation";
 import { useTimelineKeyboard } from "@/components/rewind/hooks/use-timeline-keyboard";
 import { localFetch } from "@/lib/api";
+import { hydrateSearchResultNavigation } from "@/lib/search-result-navigation";
 
 export interface StreamTimeSeriesResponse {
 	timestamp: string;
@@ -1032,28 +1033,16 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				setHighlight(searchTerms, frameId);
 			}
 
-			// Populate Main's keyword search store with results from Search window
-			// (enables bottom nav bar for cycling through results)
+			// Populate Main's keyword search store with the exact selectable results
+			// from Search (enables the bottom nav bar without reviving filtered or
+			// unavailable frames).
 			if (searchResultsJson && searchQuery) {
-				try {
-					const results = JSON.parse(searchResultsJson);
-					// Directly set the store state instead of re-running the search
-					useKeywordSearchStore.setState({
-						searchResults: results,
-						searchQuery: searchQuery,
-						searchGroups: results.map((m: any) => ({
-							representative: m,
-							group_size: 1,
-							start_time: m.timestamp,
-							end_time: m.timestamp,
-							frame_ids: [m.frame_id],
-						})),
-						currentResultIndex: results.findIndex((r: any) => r.frame_id === frameId),
-						isSearching: false,
-						error: null,
-					});
-				} catch (e) {
-					console.error("failed to parse search results from event", e);
+				if (!hydrateSearchResultNavigation({
+					searchResultsJson,
+					searchQuery,
+					frameId,
+				})) {
+					console.error("failed to hydrate search results from event");
 				}
 			}
 
@@ -1468,6 +1457,9 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				    so it sits above the z-40 timeline slider and receives clicks */}
 				{inSearchReviewMode && (
 					<div
+						data-search-result-navigation
+						data-results-length={searchResults.length}
+						data-active-result-index={searchResultIndex}
 						className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[45] flex items-center gap-3 px-4 py-2 rounded-full bg-black/70 backdrop-blur-sm border border-white/10 text-white text-sm shadow-lg"
 						onWheel={(e) => {
 							e.preventDefault();
@@ -1604,7 +1596,6 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 					)}
 				</div>
 
-	
 				{/* Search — inline overlay in embedded mode only; fullscreen uses separate window */}
 				{embedded && showSearchModal && (
 					<div className="absolute inset-0 z-50 flex flex-col" data-search-modal>
@@ -1619,8 +1610,28 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 								isOpen={true}
 								embedded
 								onClose={() => setShowSearchModal(false)}
-								onNavigateToTimestamp={(timestamp, frameId) => {
+								onNavigateToTimestamp={(
+									timestamp,
+									frameId,
+									searchTerms,
+									searchResultsJson,
+									searchQuery,
+								) => {
 									setShowSearchModal(false);
+									if (searchTerms && searchTerms.length > 0 && frameId) {
+										setHighlight(searchTerms, frameId);
+									}
+									if (
+										searchResultsJson &&
+										searchQuery &&
+										!hydrateSearchResultNavigation({
+											searchResultsJson,
+											searchQuery,
+											frameId,
+										})
+									) {
+										console.error("failed to hydrate embedded search results");
+									}
 									const targetDate = new Date(timestamp);
 									setSeekingTimestamp(timestamp);
 									if (!isSameDay(targetDate, currentDate)) {

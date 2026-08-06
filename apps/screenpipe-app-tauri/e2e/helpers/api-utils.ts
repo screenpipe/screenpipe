@@ -85,6 +85,38 @@ export async function fetchJson(
   }
 }
 
+export async function postJson(
+  url: string,
+  payload: unknown,
+  headers: Record<string, string> = {},
+): Promise<FetchResult> {
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify(payload),
+    });
+    const text = await res.text();
+    let body: unknown = text;
+    if (text.length > 0) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = text;
+      }
+    }
+    return { ok: res.ok, status: res.status, body, text };
+  } catch (e) {
+    return {
+      ok: false,
+      status: 0,
+      body: null,
+      text: "",
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
 export async function waitForLocalApi(port = 3030): Promise<void> {
   const deadline = Date.now() + t(30_000);
   let lastErr = "";

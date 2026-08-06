@@ -156,6 +156,37 @@ async function ensureLocalApi(cfg: LocalApiConfig): Promise<void> {
   });
 }
 
+async function syncMeetingIdleState(): Promise<void> {
+  const failure = await browser.executeAsync(
+    (done: (failure: string | null) => void) => {
+      const tauri = globalThis as typeof globalThis & {
+        __TAURI__?: {
+          event?: {
+            emit: (name: string, payload: unknown) => Promise<unknown>;
+          };
+        };
+      };
+      const emit = tauri.__TAURI__?.event?.emit;
+      if (!emit) {
+        done("global __TAURI__.event.emit unavailable");
+        return;
+      }
+      void emit("native-shortcut-toggle-meeting", {
+        active: false,
+        manualActive: false,
+        activeMeetingId: null,
+        stoppableMeetingId: null,
+        meetingApp: null,
+        detectionSource: null,
+      })
+        .then(() => done(null))
+        .catch((error) => done(String(error)));
+    },
+  );
+  if (failure)
+    throw new Error(`failed to synchronize meeting state: ${failure}`);
+}
+
 describe("meeting summary recovery controls", function () {
   this.timeout(t(180_000));
 
@@ -166,7 +197,6 @@ describe("meeting summary recovery controls", function () {
     await waitForAppReady();
     cfg = await getLocalApiConfig();
     await ensureLocalApi(cfg);
-    await openHomeWindow();
     cleanupSummaryMarkerChats();
 
     const started = await apiRequest<{ id: number }>(cfg, "/meetings/start", {
@@ -185,6 +215,23 @@ describe("meeting summary recovery controls", function () {
         note: "## Summary\n\nEarlier partial summary.",
       }),
     });
+    // The direct update intentionally avoids emitting meeting_ended, but the
+    // start route also records an in-memory manual-meeting id. Resolve status
+    // once after ending the fixture so that stale id is cleared before the UI
+    // subscribes to meeting state.
+    const status = await apiRequest<{ active: boolean }>(
+      cfg,
+      "/meetings/status",
+    );
+    expect(status.active).toBe(false);
+    const seededMeetings = await apiRequest<Array<{ id: number }>>(
+      cfg,
+      "/meetings?limit=10",
+    );
+    expect(seededMeetings.some((meeting) => meeting.id === meetingId)).toBe(
+      true,
+    );
+    await openHomeWindow();
   });
 
   after(async () => {
@@ -209,10 +256,37 @@ describe("meeting summary recovery controls", function () {
   });
 
   it("keeps retranscribe in the footer and lets a completed summary run again", async () => {
-    await browser.execute(() => {
-      window.location.href = "/home?section=meetings";
-    });
-    await waitForTestId("home-page", 25_000);
+    const meetingsNav = await waitForTestId("nav-meetings", 25_000);
+    if ((await meetingsNav.getAttribute("aria-current")) === "page") {
+      // The preceding meeting-note spec can leave this shared app process on
+      // a selected meeting. Leave the section first so reopening Meetings
+      // remounts its list and fetches the fixture created in this spec.
+      const homeNav = await waitForTestId("nav-home", 10_000);
+      await homeNav.click();
+      await browser.waitUntil(
+        async () => (await meetingsNav.getAttribute("aria-current")) !== "page",
+        {
+          timeout: t(10_000),
+          interval: 100,
+          timeoutMsg: "meetings navigation did not reset to the list entry",
+        },
+      );
+    }
+    await meetingsNav.click();
+    await browser.waitUntil(
+      async () =>
+        await browser.execute(
+          () =>
+            document
+              .querySelector('[data-testid="nav-meetings"]')
+              ?.getAttribute("aria-current") === "page",
+        ),
+      {
+        timeout: t(10_000),
+        interval: 100,
+        timeoutMsg: "meetings navigation did not become active",
+      },
+    );
 
     await browser.execute(
       (
@@ -355,6 +429,11 @@ describe("meeting summary recovery controls", function () {
     );
     await row.waitForExist({ timeout: t(25_000) });
     await row.click();
+    // The start and direct-update fixture operations intentionally avoid a
+    // real stop event. Synchronize the already-verified idle backend state
+    // through the same event Home consumes after a native meeting toggle so a
+    // delayed start notification cannot leave this saved row looking live.
+    await syncMeetingIdleState();
     await waitForTestId("note-editor", 20_000);
 
     const retranscribe = await $(
@@ -367,9 +446,35 @@ describe("meeting summary recovery controls", function () {
     await rerun.waitForDisplayed({ timeout: t(15_000) });
     expect(await rerun.isEnabled()).toBe(true);
 
-    await retranscribe.click();
+    await browser.waitUntil(
+      async () => {
+        const openDialog = await $('[role="alertdialog"]');
+        if (await openDialog.isDisplayed().catch(() => false)) return true;
+        try {
+          const currentRetranscribe = await $(
+            'button[aria-label="retranscribe saved audio"]',
+          );
+          if (!(await currentRetranscribe.isEnabled())) return false;
+          await currentRetranscribe.click();
+          await browser.pause(100);
+          return await (
+            await $('[role="alertdialog"]')
+          )
+            .isDisplayed()
+            .catch(() => false);
+        } catch {
+          // The meeting status refresh can replace the control between lookup
+          // and click on WebKit. Retry with a fresh element handle.
+          return false;
+        }
+      },
+      {
+        timeout: t(10_000),
+        interval: 250,
+        timeoutMsg: "retranscribe confirmation did not open",
+      },
+    );
     const dialog = await $('[role="alertdialog"]');
-    await dialog.waitForDisplayed({ timeout: t(10_000) });
     const dialogCopy = (await dialog.getText()).toLowerCase();
     expect(dialogCopy).toContain("rebuild the transcript from saved audio");
     expect(dialogCopy).toContain("replaces the current transcript");

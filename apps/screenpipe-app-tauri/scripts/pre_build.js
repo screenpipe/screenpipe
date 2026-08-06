@@ -1049,5 +1049,5 @@ if (action?.includes('--build') || action?.includes('--dev')) {
 		process.env['WHISPER_METAL_EMBED_LIBRARY'] = 'ON'
 	}
 	await $`bun install`
-	await $`bunx tauri ${action.includes('--dev') ? 'dev' : 'build'}`
+	await $`bun x tauri ${action.includes('--dev') ? 'dev' : 'build'}`
 }
