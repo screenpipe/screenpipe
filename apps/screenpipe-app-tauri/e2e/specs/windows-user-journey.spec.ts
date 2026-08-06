@@ -325,12 +325,12 @@ async function expectShortcutReminderVisible(expected: boolean, timeoutMs = t(15
       if ((await browser.getWindowHandles()).includes("home")) {
         await browser.switchToWindow("home").catch(() => {});
       }
-      return (await invokeOrThrow<boolean>("e2e_shortcut_reminder_visible")) === expected;
+      return (await invokeOrThrow<boolean>("plugin:e2e|shortcut_reminder_visible")) === expected;
     },
     {
       timeout: timeoutMs,
       interval: 250,
-      timeoutMsg: `Expected e2e_shortcut_reminder_visible=${expected}`,
+      timeoutMsg: `Expected plugin:e2e|shortcut_reminder_visible=${expected}`,
     },
   );
 }

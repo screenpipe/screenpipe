@@ -12,8 +12,9 @@ import posthog from "posthog-js";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { getStore, saveAndEncrypt } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
-import { X, Bell, RotateCw, Loader2, CheckCircle2 } from "lucide-react";
+import { X, Bell, RotateCw, Loader2, CheckCircle2, Square } from "lucide-react";
 import { useOverlayData } from "./use-overlay-data";
+import { useMeetingOverlay } from "./use-meeting-overlay";
 import { AudioEqualizer } from "./audio-equalizer";
 import { ScreenMatrix } from "./screen-matrix";
 import { isHighPriorityNotification } from "@/lib/notifications/priority";
@@ -76,7 +77,9 @@ export default function ShortcutReminderPage() {
   const [chatShortcut, setChatShortcut] = useState<string | null>(null);
   const [searchShortcut, setSearchShortcut] = useState<string | null>(null);
   const overlayData = useOverlayData();
+  const meetingOverlay = useMeetingOverlay();
   const inboxUnread = useInboxUnread();
+  const [meetingHovering, setMeetingHovering] = useState(false);
   const [overlayScale, setOverlayScale] = useState(1);
   const isMacRef = useRef(isMac);
   isMacRef.current = isMac;
@@ -269,6 +272,11 @@ export default function ShortcutReminderPage() {
   const smIconPx = 10 * overlayScale;
   const dotPx = Math.max(5 * overlayScale, 5);
   const failureReason = healthDetail || "recording stopped unexpectedly";
+  const latestTranscript = meetingOverlay.items.at(-1);
+  const latestSpeaker = latestTranscript
+    ? latestTranscript.speakerName ||
+      (latestTranscript.deviceType === "input" ? "me" : "speaker")
+    : null;
 
   // Recording-health states replace the shortcut grid inside the same fixed
   // window (160x40 x scale) — no resize needed: message row on top, actions
@@ -395,10 +403,71 @@ export default function ShortcutReminderPage() {
     );
   }
 
+  if (meetingOverlay.active && meetingHovering) {
+    return (
+      <div
+        data-testid="shortcut-reminder-meeting-preview"
+        className="w-full h-full flex items-center justify-center"
+        style={{ background: "transparent" }}
+        onMouseLeave={() => setMeetingHovering(false)}
+      >
+        <div
+          className="select-none w-full h-full border border-red-500/40"
+          style={{
+            background: "rgba(0, 0, 0, 0.92)",
+            display: "grid",
+            gridTemplateRows: "1fr 1px 1fr",
+          }}
+        >
+          <div className="flex items-center min-w-0" style={{ padding: `0 ${padX}px`, gap: `${gap * 2}px` }}>
+            <span
+              className="rounded-full bg-red-500 shrink-0"
+              style={{ width: `${dotPx}px`, height: `${dotPx}px` }}
+            />
+            <span className="font-mono text-white/85 truncate" style={{ fontSize: `${fontPx}px` }}>
+              meeting live{meetingOverlay.meetingApp ? ` · ${meetingOverlay.meetingApp}` : ""}
+            </span>
+            <button
+              onClick={(event) => {
+                event.stopPropagation();
+                void meetingOverlay.stopMeeting();
+              }}
+              onMouseDown={(event) => event.stopPropagation()}
+              disabled={meetingOverlay.stopping}
+              className="ml-auto flex items-center gap-1 px-1.5 h-full font-mono text-white/70 hover:text-white hover:bg-white/10 disabled:opacity-50"
+              style={{ fontSize: `${fontPx}px`, WebkitAppRegion: "no-drag" } as React.CSSProperties}
+              title="Stop meeting"
+            >
+              {meetingOverlay.stopping ? (
+                <Loader2 className="animate-spin" style={{ width: `${smIconPx}px`, height: `${smIconPx}px` }} />
+              ) : (
+                <Square fill="currentColor" style={{ width: `${smIconPx * 0.75}px`, height: `${smIconPx * 0.75}px` }} />
+              )}
+              stop
+            </button>
+          </div>
+          <div className="bg-white/15" />
+          <div className="flex items-center min-w-0" style={{ padding: `0 ${padX}px`, gap: `${gap * 2}px` }}>
+            <span className="font-mono text-white/40 shrink-0" style={{ fontSize: `${fontPx}px` }}>
+              {meetingOverlay.stopError ? "stop failed" : latestSpeaker || "live transcript"}
+            </span>
+            <span className="font-mono text-white/80 truncate" style={{ fontSize: `${fontPx}px` }}>
+              {meetingOverlay.stopError || latestTranscript?.text || "listening for speech…"}
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
+      data-testid="shortcut-reminder-root"
       className="w-full h-full flex items-center justify-center"
       style={{ background: "transparent" }}
+      onMouseEnter={() => {
+        if (meetingOverlay.active) setMeetingHovering(true);
+      }}
     >
       <div
         onMouseDown={handleMouseDown}
@@ -489,6 +558,15 @@ export default function ShortcutReminderPage() {
               active={overlayData.audioActive}
               speechRatio={overlayData.speechRatio}
             />
+            {meetingOverlay.active && (
+              <span
+                role="status"
+                aria-label="Meeting live"
+                title="Meeting live — hover for transcript"
+                className="ml-auto rounded-full bg-red-500 shrink-0"
+                style={{ width: `${dotPx}px`, height: `${dotPx}px` }}
+              />
+            )}
           </div>
           <div className="bg-white/15" />
           <div className="min-w-0 overflow-hidden flex items-center" style={{ padding: `${padY}px ${padX}px` }}>

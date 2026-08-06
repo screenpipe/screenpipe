@@ -416,6 +416,9 @@ jobs:
             libsamplerate-dev \
             libwebrtc-audio-processing-dev \
             libpipewire-0.3-dev \
+            libpipewire-0.3-modules \
+            libspa-0.2-modules \
+            pipewire-bin \
             libgtk-3-dev \
             librsvg2-dev \
             patchelf \
@@ -423,6 +426,8 @@ jobs:
             xdg-desktop-portal-gtk \
             libsecret-1-dev \
             libopenblas-dev
+
+          bash .github/scripts/linux/verify-pipewire-runtime-packages.sh
 
           # antirez-asr-sys build script emits -llibopenblas (double lib prefix).
           sudo mkdir -p /usr/lib/x86_64-linux-gnu/openblas/lib

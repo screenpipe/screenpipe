@@ -13,6 +13,11 @@ import { DropOverlay } from "@/components/chat/standalone/drop-overlay";
 import { PrefillContextBanner } from "@/components/chat/standalone/prefill-context-banner";
 import { QueuedPromptsList } from "@/components/chat/standalone/queued-prompts-list";
 import { UpgradeQuotaBanner } from "@/components/chat/standalone/upgrade-quota-banner";
+import {
+  FreePlanCounterChip,
+  FreePlanWallStrip,
+  FreeUpgradeSheet,
+} from "@/components/chat/standalone/free-plan-wall";
 import { getComposerPrimaryAction } from "@/lib/chat-queue-controls";
 
 const CHAT_RAIL_CLASS = "max-w-4xl mx-auto w-full";
@@ -37,11 +42,14 @@ export function ChatComposer({
     input.isLoading || input.isStreaming,
     hasInput,
   );
-  const isStopMode = primaryAction === "stop";
+  // A scheduled Pipe cannot be steered through Pi's foreground queue. Keep
+  // the action as Stop even if a draft was already present when its run began.
+  const isStopMode =
+    Boolean(modelControls.activePipeExecution) || primaryAction === "stop";
   const hasPendingDocs = attachments.pendingDocs.length > 0;
   const sendDisabled =
     (!hasInput && !isStopMode) ||
-    !input.canChat ||
+    (!isStopMode && !input.canChat) ||
     (!isStopMode && hasPendingDocs);
 
   return (
@@ -75,6 +83,8 @@ export function ChatComposer({
           />
 
           <UpgradeQuotaBanner />
+          <FreePlanWallStrip />
+          <FreeUpgradeSheet />
 
           <QueuedPromptsList
             queuedPrompts={queue.queuedPrompts}
@@ -87,6 +97,8 @@ export function ChatComposer({
           />
 
           <ComposerInputBox input={input} mentions={mentions} />
+
+          <FreePlanCounterChip />
 
           <ComposerControlsRow
             canChat={input.canChat}

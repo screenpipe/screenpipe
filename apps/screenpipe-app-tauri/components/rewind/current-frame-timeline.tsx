@@ -4,7 +4,10 @@
 import { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
 import React, { FC, useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useFrameContext } from "@/lib/hooks/use-frame-context";
-import { useFrameTextData } from "@/lib/hooks/use-frame-text-data";
+import {
+	type TextPosition,
+	useFrameTextData,
+} from "@/lib/hooks/use-frame-text-data";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { formatShortcutDisplay } from "@/lib/chat-utils";
 import { TextOverlay, extractUrlsFromText, isUrl, normalizeUrl } from "@/components/text-overlay";
@@ -20,10 +23,59 @@ import { useLiveText } from "@/components/rewind/hooks/use-live-text";
 import { useFrameActions } from "@/components/rewind/hooks/use-frame-actions";
 import { commands } from "@/lib/utils/tauri";
 import { selectTimelineDevice } from "@/lib/hooks/timeline-playback-navigation";
+import {
+	type SearchMatch,
+	useKeywordSearchStore,
+} from "@/lib/hooks/use-keyword-search-store";
 
 export interface DetectedUrl {
 	normalized: string;
 	display: string;
+}
+
+export function timelineSearchHighlightPositions(
+	allTextPositions: TextPosition[],
+	searchHighlightActive: boolean,
+	activeSearchMatch: SearchMatch | undefined,
+	displayedFrameId: string | undefined,
+): TextPosition[] {
+	if (!searchHighlightActive) return allTextPositions;
+	if (!activeSearchMatch) return [];
+	if (
+		!displayedFrameId ||
+		Number(displayedFrameId) !== activeSearchMatch.frame_id
+	) {
+		return [];
+	}
+	return activeSearchMatch.text_positions;
+}
+
+export function selectTimelineDisplayDevice<
+	T extends { device_id: string; frame_id: string },
+>(
+	devices: readonly T[] | null | undefined,
+	selectedDeviceId: string | undefined,
+	searchHighlightActive: boolean,
+	highlightFrameId: number | null,
+): T | undefined {
+	if (!devices?.length) return undefined;
+
+	// Search navigation targets an exact frame. Prefer the device containing that
+	// frame even when Timeline was previously filtered to another monitor.
+	if (searchHighlightActive && highlightFrameId !== null) {
+		const highlightedDevice = devices.find(
+			(candidate) => Number(candidate.frame_id) === highlightFrameId,
+		);
+		if (highlightedDevice) return highlightedDevice;
+	}
+
+	const explicitDeviceSelected =
+		Boolean(selectedDeviceId) && selectedDeviceId !== "all";
+	if (explicitDeviceSelected) {
+		return selectTimelineDevice(devices, selectedDeviceId);
+	}
+
+	return devices[0];
 }
 
 interface CurrentFrameTimelineProps {
@@ -101,26 +153,57 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 	const { isMac } = usePlatform();
 	const { settings } = useSettings();
 	const { templatePipes } = usePipes();
-	const { highlightTerms, dismissed: highlightDismissed, clear: clearHighlight } = useSearchHighlight();
+	const {
+		highlightTerms,
+		highlightFrameId,
+		dismissed: highlightDismissed,
+		clear: clearHighlight,
+	} = useSearchHighlight();
+	const activeSearchMatch = useKeywordSearchStore((state) =>
+		highlightFrameId
+			? state.searchResults.find(
+				(result) => result.frame_id === highlightFrameId,
+			)
+			: undefined,
+	);
 	const [contextMenuOpen, setContextMenuOpen] = useState(false);
 	const contextMenuPositionRef = useRef<{ x: number; y: number } | null>(null);
 
 	const videoRef = useRef<HTMLVideoElement>(null);
 
-	const device = selectTimelineDevice(currentFrame?.devices, selectedDeviceId);
+	const searchHighlightActive =
+		highlightTerms.length > 0 && !highlightDismissed;
+	const explicitDeviceSelected =
+		Boolean(selectedDeviceId) && selectedDeviceId !== "all";
+	const device = selectTimelineDisplayDevice(
+		currentFrame?.devices,
+		selectedDeviceId,
+		searchHighlightActive,
+		highlightFrameId,
+	);
+	const highlightedDeviceSelected =
+		!explicitDeviceSelected &&
+		searchHighlightActive &&
+		highlightFrameId !== null &&
+		Number(device?.frame_id) === highlightFrameId;
+	const restrictToDevice =
+		explicitDeviceSelected || highlightedDeviceSelected;
 	const displayFrame = useMemo<StreamTimeSeriesResponse>(() => {
-		if (!selectedDeviceId || selectedDeviceId === "all") return currentFrame;
+		if (!restrictToDevice) return currentFrame;
 		return { ...currentFrame, devices: device ? [device] : [] };
-	}, [currentFrame, device, selectedDeviceId]);
+	}, [currentFrame, device, restrictToDevice]);
 	const displayAdjacentFrames = useMemo(() => {
-		if (!adjacentFrames || !selectedDeviceId || selectedDeviceId === "all") {
+		if (!adjacentFrames || !restrictToDevice) {
 			return adjacentFrames;
 		}
 		return adjacentFrames.flatMap((frame) => {
-			const adjacentDevice = selectTimelineDevice(frame.devices, selectedDeviceId);
+			const adjacentDevice = selectTimelineDevice(
+				frame.devices,
+				device?.device_id,
+			);
 			return adjacentDevice ? [{ ...frame, devices: [adjacentDevice] }] : [];
 		});
-	}, [adjacentFrames, selectedDeviceId]);
+	}, [adjacentFrames, device?.device_id, restrictToDevice]);
 	const frameId = device?.frame_id;
 	const filePath = device?.metadata?.file_path?.trim() ?? "";
 	const frameText =
@@ -198,6 +281,23 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 		}
 		return result;
 	}, [ocrTextPositions, frameContext, contextLoading]);
+
+	// Search membership and yellow geometry are both pixel-verified before the
+	// result enters the keyword store. Reuse those exact boxes in the timeline
+	// so it cannot fall back to hidden accessibility bounds for a verified hit.
+	const searchHighlightPositions = useMemo(() => {
+		return timelineSearchHighlightPositions(
+			textPositions,
+			searchHighlightActive,
+			activeSearchMatch,
+			debouncedFrame?.frameId,
+		);
+	}, [
+		activeSearchMatch,
+		debouncedFrame?.frameId,
+		searchHighlightActive,
+		textPositions,
+	]);
 
 	// URL detection: prefer context URLs, fall back to OCR-extracted URLs
 	const detectedUrls = useMemo(() => {
@@ -608,7 +708,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 						height: renderedImageInfo.height,
 					}}>
 						<TextOverlay
-							textPositions={textPositions}
+							textPositions={searchHighlightPositions}
 							originalWidth={naturalDimensions.width}
 							originalHeight={naturalDimensions.height}
 							displayedWidth={renderedImageInfo.width}

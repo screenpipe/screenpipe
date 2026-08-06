@@ -204,10 +204,10 @@ async function main() {
 	)
 	await swapInOut(async (tmp) => {
 		// next writes the export to out/; build there, stamp the marker, and the
-		// swap moves it into place. Invoke via bunx so `next` resolves from
+		// swap moves it into place. Invoke via `bun x` so `next` resolves from
 		// node_modules/.bin (Bun's `$` does not add it to PATH like npm scripts).
 		await fs.rm(outDir, { recursive: true, force: true })
-		await $`bunx next build`.cwd(appRoot)
+		await $`bun x next build`.cwd(appRoot)
 		if (!(await hasIndex(outDir))) throw new Error('[build-frontend] `next build` produced no out/index.html')
 		await fs.writeFile(path.join(outDir, MARKER), key)
 		await fs.rename(outDir, tmp)

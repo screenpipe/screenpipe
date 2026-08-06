@@ -10,7 +10,8 @@ export type ShowRewindWindow =
   | "Chat"
   | "PermissionRecovery";
 
-export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied";
+export type OSPermissionStatus =
+  "notNeeded" | "empty" | "granted" | "restartRequired" | "denied";
 
 export interface OSPermissionsCheck {
   screenRecording: OSPermissionStatus;

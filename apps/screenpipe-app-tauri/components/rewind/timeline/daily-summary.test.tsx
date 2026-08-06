@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	dailySummaryCacheKey,
 	dailySummaryTimeRange,
+	presentGenerationError,
 	TimelineDailySummary,
 } from "./daily-summary";
 
@@ -59,6 +60,7 @@ const mocks = vi.hoisted(() => ({
 	showWindow: vi.fn(),
 	copyTextToClipboard: vi.fn(),
 	posthogCapture: vi.fn(),
+	openExternalUrl: vi.fn(),
 }));
 
 vi.mock("@/lib/hooks/use-settings", () => ({
@@ -82,6 +84,10 @@ vi.mock("@/lib/utils/tauri", () => ({
 
 vi.mock("posthog-js", () => ({
 	default: { capture: mocks.posthogCapture },
+}));
+
+vi.mock("@/lib/open-external-url", () => ({
+	openExternalUrl: mocks.openExternalUrl,
 }));
 
 vi.mock("@/components/markdown", () => ({
@@ -109,6 +115,41 @@ describe("daily summary helpers", () => {
 		expect(historical).toEqual({
 			start: startOfDay(new Date(2026, 6, 24)).toISOString(),
 			end: endOfDay(new Date(2026, 6, 24)).toISOString(),
+		});
+	});
+
+	it("classifies quota errors with an upgrade action before auth/timeout", () => {
+		const presented = presentGenerationError(
+			new Error(
+				'HTTP 429 {"error":"daily_cost_limit_exceeded","required_plan":"business","upgrade_url":"https://screenpi.pe/account/billing","resets_at":"2026-08-06T00:00:00Z"}',
+			),
+		);
+		expect(presented.kind).toBe("daily");
+		expect(presented.message.toLowerCase()).toContain("usage limit");
+		expect(presented.upgrade?.requiredPlan).toBe("business");
+	});
+
+	it("keeps rate-limit copy actionable and free of raw payloads", () => {
+		const presented = presentGenerationError(
+			new Error("rate limit exceeded. Please wait 9 seconds."),
+		);
+		expect(presented.kind).toBe("rate");
+		expect(presented.message).toContain("9 seconds");
+		expect(presented.upgrade).toBeNull();
+	});
+
+	it("keeps auth, timeout, and generic fallbacks", () => {
+		expect(presentGenerationError(new Error("HTTP 401 unauthorized")).kind).toBe(
+			"auth",
+		);
+		expect(
+			presentGenerationError(new Error("Daily summary generation timed out"))
+				.kind,
+		).toBe("timeout");
+		expect(presentGenerationError(new Error("boom"))).toEqual({
+			kind: "unknown",
+			message: "Daily summary could not be generated. Try again.",
+			upgrade: null,
 		});
 	});
 });
@@ -239,6 +280,40 @@ describe("TimelineDailySummary", () => {
 				model: "auto",
 				format_valid: true,
 			}),
+		);
+	});
+
+	it("offers a plan upgrade instead of a bare retry when the usage limit is hit", async () => {
+		mocks.settings.enhancedAI = true;
+		mocks.runDailySummaryWithPi
+			.mockReset()
+			.mockRejectedValue(
+				new Error(
+					'HTTP 429 {"error":"daily_cost_limit_exceeded","required_plan":"business","upgrade_url":"https://screenpi.pe/account/billing","resets_at":"2026-08-06T00:00:00Z"}',
+				),
+			);
+		render(<TimelineDailySummary currentDate={new Date(2026, 6, 25)} />);
+
+		fireEvent.click(screen.getByTestId("timeline-daily-summary-trigger"));
+
+		const upgradeButton = await screen.findByTestId(
+			"daily-summary-upgrade-button",
+		);
+		expect(upgradeButton).toHaveTextContent("Upgrade to Business");
+		expect(screen.getByText(/usage limit is reached/i)).toBeInTheDocument();
+		expect(screen.getByText(/limit resets/i)).toBeInTheDocument();
+		// Raw gateway JSON must never surface.
+		expect(
+			screen.queryByText(/daily_cost_limit_exceeded/),
+		).not.toBeInTheDocument();
+
+		fireEvent.click(upgradeButton);
+		expect(mocks.openExternalUrl).toHaveBeenCalledWith(
+			"https://screenpi.pe/account/billing",
+		);
+		expect(mocks.posthogCapture).toHaveBeenCalledWith(
+			"timeline_daily_summary_failed",
+			expect.objectContaining({ error_kind: "daily" }),
 		);
 	});
 });

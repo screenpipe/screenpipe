@@ -165,8 +165,8 @@ describe("Windows system integration", function () {
     if (!isWindows) return;
 
     await openHomeWindow();
-    await waitForLocalApi();
     const cfg = await getLocalApiConfig();
+    await waitForLocalApi(cfg.port);
     api = { port: cfg.port, key: cfg.key };
   });
 

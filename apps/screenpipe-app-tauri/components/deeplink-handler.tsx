@@ -23,6 +23,7 @@ import { rememberSelectedLiveViewDashboard } from "@/lib/live-views/onboarding-a
 import { isBusinessSubscriptionPurchaseDeepLink } from "@/lib/utils/purchase-deep-link";
 import { localFetch } from "@/lib/api";
 import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
+import { settingsSectionFromDeepLink } from "@/lib/utils/settings-deep-link";
 import posthog from "posthog-js";
 
 const DEEPLINK_RECENT_TTL_MS = 1_000;
@@ -238,7 +239,7 @@ export function DeeplinkHandler() {
       }
 
       if (url.includes("settings") || url.includes("home")) {
-        await openSettingsWindow();
+        await openSettingsWindow(settingsSectionFromDeepLink(parsedUrl));
       }
 
       // A Live View follow-up notification points directly at the dashboard

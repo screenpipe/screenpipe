@@ -16,6 +16,7 @@ import {
   parseRateLimitWaitSeconds,
   parseQuotaUpgradeAction,
   PI_MAX_RATE_LIMIT_RETRIES,
+  presentQuotaError,
   validateQuotaUpgradeAction,
 } from "../quota-errors";
 
@@ -345,5 +346,49 @@ describe("parseRateLimitWaitSeconds", () => {
 describe("PI_MAX_RATE_LIMIT_RETRIES", () => {
   it("is the documented retry cap", () => {
     expect(PI_MAX_RATE_LIMIT_RETRIES).toBe(3);
+  });
+});
+
+describe("presentQuotaError", () => {
+  const costLimitError =
+    'HTTP 429 {"error":"daily_cost_limit_exceeded","required_plan":"business","upgrade_url":"https://screenpi.pe/account/billing","resets_at":"2026-08-06T00:00:00Z"}';
+
+  it("classifies usage limits with standalone copy and the upgrade action", () => {
+    const presented = presentQuotaError(costLimitError);
+    expect(presented.kind).toBe("daily");
+    // Chat's "Choose a recovery option below." assumes the chat recovery
+    // panel; these surfaces render their own actions next to the copy.
+    expect(presented.message).not.toContain("below");
+    expect(presented.message.toLowerCase()).toContain("usage limit");
+    expect(presented.upgrade).toEqual({
+      requiredPlan: "business",
+      upgradeUrl: "https://screenpi.pe/account/billing",
+      resetsAt: "2026-08-06T00:00:00Z",
+    });
+  });
+
+  it("keeps the allowance-specific copy for hosted allowance exhaustion", () => {
+    const presented = presentQuotaError(
+      'HTTP 429 {"error":"hosted_ai_allowance_exceeded","lane":"auto","plan":"free"}',
+    );
+    expect(presented.kind).toBe("daily");
+    expect(presented.message.toLowerCase()).toContain("allowance");
+  });
+
+  it("classifies rate limits with retry copy and no upgrade", () => {
+    const presented = presentQuotaError(
+      "rate limit exceeded. Please wait 12 seconds.",
+    );
+    expect(presented.kind).toBe("rate");
+    expect(presented.message).toContain("12 seconds");
+    expect(presented.upgrade).toBeNull();
+  });
+
+  it("returns kind none with empty copy for non-quota errors", () => {
+    expect(presentQuotaError("connection refused")).toEqual({
+      kind: "none",
+      message: "",
+      upgrade: null,
+    });
   });
 });

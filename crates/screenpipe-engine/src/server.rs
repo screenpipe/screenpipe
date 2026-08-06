@@ -69,8 +69,8 @@ use crate::{
         },
         streaming::stream_frames_handler,
         websocket::{
-            ws_events_handler, ws_health_handler, ws_meeting_status_handler, ws_metrics_handler,
-            WebSocketLifecycle,
+            ws_events_handler, ws_health_handler, ws_meeting_overlay_handler,
+            ws_meeting_status_handler, ws_metrics_handler, WebSocketLifecycle,
         },
     },
     sync_api::{self, SyncState},
@@ -1146,11 +1146,9 @@ impl SCServer {
             let pipe_stream_hub = Arc::new(crate::pipe_stream::PipeStreamHub::new());
             {
                 let hub = pipe_stream_hub.clone();
-                pm.lock()
-                    .await
-                    .set_on_output_line(Arc::new(move |pipe, exec_id, line| {
-                        hub.publish(pipe, exec_id, line)
-                    }));
+                pm.lock().await.add_on_output_line(Arc::new(
+                    move |pipe, exec_id, _continues_chat, line| hub.publish(pipe, exec_id, line),
+                ));
             }
             let pipe_routes = Router::new()
                 .route("/", axum::routing::get(crate::pipes_api::list_pipes))
@@ -1352,6 +1350,7 @@ impl SCServer {
             .route("/stream/frames", get(stream_frames_handler))
             .route("/ws/events", get(ws_events_handler))
             .route("/ws/health", get(ws_health_handler))
+            .route("/ws/meeting-overlay", get(ws_meeting_overlay_handler))
             .route("/ws/meeting-status", get(ws_meeting_status_handler))
             .route("/ws/metrics", get(ws_metrics_handler))
             // Browser extension bridge — DEPRECATED top-level paths.

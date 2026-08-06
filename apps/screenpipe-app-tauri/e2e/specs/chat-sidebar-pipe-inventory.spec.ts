@@ -163,6 +163,45 @@ async function mockPipeActivityApi(): Promise<void> {
     testWindow.__pipeSidebarOriginalFetch = originalFetch;
     window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : (input as Request)?.url ?? String(input);
+      const parsedUrl = new URL(url, window.location.href);
+      const executionDetailPrefix =
+        `/pipes/${encodeURIComponent(pipeName)}/executions/`;
+      if (parsedUrl.pathname.startsWith(executionDetailPrefix)) {
+        const executionId = Number(
+          parsedUrl.pathname.slice(executionDetailPrefix.length),
+        );
+        if (Number.isInteger(executionId) && executionId > 0) {
+          testWindow.__pipeFullOutputFetches =
+            (testWindow.__pipeFullOutputFetches ?? 0) + 1;
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                data: {
+                  id: executionId,
+                  pipe_name: pipeName,
+                  status: "completed",
+                  trigger_type: "scheduled",
+                  started_at: new Date(
+                    Date.now() - executionId * 60_000,
+                  ).toISOString(),
+                  finished_at: new Date(
+                    Date.now() - executionId * 60_000 + 1_000,
+                  ).toISOString(),
+                  stdout: JSON.stringify({
+                    type: "agent_end",
+                    messages: [
+                      { role: "assistant", content: `execution ${executionId}` },
+                    ],
+                  }),
+                  stderr: "",
+                  error_message: null,
+                },
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+          );
+        }
+      }
       if (url.includes("/pipes/activity?")) {
         testWindow.__pipeActivityFetches = (testWindow.__pipeActivityFetches ?? 0) + 1;
         const latestCompletedId = testWindow.__pipeLatestCompletedId ?? 12;

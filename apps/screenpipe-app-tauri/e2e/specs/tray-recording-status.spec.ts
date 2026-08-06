@@ -17,7 +17,7 @@ async function waitForInstalledTrayStatus(expected: string): Promise<void> {
   await browser.waitUntil(
     async () => {
       const text = await invokeOrThrow<string | null>(
-        "e2e_installed_tray_recording_status",
+        "plugin:e2e|installed_tray_recording_status",
       );
       return text?.includes(expected) ?? false;
     },
@@ -38,12 +38,12 @@ describe("Tray: native recording status", function () {
   });
 
   it("replaces Starting with Recording in the installed native menu", async () => {
-    await invokeOrThrow("e2e_set_tray_recording_status", {
+    await invokeOrThrow("plugin:e2e|set_tray_recording_status", {
       status: "starting",
     });
     await waitForInstalledTrayStatus("Starting");
 
-    await invokeOrThrow("e2e_set_tray_recording_status", {
+    await invokeOrThrow("plugin:e2e|set_tray_recording_status", {
       status: "recording",
     });
     await waitForInstalledTrayStatus("Recording");

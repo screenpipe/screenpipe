@@ -213,6 +213,16 @@ pub struct RunPipeBody {
     /// Only the onboarding surface is accepted; all other API calls are manual.
     #[serde(default)]
     pub trigger_type: Option<String>,
+    /// When present, run the selected Pipe as the summary for this exact
+    /// meeting instead of as an unrelated foreground/manual task.
+    #[serde(default)]
+    pub meeting_summary: Option<MeetingSummaryRunRequest>,
+}
+
+#[derive(Deserialize)]
+pub struct MeetingSummaryRunRequest {
+    pub meeting_id: i64,
+    pub meeting_end: String,
 }
 
 fn run_trigger_type(body: Option<&RunPipeBody>) -> &'static str {
@@ -258,14 +268,33 @@ pub async fn run_pipe_now(
         tracing::warn!("failed to reload pipes from disk: {}", e);
     }
 
-    let run_context = body
+    let meeting_summary = body
         .as_ref()
-        .and_then(|Json(body)| {
-            body.run_context
-                .as_ref()
-                .or(body.notification_context.as_ref())
-        })
-        .map(format_run_context);
+        .and_then(|Json(body)| body.meeting_summary.as_ref());
+    if let Some(summary) = meeting_summary {
+        if summary.meeting_id <= 0 || summary.meeting_end.trim().is_empty() {
+            return Json(json!({
+                "error": "meeting_summary requires a positive meeting_id and meeting_end"
+            }));
+        }
+    }
+
+    let run_context = if let Some(summary) = meeting_summary {
+        Some(format_run_context(&json!({
+            "source": "meeting-note",
+            "meeting_id": summary.meeting_id,
+            "meeting_end": summary.meeting_end,
+            "instruction": "Summarize this exact meeting, stream the Summary section, and save it back to this meeting note."
+        })))
+    } else {
+        body.as_ref()
+            .and_then(|Json(body)| {
+                body.run_context
+                    .as_ref()
+                    .or(body.notification_context.as_ref())
+            })
+            .map(format_run_context)
+    };
 
     // Validate required connections are configured before running the pipe
     let required_connections = mgr
@@ -312,10 +341,29 @@ pub async fn run_pipe_now(
     ]);
     mgr.set_connections_context(conn_ctx);
 
-    let trigger_type = run_trigger_type(body.as_ref().map(|Json(b)| b));
-    let result = mgr
-        .start_pipe_background_with_trigger_and_context(&id, trigger_type, run_context.as_deref())
-        .await;
+    let result = if let Some(summary) = meeting_summary {
+        mgr.start_pipe_background_for_event(
+            &id,
+            "meeting_ended",
+            &summary.meeting_id.to_string(),
+            json!({
+                "meeting_id": summary.meeting_id,
+                "meeting_end": summary.meeting_end,
+                "summary_generation": chrono::Utc::now().to_rfc3339(),
+                "reason": "manual_summary",
+            }),
+            run_context.as_deref(),
+        )
+        .await
+    } else {
+        let trigger_type = run_trigger_type(body.as_ref().map(|Json(b)| b));
+        mgr.start_pipe_background_with_trigger_and_context(
+            &id,
+            trigger_type,
+            run_context.as_deref(),
+        )
+        .await
+    };
 
     match result {
         Ok(Some(execution_id)) => Json(json!({
@@ -574,11 +622,13 @@ mod tests {
             run_context: None,
             notification_context: None,
             trigger_type: Some("onboarding".to_string()),
+            meeting_summary: None,
         };
         let untrusted = RunPipeBody {
             run_context: None,
             notification_context: None,
             trigger_type: Some("scheduled".to_string()),
+            meeting_summary: None,
         };
 
         assert_eq!(run_trigger_type(Some(&onboarding)), "onboarding");
@@ -901,6 +951,88 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(wrong_pipe.status(), StatusCode::NOT_FOUND);
+
+        executor.allow_finish.notify_one();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn meeting_summary_run_is_tracked_for_the_exact_meeting() {
+        let dir = TempDir::new().unwrap();
+        write_test_pipe(&dir, "meeting-summary");
+
+        let db_path = dir.path().join("test.db");
+        let db = Arc::new(
+            screenpipe_db::DatabaseManager::new(db_path.to_str().unwrap(), Default::default())
+                .await
+                .unwrap(),
+        );
+        let store = Arc::new(SqlitePipeStore::new(db));
+        let executor = Arc::new(FakeExecutor::new(FakePublishMode::Immediate, 4243));
+        let mut executors: HashMap<String, Arc<dyn AgentExecutor>> = HashMap::new();
+        executors.insert("fake".to_string(), executor.clone());
+        let persisted_store: Arc<dyn PipeStore> = store.clone();
+        let mgr = PipeManager::new(
+            dir.path().to_path_buf(),
+            executors,
+            Some(persisted_store),
+            3030,
+        );
+        mgr.reload_pipes().await.unwrap();
+        let app = tracked_run_router(Arc::new(Mutex::new(mgr)));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/pipes/meeting-summary/run")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "meeting_summary": {
+                                "meeting_id": 42,
+                                "meeting_end": "2026-08-06T16:09:06.000Z"
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let payload: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(payload["success"], true);
+
+        let executions = store
+            .get_executions("meeting-summary", 10, None)
+            .await
+            .unwrap();
+        assert_eq!(executions[0].id, payload["execution_id"]);
+        assert_eq!(executions[0].trigger_type, "event");
+        assert_eq!(
+            executions[0].trigger_event.as_deref(),
+            Some("meeting_ended")
+        );
+        assert_eq!(executions[0].trigger_key.as_deref(), Some("42"));
+
+        let trigger_context: Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                dir.path()
+                    .join("meeting-summary")
+                    .join(".trigger-context.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(trigger_context["event"], "meeting_ended");
+        assert_eq!(trigger_context["key"], "42");
+        assert_eq!(trigger_context["data"]["meeting_id"], 42);
+        assert_eq!(
+            trigger_context["data"]["meeting_end"],
+            "2026-08-06T16:09:06.000Z"
+        );
+        assert_eq!(trigger_context["data"]["reason"], "manual_summary");
 
         executor.allow_finish.notify_one();
     }

@@ -20,6 +20,13 @@ export const WEBDRIVER_PORT = Number(
  *  developer's running production screenpipe app (which holds 11435). The
  *  Rust binary reads `SCREENPIPE_FOCUS_PORT` from env when this differs. */
 const FOCUS_PORT = Number(process.env.SCREENPIPE_FOCUS_PORT ?? '11436');
+/** Local Core API port — keep E2E away from the developer's production :3030.
+ *  The Rust server reads `SCREENPIPE_PORT`, and specs discover the matching
+ *  runtime value through `get_local_api_config`. */
+export const LOCAL_API_PORT = Number(process.env.SCREENPIPE_PORT ?? '11437');
+// WebdriverIO workers inherit the parent environment. Keep their API probes
+// aligned with the isolated app child even when the caller omitted an override.
+process.env.SCREENPIPE_PORT ??= String(LOCAL_API_PORT);
 
 /** Kill any process listening on a port. No-op if none. */
 function killPort(port: number): void {
@@ -65,7 +72,7 @@ const APP_PID_FILE = resolve(E2E_DATA_DIR, 'app.pid');
 // boots without Screen Recording / Microphone TCC — without it, an unsigned
 // debug build (`--no-sign`) on a host without granted permissions would have
 // the server early-return at the permission gate and `/health` would never
-// respond. See get_e2e_seed_flags + the recording boot path in main.rs.
+// respond. See e2e/seeds.rs + the feature-gated startup hooks in main.rs.
 //
 // Override with `SCREENPIPE_E2E_SEED=onboarding` (or any custom value) when
 // running on a host that DOES have TCC granted and you want to exercise the
@@ -77,7 +84,7 @@ const APP_PID_FILE = resolve(E2E_DATA_DIR, 'app.pid');
 // logged out so the fallback UX can be asserted. The same env var is read by
 // specs (e.g. timeline) to skip when recording is off.
 // `search-fixture` seeds a handful of known searchable frames (see
-// src-tauri/src/e2e_seed.rs) so the search-bugs spec runs inside the normal
+// src-tauri/src/e2e/seeds.rs) so the search-bugs spec runs inside the normal
 // `test:e2e` job instead of needing a separate CI step. Harmless for other
 // specs (namespaced "vector" frames; the empty-state spec uses its own query).
 // `sck-enumeration-hang-once` is a debug-only macOS fault injection used by the
@@ -264,6 +271,7 @@ export function getAppPid(): number | null {
 export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof spawn> | null> {
   killPort(port);
   killPort(FOCUS_PORT);
+  killPort(LOCAL_API_PORT);
 
   const appPath = getAppPath();
   if (!existsSync(appPath)) {
@@ -308,6 +316,7 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
       SCREENPIPE_DATA_DIR: E2E_DATA_DIR,
       SCREENPIPE_E2E_SEED: E2E_SEED_FLAGS,
       SCREENPIPE_FOCUS_PORT: String(FOCUS_PORT),
+      SCREENPIPE_PORT: String(LOCAL_API_PORT),
       TAURI_WEBDRIVER_PORT: String(port),
       ...(backgroundAiToolsEnabled
         ? {

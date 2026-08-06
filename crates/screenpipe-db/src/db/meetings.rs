@@ -43,21 +43,45 @@ impl DatabaseManager {
     /// one of the `MEETING_END_REASON_*` constants (or `None` for legacy /
     /// natural grace-timeout ends). The reason drives the auto-merge filter
     /// in [`Self::find_recent_meeting_for_app`] — explicit stops are excluded.
+    /// Returns true only for the transition from open to ended; racing duplicate
+    /// callers receive false even if they upgrade the end reason.
     pub async fn end_meeting(
         &self,
         id: i64,
         meeting_end: &str,
         end_reason: Option<&str>,
-    ) -> Result<(), SqlxError> {
+    ) -> Result<bool, SqlxError> {
         let mut tx = self.begin_immediate_with_retry().await?;
-        sqlx::query("UPDATE meetings SET meeting_end = ?1, end_reason = ?2 WHERE id = ?3")
-            .bind(normalize_timestamp_for_range_query(meeting_end))
-            .bind(end_reason)
-            .bind(id)
-            .execute(&mut **tx.conn())
-            .await?;
+        let newly_ended =
+            sqlx::query_scalar::<_, bool>("SELECT meeting_end IS NULL FROM meetings WHERE id = ?1")
+                .bind(id)
+                .fetch_optional(&mut **tx.conn())
+                .await?
+                .unwrap_or(false);
+        // The detector and an explicit stop can race on the same active row.
+        // Preserve the first committed end so duplicate end paths share one
+        // stable generation. An explicit user stop may still upgrade the end
+        // reason when it races an automatic end, and cannot be downgraded by a
+        // later detector delivery. A real resume clears both fields before the
+        // next end, so that later generation can commit normally.
+        sqlx::query(
+            "UPDATE meetings
+             SET meeting_end = COALESCE(meeting_end, ?1),
+                 end_reason = CASE
+                   WHEN end_reason = 'explicit_stop' THEN end_reason
+                   WHEN ?2 = 'explicit_stop' THEN ?2
+                   WHEN meeting_end IS NULL THEN ?2
+                   ELSE end_reason
+                 END
+             WHERE id = ?3",
+        )
+        .bind(normalize_timestamp_for_range_query(meeting_end))
+        .bind(end_reason)
+        .bind(id)
+        .execute(&mut **tx.conn())
+        .await?;
         tx.commit().await?;
-        Ok(())
+        Ok(newly_ended)
     }
 
     /// Collect text typed during a meeting's time interval from ui_events.
@@ -187,12 +211,22 @@ impl DatabaseManager {
         meeting_end: &str,
         append_typed_text: bool,
         end_reason: Option<&str>,
-    ) -> Result<(), SqlxError> {
+    ) -> Result<String, SqlxError> {
         // First end the meeting so the time range is set
-        self.end_meeting(id, meeting_end, end_reason).await?;
+        let newly_ended = self.end_meeting(id, meeting_end, end_reason).await?;
+        // Return the database-owned generation to callers. Competing end paths
+        // may propose different timestamps, but events must carry the exact
+        // first value committed above so scheduler deduplication stays stable.
+        let persisted_end = self
+            .get_meeting_by_id(id)
+            .await?
+            .meeting_end
+            .ok_or(SqlxError::RowNotFound)?;
 
-        if !append_typed_text {
-            return Ok(());
+        // A racing duplicate end may upgrade end_reason above, but must not
+        // append the same typed-text/files suffix to the note a second time.
+        if !newly_ended || !append_typed_text {
+            return Ok(persisted_end);
         }
 
         // Build the auto-injected suffix from the available signals. Each
@@ -208,7 +242,7 @@ impl DatabaseManager {
             sections.push(files);
         }
         if sections.is_empty() {
-            return Ok(());
+            return Ok(persisted_end);
         }
         let suffix = sections.join("\n\n");
 
@@ -236,7 +270,7 @@ impl DatabaseManager {
             tx.commit().await?;
         }
 
-        Ok(())
+        Ok(persisted_end)
     }
 
     /// Reopen a previously-ended meeting (clears both `meeting_end` and

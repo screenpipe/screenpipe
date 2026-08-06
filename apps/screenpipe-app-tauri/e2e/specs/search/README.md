@@ -11,7 +11,7 @@ The specs require the app to be launched with the `search-fixture` seed flag:
 SCREENPIPE_E2E_SEED=onboarding,no-recording,search-fixture
 ```
 
-That flag is handled in `src-tauri/src/e2e_seed.rs` (`seed_search_fixture`),
+That flag is handled in `src-tauri/src/e2e/seeds.rs` (`seed_search_fixture`),
 which inserts known searchable frames via `insert_snapshot_frame_with_ocr`:
 
 - 12 frames whose OCR text contains **"vector"** — enough to exercise the

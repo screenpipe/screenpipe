@@ -144,6 +144,29 @@ const RESIZE_HANDLE_STYLE: React.CSSProperties = {
   background: "hsl(var(--background))",
 };
 
+const PROPOSAL_FOCUS_DURATION_MS = 360;
+
+export function interpolateCanvasFocusViewport(
+  from: Viewport,
+  to: Viewport,
+  progress: number,
+  reduceMotion = false,
+): Viewport {
+  const boundedProgress = Math.max(0, Math.min(1, progress));
+  const easedProgress = reduceMotion ? 1 : 1 - Math.pow(1 - boundedProgress, 3);
+  return {
+    x: from.x + (to.x - from.x) * easedProgress,
+    y: from.y + (to.y - from.y) * easedProgress,
+    zoom: from.zoom + (to.zoom - from.zoom) * easedProgress,
+  };
+}
+
+export function isTrustedCanvasMove(
+  event: MouseEvent | TouchEvent | null,
+): boolean {
+  return event?.isTrusted === true;
+}
+
 function sameSelection(left: string[], right: string[]): boolean {
   if (left.length !== right.length) return false;
   const rightIds = new Set(right);
@@ -454,9 +477,24 @@ export function LiveViewCanvas({
   );
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const drawSessionRef = useRef<DrawSession | null>(null);
+  const focusAnimationFrameRef = useRef<number | null>(null);
+  const focusAnimationTimeoutRef = useRef<number | null>(null);
+  const [focusViewport, setFocusViewport] = useState<Viewport | null>(null);
+  const focusViewportRef = useRef<Viewport | null>(null);
   const latestDocumentRef = useRef(document);
+  latestDocumentRef.current = document;
+  const focusBlockGeometry = useMemo(() => {
+    if (!focusSlotId) return null;
+    const block = document.blocks.find(
+      (candidate) => candidate.slotId === focusSlotId,
+    );
+    return block
+      ? `${block.slotId}:${block.x}:${block.y}:${block.width}:${block.height}`
+      : null;
+  }, [document.blocks, focusSlotId]);
   const isMountedRef = useRef(true);
   const callbacksRef = useRef({
+    onChange,
     onFeedback,
     onRegenerate,
     onAiEdit,
@@ -465,6 +503,7 @@ export function LiveViewCanvas({
     onProposalDecision,
   });
   callbacksRef.current = {
+    onChange,
     onFeedback,
     onRegenerate,
     onAiEdit,
@@ -484,10 +523,6 @@ export function LiveViewCanvas({
     };
   }, []);
 
-  useEffect(() => {
-    latestDocumentRef.current = document;
-  }, [document]);
-
   const setCanvasSelection = useCallback((next: string[]) => {
     setSelection((current) => (sameSelection(current, next) ? current : next));
   }, []);
@@ -496,13 +531,29 @@ export function LiveViewCanvas({
     (next: BrainViewCanvasDocument, persist: boolean) => {
       if (!isMountedRef.current) return;
       latestDocumentRef.current = next;
-      onChange(next, { persist });
+      callbacksRef.current.onChange(next, { persist });
     },
-    [onChange],
+    [],
   );
 
+  const cancelFocusAnimation = useCallback(() => {
+    if (focusAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(focusAnimationFrameRef.current);
+      focusAnimationFrameRef.current = null;
+    }
+    if (focusAnimationTimeoutRef.current !== null) {
+      window.clearTimeout(focusAnimationTimeoutRef.current);
+      focusAnimationTimeoutRef.current = null;
+    }
+    focusViewportRef.current = null;
+    if (isMountedRef.current) setFocusViewport(null);
+  }, []);
+
   useEffect(() => {
-    if (!focusSlotId) return;
+    if (!focusSlotId) {
+      cancelFocusAnimation();
+      return;
+    }
     const block = latestDocumentRef.current.blocks.find(
       (candidate) => candidate.slotId === focusSlotId,
     );
@@ -515,17 +566,87 @@ export function LiveViewCanvas({
         (surface.height - 96) / block.height,
       ),
     );
-    const next = {
-      ...latestDocumentRef.current,
-      viewport: {
-        zoom,
-        x: surface.width / 2 - (block.x + block.width / 2) * zoom,
-        y: surface.height / 2 - (block.y + block.height / 2) * zoom,
-      },
+    const from = { ...latestDocumentRef.current.viewport };
+    const to = {
+      zoom,
+      x: surface.width / 2 - (block.x + block.width / 2) * zoom,
+      y: surface.height / 2 - (block.y + block.height / 2) * zoom,
     };
-    applyDocument(next, false);
     setCanvasSelection([canvasBlockNodeId(focusSlotId)]);
-  }, [applyDocument, focusSlotId, setCanvasSelection]);
+    cancelFocusAnimation();
+
+    const reduceMotion =
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    if (reduceMotion) {
+      applyDocument(
+        {
+          ...latestDocumentRef.current,
+          viewport: interpolateCanvasFocusViewport(from, to, 1, true),
+        },
+        false,
+      );
+      return;
+    }
+
+    const startedAt = performance.now();
+    const updateFocusViewport = (viewport: Viewport) => {
+      focusViewportRef.current = viewport;
+      setFocusViewport(viewport);
+    };
+    const finishFocusAnimation = () => {
+      if (!isMountedRef.current) return;
+      if (focusAnimationFrameRef.current !== null) {
+        window.cancelAnimationFrame(focusAnimationFrameRef.current);
+        focusAnimationFrameRef.current = null;
+      }
+      if (focusAnimationTimeoutRef.current !== null) {
+        window.clearTimeout(focusAnimationTimeoutRef.current);
+        focusAnimationTimeoutRef.current = null;
+      }
+      const viewport = interpolateCanvasFocusViewport(from, to, 1);
+      focusViewportRef.current = viewport;
+      applyDocument(
+        {
+          ...latestDocumentRef.current,
+          viewport,
+        },
+        false,
+      );
+      focusViewportRef.current = null;
+      setFocusViewport(null);
+    };
+    const animate = (timestamp: number) => {
+      if (!isMountedRef.current) return;
+      const progress = Math.min(
+        1,
+        (timestamp - startedAt) / PROPOSAL_FOCUS_DURATION_MS,
+      );
+      updateFocusViewport(
+        interpolateCanvasFocusViewport(from, to, progress),
+      );
+      if (progress < 1) {
+        focusAnimationFrameRef.current = window.requestAnimationFrame(animate);
+      } else {
+        finishFocusAnimation();
+      }
+    };
+    focusAnimationFrameRef.current = window.requestAnimationFrame(animate);
+    // Background tabs and automated WebKit sessions can suspend animation
+    // frames mid-transition. Preserve smooth rAF updates in the foreground,
+    // but guarantee that focus still reaches its target on time.
+    focusAnimationTimeoutRef.current = window.setTimeout(() => {
+      focusAnimationTimeoutRef.current = null;
+      finishFocusAnimation();
+    }, PROPOSAL_FOCUS_DURATION_MS);
+  }, [
+    applyDocument,
+    cancelFocusAnimation,
+    focusBlockGeometry,
+    focusSlotId,
+    setCanvasSelection,
+  ]);
+
+  useEffect(() => cancelFocusAnimation, [cancelFocusAnimation]);
 
   const updateNodeGeometry = useCallback(
     (
@@ -1189,6 +1310,7 @@ export function LiveViewCanvas({
 
   const handleViewportChange = useCallback(
     (viewport: Viewport) => {
+      if (focusViewportRef.current) return;
       const current = latestDocumentRef.current;
       if (
         current.viewport.x === viewport.x &&
@@ -1202,9 +1324,16 @@ export function LiveViewCanvas({
     [applyDocument],
   );
 
+  const handleMoveStart = useCallback(
+    (event: MouseEvent | TouchEvent | null) => {
+      if (isTrustedCanvasMove(event)) cancelFocusAnimation();
+    },
+    [cancelFocusAnimation],
+  );
+
   const handleMoveEnd = useCallback(
     (event: MouseEvent | TouchEvent | null, viewport: Viewport) => {
-      if (!event) return;
+      if (!isTrustedCanvasMove(event)) return;
       const current = latestDocumentRef.current;
       applyDocument({ ...current, viewport }, true);
     },
@@ -1239,7 +1368,7 @@ export function LiveViewCanvas({
           nodes={nodes}
           edges={edges}
           nodeTypes={CANVAS_NODE_TYPES}
-          viewport={document.viewport}
+          viewport={focusViewport ?? document.viewport}
           minZoom={0.25}
           maxZoom={2.5}
           snapToGrid
@@ -1277,6 +1406,7 @@ export function LiveViewCanvas({
             setCanvasSelection([]);
             setArrowSource(null);
           }}
+          onMoveStart={handleMoveStart}
           onViewportChange={handleViewportChange}
           onMoveEnd={handleMoveEnd}
         >

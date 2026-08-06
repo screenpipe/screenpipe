@@ -27,10 +27,8 @@ use screenpipe_screen::OcrGateDecision;
 
 use crate::ocr_gate::{OcrDecision, OcrGate};
 use std::sync::Arc;
-#[cfg(not(target_os = "windows"))]
 use std::sync::OnceLock;
 use std::time::Instant;
-#[cfg(not(target_os = "windows"))]
 use tokio::sync::Semaphore;
 use tracing::{debug, warn};
 
@@ -50,10 +48,28 @@ fn strip_gutter_noise(text: &str) -> String {
 
 /// Limits concurrent OCR tasks to avoid CPU spikes when multiple monitors
 /// trigger capture simultaneously.
-#[cfg(not(target_os = "windows"))]
+///
+/// Process-global and shared with on-demand OCR (`POST /frames/{id}/text`),
+/// which search uses to verify that a hit is actually visible in the
+/// screenshot. Without a shared gate the two producers each enforce their own
+/// limit and still add up: capture stays at one job while a burst of search
+/// verifications runs alongside it. Sharing one permit makes capture immune to
+/// search load.
+///
+/// Defined on every platform, but capture only acquires it off Windows:
+/// `perform_ocr_windows` already serializes every caller through its own
+/// global permit, so a second gate around capture would be redundant. Windows
+/// is therefore bounded either way — this semaphore is the equivalent gate for
+/// the Apple and Tesseract paths, which have no such internal limit.
 static OCR_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
-#[cfg(not(target_os = "windows"))]
-fn ocr_semaphore() -> &'static Semaphore {
+
+/// The shared OCR permit. Hold it across the *whole* expensive span (frame
+/// extraction plus OCR), and — for the blocking-pool paths — move the permit
+/// into the blocking closure so it is released when OCR truly finishes rather
+/// than when the caller stops waiting. A client that aborts its request drops
+/// the handler future, but the blocking task keeps running; releasing on drop
+/// would hand the slot away while the CPU is still busy.
+pub fn ocr_semaphore() -> &'static Semaphore {
     OCR_SEMAPHORE.get_or_init(|| Semaphore::new(1))
 }
 
