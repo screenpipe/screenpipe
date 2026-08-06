@@ -131,7 +131,7 @@ async function waitForStableFiles(
     it("keeps the desktop alive while preventing an in-process DB respawn", async () => {
       const appPid = getAppPid();
       expect(appPid).toBeTruthy();
-      const before = await invoke<HardFaultState>("e2e_db_hard_fault_state");
+      const before = await invoke<HardFaultState>("plugin:e2e|db_hard_fault_state");
       expect(before.processId).toBe(appPid);
       expect(before.recoveryRequired).toBe(false);
       expect(before.serverPresent).toBe(true);
@@ -145,7 +145,7 @@ async function waitForStableFiles(
       expect(healthy.ok).toBe(true);
 
       const injected = await invoke<HardFaultResult>(
-        "e2e_inject_db_hard_fault",
+        "plugin:e2e|inject_db_hard_fault",
       );
       expect(injected.hardFaulted).toBe(true);
       expect(injected.sqliteError.toLowerCase()).toContain("malformed");
@@ -157,7 +157,7 @@ async function waitForStableFiles(
       try {
         await browser.waitUntil(
           async () => {
-            lastState = await invoke<HardFaultState>("e2e_db_hard_fault_state");
+            lastState = await invoke<HardFaultState>("plugin:e2e|db_hard_fault_state");
             return (
               lastState.recoveryRequired &&
               lastState.recordingStatus === "error" &&
@@ -199,7 +199,7 @@ async function waitForStableFiles(
       const settled = await waitForStableFiles(injected.databasePath);
       const noRespawnDeadline = Date.now() + t(35_000);
       while (Date.now() < noRespawnDeadline) {
-        const state = await invoke<HardFaultState>("e2e_db_hard_fault_state");
+        const state = await invoke<HardFaultState>("plugin:e2e|db_hard_fault_state");
         expect(state.processId).toBe(appPid);
         expect(processIsAlive(appPid as number)).toBe(true);
         expect(state.recoveryRequired).toBe(true);

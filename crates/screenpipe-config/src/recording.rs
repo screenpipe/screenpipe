@@ -168,20 +168,13 @@ pub struct RecordingSettings {
     #[serde(rename = "useSystemDefaultAudio")]
     pub use_system_default_audio: bool,
 
-    /// Experimental: capture System Audio via the CoreAudio Process Tap API
-    /// (macOS 14.4+) instead of ScreenCaptureKit. The tap sidesteps SCK's
-    /// display-enumeration failures after sleep/wake and the GPU/compositor
-    /// wake overhead, but it cannot see audio rendered through a
-    /// VoiceProcessing AudioUnit (Zoom / Google Meet / Microsoft Teams all
-    /// use one for echo cancellation), so on meeting audio it silently
-    /// captures zeroed buffers even though tap creation succeeds.
-    ///
-    /// Default `false` (see `default_experimental_coreaudio_system_audio`).
-    /// SCK captures at the display compositor, which does see VoiceProcessing
-    /// output, so it is the right default for anyone on calls. Users who hit
-    /// SCK's sleep/wake display-enumeration bug can still opt in; when the tap
-    /// is on and creation fails (permission, macOS <14.4, OS quirk), stream.rs
-    /// falls back to the SCK path automatically. Ignored on non-macOS platforms.
+    /// Capture System Audio via the CoreAudio Process Tap API on macOS 14.4+
+    /// instead of ScreenCaptureKit. The Rust deserialization default remains
+    /// `false` for headless/non-desktop callers, while desktop settings migration
+    /// V3 enables it automatically. Initial tap creation failures fall back to
+    /// SCK; runtime failures disconnect the stream so the device manager can
+    /// reconstruct it through the same backend-selection path. Ignored on
+    /// non-macOS platforms.
     #[serde(
         rename = "experimentalCoreaudioSystemAudio",
         default = "default_experimental_coreaudio_system_audio"
@@ -848,13 +841,10 @@ fn default_audio_capture_mode() -> String {
     "always".to_string()
 }
 
-/// Default `false` — the Process Tap can't see audio rendered through
-/// VoiceProcessing AudioUnits (Zoom / Google Meet / Microsoft Teams all
-/// use one for echo cancellation), so for meeting audio it silently
-/// captures zeroed buffers even though the tap creation succeeds. SCK
-/// captures at the display compositor which *does* see VoiceProcessing
-/// output, so it's the right default for every user who uses call apps.
-/// Users who hit SCK's sleep/wake display-enumeration bug can still opt in.
+/// Default `false` for deserialization outside the desktop settings lifecycle.
+/// The desktop's V3 migration enables Process Tap on supported macOS installs;
+/// keeping this fallback false prevents old/headless configs from silently
+/// changing capture backends without that migration.
 fn default_experimental_coreaudio_system_audio() -> bool {
     false
 }

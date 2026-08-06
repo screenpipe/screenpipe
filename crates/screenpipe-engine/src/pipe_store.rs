@@ -660,23 +660,40 @@ mod tests {
         .unwrap();
     }
 
-    /// #5481: `meeting_ended` fires twice for one meeting when the user rejoins
-    /// within the 120s merge window. The second delivery must not win a claim.
+    /// #5481: duplicate delivery of one meeting-end generation is suppressed,
+    /// while a later end after the merged meeting row was resumed can run.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_duplicate_meeting_ended_claims_once() {
         let (store, _tmp) = setup_test_store().await;
 
         assert!(store
-            .claim_event_run("meeting-summary", "meeting_ended", "42")
+            .claim_event_run(
+                "meeting-summary",
+                "meeting_ended",
+                "42@2026-08-05T16:08:56.000Z"
+            )
             .await
             .unwrap());
         assert!(
             !store
-                .claim_event_run("meeting-summary", "meeting_ended", "42")
+                .claim_event_run(
+                    "meeting-summary",
+                    "meeting_ended",
+                    "42@2026-08-05T16:08:56.000Z"
+                )
                 .await
                 .unwrap(),
-            "duplicate meeting_ended for meeting 42 should be suppressed"
+            "duplicate delivery of one meeting end should be suppressed"
         );
+
+        assert!(store
+            .claim_event_run(
+                "meeting-summary",
+                "meeting_ended",
+                "42@2026-08-05T16:51:37.000Z"
+            )
+            .await
+            .unwrap());
 
         // A different meeting is unrelated work.
         assert!(store
@@ -685,7 +702,11 @@ mod tests {
             .unwrap());
         // So is the same meeting seen by a different pipe.
         assert!(store
-            .claim_event_run("meeting-notes", "meeting_ended", "42")
+            .claim_event_run(
+                "meeting-notes",
+                "meeting_ended",
+                "42@2026-08-05T16:08:56.000Z"
+            )
             .await
             .unwrap());
     }

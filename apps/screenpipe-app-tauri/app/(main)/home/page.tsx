@@ -53,6 +53,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { commands } from "@/lib/utils/tauri";
+import { getE2eSeedFlags } from "@/lib/e2e/native";
 import { shouldAcceptTitleSource } from "@/lib/utils/chat-title";
 import {
   formatShortcutDisplay,
@@ -166,8 +167,7 @@ function HomeContent() {
 
   useEffect(() => {
     let mounted = true;
-    void commands
-      .getE2eSeedFlags()
+    void getE2eSeedFlags()
       .then((flags) => {
         if (mounted) setE2eSeedFlags(flags);
       })

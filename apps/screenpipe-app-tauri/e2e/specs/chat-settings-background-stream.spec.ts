@@ -19,7 +19,7 @@
  *
  * Strategy (matches chat-streaming-performance / chat-switch-context-loss):
  * drive a deterministic synthetic stream from the Rust side
- * (`e2e_emit_agent_stream`). Because that stream is emitted by the backend, it
+ * (`plugin:e2e|emit_agent_stream`). Because that stream is emitted by the backend, it
  * keeps producing `agent_event` envelopes even while the panel is unmounted —
  * exactly the real "kept running in the background" case. We start a LONG stream
  * fire-and-forget, hop to Settings mid-stream, come back, assert the running
@@ -105,8 +105,8 @@ async function startAgentStreamNoWait(sessionId: string, deltaCount: number): Pr
       const inv = g.__TAURI__?.core?.invoke ?? g.__TAURI_INTERNALS__?.invoke;
       if (!inv) { done(); return; }
       // Fire-and-forget: do NOT await the stream — the backend keeps emitting.
-      void inv("e2e_emit_agent_stream", { sessionId: sid, deltaCount: count }).catch(() =>
-        inv("e2e_emit_agent_stream", { session_id: sid, delta_count: count }),
+      void inv("plugin:e2e|emit_agent_stream", { sessionId: sid, deltaCount: count }).catch(() =>
+        inv("plugin:e2e|emit_agent_stream", { session_id: sid, delta_count: count }),
       );
       done();
     },

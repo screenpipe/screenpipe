@@ -116,7 +116,7 @@ describe("vision stall reproduction and bounded recovery", function () {
 
     await waitForAppReady();
     const cfg = await getLocalApiConfig();
-    if (await invokeOrThrow<boolean>("e2e_screen_is_locked")) this.skip();
+    if (await invokeOrThrow<boolean>("plugin:e2e|screen_is_locked")) this.skip();
 
     let devices: VisionDeviceStatus[] = [];
     await browser.waitUntil(
@@ -235,7 +235,7 @@ describe("vision stall reproduction and bounded recovery", function () {
     const originalPid = getAppPid();
     expect(originalPid).not.toBeNull();
     const cfg = await getLocalApiConfig();
-    if (await invokeOrThrow<boolean>("e2e_screen_is_locked")) {
+    if (await invokeOrThrow<boolean>("plugin:e2e|screen_is_locked")) {
       // Lock is an intentional pause and the watchdog must stay disarmed. A
       // locked local Mac cannot establish the real capture baseline without
       // violating the product's privacy contract, so leave the lookup wedge
@@ -278,7 +278,7 @@ describe("vision stall reproduction and bounded recovery", function () {
     );
 
     expect(
-      await invokeOrThrow<boolean>("e2e_arm_capture_loop_silent_fault"),
+      await invokeOrThrow<boolean>("plugin:e2e|arm_capture_loop_silent_fault"),
     ).toBe(true);
 
     await browser.waitUntil(async () => existsSync(SILENT_MARKER), {
@@ -381,7 +381,7 @@ describe("vision stall reproduction and bounded recovery", function () {
     await waitForAppReady();
     const cfg = await getLocalApiConfig();
     expect(existsSync(LOOKUP_MARKER)).toBe(false);
-    expect(await invokeOrThrow<boolean>("e2e_arm_sck_lookup_hang_fault")).toBe(
+    expect(await invokeOrThrow<boolean>("plugin:e2e|arm_sck_lookup_hang_fault")).toBe(
       true,
     );
 

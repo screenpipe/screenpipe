@@ -7,7 +7,7 @@
  *
  * Sets up the race condition described in PR #3600:
  *   1. Seed chat A with prior user+assistant turns (via __e2eSeedUserMessage
- *      + e2e_emit_agent_stream so isLoading flips true → false naturally).
+ *      + plugin:e2e|emit_agent_stream so isLoading flips true → false naturally).
  *   2. Mid-stream, emit `chat-load-conversation` for chat B. The handler
  *      runs `loadConversation(B)`, which:
  *         - sets piSessionIdRef.current = B eagerly (line 745)
@@ -119,8 +119,8 @@ async function emitAgentStream(sessionId: string, deltaCount: number): Promise<v
       // Synthetic stream: deltaCount tokens, then agent_end. Frontend
       // treats this like a real Pi response — sets isLoading=true while
       // streaming, isLoading=false on agent_end (which is the auto-save edge).
-      void inv("e2e_emit_agent_stream", { sessionId: sid, deltaCount: count })
-        .catch(() => inv("e2e_emit_agent_stream", { session_id: sid, delta_count: count }))
+      void inv("plugin:e2e|emit_agent_stream", { sessionId: sid, deltaCount: count })
+        .catch(() => inv("plugin:e2e|emit_agent_stream", { session_id: sid, delta_count: count }))
         .then(() => done())
         .catch(() => done());
     },

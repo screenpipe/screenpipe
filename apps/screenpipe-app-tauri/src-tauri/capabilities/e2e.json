@@ -1,0 +1,11 @@
+{
+  "identifier": "e2e-harness",
+  "description": "Allows the native harness API in feature-gated E2E builds.",
+  "local": true,
+  "windows": [
+    "*"
+  ],
+  "permissions": [
+    "e2e:default"
+  ]
+}

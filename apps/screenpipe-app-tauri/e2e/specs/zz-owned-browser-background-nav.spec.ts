@@ -38,7 +38,7 @@
  * (with `home` switched to the meeting-notes section, so its sidebar keeps the
  * native layer hidden) but drive every command from a SEPARATE `search` window
  * whose WebDriver context survives. Visibility is read via the e2e-only
- * `e2e_owned_browser_visible` probe (global state, callable from any window).
+ * `plugin:e2e|owned_browser_visible` probe (global state, callable from any window).
  *
  * Linux/WebKitGTK drops context even more aggressively and rejects the attach,
  * so the assertion is gated off there (same gate as owned-browser.spec.ts). It
@@ -100,7 +100,7 @@ const canHideBackgroundDrive = canDriveOwnedBrowser && process.platform !== "win
 // `x-screenpipe-session` header the agent's curl shim adds) — and asserts the
 // foreign navigation does NOT reveal the browser.
 //
-// We assert on native visibility (`e2e_owned_browser_visible`), not persisted
+// We assert on native visibility (`plugin:e2e|owned_browser_visible`), not persisted
 // browserState: a regression reveals the panel, which attaches the native child
 // and disrupts the in-flight persist, so the disk write is an unreliable signal
 // — the *visible* leak is the actual reported symptom. As in the block below,
@@ -452,7 +452,7 @@ describe.skip("Owned browser — per-chat navigation ownership", function () {
 
       // 3. Hidden baseline.
       await invokeOrThrow("owned_browser_hide");
-      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
+      expect(await invokeOrThrow<boolean>("plugin:e2e|owned_browser_visible")).toBe(
         false,
       );
 
@@ -469,7 +469,7 @@ describe.skip("Owned browser — per-chat navigation ownership", function () {
       //    browser in OWN_CHAT. Pre-fix the global navigate event flipped the
       //    panel open in whatever chat was on screen, attaching the native child
       //    (which is exactly what destroys home's handle on a regression).
-      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
+      expect(await invokeOrThrow<boolean>("plugin:e2e|owned_browser_visible")).toBe(
         false,
       );
 
@@ -482,7 +482,7 @@ describe.skip("Owned browser — per-chat navigation ownership", function () {
       //    result — we assert visibility, not the HTTP status.
       await postEvalWithUrlAs(port, key, FOREIGN_URL, FOREIGN_OWNER);
       await browser.pause(t(2_500));
-      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
+      expect(await invokeOrThrow<boolean>("plugin:e2e|owned_browser_visible")).toBe(
         false,
       );
     },
@@ -501,7 +501,7 @@ describe.skip("Owned browser — per-chat navigation ownership", function () {
 
       // Hidden baseline.
       await invokeOrThrow("owned_browser_hide");
-      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
+      expect(await invokeOrThrow<boolean>("plugin:e2e|owned_browser_visible")).toBe(
         false,
       );
 
@@ -511,7 +511,7 @@ describe.skip("Owned browser — per-chat navigation ownership", function () {
       // tests run.
       const navigationId = await emitOwnedBrowserNavigateInHome(OWN_URL, OWN_CHAT);
       await waitForAcceptedOwnedBrowserNavigate(navigationId);
-      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
+      expect(await invokeOrThrow<boolean>("plugin:e2e|owned_browser_visible")).toBe(
         false,
       );
     },
@@ -563,7 +563,7 @@ describe.skip("Owned browser — fast chat switching keeps pipe state out of oth
       await openSearchCommandWindow();
       await browser.pause(t(800));
       await invokeOrThrow("owned_browser_hide");
-      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
+      expect(await invokeOrThrow<boolean>("plugin:e2e|owned_browser_visible")).toBe(
         false,
       );
 
@@ -579,7 +579,7 @@ describe.skip("Owned browser — fast chat switching keeps pipe state out of oth
       );
       expect(navigateStatus).toBe(200);
       await browser.pause(t(1_200));
-      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
+      expect(await invokeOrThrow<boolean>("plugin:e2e|owned_browser_visible")).toBe(
         false,
       );
 
@@ -589,7 +589,7 @@ describe.skip("Owned browser — fast chat switching keeps pipe state out of oth
         await openSearchCommandWindow();
         await postEvalWithUrlAs(port, key, FOREIGN_URL, FOREIGN_OWNER);
         await browser.pause(t(1_200));
-        expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
+        expect(await invokeOrThrow<boolean>("plugin:e2e|owned_browser_visible")).toBe(
           false,
         );
       } else {
@@ -602,7 +602,7 @@ describe.skip("Owned browser — fast chat switching keeps pipe state out of oth
           FOREIGN_OWNER,
         );
         await waitForDroppedOwnedBrowserNavigate(navigationId);
-        expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
+        expect(await invokeOrThrow<boolean>("plugin:e2e|owned_browser_visible")).toBe(
           false,
         );
       }
@@ -690,7 +690,7 @@ describe.skip("Owned browser — background navigation visibility", function () 
       console.log(`[spec] handles after attach-to-home: ${JSON.stringify(handles)}`);
 
       await invokeOrThrow("owned_browser_hide");
-      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
+      expect(await invokeOrThrow<boolean>("plugin:e2e|owned_browser_visible")).toBe(
         false,
       );
 
@@ -703,7 +703,7 @@ describe.skip("Owned browser — background navigation visibility", function () 
 
       // 5. The native browser must NOT have shown itself — the home sidebar is on
       //    the meeting-notes section, so nothing on screen should reveal it.
-      expect(await invokeOrThrow<boolean>("e2e_owned_browser_visible")).toBe(
+      expect(await invokeOrThrow<boolean>("plugin:e2e|owned_browser_visible")).toBe(
         false,
       );
     },

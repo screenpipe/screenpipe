@@ -302,6 +302,8 @@ export interface AuthResult {
 	hostedAiTrial?: boolean;
 	deviceId: string;
 	userId?: string;
+	/** Clerk subject proven by Clerk JWT verification or an authenticated /api/user response. */
+	clerkUserId?: string;
 	/** True only for the dedicated backend service bearer. */
 	service?: boolean;
 	error?: string;
