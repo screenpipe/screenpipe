@@ -156,6 +156,37 @@ async function ensureLocalApi(cfg: LocalApiConfig): Promise<void> {
   });
 }
 
+async function syncMeetingIdleState(): Promise<void> {
+  const failure = await browser.executeAsync(
+    (done: (failure: string | null) => void) => {
+      const tauri = globalThis as typeof globalThis & {
+        __TAURI__?: {
+          event?: {
+            emit: (name: string, payload: unknown) => Promise<unknown>;
+          };
+        };
+      };
+      const emit = tauri.__TAURI__?.event?.emit;
+      if (!emit) {
+        done("global __TAURI__.event.emit unavailable");
+        return;
+      }
+      void emit("native-shortcut-toggle-meeting", {
+        active: false,
+        manualActive: false,
+        activeMeetingId: null,
+        stoppableMeetingId: null,
+        meetingApp: null,
+        detectionSource: null,
+      })
+        .then(() => done(null))
+        .catch((error) => done(String(error)));
+    },
+  );
+  if (failure)
+    throw new Error(`failed to synchronize meeting state: ${failure}`);
+}
+
 describe("meeting summary recovery controls", function () {
   this.timeout(t(180_000));
 
@@ -376,6 +407,11 @@ describe("meeting summary recovery controls", function () {
     );
     await row.waitForExist({ timeout: t(25_000) });
     await row.click();
+    // The start and direct-update fixture operations intentionally avoid a
+    // real stop event. Synchronize the already-verified idle backend state
+    // through the same event Home consumes after a native meeting toggle so a
+    // delayed start notification cannot leave this saved row looking live.
+    await syncMeetingIdleState();
     await waitForTestId("note-editor", 20_000);
 
     const retranscribe = await $(
