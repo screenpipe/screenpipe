@@ -4309,6 +4309,71 @@ pub async fn perform_ocr_on_image(
     Ok(text)
 }
 
+/// Put text on the system clipboard.
+///
+/// On Linux there is no OS-side clipboard buffer: content is served by the
+/// process owning the selection, and arboard releases ownership as soon as the
+/// `Clipboard` instance is dropped (a 100ms clipboard-manager handover is
+/// attempted, which fails on typical Wayland setups). Creating a clipboard,
+/// setting text, and returning therefore looks successful but leaves the
+/// clipboard empty. Serve the selection from a detached thread until another
+/// application replaces it; the thread exits on the next clipboard write.
+pub(crate) fn set_clipboard_text(text: String) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        std::thread::Builder::new()
+            .name("clipboard-owner".to_string())
+            .spawn(move || {
+                use arboard::SetExtLinux;
+                let result = arboard::Clipboard::new()
+                    .and_then(|mut clipboard| clipboard.set().wait().text(text));
+                if let Err(e) = result {
+                    error!("failed to set clipboard: {}", e);
+                }
+            })
+            .map_err(|e| format!("failed to spawn clipboard thread: {}", e))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let mut clipboard =
+            arboard::Clipboard::new().map_err(|e| format!("clipboard error: {}", e))?;
+        clipboard
+            .set_text(text)
+            .map_err(|e| format!("failed to set clipboard: {}", e))?;
+        Ok(())
+    }
+}
+
+/// Put an image on the system clipboard. Same Linux ownership rules as
+/// [`set_clipboard_text`].
+pub(crate) fn set_clipboard_image(image: arboard::ImageData<'static>) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        std::thread::Builder::new()
+            .name("clipboard-owner".to_string())
+            .spawn(move || {
+                use arboard::SetExtLinux;
+                let result = arboard::Clipboard::new()
+                    .and_then(|mut clipboard| clipboard.set().wait().image(image));
+                if let Err(e) = result {
+                    error!("failed to set clipboard image: {}", e);
+                }
+            })
+            .map_err(|e| format!("failed to spawn clipboard thread: {}", e))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let mut clipboard =
+            arboard::Clipboard::new().map_err(|e| format!("clipboard error: {}", e))?;
+        clipboard
+            .set_image(image)
+            .map_err(|e| format!("failed to set clipboard: {}", e))?;
+        Ok(())
+    }
+}
+
 /// Copy a frame image to the system clipboard (native API, works in Tauri webview).
 /// Fetches the frame from the local server and uses arboard for clipboard access.
 #[tauri::command]
@@ -4331,16 +4396,11 @@ pub async fn copy_frame_to_clipboard(app: tauri::AppHandle, frame_id: i64) -> Re
         image::load_from_memory(&bytes).map_err(|e| format!("failed to decode image: {}", e))?;
     let rgba = img.to_rgba8();
 
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("clipboard error: {}", e))?;
-    clipboard
-        .set_image(arboard::ImageData {
-            width: rgba.width() as usize,
-            height: rgba.height() as usize,
-            bytes: std::borrow::Cow::from(rgba.into_raw()),
-        })
-        .map_err(|e| format!("failed to set clipboard: {}", e))?;
-
-    Ok(())
+    set_clipboard_image(arboard::ImageData {
+        width: rgba.width() as usize,
+        height: rgba.height() as usize,
+        bytes: std::borrow::Cow::from(rgba.into_raw()),
+    })
 }
 
 /// Copy a frame deeplink (screenpipe://frame/N) to clipboard. Native API only.
@@ -4348,11 +4408,7 @@ pub async fn copy_frame_to_clipboard(app: tauri::AppHandle, frame_id: i64) -> Re
 #[specta::specta]
 pub async fn copy_deeplink_to_clipboard(frame_id: i64) -> Result<(), String> {
     let link = format!("screenpipe://frame/{}", frame_id);
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("clipboard error: {}", e))?;
-    clipboard
-        .set_text(link)
-        .map_err(|e| format!("failed to set clipboard: {}", e))?;
-    Ok(())
+    set_clipboard_text(link)
 }
 
 /// Read text from the system clipboard (native API — navigator.clipboard.readText()
@@ -4371,11 +4427,7 @@ pub async fn read_clipboard_text() -> Result<String, String> {
 #[tauri::command]
 #[specta::specta]
 pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("clipboard error: {}", e))?;
-    clipboard
-        .set_text(text)
-        .map_err(|e| format!("failed to set clipboard: {}", e))?;
-    Ok(())
+    set_clipboard_text(text)
 }
 
 /// Open a local markdown note in Obsidian (if available), then fallback to OS default app.
@@ -4664,4 +4716,38 @@ pub fn set_autostart(app_handle: tauri::AppHandle, enabled: bool) -> Result<(), 
         manager.is_enabled().unwrap_or(false)
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod clipboard_tests {
+    /// Regression test for the Linux copy-button bug: clipboard content used to
+    /// vanish as soon as the per-call `arboard::Clipboard` instance was dropped,
+    /// because on Linux the selection is hosted by the owning instance. The
+    /// helper must keep serving the selection after `set_clipboard_text` returns.
+    ///
+    /// Needs a live display server, so it cannot run in headless CI. Run locally:
+    /// `cargo test -p screenpipe-app clipboard -- --ignored`
+    #[test]
+    #[ignore = "requires a display server (X11/Wayland); run with -- --ignored"]
+    fn set_clipboard_text_persists_after_call_returns() {
+        let marker = format!("screenpipe-clipboard-test-{}", std::process::id());
+        super::set_clipboard_text(marker.clone()).expect("set clipboard");
+        // The Linux path serves the selection from a detached thread; poll until
+        // it has taken ownership rather than trusting a fixed sleep.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let read = arboard::Clipboard::new()
+                .expect("open clipboard")
+                .get_text()
+                .unwrap_or_default();
+            if read == marker {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "clipboard still reads {read:?} after 5s, expected {marker:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
 }
