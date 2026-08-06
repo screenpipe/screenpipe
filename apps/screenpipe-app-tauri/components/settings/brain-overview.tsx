@@ -2822,11 +2822,13 @@ export function BrainOverview({
   const onboardingColdStart = showOnboardingActivation && !onboardingHasResult;
   return (
     <div className="relative flex min-h-0 flex-1 overflow-hidden">
-      <ConnectedShareDialog
-        open={shareOpen}
-        onOpenChange={setShareOpen}
-        artifact={shareArtifact!}
-      />
+      {shareArtifact && (
+        <ConnectedShareDialog
+          open={shareOpen}
+          onOpenChange={setShareOpen}
+          artifact={shareArtifact}
+        />
+      )}
       <div
         data-testid="brain-overview-scroll"
         className="flex h-full min-h-0 w-full flex-col overflow-hidden pr-2"
