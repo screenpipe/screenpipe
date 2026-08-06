@@ -1246,6 +1246,108 @@ describe("BrainOverview", () => {
     );
   });
 
+  it("keeps templates scrollable after deleting the last dashboard", async () => {
+    mocks.listBrainViewTemplateKits.mockResolvedValue({
+      status: "ok",
+      data: [dailyMemoryTemplate, processMapTemplate],
+    });
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    render(<BrainOverview />);
+
+    await openDashboardMenu();
+    fireEvent.click(await screen.findByText("delete"));
+    fireEvent.click(await screen.findByTestId("overview-confirm-delete"));
+
+    const emptyState = await screen.findByTestId("brain-overview-empty");
+    expect(emptyState.className).toContain("min-h-0");
+    expect(emptyState.className).toContain("overflow-y-auto");
+    expect(
+      screen.getByTestId("brain-overview-empty-content").className,
+    ).toContain("min-h-full");
+    expect(screen.getByTestId("live-view-template-daily-memory")).toBeTruthy();
+    expect(screen.getByTestId("live-view-template-process-map")).toBeTruthy();
+  });
+
+  it("keeps a template-generated new dashboard in review until it is saved", async () => {
+    const generatedView = {
+      title: "Daily memory, personalized",
+      timeRange: "today" as const,
+      periodPolicy: {
+        type: "selectable.v1" as const,
+        values: ["today" as const, "24h" as const],
+      },
+      note: "Built from a small relevant sample.",
+      blocks: [
+        {
+          id: "today-in-brief",
+          title: "Today in brief",
+          intent: "Summarize today's source-backed work.",
+          component: "markdown.v1" as const,
+          width: 12 as const,
+          pipeName: "daily-summary",
+        },
+      ],
+    };
+    mocks.listBrainViewTemplateKits.mockResolvedValue({
+      status: "ok",
+      data: [dailyMemoryTemplate],
+    });
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    mocks.generateLiveViewWithPi.mockResolvedValue(generatedView);
+    mocks.saveBrainView.mockImplementation(async (request) => ({
+      status: "ok",
+      data: {
+        ...request,
+        revision: 1,
+        createdAt: "2026-08-05T18:36:00Z",
+        updatedAt: "2026-08-05T18:36:00Z",
+        slots: request.slots.map((slot: object) => ({
+          ...slot,
+          value: null,
+          feedback: { upCount: 0, downCount: 0, current: null },
+          itemActions: { items: [] },
+        })),
+      },
+    }));
+    render(<BrainOverview />);
+
+    await openDashboardMenu();
+    fireEvent.click(await screen.findByTestId("overview-templates"));
+    fireEvent.click(
+      await screen.findByTestId("preview-live-view-template-daily-memory"),
+    );
+    fireEvent.click(await screen.findByTestId("overview-apply-template"));
+
+    expect(await screen.findByText(generatedView.title)).toBeTruthy();
+    expect(screen.getByText(generatedView.note)).toBeTruthy();
+    expect(screen.getByTestId("overview-apply-ai")).toHaveTextContent(
+      "create dashboard & load data",
+    );
+    expect(screen.queryByText("add your first Block")).toBeNull();
+    expect(mocks.saveBrainView).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("overview-apply-ai"));
+    await waitFor(() => expect(mocks.saveBrainView).toHaveBeenCalledTimes(1));
+    expect(mocks.saveBrainView).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedRevision: null,
+        title: generatedView.title,
+        slots: [
+          expect.objectContaining({
+            id: "today-in-brief",
+            title: "Today in brief",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("edits the real dashboard, reorders with the keyboard, and resizes without losing its Pipe", async () => {
     const secondSlot = {
       ...populatedView.slots[0],
@@ -1884,7 +1986,7 @@ describe("BrainOverview", () => {
       blocks: [
         {
           id: "focus-time",
-          title: "Focus time",
+          title: "Focused work",
           intent: "Calculate focused work time",
           component: "metric.v1",
           width: 6,
@@ -1929,7 +2031,15 @@ describe("BrainOverview", () => {
     fireEvent.click(screen.getByTestId("live-view-ai-generate"));
 
     expect(await screen.findByTestId("live-view-ai-review")).toBeTruthy();
-    expect(screen.getByTestId("canvas-block-habit-signals")).toBeTruthy();
+    const proposedBlock = screen.getByTestId("canvas-block-habit-signals");
+    expect(proposedBlock).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        proposedBlock.closest<HTMLElement>(
+          '[data-id="block:habit-signals"]',
+        )?.className,
+      ).toContain("selected"),
+    );
     mocks.saveBrainViewCanvas.mockClear();
     fireEvent.click(screen.getByTestId("canvas-tools-toggle"));
     fireEvent.click(screen.getByTestId("canvas-fit"));

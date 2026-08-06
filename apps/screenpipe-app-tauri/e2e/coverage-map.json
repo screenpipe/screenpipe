@@ -162,7 +162,12 @@
       "spec": "api.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["local-api"],
-      "features": ["health", "audio-device-health", "connections", "local-api-auth"],
+      "features": [
+        "health",
+        "audio-device-health",
+        "connections",
+        "local-api-auth"
+      ],
       "criticality": "high",
       "confidence": "partial",
       "ux": "api",
@@ -182,7 +187,13 @@
       "spec": "api-search-stress.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["local-api", "performance"],
-      "features": ["local-api-auth", "local-api-search", "health", "audio-device-health", "local-api-load"],
+      "features": [
+        "local-api-auth",
+        "local-api-search",
+        "health",
+        "audio-device-health",
+        "local-api-load"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "ux": "api",
@@ -192,7 +203,13 @@
       "spec": "app-lifecycle.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["real-ui-e2e", "window-lifecycle"],
-      "features": ["app-launch", "home-navigation", "webview-stability", "route-churn", "browser-storage"],
+      "features": [
+        "app-launch",
+        "home-navigation",
+        "webview-stability",
+        "route-churn",
+        "browser-storage"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "ux": "mixed",
@@ -202,7 +219,11 @@
       "spec": "audio-fallback.spec.ts",
       "platforms": ["macos"],
       "layers": ["audio-device", "settings", "notifications"],
-      "features": ["audio-device-health", "settings-recording", "notifications"],
+      "features": [
+        "audio-device-health",
+        "settings-recording",
+        "notifications"
+      ],
       "criticality": "medium",
       "confidence": "conditional",
       "ux": "real-user-flow",
@@ -212,7 +233,11 @@
       "spec": "zz-audio-fallback-reverify.spec.ts",
       "platforms": ["macos"],
       "layers": ["auth", "entitlement", "audio-device", "settings"],
-      "features": ["cloud-entitlement-reverify", "audio-engine-fallback", "settings-recording"],
+      "features": [
+        "cloud-entitlement-reverify",
+        "audio-engine-fallback",
+        "settings-recording"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
@@ -262,7 +287,12 @@
       "spec": "chat-tool-activity.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai", "real-ui-e2e"],
-      "features": ["chat", "chat-tools", "pi-tool-activity", "progressive-disclosure"],
+      "features": [
+        "chat",
+        "chat-tools",
+        "pi-tool-activity",
+        "progressive-disclosure"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "ux": "mixed",
@@ -572,7 +602,13 @@
       "spec": "home-window.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["real-ui-e2e", "window-lifecycle"],
-      "features": ["app-launch", "home-navigation", "timeline", "settings-recording", "pipes"],
+      "features": [
+        "app-launch",
+        "home-navigation",
+        "timeline",
+        "settings-recording",
+        "pipes"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
@@ -762,7 +798,12 @@
       "spec": "capture-stall-recovery.spec.ts",
       "platforms": ["macos"],
       "layers": ["capture-ocr", "local-api", "os-integration", "real-ui-e2e"],
-      "features": ["app-launch", "capture-ocr", "health", "recording-health-alerts"],
+      "features": [
+        "app-launch",
+        "capture-ocr",
+        "health",
+        "recording-health-alerts"
+      ],
       "criticality": "high",
       "confidence": "conditional",
       "ux": "mixed",
@@ -772,7 +813,12 @@
       "spec": "recording-health-focus-cold.spec.ts",
       "platforms": ["macos"],
       "layers": ["capture-ocr", "local-api", "os-integration", "real-ui-e2e"],
-      "features": ["app-launch", "capture-ocr", "health", "recording-health-alerts"],
+      "features": [
+        "app-launch",
+        "capture-ocr",
+        "health",
+        "recording-health-alerts"
+      ],
       "criticality": "high",
       "confidence": "conditional",
       "ux": "mixed",
@@ -822,7 +868,11 @@
       "spec": "privacy-api-auth-enforcement.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["settings", "local-api", "storage-privacy"],
-      "features": ["settings-privacy-api-auth", "local-api-auth", "restart-flow"],
+      "features": [
+        "settings-privacy-api-auth",
+        "local-api-auth",
+        "restart-flow"
+      ],
       "criticality": "high",
       "confidence": "conditional",
       "ux": "mixed",
@@ -832,7 +882,15 @@
       "spec": "settings-sections.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["settings", "real-ui-e2e", "storage-privacy"],
-      "features": ["settings-recording", "settings-ai", "settings-privacy-api-auth", "settings-permissions", "storage-retention", "low-disk-recording-guard", "audio-device-health"],
+      "features": [
+        "settings-recording",
+        "settings-ai",
+        "settings-privacy-api-auth",
+        "settings-permissions",
+        "storage-retention",
+        "low-disk-recording-guard",
+        "audio-device-health"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
@@ -931,8 +989,22 @@
     {
       "spec": "windows-core-recording.spec.ts",
       "platforms": ["windows"],
-      "layers": ["capture-ocr", "local-api", "audio-device", "notifications", "storage-privacy", "real-ui-e2e"],
-      "features": ["capture-ocr", "local-api-auth", "local-api-search", "audio-device-health", "timeline", "low-disk-recording-guard"],
+      "layers": [
+        "capture-ocr",
+        "local-api",
+        "audio-device",
+        "notifications",
+        "storage-privacy",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "capture-ocr",
+        "local-api-auth",
+        "local-api-search",
+        "audio-device-health",
+        "timeline",
+        "low-disk-recording-guard"
+      ],
       "criticality": "high",
       "confidence": "conditional",
       "ux": "mixed",
@@ -941,8 +1013,21 @@
     {
       "spec": "windows-system-integration.spec.ts",
       "platforms": ["windows"],
-      "layers": ["os-integration", "local-api", "audio-device", "window-lifecycle", "performance"],
-      "features": ["app-launch", "local-api-auth", "audio-device-health", "window-lifecycle", "os-process-health", "webview-stability"],
+      "layers": [
+        "os-integration",
+        "local-api",
+        "audio-device",
+        "window-lifecycle",
+        "performance"
+      ],
+      "features": [
+        "app-launch",
+        "local-api-auth",
+        "audio-device-health",
+        "window-lifecycle",
+        "os-process-health",
+        "webview-stability"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "ux": "mixed",
@@ -951,8 +1036,23 @@
     {
       "spec": "windows-user-journey.spec.ts",
       "platforms": ["windows"],
-      "layers": ["real-ui-e2e", "settings", "notifications", "storage-privacy", "window-lifecycle"],
-      "features": ["home-search", "timeline", "settings-recording", "meeting-notes", "shortcut-reminder", "notifications", "storage-retention", "settings-privacy-api-auth"],
+      "layers": [
+        "real-ui-e2e",
+        "settings",
+        "notifications",
+        "storage-privacy",
+        "window-lifecycle"
+      ],
+      "features": [
+        "home-search",
+        "timeline",
+        "settings-recording",
+        "meeting-notes",
+        "shortcut-reminder",
+        "notifications",
+        "storage-retention",
+        "settings-privacy-api-auth"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
@@ -1032,13 +1132,18 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Creates the first-open starter dashboard, verifies template handoff to the Live View builder agent without a legacy fixed Canvas install, renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080."
+      "notes": "Deletes the last dashboard at 800x600, scrolls to the final starter template, verifies the real local builder keeps its generated dashboard on review through save, and samples the native Canvas viewport across an AI-added Block focus to prove eased intermediate movement instead of a teleport. Also renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080."
     },
     {
       "spec": "live-view-item-actions.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["real-ui-e2e", "local-api", "pipes"],
-      "features": ["brain-overview", "live-view-item-actions", "artifacts", "pipes"],
+      "features": [
+        "brain-overview",
+        "live-view-item-actions",
+        "artifacts",
+        "pipes"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
@@ -1088,7 +1193,11 @@
       "spec": "zz-account-basic-upgrade-billing.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["real-ui-e2e", "settings", "billing"],
-      "features": ["account-upgrade", "billing-proration", "checkout-duplication"],
+      "features": [
+        "account-upgrade",
+        "billing-proration",
+        "checkout-duplication"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",

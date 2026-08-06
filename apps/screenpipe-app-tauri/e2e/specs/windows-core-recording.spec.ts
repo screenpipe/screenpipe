@@ -788,8 +788,8 @@ describe("Windows core recording pipeline", function () {
     if (!canRun) return;
 
     await openHomeWindow();
-    await waitForLocalApi();
     cfg = await getLocalApiConfig();
+    await waitForLocalApi(cfg.port);
   });
 
   async function probeMarkerIndexing(): Promise<MarkerProbe> {
