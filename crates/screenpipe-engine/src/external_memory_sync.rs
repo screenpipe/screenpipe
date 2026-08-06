@@ -245,6 +245,10 @@ pub async fn run_once(
                     destination_id: Destination::OBSIDIAN.id,
                     outcome: Err(anyhow::anyhow!("load memories: {}", e)),
                 },
+                ExternalSyncResult {
+                    destination_id: Destination::ANTIGRAVITY.id,
+                    outcome: Err(anyhow::anyhow!("load memories: {}", e)),
+                },
             ];
         }
     };
@@ -272,6 +276,14 @@ pub async fn run_once(
             secret_store,
             screenpipe_dir,
             resolve_obsidian_path,
+        )
+        .await,
+        sync_destination(
+            &Destination::ANTIGRAVITY,
+            &entries,
+            secret_store,
+            screenpipe_dir,
+            resolve_antigravity_path,
         )
         .await,
     ]
@@ -397,6 +409,10 @@ fn resolve_claude_code_path(creds: &serde_json::Map<String, Value>) -> Result<Pa
 
 fn resolve_codex_path(creds: &serde_json::Map<String, Value>) -> Result<PathBuf> {
     screenpipe_connect::connections::codex::resolve_home_path(creds)
+}
+
+fn resolve_antigravity_path(creds: &serde_json::Map<String, Value>) -> Result<PathBuf> {
+    screenpipe_connect::connections::antigravity::resolve_home_path(creds)
 }
 
 /// Resolve `<vault>/<memories_folder>` for the Obsidian destination. The

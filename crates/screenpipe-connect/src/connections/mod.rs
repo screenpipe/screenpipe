@@ -9,6 +9,7 @@
 //! credentials are never rendered into model context.
 
 pub mod airtable;
+pub mod antigravity;
 pub mod asana;
 pub mod bee;
 pub mod bitrix24;
@@ -438,6 +439,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(workflowy::Workflowy),
         Box::new(openclaw::OpenClaw),
         Box::new(hermes::Hermes),
+        Box::new(antigravity::Antigravity),
     ]
 }
 

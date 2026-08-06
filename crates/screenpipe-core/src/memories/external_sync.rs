@@ -101,6 +101,14 @@ impl Destination {
         owns_target: false,
     };
 
+    pub const ANTIGRAVITY: Destination = Destination {
+        id: "antigravity",
+        display_name: "Google Antigravity",
+        filename: "GEMINI.md",
+        sidecar_filename: None,
+        owns_target: false,
+    };
+
     /// Obsidian vault note. Unlike Claude Code / Codex — whose `CLAUDE.md` /
     /// `AGENTS.md` the user co-authors — this file is created and owned
     /// entirely by screenpipe, so it carries the full digest with no marker
@@ -133,7 +141,7 @@ impl Destination {
 // bad edit to the table fails to compile rather than misbehaving at runtime.
 const _: () =
     assert!(Destination::OBSIDIAN.owns_target && Destination::OBSIDIAN.sidecar_filename.is_none());
-const _: () = assert!(!Destination::CLAUDE_CODE.owns_target && !Destination::CODEX.owns_target);
+const _: () = assert!(!Destination::CLAUDE_CODE.owns_target && !Destination::CODEX.owns_target && !Destination::ANTIGRAVITY.owns_target);
 
 /// Bound how big the rendered block can get. Above ~200 entries the
 /// signal dies under noise and we start eating Claude Code's context

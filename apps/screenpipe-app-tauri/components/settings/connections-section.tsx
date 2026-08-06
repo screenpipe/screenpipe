@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Download, ExternalLink, Check, Loader2, Copy, Terminal, LogIn, LogOut, RotateCw, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff, FolderOpen, Plus, AlertCircle, MessageSquare, Inbox } from "lucide-react";
+import { Download, ExternalLink, Check, Loader2, Copy, Terminal, LogIn, LogOut, RotateCw, Send, X, HelpCircle, Search, Calendar as CalendarIcon, Eye, EyeOff, FolderOpen, Plus, AlertCircle, MessageSquare, Inbox, Bot } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { commands } from "@/lib/utils/tauri";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -64,9 +64,12 @@ import { areExternalAgentSkillsInstalled } from "@/lib/external-agent-skills";
 import {
   buildMcpConfig,
   buildCodexMcpToml,
+  buildGrokMcpToml,
   connectAiTool,
   disconnectAiTool,
   installClaudeMcp,
+  installGrokMcp,
+  uninstallGrokMcp,
   friendlyToolError,
   type FriendlyToolError,
 } from "@/lib/ai-tools-mcp";
@@ -216,12 +219,14 @@ async function openWindowsShellTarget(target: string): Promise<void> {
 import {
   getCodexConfigPath,
   getGrokConfigPath,
+  getAntigravityConfigPath,
   getInstalledMcpVersion,
   getInstalledClaudeScreenpipeEntry,
   isStaleClaudeScreenpipeEntry,
   isCodexMcpInstalled,
   isCursorMcpInstalled,
   isGrokMcpInstalled,
+  isAntigravityMcpInstalled,
 } from "@/lib/hooks/use-hardcoded-tiles";
 
 type McpCommand = { command: string; args: string[]; env?: Record<string, string> };
@@ -257,6 +262,7 @@ async function detectInstalledConnectionIds(): Promise<Set<string>> {
       addIf("krisp", macAppExists("Krisp")),
       addIf("codex", getCodexConfigPath().then(pathExists)),
       addIf("grok", getGrokConfigPath().then(pathExists)),
+      addIf("antigravity", getAntigravityConfigPath().then(pathExists)),
       addIf("claude-code", hasClaudeCode),
     ]);
     return detected;
@@ -327,6 +333,7 @@ async function detectInstalledConnectionIds(): Promise<Set<string>> {
       ])),
       addIf("codex", getCodexConfigPath().then(pathExists)),
       addIf("grok", getGrokConfigPath().then(pathExists)),
+      addIf("antigravity", getAntigravityConfigPath().then(pathExists)),
       addIf("obsidian", getObsidianConfigPath().then(path => !!path && pathExists(path))),
       addIf("claude-code", hasClaudeCode),
     ]);
@@ -413,6 +420,7 @@ async function detectInstalledConnectionIds(): Promise<Set<string>> {
       ])),
       addIf("codex", getCodexConfigPath().then(pathExists)),
       addIf("grok", getGrokConfigPath().then(pathExists)),
+      addIf("antigravity", getAntigravityConfigPath().then(pathExists)),
       addIf("claude-code", hasClaudeCode),
     ]);
     return detected;
@@ -421,49 +429,7 @@ async function detectInstalledConnectionIds(): Promise<Set<string>> {
   return detected;
 }
 
-// Grok CLI stores MCP servers as an array under `mcp.servers[]` in
-// ~/.grok/user-settings.json, each entry tagged with `id`/`label`/`enabled`
-// (see superagent-ai/grok-cli src/utils/settings.ts McpServerConfig).
-function buildGrokMcpServer(config: McpCommand): Record<string, unknown> {
-  const server: Record<string, unknown> = {
-    id: "screenpipe",
-    label: "screenpipe",
-    enabled: true,
-    transport: "stdio",
-    command: config.command,
-    args: config.args,
-  };
-  if (config.env && Object.keys(config.env).length > 0) server.env = config.env;
-  return server;
-}
 
-function buildGrokMcpJson(config: McpCommand): string {
-  return JSON.stringify({ mcp: { servers: [buildGrokMcpServer(config)] } }, null, 2);
-}
-
-async function installGrokMcp(): Promise<void> {
-  const configPath = await getGrokConfigPath();
-  let config: Record<string, unknown> = {};
-  try { config = JSON.parse(await readTextFile(configPath)); } catch { /* fresh */ }
-  const mcp = (config.mcp && typeof config.mcp === "object" ? config.mcp : {}) as Record<string, unknown>;
-  const servers = (Array.isArray(mcp.servers) ? mcp.servers : []) as Record<string, unknown>[];
-  const next = servers.filter((s) => s?.id !== "screenpipe");
-  next.push(buildGrokMcpServer(await buildMcpConfig({ client: "grok" })));
-  mcp.servers = next;
-  config.mcp = mcp;
-  await mkdir(await dirname(configPath), { recursive: true });
-  await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
-}
-
-async function uninstallGrokMcp(): Promise<void> {
-  const configPath = await getGrokConfigPath();
-  let config: Record<string, unknown> = {};
-  try { config = JSON.parse(await readTextFile(configPath)); } catch { return; }
-  const mcp = (config.mcp && typeof config.mcp === "object" ? config.mcp : null) as Record<string, unknown> | null;
-  if (!mcp || !Array.isArray(mcp.servers)) return;
-  mcp.servers = (mcp.servers as Record<string, unknown>[]).filter((s) => s?.id !== "screenpipe");
-  await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
-}
 
 // ---------------------------------------------------------------------------
 // Grid tile icons
@@ -497,6 +463,7 @@ const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
     codex: <img src="/images/codex.svg" alt="Codex" className="w-5 h-5 rounded" />,
     grok: <GrokLogo className="w-5 h-5 rounded" />,
     "claude-code": <Terminal className="h-5 w-5" />,
+    antigravity: <Bot className="h-5 w-5" />,
     warp: <img src="/images/warp.png" alt="Warp" className="w-5 h-5 rounded" />,
     chatgpt: <img src="/images/openai.png" alt="ChatGPT" className="w-5 h-5 rounded" />,
     telegram: (
@@ -1373,9 +1340,9 @@ function GrokPanel({ onConnected, onDisconnected }: { onConnected?: () => void; 
   const [connectError, setConnectError] = useState<FriendlyToolError | null>(null);
   useEffect(() => { isGrokMcpInstalled().then(ok => { if (ok) { setState("installed"); onConnected?.(); } }); }, []);
 
-  const manualConfig = useMemo(() => buildGrokMcpJson({
-    command: "npx",
-    args: ["-y", "screenpipe-mcp@latest"],
+  const manualConfig = useMemo(() => buildGrokMcpToml({
+    command: "bun",
+    args: ["x", "screenpipe-mcp@latest"],
   }), []);
 
   const handleConnect = async () => {

@@ -24,6 +24,7 @@ export const CONNECTION_CATEGORY_BY_ID: Record<string, string> = {
   codex: "Desktop",
   grok: "Desktop",
   "claude-code": "Desktop",
+  antigravity: "Desktop",
   warp: "Desktop",
   chatgpt: "Desktop",
 
@@ -158,6 +159,7 @@ export const CONNECTION_HARDCODED_DESCRIPTIONS: Record<string, string> = {
   "codex": "Give Codex access to your screen & audio via MCP",
   "grok": "Give Grok CLI access to your screen & audio via MCP",
   "claude-code": "Add screen memory to the Claude Code CLI",
+  "antigravity": "Give Google Antigravity access to your screen & audio via MCP",
   "warp": "Search screen history from Warp terminal via MCP",
   "chatgpt": "Search your screen history from ChatGPT",
   "browser-url": "Capture visited URLs from your browser in real time",
@@ -211,6 +213,7 @@ export const DEVICE_CONNECTION_ORDER = [
   "codex",
   "grok",
   "claude-code",
+  "antigravity",
   "chatgpt",
   "browser-url",
   "obsidian",

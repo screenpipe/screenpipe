@@ -130,6 +130,21 @@ export async function isCursorMcpInstalled(): Promise<boolean> {
   } catch { return false; }
 }
 
+export async function getAntigravityConfigPath(): Promise<string> {
+  const home = await homeDir();
+  return join(home, ".gemini", "config", "mcp_config.json");
+}
+
+export async function isAntigravityMcpInstalled(): Promise<boolean> {
+  try {
+    const path = await getAntigravityConfigPath();
+    const content = await readTextFile(path);
+    return !!JSON.parse(content)?.mcpServers?.screenpipe;
+  } catch {
+    return false;
+  }
+}
+
 export async function getCodexConfigPath(): Promise<string> {
   const home = await homeDir();
   return join(home, ".codex", "config.toml");
@@ -153,26 +168,39 @@ export async function isCodexMcpInstalled(): Promise<boolean> {
   }
 }
 
-// Grok CLI (superagent-ai/grok-cli) keeps user settings in
-// ~/.grok/user-settings.json. MCP servers live in an *array* under
-// `mcp.servers[]` (each entry: { id, label, enabled, transport, command,
-// args, env? }) — unlike Claude/Cursor's `mcpServers` object map.
+// Grok CLI keeps user configuration in ~/.grok/config.toml.
+// MCP servers live under `[mcp_servers.screenpipe]`.
 export async function getGrokConfigPath(): Promise<string> {
   const home = await homeDir();
-  return join(home, ".grok", "user-settings.json");
+  return join(home, ".grok", "config.toml");
 }
 
 export function hasEnabledGrokMcp(content: string): boolean {
+  const table = content.match(CODEX_SCREENPIPE_TABLE)?.[0] ?? "";
+  if (table && !/^\s*enabled\s*=\s*false\s*$/m.test(table)) return true;
   try {
     const servers = JSON.parse(content)?.mcp?.servers;
-    if (!Array.isArray(servers)) return false;
-    return servers.some((s) => s?.id === "screenpipe" && s?.enabled !== false);
-  } catch { return false; }
+    if (Array.isArray(servers) && servers.some((s) => s?.id === "screenpipe" && s?.enabled !== false)) {
+      return true;
+    }
+  } catch { /* not json */ }
+  return false;
 }
 
 export async function isGrokMcpInstalled(): Promise<boolean> {
   try {
-    return hasEnabledGrokMcp(await readTextFile(await getGrokConfigPath()));
+    const configPath = await getGrokConfigPath();
+    if (await exists(configPath)) {
+      const content = await readTextFile(configPath);
+      if (hasEnabledGrokMcp(content)) return true;
+    }
+    const home = await homeDir();
+    const legacyPath = await join(home, ".grok", "user-settings.json");
+    if (await exists(legacyPath)) {
+      const content = await readTextFile(legacyPath);
+      if (hasEnabledGrokMcp(content)) return true;
+    }
+    return false;
   } catch { return false; }
 }
 

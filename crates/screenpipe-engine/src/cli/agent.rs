@@ -34,7 +34,7 @@ pub enum AgentCommand {
     Setup {
         /// Which agent to wire up. Omit when using --all.
         #[arg(
-            value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "windsurf"],
+            value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "windsurf", "antigravity"],
             required_unless_present = "all",
             conflicts_with = "all"
         )]
@@ -54,7 +54,7 @@ pub enum AgentCommand {
     /// agent's own config or other skills.
     Remove {
         /// Which agent to unwire.
-        #[arg(value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "windsurf"])]
+        #[arg(value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "windsurf", "antigravity"])]
         target: String,
     },
 }
@@ -220,9 +220,15 @@ fn detected_agents_in(home: &Path) -> Vec<DetectedAgent> {
         ("cursor", "Cursor", ".cursor"),
         ("openclaw", "OpenClaw", ".openclaw"),
         ("hermes", "Hermes", ".hermes"),
+        ("grok", "Grok", ".grok"),
         ("windsurf", "Windsurf / Devin Desktop", ".codeium/windsurf"),
+        ("antigravity", "Google Antigravity", ".gemini/antigravity"),
     ] {
-        if home.join(relative_dir).exists() {
+        if home.join(relative_dir).exists()
+            || (target == "antigravity"
+                && (home.join(".gemini/config").exists()
+                    || Path::new("/Applications/Antigravity.app").exists()))
+        {
             detected.push(DetectedAgent { target, name });
         }
     }
@@ -372,6 +378,7 @@ fn detected_desktop_agents_in(home: &Path) -> Vec<DesktopDetectedAgent> {
         ("cursor", "Cursor", "cursor", ".cursor", true),
         ("openclaw", "OpenClaw", "openclaw", ".openclaw", true),
         ("hermes", "Hermes", "hermes", ".hermes", true),
+        ("grok", "Grok", "grok", ".grok", true),
         (
             "windsurf",
             "Windsurf / Devin Desktop",
@@ -379,8 +386,19 @@ fn detected_desktop_agents_in(home: &Path) -> Vec<DesktopDetectedAgent> {
             ".codeium/windsurf",
             false,
         ),
+        (
+            "antigravity",
+            "Google Antigravity",
+            "antigravity",
+            ".gemini/antigravity",
+            true,
+        ),
     ] {
-        if home.join(relative_dir).exists() {
+        if home.join(relative_dir).exists()
+            || (id == "antigravity"
+                && (home.join(".gemini/config").exists()
+                    || Path::new("/Applications/Antigravity.app").exists()))
+        {
             detected.push(DesktopDetectedAgent {
                 id,
                 name,
@@ -623,6 +641,12 @@ fn layout_in(target: &str, h: &Path) -> Result<AgentLayout> {
             mcp_path: h.join(".codex/config.toml"),
             mcp_format: McpFormat::Toml,
         },
+        "grok" => AgentLayout {
+            name: "Grok",
+            skills_dir: Some(h.join(".grok/skills")),
+            mcp_path: h.join(".grok/config.toml"),
+            mcp_format: McpFormat::Toml,
+        },
         // Cursor loads global skills from ~/.cursor/skills (also ~/.agents/skills
         // and, for compat, ~/.claude/skills + ~/.codex/skills) — see
         // https://cursor.com/docs/skills
@@ -638,8 +662,14 @@ fn layout_in(target: &str, h: &Path) -> Result<AgentLayout> {
             mcp_path: h.join(".codeium/windsurf/mcp_config.json"),
             mcp_format: McpFormat::Json,
         },
+        "antigravity" => AgentLayout {
+            name: "Google Antigravity",
+            skills_dir: Some(h.join(".gemini/config/skills")),
+            mcp_path: h.join(".gemini/config/mcp_config.json"),
+            mcp_format: McpFormat::Json,
+        },
         other => anyhow::bail!(
-            "unknown agent target '{other}' (use: openclaw, hermes, claude-code, claude-desktop, codex, cursor, windsurf)"
+            "unknown agent target '{other}' (use: openclaw, hermes, claude-code, claude-desktop, codex, cursor, windsurf, antigravity)"
         ),
     })
 }
