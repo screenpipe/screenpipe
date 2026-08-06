@@ -24,6 +24,7 @@ interface StandaloneChatHeaderProps {
   isMac: boolean;
   isFullscreen: boolean;
   hideInlineHistory?: boolean;
+  hasRightActions?: boolean;
   showHistory: boolean;
   settings: {
     disabledShortcuts: string[];
@@ -46,6 +47,7 @@ export function StandaloneChatHeader({
   isMac,
   isFullscreen,
   hideInlineHistory,
+  hasRightActions,
   showHistory,
   settings,
   reloadStore,
@@ -76,6 +78,16 @@ export function StandaloneChatHeader({
         ? storeTitle
         : derivedTitle || (hasMessages ? "untitled" : ""));
   const useCompactHeaderPadding = !className || Boolean(conversationId && visibleTitle);
+  // With inline history hidden (main window) the row can end up with the title
+  // menu suppressed and no right actions — an empty strip. Nothing to show and
+  // nothing to drag (dragging is disabled whenever className is set), so drop
+  // the row entirely instead of leaving a bordered band of dead space.
+  const isEmpty =
+    Boolean(hideInlineHistory) &&
+    !(conversationId && visibleTitle) &&
+    !hasRightActions;
+
+  if (isEmpty) return null;
 
   return (
     <div

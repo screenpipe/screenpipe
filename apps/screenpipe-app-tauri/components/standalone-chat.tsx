@@ -1342,6 +1342,7 @@ export function StandaloneChat({
         isMac={isMac}
         isFullscreen={isFullscreen}
         hideInlineHistory={hideInlineHistory}
+        hasRightActions={inspectorHasContent || sidePanelHasContent}
         showHistory={showHistory}
         settings={settings}
         reloadStore={reloadStore}
