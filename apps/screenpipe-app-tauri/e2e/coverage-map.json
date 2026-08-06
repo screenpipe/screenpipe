@@ -1142,7 +1142,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Deletes the last dashboard at 800x600, scrolls to the final starter template, verifies the real local builder keeps its generated dashboard on review through save, and samples the native Canvas viewport across an AI-added Block focus to prove eased intermediate movement instead of a teleport. Also renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080."
+      "notes": "Deletes the last dashboard at 800x600, scrolls to the final starter template, verifies the real local builder keeps its generated dashboard on review through save, requires four AI-proposed Blocks to be visible on an empty Canvas before acceptance, and samples the native Canvas viewport across an AI-added Block focus to prove eased intermediate movement instead of a teleport. Also renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080."
     },
     {
       "spec": "live-view-item-actions.spec.ts",

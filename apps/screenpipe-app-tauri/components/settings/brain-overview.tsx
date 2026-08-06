@@ -3101,7 +3101,7 @@ export function BrainOverview({
           />
         )}
         {showOnboardingActivation &&
-        !onboardingHasResult ? null : slots.length === 0 ? (
+        !onboardingHasResult ? null : proposalSlots.length === 0 ? (
           <button
             type="button"
             className="flex min-h-0 w-full flex-1 items-center justify-center border border-dashed border-border text-xs text-muted-foreground hover:text-foreground"
