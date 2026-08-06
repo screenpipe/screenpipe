@@ -4,15 +4,15 @@
 
 /**
  * Regression: clicking the bottom lines of a meeting note must place the caret
- * there. The note editor scrolls inside a container with a sticky, opaque
- * footer (control bar + transcript panel) docked at the bottom. If the footer
+ * there. The note editor scrolls inside a container with an opaque control
+ * footer docked at the bottom. If the footer
  * overlaps the editor's scroll content, the bottom lines render *underneath*
  * it: mouse clicks land on the footer (a dead zone) and the caret can only be
  * moved there with the arrow keys. See components/meeting-notes/note-view.tsx.
  *
- * This spec seeds a long note, opens the transcript panel (worst-case footer
- * height), and asserts that the editor's last line is NOT covered by the
- * footer and is actually clickable (a real click lands the caret on it).
+ * This spec seeds a long note, explicitly selects the Notes workspace tab,
+ * and asserts that the editor's last line is NOT covered by the footer and is
+ * actually clickable (a real click lands the caret on it).
  */
 
 import {
@@ -297,8 +297,17 @@ describe("meeting note – bottom line is clickable", function () {
     await row.waitForExist({ timeout: t(25000) });
     await row.click();
 
+    // The meeting workspace remembers its last active tab and keeps the notes
+    // editor mounted while hidden. Select Notes explicitly so an existence
+    // check cannot accidentally pass against the zero-geometry hidden editor.
+    const notesTab = await $("#meeting-tab-notes");
+    await notesTab.waitForExist({ timeout: t(10000) });
+    if ((await notesTab.getAttribute("aria-selected")) !== "true") {
+      await notesTab.click();
+    }
+
     const editor = await waitForTestId("note-editor", 20000);
-    await editor.waitForExist({ timeout: t(10000) });
+    await editor.waitForDisplayed({ timeout: t(10000) });
     await browser.pause(t(800));
   });
 
@@ -361,13 +370,6 @@ describe("meeting note – bottom line is clickable", function () {
   });
 
   it("diagnoses footer overlap and asserts the last line is clickable", async () => {
-    // worst case: open the transcript panel so the footer is tall
-    const tBtn = await $(`button[aria-label="show transcript"]`);
-    if (await tBtn.isExisting()) {
-      await tBtn.click();
-      await browser.pause(t(1000));
-    }
-
     await measure("before-scroll");
     await scrollToBottom();
     const g = await measure("max-scroll");
