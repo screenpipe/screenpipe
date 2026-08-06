@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use screenpipe_events::{send_event, DiskSpaceLowEvent, LOW_DISK_THRESHOLD_BYTES};
+use screenpipe_events::{
+    send_event, DiskSpaceLowEvent, DiskSpaceRecoveredEvent, LOW_DISK_RECOVERY_THRESHOLD_BYTES,
+    LOW_DISK_THRESHOLD_BYTES,
+};
 use sysinfo::{DiskExt, System, SystemExt};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
@@ -17,7 +20,13 @@ pub const LOW_DISK_CHECK_INTERVAL_SECS: u64 = 30;
 const CHECK_INTERVAL: Duration = Duration::from_secs(LOW_DISK_CHECK_INTERVAL_SECS);
 
 type DiskSpaceProbe = Arc<dyn Fn(&Path) -> Option<u64> + Send + Sync>;
-type EventPublisher = Arc<dyn Fn(DiskSpaceLowEvent) -> Result<(), String> + Send + Sync>;
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DiskPressureEvent {
+    Low(DiskSpaceLowEvent),
+    Recovered(DiskSpaceRecoveredEvent),
+}
+
+type EventPublisher = Arc<dyn Fn(DiskPressureEvent) -> Result<(), String> + Send + Sync>;
 
 #[cfg(any(debug_assertions, test))]
 fn seed_list_ignores_disk_pressure(seeds: &str) -> bool {
@@ -58,8 +67,11 @@ pub fn start_disk_pressure_monitor(
         CHECK_INTERVAL,
         Arc::new(available_space_for_path),
         Arc::new(|event| {
-            let event_name = event.event_name();
-            send_event(event_name, event).map_err(|error| error.to_string())
+            let result = match event {
+                DiskPressureEvent::Low(event) => send_event(event.event_name(), event),
+                DiskPressureEvent::Recovered(event) => send_event(event.event_name(), event),
+            };
+            result.map_err(|error| error.to_string())
         }),
     )
 }
@@ -75,6 +87,7 @@ fn start_disk_pressure_monitor_with(
         let mut interval = tokio::time::interval(check_interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut pressure_active = false;
+        let mut recovery_published = false;
 
         loop {
             tokio::select! {
@@ -104,19 +117,34 @@ fn start_disk_pressure_monitor_with(
                                 );
                             }
                             pressure_active = true;
-                            if let Err(error) = publish(event) {
+                            recovery_published = false;
+                            if let Err(error) = publish(DiskPressureEvent::Low(event)) {
                                 warn!("failed to publish disk_space_low event: {error}");
                             }
                         }
-                        Ok(Some(available_bytes)) => {
-                            if pressure_active {
+                        Ok(Some(available_bytes)) if has_recovered(available_bytes) => {
+                            if pressure_active || !recovery_published {
                                 info!(
                                     available_bytes,
                                     data_dir = %data_dir.display(),
-                                    "disk space recovered above the capture safety threshold"
+                                    recovery_threshold_bytes = LOW_DISK_RECOVERY_THRESHOLD_BYTES,
+                                    "disk space recovered with enough headroom to re-arm alerts"
                                 );
+                                let event = DiskSpaceRecoveredEvent::new(
+                                    available_bytes,
+                                    data_dir.to_string_lossy().into_owned(),
+                                );
+                                if let Err(error) = publish(DiskPressureEvent::Recovered(event)) {
+                                    warn!("failed to publish disk_space_recovered event: {error}");
+                                } else {
+                                    recovery_published = true;
+                                }
                             }
                             pressure_active = false;
+                        }
+                        Ok(Some(_)) => {
+                            // Between the stop and recovery thresholds: capture may run,
+                            // but this remains the same incident for notification dedup.
                         }
                         Ok(None) => warn!(
                             data_dir = %data_dir.display(),
@@ -201,6 +229,10 @@ fn is_low_disk(available_bytes: u64) -> bool {
     available_bytes <= LOW_DISK_THRESHOLD_BYTES
 }
 
+fn has_recovered(available_bytes: u64) -> bool {
+    available_bytes >= LOW_DISK_RECOVERY_THRESHOLD_BYTES
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,6 +244,8 @@ mod tests {
         assert!(!is_low_disk(LOW_DISK_THRESHOLD_BYTES + 1));
         assert!(is_low_disk(LOW_DISK_THRESHOLD_BYTES));
         assert!(is_low_disk(0));
+        assert!(!has_recovered(LOW_DISK_RECOVERY_THRESHOLD_BYTES - 1));
+        assert!(has_recovered(LOW_DISK_RECOVERY_THRESHOLD_BYTES));
     }
 
     #[test]
@@ -285,6 +319,9 @@ mod tests {
             .await
             .expect("monitor did not publish its immediate sample")
             .expect("publisher closed before emitting");
+        let DiskPressureEvent::Low(event) = event else {
+            panic!("expected low-disk event");
+        };
         assert_eq!(event.available_bytes, LOW_DISK_THRESHOLD_BYTES);
         assert_eq!(event.data_dir, "test-data");
 
@@ -377,5 +414,46 @@ mod tests {
             .expect("monitor did not stop after shutdown")
             .unwrap();
         assert!(event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn monitor_rearms_once_after_recovery_hysteresis() {
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let probes = Arc::new(AtomicUsize::new(0));
+        let probe_count = Arc::clone(&probes);
+        let handle = start_disk_pressure_monitor_with(
+            PathBuf::from("test-data"),
+            shutdown_rx,
+            Duration::from_millis(10),
+            Arc::new(move |_| {
+                if probe_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Some(LOW_DISK_THRESHOLD_BYTES)
+                } else {
+                    Some(LOW_DISK_RECOVERY_THRESHOLD_BYTES)
+                }
+            }),
+            Arc::new(move |event| event_tx.send(event).map_err(|error| error.to_string())),
+        );
+
+        let first = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+            .await
+            .expect("monitor did not publish low-disk event")
+            .expect("publisher closed before low-disk event");
+        assert!(matches!(first, DiskPressureEvent::Low(_)));
+
+        let second = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+            .await
+            .expect("monitor did not publish recovery event")
+            .expect("publisher closed before recovery event");
+        assert!(matches!(second, DiskPressureEvent::Recovered(_)));
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(event_rx.try_recv().is_err(), "recovery event repeated");
+        shutdown_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("monitor did not stop after shutdown")
+            .unwrap();
     }
 }

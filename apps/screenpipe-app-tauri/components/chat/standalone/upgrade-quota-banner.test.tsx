@@ -275,7 +275,7 @@ describe("UpgradeQuotaBanner", () => {
     expect(mocks.openBusinessUpgradeSurface).not.toHaveBeenCalled();
   });
 
-  it("opens an upgrade modal from polled legacy cost exhaustion on chat entry", async () => {
+  it("offers the upgrade inline (no modal) from polled legacy cost exhaustion", async () => {
     mocks.usageState = {
       ...mocks.usageState,
       tier: "subscribed",
@@ -298,7 +298,8 @@ describe("UpgradeQuotaBanner", () => {
     render(<UpgradeQuotaBanner />);
 
     expect(screen.getByTestId("hosted-ai-cost-limit-banner")).toBeTruthy();
-    expect(screen.getByTestId("ai-usage-limit-modal")).toBeTruthy();
+    // The blocking dialog is gone — the banner carries the recovery action.
+    expect(screen.queryByTestId("ai-usage-limit-modal")).toBeNull();
     fireEvent.click(
       screen.getByRole("button", { name: "Upgrade to Business Max" }),
     );
@@ -365,7 +366,6 @@ describe("UpgradeQuotaBanner", () => {
     };
     render(<UpgradeQuotaBanner />);
 
-    fireEvent.click(screen.getByRole("button", { name: "not now" }));
     fireEvent.click(
       screen.getByRole("button", { name: "dismiss AI usage notice" }),
     );
