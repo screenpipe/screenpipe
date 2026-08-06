@@ -4318,21 +4318,68 @@ pub async fn perform_ocr_on_image(
 /// setting text, and returning therefore looks successful but leaves the
 /// clipboard empty. Serve the selection from a detached thread until another
 /// application replaces it; the thread exits on the next clipboard write.
+/// Serializes Linux clipboard ownership handoff: rapid successive copies must
+/// acquire the selection in call order so the last command deterministically
+/// wins, and each command must not return before its worker owns the selection.
+#[cfg(target_os = "linux")]
+static CLIPBOARD_HANDOFF: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Linux ownership handoff: spawn a single owner thread that sets the
+/// selection once via `set().wait()` (serving it until another clipboard write
+/// replaces it), then block until a fresh read observes the new content — so
+/// the command never returns before an immediate paste would succeed. The set
+/// happens exactly once per command; a superseded waiter simply unblocks and
+/// exits, it can never re-acquire and resurrect a stale value.
+#[cfg(target_os = "linux")]
+fn set_clipboard_linux(
+    serve: impl FnOnce(&mut arboard::Clipboard) -> Result<(), arboard::Error> + Send + 'static,
+    confirmed: impl Fn(&mut arboard::Clipboard) -> bool,
+) -> Result<(), String> {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    let _guard = CLIPBOARD_HANDOFF
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let (err_tx, err_rx) = mpsc::channel::<String>();
+    std::thread::Builder::new()
+        .name("clipboard-owner".to_string())
+        .spawn(move || {
+            let result = arboard::Clipboard::new()
+                .and_then(|mut clipboard| serve(&mut clipboard));
+            if let Err(e) = result {
+                let _ = err_tx.send(format!("failed to set clipboard: {}", e));
+            }
+        })
+        .map_err(|e| format!("failed to spawn clipboard thread: {}", e))?;
+
+    let mut reader =
+        arboard::Clipboard::new().map_err(|e| format!("clipboard error: {}", e))?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(e) = err_rx.try_recv() {
+            return Err(e);
+        }
+        if confirmed(&mut reader) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("clipboard ownership handoff timed out".to_string());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 pub(crate) fn set_clipboard_text(text: String) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
-        std::thread::Builder::new()
-            .name("clipboard-owner".to_string())
-            .spawn(move || {
-                use arboard::SetExtLinux;
-                let result = arboard::Clipboard::new()
-                    .and_then(|mut clipboard| clipboard.set().wait().text(text));
-                if let Err(e) = result {
-                    error!("failed to set clipboard: {}", e);
-                }
-            })
-            .map_err(|e| format!("failed to spawn clipboard thread: {}", e))?;
-        Ok(())
+        use arboard::SetExtLinux;
+        let expected = text.clone();
+        set_clipboard_linux(
+            move |clipboard| clipboard.set().wait().text(text),
+            move |clipboard| clipboard.get_text().is_ok_and(|read| read == expected),
+        )
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -4350,18 +4397,16 @@ pub(crate) fn set_clipboard_text(text: String) -> Result<(), String> {
 pub(crate) fn set_clipboard_image(image: arboard::ImageData<'static>) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
-        std::thread::Builder::new()
-            .name("clipboard-owner".to_string())
-            .spawn(move || {
-                use arboard::SetExtLinux;
-                let result = arboard::Clipboard::new()
-                    .and_then(|mut clipboard| clipboard.set().wait().image(image));
-                if let Err(e) = result {
-                    error!("failed to set clipboard image: {}", e);
-                }
-            })
-            .map_err(|e| format!("failed to spawn clipboard thread: {}", e))?;
-        Ok(())
+        use arboard::SetExtLinux;
+        let expected = image.clone();
+        set_clipboard_linux(
+            move |clipboard| clipboard.set().wait().image(image),
+            move |clipboard| clipboard.get_image().is_ok_and(|read| {
+                read.width == expected.width
+                    && read.height == expected.height
+                    && read.bytes == expected.bytes
+            }),
+        )
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -4720,34 +4765,48 @@ pub fn set_autostart(app_handle: tauri::AppHandle, enabled: bool) -> Result<(), 
 
 #[cfg(test)]
 mod clipboard_tests {
-    /// Regression test for the Linux copy-button bug: clipboard content used to
-    /// vanish as soon as the per-call `arboard::Clipboard` instance was dropped,
-    /// because on Linux the selection is hosted by the owning instance. The
-    /// helper must keep serving the selection after `set_clipboard_text` returns.
-    ///
-    /// Needs a live display server, so it cannot run in headless CI. Run locally:
-    /// `cargo test -p screenpipe-app clipboard -- --ignored`
+    //! Regression tests for the Linux copy bug: clipboard content used to
+    //! vanish as soon as the per-call `arboard::Clipboard` instance was
+    //! dropped, because on Linux the selection is hosted by the owning
+    //! instance. These need a live display server, so they cannot run in
+    //! headless CI. Run locally:
+    //! `cargo test -p screenpipe-app clipboard -- --ignored`
+
+    fn read_clipboard() -> String {
+        arboard::Clipboard::new()
+            .expect("open clipboard")
+            .get_text()
+            .unwrap_or_default()
+    }
+
+    /// The command must not return before its worker owns the selection: a
+    /// paste immediately after the call returns has to see the new value.
+    /// No polling or sleeps — an ownership race fails this deterministically.
     #[test]
+    #[serial_test::serial]
     #[ignore = "requires a display server (X11/Wayland); run with -- --ignored"]
-    fn set_clipboard_text_persists_after_call_returns() {
-        let marker = format!("screenpipe-clipboard-test-{}", std::process::id());
+    fn set_clipboard_text_is_immediately_pastable() {
+        let marker = format!("screenpipe-clipboard-immediate-{}", std::process::id());
         super::set_clipboard_text(marker.clone()).expect("set clipboard");
-        // The Linux path serves the selection from a detached thread; poll until
-        // it has taken ownership rather than trusting a fixed sleep.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            let read = arboard::Clipboard::new()
-                .expect("open clipboard")
-                .get_text()
-                .unwrap_or_default();
-            if read == marker {
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "clipboard still reads {read:?} after 5s, expected {marker:?}"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(read_clipboard(), marker);
+    }
+
+    /// Rapid successive copies must acquire ownership in call order: after N
+    /// back-to-back writes the clipboard holds the last one, and it survives
+    /// the earlier waiter threads exiting.
+    #[test]
+    #[serial_test::serial]
+    #[ignore = "requires a display server (X11/Wayland); run with -- --ignored"]
+    fn rapid_copies_last_write_wins() {
+        let base = format!("screenpipe-clipboard-rapid-{}", std::process::id());
+        let mut last = String::new();
+        for i in 0..5 {
+            last = format!("{base}-{i}");
+            super::set_clipboard_text(last.clone()).expect("set clipboard");
         }
+        assert_eq!(read_clipboard(), last);
+        // The final owner keeps serving after the superseded waiters exited.
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        assert_eq!(read_clipboard(), last);
     }
 }
