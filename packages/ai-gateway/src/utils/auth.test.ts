@@ -216,6 +216,7 @@ describe('validateAuth — verified identities only', () => {
       accountPlan: 'free',
       deviceId: 'user_verified',
       userId: 'user_verified',
+      clerkUserId: 'user_verified',
     } as const;
 
     expect(await validateAuth(requestFor('eyJ.verified.clerk.1'), env)).toEqual(expected);
@@ -249,6 +250,7 @@ describe('validateAuth — verified identities only', () => {
       accountPlan: 'free',
       deviceId: 'user_refunded',
       userId: 'user_refunded',
+      clerkUserId: 'user_refunded',
     });
   });
 
@@ -284,6 +286,7 @@ describe('validateAuth — verified identities only', () => {
       accountPlan: 'basic',
       deviceId: 'user_basic',
       userId: 'user_basic',
+      clerkUserId: 'user_basic',
     } as const;
 
     expect(await validateAuth(requestFor('eyJ.basic.clerk.1'), env)).toEqual(expected);
@@ -318,6 +321,7 @@ describe('validateAuth — verified identities only', () => {
       accountPlan: 'basic',
       deviceId: 'user_lifetime',
       userId: 'user_lifetime',
+      clerkUserId: 'user_lifetime',
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -348,6 +352,7 @@ describe('validateAuth — verified identities only', () => {
       accountPlan: 'unknown',
       deviceId: 'user_unknown',
       userId: 'user_unknown',
+      clerkUserId: 'user_unknown',
     } as const;
 
     expect(await validateAuth(requestFor('eyJ.unknown.clerk.1'), env)).toEqual(expected);
@@ -365,6 +370,7 @@ describe('validateAuth — verified identities only', () => {
       accountPlan: 'unknown',
       deviceId: 'user_retry',
       userId: 'user_retry',
+      clerkUserId: 'user_retry',
     } as const;
 
     expect(await validateAuth(requestFor('eyJ.retry.clerk.1'), env)).toEqual(expected);
@@ -404,6 +410,7 @@ describe('validateAuth — verified identities only', () => {
         accountPlan: 'business',
         deviceId: 'user_concurrent',
         userId: 'user_concurrent',
+        clerkUserId: 'user_concurrent',
       },
       {
         isValid: true,
@@ -411,6 +418,7 @@ describe('validateAuth — verified identities only', () => {
         accountPlan: 'business',
         deviceId: 'user_concurrent',
         userId: 'user_concurrent',
+        clerkUserId: 'user_concurrent',
       },
     ]);
     expect(verifyTokenMock).toHaveBeenCalledTimes(2);
@@ -448,6 +456,7 @@ describe('validateAuth — verified identities only', () => {
       accountPlan: 'business',
       deviceId: 'user_subscribed',
       userId: 'user_subscribed',
+      clerkUserId: 'user_subscribed',
     });
   });
 
@@ -472,6 +481,7 @@ describe('validateAuth — verified identities only', () => {
 			hostedAiTrial: true,
 			deviceId: 'user_trial',
 			userId: 'user_trial',
+			clerkUserId: 'user_trial',
 		});
 	});
 
@@ -502,6 +512,7 @@ describe('validateAuth — verified identities only', () => {
         accountPlan,
         deviceId: clerkId,
         userId: clerkId,
+        clerkUserId: clerkId,
       });
     }
   });
@@ -532,6 +543,7 @@ describe('validateAuth — verified identities only', () => {
         accountPlan,
         deviceId: clerkId,
         userId: clerkId,
+        clerkUserId: clerkId,
       });
     }
   });
@@ -565,6 +577,7 @@ describe('validateAuth — verified identities only', () => {
         accountPlan: 'unknown',
         deviceId: clerkId,
         userId: clerkId,
+        clerkUserId: clerkId,
       } as const;
       expect(await validateAuth(requestFor(`eyJ.bad-billing.${suffix}.1`), env)).toEqual(expected);
       expect(await validateAuth(requestFor(`eyJ.bad-billing.${suffix}.2`), env)).toEqual(expected);
@@ -596,6 +609,7 @@ describe('validateAuth — verified identities only', () => {
       accountPlan: 'unknown',
       deviceId: 'user_verified_caller',
       userId: 'user_verified_caller',
+      clerkUserId: 'user_verified_caller',
     } as const;
 
     expect(await validateAuth(requestFor('eyJ.verified.mismatch.1'), env)).toEqual(expected);
@@ -625,6 +639,7 @@ describe('validateAuth — verified identities only', () => {
       accountPlan: 'unknown',
       deviceId: 'user_verified_caller',
       userId: 'user_verified_caller',
+      clerkUserId: 'user_verified_caller',
     });
   });
 
@@ -649,6 +664,7 @@ describe('validateAuth — verified identities only', () => {
       accountPlan: 'business',
       deviceId: 'user_legacy',
       userId: 'user_legacy',
+      clerkUserId: 'user_legacy',
     });
   });
 

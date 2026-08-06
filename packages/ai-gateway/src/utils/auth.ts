@@ -119,6 +119,7 @@ export async function validateAuth(request: Request, env: Env): Promise<AuthResu
       ),
       deviceId: resolvedUserId,
       userId: resolvedUserId,
+      clerkUserId: resolvedUserId,
     };
   }
 
@@ -136,6 +137,9 @@ export async function validateAuth(request: Request, env: Env): Promise<AuthResu
         ...usageTierField(screenpipeUser.accountPlan ?? 'unknown', 'subscribed'),
         deviceId: resolvedUserId,
         userId: screenpipeUser.userId,
+        ...(screenpipeUser.clerkUserId
+          ? { clerkUserId: screenpipeUser.clerkUserId }
+          : {}),
       };
     }
     // Logged in but no subscription
@@ -146,6 +150,9 @@ export async function validateAuth(request: Request, env: Env): Promise<AuthResu
       ...(screenpipeUser.hostedAiTrial === true ? { hostedAiTrial: true } : {}),
       deviceId: resolvedUserId,
       userId: screenpipeUser.userId,
+      ...(screenpipeUser.clerkUserId
+        ? { clerkUserId: screenpipeUser.clerkUserId }
+        : {}),
     };
   }
 

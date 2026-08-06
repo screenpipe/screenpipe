@@ -340,8 +340,9 @@ export type Settings = SettingsStore & {
 	disableKeyboardCapture?: boolean;
 	/** Skip mouse-click rows in the UI recorder. Defaults to false (click capture ON) — clicks carry no text payload and drive workflow/task mining. Clicks still wake event-driven capture when disabled. */
 	disableClickCapture?: boolean;
-	/** Experimental: capture System Audio via CoreAudio Process Tap (macOS 14.4+) instead of ScreenCaptureKit.
-	 *  Off by default. Ignored on macOS <14.4 and non-macOS — falls back to SCK. */
+	/** Capture System Audio via CoreAudio Process Tap on macOS 14.4+ instead of ScreenCaptureKit.
+	 *  Desktop migration V3 enables it automatically. Initial tap failures fall back to SCK;
+	 *  ignored on macOS <14.4 and non-macOS. */
 	experimentalCoreaudioSystemAudio?: boolean;
 	/** Beta ("Smart recording" in the app): during meetings, capture only the meeting app's audio
 	 *  and the microphone it actually uses (per-process piggyback). Off by default. Engages in ANY
@@ -1078,8 +1079,8 @@ function createSettingsStore() {
 		}
 
 		// One-time migration (V3 — supersedes V2): flip CoreAudio Process Tap
-		// back ON. The VoiceProcessing AudioUnit issue from V2 is resolved;
-		// toggle removed from UI, auto-enabled when available (#5236).
+		// back ON. The toggle was removed from the UI and the runtime falls back
+		// through normal backend selection if tap initialization fails (#5236).
 		if (!(settings as any).coreaudioTapMigrationV3) {
 			settings.experimentalCoreaudioSystemAudio = true;
 			(settings as any).coreaudioTapMigrationV3 = true;

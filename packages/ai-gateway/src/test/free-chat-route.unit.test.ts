@@ -23,6 +23,17 @@ const { resolveLatencyClass } = await import('../utils/latency');
 
 describe('/v1/chat/completions free-plan route policy', () => {
 	const originalFetch = globalThis.fetch;
+	const allowedRateLimitResponse = () => new Response(JSON.stringify({
+		allowed: true,
+		standing: 'good',
+		remaining: 10,
+		reset_in: 60,
+		tier: 'logged_in',
+		rpm_limit: 25,
+	}));
+	const rateLimiterFetch = mock(async (_input: string | Request) => allowedRateLimitResponse());
+	const rateLimiterIdFromName = mock((name: string) => name);
+	const rateLimiterGet = mock(() => ({ fetch: rateLimiterFetch }));
 	const env = {
 		NODE_ENV: 'production',
 		AI_GATEWAY_SERVICE_TOKEN: 'runner-service-secret',
@@ -31,16 +42,8 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		SUPABASE_ANON_KEY: 'supabase-test-key',
 		...TEST_PRIVATE_COST_CONTROLS,
 		RATE_LIMITER: {
-			idFromName: (name: string) => name,
-			get: () => ({
-				fetch: async () => new Response(JSON.stringify({
-					allowed: true,
-					remaining: 10,
-					reset_in: 60,
-					tier: 'logged_in',
-					rpm_limit: 25,
-				})),
-			}),
+			idFromName: rateLimiterIdFromName,
+			get: rateLimiterGet,
 		},
 		DB: {
 			prepare: (sql: string) => ({
@@ -90,6 +93,29 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		return (JSON.parse(outer.error) as { error: string }).error;
 	}
 
+	function configureDeniedClerk(clerkId: string) {
+		verifyTokenMock.mockImplementation(async () => ({ sub: clerkId }) as any);
+		const authFetch = mock(async (input: RequestInfo | URL) => {
+			expect(String(input)).toBe('https://screenpipe.com/api/user');
+			return Response.json({
+				success: true,
+				user: {
+					clerk_id: clerkId,
+					cloud_subscribed: true,
+					app_entitled: true,
+					subscription_plan: 'pro',
+					entitlement: { active: true, plan: 'pro', features: { app: true, cloud: true } },
+				},
+			});
+		});
+		globalThis.fetch = authFetch as typeof fetch;
+		rateLimiterFetch.mockImplementation(async () => Response.json({
+			allowed: false,
+			standing: 'denied',
+		}));
+		return authFetch;
+	}
+
 	beforeEach(() => {
 		verifyTokenMock.mockImplementation(async () => {
 			throw new Error('invalid token');
@@ -97,6 +123,10 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		globalThis.fetch = mock(async () => {
 			throw new Error('unexpected fetch');
 		}) as typeof fetch;
+		rateLimiterFetch.mockImplementation(async () => allowedRateLimitResponse());
+		rateLimiterFetch.mockClear();
+		rateLimiterIdFromName.mockClear();
+		rateLimiterGet.mockClear();
 	});
 
 	afterEach(() => {
@@ -114,6 +144,73 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		expect(response.status).toBe(401);
 		expect(await errorCode(response)).toBe('authentication_required');
 		expect(globalThis.fetch).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		['the common non-chat gate', '/v1/usage'],
+		['the model-aware chat gate', '/v1/chat/completions'],
+	] as const)('rejects a stale valid Clerk JWT at %s before provider work', async (
+		_label,
+		path,
+	) => {
+		const clerkId = path === '/v1/usage' ? 'user_stale_usage' : 'user_stale_chat';
+		const authFetch = configureDeniedClerk(clerkId);
+
+		const gatewayRequest = path === '/v1/usage'
+			? new Request(`https://gateway.test${path}`, {
+				headers: { Authorization: 'Bearer eyJ.stale-ten-year-clerk-jwt' },
+			})
+			: request(
+				{ Authorization: 'Bearer eyJ.stale-ten-year-clerk-jwt' },
+				path,
+				'claude-fable-5',
+			);
+		const response = await handleRequest(gatewayRequest, env, ctx);
+
+		expect(response.status).toBe(403);
+		expect(await errorCode(response)).toBe('account_not_in_good_standing');
+		expect(rateLimiterIdFromName).toHaveBeenCalledWith(clerkId);
+		// The sole outbound call resolves existing entitlements; no provider call occurs.
+		expect(authFetch).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		['web search', 'POST', '/v1/web-search'],
+		['file transcription', 'POST', '/v1/listen'],
+		['realtime transcription', 'GET', '/v1/realtime'],
+		['Tinfoil attestation', 'GET', '/v1/tinfoil/attestation'],
+		['Tinfoil chat', 'POST', '/v1/tinfoil/chat/completions'],
+		['Tinfoil responses', 'POST', '/v1/tinfoil/responses'],
+		['voice transcription', 'POST', '/v1/voice/transcribe'],
+		['voice query', 'POST', '/v1/voice/query'],
+		['text to speech', 'POST', '/v1/text-to-speech'],
+		['voice chat', 'POST', '/v1/voice/chat'],
+		['Vertex messages', 'POST', '/v1/messages'],
+		['Anthropic messages', 'POST', '/anthropic/v1/messages'],
+		['Anthropic models', 'GET', '/anthropic/v1/models'],
+	] as const)('applies GOOD-STANDING before provider-bearing %s', async (
+		label,
+		method,
+		path,
+	) => {
+		const clerkId = `user_denied_${label.toLowerCase().replace(/\W+/g, '_')}`;
+		const authFetch = configureDeniedClerk(clerkId);
+		const response = await handleRequest(new Request(`https://gateway.test${path}`, {
+			method,
+			headers: {
+				Authorization: 'Bearer eyJ.stale-ten-year-clerk-jwt',
+				'Content-Type': 'application/json',
+			},
+			...(method === 'POST'
+				? { body: JSON.stringify({ model: 'claude-fable-5', messages: [] }) }
+				: {}),
+		}), env, ctx);
+
+		expect(response.status).toBe(403);
+		expect(await errorCode(response)).toBe('account_not_in_good_standing');
+		expect(rateLimiterIdFromName).toHaveBeenCalledWith(clerkId);
+		// Only the existing entitlement lookup ran; no provider/cost route executed.
+		expect(authFetch).toHaveBeenCalledTimes(1);
 	});
 
 	it.each([
