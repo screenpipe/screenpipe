@@ -2733,16 +2733,7 @@ pub async fn pi_start_inner(
             }
         }
 
-        // Shared BYOK contract (enforce_byok_api_key, also enforced by the
-        // core pipe executor): OpenAI/Anthropic hard-require a key — silently
-        // spawning without one boots pi fine but fails every message with
-        // pi's raw CLI error ("No API key found for anthropic-byok. Use
-        // /login …" — advice that doesn't apply inside the app). A non-empty
-        // key inherited from the app's environment satisfies it (pi resolves
-        // `$NAME` from the child process env, so a globally-exported key kept
-        // working before this guard — preserved). `custom` stays optional:
-        // keyless OpenAI-compatible endpoints (LM Studio, llama.cpp,
-        // corporate proxies) are legitimate.
+        // Shared BYOK contract — see enforce_byok_api_key in screenpipe-core.
         if let Some((env_name, key)) = screenpipe_core::agents::pi::enforce_byok_api_key(
             &config.provider,
             config.api_key.as_deref(),

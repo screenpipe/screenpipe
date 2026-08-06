@@ -7538,12 +7538,8 @@ mod tests {
 
     // -- BYOK required-key contract through a pipe run -----------------------
 
-    /// Regression: a preset saved with a blank API key (possible before the
-    /// preset editors validated it) resolves to `api_key: None`, and a pipe
-    /// run used to spawn pi anyway — pi boots fine, then every message fails
-    /// with its raw CLI error ("No API key found for anthropic-byok. Use
-    /// /login …"). The core executor must fail fast with the actionable
-    /// error, same as the chat spawn path.
+    /// Regression: a preset saved with a blank key used to spawn pi anyway,
+    /// failing every message with pi's raw CLI error — fail fast instead.
     #[tokio::test]
     async fn pipe_run_with_saved_blank_key_preset_fails_with_actionable_error() {
         let root = std::env::temp_dir().join(format!(
@@ -7573,8 +7569,7 @@ mod tests {
         assert_eq!(resolved.provider.as_deref(), Some("anthropic"));
         assert_eq!(resolved.api_key, None, "blank key must resolve to None");
 
-        // The guard accepts a key inherited from the process env — make sure
-        // a key exported on the dev machine doesn't satisfy it here.
+        // A key exported on the dev machine must not satisfy the guard here.
         unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
 
         let executor = crate::agents::pi::PiExecutor::new(None);
