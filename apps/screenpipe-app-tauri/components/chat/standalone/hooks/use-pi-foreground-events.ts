@@ -4,8 +4,8 @@
 
 import { useEffect } from "react";
 import { emit, type UnlistenFn } from "@tauri-apps/api/event";
-import { homeDir, join } from "@tauri-apps/api/path";
 import posthog from "posthog-js";
+import { piProjectDirForSession } from "@/lib/chat/pi-project-dir";
 import { mountAgentEventBus, onTerminated as onAgentTerminated } from "@/lib/events/bus";
 import { commands } from "@/lib/utils/tauri";
 import { useChatStore } from "@/lib/stores/chat-store";
@@ -1220,8 +1220,7 @@ export function usePiForegroundEvents({
             console.log("[Pi] Auto-restarting after crash");
             try {
               const providerConfig = buildProviderConfig();
-              const home = await homeDir();
-              const dir = await join(home, ".screenpipe", "pi-chat");
+              const dir = await piProjectDirForSession(piSessionIdRef.current);
               const result = await commands.piStart(piSessionIdRef.current, dir, settings.user?.token ?? null, providerConfig);
               if (result.status === "ok") {
                 setPiInfo(result.data);

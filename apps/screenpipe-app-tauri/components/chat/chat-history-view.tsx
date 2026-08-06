@@ -40,6 +40,7 @@ import {
   type ConversationMeta,
 } from "@/lib/chat-storage";
 import { useChatStore } from "@/lib/stores/chat-store";
+import { pipeConversationDeletionKey } from "@/lib/pipe-execution-status";
 import {
   listMoveTargetGroups,
   validateSidebarGroupName,
@@ -978,6 +979,11 @@ export function ChatHistoryView({
                 const failed: string[] = [];
                 for (const id of ids) {
                   try {
+                    const metadata = conversations.find((conversation) => conversation.id === id);
+                    const deletionKey = pipeConversationDeletionKey(
+                      id,
+                      metadata?.pipeContext?.executionId,
+                    );
                     await deleteConversationFile(id);
                     try {
                       useChatStore.getState().actions.drop(id);
@@ -985,7 +991,7 @@ export function ChatHistoryView({
                       // ignore
                     }
                     try {
-                      await emit("chat-deleted", { id });
+                      await emit("chat-deleted", { id, deletionKey });
                     } catch {
                       // ignore
                     }

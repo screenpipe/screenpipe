@@ -1665,7 +1665,7 @@ async fn main() {
 
                 // Pipe output callback. Stage 5: legacy `pipe_event`
                 // topic dropped — every pipe stdout line goes out on
-                // `agent_event` with sessionId `pipe:<name>:<execId>`.
+                // `agent_event` with a per-run or stable continued session id.
                 let app_for_pipe = app_handle.clone();
                 // Separate clone for the owned-browser install path — the
                 // on_pipe_output closure below captures app_for_pipe by
@@ -1675,8 +1675,8 @@ async fn main() {
                 let pipe_agent_events =
                     crate::agent_event_emitter::PipeAgentEventEmitter::new(app_for_pipe);
                 let on_pipe_output: Option<screenpipe_core::pipes::OnPipeOutputLine> = Some(
-                    std::sync::Arc::new(move |pipe_name: &str, exec_id: i64, line: &str| {
-                        pipe_agent_events.emit_line(pipe_name, exec_id, line);
+                    std::sync::Arc::new(move |pipe_name: &str, exec_id: i64, continues_chat: bool, line: &str| {
+                        pipe_agent_events.emit_line(pipe_name, exec_id, continues_chat, line);
                     }),
                 );
 

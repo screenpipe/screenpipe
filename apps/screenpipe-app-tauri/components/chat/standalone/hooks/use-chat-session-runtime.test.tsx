@@ -7,6 +7,12 @@ import { useRef, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useChatStore } from "@/lib/stores/chat-store";
 
+const runtimeMocks = vi.hoisted(() => ({
+  foregroundHandler: null as ((envelope: any) => void) | null,
+  startPipeExecution: vi.fn(),
+  clearPipeExecution: vi.fn(),
+}));
+
 vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn(async () => undefined),
 }));
@@ -14,11 +20,17 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("@/lib/events/bus", () => ({
   mountAgentEventBus: vi.fn(async () => undefined),
   onEvicted: vi.fn(() => () => undefined),
-  registerForeground: vi.fn(() => () => undefined),
+  registerForeground: vi.fn((_sessionId, handler) => {
+    runtimeMocks.foregroundHandler = handler;
+    return () => undefined;
+  }),
 }));
 
 vi.mock("@/components/chat/standalone/hooks/use-chat-pipe-watch", () => ({
-  useChatPipeWatch: vi.fn(() => ({})),
+  useChatPipeWatch: vi.fn(() => ({
+    startPipeExecution: runtimeMocks.startPipeExecution,
+    clearPipeExecution: runtimeMocks.clearPipeExecution,
+  })),
 }));
 
 vi.mock("@/lib/stores/pi-event-router", () => ({
@@ -27,7 +39,7 @@ vi.mock("@/lib/stores/pi-event-router", () => ({
 
 import { useChatSessionRuntime } from "./use-chat-session-runtime";
 
-const SESSION_ID = "store-routed-active-turn";
+const SESSION_ID = "pipe:e2e-continuous-chat:continuous";
 
 function useRuntimeHarness() {
   const [isLoading, setIsLoading] = useState(false);
@@ -65,6 +77,9 @@ function useRuntimeHarness() {
 
 describe("useChatSessionRuntime", () => {
   beforeEach(() => {
+    runtimeMocks.foregroundHandler = null;
+    runtimeMocks.startPipeExecution.mockClear();
+    runtimeMocks.clearPipeExecution.mockClear();
     useChatStore.setState({
       sessions: {},
       currentId: null,
@@ -107,5 +122,33 @@ describe("useChatSessionRuntime", () => {
     await waitFor(() => {
       expect(result.current).toEqual({ isLoading: false, isStreaming: false });
     });
+  });
+
+  it("tracks a scheduled run while its continued chat owns foreground events", async () => {
+    renderHook(() => useRuntimeHarness());
+    await waitFor(() => expect(runtimeMocks.foregroundHandler).not.toBeNull());
+
+    act(() => {
+      runtimeMocks.foregroundHandler?.({
+        source: "pipe",
+        sessionId: SESSION_ID,
+        executionId: 42,
+        event: { type: "message_start" },
+      });
+    });
+    expect(runtimeMocks.startPipeExecution).toHaveBeenCalledWith(
+      "e2e-continuous-chat",
+      42,
+    );
+
+    act(() => {
+      runtimeMocks.foregroundHandler?.({
+        source: "pipe",
+        sessionId: SESSION_ID,
+        executionId: 42,
+        event: { type: "agent_end" },
+      });
+    });
+    expect(runtimeMocks.clearPipeExecution).toHaveBeenCalled();
   });
 });

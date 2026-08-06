@@ -1161,9 +1161,7 @@ export const SpeakerParagraph = React.memo(function SpeakerParagraph({
               <span
                 className={cn(
                   "inline-flex cursor-pointer items-center gap-1 text-[11px] font-semibold tracking-tight hover:underline underline-offset-2",
-                  isSelf
-                    ? "text-sky-700 dark:text-sky-300"
-                    : "text-violet-700 dark:text-violet-300",
+                  isSelf ? "text-foreground" : "text-muted-foreground",
                 )}
                 title={
                   block.speakerId != null
@@ -1181,9 +1179,7 @@ export const SpeakerParagraph = React.memo(function SpeakerParagraph({
             <span
               className={cn(
                 "inline-flex items-center gap-1 text-[11px] font-semibold tracking-tight",
-                isSelf
-                  ? "text-sky-700 dark:text-sky-300"
-                  : "text-violet-700 dark:text-violet-300",
+                isSelf ? "text-foreground" : "text-muted-foreground",
               )}
             >
               <User className="h-3 w-3 text-muted-foreground/70 self-center" />
@@ -1201,7 +1197,9 @@ export const SpeakerParagraph = React.memo(function SpeakerParagraph({
       <div
         className={cn(
           "relative w-fit max-w-full rounded-2xl px-3 py-2 shadow-[0_1px_0_rgb(0_0_0/0.03)] transition-colors",
-          isSelf ? "bg-sky-500/[0.09] dark:bg-sky-400/[0.11]" : "bg-muted/80",
+          isSelf
+            ? "bg-foreground/[0.07] dark:bg-foreground/[0.10]"
+            : "bg-muted/80",
           continuation && "rounded-tl-md",
           continues && "rounded-bl-md",
           !block.final && "ring-1 ring-inset ring-foreground/5",
@@ -1224,7 +1222,7 @@ export const SpeakerParagraph = React.memo(function SpeakerParagraph({
             title="transcribing partial text"
             aria-label="transcribing partial text"
           >
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-500 motion-reduce:animate-none" />
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-foreground motion-reduce:animate-none" />
           </span>
         )}
         {block.firstAudioFilePath && (

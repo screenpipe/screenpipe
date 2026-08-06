@@ -5,6 +5,7 @@
 //! Deterministic settings and database fixtures for the feature-gated E2E app.
 
 use chrono::{Duration, Utc};
+use image::{ImageBuffer, Rgb};
 use screenpipe_db::DatabaseManager;
 use serde_json::json;
 use sqlx::{ConnectOptions, Connection};
@@ -149,15 +150,41 @@ const DB_HARD_FAULT_CHECKPOINT_ATTEMPTS: usize = 10;
 ///
 /// - 12 frames whose OCR text contains "vector" — enough that the results grid
 ///   is worth reflowing and the 60vh height cap is visible.
-/// - 1 frame for the highlight over-match bug: the token "cat" is a whole word
-///   here AND a substring of "concatenate", with known per-word bounding boxes.
+/// - 1 frame with searchable OCR but a missing snapshot, next to valid frames,
+///   so Search must reject nearby thumbnail fallback.
+/// - 1 accessibility frame with NO stored OCR boxes, so verification has to run
+///   the real snapshot-OCR path instead of replaying seeded positions.
+/// - 1 accessibility frame whose snapshot carries REAL rendered text and no
+///   stored boxes, so platform OCR must read the word off the pixels and the
+///   highlight is placed from OCR-derived bounds.
 ///
 /// `insert_snapshot_frame_with_ocr` writes `full_text` (FTS-indexed by the
 /// `frames_ai` trigger → searchable) and `text_json` (per-word boxes →
 /// served by `/frames/{id}/text` for highlight rendering). Bounds are
-/// normalized 0–1, matching `parse_all_text_positions`.
+/// normalized 0–1, matching `parse_all_text_positions`. Passing `None` for
+/// `ocr_data` leaves `text_json` NULL, which is what makes `/frames/{id}/text`
+/// fall through to on-demand OCR.
 async fn seed_search_fixture(db: &DatabaseManager) {
     let now = Utc::now();
+    let fixture_dir = std::env::var_os("SCREENPIPE_DATA_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("e2e-fixtures");
+    if let Err(error) = std::fs::create_dir_all(&fixture_dir) {
+        warn!("e2e search-fixture: failed to create fixture directory: {error}");
+    }
+    let fixture_path = fixture_dir.join("screenpipe-e2e-search-fixture.jpg");
+    let fixture_image = ImageBuffer::from_fn(1600, 1000, |x, y| {
+        if (300..1300).contains(&x) && (180..240).contains(&y) {
+            Rgb([230_u8, 230_u8, 230_u8])
+        } else {
+            Rgb([18_u8, 22_u8, 30_u8])
+        }
+    });
+    if let Err(error) = fixture_image.save(&fixture_path) {
+        warn!("e2e search-fixture: failed to create snapshot fixture: {error}");
+    }
+    let fixture_path = fixture_path.to_string_lossy().into_owned();
 
     // Single "vector" word box per frame (normalized 0–1, area well under the
     // overlay's 15% skip threshold).
@@ -176,7 +203,7 @@ async fn seed_search_fixture(db: &DatabaseManager) {
             .insert_snapshot_frame_with_ocr(
                 "e2e-search",
                 ts,
-                "e2e-search-fixture.jpg",
+                &fixture_path,
                 Some(app),
                 Some(&window),
                 url,
@@ -211,7 +238,7 @@ async fn seed_search_fixture(db: &DatabaseManager) {
         .insert_snapshot_frame_with_ocr(
             "e2e-search",
             now,
-            "e2e-search-fixture.jpg",
+            &fixture_path,
             Some("Code"),
             Some("highlight overmatch"),
             None,
@@ -231,7 +258,174 @@ async fn seed_search_fixture(db: &DatabaseManager) {
         warn!("e2e search-fixture: failed to insert highlight frame: {e}");
     }
 
-    info!("e2e search-fixture: seeded searchable frames (vector x12 + highlight)");
+    // Five accessibility candidates for visibility verification. Only two
+    // have matching screenshot OCR; the other three contain the query solely
+    // in hidden accessibility text and must never reach the result grid.
+    let visibility_query = "retentionverify";
+    let visible_json = r#"[
+        {"text":"retentionverify","conf":"97","left":"0.20","top":"0.20","width":"0.22","height":"0.04"}
+    ]"#;
+    let hidden_json = r#"[
+        {"text":"pixels contain something else","conf":"97","left":"0.20","top":"0.20","width":"0.30","height":"0.04"}
+    ]"#;
+    for i in 0..5 {
+        let visible = i == 1 || i == 4;
+        let ts = now - Duration::minutes(i64::from(i) + 60);
+        let app = if i == 1 {
+            "e2e-visible-a"
+        } else if i == 4 {
+            "e2e-visible-b"
+        } else {
+            "e2e-hidden"
+        };
+        let ocr_text = if visible {
+            visibility_query
+        } else {
+            "pixels contain something else"
+        };
+        let ocr_json = if visible { visible_json } else { hidden_json };
+        if let Err(error) = db
+            .insert_snapshot_frame_with_ocr(
+                "e2e-search",
+                ts,
+                &fixture_path,
+                Some(app),
+                Some("visibility verification fixture"),
+                None,
+                None,
+                true,
+                None,
+                Some(visibility_query),
+                Some("accessibility"),
+                None,
+                None,
+                None,
+                Some((ocr_text, ocr_json, "e2e")),
+                None,
+            )
+            .await
+        {
+            warn!("e2e search-fixture: failed to insert visibility frame {i}: {error}");
+        }
+    }
+
+    // A candidate whose snapshot contains REAL rendered text and no stored OCR
+    // boxes. The shared fixture above is a flat rectangle, so OCR over it can
+    // only ever prove the negative case (nothing readable → dropped). This one
+    // proves the positive: platform OCR reads the word off the pixels, the
+    // match survives verification, and the highlight is positioned from
+    // OCR-derived bounds rather than coordinates the seed supplied.
+    //
+    // The image is committed rather than drawn here because rendering glyphs
+    // needs a font, and `include_bytes!` keeps it deterministic without adding
+    // a font dependency. Apple Vision reads "VISIBLEOCR" from it at confidence
+    // 1.0 with bounds ~left 0.199 / top 0.214.
+    let visible_text_query = "visibleocr";
+    let visible_text_path = fixture_dir.join("screenpipe-e2e-visible-text.jpg");
+    if let Err(error) = std::fs::write(
+        &visible_text_path,
+        include_bytes!("../../fixtures/e2e-search-visible-text.jpg"),
+    ) {
+        warn!("e2e search-fixture: failed to write rendered-text fixture: {error}");
+    }
+    if let Err(error) = db
+        .insert_snapshot_frame_with_ocr(
+            "e2e-search",
+            now - Duration::minutes(75),
+            &visible_text_path.to_string_lossy(),
+            Some("e2e-real-ocr"),
+            Some("rendered text verification fixture"),
+            None,
+            None,
+            true,
+            None,
+            Some(visible_text_query),
+            Some("accessibility"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+    {
+        warn!("e2e search-fixture: failed to insert rendered-text frame: {error}");
+    }
+
+    // One accessibility candidate with NO stored OCR boxes. Every fixture above
+    // is inserted with `text_json`, so `/frames/{id}/text` short-circuits on the
+    // stored positions and the production path never runs. This frame forces the
+    // real one: snapshot load, platform OCR, and the read-only `persist=false`
+    // branch.
+    //
+    // The shared fixture image is a flat rectangle with no glyphs, so OCR
+    // deterministically finds no text on Apple, Tesseract, and Windows alike.
+    // That is the point — the frame carries the query solely in hidden
+    // accessibility text, so verification must drop it from the grid, and the
+    // absence is reproducible on every platform without shipping a font.
+    if let Err(error) = db
+        .insert_snapshot_frame_with_ocr(
+            "e2e-search",
+            now - Duration::minutes(70),
+            &fixture_path,
+            Some("e2e-unstored"),
+            Some("unstored ocr verification fixture"),
+            None,
+            None,
+            true,
+            None,
+            Some(visibility_query),
+            Some("accessibility"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+    {
+        warn!("e2e search-fixture: failed to insert unstored-ocr frame: {error}");
+    }
+
+    let missing_thumbnail_query = "exactthumbnailverify";
+    let missing_thumbnail_json = r#"[
+        {"text":"exactthumbnailverify","conf":"99","left":"0.15","top":"0.15","width":"0.25","height":"0.04"}
+    ]"#;
+    let missing_thumbnail_path = fixture_dir.join("screenpipe-e2e-missing-thumbnail.jpg");
+    let _ = std::fs::remove_file(&missing_thumbnail_path);
+    if let Err(error) = db
+        .insert_snapshot_frame_with_ocr(
+            "e2e-search",
+            now - Duration::minutes(90),
+            &missing_thumbnail_path.to_string_lossy(),
+            Some("e2e-missing-thumbnail"),
+            Some("exact thumbnail verification fixture"),
+            None,
+            None,
+            true,
+            None,
+            None,
+            Some("ocr"),
+            None,
+            None,
+            None,
+            Some((
+                missing_thumbnail_query,
+                missing_thumbnail_json,
+                "e2e",
+            )),
+            None,
+        )
+        .await
+    {
+        warn!("e2e search-fixture: failed to insert missing-thumbnail frame: {error}");
+    }
+
+    info!(
+        "e2e search-fixture: seeded searchable frames \
+         (vector x12 + highlight + visibility x5 + real ocr + unstored ocr \
+          + missing thumbnail)"
+    );
 }
 
 fn seed_requested(flag: &str) -> bool {

@@ -44,6 +44,7 @@ import {
   buildInvalidatedAuthTokenMessage,
 } from "@/lib/chat/auth-errors";
 import { usePipes } from "@/lib/hooks/use-pipes";
+import { continuousPipeChatPolicy } from "@/lib/pipe-chat-policy";
 import { connectInlineConnection, type InlineConnectStatus } from "@/lib/connections/inline-connect";
 import {
   computeChatCitationPlan,
@@ -150,7 +151,13 @@ export function StandaloneChat({
   const { items: appItems, isLoading: appsLoading, refresh: refreshAppItems } = useSqlAutocomplete("app");
   const { items: tagItems, isLoading: tagsLoading, refresh: refreshTagItems } = useTagAutocomplete();
   const { suggestions: autoSuggestions, refreshing: suggestionsRefreshing, forceRefresh: refreshSuggestions } = useAutoSuggestions();
-  const { pipes, templatePipes } = usePipes();
+  const {
+    pipes,
+    templatePipes,
+    loading: pipesLoading,
+    error: pipesError,
+    refetch: refetchPipes,
+  } = usePipes();
   // Connected integrations (google-calendar, google-docs, slack, etc.) surfaced in the
   // filter popover so users can mention them directly with @id — helps the
   // agent pick the right connection for a query instead of having to guess.
@@ -897,6 +904,31 @@ export function StandaloneChat({
     piStoppedIntentionallyRef,
     piPresetSwitchPromiseRef,
   });
+  useEffect(() => {
+    const stablePipeChat = continuousPipeChatPolicy({
+      conversationId,
+      pipes: [],
+      pipesLoaded: false,
+    });
+    if (stablePipeChat) void refetchPipes();
+  }, [conversationId, refetchPipes]);
+
+  const continuousPipeChat = React.useMemo(
+    () =>
+      continuousPipeChatPolicy({
+        conversationId,
+        pipes,
+        pipesLoaded: !pipesLoading && !pipesError,
+      }),
+    [conversationId, pipes, pipesError, pipesLoading],
+  );
+  const canSendChatMessage =
+    canChat &&
+    !activePipeExecution &&
+    !continuousPipeChat?.replyDisabledReason;
+  const composerDisabledReason = activePipeExecution
+    ? `${activePipeExecution.name} is running. Reply after this run finishes.`
+    : continuousPipeChat?.replyDisabledReason || disabledReason;
 
   useChatPanelEffects({
     inputRef,
@@ -942,7 +974,7 @@ export function StandaloneChat({
     autoSendBypassRef,
     setConversationId,
     buildProviderConfig,
-    canChat,
+    canChat: canSendChatMessage,
     cancelStreamingMessageRender,
     consumePendingAttachments,
     currentQueueSessionId,
@@ -1322,6 +1354,7 @@ export function StandaloneChat({
         isMac={isMac}
         isFullscreen={isFullscreen}
         hideInlineHistory={hideInlineHistory}
+        hasRightActions={inspectorHasContent || sidePanelHasContent}
         showHistory={showHistory}
         settings={settings}
         reloadStore={reloadStore}
@@ -1399,6 +1432,7 @@ export function StandaloneChat({
         messages={messages}
         isPreparingPrefill={isPreparingPrefill}
         activePipeExecution={activePipeExecution}
+        continuousPipeChat={continuousPipeChat}
         isLoading={isLoading}
         isStreaming={isStreaming}
         disabledReason={disabledReason}
@@ -1410,6 +1444,9 @@ export function StandaloneChat({
         }}
         onOpenSettings={async () => {
           await commands.showWindow({ Home: { page: null } });
+        }}
+        onOpenPipeSettings={async () => {
+          await commands.showWindow({ Home: { page: "pipes" } });
         }}
         summaryCardsProps={{
           onSendMessage: (message, displayLabel, entrySource, entryCard) =>
@@ -1484,8 +1521,8 @@ export function StandaloneChat({
           sectionRef: inputSectionRef,
           inputRef,
           value: input,
-          disabledReason,
-          canChat: Boolean(canChat),
+          disabledReason: composerDisabledReason,
+          canChat: Boolean(canSendChatMessage),
           isLoading,
           isStreaming,
           isEmbedded,

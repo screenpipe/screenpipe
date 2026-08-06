@@ -326,7 +326,7 @@ async fn emit_pipe_stream(
     tokio::spawn(async move {
         let emit_line = |event: serde_json::Value| -> Result<(), String> {
             let line = serde_json::to_string(&event).map_err(|e| e.to_string())?;
-            emitter.emit_line(&pipe_name, execution_id, &line);
+            emitter.emit_line(&pipe_name, execution_id, false, &line);
             Ok(())
         };
 
