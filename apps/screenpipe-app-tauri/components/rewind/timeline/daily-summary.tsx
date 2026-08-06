@@ -40,6 +40,14 @@ import {
 	evaluateDailySummaryFormat,
 } from "@/lib/daily-summary-prompt";
 import { runDailySummaryWithPi } from "@/lib/daily-summary-pi";
+import {
+	presentQuotaError,
+	QUOTA_PLAN_LABELS,
+	type QuotaErrorType,
+	type QuotaUpgradeAction,
+} from "@/lib/chat/quota-errors";
+import { formatAllowanceReset } from "@/lib/hooks/use-usage-status";
+import { openExternalUrl } from "@/lib/open-external-url";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { pickPipePreset } from "@/lib/utils/pick-pipe-preset";
 import { cn } from "@/lib/utils";
@@ -77,15 +85,45 @@ function cacheSummary(date: Date, summary: string) {
 	}
 }
 
-function friendlyGenerationError(error: unknown): string {
-	if (!(error instanceof Error)) return "Daily summary could not be generated.";
-	if (/401|403/.test(error.message))
-		return "Your session expired. Sign in again to continue.";
-	if (/429/.test(error.message))
-		return "AI is busy right now. Try again in a moment.";
-	if (/timed out/i.test(error.message))
-		return "The AI took too long to read this day. Try again.";
-	return "Daily summary could not be generated. Try again.";
+export type DailySummaryErrorPresentation = {
+	kind: QuotaErrorType | "auth" | "timeout" | "unknown";
+	message: string;
+	upgrade: QuotaUpgradeAction | null;
+};
+
+export function presentGenerationError(
+	error: unknown,
+): DailySummaryErrorPresentation {
+	if (!(error instanceof Error)) {
+		return {
+			kind: "unknown",
+			message: "Daily summary could not be generated.",
+			upgrade: null,
+		};
+	}
+	// Quota/rate classification first: a usage-limit body can also mention an
+	// HTTP status, and the auth branch below must not swallow it.
+	const quota = presentQuotaError(error.message);
+	if (quota.kind !== "none") return quota;
+	if (/401|403/.test(error.message)) {
+		return {
+			kind: "auth",
+			message: "Your session expired. Sign in again to continue.",
+			upgrade: null,
+		};
+	}
+	if (/timed out/i.test(error.message)) {
+		return {
+			kind: "timeout",
+			message: "The AI took too long to read this day. Try again.",
+			upgrade: null,
+		};
+	}
+	return {
+		kind: "unknown",
+		message: "Daily summary could not be generated. Try again.",
+		upgrade: null,
+	};
 }
 
 export function TimelineDailySummary({
@@ -102,6 +140,9 @@ export function TimelineDailySummary({
 	const [enableDialogOpen, setEnableDialogOpen] = useState(false);
 	const [isEnabling, setIsEnabling] = useState(false);
 	const [error, setError] = useState("");
+	const [errorUpgrade, setErrorUpgrade] = useState<QuotaUpgradeAction | null>(
+		null,
+	);
 	const [copied, setCopied] = useState(false);
 	const abortRef = useRef<AbortController | null>(null);
 	const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -129,6 +170,7 @@ export function TimelineDailySummary({
 		setSummary(cached);
 		setStatus(cached ? "complete" : "idle");
 		setError("");
+		setErrorUpgrade(null);
 		setCopied(false);
 		setPanelOpen(false);
 
@@ -147,6 +189,7 @@ export function TimelineDailySummary({
 				setPanelOpen(true);
 				setStatus("error");
 				setError("No AI model is configured. Choose one in Settings.");
+				setErrorUpgrade(null);
 				return;
 			}
 
@@ -160,6 +203,7 @@ export function TimelineDailySummary({
 			setStatus("gathering");
 			setSummary("");
 			setError("");
+			setErrorUpgrade(null);
 			setCopied(false);
 			posthog.capture("timeline_daily_summary_generation_started", {
 				selected_date: dateId,
@@ -199,10 +243,13 @@ export function TimelineDailySummary({
 					return;
 				}
 				console.error("daily summary generation failed", generationError);
+				const presented = presentGenerationError(generationError);
 				setStatus("error");
-				setError(friendlyGenerationError(generationError));
+				setError(presented.message);
+				setErrorUpgrade(presented.upgrade);
 				posthog.capture("timeline_daily_summary_failed", {
 					selected_date: dateId,
+					error_kind: presented.kind,
 					reason:
 						generationError instanceof Error
 							? generationError.message.slice(0, 120)
@@ -472,15 +519,46 @@ export function TimelineDailySummary({
 											: "Couldn’t create summary"}
 									</p>
 									<p className="mt-2 text-sm text-muted-foreground">{error}</p>
-									<Button
-										variant="outline"
-										size="sm"
-										className="mt-4"
-										onClick={retryGeneration}
-									>
-										<RefreshCw className="mr-2 h-3.5 w-3.5" />
-										Try again
-									</Button>
+									{errorUpgrade?.resetsAt &&
+										formatAllowanceReset(errorUpgrade.resetsAt) && (
+											<p className="mt-1 text-xs text-muted-foreground">
+												Limit resets{" "}
+												{formatAllowanceReset(errorUpgrade.resetsAt)}.
+											</p>
+										)}
+									<div className="mt-4 flex items-center gap-2">
+										{errorUpgrade ? (
+											<>
+												<Button
+													size="sm"
+													data-testid="daily-summary-upgrade-button"
+													onClick={() =>
+														void openExternalUrl(errorUpgrade.upgradeUrl)
+													}
+												>
+													Upgrade to{" "}
+													{QUOTA_PLAN_LABELS[errorUpgrade.requiredPlan]}
+												</Button>
+												<Button
+													variant="outline"
+													size="sm"
+													onClick={retryGeneration}
+												>
+													<RefreshCw className="mr-2 h-3.5 w-3.5" />
+													Try again
+												</Button>
+											</>
+										) : (
+											<Button
+												variant="outline"
+												size="sm"
+												onClick={retryGeneration}
+											>
+												<RefreshCw className="mr-2 h-3.5 w-3.5" />
+												Try again
+											</Button>
+										)}
+									</div>
 								</div>
 							)}
 						</div>

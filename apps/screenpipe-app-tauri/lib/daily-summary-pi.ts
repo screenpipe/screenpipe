@@ -5,6 +5,7 @@
 import { homeDir, join } from "@tauri-apps/api/path";
 
 import { mountAgentEventBus, registerForeground } from "@/lib/events/bus";
+import { agentEventErrorText } from "@/lib/events/error-text";
 import type { AgentEventEnvelope } from "@/lib/events/types";
 import {
   buildDailySummaryAgentPrompt,
@@ -125,7 +126,13 @@ export async function runDailySummaryWithPi(
     if (event.type === "agent_end") {
       settle(finalAssistantText(envelope) || lastAssistant);
     } else if (event.type === "error") {
-      fail(new Error("AI failed to generate the daily summary"));
+      // Keep the provider error intact — the UI classifies quota/rate-limit
+      // codes out of it to offer the right recovery (upgrade vs retry).
+      fail(
+        new Error(
+          agentEventErrorText(event, "AI failed to generate the daily summary"),
+        ),
+      );
     }
   };
 

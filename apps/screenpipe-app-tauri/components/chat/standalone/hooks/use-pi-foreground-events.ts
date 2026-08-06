@@ -26,6 +26,7 @@ import {
   clearQuotaUpgrade,
   setQuotaUpgradeFromError,
 } from "@/lib/chat/quota-upgrade";
+import { clearFreeWall, setFreeWallFromError } from "@/lib/chat/free-wall";
 import { buildInvalidatedAuthTokenMessage, isInvalidatedAuthTokenError } from "@/lib/chat/auth-errors";
 import { buildNoResponseMessage, buildProviderErrorPresentation } from "@/lib/chat/provider-errors";
 import { chatTelemetryContextForResponse } from "@/lib/chat/response-feedback";
@@ -36,6 +37,7 @@ import { registerPiReauthListener } from "@/components/chat/standalone/hooks/pi-
 import {
   firstAgentEndAssistantError,
   isRecord,
+  isTerminalQuotaError,
   piEventDataFromUnknown,
   stringValue,
   textFromAssistantMessages,
@@ -101,6 +103,8 @@ export function usePiForegroundEvents({
   const getActivePreset = () => activePresetRef?.current ?? activePreset;
   const dailyLimitMessage = (errorStr: string) => {
     setQuotaUpgradeFromError(errorStr);
+    // No-op unless this is the free-plan wall (free_chat_limit_exceeded).
+    setFreeWallFromError(errorStr);
     return buildDailyLimitMessage(errorStr);
   };
   // Listen for Pi / pipe events.
@@ -532,6 +536,7 @@ export function usePiForegroundEvents({
           // A new turn is a fresh admission attempt. Hide the previous blocked
           // action while it runs; a repeated structured rejection restores it.
           clearQuotaUpgrade();
+          clearFreeWall();
           // Pi fires `message_start` for each user turn. When a queued
           // follow-up starts, close the previous streaming target here so the
           // next text_delta creates a fresh assistant bubble instead of
@@ -759,10 +764,23 @@ export function usePiForegroundEvents({
           const isPipeWatch = piMessageIdRef.current?.startsWith("pipe-");
 
           if (!isPipeWatch && data.willRetry === true) {
-            setIsLoading(true);
-            setIsStreaming(true);
-            emitSessionActivity({ status: "streaming" });
-            return;
+            // Pi retries anything that mentions 429 — including terminal
+            // usage-limit rejections it can't recognize (gateway codes like
+            // daily_cost_limit_exceeded). Retrying those can't succeed and
+            // burns more gateway calls while the UI shows "analyzing…" under
+            // the limit message. Stop the session and finalize the turn now.
+            if (isTerminalQuotaError(piLastErrorRef.current ?? "")) {
+              const sid = piSessionIdRef.current;
+              if (sid) {
+                piStoppedIntentionallyRef.current = true;
+                void commands.piStop(sid);
+              }
+            } else {
+              setIsLoading(true);
+              setIsStreaming(true);
+              emitSessionActivity({ status: "streaming" });
+              return;
+            }
           }
 
           // Always clear loading/streaming state on agent_end, even if piMessageIdRef is null

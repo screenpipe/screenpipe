@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   findMeetingSummaryExecution,
   latestSummaryInputAt,
+  meetingSummaryFailure,
   meetingSummaryFailureCopy,
   meetingSummaryLifecycle,
   type MeetingSummaryExecution,
@@ -144,12 +145,91 @@ describe("meeting summary lifecycle", () => {
   });
 
   it("explains daily limits without implying the meeting was lost", () => {
-    expect(
-      meetingSummaryFailureCopy({
-        ...execution,
-        status: "failed",
-        error_type: "daily_limit",
-      }),
-    ).toBe("AI limit reached. Your meeting and transcript are safe.");
+    const copy = meetingSummaryFailureCopy({
+      ...execution,
+      status: "failed",
+      error_type: "daily_limit",
+    });
+    expect(copy).toContain("usage limit is reached");
+    expect(copy).toContain("Your meeting and transcript are safe");
+  });
+});
+
+describe("meetingSummaryFailure", () => {
+  const failed = (
+    error_type: string | null,
+    error_message: string | null = null,
+  ): MeetingSummaryExecution => ({
+    ...execution,
+    status: "failed",
+    error_type,
+    error_message,
+  });
+
+  it("tells the user rate limits are transient and retryable", () => {
+    const failure = meetingSummaryFailure(failed("rate_limited"));
+    expect(failure.kind).toBe("rate_limit");
+    expect(failure.retryable).toBe(true);
+    expect(failure.copy).toContain("rate-limited");
+    expect(failure.upgrade).toBeNull();
+  });
+
+  it("treats credits and quota exhaustion as usage limits, not retries", () => {
+    for (const errorType of [
+      "credits_exhausted",
+      "quota_exhausted",
+      "daily_limit",
+    ]) {
+      const failure = meetingSummaryFailure(failed(errorType));
+      expect(failure.retryable).toBe(false);
+      expect(failure.copy).toContain("usage limit");
+      expect(failure.copy).toContain("Your meeting and transcript are safe");
+    }
+  });
+
+  it("extracts the gateway's validated upgrade action from the error body", () => {
+    const failure = meetingSummaryFailure(
+      failed(
+        "daily_limit",
+        'HTTP 429 {"error":"daily_limit_exceeded","required_plan":"business","upgrade_url":"https://screenpi.pe/account/billing","resets_at":"2026-08-06T00:00:00Z"}',
+      ),
+    );
+    expect(failure.upgrade).toEqual({
+      requiredPlan: "business",
+      upgradeUrl: "https://screenpi.pe/account/billing",
+      resetsAt: "2026-08-06T00:00:00Z",
+    });
+  });
+
+  it("rejects upgrade URLs outside the billing allow-list", () => {
+    const failure = meetingSummaryFailure(
+      failed(
+        "credits_exhausted",
+        '{"error":"credits_exhausted","required_plan":"business","upgrade_url":"https://evil.example/upgrade"}',
+      ),
+    );
+    expect(failure.upgrade).toBeNull();
+  });
+
+  it("suggests switching models when the plan gates the model", () => {
+    const failure = meetingSummaryFailure(failed("model_not_allowed"));
+    expect(failure.kind).toBe("model_not_allowed");
+    expect(failure.retryable).toBe(false);
+    expect(failure.copy.toLowerCase()).toContain("model");
+  });
+
+  it("classifies from the error message when error_type is missing", () => {
+    const failure = meetingSummaryFailure(
+      failed(null, 'pipe failed: {"error":"credits_exhausted"}'),
+    );
+    expect(failure.kind).toBe("credits_exhausted");
+  });
+
+  it("keeps the reassuring generic copy for unknown failures", () => {
+    const failure = meetingSummaryFailure(failed("network", "socket hang up"));
+    expect(failure.retryable).toBe(true);
+    expect(failure.copy).toBe(
+      "Your meeting and transcript are safe. Retry when you're ready.",
+    );
   });
 });
