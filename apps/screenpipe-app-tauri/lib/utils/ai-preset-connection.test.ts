@@ -96,4 +96,53 @@ describe("testAiPresetConnection", () => {
       max_completion_tokens: 50,
     });
   });
+
+  it("reconstructs the reply from an SSE stream (OmniRoute/LiteLLM/vLLM)", async () => {
+    // Gateways like OmniRoute answer with text/event-stream even without
+    // stream:true. Feeding that to response.json() throws the opaque
+    // "The string did not match the expected pattern." on macOS WKWebView.
+    const sse = [
+      'data: {"choices":[{"delta":{"content":"he"}}]}',
+      'data: {"choices":[{"delta":{"content":"llo"}}]}',
+      "data: [DONE]",
+      "",
+    ].join("\n");
+    const request = vi.fn(async () =>
+      new Response(sse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }));
+
+    await expect(
+      testAiPresetConnection(
+        {
+          provider: "custom",
+          url: "http://localhost:20128/v1",
+          model: "gpt-4o-mini",
+          apiKey: "secret",
+        },
+        { fetch: request },
+      ),
+    ).resolves.toMatchObject({ reply: "hello" });
+  });
+
+  it("reconstructs an SSE reply even when content-type is not set", async () => {
+    // Some gateways stream without a text/event-stream content-type, so we
+    // must sniff the body shape too.
+    const sse = 'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n';
+    const request = vi.fn(async () =>
+      new Response(sse, { status: 200 }));
+
+    await expect(
+      testAiPresetConnection(
+        {
+          provider: "custom",
+          url: "http://localhost:20128/v1",
+          model: "gpt-4o-mini",
+          apiKey: "secret",
+        },
+        { fetch: request },
+      ),
+    ).resolves.toMatchObject({ reply: "hi" });
+  });
 });

@@ -31,6 +31,7 @@ import {
   hostedAiAllowanceForModel,
   shouldWarnLowHostedAiAllowance,
 } from "@/lib/hooks/use-usage-status";
+
 import { testAiPresetConnection } from "@/lib/utils/ai-preset-connection";
 import { openBusinessUpgradeSurface } from "@/lib/upgrade-flow";
 import { Label } from "../ui/label";
@@ -154,6 +155,80 @@ const formatPresetName = (name: string): string => {
   return name;
 };
 
+const isLocalhostUrl = (url?: string): boolean => {
+  if (!url) return false;
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1") return true;
+    // mDNS/Bonjour .local domains resolve to local addresses (RFC 6762)
+    if (hostname.endsWith(".local")) return true;
+    // Private IP ranges: 10.x.x.x, 172.16-31.x.x, 192.168.x.x
+    if (/^10\.\d+\.\d+\.\d+$/.test(hostname)) return true;
+    if (/^172\.(1[6-9]|2[0-9]|3[01])\.\d+\.\d+$/.test(hostname)) return true;
+    if (/^192\.168\.\d+\.\d+$/.test(hostname)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+};
+
+const tauriBackendFetch = async (
+  url: string,
+  options?: RequestInit
+): Promise<Response> => {
+  try {
+    const headers: Record<string, string> = {};
+    if (options?.headers) {
+      const h = options.headers as Record<string, string>;
+      Object.keys(h).forEach((key) => {
+        headers[key] = h[key];
+      });
+    }
+    const bodyVal = options?.body ? JSON.parse(options.body as string) : null;
+    const res = await commands.testAiEndpoint(
+      url,
+      options?.method || "GET",
+      headers,
+      bodyVal
+    );
+    if (res.status === "error") {
+      throw new Error(res.error);
+    }
+    const resText = res.data;
+    // The Rust backend returns only the body text (no headers). Sniff SSE so
+    // the diagnostics' content-type check can detect a streamed response.
+    const looksLikeSse = /(^|\n)\s*data:/.test(resText);
+    const contentType = looksLikeSse ? "text/event-stream" : "application/json";
+    return {
+      ok: true,
+      status: 200,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "content-type" ? contentType : null,
+      },
+      json: async () => JSON.parse(resText),
+      text: async () => resText,
+      clone: function () {
+        return this;
+      },
+    } as unknown as Response;
+  } catch (err: any) {
+    return {
+      ok: false,
+      status: 500,
+      headers: {
+        get: (_name: string) => null,
+      },
+      text: async () => String(err?.message || err),
+      json: async () => {
+        throw new Error(String(err?.message || err));
+      },
+      clone: function () {
+        return this;
+      },
+    } as unknown as Response;
+  }
+};
 type DiagnosticStatus = "pass" | "fail" | "skip" | "pending" | "running";
 
 interface DiagnosticStepResult {
@@ -824,10 +899,17 @@ const AISection = ({
         chat: { status: "running", message: "Sending test message..." },
       }));
     } else {
-      // Custom endpoints use native HTTP so validation is not affected by the
-      // webview's CORS policy. The wrapper also bounds both headers and body.
+      // native-ollama and custom local endpoints go through native HTTP to bypass
+      // WKWebView mixed-content/CORS blocking. Custom local providers use the
+      // Rust backend allowlisted fetcher so missing CORS preflight doesn't matter.
+      const modelsFetchFn =
+        settingsPreset?.provider === "native-ollama"
+          ? tauriFetchWithDeadline
+          : settingsPreset?.provider === "custom" && isLocalhostUrl(settingsPreset?.url)
+          ? tauriBackendFetch
+          : fetch;
       try {
-        modelsResponse = await tauriFetchWithDeadline(modelsUrl, {
+        modelsResponse = await modelsFetchFn(modelsUrl, {
           headers,
           signal: abort.signal,
         });
@@ -947,6 +1029,13 @@ const AISection = ({
 
     // Step 4: Test the actual chat endpoint. BYOK providers share one probe so
     // both preset editors enforce the same request and response contract.
+    // Custom local/private URLs route through the Rust backend (tauriBackendFetch)
+    // because WKWebView blocks them; other BYOK traffic uses native HTTP.
+    const chatFetchFn = isLocalhostUrl(
+      settingsPreset?.provider === "custom" ? settingsPreset?.url : undefined
+    )
+      ? tauriBackendFetch
+      : tauriFetchWithDeadline;
     const chatStart = performance.now();
     try {
       let reply: string;
@@ -996,6 +1085,7 @@ const AISection = ({
           apiKey: settingsPreset?.apiKey,
         }, {
           signal: abort.signal,
+          fetch: chatFetchFn,
         });
         reply = result.reply;
         latencyMs = result.latencyMs;
@@ -1078,7 +1168,10 @@ const AISection = ({
           break;
         case "custom":
           try {
-            const customResponse = await tauriFetchWithDeadline(
+            const customFetchFn = isLocalhostUrl(settingsPreset?.url)
+              ? tauriBackendFetch
+              : tauriFetchWithDeadline;
+            const customResponse = await customFetchFn(
               aiEndpointUrl(settingsPreset?.url, "models"),
               {
                 headers: settingsPreset.apiKey

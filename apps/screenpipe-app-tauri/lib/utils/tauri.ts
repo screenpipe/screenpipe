@@ -8,6 +8,14 @@
 
 
 export const commands = {
+async testAiEndpoint(url: string, method: string, headers: Record<string, string>, body: any | null) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("test_ai_endpoint", { url, method, headers, body }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Frontend hook for browser OAuth flows that complete by polling (MCP and
  * Composio). Generic integration OAuth calls the same mechanism directly.
