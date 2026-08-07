@@ -6,10 +6,10 @@
 import React, { useEffect, useState, useRef, Suspense, useCallback } from "react";
 import {
   Settings as SettingsIcon,
-  Workflow,
+  TimerReset,
   Plus,
   Brain,
-  Clock,
+  MonitorPlay,
   HelpCircle,
   PanelLeftClose,
   PanelLeftOpen,
@@ -965,8 +965,8 @@ function HomeContent() {
     // rows are not reused — that felt like opening an old recent).
     { id: "home", label: "Chat", icon: <Plus className="h-3.5 w-3.5" /> },
     { id: "brain", label: "Brain", icon: <Brain className="h-3.5 w-3.5" /> },
-    { id: "pipes", label: "Scheduled", icon: <Workflow className="h-3.5 w-3.5" /> },
-    { id: "timeline", label: "Timeline", icon: <Clock className="h-3.5 w-3.5" /> },
+    { id: "pipes", label: "Scheduled", icon: <TimerReset className="h-3.5 w-3.5" /> },
+    { id: "timeline", label: "Timeline", icon: <MonitorPlay className="h-3.5 w-3.5" /> },
     { id: "connections", label: "Connections", icon: <Plug className="h-3.5 w-3.5" /> },
   ]
     .filter((s) => !isSectionHidden(s.id) && !(s.id === "brain" && isSectionHidden("memories")))
