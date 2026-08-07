@@ -189,44 +189,62 @@ export const CONNECTION_HARDCODED_DESCRIPTIONS: Record<string, string> = {
 };
 
 // High-activation defaults fill the suggested row when there are not enough
-// detected or already-connected apps on the device.
+// detected apps on the device.
+//
+// Ordered by what people actually keep connected (PostHog `connections_loaded`
+// -> `active_connections`, 90d distinct users) with calendar and mail pulled to
+// the front: they carry the strongest "answer my day" payoff, calendar is the
+// single largest connected category (apple 351 + google 226 + ics 30), and mail
+// is high-intent but under-surfaced. Plumbing tiles (custom-mcp, pi-extensions)
+// sit below outcome-bearing ones — they are a means, not a reason to connect.
 export const FEATURED_CONNECTION_IDS = [
-  "custom-mcp",
-  "pi-extensions",
-  "claude",
-  "cursor",
-  "codex",
-  "claude-code",
-  "chatgpt",
+  "google-calendar",
+  "apple-calendar",
+  "gmail",
+  "outlook-email",
   "slack",
   "obsidian",
   "notion",
+  "github",
+  "claude-code",
+  "linear",
 ];
 
 export const DEVICE_CONNECTION_ORDER = [
-  "custom-mcp",
-  "pi-extensions",
-  "claude",
-  "cursor",
-  "codex",
-  "grok",
-  "claude-code",
-  "chatgpt",
-  "browser-url",
+  // Calendar & mail first — highest real adoption and clearest payoff.
+  "google-calendar",
+  "apple-calendar",
+  "outlook-calendar",
+  "ics-calendar",
+  "gmail",
+  "outlook-email",
+  "microsoft365",
+  "email",
+  // Then the rest of the daily-context surface.
+  "slack",
   "obsidian",
   "notion",
+  "github",
   "linear",
-  "slack",
-  "outlook-email",
-  "apple-calendar",
-  "google-calendar",
   "google-docs",
+  "browser-url",
+  "whatsapp",
+  "granola",
+  // Desktop AI clients & local runtimes.
+  "claude-code",
+  "codex",
+  "claude",
+  "cursor",
+  "grok",
+  "chatgpt",
   "warp",
   "ollama",
   "lmstudio",
   "msty",
   "krisp",
-  "whatsapp",
+  // Plumbing last.
+  "custom-mcp",
+  "pi-extensions",
 ];
 
 export function normalizeConnectionCategory(category: string | null | undefined): string {
@@ -244,9 +262,26 @@ export function normalizeConnectionCategory(category: string | null | undefined)
     .join(" ");
 }
 
+// Calendar and mail share the top tier with detected apps: they are the two
+// sources that make "what happened / what is next" answerable, so they lead the
+// suggested row instead of losing it to whichever client happens to be
+// installed. Ties inside a tier fall through to DEVICE_CONNECTION_ORDER.
+// Only the mainstream providers — a raw ICS feed or generic IMAP is a
+// power-user fallback, and stacking them here buries mail under a wall of
+// near-identical calendar tiles. They stay reachable via search and the
+// Calendar/Communication groups.
+export const PRIORITY_CONNECTION_IDS = [
+  "google-calendar",
+  "apple-calendar",
+  "outlook-calendar",
+  "gmail",
+  "outlook-email",
+  "microsoft365",
+];
+
 function connectionPriority(tile: ConnectionSuggestionTile): number {
   if (tile.connected) return 0;
-  if (tile.detected) return 1;
+  if (tile.detected || PRIORITY_CONNECTION_IDS.includes(tile.id)) return 1;
   if (FEATURED_CONNECTION_IDS.includes(tile.id)) return 2;
   return 3;
 }
@@ -267,8 +302,17 @@ export function compareConnectionTiles(
   return a.name.localeCompare(b.name);
 }
 
+// Suggestions are a call to action, so anything already connected is excluded —
+// re-listing a connected tile spends the most valuable slot on a no-op and
+// pushes the real next step out of view. Connected tiles still show in their
+// category group (sorted first there by compareConnectionTiles).
 export function isSuggestedForThisDevice(tile: ConnectionSuggestionTile): boolean {
-  return tile.connected || !!tile.detected || FEATURED_CONNECTION_IDS.includes(tile.id);
+  if (tile.connected) return false;
+  return (
+    !!tile.detected ||
+    PRIORITY_CONNECTION_IDS.includes(tile.id) ||
+    FEATURED_CONNECTION_IDS.includes(tile.id)
+  );
 }
 
 export function getSuggestedConnectionsForDevice<T extends ConnectionSuggestionTile>(
