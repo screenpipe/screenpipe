@@ -139,7 +139,9 @@ fn get_base_dir(custom_path: &Option<String>) -> anyhow::Result<PathBuf> {
     let data_dir = base_dir.join("data");
 
     fs::create_dir_all(&data_dir)?;
-    paths::ensure_spotlight_excluded(&base_dir)?;
+    // Best effort: a failed Spotlight exclusion must not stop the recorder from
+    // starting — capture is the job, the exclusion is hardening around it.
+    paths::ensure_spotlight_excluded_best_effort(&base_dir);
     Ok(base_dir)
 }
 
