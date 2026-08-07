@@ -944,8 +944,6 @@ fn sign_macos_sidecar_if_needed(path: &std::path::Path) {
 
 #[cfg(target_os = "macos")]
 fn download_homebrew_onnxruntime_dylib(dst: &std::path::Path) -> Result<u64, String> {
-    use std::path::PathBuf;
-
     let tmp = std::env::temp_dir().join(format!("ort-app-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
     let tarball = tmp.join("bottle.tar.gz");

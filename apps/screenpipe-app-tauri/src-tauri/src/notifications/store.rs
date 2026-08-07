@@ -155,6 +155,9 @@ pub fn read_all() -> Vec<NotificationHistoryEntry> {
     entries
 }
 
+/// Bell badge count for the native macOS shortcut overlay. The webview overlay
+/// on Windows/Linux computes its own dot from the list it already polls.
+#[cfg(target_os = "macos")]
 pub fn unread_count() -> usize {
     read_all()
         .iter()

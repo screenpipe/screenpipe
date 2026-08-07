@@ -303,7 +303,7 @@ pub async fn read_viewer_file(path: String) -> Result<ViewerContent, String> {
     let cap = total_bytes.min(MAX_VIEWER_FILE_BYTES) as usize;
     let truncated = total_bytes > MAX_VIEWER_FILE_BYTES;
 
-    let mut file = tokio::fs::File::open(p).await.map_err(|e| e.to_string())?;
+    let file = tokio::fs::File::open(p).await.map_err(|e| e.to_string())?;
     let mut raw = Vec::with_capacity(cap);
     file.take(cap as u64)
         .read_to_end(&mut raw)

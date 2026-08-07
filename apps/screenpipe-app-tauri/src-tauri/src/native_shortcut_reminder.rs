@@ -7,13 +7,17 @@
 //! Note: metrics (audio/screen) are fetched by Swift via WebSocket directly,
 //! so no Rust-side update_metrics/update_shortcuts calls are needed.
 
+#[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Whether the native panel is currently shown. Tracked here (not in Swift)
 /// so the recording-health incident logic can tell "reveal needed" apart from
-/// "already on screen" without another FFI round-trip.
+/// "already on screen" without another FFI round-trip. Only the macOS FFI
+/// writes it and only `overlay_health::overlay_visible` (macOS branch) reads it.
+#[cfg(target_os = "macos")]
 static NATIVE_REMINDER_VISIBLE: AtomicBool = AtomicBool::new(false);
 
+#[cfg(target_os = "macos")]
 pub fn is_reminder_visible() -> bool {
     NATIVE_REMINDER_VISIBLE.load(Ordering::SeqCst)
 }

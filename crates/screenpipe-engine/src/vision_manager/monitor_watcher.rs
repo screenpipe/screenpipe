@@ -93,6 +93,9 @@ struct VisionWatchdogConfig {
     restart_cooldown: Duration,
     silent_db_stale_secs: u64,
     silent_never_produced_uptime_secs: f64,
+    /// Only the macOS display-reconfig wait reads this; other targets poll on a
+    /// fixed interval.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     monitor_backstop: Duration,
 }
 

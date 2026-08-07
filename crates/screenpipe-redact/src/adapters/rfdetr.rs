@@ -292,7 +292,10 @@ mod imp {
                 // Offload to the Apple Neural Engine (Mac) / NPU (Windows) instead of
                 // running CPU-only. CoreML MLProgram + ComputeUnits::All measured ~3.4x
                 // faster than the legacy default and keeps the work off the CPU/GPU.
+                // Shadowed again by the directml rebind when both features are
+                // enabled (Windows app build), which leaves this `mut` unused there.
                 #[cfg(feature = "onnx-coreml")]
+                #[allow(unused_mut)]
                 let mut builder = builder.with_execution_providers([
                     ort::ep::CoreML::default()
                         .with_model_format(ort::ep::coreml::ModelFormat::MLProgram)

@@ -86,6 +86,9 @@ pub struct RunningMeetingApp {
 ///      (e.g. "google meet" or "meet.google.com" silences Meet-in-a-browser).
 ///
 /// Blank/whitespace entries never match. Empty list = nothing ignored.
+// Convenience wrapper exercised by the ui_scan tests; production call sites
+// normalize once and use `meeting_app_is_ignored_with_terms` directly.
+#[cfg(test)]
 pub fn meeting_app_is_ignored(
     app_name: &str,
     profile: &MeetingDetectionProfile,
@@ -193,6 +196,8 @@ pub(crate) fn browser_window_matches_meeting(
 /// no genuine detection. The mic-gated URL probe and DB-evidence paths
 /// (`browser_window_matches_meeting`) are unchanged, and non-Meet platforms
 /// keep their coverage via URL patterns and the Windows UIA path.
+// Only the macOS AX sweep calls this (plus the shared tests).
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn ax_window_matches_meeting(
     doc: Option<&str>,
     title: Option<&str>,
@@ -244,6 +249,7 @@ pub(crate) fn ax_window_matches_meeting(
 /// `browser_title_patterns` fallback for URL-less windows. Byte-level scan is
 /// UTF-8 safe: multi-byte separators (the en dash above) have non-ASCII bytes,
 /// which neither form the code nor extend the token.
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn title_contains_meeting_code(title: &str) -> bool {
     const CODE_LEN: usize = 12; // aaa-bbbb-ccc
     let bytes = title.as_bytes();

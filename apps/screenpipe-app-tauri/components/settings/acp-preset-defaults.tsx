@@ -4,7 +4,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, Copy, Loader2, RefreshCw } from "lucide-react";
+import { Check, Copy, Download, Loader2, RefreshCw } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { commands } from "@/lib/utils/tauri";
@@ -48,12 +48,17 @@ export function AcpPresetDefaults({
   modeId,
   onChange,
   compact = false,
+  onConnectedChange,
 }: {
   agent: AcpPresetAgent;
   config: Record<string, string> | undefined;
   modeId: string | null | undefined;
   onChange: (change: AcpPresetDefaultsChange) => void;
   compact?: boolean;
+  /** True once the agent answered with its choices, i.e. it is installed and
+   *  signed in. The parent uses it to hold back advanced settings that are
+   *  noise until the agent actually works. */
+  onConnectedChange?: (connected: boolean) => void;
 }) {
   const agentId = agent.id;
   const advertised = useAcpSessionConfig((state) => state.byAgent[agentId]);
@@ -62,9 +67,14 @@ export function AcpPresetDefaults({
   const [probeError, setProbeError] = useState<string | null>(null);
   const [probeNonce, setProbeNonce] = useState(0);
   const [copied, setCopied] = useState(false);
-  // True while a probe is installing an npx agent that isn't cached yet, so the
-  // label can say "Installing <agent>…" instead of "loading choices".
-  const [downloadPending, setDownloadPending] = useState(false);
+  // Whether this agent still has to be downloaded. Asked BEFORE probing, not
+  // during: starting a background download because someone clicked an agent in
+  // a list is a surprise, and "Installing Codex…" appearing unbidden reads like
+  // the app did something on its own.
+  const [downloadPending, setDownloadPending] = useState<boolean | null>(null);
+  // Set once the user explicitly asks for the download. Until then an
+  // uninstalled agent shows an install button instead of installing itself.
+  const [installApproved, setInstallApproved] = useState(false);
   // Holds the retry button's "checking…" spinner for a minimum window. The
   // re-probe is event-driven and often near-instant, so without this the
   // spinner would flash imperceptibly and retry would feel dead.
@@ -99,16 +109,40 @@ export function AcpPresetDefaults({
   // while it re-checks, instead of blanking it — the re-probe is near-instant.
   useEffect(() => {
     setProbeError(null);
-    setDownloadPending(false);
+    setDownloadPending(null);
+    setInstallApproved(false);
     setRetryPending(false);
     setRetryFailed(false);
     wasRetryRef.current = false;
     if (retryTimerRef.current != null) window.clearTimeout(retryTimerRef.current);
   }, [agentId]);
 
+  // Resolve "does this need downloading?" first, so the probe effect below can
+  // hold off rather than discovering it mid-install.
+  useEffect(() => {
+    if (advertised || !probeable) return;
+    let cancelled = false;
+    void commands
+      .piAcpAgentDownloadPending(agentId)
+      .then((pending) => {
+        if (!cancelled) setDownloadPending(pending);
+      })
+      .catch(() => {
+        // Unknown: treat as installed so a probe failure explains itself,
+        // rather than blocking behind an install button we cannot justify.
+        if (!cancelled) setDownloadPending(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId, advertised, probeable]);
+
   useEffect(() => {
     if (advertised || !probeable) return;
     if (probesInFlight.has(agentId)) return;
+    // Not known yet, or the agent needs a download the user has not asked for.
+    if (downloadPending === null) return;
+    if (downloadPending && !installApproved) return;
     // Reuse a remembered verdict instead of spawning a fresh agent again.
     const cached = probeVerdicts.get(agentId);
     if (cached !== undefined) {
@@ -119,14 +153,6 @@ export function AcpPresetDefaults({
     probesInFlight.add(agentId);
     setProbing(true);
     let cancelled = false;
-    // A not-yet-cached npx agent installs on first probe, so the label can say
-    // "Installing…" instead of a bare "loading…" that looks hung.
-    void commands
-      .piAcpAgentDownloadPending(agentId)
-      .then((pending) => {
-        if (!cancelled) setDownloadPending(pending);
-      })
-      .catch(() => {});
     void (async () => {
       try {
         // Cap the probe so a signed-out/wedged agent can't spin forever; the
@@ -172,7 +198,17 @@ export function AcpPresetDefaults({
     };
     // Probing keys off the adapter identity, not the callback identities.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentId, advertised, probeable, probeNonce]);
+  }, [agentId, advertised, probeable, probeNonce, downloadPending, installApproved]);
+
+  // "Connected" is the agent having answered with its choices. Anything else
+  // (needs install, needs sign-in, probe failed) is not connected.
+  const connected = !!advertised;
+  useEffect(() => {
+    onConnectedChange?.(connected);
+    // The callback identity churns on every parent render; the fact that
+    // matters is whether the agent answered.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected]);
 
   const selects = (advertised?.options ?? []).filter(
     (option) => option.type === "select" && option.values.length > 0,
@@ -215,6 +251,29 @@ export function AcpPresetDefaults({
     const busy = probing || retryPending;
     // First probe (no card yet): show a loading line, or a pulsing install
     // label for a not-yet-cached npx agent (Zed's pattern: no spinner, no %).
+    // Needs downloading and nobody asked for it yet: offer the download as an
+    // action instead of starting it. Clicking an agent in a list is a choice
+    // about which agent, not consent to fetch a package.
+    if (downloadPending && !installApproved) {
+      const name = acpAdapterInfo(agentId).name;
+      return (
+        <div
+          className={cn("space-y-2 rounded-lg border border-input bg-muted/20", compact ? "p-3" : "p-4")}
+          data-testid="acp-preset-install"
+        >
+          <p className={cn("font-medium", compact ? "text-xs" : "text-sm")}>
+            {name} isn&apos;t installed yet
+          </p>
+          <p className={cn("text-muted-foreground", compact ? "text-[11px]" : "text-xs")}>
+            Screenpipe can download it for you. It runs on this computer as its
+            own program, and signs in with its own account.
+          </p>
+          <Button type="button" size="sm" onClick={() => setInstallApproved(true)}>
+            <Download className="mr-1.5 h-3.5 w-3.5" /> Install {name}
+          </Button>
+        </div>
+      );
+    }
     if (busy && !authErr) {
       if (downloadPending) {
         const name = acpAdapterInfo(agentId).name;
@@ -245,8 +304,8 @@ export function AcpPresetDefaults({
             <p className={cn("font-medium", compact ? "text-xs" : "text-sm")}>Sign in to {info.name}</p>
             <p className={cn("text-muted-foreground", compact ? "text-[11px]" : "text-xs")}>
               {signInCommand
-                ? "Run this command in a terminal to sign in, then retry."
-                : probeError}
+                ? `Run this in a terminal. It opens ${info.name}'s own login, which stores the credential itself.`
+                : `${info.name} signs in when you open a chat with this preset: it runs its own login and stores the credential itself. Screenpipe never sees or stores an API key for it.`}
             </p>
           </div>
           {/* A retry that still failed: say so plainly, kept visible, like the
@@ -261,8 +320,8 @@ export function AcpPresetDefaults({
               )}
             >
               {signInCommand
-                ? "still not signed in. run the command, then retry."
-                : "still not signed in. finish the sign in, then retry."}
+                ? "Still not signed in. Run the command above, then check again."
+                : `Still not signed in. ${info.name} signs in from a chat, not from here.`}
             </div>
           )}
           {signInCommand && (
@@ -289,13 +348,33 @@ export function AcpPresetDefaults({
               </button>
             </div>
           )}
-          <Button type="button" size="sm" disabled={busy} onClick={beginRetry}>
-            {busy ? (
-              <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> checking…</>
-            ) : (
-              <><RefreshCw className="mr-1.5 h-3.5 w-3.5" /> I&apos;ve signed in, retry</>
-            )}
-          </Button>
+          {/* This button re-checks; it cannot perform the sign-in itself, so it
+              must not be labelled as if it could. "I've signed in" invited a
+              click before signing in, which then looked broken. Agents whose
+              login is in-protocol have nothing to run here at all, so they get
+              no button and an honest sentence instead. */}
+          {signInCommand ? (
+            <Button type="button" size="sm" disabled={busy} onClick={beginRetry}>
+              {busy ? (
+                <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> Checking…</>
+              ) : (
+                <><RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Check again</>
+              )}
+            </Button>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Button type="button" size="sm" variant="outline" disabled={busy} onClick={beginRetry}>
+                {busy ? (
+                  <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> Checking…</>
+                ) : (
+                  <><RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Check again</>
+                )}
+              </Button>
+              <span className={cn("text-muted-foreground", compact ? "text-[10px]" : "text-xs")}>
+                Save this preset and open a chat to sign in.
+              </span>
+            </div>
+          )}
         </div>
       );
     }

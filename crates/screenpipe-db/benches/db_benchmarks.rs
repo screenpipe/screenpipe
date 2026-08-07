@@ -14,7 +14,7 @@ async fn setup_large_db(size: usize) -> DatabaseManager {
     let db = DatabaseManager::new("sqlite::memory:", Default::default())
         .await
         .unwrap();
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for _ in 0..size {
         let _video_id = db
@@ -25,7 +25,7 @@ async fn setup_large_db(size: usize) -> DatabaseManager {
             .insert_frame("test_device", None, None, None, None, false, None)
             .await
             .unwrap();
-        let ocr_text = format!("OCR text {}", rng.gen::<u32>());
+        let ocr_text = format!("OCR text {}", rng.random::<u32>());
         let text_json = format!(r#"{{"text": "{}"}}"#, ocr_text);
         db.insert_ocr_text(
             frame_id,
@@ -37,7 +37,7 @@ async fn setup_large_db(size: usize) -> DatabaseManager {
         .unwrap();
 
         let audio_id = db.insert_audio_chunk("test_audio.mp4", None).await.unwrap();
-        let audio_text = format!("Audio transcription {}", rng.gen::<u32>());
+        let audio_text = format!("Audio transcription {}", rng.random::<u32>());
         db.insert_audio_transcription(
             audio_id,
             &audio_text,

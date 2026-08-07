@@ -297,7 +297,6 @@ pub fn set_audio_device_status(devices: Vec<AudioDeviceEntry>) {
 #[derive(Clone, Debug)]
 pub struct VisionDeviceEntry {
     pub id: u32,
-    pub name: String,
     pub user_disabled: bool,
 }
 
@@ -604,6 +603,9 @@ fn stall_confirmed(counter: u32) -> bool {
     counter >= CAPTURE_STALL_THRESHOLD
 }
 
+/// Test-only wrapper that pins the production cooldown; the polling loop calls
+/// [`should_track_capture_stalls_after`] with its own delay.
+#[cfg(test)]
 fn should_track_capture_stalls(
     status: RecordingStatus,
     elapsed_since_start: Duration,
@@ -1471,11 +1473,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                                 let id = d["id"].as_u64().unwrap_or(0) as u32;
                                 let name = d["name"].as_str().unwrap_or("").to_string();
                                 let user_disabled = d["user_disabled"].as_bool().unwrap_or(false);
-                                vision_entries.push(VisionDeviceEntry {
-                                    id,
-                                    name: name.clone(),
-                                    user_disabled,
-                                });
+                                vision_entries.push(VisionDeviceEntry { id, user_disabled });
                                 devices.push(DeviceInfo {
                                     name,
                                     kind: DeviceKind::Monitor,

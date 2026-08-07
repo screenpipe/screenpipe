@@ -1885,8 +1885,14 @@ async fn browser_session_decision_for_url(
     // so we don't need an explicit consent step. DPAPI cookies inject silently;
     // if they are v20-encrypted inject_cookies_for_url will show the single
     // "Browser login is protected" card which already acts as consent + setup.
-    #[cfg(target_os = "windows")]
-    return BrowserSessionDecision::UseBrowserSession;
+    //
+    // `cfg!` rather than `#[cfg]`: an attribute-gated `return` here makes the
+    // whole consent flow below unreachable on Windows, which also hides
+    // `already_granted` from liveness analysis. The runtime constant keeps the
+    // non-Windows path intact and still compiles the branch away.
+    if cfg!(target_os = "windows") {
+        return BrowserSessionDecision::UseBrowserSession;
+    }
 
     // macOS: a persisted app-level grant is not enough to avoid surprise.
     // The first Safe Storage read after app launch can still trigger a macOS

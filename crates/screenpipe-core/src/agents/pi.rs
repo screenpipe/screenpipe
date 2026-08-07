@@ -2924,6 +2924,8 @@ pub fn pi_child_path(existing_path: &OsStr) -> Option<OsString> {
     std::env::join_paths(paths).ok()
 }
 
+// Windows builds its own PATH inline in the .cmd-shim branch below.
+#[cfg(not(windows))]
 fn apply_pi_child_path(cmd: &mut tokio::process::Command) {
     let current_path = std::env::var_os("PATH").unwrap_or_default();
     if let Some(path) = pi_child_path(&current_path) {

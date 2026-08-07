@@ -1715,6 +1715,9 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
     }
 }
 
+/// Only the macOS run-loop-observer path installs queued menu state; the tests
+/// below cover the transition logic on every platform.
+#[cfg(any(target_os = "macos", test))]
 fn replace_menu_state_if_changed(last_state: &mut MenuState, new_state: MenuState) -> bool {
     if *last_state == new_state {
         return false;

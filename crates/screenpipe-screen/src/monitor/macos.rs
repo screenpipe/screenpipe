@@ -143,10 +143,14 @@ pub mod macos_version {
 
 use macos_version::use_sck_rs;
 
+// E2E fault-injection seeds are only honoured in debug builds (see
+// `e2e_sck_capture_hang_enabled`), so release builds never call these.
+#[cfg(any(debug_assertions, test))]
 fn seed_list_has_exact_token(seeds: &str, token: &str) -> bool {
     seeds.split(',').any(|seed| seed.trim() == token)
 }
 
+#[cfg(any(debug_assertions, test))]
 fn seed_has_exact_token(token: &str) -> bool {
     std::env::var("SCREENPIPE_E2E_SEED")
         .ok()

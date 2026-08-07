@@ -17,6 +17,8 @@ mod null;
 #[cfg(target_os = "windows")]
 mod windows;
 
+// Kept compiled on every target so the counters unit tests still run there.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod counters;
 // Only the macOS GLOBAL tap drains a watchdog; the per-pid Meeting Tap never
 // acts on silence (product decision: a silent meeting device is the user's own

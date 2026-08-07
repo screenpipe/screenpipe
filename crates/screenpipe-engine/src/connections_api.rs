@@ -804,6 +804,10 @@ enum NativeCalendarError {
     #[allow(dead_code)] // constructed only on the macOS arm
     AuthRequired(String),
     /// Real failure while reading events.
+    #[cfg_attr(
+        not(any(target_os = "macos", target_os = "windows", test)),
+        allow(dead_code)
+    )]
     Internal(String),
 }
 

@@ -1189,6 +1189,8 @@ pub(crate) async fn event_driven_capture_loop(
         let mut warm_trigger_override: Option<CaptureTrigger> = None;
         {
             use crate::focus_aware_controller::CaptureState;
+            // Only the debug-only e2e override below reassigns this.
+            #[cfg_attr(not(debug_assertions), allow(unused_mut))]
             let mut capture_state = focus_controller.state_for_monitor(&monitor);
             #[cfg(debug_assertions)]
             if e2e_force_focus_cold(monitor_id) {

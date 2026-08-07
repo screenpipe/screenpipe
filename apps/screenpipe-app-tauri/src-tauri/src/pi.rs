@@ -4243,6 +4243,8 @@ pub async fn pi_acp_probe_agent(agent: AcpAgentConfig) -> Result<String, String>
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let project_dir = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
 
+    // `process_group` below is the only mutation, and it is unix-only.
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut std_cmd = std::process::Command::new(exe);
     // Own process group so cleanup group-kills can never target the app.
     #[cfg(unix)]

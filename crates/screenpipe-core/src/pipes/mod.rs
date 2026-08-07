@@ -2272,7 +2272,7 @@ async fn setup_pipe_permissions(
     if perms.has_any_restrictions() || force_write {
         // Generate a unique pipe token for server-side enforcement
         use rand::Rng;
-        let suffix: u64 = rand::thread_rng().gen();
+        let suffix: u64 = rand::rng().random();
         let t = format!("sp_pipe_{:016x}", suffix);
         perms.pipe_token = Some(t.clone());
 

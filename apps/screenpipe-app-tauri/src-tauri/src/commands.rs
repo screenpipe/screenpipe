@@ -561,6 +561,9 @@ struct RecoveredEnterpriseDeviceConfig {
 }
 
 impl EnterpriseFileConfig {
+    /// Assertion helper for the `enterprise.json` parser tests — production
+    /// code branches on the individual fields instead.
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.license_key.is_none() && self.ingest_url.is_none()
     }
@@ -2766,6 +2769,11 @@ pub(crate) async fn show_shortcut_reminder_impl(
     wait_for_server: bool,
 ) -> Result<(), String> {
     use tauri::{Emitter, WebviewWindowBuilder};
+
+    // Only the macOS native-reminder path below performs the wait-for-server
+    // handshake; the webview fallback shows immediately on every platform.
+    #[cfg(not(target_os = "macos"))]
+    let _ = wait_for_server;
 
     let label = "shortcut-reminder";
 

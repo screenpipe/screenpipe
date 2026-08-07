@@ -52,6 +52,10 @@ export function AcpAgentPicker({
   compact?: boolean;
 }) {
   const [installBlocked, setInstallBlocked] = useState(false);
+  // Advanced settings stay hidden until the agent is actually usable. Showing a
+  // custom command box and an env editor next to "sign in to continue" implies
+  // they are part of signing in, and buries the one thing left to do.
+  const [agentConnected, setAgentConnected] = useState(false);
   const currentId = agent?.id || DEFAULT_AGENT_ID;
   const info = acpAdapterInfo(currentId);
   // Some agents roll out on their own flag; the already-selected one is always
@@ -234,9 +238,12 @@ export function AcpAgentPicker({
           config={agent?.config}
           modeId={agent?.modeId}
           onChange={(change) => merge(change)}
+          onConnectedChange={setAgentConnected}
         />
       )}
 
+      {/* A custom agent needs its command before it can connect at all, so that
+          one field stays visible; everything else waits. */}
       {currentId === "custom" &&
         (compact ? (
           <div className="space-y-1">
@@ -307,7 +314,7 @@ export function AcpAgentPicker({
           </div>
         ))}
 
-      {!compact && (
+      {!compact && agentConnected && (
         <div className="space-y-2 border-t pt-4">
           <Label htmlFor="acpEnv">Additional environment variables</Label>
           <Textarea

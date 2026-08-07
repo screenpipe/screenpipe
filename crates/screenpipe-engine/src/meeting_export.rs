@@ -698,7 +698,8 @@ async fn run_ffprobe(ffprobe_path: &Path, args: &[&str]) -> Result<String> {
     cmd.args(args);
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
+        // tokio's Command exposes creation_flags inherently, so the
+        // std CommandExt trait import would be unused here.
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
     let output = cmd.output().await.context("failed to spawn ffprobe")?;

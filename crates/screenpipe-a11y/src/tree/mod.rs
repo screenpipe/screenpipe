@@ -10,6 +10,9 @@
 // Support` macOS, `%APPDATA%` Windows, `~/.config` Linux). Resolver
 // returns `None` for unknown apps, missing files, or any error — call
 // sites are safe to invoke for every focused frame.
+// Only the macOS/Windows tree walkers resolve app versions; Linux keeps the
+// module compiled so its unit tests still run there.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 mod app_version;
 mod electron_docs;
 #[cfg(target_os = "linux")]

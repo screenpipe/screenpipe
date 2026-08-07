@@ -160,6 +160,10 @@ mod notifications;
 mod safe_icon;
 mod shortcuts;
 mod skills;
+// Binding generation runs from `cargo test` (`bun run bindings:generate` /
+// `bindings:check`) and from the debug-build refresh in `async_main`. Release
+// binaries never export TypeScript, so the whole module stays out of them.
+#[cfg(any(debug_assertions, test))]
 mod specta_bindings;
 mod vault;
 mod viewer;
@@ -270,7 +274,9 @@ const _: () = assert!(
     "generated Tauri command registry must not be empty"
 );
 
-/// Shared tauri-specta registry body.
+/// Shared tauri-specta registry body. Only the debug-build binding refresh and
+/// the `cfg(test)` exporter build the registry — release binaries never do.
+#[cfg(any(debug_assertions, test))]
 macro_rules! define_specta_builder {
     () => {{
         use crate::store::{OnboardingStore, SettingsStore};
