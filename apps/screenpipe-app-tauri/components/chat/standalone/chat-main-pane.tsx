@@ -239,7 +239,13 @@ export function ChatMainPane({
               !isStreaming &&
               hasPresets &&
               hasValidModel && <SummaryCards {...summaryCardsProps} />}
-            <ChatMessageList {...messageListProps} />
+            {/* A conversation switch is a hard visual boundary. Remounting the
+                list prevents AnimatePresence from carrying an outgoing chat's
+                exit nodes into the new chat's empty state. */}
+            <ChatMessageList
+              key={conversationId ?? "blank-chat"}
+              {...messageListProps}
+            />
 
             <div ref={messagesEndRef} />
           </div>
