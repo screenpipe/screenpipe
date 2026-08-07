@@ -278,8 +278,10 @@ describe("onboarding login gate", () => {
     mocks.settings = { user: null };
     render(<OnboardingLogin handleNextSlide={vi.fn()} />);
 
-    // Before the handoff the normal sign-in button is the only affordance.
-    expect(screen.getByText(/^sign in$/i)).toBeInTheDocument();
+    // Before the handoff the normal login button is the only affordance.
+    // These handoff tests address it by test id, not by label: the label is
+    // owned by the copy tests above and changes with positioning.
+    expect(screen.getByTestId("login-cta")).toBeInTheDocument();
     expect(screen.queryByTestId("login-browser-waiting")).toBeNull();
 
     await waitFor(() =>
@@ -301,7 +303,7 @@ describe("onboarding login gate", () => {
     render(<OnboardingLogin handleNextSlide={vi.fn()} />);
 
     expect(screen.queryByTestId("login-browser-waiting")).toBeNull();
-    expect(screen.getByText(/^sign in$/i)).toBeInTheDocument();
+    expect(screen.getByTestId("login-cta")).toBeInTheDocument();
   });
 
   it("offers the in-app window as an escape hatch while waiting", async () => {
@@ -343,7 +345,7 @@ describe("onboarding login gate", () => {
       /cancelled in your browser/i,
     );
     // Retry must be immediately available.
-    expect(screen.getByText(/^sign in$/i)).toBeInTheDocument();
+    expect(screen.getByTestId("login-cta")).toBeInTheDocument();
   });
 
   it("explains an expired link and still allows retry", async () => {
@@ -359,7 +361,7 @@ describe("onboarding login gate", () => {
       /expired/i,
     );
 
-    fireEvent.click(screen.getByText(/^sign in$/i));
+    fireEvent.click(screen.getByTestId("login-cta"));
     expect(mocks.openLoginWindow).toHaveBeenCalledWith(null);
     // Retrying clears the stale failure message.
     expect(screen.queryByTestId("login-browser-failure")).toBeNull();

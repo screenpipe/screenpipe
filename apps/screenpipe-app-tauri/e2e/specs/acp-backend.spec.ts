@@ -617,7 +617,11 @@ describe("ACP backend", function () {
     const permission = beforeApproval.find(
       (envelope) => envelope.event?.type === "extension_ui_request",
     )?.event;
-    expect(permission?.title).toContain("acp:permission:Write mock result");
+    // The heading comes from the tool's `kind` (permission_label), not its raw
+    // title, so a shell command can never be humanized into a mangled heading.
+    // The mock's tool is kind "edit", so the heading is "Edit a file" and the
+    // raw target ("Write mock result") is carried verbatim in the detail below.
+    expect(permission?.title).toContain("acp:permission:Edit a file");
     expect(permission?.options.map((option: any) => option.kind)).toEqual([
       "allow_once",
       "reject_once",
@@ -625,6 +629,9 @@ describe("ACP backend", function () {
 
     await foregroundChat(normalSession);
     const permissionCard = await waitForAgentAction("permission");
+    // Heading plus the verbatim target: losing either would leave the user
+    // approving a write without seeing what is being written.
+    expect(await permissionCard.getText()).toContain("Edit a file");
     expect(await permissionCard.getText()).toContain("Write mock result");
     expect(await permissionCard.getText()).toContain("Allow once");
     await answerAgentAction("permission", "Allow once");

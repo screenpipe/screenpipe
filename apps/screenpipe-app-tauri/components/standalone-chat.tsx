@@ -20,11 +20,11 @@ import { toast } from "@/components/ui/use-toast";
 import type { AIPreset, JsonValue } from "@/lib/utils/tauri";
 // OpenAI SDK no longer used directly — all providers route through Pi agent
 import posthog from "posthog-js";
-import { useFeatureFlagEnabled } from "posthog-js/react";
+import { useAcpWarmup } from "@/components/chat/standalone/hooks/use-acp-warmup";
+import { piProjectDirForSession } from "@/lib/chat/pi-project-dir";
 import {
-  ACP_AGENTS_FLAG,
   filterAcpPresets,
-  isAcpRolloutEnabled,
+  useAcpRolloutEnabled,
 } from "@/lib/acp-rollout";
 import { commands } from "@/lib/utils/tauri";
 import { useChatConversations } from "@/components/hooks/use-chat-conversations";
@@ -149,8 +149,7 @@ export function StandaloneChat({
   // `activePreset.provider === "acp"`, so a preset list with no ACP entry makes
   // every one of them unreachable. Fails closed — an undefined flag (offline,
   // PostHog blocked, opt-out) hides ACP.
-  const acpFlag = useFeatureFlagEnabled(ACP_AGENTS_FLAG);
-  const acpEnabled = isAcpRolloutEnabled(acpFlag);
+  const acpEnabled = useAcpRolloutEnabled();
   const availableAiPresets = React.useMemo(
     () => filterAcpPresets(settings.aiPresets, acpEnabled),
     [settings.aiPresets, acpEnabled],
@@ -969,6 +968,26 @@ export function StandaloneChat({
     piStoppedIntentionallyRef,
     piPresetSwitchPromiseRef,
   });
+
+  // Connect an ACP agent as soon as it is picked, so its install and sign-in
+  // happen while the composer is still being typed into rather than after the
+  // first send. Must sit after usePiSessionLifecycle — it needs that hook's
+  // buildProviderConfig.
+  useAcpWarmup({
+    enabled: acpEnabled && isSettingsLoaded,
+    activePreset,
+    piInfo,
+    piStartInFlightRef,
+    piSessionIdRef,
+    piProjectDirForSession,
+    buildProviderConfig,
+    userToken: settings.user?.token,
+    setPiInfo,
+    setPiStarting,
+    setRunningConfigFromProviderConfig,
+    syncThinkingLevelAfterStart,
+  });
+
   useEffect(() => {
     const stablePipeChat = continuousPipeChatPolicy({
       conversationId,

@@ -106,8 +106,14 @@
     {
       "id": "screen-share-privacy",
       "label": "Screen-share window privacy preference",
-      "platforms": ["windows", "macos"],
-      "layers": ["settings", "tauri-command"]
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "layers": [
+        "settings",
+        "tauri-command"
+      ]
     },
     {
       "id": "settings-ai",
@@ -301,13 +307,53 @@
   "specs": [
     {
       "spec": "acp-backend.spec.ts",
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["chat-ai", "tauri-command", "os-integration"],
-      "features": ["chat", "acp-backend", "agent-streaming", "agent-permissions", "agent-cancellation", "agent-terminal", "mcp-registration", "process-supervision"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "tauri-command",
+        "os-integration"
+      ],
+      "features": [
+        "chat",
+        "acp-backend",
+        "agent-streaming",
+        "agent-permissions",
+        "agent-cancellation",
+        "agent-terminal",
+        "mcp-registration",
+        "process-supervision"
+      ],
       "criticality": "high",
       "confidence": "partial",
       "ux": "mixed",
       "notes": "Official Rust ACP SDK runtime and inline UI E2E with a deterministic stdio agent: initialization, session close, streaming, background permissions, cancellation, localized auth/cancel, malformed stdout, exact adapter/descendant reaping, terminal lifecycle/output draining, and a real authenticated local API MCP health call. Curated third-party adapters remain manual smoke coverage."
+    },
+    {
+      "spec": "acp-onboarding-ux.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "chat",
+        "acp-backend",
+        "acp-onboarding",
+        "acp-auth"
+      ],
+      "criticality": "high",
+      "confidence": "partial",
+      "ux": "real-user-flow",
+      "notes": "Selecting an ACP agent connects it with nothing sent (sign-in surfaces before the first send, not after a cold install), and the settings picker states who owns sign-in/models/API keys next to the agent list."
     },
     {
       "spec": "api.spec.ts",
@@ -811,9 +857,21 @@
     },
     {
       "spec": "chat-subagent-async-completion.spec.ts",
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["chat-ai", "real-ui-e2e", "tauri-command"],
-      "features": ["chat", "chat-streaming", "async-subagents"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "chat",
+        "chat-streaming",
+        "async-subagents"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
@@ -1310,9 +1368,19 @@
     },
     {
       "spec": "meeting-overlay-stream.spec.ts",
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["local-api", "tauri-command"],
-      "features": ["meeting-notes", "meeting-overlay-stream"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api",
+        "tauri-command"
+      ],
+      "features": [
+        "meeting-notes",
+        "meeting-overlay-stream"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "ux": "mixed",

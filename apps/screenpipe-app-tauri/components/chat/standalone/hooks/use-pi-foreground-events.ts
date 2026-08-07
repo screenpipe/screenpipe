@@ -35,6 +35,7 @@ import { chatTelemetryContextForResponse } from "@/lib/chat/response-feedback";
 import { optimisticAssistantForUserEcho } from "@/lib/chat/cross-window-transcript-sync";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { acpAdapterInfo } from "@/lib/utils/preset-appearance";
+import { useAcpBootState } from "@/lib/stores/acp-boot-state";
 import { toast } from "@/components/ui/use-toast";
 import { registerPiLogListener } from "@/components/chat/standalone/hooks/pi-log-listener";
 import { registerPiReauthListener } from "@/components/chat/standalone/hooks/pi-reauth-listener";
@@ -212,6 +213,7 @@ export function usePiForegroundEvents({
         // The install attempt ended without a "ready", so clear any pending
         // install marker (else a later instant connect fires a spurious toast).
         installingAgents.delete(stringValue(data.agentId));
+        useAcpBootState.getState().finish(stringValue(data.agentId));
         piStoppedIntentionallyRef.current = true;
         setPiInfo(null);
         setIsLoading(false);
@@ -227,6 +229,7 @@ export function usePiForegroundEvents({
         // CLI step. Treat this like an intentional stop so the crash-recovery
         // loop does NOT silently restart into the default provider (that was
         // the "fell back to pi" bug); instead tell the user how to sign in.
+        useAcpBootState.getState().finish(stringValue(data.agentId));
         piStoppedIntentionallyRef.current = true;
         setPiInfo(null);
         setIsLoading(false);
@@ -254,11 +257,16 @@ export function usePiForegroundEvents({
         const name = acpAdapterInfo(agentId).name;
         if (stringValue(data.phase) === "downloading") {
           installingAgents.add(agentId);
+          // Persistent in-thread state, not just this toast. The toast is gone
+          // in seconds; a cold npx fetch is not, and the rest of the wait used
+          // to look like nothing was happening.
+          useAcpBootState.getState().begin(agentId, "installing");
           toast({
             title: `installing ${name}`,
             description: "downloading the agent. this can take a moment.",
           });
         } else if (stringValue(data.phase) === "ready") {
+          useAcpBootState.getState().finish(agentId);
           // Only follow up when we actually showed an install toast, so a
           // cached/instant connect stays quiet.
           if (installingAgents.delete(agentId)) {

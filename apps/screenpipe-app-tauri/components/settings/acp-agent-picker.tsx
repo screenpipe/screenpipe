@@ -12,6 +12,7 @@ import type { AcpAgentConfig } from "@/lib/utils/tauri";
 import { SELECTABLE_ACP_ADAPTERS, acpAdapterInfo } from "@/lib/utils/preset-appearance";
 import { AcpInstallGate } from "@/components/settings/acp-install-gate";
 import { AcpPresetDefaults } from "@/components/settings/acp-preset-defaults";
+import { AcpBoundaries } from "@/components/settings/acp-boundaries";
 
 const DEFAULT_AGENT_ID = "pi-acp";
 
@@ -85,7 +86,8 @@ export function AcpAgentPicker({
         <div className="space-y-1">
           <Label htmlFor="acpAgent">Agent</Label>
           <p className="text-xs text-muted-foreground">
-            Choose the coding agent Screenpipe should run. Your existing sign-in and agent settings stay in that app.
+            Choose the coding agent Screenpipe should run. It runs as its own
+            program with its own account — see the split below.
           </p>
         </div>
       )}
@@ -140,6 +142,11 @@ export function AcpAgentPicker({
       <p className={cn("text-muted-foreground", compact ? "text-[10px]" : "text-xs")}>
         {info.description}
       </p>
+
+      {/* Ownership split. Sits above the install gate so the answer to "does my
+          Anthropic key configure this?" is visible before the user starts
+          troubleshooting a sign-in. */}
+      <AcpBoundaries agentName={info.name} compact={compact} />
 
       <AcpInstallGate
         compact={compact}

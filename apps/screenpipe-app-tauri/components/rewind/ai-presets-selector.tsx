@@ -23,11 +23,7 @@ import {
   presetImageSrc,
 } from "@/lib/utils/preset-appearance";
 import { AcpAgentPicker } from "@/components/settings/acp-agent-picker";
-import { useFeatureFlagEnabled } from "posthog-js/react";
-import {
-  ACP_AGENTS_FLAG,
-  isAcpRolloutEnabled,
-} from "@/lib/acp-rollout";
+import { useAcpRolloutEnabled } from "@/lib/acp-rollout";
 import {
   Command,
   CommandEmpty,
@@ -306,7 +302,7 @@ export function AIProviderConfig({
   // Second ACP entry point (the first is Settings → AI presets). Same
   // fail-closed rollout gate, otherwise this selector would hand every user a
   // coding-agent provider the settings page deliberately hides.
-  const acpEnabled = isAcpRolloutEnabled(useFeatureFlagEnabled(ACP_AGENTS_FLAG));
+  const acpEnabled = useAcpRolloutEnabled();
 
   // A preset saved while the flag was on must not leave this editor stuck on a
   // provider whose picker is no longer rendered.

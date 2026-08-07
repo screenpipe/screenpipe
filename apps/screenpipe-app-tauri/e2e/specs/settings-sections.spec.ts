@@ -86,6 +86,19 @@ describe('Settings sections', () => {
     await openSettings();
   });
 
+  // Some tests deliberately leave Settings: the low-disk alert walks out to
+  // Home and deep-links back in. When that walk does not make it back, every
+  // later test was left on whatever page it stopped on and failed looking for
+  // a sidebar that is not there, so one failure reported as four and buried
+  // which one was real. Only repair a genuinely stranded window, so the normal
+  // flow between tests is unchanged.
+  beforeEach(async () => {
+    const sidebar = await $('[data-testid="settings-nav-general"]');
+    if (!(await sidebar.isExisting())) {
+      await openSettings();
+    }
+  });
+
   // ─── Happy paths ──────────────────────────────────────────────────────────
 
   it('renders General settings without a crash', async () => {

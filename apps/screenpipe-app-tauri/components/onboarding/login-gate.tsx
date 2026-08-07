@@ -443,6 +443,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
             ) : null}
             {/* Button with internal geometry canvas */}
             <motion.button
+              data-testid="login-cta"
               onClick={handleLogin}
               onMouseEnter={() => setIsHovered(true)}
               onMouseLeave={() => setIsHovered(false)}

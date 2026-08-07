@@ -32,6 +32,7 @@ import {
   hasPendingPermissionRequest,
 } from "@/lib/chat/message-rendering";
 import { cn } from "@/lib/utils";
+import { useAcpBootLabel } from "@/lib/stores/acp-boot-state";
 import type { ContentBlock, Message } from "@/lib/chat/types";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import type { InlineConnectStatus } from "@/lib/connections/inline-connect";
@@ -138,6 +139,9 @@ export function ChatMessageList({
   onAskUserReply,
   suppressSourceFooters = false,
 }: ChatMessageListProps) {
+  // Null unless an ACP agent is installing/starting. Ticks only while it is.
+  const acpBoot = useAcpBootLabel();
+
   return (
     <>
       <AnimatePresence mode="popLayout">
@@ -581,6 +585,25 @@ export function ChatMessageList({
           if (blocks?.some((block) => block.type === "tool")) return null;
           let loaderPhase: LoaderPhase = "analyzing";
           let toolName: string | undefined;
+
+          // An ACP agent that is still installing or starting has produced no
+          // blocks yet, so the generic pulse would sit there saying nothing
+          // through a wait that can run minutes on a cold npx fetch. Name the
+          // agent and count the seconds instead.
+          const boot = acpBoot ?? null;
+          if (boot && !(blocks && blocks.length > 0)) {
+            return (
+              <motion.div
+                data-testid="chat-acp-boot-loader"
+                initial={false}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.15 }}
+                className="w-fit self-start px-2 py-1"
+              >
+                <GridDissolveLoader phase="analyzing" label={boot} />
+              </motion.div>
+            );
+          }
 
           if (blocks && blocks.length > 0) {
             const lastBlock = blocks[blocks.length - 1];

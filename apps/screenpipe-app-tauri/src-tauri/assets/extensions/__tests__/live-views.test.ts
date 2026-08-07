@@ -15,14 +15,22 @@ type ToolDef = {
   ) => Promise<any>;
 };
 
-function getTool(): ToolDef {
+function getTools(): Record<string, ToolDef> {
   const tools: Record<string, ToolDef> = {};
   registerLiveViews({
     registerTool: (tool: ToolDef) => {
       tools[tool.name] = tool;
     },
   } as any);
-  return tools.screenpipe_live_view;
+  return tools;
+}
+
+function getTool(): ToolDef {
+  return getTools().screenpipe_live_view;
+}
+
+function getProposeTool(): ToolDef {
+  return getTools().screenpipe_live_view_propose;
 }
 
 function response(body: unknown, status = 200): Response {
@@ -63,7 +71,10 @@ function pipeBlock(overrides: Record<string, unknown> = {}) {
 
 async function attemptPipeBinding(
   status: Record<string, unknown>,
-  views: { current?: ReturnType<typeof liveView>; next?: ReturnType<typeof liveView> } = {},
+  views: {
+    current?: ReturnType<typeof liveView>;
+    next?: ReturnType<typeof liveView>;
+  } = {},
 ) {
   const current = views.current ?? liveView();
   const next = views.next ?? liveView({ blocks: [pipeBlock()] });
@@ -223,12 +234,8 @@ describe("screenpipe_live_view", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain(
-      "must complete a successful test",
-    );
-    expect(result.content[0].text).toContain(
-      "No API key found for screenpipe",
-    );
+    expect(result.content[0].text).toContain("must complete a successful test");
+    expect(result.content[0].text).toContain("No API key found for screenpipe");
     expect(
       fetchMock.mock.calls.some(([, init]) => init?.method === "PUT"),
     ).toBe(false);
@@ -343,5 +350,198 @@ describe("screenpipe_live_view", () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("revision changed");
+  });
+});
+
+describe("live view retrieval the model drives", () => {
+  it("searches installed scheduled tasks with the model's own query", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      response({
+        data: [
+          {
+            id: "chronos-time-tracker",
+            enabled: true,
+            config: {
+              name: "chronos-time-tracker",
+              description: "tracks active time by app and project",
+            },
+          },
+          {
+            id: "notifier",
+            enabled: false,
+            config: { name: "notifier", description: "sends a notification" },
+          },
+        ],
+      }),
+    ) as any;
+
+    const result = await getTool().execute(
+      "pipes",
+      { action: "pipes", query: "time tracking" },
+      new AbortController().signal,
+    );
+
+    expect(resultJson(result).pipes).toEqual([
+      expect.objectContaining({ name: "chronos-time-tracker", enabled: true }),
+    ]);
+  });
+
+  it("falls back to the full inventory rather than reporting no tasks exist", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      response({
+        data: [
+          {
+            id: "notifier",
+            config: { name: "notifier", description: "notify" },
+          },
+        ],
+      }),
+    ) as any;
+
+    const result = await getTool().execute(
+      "pipes",
+      { action: "pipes", query: "zzzz nothing matches" },
+      new AbortController().signal,
+    );
+
+    expect(resultJson(result).pipes).toHaveLength(1);
+  });
+
+  it("reports what a Block currently renders, not its intent", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      response([
+        {
+          id: "daily",
+          slots: [
+            {
+              id: "focus-time",
+              title: "Focus time",
+              component: "metric.v1",
+              binding: { pipeName: "time-breakdown" },
+              value: { payload: { value: 214, unit: "minutes" } },
+            },
+            { id: "empty", title: "Empty", component: "list.v1" },
+          ],
+        },
+      ]),
+    ) as any;
+
+    const result = await getTool().execute(
+      "values",
+      { action: "values", viewId: "daily" },
+      new AbortController().signal,
+    );
+    const blocks = resultJson(result).blocks;
+
+    expect(blocks[0]).toEqual(
+      expect.objectContaining({
+        id: "focus-time",
+        component: "metric.v1",
+        pipeName: "time-breakdown",
+        hasValue: true,
+        renders: '{"value":214,"unit":"minutes"}',
+      }),
+    );
+    expect(blocks[1]).toEqual(
+      expect.objectContaining({ hasValue: false, renders: null }),
+    );
+  });
+
+  it("fails a values lookup for an unknown Block instead of returning nothing", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      response([{ id: "daily", slots: [] }]),
+    ) as any;
+
+    const result = await getTool().execute(
+      "values",
+      { action: "values", viewId: "daily", blockId: "missing" },
+      new AbortController().signal,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Block "missing" was not found');
+  });
+});
+
+describe("screenpipe_live_view_propose", () => {
+  const signal = () => new AbortController().signal;
+
+  it("accepts a valid targeted edit without writing anything", async () => {
+    const result = await getProposeTool().execute(
+      "propose",
+      {
+        operations: [
+          {
+            op: "update",
+            blockId: "focus-time",
+            block: { component: "table.v1", width: 12 },
+          },
+        ],
+        note: "Focus time becomes a per-app table.",
+      },
+      signal(),
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(resultJson(result)).toEqual(
+      expect.objectContaining({ accepted: true, awaitingUserReview: true }),
+    );
+  });
+
+  it("returns a retryable error naming the bad field instead of coercing it", async () => {
+    const result = await getProposeTool().execute(
+      "propose",
+      {
+        blocks: [
+          {
+            title: "Tasks",
+            intent: "List tasks.",
+            component: "list",
+            width: 8,
+          },
+        ],
+        note: "adds tasks",
+      },
+      signal(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('component "list" is not one of');
+    expect(result.content[0].text).toContain("width must be 3, 6, or 12");
+    expect(result.content[0].text).toContain(
+      "call screenpipe_live_view_propose again",
+    );
+  });
+
+  it("rejects a proposal that sends neither blocks nor operations", async () => {
+    const result = await getProposeTool().execute(
+      "propose",
+      { note: "did nothing" },
+      signal(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Both were empty");
+  });
+
+  it("requires blockId for an update", async () => {
+    const result = await getProposeTool().execute(
+      "propose",
+      {
+        operations: [{ op: "update", block: { width: 12 } }],
+        note: "widen it",
+      },
+      signal(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("blockId is required for update");
+  });
+
+  it("tells the model an intent-only edit renders identically", () => {
+    const guidance = getProposeTool().promptGuidelines?.join(" ") ?? "";
+
+    expect(guidance).toContain("renders identically");
+    expect(guidance).toContain("action=values");
   });
 });

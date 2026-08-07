@@ -428,6 +428,8 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
           managed: false,
           detected_by: [],
         };
+      case "get_screenpipe_ai_gateway_url":
+        return "https://api.screenpipe.com/v1";
       case "is_enterprise_build_cmd":
       case "is_capture_paused":
         return false;

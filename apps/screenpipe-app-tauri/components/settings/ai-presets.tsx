@@ -139,11 +139,9 @@ import {
   filterPresetsForEnterprisePolicy,
   isEnterpriseManagedPreset,
 } from "@/lib/enterprise-ai-preset-policy";
-import { useFeatureFlagEnabled } from "posthog-js/react";
 import {
-  ACP_AGENTS_FLAG,
   filterAcpPresets,
-  isAcpRolloutEnabled,
+  useAcpRolloutEnabled,
 } from "@/lib/acp-rollout";
 
 // Helper to detect UUID-like strings and format preset names nicely
@@ -319,7 +317,7 @@ const AISection = ({
 
   // ACP is team-only until PostHog hands out the rollout flag. Fails closed:
   // an undefined flag (offline, PostHog blocked, analytics opt-out) hides it.
-  const acpEnabled = isAcpRolloutEnabled(useFeatureFlagEnabled(ACP_AGENTS_FLAG));
+  const acpEnabled = useAcpRolloutEnabled();
 
   // A preset created while the flag was on must not keep the editor pinned to
   // a provider the user can no longer see once it is turned off.
