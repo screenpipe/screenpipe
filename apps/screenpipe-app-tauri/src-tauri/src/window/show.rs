@@ -294,11 +294,10 @@ impl ShowRewindWindow {
         // This catches WKWebView content-process termination directly from WebKit.
         setup_content_process_handler(window);
 
-        let capturable = crate::config::is_e2e_mode()
-            || SettingsStore::get(app)
-                .unwrap_or_default()
-                .unwrap_or_default()
-                .show_overlay_in_screen_recording;
+        let settings = SettingsStore::get(app)
+            .unwrap_or_default()
+            .unwrap_or_default();
+        let capturable = crate::window::overlay_is_capturable(&settings);
 
         if overlay_mode == "window" {
             info!("showing existing main window (window mode)");
@@ -680,8 +679,7 @@ impl ShowRewindWindow {
                     let settings = SettingsStore::get(app)
                         .unwrap_or_default()
                         .unwrap_or_default();
-                    let capturable =
-                        crate::config::is_e2e_mode() || settings.show_overlay_in_screen_recording;
+                    let capturable = crate::window::overlay_is_capturable(&settings);
                     let chat_on_top = settings.chat_always_on_top;
                     let app_clone = app.clone();
                     run_on_main_thread_safe(app, move || {
@@ -746,11 +744,10 @@ impl ShowRewindWindow {
                 let settings = SettingsStore::get(app)
                     .unwrap_or_default()
                     .unwrap_or_default();
-                let overlay_mode = settings.overlay_mode;
                 #[allow(unused_variables)]
                 // show_in_recording consumed only on Windows (display affinity)
-                let show_in_recording =
-                    crate::config::is_e2e_mode() || settings.show_overlay_in_screen_recording;
+                let show_in_recording = crate::window::overlay_is_capturable(&settings);
+                let overlay_mode = settings.overlay_mode;
                 // Record what mode we're creating so we can detect changes later
                 *MAIN_CREATED_MODE.lock().unwrap_or_else(|e| e.into_inner()) = overlay_mode.clone();
                 let use_window_mode = overlay_mode == "window";
@@ -1618,11 +1615,11 @@ impl ShowRewindWindow {
                                 };
 
                                 // NSWindowSharingNone=0 hides from screen recorders, NSWindowSharingReadOnly=1 allows capture
-                                let capturable = crate::config::is_e2e_mode()
-                                    || SettingsStore::get(window_clone.app_handle())
-                                        .unwrap_or_default()
-                                        .unwrap_or_default()
-                                        .show_overlay_in_screen_recording;
+                                let settings = SettingsStore::get(window_clone.app_handle())
+                                    .unwrap_or_default()
+                                    .unwrap_or_default();
+                                let capturable =
+                                    crate::window::overlay_is_capturable(&settings);
                                 let sharing: u64 = if capturable { 1 } else { 0 };
                                 let _: () = unsafe { msg_send![&*panel, setSharingType: sharing] };
 

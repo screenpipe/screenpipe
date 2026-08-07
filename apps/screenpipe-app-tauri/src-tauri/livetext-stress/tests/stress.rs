@@ -17,3 +17,20 @@ fn livetext_bridge_survives_race_stress() {
         _ => panic!("livetext bridge stress crashed: {status}"),
     }
 }
+
+// Guards the overlay's frame identity: a pending analysis must never be bound
+// to a different frame (breaks text selection), and a search highlight must be
+// re-applied when its own analysis lands and never painted onto another frame.
+// Exit 3 = environment skip.
+#[test]
+fn livetext_overlay_is_scoped_to_its_frame() {
+    let exe = env!("CARGO_BIN_EXE_livetext-frame-scope");
+    let status = std::process::Command::new(exe)
+        .status()
+        .expect("failed to spawn frame-scope binary");
+    match status.code() {
+        Some(0) => {}
+        Some(3) => eprintln!("skipped: VisionKit unavailable in this environment"),
+        _ => panic!("livetext frame scoping regressed: {status}"),
+    }
+}

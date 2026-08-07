@@ -456,6 +456,10 @@ export function sanitizeCommand(command: string): string {
 export interface PresentableToolCall {
   toolName: string;
   args?: Record<string, unknown>;
+  // ACP tool-call kind (read/edit/execute/fetch/search/think/…). Native ACP
+  // tools (Claude's Read/Edit/…) carry this even when the human title doesn't
+  // match a known tool name, so it drives a sensible label as a fallback.
+  kind?: string;
   isRunning?: boolean;
   isError?: boolean;
 }
@@ -610,6 +614,146 @@ function commandActivity(command: string): ToolActivityPresentation {
   return GENERIC_ACTIVITY;
 }
 
+// screenpipe's MCP server exposes tools that mirror the local REST endpoints
+// (activity-summary → /activity-summary, list-pipes → /pipes, search-content →
+// /search, …). ACP agents surface these as `mcp__screenpipe__<name>` tool calls
+// carrying a structured rawInput object, where raw pi sent a curl string. Map
+// such a call back to the equivalent local request as a synthesized curl
+// command so the SAME curl classifier drives both the label and the endpoint
+// card — no duplicated endpoint vocabulary, no risk to the raw-pi path.
+const MCP_PREFIX_RE = /^mcp__[a-z0-9_-]+__/i;
+
+const MCP_SCREENPIPE_ENDPOINTS: Record<string, { path: string; method: string }> = {
+  "activity-summary": { path: "/activity-summary", method: "GET" },
+  "search-content": { path: "/search", method: "GET" },
+  "keyword-search": { path: "/search", method: "GET" },
+  "search-elements": { path: "/search", method: "GET" },
+  "get-frame-elements": { path: "/search", method: "GET" },
+  "frame-context": { path: "/search", method: "GET" },
+  "team-search": { path: "/search", method: "GET" },
+  screenpipe: { path: "/search", method: "GET" },
+  "list-pipes": { path: "/pipes", method: "GET" },
+  "pipe-logs": { path: "/pipes", method: "GET" },
+  "run-pipe": { path: "/pipes", method: "POST" },
+  "create-pipe": { path: "/pipes", method: "POST" },
+  "list-meetings": { path: "/meetings", method: "GET" },
+  "get-meeting": { path: "/meetings", method: "GET" },
+  "start-meeting": { path: "/meetings", method: "POST" },
+  "stop-meeting": { path: "/meetings", method: "POST" },
+  "update-meeting": { path: "/meetings", method: "PATCH" },
+  "list-unnamed-speakers": { path: "/speakers/unnamed", method: "GET" },
+  "search-speakers": { path: "/speakers/search", method: "GET" },
+  "merge-speakers": { path: "/speakers/merge", method: "POST" },
+  "update-speaker": { path: "/speakers", method: "PATCH" },
+  "update-memory": { path: "/memories", method: "POST" },
+  "add-tags": { path: "/tags", method: "POST" },
+  "health-check": { path: "/health", method: "GET" },
+  "export-video": { path: "/export", method: "GET" },
+  "list-audio-devices": { path: "/list-audio-devices", method: "GET" },
+  "list-monitors": { path: "/list-monitors", method: "GET" },
+};
+
+// Arg-key → REST query-param name. Search and activity share this shape.
+const MCP_QUERY_ALIASES: Record<string, string> = {
+  q: "q",
+  query: "q",
+  search: "q",
+  app_name: "app_name",
+  app: "app_name",
+  window_name: "window_name",
+  window: "window_name",
+  content_type: "content_type",
+  content: "content_type",
+  start_time: "start_time",
+  end_time: "end_time",
+  limit: "limit",
+};
+
+// Strip an `mcp__<server>__` prefix if present.
+function bareMcpName(toolName: string): string {
+  return toolName.replace(MCP_PREFIX_RE, "");
+}
+
+/**
+ * If `toolName` is a screenpipe MCP tool, synthesize the equivalent local curl
+ * command from its rawInput args, so the existing curl classifier and endpoint
+ * card can present it exactly like raw pi's curl call. Returns null for any
+ * other tool (bash, a different MCP server, a native ACP tool).
+ */
+export function mcpScreenpipeCommand(
+  toolName: string,
+  args: Record<string, unknown> = {},
+): string | null {
+  let name: string;
+  if (/^mcp__screenpipe__/i.test(toolName)) {
+    name = toolName.replace(/^mcp__screenpipe__/i, "");
+  } else if (!MCP_PREFIX_RE.test(toolName) && MCP_SCREENPIPE_ENDPOINTS[toolName]) {
+    // Some agents drop the mcp__ prefix; still recognize a known screenpipe tool.
+    name = toolName;
+  } else {
+    return null;
+  }
+
+  const base = "http://localhost:3030";
+  const endpoint = MCP_SCREENPIPE_ENDPOINTS[name];
+  if (!endpoint) {
+    // A screenpipe MCP tool we haven't mapped: a bare local URL still reads as
+    // "Working in Screenpipe" rather than a generic background step.
+    return `curl '${base}/${name.replace(/^\/+/, "")}'`;
+  }
+
+  const { path, method } = endpoint;
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(args)) {
+    const param = MCP_QUERY_ALIASES[key.toLowerCase()];
+    if (!param) continue;
+    if (typeof value === "string" && value) query.set(param, value);
+    else if (typeof value === "number") query.set(param, String(value));
+  }
+  const qs = query.toString();
+  const url = `${base}${path}${qs ? `?${qs}` : ""}`;
+  const parts = ["curl"];
+  if (method !== "GET") parts.push("-X", method);
+  parts.push(`'${url}'`);
+  if (method !== "GET" && Object.keys(args).length > 0) {
+    parts.push("-d", `'${JSON.stringify(args)}'`);
+  }
+  return parts.join(" ");
+}
+
+// Map an ACP tool `kind` to a coarse label, for native agent tools whose human
+// title doesn't match a known tool name (e.g. Claude's "Read /a/b.ts").
+function kindActivity(kind: string): ToolActivityPresentation | null {
+  switch (kind.toLowerCase()) {
+    case "read":
+      return activity("Reviewing a file", "Reviewed a file");
+    case "edit":
+      return activity("Updating files", "Updated files");
+    case "delete":
+      return activity("Removing files", "Removed files");
+    case "move":
+      return activity("Moving files", "Moved files");
+    case "search":
+      return activity("Finding relevant information", "Found relevant information");
+    case "execute":
+      return activity("Running a command", "Ran a command");
+    case "fetch":
+      return activity("Fetching content", "Fetched content");
+    case "think":
+      return activity("Thinking it through", "Thought it through");
+    default:
+      return null;
+  }
+}
+
+// Last-resort label from a raw tool name: strip an mcp__server__ prefix and
+// de-slugify (activity-summary → "Activity summary"). Beats a generic step.
+function humanizeToolName(toolName: string): string {
+  const bare = bareMcpName(toolName).replace(/[_-]+/g, " ").trim();
+  if (!bare) return "";
+  return bare.charAt(0).toUpperCase() + bare.slice(1);
+}
+
 /**
  * Convert raw tool metadata into deliberately coarse, user-facing activity.
  * This never includes command source, arguments, paths, queries, or results.
@@ -617,14 +761,20 @@ function commandActivity(command: string): ToolActivityPresentation {
  * disclosure step in the chat UI.
  */
 export function presentToolActivity(toolCall: PresentableToolCall): ToolActivityPresentation {
-  const toolName = toolCall.toolName.toLowerCase();
+  const rawName = toolCall.toolName;
+  const toolName = rawName.toLowerCase();
   const args = toolCall.args ?? {};
+  const kind = toolCall.kind?.toLowerCase();
+
+  // screenpipe MCP tools mirror the local REST endpoints — reuse the curl path.
+  const mcpCommand = mcpScreenpipeCommand(rawName, args);
+  if (mcpCommand) return commandActivity(mcpCommand);
 
   if (toolName === "bash" || toolName === "shell" || toolName === "exec" || toolName === "exec_command") {
     return commandActivity(String(args.command ?? args.cmd ?? ""));
   }
-  if (toolName === "read" || toolName === "read_file" || toolName === "open_file") {
-    const path = String(args.path ?? "").toLowerCase();
+  if (toolName === "read" || toolName === "read_file" || toolName === "open_file" || kind === "read") {
+    const path = String(args.path ?? args.file ?? args.abs_path ?? "").toLowerCase();
     return path.endsWith("skill.md")
       ? activity("Reviewing instructions", "Reviewed instructions")
       : activity("Reviewing a file", "Reviewed a file");
@@ -656,6 +806,22 @@ export function presentToolActivity(toolCall: PresentableToolCall): ToolActivity
     return activity("Waiting for your input", "Asked for your input");
   }
 
+  // ACP native tools carry a `kind`; use it before the generic fallback.
+  if (kind) {
+    const byKind = kindActivity(kind);
+    if (byKind) return byKind;
+  }
+
+  // Humanize the raw tool name only for agent-provided tools — ACP tools carry
+  // a `kind`, and MCP tools carry an `mcp__server__` prefix. Tools with neither
+  // keep the coarse generic label, so internal tool names are never surfaced to
+  // the user.
+  if (kind || MCP_PREFIX_RE.test(rawName)) {
+    const humanized = humanizeToolName(rawName);
+    if (humanized && humanized !== "Unknown" && humanized !== "Tool") {
+      return activity(humanized, humanized);
+    }
+  }
   return GENERIC_ACTIVITY;
 }
 

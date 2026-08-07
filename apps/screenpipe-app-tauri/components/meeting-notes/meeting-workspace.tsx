@@ -9,6 +9,17 @@ import { cn } from "@/lib/utils";
 
 export type MeetingWorkspaceTab = "notes" | "transcript" | "summary";
 
+// One shell owns the horizontal rhythm of the whole meeting view: the header
+// (title, chips, tabs), every tab panel, and the footer. Keeping them on a
+// single centered container is what makes the title line up with the note
+// text beneath it instead of floating on its own wider edge.
+export const MEETING_SHELL_CLASS = "mx-auto w-full max-w-3xl px-5 sm:px-8";
+
+// The shell already bounds the selectable width, so the reading column no
+// longer needs its own cap. It stays a distinct class because selection
+// highlighting must have a width-limited container to paint inside.
+export const MEETING_READING_COLUMN_CLASS = "w-full";
+
 const MEETING_TABS: ReadonlyArray<{
   value: MeetingWorkspaceTab;
   label: string;
@@ -113,16 +124,20 @@ export function MeetingSummarySurface({
   note,
   state,
   detail,
+  streamedSummary,
   onGenerate,
   canGenerate,
 }: {
   note: string;
   state: "idle" | "working" | "ready" | "attention";
   detail: string;
+  streamedSummary?: string;
   onGenerate: () => void;
   canGenerate: boolean;
 }) {
-  const summary = extractMeetingSummary(note);
+  const savedSummary = extractMeetingSummary(note);
+  const isStreaming = state === "working" && Boolean(streamedSummary?.trim());
+  const summary = isStreaming ? streamedSummary! : savedSummary;
 
   return (
     <section
@@ -130,9 +145,9 @@ export function MeetingSummarySurface({
       role="tabpanel"
       aria-labelledby="meeting-tab-summary"
       data-testid="meeting-summary-surface"
-      className="h-full overflow-y-auto [scrollbar-gutter:stable]"
+      className="h-full select-none overflow-y-auto [scrollbar-gutter:stable]"
     >
-      <div className="mx-auto w-full max-w-3xl px-5 py-8 sm:px-8 sm:py-10">
+      <div className={cn(MEETING_SHELL_CLASS, "py-8 sm:py-10")}>
         <div className="mb-8 flex items-start justify-between gap-5 border-b border-border pb-5">
           <div className="min-w-0">
             <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
@@ -158,48 +173,65 @@ export function MeetingSummarySurface({
           )}
         </div>
 
-        {summary ? (
-          <>
-            {state === "working" && (
-              <p
-                role="status"
-                className="mb-5 border-l border-foreground pl-3 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground"
-              >
-                refreshing summary
-              </p>
-            )}
-            <MemoizedReactMarkdown className="prose prose-sm max-w-none break-words text-foreground dark:prose-invert prose-headings:font-mono prose-headings:text-xs prose-headings:uppercase prose-headings:tracking-[0.12em] prose-p:leading-7 prose-li:leading-7 [&>*:first-child]:mt-0">
-              {summary}
-            </MemoizedReactMarkdown>
-          </>
-        ) : state === "working" ? (
-          <div role="status" className="border-l border-foreground pl-5">
-            <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-              writing summary
-            </p>
-            <div aria-hidden className="mt-7 space-y-7">
-              {["w-2/3", "w-5/6", "w-3/4"].map((width) => (
-                <div key={width} className="space-y-3">
-                  <div
-                    className={cn("h-2 animate-pulse bg-foreground/20", width)}
+        <div
+          data-testid="meeting-summary-reading-column"
+          className={cn(MEETING_READING_COLUMN_CLASS, "select-text")}
+        >
+          {summary ? (
+            <>
+              {state === "working" && (
+                <p
+                  role="status"
+                  className="mb-5 border-l border-foreground pl-3 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground"
+                >
+                  {isStreaming ? "writing summary" : "refreshing summary"}
+                </p>
+              )}
+              <div aria-busy={isStreaming}>
+                <MemoizedReactMarkdown className="prose prose-sm max-w-none break-words text-foreground dark:prose-invert prose-headings:font-mono prose-headings:text-xs prose-headings:uppercase prose-headings:tracking-[0.12em] prose-p:leading-7 prose-li:leading-7 [&>*:first-child]:mt-0">
+                  {summary}
+                </MemoizedReactMarkdown>
+                {isStreaming && (
+                  <span
+                    aria-hidden="true"
+                    data-testid="meeting-summary-stream-cursor"
+                    className="mt-1 block h-4 w-px animate-pulse bg-foreground"
                   />
-                  <div className="h-px w-full bg-border" />
-                  <div className="h-px w-4/5 bg-border" />
-                </div>
-              ))}
+                )}
+              </div>
+            </>
+          ) : state === "working" ? (
+            <div role="status" className="border-l border-foreground pl-5">
+              <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                writing summary
+              </p>
+              <div aria-hidden className="mt-7 space-y-7">
+                {["w-2/3", "w-5/6", "w-3/4"].map((width) => (
+                  <div key={width} className="space-y-3">
+                    <div
+                      className={cn(
+                        "h-2 animate-pulse bg-foreground/20",
+                        width,
+                      )}
+                    />
+                    <div className="h-px w-full bg-border" />
+                    <div className="h-px w-4/5 bg-border" />
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        ) : (
-          <div className="border-l border-border py-2 pl-5">
-            <p className="text-sm font-medium text-foreground">
-              no summary yet
-            </p>
-            <p className="mt-2 max-w-lg text-sm leading-6 text-muted-foreground">
-              Stop the meeting first. screenpipe will keep your notes and
-              transcript intact while the summary is written.
-            </p>
-          </div>
-        )}
+          ) : (
+            <div className="border-l border-border py-2 pl-5">
+              <p className="text-sm font-medium text-foreground">
+                no summary yet
+              </p>
+              <p className="mt-2 max-w-lg text-sm leading-6 text-muted-foreground">
+                Stop the meeting first. screenpipe will keep your notes and
+                transcript intact while the summary is written.
+              </p>
+            </div>
+          )}
+        </div>
       </div>
     </section>
   );

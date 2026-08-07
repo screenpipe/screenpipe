@@ -37,6 +37,7 @@ import {
   shouldActivateHomeSectionForChatLoadConversation,
   shouldHandleChatLoadConversationForWindow,
   shouldHandleChatPrefillForWindow,
+  normalizeComposerMentionsForModel,
 } from "./chat-utils";
 import { useChatStore } from "./stores/chat-store";
 
@@ -175,5 +176,73 @@ describe("shouldHandleChatPrefillForWindow", () => {
   it("returns false for a missing payload", () => {
     expect(shouldHandleChatPrefillForWindow(null, "home")).toBe(false);
     expect(shouldHandleChatPrefillForWindow(undefined, "chat")).toBe(false);
+  });
+});
+
+describe("normalizeComposerMentionsForModel", () => {
+  const now = new Date("2026-08-06T12:00:00.000Z");
+  const skills = [
+    { name: "deep-research", path: "/Users/u/.screenpipe/skills/deep-research" },
+  ];
+
+  it("leaves a plain message untouched", () => {
+    const result = normalizeComposerMentionsForModel("what did i work on", { now });
+    expect(result.modelInput).toBe("what did i work on");
+    expect(result.context.contentType).toBeNull();
+    expect(result.context.skills).toEqual([]);
+  });
+
+  it("resolves content type, app and tags into one context block", () => {
+    const result = normalizeComposerMentionsForModel(
+      "@audio @slack #project what did we decide",
+      { now },
+    );
+    expect(result.modelInput).toContain("<screenpipe_query_context>");
+    expect(result.modelInput).toContain("content_type: audio");
+    expect(result.modelInput).toContain("app_name: Slack");
+    expect(result.modelInput).toContain("tags: project");
+    expect(result.context.contentType).toBe("audio");
+    expect(result.context.appName).toBe("Slack");
+    expect(result.context.tagNames).toEqual(["project"]);
+  });
+
+  it("strips the resolved tokens from the sentence the model reads", () => {
+    const result = normalizeComposerMentionsForModel("@audio #project summarize", { now });
+    const sentence = result.modelInput.split("</screenpipe_query_context>")[1]?.trim();
+    expect(sentence).toBe("summarize");
+    expect(sentence).not.toContain("@audio");
+    expect(sentence).not.toContain("#project");
+  });
+
+  it("emits exact ISO boundaries for a time range", () => {
+    const result = normalizeComposerMentionsForModel("~lastweek recap", { now });
+    expect(result.context.timeRanges).toHaveLength(1);
+    expect(result.modelInput).toContain("start_time: ");
+    expect(result.modelInput).toContain("end_time: ");
+    expect(result.modelInput).toContain(result.context.timeRanges[0].startTime);
+  });
+
+  it("resolves a quoted speaker mention", () => {
+    const result = normalizeComposerMentionsForModel('@"John Doe" what did he say', { now });
+    expect(result.context.speakerName).toBe("John Doe");
+    expect(result.modelInput).toContain("speaker: John Doe");
+  });
+
+  it("turns a known skill token into a loadable path", () => {
+    const result = normalizeComposerMentionsForModel("$deep-research on this", {
+      now,
+      skills,
+    });
+    expect(result.context.skills).toEqual(skills);
+    expect(result.modelInput).toContain("path: /Users/u/.screenpipe/skills/deep-research");
+    expect(result.modelInput).toContain("Load each listed skill from its path before answering.");
+    const sentence = result.modelInput.split("</screenpipe_query_context>")[1]?.trim();
+    expect(sentence).toBe("on this");
+  });
+
+  it("keeps an unknown skill token in the sentence instead of dropping it", () => {
+    const result = normalizeComposerMentionsForModel("$nope on this", { now, skills });
+    expect(result.context.skills).toEqual([]);
+    expect(result.modelInput).toBe("$nope on this");
   });
 });

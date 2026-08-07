@@ -32,6 +32,7 @@ use tracing_oslog::OsLogger;
 use updates::start_update_check;
 use window::ShowRewindWindow;
 
+mod acp_runtime;
 mod analytics;
 mod auth_session;
 #[allow(deprecated)]
@@ -41,6 +42,7 @@ mod agent_event_emitter;
 mod audio_exclusions;
 mod auth_token;
 mod brain_views;
+mod browser_login;
 mod calendar;
 mod capture_session;
 mod chatgpt_oauth;
@@ -48,6 +50,7 @@ mod chatgpt_oauth;
 mod commands;
 mod db_recovery_notifications;
 mod db_relaunch;
+mod dev_isolation;
 mod diagnostic_logs;
 mod disk_usage;
 mod disk_pressure_notifications;
@@ -83,7 +86,6 @@ mod engine_events;
 mod monitor_events;
 mod owned_browser_cookies;
 mod permissions;
-mod acp_runtime;
 mod pi;
 mod pi_command_queue;
 mod power_awake;
@@ -149,8 +151,8 @@ use sentry;
 use tauri::AppHandle;
 #[cfg(target_os = "macos")]
 mod dock_menu;
-mod health;
 mod headless;
+mod health;
 mod log_files;
 mod media_commands;
 mod native_notification;
@@ -304,9 +306,6 @@ macro_rules! define_specta_builder {
 
 #[tokio::main]
 async fn main() {
-    // The ACP agent runs as a hidden mode of this same signed executable, so no
-    // second sidecar or hand-written protocol ships. These paths must exit
-    // before any Tauri, database, or recording setup.
     if acp_runtime::is_process_guard_mode() {
         let exit_code = match acp_runtime::run_process_guard() {
             Ok(exit_code) => exit_code,
@@ -317,6 +316,10 @@ async fn main() {
         };
         std::process::exit(exit_code);
     }
+
+    // ACP runs in a hidden mode of this same executable. Keeping the protocol
+    // runtime in Rust avoids shipping a second sidecar while ensuring this path
+    // exits before any Tauri, database, or recording initialization.
     if acp_runtime::is_runtime_mode() {
         let exit_code = match acp_runtime::run_from_env().await {
             Ok(()) => 0,
@@ -326,13 +329,22 @@ async fn main() {
                 let _ = writeln!(
                     stdout,
                     "{}",
-                    serde_json::json!({ "type": "error", "message": error })
+                    serde_json::json!({ "type": "acp_fatal", "error": error })
                 );
+                let _ = stdout.flush();
+                eprintln!("[acp-runtime] {error}");
                 1
             }
         };
         std::process::exit(exit_code);
     }
+
+    // Point debug builds at their own data dir and ports so `bun tauri dev`
+    // can't hand off to (or kill) an installed production app. Must run before
+    // the DB-recovery-lock check, the /focus single-instance handoff and the
+    // telemetry store read below — all of which resolve the data directory or
+    // the focus port. No-op in release builds. See `dev_isolation`.
+    dev_isolation::apply();
 
     #[cfg(target_os = "linux")]
     linux_webkit_env::configure();
@@ -524,7 +536,9 @@ async fn main() {
         .map(|enabled| !enabled)
         .unwrap_or(false)
         || screenpipe_engine::analytics::telemetry_disabled_by_env();
-    let _posthog_disabled = telemetry_disabled;
+    // The webview gets this same decision through the
+    // `is_telemetry_disabled_by_env` command (see commands.rs); it cannot read
+    // the process env itself.
 
     let app_version = env!("CARGO_PKG_VERSION");
     let sentry_guard = if !telemetry_disabled {
@@ -802,6 +816,13 @@ async fn main() {
             tauri::WindowEvent::Focused(true) => {
                 let app = window.app_handle().clone();
                 tauri::async_runtime::spawn(async move {
+                    let capture_intended = app
+                        .try_state::<RecordingState>()
+                        .map(|s| s.capture_intended())
+                        .unwrap_or(false);
+                    if !capture_intended {
+                        return;
+                    }
                     let permission_granted =
                         permissions::check_microphone_permission().permitted();
                     let audio_devices_empty = health::get_audio_device_status().is_empty();
@@ -1179,15 +1200,23 @@ async fn main() {
             let posthog_api_key = "phc_z7FZXE8vmXtdTQ78LMy3j1BQWW4zP6PGDUP46rgcdnb".to_string();
             let interval_hours = 6;
 
-            // Store setup and initialization - must be done first
+            // Store setup and initialization - must be done first. A locked
+            // encrypted store is fatal: continuing would let the webview load
+            // an empty plugin handle and save defaults over the ciphertext.
             // Note: StoreBuilder handles file creation internally — pre-creating
             // store.bin here caused TOCTOU race conditions ("File exists" os error 17).
-            // Use unwrap_or_default to prevent crashes from corrupted stores
             #[allow(unused_mut)] // E2E seeds mutate the store in feature builds.
-            let mut store = store::init_store(&app.handle()).unwrap_or_else(|e| {
-                error!("Failed to init settings store, using defaults: {}", e);
-                store::SettingsStore::default()
-            });
+            let mut store = store::init_store(&app.handle()).map_err(|e| {
+                error!("Failed to init settings store; aborting startup: {}", e);
+                // A log line is invisible to the user: without this the app just
+                // silently refuses to launch. Say why, and say the settings are
+                // intact, before the process goes away.
+                store::show_fatal_startup_alert(
+                    "screenpipe cannot start",
+                    &store::locked_store_alert_message(&e),
+                );
+                std::io::Error::other(e)
+            })?;
 
             #[cfg(feature = "e2e")]
             e2e::seeds::apply_settings(app.handle(), &mut store);
@@ -1665,7 +1694,7 @@ async fn main() {
 
                 // Pipe output callback. Stage 5: legacy `pipe_event`
                 // topic dropped — every pipe stdout line goes out on
-                // `agent_event` with sessionId `pipe:<name>:<execId>`.
+                // `agent_event` with a per-run or stable continued session id.
                 let app_for_pipe = app_handle.clone();
                 // Separate clone for the owned-browser install path — the
                 // on_pipe_output closure below captures app_for_pipe by
@@ -1675,8 +1704,8 @@ async fn main() {
                 let pipe_agent_events =
                     crate::agent_event_emitter::PipeAgentEventEmitter::new(app_for_pipe);
                 let on_pipe_output: Option<screenpipe_core::pipes::OnPipeOutputLine> = Some(
-                    std::sync::Arc::new(move |pipe_name: &str, exec_id: i64, line: &str| {
-                        pipe_agent_events.emit_line(pipe_name, exec_id, line);
+                    std::sync::Arc::new(move |pipe_name: &str, exec_id: i64, continues_chat: bool, line: &str| {
+                        pipe_agent_events.emit_line(pipe_name, exec_id, continues_chat, line);
                     }),
                 );
 
@@ -1929,7 +1958,14 @@ async fn main() {
             let is_autostart_enabled = store
                 .auto_start_enabled;
 
-            if is_autostart_enabled {
+            // `auto_start_enabled` defaults to true, so an isolated dev profile
+            // would register a login item pointing at target/debug — launching a
+            // development build at every login alongside the real app. Never
+            // touch the OS login item from a dev build; leave whatever the
+            // installed app registered exactly as it is.
+            if crate::dev_isolation::is_active() {
+                debug!("dev isolation active, skipping autostart registration");
+            } else if is_autostart_enabled {
                 let _ = autostart_manager.enable();
             } else {
                 let _ = autostart_manager.disable();
@@ -2277,8 +2313,7 @@ async fn main() {
                 tauri::RunEvent::Reopen { .. } => {
                     // Defer off the event stack so run handler stays panic-free.
                     // Open the settings/app window (not the timeline overlay).
-                    if crate::enterprise_policy::is_app_ui_hidden()
-                        || crate::headless::is_dormant()
+                    if crate::enterprise_policy::is_app_ui_hidden() || crate::headless::is_dormant()
                     {
                         return;
                     }
@@ -2309,7 +2344,10 @@ mod autostart_arg_tests {
     #[test]
     fn ignores_unrelated_args() {
         assert!(!args_contain_autostart(["screenpipe"]));
-        assert!(!args_contain_autostart(["screenpipe", "--check-arc-automation"]));
+        assert!(!args_contain_autostart([
+            "screenpipe",
+            "--check-arc-automation"
+        ]));
         assert!(!args_contain_autostart(["screenpipe", "--autostarted"]));
     }
 }

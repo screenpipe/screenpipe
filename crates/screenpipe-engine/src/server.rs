@@ -69,8 +69,8 @@ use crate::{
         },
         streaming::stream_frames_handler,
         websocket::{
-            ws_events_handler, ws_health_handler, ws_meeting_status_handler, ws_metrics_handler,
-            WebSocketLifecycle,
+            ws_events_handler, ws_health_handler, ws_meeting_overlay_handler,
+            ws_meeting_status_handler, ws_metrics_handler, WebSocketLifecycle,
         },
     },
     sync_api::{self, SyncState},
@@ -1139,6 +1139,23 @@ impl SCServer {
                 "/v1/chat/completions",
                 axum::routing::post(crate::routes::cloud_proxy::chat_completions)
                     .layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024)), // 50MB
+            )
+            // Local proxy → api.screenpipe.com/v1/web-search. Lets coding-agent
+            // harnesses web-search through their bundled MCP tool without ever
+            // holding the cloud JWT (scrubbed from third-party adapter trees).
+            .route(
+                "/v1/web-search",
+                axum::routing::post(crate::routes::web_search::web_search),
+            )
+            // Blocking connect broker for the harness MCP `screenpipe_connect_app`
+            // tool: raise the in-chat connect card and wait for the user's answer.
+            .route(
+                "/v1/connect-request",
+                axum::routing::post(crate::routes::connect_broker::connect_request),
+            )
+            .route(
+                "/v1/connect-response",
+                axum::routing::post(crate::routes::connect_broker::connect_response),
             );
 
         // Pipe API routes (if pipe manager is available)
@@ -1146,11 +1163,9 @@ impl SCServer {
             let pipe_stream_hub = Arc::new(crate::pipe_stream::PipeStreamHub::new());
             {
                 let hub = pipe_stream_hub.clone();
-                pm.lock()
-                    .await
-                    .set_on_output_line(Arc::new(move |pipe, exec_id, line| {
-                        hub.publish(pipe, exec_id, line)
-                    }));
+                pm.lock().await.add_on_output_line(Arc::new(
+                    move |pipe, exec_id, _continues_chat, line| hub.publish(pipe, exec_id, line),
+                ));
             }
             let pipe_routes = Router::new()
                 .route("/", axum::routing::get(crate::pipes_api::list_pipes))
@@ -1352,6 +1367,7 @@ impl SCServer {
             .route("/stream/frames", get(stream_frames_handler))
             .route("/ws/events", get(ws_events_handler))
             .route("/ws/health", get(ws_health_handler))
+            .route("/ws/meeting-overlay", get(ws_meeting_overlay_handler))
             .route("/ws/meeting-status", get(ws_meeting_status_handler))
             .route("/ws/metrics", get(ws_metrics_handler))
             // Browser extension bridge — DEPRECATED top-level paths.

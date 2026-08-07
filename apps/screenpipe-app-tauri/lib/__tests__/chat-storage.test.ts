@@ -364,6 +364,38 @@ function candidate(
   return { meta: meta(id, over), key, hasCompletedReply };
 }
 
+describe("conversationDedupKey", () => {
+  it("keys plain typed chats by their stripped opener", () => {
+    const key = conversationDedupKey({
+      kind: "chat",
+      messages: [{ role: "user", content: "export last 5 min of video" }],
+    });
+    expect(key).toBe("export last 5 min of video");
+  });
+
+  it("exempts templated starter/summary openers (they carry a displayContent)", () => {
+    // Two distinct launches of the same card produce identical text but are
+    // separate chats; a non-null key would collapse them on the next boot.
+    const conv = {
+      kind: "chat",
+      messages: [
+        {
+          role: "user",
+          displayContent: "\u2728 Day Recap \u2014 Today",
+          content:
+            "Analyze my screen and audio recordings from today.\n\nUser instructions: recap",
+        },
+      ],
+    };
+    expect(conversationDedupKey(conv)).toBeNull();
+  });
+
+  it("still returns null for pipe runs and empty chats", () => {
+    expect(conversationDedupKey({ kind: "pipe", messages: [{ role: "user", content: "x" }] })).toBeNull();
+    expect(conversationDedupKey({ kind: "chat", messages: [] })).toBeNull();
+  });
+});
+
 describe("dedupeConversationMetas", () => {
   it("collapses two copies of the same chat, keeping the one with a real reply", () => {
     const out = dedupeConversationMetas([

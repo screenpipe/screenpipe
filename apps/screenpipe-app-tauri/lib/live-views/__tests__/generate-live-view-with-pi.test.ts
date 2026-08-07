@@ -6,13 +6,12 @@ import { describe, expect, it } from "vitest";
 import {
   buildLiveViewGenerationPrompt,
   parseGeneratedLiveView,
-  relevantPipes,
 } from "../generate-live-view-with-pi";
 
 describe("parseGeneratedLiveView", () => {
-  it("accepts the safe component palette and exact installed Pipe names", () => {
+  it("accepts a validated create proposal", () => {
     const result = parseGeneratedLiveView(
-      JSON.stringify({
+      {
         title: "How I worked",
         timeRange: "7d",
         timeRangeBehavior: "selectable",
@@ -28,154 +27,159 @@ describe("parseGeneratedLiveView", () => {
           {
             title: "Time by project",
             intent: "Group active time by project.",
-            component: "bar-chart",
-            width: "half",
+            component: "bar-chart.v1",
+            width: 6,
             pipeName: "time-tracker",
-          },
-          {
-            title: "Focus trend",
-            intent: "Show focused work over time.",
-            component: "line-chart",
-            width: 12,
-            pipeName: "time-tracker",
-          },
-          {
-            title: "Project detail",
-            intent: "List project activity with supporting details.",
-            component: "table.v1",
-            width: 12,
-            pipeName: "daily-summary",
           },
         ],
-      }),
+      },
       ["daily-summary", "time-tracker"],
       "dashboard",
     );
 
-    expect(result).toEqual({
-      title: "How I worked",
-      timeRange: "7d",
-      periodPolicy: {
-        type: "selectable.v1",
-        values: ["today", "24h", "7d", "30d"],
-      },
-      note: "A useful overview.",
-      blocks: [
-        {
-          title: "Focus time",
-          intent: "Calculate focused work time in the selected period.",
-          component: "metric.v1",
-          width: 3,
-          pipeName: "daily-summary",
-        },
-        {
-          title: "Time by project",
-          intent: "Group active time by project.",
-          component: "bar-chart.v1",
-          width: 6,
-          pipeName: "time-tracker",
-        },
-        {
-          title: "Focus trend",
-          intent: "Show focused work over time.",
-          component: "line-chart.v1",
-          width: 12,
-          pipeName: "time-tracker",
-        },
-        {
-          title: "Project detail",
-          intent: "List project activity with supporting details.",
-          component: "table.v1",
-          width: 12,
-          pipeName: "daily-summary",
-        },
-      ],
-    });
+    expect(result.title).toBe("How I worked");
+    expect(result.timeRange).toBe("7d");
+    expect(result.note).toBe("A useful overview.");
+    expect(result.blocks).toEqual([
+      expect.objectContaining({
+        title: "Focus time",
+        component: "metric.v1",
+        width: 3,
+        pipeName: "daily-summary",
+      }),
+      expect.objectContaining({
+        title: "Time by project",
+        component: "bar-chart.v1",
+        width: 6,
+        pipeName: "time-tracker",
+      }),
+    ]);
   });
 
-  it("automatically fixes the period only when the generated view requires it", () => {
+  it("fixes the period only when the proposal requires it", () => {
     const result = parseGeneratedLiveView(
-      JSON.stringify({
+      {
         title: "Daily memory",
         timeRange: "today",
         timeRangeBehavior: "fixed",
         blocks: [
           {
             title: "Daily brief",
+            intent: "Summarize the day.",
             component: "markdown.v1",
+            width: 12,
           },
         ],
-      }),
+      },
       [],
       "dashboard",
     );
 
-    expect(result.periodPolicy).toEqual({
-      type: "fixed.v1",
-      value: "today",
-    });
+    expect(result.periodPolicy).toEqual({ type: "fixed.v1", value: "today" });
   });
 
-  it("strips JSON fences and refuses invented Pipe bindings", () => {
+  it("refuses a component outside the palette instead of guessing an alias", () => {
+    expect(() =>
+      parseGeneratedLiveView(
+        {
+          title: "Today",
+          blocks: [
+            {
+              title: "Tasks",
+              intent: "List tasks.",
+              component: "list",
+              width: 12,
+            },
+          ],
+        },
+        [],
+        "dashboard",
+      ),
+    ).toThrow("did not create any usable sections");
+  });
+
+  it("refuses an out-of-palette width instead of defaulting to half", () => {
+    expect(() =>
+      parseGeneratedLiveView(
+        {
+          title: "Today",
+          blocks: [
+            {
+              title: "Tasks",
+              intent: "List tasks.",
+              component: "list.v1",
+              width: 8,
+            },
+          ],
+        },
+        [],
+        "dashboard",
+      ),
+    ).toThrow("width outside 3, 6, or 12");
+  });
+
+  it("refuses an unsupported time range instead of silently using today", () => {
+    expect(() =>
+      parseGeneratedLiveView(
+        {
+          title: "Weekly",
+          timeRange: "last 7 days",
+          blocks: [
+            {
+              title: "Tasks",
+              intent: "List tasks.",
+              component: "list.v1",
+              width: 6,
+            },
+          ],
+        },
+        [],
+        "dashboard",
+      ),
+    ).toThrow("unsupported time range");
+  });
+
+  it("refuses invented Pipe bindings", () => {
     const result = parseGeneratedLiveView(
-      '```json\n{"title":"Today","blocks":[{"title":"Tasks","type":"list","width":12,"pipe":"invented-pipe"}]}\n```',
+      {
+        title: "Today",
+        blocks: [
+          {
+            title: "Tasks",
+            intent: "List tasks.",
+            component: "list.v1",
+            width: 12,
+            pipeName: "invented-pipe",
+          },
+        ],
+      },
       ["real-pipe"],
       "dashboard",
     );
 
     expect(result.blocks[0]).toEqual(
-      expect.objectContaining({
-        title: "Tasks",
-        component: "list.v1",
-        width: 12,
-        pipeName: null,
-      }),
-    );
-  });
-
-  it("accepts the native Live View shape returned by the agent tool", () => {
-    const result = parseGeneratedLiveView(
-      JSON.stringify({
-        view: {
-          title: "Work Patterns Dashboard 2",
-          timeRange: "today",
-          blocks: [
-            {
-              id: "time-by-app",
-              title: "Time by application",
-              kind: "bar-chart.v1",
-              width: 6,
-              intent: "Group captured active minutes by application.",
-              source: {
-                type: "pipe.v1",
-                pipeName: "chronos-time-tracker",
-              },
-            },
-          ],
-        },
-      }),
-      ["chronos-time-tracker"],
-      "dashboard",
-    );
-
-    expect(result).toEqual(
-      expect.objectContaining({
-        title: "Work Patterns Dashboard 2",
-        timeRange: "today",
-        blocks: [
-          expect.objectContaining({
-            title: "Time by application",
-            component: "bar-chart.v1",
-            pipeName: "chronos-time-tracker",
-          }),
-        ],
-      }),
+      expect.objectContaining({ title: "Tasks", pipeName: null }),
     );
   });
 
   it("keeps only one section when generating an addition", () => {
     const result = parseGeneratedLiveView(
-      '{"blocks":[{"title":"First","component":"timeline.v1"},{"title":"Second","component":"markdown.v1"}]}',
+      {
+        blocks: [
+          {
+            title: "First",
+            intent: "Show a timeline.",
+            component: "timeline.v1",
+            width: 12,
+          },
+          {
+            title: "Second",
+            intent: "Show notes.",
+            component: "markdown.v1",
+            width: 6,
+          },
+        ],
+      },
       [],
       "block",
     );
@@ -203,14 +207,11 @@ describe("parseGeneratedLiveView", () => {
         },
       ],
     };
+
     const result = parseGeneratedLiveView(
-      JSON.stringify({
+      {
         operations: [
-          {
-            op: "update",
-            blockId: "focus",
-            block: { title: "Deep focus" },
-          },
+          { op: "update", blockId: "focus", block: { title: "Deep focus" } },
           {
             op: "add",
             block: {
@@ -224,7 +225,7 @@ describe("parseGeneratedLiveView", () => {
           },
         ],
         note: "Updated two Blocks.",
-      }),
+      },
       ["time-tracker", "meeting-summary"],
       "dashboard",
       currentView,
@@ -240,25 +241,64 @@ describe("parseGeneratedLiveView", () => {
         intent: "Show focused time.",
         pipeName: "time-tracker",
       }),
-      expect.objectContaining({
-        id: "meetings",
-        pipeName: "meeting-summary",
-      }),
+      expect.objectContaining({ id: "meetings", pipeName: "meeting-summary" }),
     ]);
+  });
+
+  it("supports the detail fix: swapping what a Block renders", () => {
+    const result = parseGeneratedLiveView(
+      {
+        operations: [
+          {
+            op: "update",
+            blockId: "focus-time",
+            block: {
+              component: "table.v1",
+              width: 12,
+              intent: "Rows of app with focused minutes, largest first.",
+            },
+          },
+        ],
+        note: "Focus time becomes a per-app table.",
+      },
+      ["time-breakdown"],
+      "block",
+      {
+        title: "Time & focus",
+        timeRange: "today",
+        blocks: [
+          {
+            id: "focus-time",
+            title: "Focus time",
+            intent: "Total focused minutes.",
+            component: "metric.v1",
+            width: 6,
+            pipeName: "time-breakdown",
+          },
+        ],
+      },
+      "focus-time",
+    );
+
+    expect(result.blocks[0]).toEqual(
+      expect.objectContaining({
+        id: "focus-time",
+        title: "Focus time",
+        component: "table.v1",
+        width: 12,
+        pipeName: "time-breakdown",
+      }),
+    );
   });
 
   it("rejects a Block edit that targets a different Block", () => {
     expect(() =>
       parseGeneratedLiveView(
-        JSON.stringify({
+        {
           operations: [
-            {
-              op: "update",
-              blockId: "other",
-              block: { title: "Changed" },
-            },
+            { op: "update", blockId: "other", block: { title: "Changed" } },
           ],
-        }),
+        },
         [],
         "block",
         {
@@ -291,51 +331,28 @@ describe("parseGeneratedLiveView", () => {
   it("rejects whole-dashboard output for an existing Live View", () => {
     expect(() =>
       parseGeneratedLiveView(
-        JSON.stringify({
-          blocks: [{ title: "Replacement", component: "metric.v1" }],
-        }),
+        {
+          blocks: [
+            {
+              title: "Replacement",
+              intent: "Replace everything.",
+              component: "metric.v1",
+              width: 6,
+            },
+          ],
+        },
         [],
         "dashboard",
-        {
-          title: "Existing",
-          timeRange: "today",
-          blocks: [],
-        },
+        { title: "Existing", timeRange: "today", blocks: [] },
       ),
     ).toThrow("targeted Live View changes");
   });
+});
 
-  it("rejects arbitrary or unusable output", () => {
-    expect(() =>
-      parseGeneratedLiveView(
-        '{"title":"unsafe","blocks":[{"title":"HTML","component":"html","content":"<script>"}]}',
-        [],
-        "dashboard",
-      ),
-    ).toThrow("did not create any usable sections");
-  });
-
-  it("keeps the prompt compact while prioritizing relevant data Pipes", () => {
-    const pipes = [
-      ...Array.from({ length: 20 }, (_, index) => ({
-        name: `unrelated-${index}`,
-        description: "sends a generic notification",
-      })),
-      {
-        name: "chronos-time-tracker",
-        description: "tracks active time by app, project, and category",
-      },
-    ];
-
-    const selected = relevantPipes("track how I spend my time", pipes);
-
-    expect(selected).toHaveLength(16);
-    expect(selected[0].name).toBe("chronos-time-tracker");
-  });
-
-  it("references an existing Live View lazily instead of injecting its Blocks", () => {
+describe("buildLiveViewGenerationPrompt", () => {
+  it("references an existing Live View lazily and looks at what it renders first", () => {
     const prompt = buildLiveViewGenerationPrompt({
-      prompt: "add meetings and keep everything else",
+      prompt: "show more detail",
       scope: "dashboard",
       preset: {} as any,
       userToken: null,
@@ -344,12 +361,46 @@ describe("parseGeneratedLiveView", () => {
     });
 
     expect(prompt).toContain('"id":"daily","revision":7');
+    expect(prompt).toContain("action=values");
+    expect(prompt).toContain("screenpipe_live_view_propose");
     expect(prompt).toContain(
       "Do not restate, remove, or update unrelated Blocks",
     );
-    expect(prompt).toContain('"op":"add"');
-    expect(prompt).toContain("Never return a complete blocks array");
     expect(prompt).not.toContain("Current Live View:\n{");
-    expect(prompt).not.toContain("Focus time");
+    // The reference is an id and revision, never the view's Block list.
+    expect(prompt).not.toContain('"blocks":[');
+  });
+
+  it("looks installed scheduled tasks up on demand instead of injecting them", () => {
+    const prompt = buildLiveViewGenerationPrompt({
+      prompt: "track how I spend my time",
+      scope: "dashboard",
+      preset: {} as any,
+      userToken: null,
+      pipes: Array.from({ length: 20 }, (_, index) => ({
+        name: `unrelated-${index}`,
+        description: "sends a generic notification",
+      })),
+    });
+
+    expect(prompt).toContain("action=pipes");
+    expect(prompt).not.toContain("unrelated-0");
+    expect(prompt).not.toContain("sends a generic notification");
+  });
+
+  it("still carries the curated Store candidates onboarding will install", () => {
+    const prompt = buildLiveViewGenerationPrompt({
+      prompt: "remember my work",
+      scope: "dashboard",
+      preset: {} as any,
+      userToken: null,
+      pipes: [{ name: "daily-summary", description: "summarizes the day" }],
+      pipeAvailability: "store",
+      maxSelectedPipes: 2,
+    });
+
+    expect(prompt).toContain("daily-summary");
+    expect(prompt).toContain("at most 2 distinct");
+    expect(prompt).not.toContain("action=pipes");
   });
 });

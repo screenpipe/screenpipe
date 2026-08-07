@@ -421,6 +421,11 @@ export default function FirstDashboard() {
         pipe_slugs: result.pipeSlugs,
         block_count: result.blockCount,
         refresh_started_count: result.refreshStartedCount,
+        // Separates a dashboard the AI planned from one the deterministic
+        // fallback built, so the planner's real success rate stays visible
+        // now that a failed plan no longer ends onboarding.
+        plan_source: result.planSource,
+        plan_fallback_reason: result.planFallbackReason ?? "none",
         time_spent_ms: Date.now() - mountedAtRef.current,
       });
       onboardingFunnel.liveViewCreated(selectedGoalCategory, flowProperties);
@@ -864,6 +869,7 @@ export default function FirstDashboard() {
               <button
                 key={suggestion.category}
                 type="button"
+                data-testid={`onboarding-goal-${suggestion.category}`}
                 aria-pressed={selected}
                 onClick={() => {
                   selectGoalOption(
@@ -950,6 +956,7 @@ export default function FirstDashboard() {
 
         <button
           type="button"
+          data-testid="onboarding-build-live-view"
           onClick={
             goalCategory === "ai_context" ? handleUseWithAi : handleCreate
           }

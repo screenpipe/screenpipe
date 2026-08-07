@@ -69,7 +69,16 @@ import {
   isInjectedTitleSourcePrompt,
 } from "@/lib/chat-utils";
 import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
+import { optimisticAssistantForUserEcho } from "@/lib/chat/cross-window-transcript-sync";
 import { isInternalTitleSession } from "@/lib/utils/internal-session";
+import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
+import {
+  agentActionMessage,
+  parseAgentActionRequest,
+  stripAgentActionBlocks,
+} from "@/lib/chat/agent-action-card";
+import type { Message } from "@/lib/chat/types";
+import { isPendingAgentActionMessage } from "@/lib/chat/message-rendering";
 import {
   getPersistedViewedAt,
   useChatStore,
@@ -78,6 +87,7 @@ import {
   type SessionStatus,
   type SessionRecord,
 } from "@/lib/stores/chat-store";
+import { connectionActionFromToolResult } from "@/components/chat/standalone/hooks/pi-event-handlers";
 
 // Module-level state — the router is a singleton process-wide.
 let mounted = false;
@@ -183,6 +193,28 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
   if (!sid || !inner) return; // events without a session id or body can't be routed
   // Internal Pi sessions (title generation, etc.) — never routed to chat store
   if (isInternalTitleSession(sid)) return;
+  // ACP adapters advertise their model/mode selectors per session. Pure
+  // runtime metadata: capture it for the composer picker and stop — it must
+  // not lazy-create a chat row or touch message content.
+  if ((inner as { type?: string }).type === "acp_session_config") {
+    useAcpSessionConfig.getState().setFromEvent(sid, inner);
+    return;
+  }
+  // Mode/option changes stream as generic acp_update notifications. Like
+  // acp_session_config above, this is pure runtime metadata: capture it for the
+  // composer picker and stop — it must not fall through to the lazy-create
+  // upsert and materialize a phantom "untitled" chat row for a session that has
+  // no content yet.
+  if ((inner as { type?: string }).type === "acp_update") {
+    const update = (inner as { update?: { sessionUpdate?: string } }).update;
+    if (
+      update?.sessionUpdate === "current_mode_update" ||
+      update?.sessionUpdate === "config_option_update"
+    ) {
+      useAcpSessionConfig.getState().applyUpdate(sid, update);
+      return;
+    }
+  }
   // Pipe sessions are only routed when chat-store already has a record
   // for them — i.e. the user clicked into a pipe-watch view, which
   // upserted the session. Unwatched pipes go to the pipe-run-recorder
@@ -195,29 +227,21 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
   }
 
   const store = useChatStore.getState();
-  const existing = store.sessions[sid];
+  let existing = store.sessions[sid];
+
+  // ACP lifecycle/metadata events (acp_status / acp_ready / acp_fatal /
+  // acp_external_auth_required / acp_auth_cancelled / acp_authenticated) carry
+  // no chat content. For a session the store hasn't hydrated yet they must not
+  // fall through to the lazy-create below and materialize a phantom "untitled"
+  // row pinned to "streaming" (mirrors the acp_session_config / acp_update
+  // guards above). If the row already exists they proceed to normal handling.
+  if (!existing && (inner as { type?: string }).type?.startsWith("acp_")) {
+    return;
+  }
 
   const nextStatus = statusForEvent(inner);
   const snippet = previewSnippet(inner);
   const err = errorMessage(inner);
-
-  // Phase 3: accumulate full message-content state in the store for
-  // EVERY session (current + background). This is what makes it possible
-  // for the chat panel to switch back to a previously-backgrounded
-  // session and see live tokens that arrived while it was away — the
-  // router has been writing them to the store the whole time. The chat
-  // panel either reads the store directly or syncs its local state from
-  // the store on session switch.
-  //
-  // Pipe-watch sessions are written by `pipe-watch-writer` instead —
-  // pipe streams don't follow chat-shaped lifecycles (missing
-  // message_start between turns, terminal `agent_end` carrying the
-  // canonical messages array), and double-writing here would race
-  // against that writer. Status mirroring (the sidebar dot / preview)
-  // still happens below for both kinds.
-  if (existing?.kind !== "pipe-watch") {
-    applyEventToSessionContent(sid, inner);
-  }
 
   // Lazy-create on first event from a previously-unknown session id.
   // Handles the case where Pi was started outside the chat-storage flow
@@ -240,7 +264,24 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
       ...(snippet ? { lastContentAt: now } : {}),
     });
     if (snippet) previewLastEmittedAt.set(sid, Date.now());
-    return;
+    existing = useChatStore.getState().sessions[sid];
+    if (!existing) return;
+  }
+
+  // Phase 3: accumulate full message-content state in the store for
+  // EVERY session (current + background). This is what makes it possible
+  // for the chat panel to switch back to a previously-backgrounded
+  // session and see live tokens that arrived while it was away — the
+  // router has been writing them to the store the whole time. The chat
+  // panel either reads the store directly or syncs its local state from
+  // the store on session switch.
+  //
+  // Pipe content has dedicated owners: `pipe-watch-writer` for a watched run
+  // and `pipe-run-recorder` for durable run history. A continued Pipe reuses
+  // its sid, so generic accumulation would duplicate and race those writers.
+  // Status mirroring below still runs for both Pi and Pipe sessions.
+  if (envelope.source === "pi") {
+    applyEventToSessionContent(sid, inner);
   }
 
   // Decide whether to write a preview update — throttled per session.
@@ -301,8 +342,15 @@ export function handleTerminated(payload: AgentTerminatedPayload) {
   // streaming dot.
   const sid = payload.sessionId;
   if (!sid) return;
+  // Snapshot the ACP resume id BEFORE clearing the live config: the crash
+  // persist below is async/queued and would otherwise read an already-cleared
+  // config, losing the resume id for a chat that crashed before its first
+  // agent_end wrote anything to disk.
+  const acpSessionIdSnapshot = useAcpSessionConfig.getState().sessions[sid]?.sessionId;
+  useAcpSessionConfig.getState().clear(sid);
   const store = useChatStore.getState();
   if (!store.sessions[sid]) return;
+  removeAgentActionsFromSession(sid);
   const isCleanExit = payload.exitCode === 0 || payload.exitCode == null;
   store.actions.patch(sid, {
     status: isCleanExit ? "idle" : "error",
@@ -318,8 +366,13 @@ export function handleTerminated(payload: AgentTerminatedPayload) {
   // crashed mid-stream — without this the user loses everything that
   // was generated after the moment they navigated away. Foreground
   // session has its own pi_terminated handler in standalone-chat.
-  if (store.currentId !== sid) {
-    void persistBackgroundSession(sid);
+  const sessionKind = store.sessions[sid]?.kind;
+  if (
+    store.currentId !== sid &&
+    sessionKind !== "pipe-run" &&
+    sessionKind !== "pipe-watch"
+  ) {
+    void persistBackgroundSession(sid, acpSessionIdSnapshot);
   }
 }
 
@@ -443,6 +496,45 @@ interface MutableMessage {
   [k: string]: unknown;
 }
 
+function removeAgentActionsFromSession(sid: string): void {
+  const store = useChatStore.getState();
+  const session = store.sessions[sid];
+  if (!session?.messages) return;
+  // A backgrounded session's messages all belong to it, so strip every
+  // agent-action block (predicate always true). Shared with the panel.
+  const next = stripAgentActionBlocks(session.messages as unknown as Message[], () => true);
+  // stripAgentActionBlocks returns the SAME array reference when nothing
+  // matched (the common case — most sessions have no agent-action blocks).
+  // Skip the store write then, or we rebuild the session + sessions map and
+  // force redundant subscriber re-renders on every agent_end / terminate.
+  if ((next as unknown) === session.messages) return;
+  store.actions.setMessages(sid, next as unknown as MutableMessage[]);
+}
+
+function appendAgentActionRequest(sid: string, payload: PiInnerEvent): boolean {
+  const parsed = parseAgentActionRequest(payload);
+  if (!parsed) return false;
+
+  const store = useChatStore.getState();
+  const session = store.sessions[sid];
+  if (!session) return false;
+  const messages = (session.messages as MutableMessage[] | undefined) ?? [];
+  const alreadyVisible = messages.some((message) =>
+    message.contentBlocks?.some(
+      (block: any) => block?.type === "agent_action" && block.requestId === parsed.requestId,
+    ),
+  );
+  if (alreadyVisible) return true;
+
+  store.actions.appendMessage(sid, agentActionMessage(parsed, sid) as unknown as MutableMessage);
+  store.actions.patch(sid, {
+    status: "tool",
+    preview: parsed.actionKind === "auth" ? "sign-in needed" : "permission needed",
+    lastContentAt: Date.now(),
+  });
+  return true;
+}
+
 function textFromPiMessageContent(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -496,6 +588,16 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
 
   const t = payload.type;
 
+  if (appendAgentActionRequest(sid, payload)) return;
+  if (
+    t === "agent_end" ||
+    t === "acp_authenticated" ||
+    t === "acp_fatal" ||
+    t === "acp_auth_cancelled"
+  ) {
+    removeAgentActionsFromSession(sid);
+  }
+
   // Queued follow-ups begin with `message_start(role=user)`. When the user has
   // switched away, the foreground panel does not see that event, so the
   // background router must materialize the user bubble and the assistant
@@ -506,6 +608,32 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
     const text = extractInjectedUserText(rawText) ?? rawText;
     const images = imageDataUrlsFromPiContent(payload.message?.content);
     if (!text && images.length === 0) return;
+
+    // The panel appends its own optimistic `[user, "Processing..."]` pair the
+    // moment the user hits send. If ownership moved to this router after that
+    // (chat switch mid-turn, or the gap before the panel's foreground handler
+    // registered), Pi's echo of the same prompt arrives here — and blindly
+    // materializing it produced a SECOND copy of the user's message next to
+    // the optimistic one, which then won the switch-back merge because
+    // `snapshotSession` keeps the longer array. Adopt the existing placeholder
+    // instead, exactly as the foreground handler does for the same echo.
+    const optimistic = optimisticAssistantForUserEcho(
+      (existing.messages ?? []) as unknown as Parameters<
+        typeof optimisticAssistantForUserEcho
+      >[0],
+      text,
+    );
+    if (optimistic) {
+      store.actions.setStreaming(sid, {
+        streamingMessageId: optimistic.assistantMessageId,
+        streamingText: "",
+        contentBlocks: [],
+        isStreaming: true,
+        isLoading: true,
+      });
+      store.actions.patch(sid, { draft: false });
+      return;
+    }
 
     const userId = `pi-user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const assistantId = `pi-assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -609,12 +737,16 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
     const cur = store.sessions[sid];
     if (!cur?.streamingMessageId) return;
     const msgId = cur.streamingMessageId;
+    const parentToolCallId = (payload as any).parentToolCallId;
     const tool = {
       id: (payload as any).toolCallId || `${Date.now()}`,
       toolName: (payload as any).toolName || "unknown",
       args: (payload as any).args || {},
       isRunning: true,
       startedAtMs: Date.now(),
+      ...(typeof parentToolCallId === "string" && parentToolCallId
+        ? { parentToolCallId }
+        : {}),
     };
     const blocks = [...((cur.contentBlocks as any[]) ?? []), { type: "tool", toolCall: tool }];
     store.actions.setStreaming(sid, { contentBlocks: blocks });
@@ -651,6 +783,36 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
     return;
   }
 
+  // Live progress on a running tool: subagent heartbeats (elapsed, type,
+  // retry), streamed output tails, and mid-run title refinements. Patched in
+  // place so a 30-minute Task visibly advances instead of just pulsing.
+  if (t === "tool_execution_progress") {
+    const cur = store.sessions[sid];
+    if (!cur?.streamingMessageId) return;
+    const msgId = cur.streamingMessageId;
+    const toolCallId = (payload as any).toolCallId;
+    const blocks = ((cur.contentBlocks as any[]) ?? []).map((b: any) => {
+      if (b.type !== "tool" || b.toolCall?.id !== toolCallId) return b;
+      const p = payload as any;
+      const next = { ...b.toolCall };
+      if (typeof p.elapsedSeconds === "number") next.elapsedSeconds = p.elapsedSeconds;
+      if (typeof p.subagentType === "string") next.subagentType = p.subagentType;
+      if (p.retry !== undefined) next.retry = p.retry;
+      if (typeof p.title === "string" && p.title) next.toolName = p.title;
+      if (typeof p.outputDelta === "string" && p.outputDelta) {
+        const combined = `${next.progress ?? ""}${p.outputDelta}`;
+        next.progress = combined.length > 4000 ? combined.slice(-4000) : combined;
+      }
+      return { ...b, toolCall: next };
+    });
+    store.actions.setStreaming(sid, { contentBlocks: blocks });
+    store.actions.patchMessage(sid, msgId, (m: any) => ({
+      ...m,
+      contentBlocks: blocks,
+    }));
+    return;
+  }
+
   if (t === "tool_execution_end") {
     const cur = store.sessions[sid];
     if (!cur?.streamingMessageId) return;
@@ -678,6 +840,17 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
           }
         : b
     );
+    // A connect tool that needs a connection (async fallback) raises the
+    // connect card in this background session; the user sees it on return.
+    const connectCard = connectionActionFromToolResult(resultText);
+    if (
+      connectCard &&
+      !blocks.some(
+        (b: any) => b.type === "connection_action" && b.connectionId === connectCard.connectionId,
+      )
+    ) {
+      blocks.push(connectCard);
+    }
     store.actions.setStreaming(sid, { contentBlocks: blocks });
     store.actions.patchMessage(sid, msgId, (m: any) => ({
       ...m,
@@ -746,13 +919,23 @@ export async function flushPendingSaves(): Promise<void> {
  * data depending on where the save came from — confusing and a vector
  * for hard-to-reproduce bugs.
  */
-async function persistBackgroundSession(sid: string): Promise<void> {
+// `acpSessionIdOverride` lets callers that clear the live ACP config before the
+// (async, queued) persist runs — e.g. handleTerminated — pass the resume id
+// captured beforehand, so a crash mid-first-turn doesn't lose it.
+async function persistBackgroundSession(
+  sid: string,
+  acpSessionIdOverride?: string,
+): Promise<void> {
   const prev = saveQueue.get(sid) ?? Promise.resolve();
   const next = prev
     .catch(() => undefined)
     .then(async () => {
       const session = useChatStore.getState().sessions[sid];
       if (!session) return;
+      // Pipe transcripts are persisted by their dedicated writers. This guard
+      // also protects close/termination flushes from overwriting a recorder
+      // save with metadata or stale in-memory content.
+      if (session.kind === "pipe-run" || session.kind === "pipe-watch") return;
       const messages = (session.messages as MutableMessage[] | undefined) ?? [];
       if (messages.length === 0) return;
 
@@ -772,6 +955,10 @@ async function persistBackgroundSession(sid: string): Promise<void> {
       }
 
       const existing = await loadConversationFile(sid);
+      const acpSessionId =
+        acpSessionIdOverride ??
+        useAcpSessionConfig.getState().sessions[sid]?.sessionId ??
+        existing?.acpSessionId;
       const browserState = resolveNewestBrowserState(
         existing?.browserState,
         getCachedBrowserStateEntry(sid),
@@ -820,24 +1007,43 @@ async function persistBackgroundSession(sid: string): Promise<void> {
         // Full transcript — see comment in use-chat-conversations.ts
         // saveConversation. The slice(-100) here was silently truncating
         // long backgrounded chats on every agent_end save.
-        messages: messages.map((m: any) => {
+        // Drop pending permission/sign-in cards: they are ephemeral UI tied to
+        // a live runtime waiter. Persisting one (e.g. on app-quit before it is
+        // answered) rehydrates a dead card whose buttons do nothing and which
+        // falsely marks the next turn "waiting for approval".
+        messages: (messages as any[])
+          .filter((m) => !isPendingAgentActionMessage(m as Message))
+          .map((m: any) => {
           let content: string = m.content || "";
           if (!content && m.contentBlocks?.length) {
-            content =
-              m.contentBlocks
-                .filter((b: any) => b.type === "text")
-                .map((b: any) => b.text)
-                .join("\n") || "(tool result)";
+            // Tool-only messages have no text; leave content empty (the tool
+            // activity persists via contentBlocks) rather than a placeholder
+            // that would render as an assistant text bubble.
+            content = m.contentBlocks
+              .filter((b: any) => b.type === "text")
+              .map((b: any) => b.text)
+              .join("\n");
           }
+          // A tool still marked running at persist time never reported
+          // completion: the turn was cut off (crash or app quit), since a
+          // normal finish flips isRunning false via tool_execution_end
+          // before agent_end. Record it honestly instead of persisting it
+          // as silently done, and flag the message so the UI can say so.
+          let wasInterrupted = false;
           const blocks = m.contentBlocks?.map((b: any) => {
             if (b.type === "tool") {
-              const { isRunning: _isRunning, ...rest } = b.toolCall ?? {};
+              const { isRunning, ...rest } = b.toolCall ?? {};
+              const interrupted = isRunning === true;
+              if (interrupted) wasInterrupted = true;
               return {
                 type: "tool",
                 toolCall: {
                   ...rest,
                   isRunning: false,
-                  result: rest.result?.slice?.(0, 4000),
+                  isError: interrupted ? true : rest.isError,
+                  result: interrupted
+                    ? "interrupted — the app closed before this finished"
+                    : rest.result?.slice?.(0, 4000),
                 },
               };
             }
@@ -846,6 +1052,7 @@ async function persistBackgroundSession(sid: string): Promise<void> {
             }
             return b;
           });
+          const interruptedByQuit = m.interruptedByQuit || wasInterrupted;
           return {
             id: m.id,
             role: m.role,
@@ -862,6 +1069,7 @@ async function persistBackgroundSession(sid: string): Promise<void> {
             ...(m.steeredResponse ? { steeredResponse: true } : {}),
             ...(m.workDurationMs ? { workDurationMs: m.workDurationMs } : {}),
             ...(m.stoppedByUser ? { stoppedByUser: true } : {}),
+            ...(interruptedByQuit ? { interruptedByQuit: true } : {}),
           };
         }),
         createdAt: existing?.createdAt ?? Date.now(),
@@ -877,6 +1085,8 @@ async function persistBackgroundSession(sid: string): Promise<void> {
         ...(existing?.sidebarGroup ? { sidebarGroup: existing.sidebarGroup } : {}),
         ...(session.branchedFrom ? { branchedFrom: session.branchedFrom } : existing?.branchedFrom ? { branchedFrom: existing.branchedFrom } : {}),
         ...(browserState ? { browserState } : {}),
+        // Keep the live ACP session id (if any) so a reopen can resume it.
+        ...(acpSessionId ? { acpSessionId } : existing?.acpSessionId ? { acpSessionId: existing.acpSessionId } : {}),
       };
 
       try {

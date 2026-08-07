@@ -42,11 +42,14 @@ export function ChatComposer({
     input.isLoading || input.isStreaming,
     hasInput,
   );
-  const isStopMode = primaryAction === "stop";
+  // A scheduled Pipe cannot be steered through Pi's foreground queue. Keep
+  // the action as Stop even if a draft was already present when its run began.
+  const isStopMode =
+    Boolean(modelControls.activePipeExecution) || primaryAction === "stop";
   const hasPendingDocs = attachments.pendingDocs.length > 0;
   const sendDisabled =
     (!hasInput && !isStopMode) ||
-    !input.canChat ||
+    (!isStopMode && !input.canChat) ||
     (!isStopMode && hasPendingDocs);
 
   return (

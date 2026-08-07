@@ -77,9 +77,8 @@ describe('lookupClerkStanding', () => {
 
 	it.each([
 		['banned', { banned: true, locked: false }],
-		['locked', { banned: false, locked: true }],
 		['banned and locked', { banned: true, locked: true }],
-	] as const)('returns a bounded DENIED decision for a %s user', async (
+	] as const)('returns a bounded DENIED decision with a banned reason for a %s user', async (
 		_label,
 		overrides,
 	) => {
@@ -92,6 +91,23 @@ describe('lookupClerkStanding', () => {
 			version: CLERK_STANDING_RECORD_VERSION,
 			userId: USER_ID,
 			standing: 'denied',
+			reason: 'banned',
+			checkedAt: CHECKED_AT,
+			revalidateAfter: standingRevalidateAfter(USER_ID, CHECKED_AT),
+		});
+	});
+
+	it('keeps a locked (sign-in throttled) user in GOOD standing', async () => {
+		const record = await lookupClerkStanding(env(), USER_ID, {
+			fetchImpl: mock(async () =>
+				Response.json(clerkUser({ banned: false, locked: true }))) as typeof fetch,
+			now: CHECKED_AT,
+		});
+
+		expect(record).toEqual({
+			version: CLERK_STANDING_RECORD_VERSION,
+			userId: USER_ID,
+			standing: 'good',
 			checkedAt: CHECKED_AT,
 			revalidateAfter: standingRevalidateAfter(USER_ID, CHECKED_AT),
 		});
@@ -107,6 +123,7 @@ describe('lookupClerkStanding', () => {
 			version: CLERK_STANDING_RECORD_VERSION,
 			userId: USER_ID,
 			standing: 'denied',
+			reason: 'deleted',
 			checkedAt: CHECKED_AT,
 			revalidateAfter: standingRevalidateAfter(USER_ID, CHECKED_AT),
 		});
@@ -211,11 +228,17 @@ describe('isClerkStandingRecord', () => {
 		revalidateAfter: CHECKED_AT + STANDING_MIN_TTL_MS,
 	};
 
-	it('accepts only complete v3 records bound to the expected Clerk subject', () => {
+	it('accepts only complete v4 records bound to the expected Clerk subject', () => {
 		expect(isClerkStandingRecord(goodRecord, USER_ID)).toBe(true);
 		expect(isClerkStandingRecord({
 			...goodRecord,
 			standing: 'denied',
+			reason: 'banned',
+		}, USER_ID)).toBe(true);
+		expect(isClerkStandingRecord({
+			...goodRecord,
+			standing: 'denied',
+			reason: 'deleted',
 		}, USER_ID)).toBe(true);
 		expect(isClerkStandingRecord(goodRecord, 'user_different')).toBe(false);
 		expect(isClerkStandingRecord({ ...goodRecord, revalidateAfter: CHECKED_AT }, USER_ID)).toBe(false);
@@ -226,7 +249,24 @@ describe('isClerkStandingRecord', () => {
 		expect(isClerkStandingRecord({
 			...goodRecord,
 			standing: 'denied',
+			reason: 'banned',
 			revalidateAfter: null,
+		}, USER_ID)).toBe(false);
+	});
+
+	it('rejects denials without a valid reason and good records carrying one', () => {
+		expect(isClerkStandingRecord({
+			...goodRecord,
+			standing: 'denied',
+		}, USER_ID)).toBe(false);
+		expect(isClerkStandingRecord({
+			...goodRecord,
+			standing: 'denied',
+			reason: 'locked',
+		}, USER_ID)).toBe(false);
+		expect(isClerkStandingRecord({
+			...goodRecord,
+			reason: 'banned',
 		}, USER_ID)).toBe(false);
 	});
 
@@ -234,6 +274,7 @@ describe('isClerkStandingRecord', () => {
 		['legacy boolean', false],
 		['unversioned allowed record', { userId: USER_ID, standing: 'good' }],
 		['v2 record', { ...goodRecord, version: 2 }],
+		['v3 record (pre reason, locked-denies era)', { ...goodRecord, version: 3 }],
 	] as const)('rejects %s so it must be authoritatively rechecked', (_label, value) => {
 		expect(isClerkStandingRecord(value, USER_ID)).toBe(false);
 	});

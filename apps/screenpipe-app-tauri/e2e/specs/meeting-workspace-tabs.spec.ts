@@ -128,8 +128,13 @@ describe("meeting workspace tabs and responsive layout", function () {
       window.localStorage.removeItem(key);
       return forced;
     }, FORCE_BILLING_GATE_KEY)) as boolean;
-    await reloadAndWaitForHome();
     try {
+      // A WebDriver session can begin on any persisted app window. Switch to
+      // Home before reloading; otherwise a Chat window reload can never render
+      // the Home-only test id that reloadAndWaitForHome waits for.
+      await openHomeWindow();
+      await reloadAndWaitForHome();
+      // Reload resets in-memory sidebar state, so normalize Home once more.
       await openHomeWindow();
     } catch (error) {
       const diagnostics = await browser

@@ -286,9 +286,9 @@ dependencies = [
 
 [[package]]
 name = "agent-client-protocol-derive"
-version = "1.3.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97b94934d118a69e921d14e94d4af5b3076563318c52662c89a0ecb3f139e1da"
+checksum = "dd5ca63f112bd2459bcaf9eda0683b9ba95fc3b5e5fdd9036ca941c6a09345b1"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -11148,7 +11148,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.5.184"
+version = "2.5.191"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",

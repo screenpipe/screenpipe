@@ -38,6 +38,8 @@ describe("meeting summary pipe prompt", () => {
     expect(prompt).toContain("up to 4 representative frame_id values");
     expect(prompt).toContain("GET /frames/<frame_id>");
     expect(prompt).toContain("NEVER call POST /export");
+    expect(prompt).toContain('starting on a line with exactly "## Summary"');
+    expect(prompt).toContain("the meeting UI streams this section");
     expect(prompt).not.toContain("export the meeting");
     expect(prompt).not.toContain("ffmpeg-sample");
   });
@@ -174,7 +176,11 @@ describe("mergeMeetingAudioChunks", () => {
     const live = chunk({ speakerName: "speaker 2", source: "live" });
     const mirrored = chunk({ speakerName: "speaker" });
 
-    const merged = mergeMeetingAudioChunks([live], [mirrored, chunk({ speakerName: "" })], 100);
+    const merged = mergeMeetingAudioChunks(
+      [live],
+      [mirrored, chunk({ speakerName: "" })],
+      100,
+    );
 
     expect(merged).toHaveLength(1);
     expect(merged[0].speakerName).toBe("speaker 2");

@@ -225,6 +225,57 @@ describe('Cloudflare hosted-chat usage', () => {
 		]);
 	});
 
+	it('handles a combined rule with no lane dimension', async () => {
+		globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes('/ai-gateway/gateways/combined-rule-test')) {
+				return gatewayResponse([{
+					id: 'basic-combined',
+					enabled: true,
+					limit: 10,
+					limitType: 'cost',
+					window: 86_400,
+					technique: 'fixed',
+					metadata: {
+						user_id: { mode: 'partition' },
+						plan: { mode: 'filter', values: ['basic'] },
+					},
+				}]);
+			}
+			if (url.endsWith('/graphql')) {
+				return new Response(JSON.stringify({
+					data: {
+						viewer: {
+							accounts: [{
+								window0: [
+									usageRow('auto', 'interactive', 3),
+									usageRow('explicit', 'interactive', 2),
+								],
+							}],
+						},
+					},
+				}), { status: 200 });
+			}
+			throw new Error(`unexpected fetch: ${url}`);
+		}) as typeof fetch;
+
+		const result = await getCloudflareHostedChatUsage(
+			env('combined-rule-test'),
+			context,
+			new Date('2026-08-04T16:30:00.000Z'),
+		);
+
+		expect(result?.allowances).toEqual([
+			expect.objectContaining({
+				lane: 'combined',
+				used_percent: 50,
+				remaining_percent: 50,
+				window_seconds: 86_400,
+				technique: 'fixed',
+			}),
+		]);
+	});
+
 	it('returns unavailable instead of a fabricated balance without read credentials', async () => {
 		globalThis.fetch = mock(async () => {
 			throw new Error('fetch should not run');

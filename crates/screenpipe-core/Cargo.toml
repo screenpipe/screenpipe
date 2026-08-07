@@ -115,3 +115,6 @@ sha2 = { workspace = true }
 # Used by sync::client wire-compat test (asserts the PUT request shape
 # stays byte-identical after the upload_to_s3 → HttpPutDirect migration).
 wiremock = { workspace = true }
+# test-util (virtual clock) lets agents::pi's rate-limit retry loop tests
+# drive real minutes of retry/backoff timing without real wall-clock waits.
+tokio = { version = "1.15", features = ["test-util"] }

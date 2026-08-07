@@ -28,8 +28,11 @@ import {
   isNormalUserMessage,
   isSteeredAssistantMessage,
   hasRenderableAssistantBody,
+  isPendingAgentActionMessage,
+  hasPendingPermissionRequest,
 } from "@/lib/chat/message-rendering";
 import { cn } from "@/lib/utils";
+import { useAcpBootLabel } from "@/lib/stores/acp-boot-state";
 import type { ContentBlock, Message } from "@/lib/chat/types";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import type { InlineConnectStatus } from "@/lib/connections/inline-connect";
@@ -92,6 +95,7 @@ export interface ChatMessageListProps {
   onConnectConnectionAction?: (connectionId: string, block?: Extract<ContentBlock, { type: "connection_action" }>) => Promise<InlineConnectStatus | void> | InlineConnectStatus | void;
   onContinueConnectionAction?: (prompt: string, label?: string) => void | Promise<void>;
   onDismissConnectionAction?: (messageId: string, connectionId: string) => void;
+  onAnswerAgentAction?: (block: Extract<ContentBlock, { type: "agent_action" }>, selectedOptionId?: string) => Promise<boolean> | boolean;
   onAskUserReply?: (reply: string, displayLabel: string, toolCallId?: string) => Promise<void> | void;
   suppressSourceFooters?: boolean;
 }
@@ -131,9 +135,13 @@ export function ChatMessageList({
   onConnectConnectionAction,
   onContinueConnectionAction,
   onDismissConnectionAction,
+  onAnswerAgentAction,
   onAskUserReply,
   suppressSourceFooters = false,
 }: ChatMessageListProps) {
+  // Null unless an ACP agent is installing/starting. Ticks only while it is.
+  const acpBoot = useAcpBootLabel();
+
   return (
     <>
       <AnimatePresence mode="popLayout">
@@ -153,15 +161,31 @@ export function ChatMessageList({
           // *visible* assistant is the previous turn's completed answer;
           // marking that one live would hide its action bar and tick a bogus
           // "Working for …" header on it until the first token arrives.
+          // A pending permission/sign-in card is a separate assistant message,
+          // but the real turn is still live and blocked on the user's answer.
+          // Skip these cards so the true assistant turn stays the active one and
+          // its tool group keeps showing "working" instead of a false "done".
           const lastVisibleAssistantId = [...visibleMessages]
             .reverse()
-            .find((candidate) => candidate.role === "assistant")?.id;
+            .find((candidate) => candidate.role === "assistant" && !isPendingAgentActionMessage(candidate))?.id;
           const lastAssistantId = [...messages]
             .reverse()
-            .find((candidate) => candidate.role === "assistant")?.id;
+            .find((candidate) => candidate.role === "assistant" && !isPendingAgentActionMessage(candidate))?.id;
           const activeAssistantMessageId =
             activeSourceFooterMessageId ??
             (lastVisibleAssistantId === lastAssistantId ? lastVisibleAssistantId : undefined);
+          // The live turn is blocked on the user approving an agent action.
+          // Scope to the current turn: only a pending permission card AFTER the
+          // active assistant message counts. A stale card left earlier in the
+          // transcript (e.g. one that outlived its runtime waiter) must not mark
+          // a fresh turn "waiting for approval".
+          const activeAssistantIndex = activeAssistantMessageId
+            ? messages.findIndex((candidate) => candidate.id === activeAssistantMessageId)
+            : -1;
+          const waitingForApproval =
+            (isLoading || isStreaming) &&
+            activeAssistantIndex >= 0 &&
+            hasPendingPermissionRequest(messages.slice(activeAssistantIndex));
 
           // Find parent assistant IDs whose steered child is currently streaming.
           // Walk backwards from the active streaming assistant to find the
@@ -370,6 +394,7 @@ export function ChatMessageList({
                         <MessageContent
                           message={message}
                           isGenerating={isActiveStreamingAssistantMessage}
+                          waitingForApproval={isActiveStreamingAssistantMessage && waitingForApproval}
                           deferSourceFooter={
                             suppressSourceFooters ||
                             citationPlan.deferredMessageIds.has(message.id) ||
@@ -389,6 +414,7 @@ export function ChatMessageList({
                           onConnectConnectionAction={onConnectConnectionAction}
                           onContinueConnectionAction={onContinueConnectionAction}
                           onDismissConnectionAction={onDismissConnectionAction}
+                          onAnswerAgentAction={onAnswerAgentAction}
                           onAskUserReply={onAskUserReply}
                         />
                       )}
@@ -547,12 +573,37 @@ export function ChatMessageList({
         {isLoading && (() => {
           const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
           const blocks = lastAssistant?.contentBlocks;
+          // A pending permission/sign-in card already states the turn is blocked
+          // on the user ("needs your approval"); a generic "analyzing…" loader
+          // below it is both redundant and wrong (the agent is waiting, not
+          // working). The active turn's tool group shows "Waiting for your
+          // approval" instead.
+          if (lastAssistant && isPendingAgentActionMessage(lastAssistant)) return null;
           // Once a tool group exists, it owns the live status and completion
           // receipt. A second generic loader makes completed work look like it
           // is still running and adds technical-looking visual noise.
           if (blocks?.some((block) => block.type === "tool")) return null;
           let loaderPhase: LoaderPhase = "analyzing";
           let toolName: string | undefined;
+
+          // An ACP agent that is still installing or starting has produced no
+          // blocks yet, so the generic pulse would sit there saying nothing
+          // through a wait that can run minutes on a cold npx fetch. Name the
+          // agent and count the seconds instead.
+          const boot = acpBoot ?? null;
+          if (boot && !(blocks && blocks.length > 0)) {
+            return (
+              <motion.div
+                data-testid="chat-acp-boot-loader"
+                initial={false}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.15 }}
+                className="w-fit self-start px-2 py-1"
+              >
+                <GridDissolveLoader phase="analyzing" label={boot} />
+              </motion.div>
+            );
+          }
 
           if (blocks && blocks.length > 0) {
             const lastBlock = blocks[blocks.length - 1];

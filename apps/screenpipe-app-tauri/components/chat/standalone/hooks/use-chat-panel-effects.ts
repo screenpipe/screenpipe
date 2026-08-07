@@ -9,7 +9,14 @@ import { commands } from "@/lib/utils/tauri";
 
 interface UseChatPanelEffectsOptions {
   inputRef: React.RefObject<HTMLTextAreaElement>;
-  showMentionDropdown: boolean;
+  /**
+   * True only when the mention list is really on screen with at least one
+   * suggestion. Must not be the raw "a trigger char was typed" flag: `~`
+   * matches to end-of-line, so that flag stays true for the rest of the
+   * message and would swallow Escape (no stop, no window close) long after
+   * the list stopped rendering.
+   */
+  mentionDropdownIsOpen: boolean;
   isLoading: boolean;
   isStreaming: boolean;
   piActiveStopRequestedRef: React.MutableRefObject<boolean>;
@@ -26,7 +33,7 @@ interface UseChatPanelEffectsOptions {
 
 export function useChatPanelEffects({
   inputRef,
-  showMentionDropdown,
+  mentionDropdownIsOpen,
   isLoading,
   isStreaming,
   piActiveStopRequestedRef,
@@ -45,7 +52,7 @@ export function useChatPanelEffects({
   }, [inputRef]);
 
   useEventListener("keydown", async (event: KeyboardEvent) => {
-    if (event.key !== "Escape" || showMentionDropdown) return;
+    if (event.key !== "Escape" || mentionDropdownIsOpen) return;
     if (isLoading || isStreaming) {
       piActiveStopRequestedRef.current = true;
       try {

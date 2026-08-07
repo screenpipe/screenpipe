@@ -179,6 +179,12 @@ type UnifiedItem =
   | { kind: "artifact"; data: UnifiedArtifact; sortDate: number };
 
 type TypeFilter = "overview" | "memories" | "artifacts";
+
+const BRAIN_TAB_DESCRIPTIONS: Record<TypeFilter, string> = {
+  overview: "live dashboards the AI builds from your activity, updated as you work",
+  memories: "what the AI has learned about you from your activity",
+  artifacts: "documents, pages and files the AI has generated for you",
+};
 type SelectedBrainItem =
   | { kind: "memory"; key: string }
   | { kind: "artifact"; key: string };
@@ -1471,18 +1477,15 @@ export function BrainSection() {
     <div data-testid="section-brain" className="h-full overflow-hidden">
     <div
       data-testid="brain-content"
-      className={`mx-auto flex h-full flex-col px-3 pb-6 sm:px-6 ${
+      className={`mx-auto flex h-full flex-col px-3 pb-6 pt-10 sm:px-6 ${
         typeFilter === "overview"
-          ? "max-w-none space-y-2 pt-8"
-          : "max-w-6xl space-y-4 pt-10"
+          ? "max-w-none space-y-2"
+          : "max-w-6xl space-y-4"
       }`}
     >
-      {typeFilter !== "overview" && (
-        <p className="mb-4 text-sm text-muted-foreground">
-          what the AI has learned from your activity and what it has generated
-          for you
-        </p>
-      )}
+      <p className="mb-4 text-sm text-muted-foreground">
+        {BRAIN_TAB_DESCRIPTIONS[typeFilter]}
+      </p>
 
       {/* stale memories warning */}
       {typeFilter === "memories" && isStale && (

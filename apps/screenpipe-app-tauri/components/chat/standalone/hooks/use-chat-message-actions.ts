@@ -29,6 +29,7 @@ interface UseChatMessageActionsOptions {
   onOpenConnectionSetup?: (connectionId: string) => void | Promise<void>;
   onConnectConnectionAction?: (connectionId: string, block?: Extract<ContentBlock, { type: "connection_action" }>) => Promise<InlineConnectStatus | void> | InlineConnectStatus | void;
   onDeclineConnectionAction?: (block: Extract<ContentBlock, { type: "connection_action" }>) => void | Promise<void>;
+  onAnswerAgentAction?: (block: Extract<ContentBlock, { type: "agent_action" }>, selectedOptionId?: string) => Promise<boolean> | boolean;
   /**
    * Answer a pending sp_ask_user extension UI request. "answered" resumed the
    * waiting Pi tool; "failed" means delivery failed but the request is still
@@ -54,6 +55,7 @@ export function useChatMessageActions({
   onOpenConnectionSetup,
   onConnectConnectionAction,
   onDeclineConnectionAction,
+  onAnswerAgentAction,
   answerAskUserRequest,
 }: UseChatMessageActionsOptions) {
   const [expandedSteerWorkIds, setExpandedSteerWorkIds] = useState<Set<string>>(() => new Set());
@@ -246,6 +248,7 @@ export function useChatMessageActions({
     onConnectConnectionAction,
     onContinueConnectionAction: (prompt, label) => sendMessage(prompt, label),
     onDismissConnectionAction: dismissConnectionAction,
+    onAnswerAgentAction,
     onAskUserReply: async (reply, label, toolCallId) => {
       // sp_ask_user keeps the Pi tool call pending until this reply resumes
       // it; only legacy ask_user results fall back to a plain chat message.

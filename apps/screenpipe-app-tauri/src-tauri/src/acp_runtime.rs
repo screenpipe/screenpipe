@@ -10,7 +10,8 @@
 //! handwritten protocol implementation is shipped.
 
 use agent_client_protocol::schema::v1::{
-    AuthenticateRequest, BooleanConfigOptionCapabilities, CancelNotification, ClientCapabilities,
+    AuthCapabilities, AuthMethod, AuthenticateRequest, BooleanConfigOptionCapabilities,
+    CancelNotification, ClientCapabilities,
     ClientSessionCapabilities, CloseSessionRequest, ContentBlock, CreateTerminalRequest,
     CreateTerminalResponse, EnvVariable, FileSystemCapabilities, HttpHeader, ImageContent,
     Implementation, InitializeRequest, InitializeResponse, KillTerminalRequest,
@@ -40,6 +41,14 @@ pub const RUNTIME_ARG: &str = "--screenpipe-acp-runtime";
 const PROCESS_GUARD_ARG: &str = "--screenpipe-acp-process-guard";
 pub(crate) const CLOUD_API_KEY_ENV: &str = "SCREENPIPE_API_KEY";
 
+/// The core screenpipe MCP server (activity-summary, search-content,
+/// update-memory). Pinned rather than `@latest` so `bun x` resolves it from
+/// cache instead of re-fetching every session; a cold/slow `@latest` fetch is
+/// why these tools sometimes never registered and the agent fell back to raw
+/// SQL. `pi::prewarm_screenpipe_mcp` seeds the cache at install. Bump alongside
+/// packages/screenpipe-mcp.
+pub(crate) const SCREENPIPE_MCP_PKG: &str = "screenpipe-mcp@0.19.1";
+
 /// Environment carried into the runtime process by `pi.rs` that belongs to the
 /// runtime alone and must never be inherited by any child it spawns — neither
 /// the agent adapter nor a client-requested terminal. These blobs hold resolved
@@ -52,11 +61,6 @@ pub(crate) const CLOUD_API_KEY_ENV: &str = "SCREENPIPE_API_KEY";
 /// out). `CLOUD_API_KEY_ENV` is the signed-in user's cloud JWT.
 const RUNTIME_ONLY_ENV: &[&str] = &[
     CLOUD_API_KEY_ENV,
-    "CLAUDE_CODE_OAUTH_TOKEN",
-    "SCREENPIPE_LOCAL_API_KEY",
-    "SCREENPIPE_LOCAL_API_PORT",
-    "SCREENPIPE_LOCAL_API_URL",
-    "SCREENPIPE_API_AUTH_KEY",
     "SCREENPIPE_ACP_ENV_JSON",
     "SCREENPIPE_ACP_USER_MCP_JSON",
     "SCREENPIPE_ACP_SESSION_CONFIG_JSON",
@@ -241,7 +245,9 @@ impl RuntimeConfig {
             project_dir,
             bun_path,
             preferred_auth_method: env_nonempty("SCREENPIPE_ACP_AUTH_METHOD"),
-            system_context: env_nonempty("SCREENPIPE_ACP_SYSTEM_PROMPT"),
+            system_context: Some(build_first_turn_context(env_nonempty(
+                "SCREENPIPE_ACP_SYSTEM_PROMPT",
+            ))),
             session_defaults: parse_json_env::<SessionDefaults>(
                 "SCREENPIPE_ACP_SESSION_CONFIG_JSON",
             )?
@@ -255,6 +261,35 @@ impl RuntimeConfig {
     }
 }
 
+/// A short, harness-agnostic note about the screenpipe tools every ACP session
+/// gets over MCP, injected once into the first turn. Without it a harness that
+/// doesn't proactively list its MCP tools tends to fall back to curl recipes
+/// against localhost:3030 instead of calling the real tools. Names the tools
+/// the bundled server registers (see assets/mcp/screenpipe-tools.mjs) plus the
+/// core screenpipe search server, and points at the seeded `.pi/skills` guides
+/// that third-party agents otherwise only find by chance.
+const SCREENPIPE_TOOLS_HINT: &str = "\
+You are running inside screenpipe. Prefer its MCP tools over shell/curl (this is your usage guide):
+- the `screenpipe` server searches and summarizes the user's screen, audio, and UI history.
+  - `activity-summary` for broad questions (\"what was I doing?\", \"which apps?\", \"how long on X?\"): it pre-summarizes apps, windows, and transcripts and owns the time math — pass natural-language times (\"today\", \"2h ago\") and never sum minutes yourself.
+  - `search-content` for specific lookups; filter by content_type, app_name, window_name, and a time range.
+  - `update-memory` (and search with content_type=memory) to persist and recall facts across sessions.
+- `list_connections` shows the user's connected apps; `screenpipe_connect_app` connects one and waits for the user when a task needs it.
+- for a connection returned with mcp=true (Linear, Notion, Stripe, Sentry, Jira, Gmail, Zoom, Drive), use `sp_mcp_list_tools` then `sp_mcp_call` (with its `mcp_server_id`) to actually use it — not the connection proxy.
+- `sp_web_search` searches the public web; `save_artifact` saves a finished, user-facing deliverable (text or, with encoding=base64, an image) to the Artifacts library.
+- `live_view` reads or edits the user's saved Live Views (dashboards): action=list to find one, action=get for its definition, action=save to persist edits — only when the user asks about a dashboard.
+- screenpipe seeds task guides in `.pi/skills/*/SKILL.md` under your working directory. Before starting a task, list that folder and read the SKILL.md that matches the request; it names the exact tools and steps to use.
+Do not curl localhost for these; call the tools.";
+
+/// Combine the always-on tools hint with the user's configured system prompt
+/// (if any) into the first-turn context. Kept as one string so it is delivered
+/// exactly once, on the first prompt of the session.
+fn build_first_turn_context(user_prompt: Option<String>) -> String {
+    match user_prompt {
+        Some(prompt) => format!("{SCREENPIPE_TOOLS_HINT}\n\n{prompt}"),
+        None => SCREENPIPE_TOOLS_HINT.to_string(),
+    }
+}
 
 fn env_nonempty(name: &str) -> Option<String> {
     std::env::var(name)
@@ -277,16 +312,10 @@ fn is_process_guard_env(name: &str) -> bool {
 }
 
 pub(crate) fn is_forbidden_acp_env(name: &str) -> bool {
-    // Screenpipe credentials and the Claude subscription token must never be
-    // supplied by an ACP preset or agent-created terminal. The built-in Claude
-    // adapter is intentionally API-key-only. Compare case-insensitively because
-    // Windows environment keys are case-insensitive.
+    // This is the signed-in user's Screenpipe cloud JWT, not the local API
+    // key. ACP adapters and client-created terminals never need it. Compare
+    // case-insensitively because Windows environment keys are case-insensitive.
     name.eq_ignore_ascii_case(CLOUD_API_KEY_ENV)
-        || name.eq_ignore_ascii_case("CLAUDE_CODE_OAUTH_TOKEN")
-        || name.eq_ignore_ascii_case("SCREENPIPE_LOCAL_API_KEY")
-        || name.eq_ignore_ascii_case("SCREENPIPE_LOCAL_API_PORT")
-        || name.eq_ignore_ascii_case("SCREENPIPE_LOCAL_API_URL")
-        || name.eq_ignore_ascii_case("SCREENPIPE_API_AUTH_KEY")
 }
 
 fn parse_json_env<T: serde::de::DeserializeOwned>(name: &str) -> Result<Option<T>, String> {
@@ -326,6 +355,52 @@ struct CatalogAgent {
     /// JSON key is `installUrl`.
     #[serde(default)]
     install_url: Option<String>,
+    /// Serve screenpipe's MCP tools over loopback http instead of client stdio,
+    /// for agents that reject stdio MCP servers (Cursor, GitHub Copilot). JSON
+    /// key is `httpMcp`.
+    #[serde(default)]
+    http_mcp: bool,
+}
+
+/// Run a `terminal`-type ACP auth method's login: the agent's own launch
+/// command plus the method's `args` (e.g. `bun x <adapter> --cli auth login
+/// --claudeai`). The command opens the browser, completes OAuth, writes the
+/// credential the agent then reads, and exits; success is its exit code. The
+/// login args come straight from the agent's advertised method, so we never
+/// hardcode them. Bounded so an abandoned login can't hang the session.
+async fn run_terminal_login(
+    bun_path: &str,
+    agent_id: &str,
+    method_args: &[String],
+) -> Result<(), String> {
+    let agent =
+        agent_catalog().into_iter().find(|a| a.id == agent_id).ok_or("unknown agent")?;
+    // Invoke the agent's package with the login args only. The launch args are
+    // the ACP-server mode (e.g. Copilot's `--acp`) and must not ride along on a
+    // login command (`copilot login`, not `copilot --acp login`).
+    let (program, mut args) = match agent.launch {
+        AgentLaunch::Npx { package, .. } => (bun_path.to_string(), vec!["x".to_string(), package]),
+        AgentLaunch::Binary { command, .. } => (command, Vec::new()),
+    };
+    args.extend(method_args.iter().cloned());
+
+    let mut child = tokio::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("failed to start login: {e}"))?;
+    let status = tokio::time::timeout(std::time::Duration::from_secs(300), child.wait()).await;
+    match status {
+        Ok(Ok(status)) if status.success() => Ok(()),
+        Ok(Ok(status)) => Err(format!("login exited with status {status}")),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => {
+            let _ = child.kill().await;
+            Err("sign-in timed out. try again.".to_owned())
+        }
+    }
 }
 
 fn agent_catalog() -> Vec<CatalogAgent> {
@@ -579,26 +654,18 @@ fn resolve_windows_program_in(
     PathBuf::from(program)
 }
 
-/// Sink for the newline-delimited JSON events the runtime streams to its
-/// parent. Boxed behind a mutex so the writer is stdout in production and a
-/// capture buffer under test; cloning shares the one sink.
 #[derive(Clone)]
-struct ParentOutput(Arc<Mutex<Box<dyn std::io::Write + Send>>>);
+struct ParentOutput(Arc<Mutex<std::io::Stdout>>);
 
 impl ParentOutput {
     fn new() -> Self {
-        Self(Arc::new(Mutex::new(Box::new(std::io::stdout()))))
-    }
-
-    #[cfg(test)]
-    fn with_writer(writer: Box<dyn std::io::Write + Send>) -> Self {
-        Self(Arc::new(Mutex::new(writer)))
+        Self(Arc::new(Mutex::new(std::io::stdout())))
     }
 
     fn send(&self, value: Value) {
-        if let Ok(mut writer) = self.0.lock() {
-            let _ = writeln!(writer, "{value}");
-            let _ = writer.flush();
+        if let Ok(mut stdout) = self.0.lock() {
+            let _ = writeln!(stdout, "{value}");
+            let _ = stdout.flush();
         }
     }
 }
@@ -985,6 +1052,13 @@ impl RuntimeState {
     }
 
     fn close_turn(&self, stop_reason: &str) {
+        self.close_turn_ex(stop_reason, false);
+    }
+
+    /// Like `close_turn`, but `auth_pending` marks the (empty) turn as pausing
+    /// for a sign-in so the desktop drops the placeholder assistant bubble
+    /// instead of rendering "No response from model" while the card is up.
+    fn close_turn_ex(&self, stop_reason: &str, auth_pending: bool) {
         let Ok(mut turn) = self.turn.lock() else {
             return;
         };
@@ -1005,7 +1079,7 @@ impl RuntimeState {
             }));
         }
         if turn.turn_open {
-            self.output.send(json!({ "type": "agent_end" }));
+            self.output.send(json!({ "type": "agent_end", "authPending": auth_pending }));
         }
         turn.turn_open = false;
         turn.message_open = false;
@@ -1144,18 +1218,26 @@ impl RuntimeState {
         title: String,
         message: String,
         options: Value,
+        detail: Option<&str>,
     ) -> Option<String> {
         let request_id = format!("{prefix}-{}", uuid::Uuid::new_v4());
         let (tx, rx) = oneshot::channel();
         self.ui_waiters.lock().ok()?.insert(request_id.clone(), tx);
-        self.output.send(json!({
+        let mut request = json!({
             "type": "extension_ui_request",
             "id": request_id,
             "method": "select",
             "title": title,
             "message": message,
             "options": options
-        }));
+        });
+        // The exact command / target, shown verbatim as a code block under a
+        // short human title, so the heading stays readable instead of a mangled
+        // humanized command.
+        if let Some(detail) = detail.filter(|value| !value.trim().is_empty()) {
+            request["detail"] = json!(detail);
+        }
+        self.output.send(request);
         rx.await.ok().flatten()
     }
 
@@ -1715,12 +1797,231 @@ fn spawn_terminal(state: &RuntimeState, request: CreateTerminalRequest) -> Resul
     Ok(terminal_id)
 }
 
-/// Screenpipe's own tools (search, memory, artifacts, connections) are not yet
-/// exposed over ACP. The adapter retains its own tools and the client-advertised
-/// workspace file and terminal callbacks. Returning no servers keeps
-/// session/new free of any Screenpipe MCP surface.
-fn mcp_servers(_config: &RuntimeConfig) -> Vec<McpServer> {
-    Vec::new()
+/// Write the bundled companion MCP server to a stable absolute path under the
+/// project dir and return it, so the adapter (which may spawn MCP servers from
+/// its own cwd) can launch it. Idempotent overwrite, mirroring how Pi
+/// extensions are staged. Returns None if it can't be written, so registration
+/// is simply skipped rather than failing the session.
+fn ensure_tools_mcp_server(config: &RuntimeConfig) -> Option<PathBuf> {
+    const SOURCE: &str = include_str!("../assets/mcp/screenpipe-tools.mjs");
+    let dir = config.project_dir.join(".screenpipe");
+    if let Err(error) = std::fs::create_dir_all(&dir) {
+        eprintln!("[acp-runtime] could not create MCP tools dir: {error}");
+        return None;
+    }
+    let path = dir.join("screenpipe-tools.mjs");
+    if let Err(error) = std::fs::write(&path, SOURCE) {
+        eprintln!("[acp-runtime] could not stage MCP tools server: {error}");
+        return None;
+    }
+    Some(path)
+}
+
+/// Harnesses that ignore client-provided STDIO MCP servers over ACP but do
+/// accept http (Cursor). STDIO is the ACP baseline every conformant agent
+/// honors, so this list stays deliberately small; for these we serve
+/// screenpipe's tools over loopback Streamable-HTTP instead (see
+/// `spawn_http_mcp_servers`).
+fn agent_needs_http_mcp(agent_id: &str) -> bool {
+    // Driven by the catalog's `httpMcp` flag (agents.json), not hardcoded here,
+    // so adding an http-only agent needs no Rust change. Cursor and GitHub
+    // Copilot set it today; without it they get no screenpipe tools at all.
+    agent_catalog()
+        .into_iter()
+        .find(|agent| agent.id == agent_id)
+        .is_some_and(|agent| agent.http_mcp)
+}
+
+/// (name, url) of the loopback http MCP servers the runtime stood up for an
+/// http-only agent. Set once in `run_from_env`; read by `mcp_servers`. Empty /
+/// unset means the default stdio transport (every other agent, and all tests).
+static HTTP_MCP_URLS: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+
+/// The local screenpipe engine base url, from the runtime's env.
+fn engine_api_url() -> Option<String> {
+    env_nonempty("SCREENPIPE_LOCAL_API_URL").or_else(|| {
+        env_nonempty("SCREENPIPE_LOCAL_API_PORT").map(|port| format!("http://localhost:{port}"))
+    })
+}
+
+fn mcp_servers(config: &RuntimeConfig) -> Vec<McpServer> {
+    let mut servers: Vec<McpServer> = Vec::new();
+
+    if let Some(http) = HTTP_MCP_URLS.get().filter(|urls| !urls.is_empty()) {
+        // This agent doesn't honor client stdio MCP servers; the runtime stood
+        // up loopback http servers for screenpipe's tools (see run_from_env),
+        // so advertise those instead. No secrets on the wire — the servers bind
+        // 127.0.0.1 and talk to the local engine themselves.
+        for (name, url) in http {
+            servers.push(McpServer::Http(McpServerHttp::new(name, url)));
+        }
+    } else {
+        let mut args = vec!["x".into(), SCREENPIPE_MCP_PKG.into()];
+        let mut env = Vec::new();
+        if let Some(url) = engine_api_url() {
+            args.extend(["--screenpipe-url".into(), url.clone()]);
+            env.push(EnvVariable::new("SCREENPIPE_API_URL", url));
+        }
+        if let Some(key) = env_nonempty("SCREENPIPE_LOCAL_API_KEY") {
+            env.push(EnvVariable::new("SCREENPIPE_LOCAL_API_KEY", key));
+        }
+        servers.push(McpServer::Stdio(
+            McpServerStdio::new("screenpipe", &config.bun_path)
+                .args(args)
+                .env(env),
+        ));
+        // Bundled companion server exposing save_artifact, list_connections,
+        // etc. as MCP tools so every harness gets them. Additive next to the
+        // core screenpipe server above;
+        // shipped in-app (no npm fetch), talks only to the local engine.
+        if let Some(tools_server) = ensure_tools_mcp_server(config) {
+            let mut tools_env = Vec::new();
+            if let Some(url) = engine_api_url() {
+                tools_env.push(EnvVariable::new("SCREENPIPE_API_URL", url));
+            }
+            if let Some(key) = env_nonempty("SCREENPIPE_LOCAL_API_KEY") {
+                tools_env.push(EnvVariable::new("SCREENPIPE_LOCAL_API_KEY", key));
+            }
+            if let Some(chat_id) = env_nonempty("SCREENPIPE_CHAT_SESSION_ID") {
+                tools_env.push(EnvVariable::new("SCREENPIPE_CHAT_SESSION_ID", chat_id));
+            }
+            servers.push(McpServer::Stdio(
+                McpServerStdio::new("screenpipe-tools", &config.bun_path)
+                    .args(vec![tools_server.to_string_lossy().into_owned()])
+                    .env(tools_env),
+            ));
+        }
+    }
+    // Forward the user's own registered MCP servers so every harness sees
+    // the same tool surface the native Pi mcp-bridge extension gives raw Pi.
+    for server in &config.user_mcp_servers {
+        if server.transport.eq_ignore_ascii_case("stdio") {
+            let Some(command) = server.command.as_deref().filter(|c| !c.trim().is_empty()) else {
+                continue;
+            };
+            let server_env = server
+                .env
+                .iter()
+                .filter(|(name, _)| !is_forbidden_acp_env(name))
+                .map(|(name, value)| EnvVariable::new(name.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            servers.push(McpServer::Stdio(
+                McpServerStdio::new(&server.name, command)
+                    .args(server.args.clone())
+                    .env(server_env),
+            ));
+        } else if !server.url.trim().is_empty() {
+            let headers = server
+                .headers
+                .iter()
+                .map(|(name, value)| HttpHeader::new(name.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            servers.push(McpServer::Http(
+                McpServerHttp::new(&server.name, &server.url).headers(headers),
+            ));
+        }
+    }
+    servers
+}
+
+fn free_loopback_port() -> Option<u16> {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .ok()
+        .and_then(|listener| listener.local_addr().ok())
+        .map(|addr| addr.port())
+}
+
+/// Block briefly until a loopback port accepts a connection, so we never hand
+/// the agent a url before its server is listening. Runs once at session start.
+fn wait_port_ready(port: u16, timeout: std::time::Duration) {
+    let deadline = std::time::Instant::now() + timeout;
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    while std::time::Instant::now() < deadline {
+        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(200)).is_ok()
+        {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+/// Stand up loopback Streamable-HTTP MCP servers for an http-only agent and
+/// record their urls in `HTTP_MCP_URLS` for `mcp_servers` to advertise. Returns
+/// the child processes so the caller reaps them on shutdown (they also inherit
+/// the runtime's process group, so desktop teardown kills them too). Best
+/// effort: a server that can't spawn is simply omitted.
+fn spawn_http_mcp_servers(config: &RuntimeConfig) -> Vec<std::process::Child> {
+    use std::process::{Command, Stdio};
+    let mut children = Vec::new();
+    let mut urls: Vec<(String, String)> = Vec::new();
+    let engine_url = engine_api_url();
+    let api_key = env_nonempty("SCREENPIPE_LOCAL_API_KEY");
+
+    // Bundled tools server over http (fast, in-app, no npm fetch). Waited on
+    // below so it is listening before session/new.
+    if let (Some(tools_path), Some(port)) = (ensure_tools_mcp_server(config), free_loopback_port())
+    {
+        let mut cmd = Command::new(&config.bun_path);
+        cmd.arg(&tools_path)
+            .env("SCREENPIPE_TOOLS_HTTP_PORT", port.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit());
+        if let Some(url) = &engine_url {
+            cmd.env("SCREENPIPE_API_URL", url);
+        }
+        if let Some(key) = &api_key {
+            cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
+        }
+        if let Some(chat_id) = env_nonempty("SCREENPIPE_CHAT_SESSION_ID") {
+            cmd.env("SCREENPIPE_CHAT_SESSION_ID", chat_id);
+        }
+        match cmd.spawn() {
+            Ok(child) => {
+                children.push(child);
+                urls.push(("screenpipe-tools".into(), format!("http://127.0.0.1:{port}/mcp")));
+                wait_port_ready(port, std::time::Duration::from_secs(3));
+            }
+            Err(error) => eprintln!("[acp-runtime] tools http server failed to start: {error}"),
+        }
+    }
+
+    // Core search over http. `screenpipe-mcp --http` dispatches to the package's
+    // Streamable-HTTP server (there is no separate screenpipe-mcp-http package,
+    // only that mode). Best-effort: `bun x` may fetch it on first run, so it can
+    // lag; we still advertise it (the agent retries) rather than block on it.
+    if let Some(port) = free_loopback_port() {
+        let mut cmd = Command::new(&config.bun_path);
+        cmd.arg("x")
+            .arg(SCREENPIPE_MCP_PKG)
+            .arg("--http")
+            .arg("--port")
+            .arg(port.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit());
+        if let Some(engine_port) =
+            env_nonempty("SCREENPIPE_LOCAL_API_PORT").or_else(|| env_nonempty("SCREENPIPE_PORT"))
+        {
+            cmd.arg("--screenpipe-port").arg(engine_port);
+        }
+        if let Some(url) = &engine_url {
+            cmd.env("SCREENPIPE_API_URL", url);
+        }
+        if let Some(key) = &api_key {
+            cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
+        }
+        match cmd.spawn() {
+            Ok(child) => {
+                children.push(child);
+                urls.push(("screenpipe".into(), format!("http://127.0.0.1:{port}/mcp")));
+            }
+            Err(error) => eprintln!("[acp-runtime] core http mcp server failed to start: {error}"),
+        }
+    }
+
+    let _ = HTTP_MCP_URLS.set(urls);
+    children
 }
 
 async fn create_session(
@@ -1832,26 +2133,79 @@ fn auth_error(error: &Error) -> bool {
         .any(|needle| error.to_string().to_ascii_lowercase().contains(needle))
 }
 
-fn configured_env_nonempty(config: &RuntimeConfig, name: &str) -> Option<String> {
-    config
-        .env
-        .get(name)
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .or_else(|| env_nonempty(name))
+/// Screenpipe's own local, read-only screen-data tools (the `screenpipe` MCP
+/// server: search-content, activity-summary, ...). Reading the user's own
+/// recordings is the product's core purpose, so these are auto-approved rather
+/// than gated behind a per-call approval card. Deliberately does NOT match the
+/// `screenpipe-tools` server (mcp__screenpipe-tools__*), which includes writes,
+/// app-connect, and the user-MCP bridge and must keep prompting.
+fn is_screenpipe_read_tool(tool_title: &str) -> bool {
+    // The screenpipe-mcp read server (search-content, activity-summary, ...) is
+    // entirely read-only.
+    if tool_title.starts_with("mcp__screenpipe__") {
+        return true;
+    }
+    // Specific read-only tools from the bundled screenpipe-tools server.
+    // `query_recordings` is server-side-validated SELECT-only. The write/bridge
+    // tools (save_artifact, sp_mcp_call, screenpipe_connect_app, live_view,
+    // sp_web_search) are deliberately NOT auto-approved.
+    matches!(
+        tool_title,
+        "mcp__screenpipe-tools__query_recordings" | "mcp__screenpipe-tools__list_connections"
+    )
 }
 
-fn auth_method_has_required_env(
-    agent_id: &str,
-    method_id: &str,
-    is_configured: impl Fn(&str) -> bool,
-) -> bool {
-    match (agent_id, method_id) {
-        ("codex-acp", "api-key") => {
-            is_configured("CODEX_API_KEY") || is_configured("OPENAI_API_KEY")
-        }
-        _ => true,
+/// A short, readable heading for a permission prompt, from the tool's `kind`.
+/// The raw command / target is shown verbatim as the card's `detail`, so the
+/// heading never becomes a mangled humanized shell command. Falls back to the
+/// tool title (fine for short named tools) when the kind isn't a known verb.
+fn permission_label(kind: Option<&str>, title: &str) -> String {
+    match kind {
+        Some("execute") => "Run a terminal command".to_owned(),
+        Some("read") => "Read a file".to_owned(),
+        Some("edit") => "Edit a file".to_owned(),
+        Some("delete") => "Delete a file".to_owned(),
+        Some("move") => "Move a file".to_owned(),
+        Some("search") => "Run a search".to_owned(),
+        Some("fetch") => "Fetch a URL".to_owned(),
+        _ => title.to_owned(),
     }
+}
+
+/// The exact command / target to show under the short heading. Codex's execute
+/// approval carries the shell command in `rawInput.command` (a string or an
+/// argv array) and sets no title, so read the command from the tool input
+/// first, then fall back to the human title (other agents put it there).
+fn permission_detail(tool: &Value, title: Option<&str>) -> Option<String> {
+    if let Some(command) = tool_args(tool).get("command") {
+        let text = match command {
+            Value::String(text) => text.trim().to_owned(),
+            Value::Array(parts) => parts
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" "),
+            _ => String::new(),
+        };
+        if !text.trim().is_empty() {
+            return Some(text);
+        }
+    }
+    title.map(str::to_owned)
+}
+
+/// The option id to auto-approve a permission request with, preferring the
+/// "always" grant so the adapter stops re-asking for the same tool. `None` when
+/// the request offers no allow option (then we fall back to prompting).
+fn allow_option_id(options: &Value) -> Option<String> {
+    let arr = options.as_array()?;
+    let by_kind = |kind: &str| {
+        arr.iter()
+            .find(|option| option.get("kind").and_then(Value::as_str) == Some(kind))
+            .and_then(|option| option.get("optionId").and_then(Value::as_str))
+            .map(str::to_owned)
+    };
+    by_kind("allow_always").or_else(|| by_kind("allow_once"))
 }
 
 fn external_auth_command(agent_id: &str) -> Option<&'static str> {
@@ -1866,18 +2220,23 @@ fn external_auth_command(agent_id: &str) -> Option<&'static str> {
     }
 }
 
-fn available_auth_methods<'a>(
-    init: &'a InitializeResponse,
-    config: &RuntimeConfig,
-) -> Vec<&'a agent_client_protocol::schema::v1::AuthMethod> {
-    init.auth_methods
-        .iter()
-        .filter(|method| {
-            auth_method_has_required_env(&config.agent_id, &method.id().to_string(), |name| {
-                configured_env_nonempty(config, name).is_some()
-            })
-        })
-        .collect()
+/// Login args a method declares under the `_meta["terminal-auth"]` convention,
+/// if any. Agents like Copilot advertise a normal ACP method plus this meta
+/// (`{command, args, label}`) so the client runs their CLI login (a browser
+/// flow) instead of authenticating over the protocol. We run the args against
+/// the agent's own launch command, like a `terminal`-type method. Generic: any
+/// agent using this convention works with no per-agent code. (Claude's methods
+/// arrive as the `AuthMethod::Terminal` variant instead and carry their args
+/// directly.)
+fn terminal_auth_args(method: &Value) -> Option<Vec<String>> {
+    let args = method.get("_meta")?.get("terminal-auth")?.get("args")?.as_array()?;
+    Some(args.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+}
+
+fn available_auth_methods(
+    init: &InitializeResponse,
+) -> Vec<&agent_client_protocol::schema::v1::AuthMethod> {
+    init.auth_methods.iter().collect()
 }
 
 async fn authenticate(
@@ -1905,64 +2264,98 @@ async fn authenticate(
             "{agent_name} needs a one-time CLI login: run `{command}`, then retry."
         ));
     }
-    let methods = available_auth_methods(init, config);
+    // Emit the sign-in card when the agent offers any way in. Every agent's
+    // methods now come from what it advertised at `initialize`: ChatGPT for
+    // Codex, Cursor Login for Cursor, and — because we declare the terminal-auth
+    // capability — Claude Subscription / Anthropic Console for Claude.
+    let methods = available_auth_methods(init);
     if methods.is_empty() {
         return Err("ACP agent requires authentication but offered no auth methods".into());
     }
-    let selected = config
-        .preferred_auth_method
-        .as_deref()
-        .and_then(|preferred| {
-            methods
-                .iter()
-                .find(|method| method.id().to_string() == preferred)
-        })
-        .copied();
-    let method = if let Some(method) = selected {
-        method
-    } else {
-        let agent_name = init
-            .agent_info
-            .as_ref()
-            .map(|info| info.title.as_deref().unwrap_or(&info.name))
-            .unwrap_or(&config.agent_id);
-        let options = methods
-            .iter()
-            .map(|method| {
-                json!({
-                    "optionId": method.id().to_string(),
-                    "name": method.name(),
-                    "kind": "allow_once"
-                })
-            })
-            .collect::<Vec<_>>();
-        let selection = state
-            .request_selection(
-                "acp-auth",
-                format!("acp:auth:{agent_name}"),
-                "Sign in to this agent to continue. Authentication is handled by the agent and credentials stay in its local store.".into(),
-                Value::Array(options),
-            )
-            .await;
-        let Some(selection) = selection else {
-            state.output.send(json!({ "type": "acp_auth_cancelled" }));
-            return Err("ACP authentication cancelled".into());
+    let agent_name = init
+        .agent_info
+        .as_ref()
+        .map(|info| info.title.as_deref().unwrap_or(&info.name))
+        .unwrap_or(&config.agent_id)
+        .to_owned();
+    // Only the first pass may honor a preconfigured preferred method; after a
+    // failed terminal login we always re-show the card so the user can retry or
+    // pick another, instead of the card spinning or silently closing.
+    let mut preferred = config.preferred_auth_method.clone();
+    loop {
+        let method = match preferred
+            .take()
+            .and_then(|p| methods.iter().find(|m| m.id().to_string() == p).copied())
+        {
+            Some(method) => method,
+            None => {
+                let options = methods
+                    .iter()
+                    .map(|method| {
+                        json!({
+                            "optionId": method.id().to_string(),
+                            "name": method.name(),
+                            "description": method.description(),
+                            "kind": "allow_once"
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let selection = state
+                    .request_selection(
+                        "acp-auth",
+                        format!("acp:auth:{agent_name}"),
+                        "Sign in to this agent to continue. Authentication is handled by the agent and credentials stay in its local store.".into(),
+                        Value::Array(options),
+                        None,
+                    )
+                    .await;
+                let Some(selection) = selection else {
+                    // Also reached when the user submitted an API key instead of
+                    // selecting a method: the client stores it and respawns,
+                    // killing this process, so this only observes an explicit
+                    // dismiss.
+                    state.output.send(json!({ "type": "acp_auth_cancelled" }));
+                    return Err("ACP authentication cancelled".into());
+                };
+                match methods.iter().find(|m| m.id().to_string() == selection).copied() {
+                    Some(method) => method,
+                    None => return Err("Selected ACP authentication method is unavailable".into()),
+                }
+            }
         };
-        methods
-            .into_iter()
-            .find(|method| method.id().to_string() == selection)
-            .ok_or("Selected ACP authentication method is unavailable")?
-    };
-    connection
-        .send_request(AuthenticateRequest::new(method.id().clone()))
-        .block_task()
-        .await
-        .map_err(|error| error.to_string())?;
-    state.output.send(json!({
-        "type": "acp_authenticated",
-        "methodId": method.id().to_string()
-    }));
-    Ok(())
+        // Some methods are run by the client as the agent's own login command
+        // (which opens the browser and writes the credential) rather than over
+        // ACP: a `terminal` method (Claude's Subscription / Anthropic Console)
+        // advertises the args directly, and Copilot advertises a normal method
+        // whose `copilot login` is a browser flow (see cli_login_args). The rest
+        // (Codex ChatGPT) authenticate over the protocol.
+        let method_id = method.id().to_string();
+        let terminal_args = match method {
+            AuthMethod::Terminal(terminal) => Some(terminal.args.clone()),
+            _ => serde_json::to_value(method).ok().as_ref().and_then(terminal_auth_args),
+        };
+        if let Some(args) = terminal_args {
+            if let Err(error) =
+                run_terminal_login(&config.bun_path, &config.agent_id, &args).await
+            {
+                // Show why it failed and loop back to re-emit the card so the
+                // user can retry or cancel instead of it hanging.
+                state.output.send(json!({ "type": "acp_auth_error", "message": error }));
+                continue;
+            }
+        } else {
+            connection
+                .send_request(AuthenticateRequest::new(method.id().clone()))
+                .block_task()
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        state.output.send(json!({
+            "type": "acp_authenticated",
+            "methodId": method_id
+        }));
+        return Ok(());
+    }
 }
 
 async fn create_session_with_auth(
@@ -2174,13 +2567,40 @@ async fn run_protocol(
                     let title = tool
                         .get("title")
                         .and_then(Value::as_str)
-                        .unwrap_or("agent action");
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty());
+                    let kind = tool.get("kind").and_then(Value::as_str);
+                    let options = serialized.get("options").cloned().unwrap_or_else(|| json!([]));
+                    // Auto-approve screenpipe's own read-only screen-data tools
+                    // so the agent isn't gated on every search and the user
+                    // isn't buried in identical approval cards. Everything else
+                    // still prompts.
+                    if let Some(title) = title {
+                        if is_screenpipe_read_tool(title) {
+                            if let Some(option_id) = allow_option_id(&options) {
+                                return responder.respond(RequestPermissionResponse::new(
+                                    RequestPermissionOutcome::Selected(
+                                        SelectedPermissionOutcome::new(option_id),
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                    // Short heading by kind; the raw command/target rides along
+                    // as `detail` and is shown verbatim. Codex sends a shell
+                    // command in `rawInput.command` with no title, so pull the
+                    // command from the tool input rather than showing a generic
+                    // placeholder.
+                    let label = permission_label(kind, title.unwrap_or(""));
+                    let detail_text = permission_detail(&tool, title);
+                    let detail = detail_text.as_deref().filter(|value| *value != label);
                     let selected = state
                         .request_selection(
                             "acp-permission",
-                            format!("acp:permission:{title}"),
-                            title.to_owned(),
-                            serialized.get("options").cloned().unwrap_or_else(|| json!([])),
+                            format!("acp:permission:{label}"),
+                            "the agent needs your approval before it can continue.".to_owned(),
+                            options,
+                            detail,
                         )
                         .await;
                     let outcome = selected.map_or(
@@ -2347,6 +2767,12 @@ async fn run_protocol(
                                         .write_text_file(true),
                                 )
                                 .terminal(true)
+                                // Declare terminal-auth so agents advertise
+                                // their browser logins as `terminal` methods
+                                // (Claude Subscription / Anthropic Console),
+                                // which the client runs. Without this Claude
+                                // advertises no auth methods at all.
+                                .auth(AuthCapabilities::new().terminal(true))
                                 // Agents only advertise their model/mode
                                 // selectors (session config options) to
                                 // clients that declare support for them;
@@ -2412,6 +2838,9 @@ async fn run_protocol(
             let mut pending_aborts: Vec<String> = Vec::new();
             let mut pending_steer: Option<Value> = None;
             let mut cancel_deadline: Option<Pin<Box<tokio::time::Sleep>>> = None;
+            // The last prompt we dispatched, kept so a prompt-time auth failure
+            // can retry it after an in-process sign-in.
+            let mut last_prompt: Option<Value> = None;
 
             loop {
                 tokio::select! {
@@ -2435,6 +2864,7 @@ async fn run_protocol(
                         let id = command.get("id").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                         match command_type {
                             "prompt" if !active => {
+                                last_prompt = Some(command.clone());
                                 start_prompt(&PromptDispatch { connection: &connection, state: &state, session_id: &session.session_id, image_supported, completed: &completed_tx }, command).map_err(acp_invalid_params)?;
                                 active = true;
                                 cancel_requested = false;
@@ -2627,6 +3057,21 @@ async fn run_protocol(
                                         Ok(())
                                     })?;
                             }
+                            "reauthenticate" => {
+                                // Re-show the sign-in card without signing out.
+                                // Picking a method re-runs that login in place; we
+                                // never send a logout, so an existing login is
+                                // never lost as a side effect. Blocks the parent
+                                // command loop until the user acts (the connection
+                                // still services agent-side requests); a browser
+                                // login respawns this process and drops the wait.
+                                if let Err(error) =
+                                    authenticate(&connection, &state, &init, &config).await
+                                {
+                                    eprintln!("[acp:{}] re-auth not completed: {error}", config.agent_id);
+                                }
+                                parent_response(&state.output, "reauthenticate", &id, None);
+                            }
                             _ => parent_response(&state.output, command_type, &id, None),
                         }
                     }
@@ -2634,24 +3079,46 @@ async fn run_protocol(
                         let Some((command_type, command_id, result)) = completed else {
                             return Err(Error::internal_error().data(json!("ACP prompt completion channel closed")));
                         };
+                        // A missing-credential failure isn't a real turn error: the
+                        // sign-in card takes over. Close the turn quietly so the
+                        // desktop doesn't render an "LLM error" bubble or trigger an
+                        // auth-invalidation restart (which would close the card).
+                        let is_auth_error = !cancel_requested && matches!(&result, Err(e) if auth_error(e));
                         let effective_reason = match &result {
                             Ok(reason) => serde_json::to_value(reason).ok().and_then(|value| value.as_str().map(str::to_owned)).unwrap_or_else(|| "end_turn".into()),
                             Err(_) if cancel_requested => "cancelled".into(),
+                            Err(_) if is_auth_error => "cancelled".into(),
                             Err(_) => "error".into(),
                         };
-                        state.close_turn(&effective_reason);
+                        state.close_turn_ex(&effective_reason, is_auth_error);
+                        // A prompt that failed for lack of a credential (Claude
+                        // accepts session/new but rejects here): show the sign-in
+                        // card. The prompt is already stuck in this session, which
+                        // was created unauthenticated, so instead of retrying it
+                        // here we tell the desktop to start a fresh chat and
+                        // re-send it — a clean session reads the new credential.
+                        let _ = &last_prompt;
                         match result {
                             Ok(_) => parent_response(&state.output, &command_type, &command_id, None),
                             Err(_) if cancel_requested => parent_response(&state.output, &command_type, &command_id, None),
+                            Err(ref error) if auth_error(error) => {
+                                // authenticate() drives the card + login and only
+                                // returns Err when the user cancels, which is not
+                                // a turn error (no bubble).
+                                if authenticate(&connection, &state, &init, &config).await.is_ok() {
+                                    state.output.send(json!({ "type": "acp_reinit_resend" }));
+                                }
+                                parent_response(&state.output, &command_type, &command_id, None);
+                            }
                             Err(error) => {
                                 let message = error.to_string();
                                 command_error(&state.output, &message);
                                 parent_response(&state.output, &command_type, &command_id, Some(&message));
                             }
                         }
-                        active = false;
                         cancel_requested = false;
                         cancel_deadline = None;
+                        active = false;
                         for abort_id in pending_aborts.drain(..) {
                             parent_response(&state.output, "abort", &abort_id, None);
                         }
@@ -2747,6 +3214,14 @@ pub async fn run_from_env() -> Result<(), String> {
     let config = RuntimeConfig::from_env()?;
     let output = ParentOutput::new();
     let state = Arc::new(RuntimeState::new(output.clone(), &config));
+    // Agents that ignore client stdio MCP servers (Cursor) get screenpipe's
+    // tools over loopback http instead — stand those servers up before the
+    // first session/new so mcp_servers() can advertise their urls.
+    let http_mcp_children = if agent_needs_http_mcp(&config.agent_id) {
+        spawn_http_mcp_servers(&config)
+    } else {
+        Vec::new()
+    };
     // A first-run npx install is a slow, silent-looking wait. Announce it out
     // of band (ACP has no install-progress concept; the agent isn't up yet),
     // so the UI can show "Installing <agent>…" instead of a bare spinner.
@@ -2949,6 +3424,12 @@ pub async fn run_from_env() -> Result<(), String> {
     }
     process_tree.terminate();
     let _ = child.wait().await;
+    // Reap the loopback http MCP servers (if any) — they die with the runtime's
+    // process group too, but kill explicitly so a graceful exit leaves nothing.
+    for mut http_child in http_mcp_children {
+        let _ = http_child.kill();
+        let _ = http_child.wait();
+    }
     state.shutdown_terminals();
     result
 }
@@ -2956,6 +3437,26 @@ pub async fn run_from_env() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_auth_meta_drives_a_cli_login() {
+        // A standard advertised method (not the Terminal variant) that carries
+        // the terminal-auth meta convention, like Copilot's copilot-login. It
+        // must survive a round-trip through the crate's AuthMethod so we can run
+        // its CLI login instead of authenticating over the protocol.
+        let raw = json!({
+            "id": "copilot-login",
+            "name": "Log in with Copilot CLI",
+            "_meta": { "terminal-auth": { "command": "copilot", "args": ["login"], "label": "Copilot Login" } }
+        });
+        let method: agent_client_protocol::schema::v1::AuthMethod =
+            serde_json::from_value(raw).expect("deserialize copilot method");
+        let round = serde_json::to_value(&method).expect("serialize");
+        assert_eq!(terminal_auth_args(&round), Some(vec!["login".to_string()]));
+        // A plain method (Codex ChatGPT) declares no such meta and authenticates
+        // over the protocol.
+        assert_eq!(terminal_auth_args(&json!({ "id": "chat-gpt", "name": "ChatGPT" })), None);
+    }
 
     fn runtime_config(agent_id: &str) -> RuntimeConfig {
         RuntimeConfig {
@@ -2975,27 +3476,35 @@ mod tests {
 
     #[test]
     fn agents_resolve_from_the_catalog() {
-        // The catalog agent (claude-acp) is an npx agent: it runs via the
-        // bundled bun with the pinned package from agents.json.
-        let (cmd, claude) = builtin_agent("claude-acp", "/bun").expect("claude");
+        // npx agents run via the bundled bun with a pinned package from the
+        // static catalog (version lives in agents.json, not hardcoded here).
+        let (cmd, codex) = builtin_agent("codex-acp", "/bun").expect("codex");
         assert_eq!(cmd, "/bun");
-        assert_eq!(claude.first().map(String::as_str), Some("x"));
-        assert!(claude
-            .iter()
-            .any(|arg| arg.starts_with("@agentclientprotocol/claude-agent-acp@")));
-        assert!(claude.iter().any(|arg| arg == "--hide-claude-auth"));
+        assert_eq!(codex.first().map(String::as_str), Some("x"));
+        assert!(codex.iter().any(|arg| arg.starts_with("@agentclientprotocol/codex-acp@")));
+
+        // Binary agents launch their CLI by name on PATH.
+        let (cmd, opencode) = builtin_agent("opencode", "/bun").expect("opencode");
+        assert_eq!(cmd, "opencode");
+        assert_eq!(opencode, vec!["acp".to_string()]);
 
         // Unknown ids don't resolve.
         assert!(builtin_agent("not-a-real-agent", "/bun").is_none());
     }
 
     #[test]
-    fn npx_agents_are_never_install_gated() {
-        // npx agents run via the bundled bun, so they never require a user
-        // install and always report installed.
-        let (requires, installed, _, _) = agent_install_status("claude-acp");
+    fn install_status_only_gates_binary_agents() {
+        // npx agents run via the bundled bun — never gated on a user install.
+        let (requires, installed, _, _) = agent_install_status("codex-acp");
         assert!(!requires);
         assert!(installed);
+
+        // Binary agents require the CLI on PATH (installed value is env-specific)
+        // and surface their install URL (installUrl in agents.json).
+        let (requires, _, command, install_url) = agent_install_status("opencode");
+        assert!(requires);
+        assert_eq!(command.as_deref(), Some("opencode"));
+        assert_eq!(install_url.as_deref(), Some("https://opencode.ai"));
 
         // Unknown ids don't gate.
         let (requires, installed, _, _) = agent_install_status("not-a-real-agent");
@@ -3004,15 +3513,10 @@ mod tests {
     }
 
     #[test]
-    fn screenpipe_credentials_are_forbidden_from_acp_processes() {
+    fn cloud_token_is_forbidden_from_acp_processes() {
         assert!(is_forbidden_acp_env("SCREENPIPE_API_KEY"));
         assert!(is_forbidden_acp_env("screenpipe_api_key"));
-        assert!(is_forbidden_acp_env("CLAUDE_CODE_OAUTH_TOKEN"));
-        assert!(is_forbidden_acp_env("claude_code_oauth_token"));
-        assert!(is_forbidden_acp_env("SCREENPIPE_LOCAL_API_KEY"));
-        assert!(is_forbidden_acp_env("screenpipe_local_api_port"));
-        assert!(is_forbidden_acp_env("SCREENPIPE_LOCAL_API_URL"));
-        assert!(is_forbidden_acp_env("SCREENPIPE_API_AUTH_KEY"));
+        assert!(!is_forbidden_acp_env("SCREENPIPE_LOCAL_API_KEY"));
         assert!(!is_forbidden_acp_env("ANTHROPIC_API_KEY"));
     }
 
@@ -3024,11 +3528,6 @@ mod tests {
         // terminal could `env` the value out).
         for required in [
             CLOUD_API_KEY_ENV,
-            "CLAUDE_CODE_OAUTH_TOKEN",
-            "SCREENPIPE_LOCAL_API_KEY",
-            "SCREENPIPE_LOCAL_API_PORT",
-            "SCREENPIPE_LOCAL_API_URL",
-            "SCREENPIPE_API_AUTH_KEY",
             "SCREENPIPE_ACP_ENV_JSON",
             "SCREENPIPE_ACP_USER_MCP_JSON",
             "SCREENPIPE_ACP_SESSION_CONFIG_JSON",
@@ -3040,58 +3539,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn child_env_scrubber_removes_screenpipe_credentials() {
-        let mut command = Command::new("screenpipe-acp-child");
-        for name in [
-            CLOUD_API_KEY_ENV,
-            "SCREENPIPE_LOCAL_API_KEY",
-            "SCREENPIPE_LOCAL_API_PORT",
-            "SCREENPIPE_LOCAL_API_URL",
-            "SCREENPIPE_API_AUTH_KEY",
-        ] {
-            command.env(name, "must-not-leak");
-        }
-
-        scrub_runtime_env(&mut command);
-
-        let removed = command
-            .get_envs()
-            .filter_map(|(name, value)| {
-                value
-                    .is_none()
-                    .then(|| name.to_string_lossy().into_owned())
-            })
-            .collect::<Vec<_>>();
-        for name in [
-            CLOUD_API_KEY_ENV,
-            "SCREENPIPE_LOCAL_API_KEY",
-            "SCREENPIPE_LOCAL_API_PORT",
-            "SCREENPIPE_LOCAL_API_URL",
-            "SCREENPIPE_API_AUTH_KEY",
-        ] {
-            assert!(removed.iter().any(|removed| removed == name), "{name} leaked");
-        }
-    }
-
-    #[test]
-    fn codex_key_auth_requires_an_available_key() {
-        assert!(!auth_method_has_required_env(
-            "codex-acp",
-            "api-key",
-            |_| false,
-        ));
-        assert!(auth_method_has_required_env(
-            "codex-acp",
-            "api-key",
-            |name| name == "OPENAI_API_KEY",
-        ));
-        assert!(auth_method_has_required_env(
-            "codex-acp",
-            "chat-gpt",
-            |_| false,
-        ));
-    }
 
     #[test]
     fn external_auth_agents_use_their_cli_login() {
@@ -3214,6 +3661,101 @@ mod tests {
     }
 
     #[test]
+    fn bundled_tools_mcp_server_is_registered_alongside_screenpipe() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = runtime_config("claude-acp");
+        config.project_dir = dir.path().to_path_buf();
+
+        let servers = mcp_servers(&config);
+        let names: Vec<String> = servers
+            .iter()
+            .filter_map(|server| match server {
+                McpServer::Stdio(stdio) => Some(stdio.name.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(names.iter().any(|n| n == "screenpipe"));
+        assert!(
+            names.iter().any(|n| n == "screenpipe-tools"),
+            "bundled tools server must be registered, got {names:?}"
+        );
+        // The companion server is staged to disk so the adapter can launch it.
+        assert!(dir
+            .path()
+            .join(".screenpipe")
+            .join("screenpipe-tools.mjs")
+            .exists());
+    }
+
+    #[test]
+    fn first_turn_context_always_includes_the_tools_hint() {
+        // With no user system prompt, the first-turn context is just the hint.
+        let none = build_first_turn_context(None);
+        assert!(none.contains("screenpipe_connect_app"));
+        assert!(none.contains("save_artifact"));
+
+        // With a user prompt, the hint is prepended and the prompt preserved.
+        let combined = build_first_turn_context(Some("Be terse.".to_string()));
+        assert!(combined.contains("sp_web_search"));
+        assert!(combined.trim_end().ends_with("Be terse."));
+    }
+
+    #[test]
+    fn user_mcp_servers_are_forwarded_alongside_screenpipe() {
+        let mut config = runtime_config("claude-acp");
+        config.user_mcp_servers = vec![
+            UserMcpServer {
+                name: "linear".into(),
+                transport: "http".into(),
+                url: "https://mcp.linear.app/sse".into(),
+                headers: vec![("Authorization".into(), "Bearer secret".into())],
+                command: None,
+                args: vec![],
+                env: HashMap::new(),
+            },
+            UserMcpServer {
+                name: "local-fs".into(),
+                transport: "stdio".into(),
+                url: String::new(),
+                headers: vec![],
+                command: Some("uvx".into()),
+                args: vec!["mcp-server-fs".into()],
+                env: HashMap::from([
+                    ("FS_ROOT".into(), "/tmp".into()),
+                    // The cloud JWT must never ride along into a user server.
+                    (CLOUD_API_KEY_ENV.to_string(), "jwt".into()),
+                ]),
+            },
+        ];
+
+        let servers = mcp_servers(&config);
+        // The built-in screenpipe server is always present; match user
+        // servers by name so the optional bundled tools server (staged only
+        // when the project dir is writable) can't shift positional indexes.
+        assert!(servers
+            .iter()
+            .any(|s| matches!(s, McpServer::Stdio(stdio) if stdio.name == "screenpipe")));
+        let linear = servers.iter().find_map(|s| match s {
+            McpServer::Http(http) if http.name == "linear" => Some(http),
+            _ => None,
+        });
+        let linear = linear.expect("forwarded http server 'linear'");
+        assert_eq!(linear.url, "https://mcp.linear.app/sse");
+        assert_eq!(linear.headers[0].name, "Authorization");
+        let local_fs = servers.iter().find_map(|s| match s {
+            McpServer::Stdio(stdio) if stdio.name == "local-fs" => Some(stdio),
+            _ => None,
+        });
+        let local_fs = local_fs.expect("forwarded stdio server 'local-fs'");
+        assert_eq!(local_fs.command.to_str(), Some("uvx"));
+        assert!(local_fs.env.iter().any(|e| e.name == "FS_ROOT"));
+        assert!(
+            !local_fs.env.iter().any(|e| e.name.eq_ignore_ascii_case(CLOUD_API_KEY_ENV)),
+            "cloud JWT must be scrubbed from forwarded stdio env"
+        );
+    }
+
+    #[test]
     fn subagent_meta_maps_to_parent_linkage_and_progress() {
         assert_eq!(
             parent_tool_call_id(&json!({
@@ -3277,6 +3819,42 @@ mod tests {
         assert_eq!(tool_args(&json!({ "arguments": { "q": "z" } })), json!({ "q": "z" }));
         // Nothing input-bearing → empty object, never a non-object value.
         assert_eq!(tool_args(&json!({ "title": "T", "rawInput": "nope" })), json!({}));
+    }
+
+    #[test]
+    fn http_mcp_fallback_covers_the_stdio_hostile_agents() {
+        // Both reject client stdio MCP servers, so both need the loopback-http
+        // fallback; every other agent keeps stdio.
+        assert!(agent_needs_http_mcp("cursor"));
+        assert!(agent_needs_http_mcp("github-copilot-cli"));
+        assert!(!agent_needs_http_mcp("claude-acp"));
+        assert!(!agent_needs_http_mcp("pi-acp"));
+    }
+
+    #[test]
+    fn screenpipe_read_tools_auto_approve_prefer_always() {
+        // Only the read-only screen-data server auto-approves; writes/bridge
+        // (screenpipe-tools) and everything else still prompt.
+        assert!(is_screenpipe_read_tool("mcp__screenpipe__search-content"));
+        assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__query_recordings"));
+        assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__list_connections"));
+        assert!(!is_screenpipe_read_tool("mcp__screenpipe-tools__sp_mcp_call"));
+        assert!(!is_screenpipe_read_tool("mcp__screenpipe-tools__save_artifact"));
+        assert!(!is_screenpipe_read_tool("bash"));
+
+        let options = json!([
+            { "optionId": "a1", "name": "Allow", "kind": "allow_once" },
+            { "optionId": "a2", "name": "Always allow", "kind": "allow_always" },
+            { "optionId": "r1", "name": "Reject", "kind": "reject_once" },
+        ]);
+        assert_eq!(allow_option_id(&options).as_deref(), Some("a2"));
+        let once_only = json!([
+            { "optionId": "a1", "name": "Allow", "kind": "allow_once" },
+            { "optionId": "r1", "name": "Reject", "kind": "reject_once" },
+        ]);
+        assert_eq!(allow_option_id(&once_only).as_deref(), Some("a1"));
+        let reject_only = json!([{ "optionId": "r1", "name": "Reject", "kind": "reject_once" }]);
+        assert_eq!(allow_option_id(&reject_only), None);
     }
 
     #[cfg(windows)]
@@ -3351,50 +3929,6 @@ mod tests {
             std::io::Error::last_os_error().raw_os_error(),
             Some(libc::ESRCH),
             "terminal process group should no longer exist"
-        );
-    }
-
-    /// A capture sink so a test can read the newline-JSON events the runtime
-    /// would otherwise stream to its parent over stdout.
-    #[derive(Clone)]
-    struct CaptureSink(Arc<Mutex<Vec<u8>>>);
-
-    impl std::io::Write for CaptureSink {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn agent_text_chunk_streams_as_a_text_delta_between_start_and_end() {
-        let captured = Arc::new(Mutex::new(Vec::<u8>::new()));
-        let output = ParentOutput::with_writer(Box::new(CaptureSink(captured.clone())));
-        let state = RuntimeState::new(output, &runtime_config("claude-acp"));
-
-        // A turn: the prompt is in flight, the agent streams one text chunk,
-        // then the turn ends. This is the core streaming contract.
-        state.begin_prompt(Some("hi"));
-        state.handle_update(json!({
-            "sessionUpdate": "agent_message_chunk",
-            "content": { "type": "text", "text": "hello from the agent" }
-        }));
-        state.close_turn("end_turn");
-
-        let events = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
-        // Opens the turn, streams the agent's text verbatim as a text_delta,
-        // and closes the turn.
-        assert!(events.contains("\"type\":\"agent_start\""), "missing agent_start in: {events}");
-        assert!(events.contains("\"type\":\"text_delta\""), "missing text_delta in: {events}");
-        assert!(events.contains("hello from the agent"), "text not streamed in: {events}");
-        assert!(events.contains("\"type\":\"agent_end\""), "missing agent_end in: {events}");
-        // text_delta must be emitted after the turn opens, never before.
-        assert!(
-            events.find("agent_start") < events.find("text_delta"),
-            "text streamed before the turn opened: {events}"
         );
     }
 }

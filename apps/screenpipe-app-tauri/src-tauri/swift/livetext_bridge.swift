@@ -77,6 +77,16 @@ private class LiveTextManager {
     /// Frame ID associated with pendingAnalysis — used to validate that the
     /// analysis matches the currently displayed frame before applying it.
     private var _pendingFrameId: String?
+    /// Frame ID of the analysis currently applied to the overlay. Highlight
+    /// requests are scoped to it so search hits never paint onto a frame the
+    /// match did not come from.
+    private var _appliedFrameId: String?
+    /// Search terms the UI asked us to highlight, plus the frame they belong
+    /// to. Kept here because `overlay.analysis = …` resets the overlay's
+    /// selection: highlights must be re-applied every time a new analysis
+    /// lands, not only when the terms change.
+    private var _highlightTerms: [String] = []
+    private var _highlightFrameId: String?
     private var _hostContentView: NSView?
     /// Named guard views that sit above the overlay, preventing VisionKit
     /// from intercepting clicks on UI controls (nav bar, filters, scrubber, etc.).
@@ -102,23 +112,78 @@ private class LiveTextManager {
         _pendingFrameId = frameId
     }
 
-    /// Atomically take (read + clear) the pending analysis.
-    func takePending() -> ImageAnalysis? {
+    /// Atomically take (read + clear) the pending analysis, but only when it
+    /// belongs to the frame the caller is positioning.
+    ///
+    /// VisionKit computes its text hit regions from `overlay.analysis` against
+    /// `overlay.frame`. Analysis is produced asynchronously on the livetext
+    /// worker while the user keeps scrolling, so a position update for frame B
+    /// can arrive while frame A's analysis is still pending. Applying it would
+    /// bind A's text boxes to B's pixels — the overlay looks fine but dragging
+    /// over visible text selects nothing (or selects text that isn't there).
+    /// On mismatch we leave the analysis pending so the position update that
+    /// actually belongs to it can still apply it.
+    ///
+    /// An empty id on either side is treated as a wildcard so callers that do
+    /// not track frames keep working.
+    func takePending(matching frameId: String) -> ImageAnalysis? {
         stateLock.lock()
         defer { stateLock.unlock() }
-        let pending = _pendingAnalysis
+        guard let pending = _pendingAnalysis else { return nil }
+        let pendingId = _pendingFrameId ?? ""
+        if !pendingId.isEmpty && !frameId.isEmpty && pendingId != frameId { return nil }
         _pendingAnalysis = nil
         _pendingFrameId = nil
+        _appliedFrameId = pendingId.isEmpty ? frameId : pendingId
         return pending
     }
 
+    /// Frame whose analysis is currently on the overlay.
+    func appliedFrameId() -> String? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return _appliedFrameId
+    }
+
+    /// Remember which terms to highlight and which frame they belong to.
+    /// Survives hide/show cycles (e.g. the search modal opening) so the hit
+    /// comes back with the overlay instead of being lost.
+    func setHighlightRequest(terms: [String], frameId: String) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        _highlightTerms = terms
+        _highlightFrameId = frameId
+    }
+
+    func clearHighlightRequest() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        _highlightTerms = []
+        _highlightFrameId = nil
+    }
+
+    /// Terms to paint on `frameId`, or [] when the request targets another
+    /// frame. Scoping this is what stops a stale search hit from highlighting
+    /// whatever frame the user scrolled to next.
+    func highlightTerms(for frameId: String?) -> [String] {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        if _highlightTerms.isEmpty { return [] }
+        guard let target = _highlightFrameId, !target.isEmpty else { return _highlightTerms }
+        guard let frameId = frameId, !frameId.isEmpty else { return [] }
+        return target == frameId ? _highlightTerms : []
+    }
+
     /// Drop current and pending analyses (lt_hide / lt_init / lt_destroy).
+    /// Highlight *requests* deliberately survive — the overlay is rebuilt from
+    /// them once a new analysis lands.
     func clearAnalyses() {
         stateLock.lock()
         defer { stateLock.unlock() }
         _currentAnalysis = nil
         _pendingAnalysis = nil
         _pendingFrameId = nil
+        _appliedFrameId = nil
     }
 
     func dropAnalyzer() {
@@ -425,12 +490,19 @@ public func ltUpdatePosition(_ frameId: UnsafePointer<CChar>?, _ x: Double, _ y:
         let mgr = LiveTextManager.shared
         guard let overlay = mgr.overlayView, let contentView = mgr.hostContentView else { return -1 }
 
+        let frameIdStr = frameId != nil ? String(cString: frameId!) : ""
         let contentHeight = contentView.frame.height
         let appKitY = contentHeight - (y + h)
 
         // Apply pending analysis AFTER setting the frame so VisionKit
-        // computes hit regions against the correct geometry.
-        let pending = mgr.takePending()
+        // computes hit regions against the correct geometry — and only when
+        // the analysis belongs to the frame being positioned.
+        let pending = mgr.takePending(matching: frameIdStr)
+        // Search hits belong to one frame. Re-derive the selection on every
+        // apply: the terms for this frame if the search matched here, otherwise
+        // an explicit empty selection so the previous frame's highlight cannot
+        // linger on top of different pixels.
+        let terms = pending != nil ? mgr.highlightTerms(for: frameIdStr) : []
 
         mainThreadPreservingFocus(contentView) {
             MainActor.assumeIsolated {
@@ -439,6 +511,13 @@ public func ltUpdatePosition(_ frameId: UnsafePointer<CChar>?, _ x: Double, _ y:
                     overlay.analysis = analysis
                     overlay.preferredInteractionTypes = [.textSelection]
                     overlay.isHidden = false
+                    if #available(macOS 14.0, *) {
+                        if terms.isEmpty {
+                            overlay.selectedRanges = []
+                        } else {
+                            _ = applyHighlightTerms(overlay, terms)
+                        }
+                    }
                 }
             }
         }
@@ -450,8 +529,33 @@ public func ltUpdatePosition(_ frameId: UnsafePointer<CChar>?, _ x: Double, _ y:
 
 // MARK: - Highlight Search Terms (macOS 14+)
 
+/// Paint `terms` as the overlay's selection. Must run on the main thread.
+///
+/// Ranges MUST be computed from overlay.text (not analysis.transcript) because
+/// selectedRanges indices must be valid for the overlay's own String instance.
+/// Different String instances have incompatible index storage — using
+/// analysis.transcript indices causes "String index is out of bounds" crash
+/// when VisionKit converts Range<String.Index> → NSRange internally.
+@available(macOS 14.0, *)
+@MainActor
+private func applyHighlightTerms(_ overlay: ImageAnalysisOverlayView, _ terms: [String]) -> Int32 {
+    let fullText = overlay.text
+    guard !fullText.isEmpty else { return -3 }
+
+    var ranges: [Range<String.Index>] = []
+    for term in terms where !term.isEmpty {
+        var searchStart = fullText.startIndex
+        while let range = fullText.range(of: term, options: .caseInsensitive, range: searchStart..<fullText.endIndex) {
+            ranges.append(range)
+            searchStart = range.upperBound
+        }
+    }
+    overlay.selectedRanges = ranges
+    return Int32(ranges.count)
+}
+
 @_cdecl("lt_highlight_ranges")
-public func ltHighlightRanges(_ searchTermsJson: UnsafePointer<CChar>?) -> Int32 {
+public func ltHighlightRanges(_ searchTermsJson: UnsafePointer<CChar>?, _ frameId: UnsafePointer<CChar>?) -> Int32 {
     #if canImport(VisionKit)
     if #available(macOS 14.0, *) {
         guard let searchTermsJson = searchTermsJson else { return -1 }
@@ -464,29 +568,21 @@ public func ltHighlightRanges(_ searchTermsJson: UnsafePointer<CChar>?) -> Int32
         let mgr = LiveTextManager.shared
         guard let overlay = mgr.overlayView else { return -3 }
 
-        // MUST compute ranges from overlay.text (not analysis.transcript) because
-        // selectedRanges indices must be valid for the overlay's own String instance.
-        // Different String instances have incompatible index storage — using
-        // analysis.transcript indices causes "String index is out of bounds" crash
-        // when VisionKit converts Range<String.Index> → NSRange internally.
-        var result: Int32 = 0
-        DispatchQueue.main.sync {
-            MainActor.assumeIsolated {
-                let fullText = overlay.text
-                guard !fullText.isEmpty else { result = -3; return }
+        let frameIdStr = frameId != nil ? String(cString: frameId!) : ""
+        // Remember the request: the analysis for this frame may not have landed
+        // yet (analysis is async), in which case there is no text to search and
+        // the highlight would simply be dropped. lt_update_position re-applies
+        // it as soon as the matching analysis is on the overlay.
+        mgr.setHighlightRequest(terms: terms, frameId: frameIdStr)
 
-                var ranges: [Range<String.Index>] = []
-                for term in terms {
-                    var searchStart = fullText.startIndex
-                    while let range = fullText.range(of: term, options: .caseInsensitive, range: searchStart..<fullText.endIndex) {
-                        ranges.append(range)
-                        searchStart = range.upperBound
-                    }
-                }
-                overlay.selectedRanges = ranges
-                result = Int32(ranges.count)
-            }
-        }
+        // Only paint now if the overlay is already showing that frame.
+        guard !mgr.highlightTerms(for: mgr.appliedFrameId()).isEmpty else { return 0 }
+
+        // main.sync from the main thread deadlocks — callers today are tokio
+        // threads, but never rely on that.
+        var result: Int32 = 0
+        let paint = { MainActor.assumeIsolated { result = applyHighlightTerms(overlay, terms) } }
+        if Thread.isMainThread { paint() } else { DispatchQueue.main.sync(execute: paint) }
         return result
     }
     #endif
@@ -500,6 +596,7 @@ public func ltClearHighlights() -> Int32 {
     #if canImport(VisionKit)
     if #available(macOS 14.0, *) {
         let mgr = LiveTextManager.shared
+        mgr.clearHighlightRequest()
         guard let overlay = mgr.overlayView else { return -1 }
         mainThreadPreservingFocus(mgr.hostContentView) {
             MainActor.assumeIsolated {
@@ -595,6 +692,43 @@ public func ltSetGuardRect(_ key: UnsafePointer<CChar>?, _ x: Double, _ y: Doubl
     }
     #endif
     return -1
+}
+
+// MARK: - Debug Introspection
+
+/// Frame id whose analysis is currently applied to the overlay ("" when none).
+/// Read-only; exists so the livetext regression tests can assert that a stale
+/// analysis is never bound to the displayed frame. Caller frees with
+/// lt_free_string.
+@_cdecl("lt_debug_applied_frame_id")
+public func ltDebugAppliedFrameId() -> UnsafeMutablePointer<CChar> {
+    #if canImport(VisionKit)
+    if #available(macOS 13.0, *) {
+        return makeCString(LiveTextManager.shared.appliedFrameId() ?? "")
+    }
+    #endif
+    return makeCString("")
+}
+
+/// Text currently selected on the overlay ("" when none). Caller frees with
+/// lt_free_string.
+///
+/// Read this, never `selectedRanges.count`: the range array echoes the last
+/// non-empty assignment even after the selection has been cleared, so only the
+/// text reports whether a highlight is actually live.
+/// Read-only; used by the livetext regression tests and interactive harness.
+@_cdecl("lt_debug_selected_text")
+public func ltDebugSelectedText() -> UnsafeMutablePointer<CChar> {
+    #if canImport(VisionKit)
+    if #available(macOS 14.0, *) {
+        guard let overlay = LiveTextManager.shared.overlayView else { return makeCString("") }
+        var text = ""
+        let read = { MainActor.assumeIsolated { text = overlay.selectedText } }
+        if Thread.isMainThread { read() } else { DispatchQueue.main.sync(execute: read) }
+        return makeCString(text)
+    }
+    #endif
+    return makeCString("")
 }
 
 /// Remove a specific named guard, or all guards if key is nil.

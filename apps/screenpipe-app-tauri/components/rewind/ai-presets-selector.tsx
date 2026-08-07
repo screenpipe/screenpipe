@@ -15,7 +15,15 @@ import {
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useModelUpsellGating } from "@/lib/hooks/use-model-upsell-gating";
 import { usePiModels } from "@/lib/hooks/use-pi-models";
-import { useMemo, useState, useEffect, useCallback } from "react";
+import { useMemo, useState, useEffect, useCallback, useRef } from "react";
+import {
+  acpAdapterInfo,
+  generatePresetName,
+  presetImageClass,
+  presetImageSrc,
+} from "@/lib/utils/preset-appearance";
+import { AcpAgentPicker } from "@/components/settings/acp-agent-picker";
+import { useAcpRolloutEnabled } from "@/lib/acp-rollout";
 import {
   Command,
   CommandEmpty,
@@ -233,6 +241,7 @@ export function AIProviderConfig({
     apiKey: defaultPreset?.apiKey || "",
     url: defaultPreset?.url || "",
     model: defaultPreset?.model || "",
+    acpAgent: defaultPreset?.acpAgent,
     maxContextChars: defaultPreset?.maxContextChars || 512000,
     prompt: defaultPreset?.prompt || DEFAULT_PROMPT,
     id: defaultPreset?.id || "",
@@ -287,11 +296,79 @@ export function AIProviderConfig({
       );
     }
   };
+  // Set by AcpInstallGate: true when the selected binary agent's CLI is missing.
+  const [acpInstallBlocked, setAcpInstallBlocked] = useState(false);
+
+  // Second ACP entry point (the first is Settings → AI presets). Same
+  // fail-closed rollout gate, otherwise this selector would hand every user a
+  // coding-agent provider the settings page deliberately hides.
+  const acpEnabled = useAcpRolloutEnabled();
+
+  // A preset saved while the flag was on must not leave this editor stuck on a
+  // provider whose picker is no longer rendered.
+  useEffect(() => {
+    if (!acpEnabled && selectedProvider === "acp") {
+      setSelectedProvider("screenpipe-cloud");
+    }
+  }, [acpEnabled, selectedProvider]);
+
+  // Last name this dialog generated itself. While the field still holds it
+  // (or is empty) selection changes keep regenerating it; a name the user
+  // typed is never overwritten. Empty names get generated on submit.
+  const lastAutoNameRef = useRef<string | null>(null);
+
+  // Live auto-naming: write the generated name straight into the name field
+  // whenever the selection (provider, model, agent) changes. Name-field
+  // edits themselves never trigger this, so typing is never fought.
+  useEffect(() => {
+    if (defaultPreset?.id) return;
+    const currentName = formData.id || "";
+    if (currentName && currentName !== lastAutoNameRef.current) return;
+    const autoName = generatePresetName(
+      {
+        provider: formData.provider,
+        acpAgentId: formData.acpAgent?.id,
+        model: formData.model,
+      },
+      (settings?.aiPresets ?? []).map((preset) => preset.id),
+    );
+    if (autoName === currentName) return;
+    lastAutoNameRef.current = autoName;
+    setFormData((prev) => ({ ...prev, id: autoName }));
+    setIdError(null);
+    // formData.id is read but intentionally not a dependency: clearing or
+    // retyping the name must not refill it mid-edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    formData.provider,
+    formData.model,
+    formData.acpAgent?.id,
+    defaultPreset?.id,
+    settings?.aiPresets,
+  ]);
+
+  // A cleared name refills when the field loses focus, so it never sits
+  // empty even when the selection itself does not change again.
+  const refillEmptyName = () => {
+    if (defaultPreset?.id || formData.id?.trim()) return;
+    const autoName = generatePresetName(
+      {
+        provider: formData.provider,
+        acpAgentId: formData.acpAgent?.id,
+        model: formData.model,
+      },
+      (settings?.aiPresets ?? []).map((preset) => preset.id),
+    );
+    lastAutoNameRef.current = autoName;
+    setFormData((prev) => ({ ...prev, id: autoName }));
+    setIdError(null);
+  };
 
   const validateId = (id: string | undefined): boolean => {
     if (!id?.trim()) {
-      setIdError("name is required");
-      return false;
+      // Empty is fine: a name is generated from the selection on submit.
+      setIdError(null);
+      return true;
     }
 
     // Check if ID ends with 'copy' (case insensitive)
@@ -476,7 +553,17 @@ export function AIProviderConfig({
     try {
       onSubmit({
         ...formData,
-        id: formData.id?.trim() || "",
+        id:
+          formData.id?.trim() ||
+          generatePresetName(
+            {
+              provider: formData.provider,
+              acpAgentId: formData.acpAgent?.id,
+              model: formData.model,
+            },
+            (settings?.aiPresets ?? []).map((preset) => preset.id),
+            defaultPreset?.id,
+          ),
       });
     } finally {
       setIsLoading(false);
@@ -508,9 +595,10 @@ export function AIProviderConfig({
           <Input
             id="name"
             type="text"
-            placeholder="enter preset name"
-            value={formData.id || undefined}
+            placeholder="preset name"
+            value={formData.id ?? ""}
             onChange={(e) => handleIdChange(e.target.value)}
+            onBlur={refillEmptyName}
             className={cn(
               "font-mono h-8 text-sm",
               idError && "border-destructive focus-visible:ring-destructive",
@@ -526,10 +614,7 @@ export function AIProviderConfig({
           />
         </div>
 
-        <div className={cn(
-          "grid gap-2",
-          piAvailable ? "grid-cols-3" : "grid-cols-4"
-        )}>
+        <div className="grid grid-cols-3 gap-2">
           {piAvailable && (
             <Button
               type="button"
@@ -625,7 +710,49 @@ export function AIProviderConfig({
             <img src="/images/claude-ai.svg" alt="Claude API" className="h-3.5 w-3.5 rounded-sm" />
             <span>claude api</span>
           </Button>
+
+          {acpEnabled && (
+          <Button
+            type="button"
+            variant={selectedProvider === "acp" ? "default" : "outline"}
+            className="flex h-8 items-center justify-center gap-1.5 text-xs px-3"
+            onClick={() => {
+              if (selectedProvider === "acp") return;
+              setSelectedProvider("acp");
+              const agentId = formData.acpAgent?.id || "pi-acp";
+              setFormData({
+                ...formData,
+                provider: "acp",
+                url: "",
+                model: agentId,
+                acpAgent: formData.acpAgent || { id: "pi-acp" },
+              });
+            }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/images/acp.svg"
+              alt="Coding agent"
+              className={cn(
+                "h-3.5 w-3.5 rounded-sm dark:invert",
+                selectedProvider === "acp" && "invert dark:invert-0",
+              )}
+            />
+            <span>coding agent</span>
+          </Button>
+          )}
         </div>
+
+        {acpEnabled && selectedProvider === "acp" && (
+          <AcpAgentPicker
+            compact
+            agent={formData.acpAgent}
+            onChange={(next) =>
+              setFormData({ ...formData, provider: "acp", model: next.id, acpAgent: next })
+            }
+            onInstallBlockedChange={setAcpInstallBlocked}
+          />
+        )}
 
         {selectedProvider === "openai" && (
           <div className="space-y-1">
@@ -1046,9 +1173,15 @@ export function AIProviderConfig({
           className="w-full h-7 text-xs"
           disabled={
             isLoading ||
-            Boolean(!formData.id?.length || !formData.model?.length) ||
+            Boolean(idError) ||
+            !formData.id?.length ||
+            !formData.model?.length ||
             Object.keys(connectionFieldErrors).length > 0 ||
-            (connectionTestRequired && !connectionTestPassed)
+            (connectionTestRequired && !connectionTestPassed) ||
+            (formData.provider === "acp" &&
+              formData.acpAgent?.id === "custom" &&
+              !formData.acpAgent?.command?.trim()) ||
+            (formData.provider === "acp" && acpInstallBlocked)
           }
         >
           {isLoading ? (
@@ -1094,6 +1227,8 @@ interface AIPresetsSelectorProps {
   showModelOnly?: boolean;
   /** Notify parent surfaces when the preset popover opens or closes. */
   onOpenChange?: (open: boolean) => void;
+  /** Scheduled pipes still run through raw Pi and cannot execute ACP adapters. */
+  includeAgentPresets?: boolean;
 }
 
 export const AIPresetDialog = ({
@@ -1112,6 +1247,9 @@ export const AIPresetDialog = ({
       id: providerData.id,
       maxContextChars: providerData.maxContextChars,
       prompt: providerData.prompt,
+      // Coding agent presets are defined by their agent config; dropping it
+      // here saved presets with provider "acp" but no agent.
+      acpAgent: providerData.provider === "acp" ? providerData.acpAgent : undefined,
     };
 
     // Screenpipe Cloud: max output is defined per model in the gateway catalog (see screenpipe_cloud_models in Rust).
@@ -1138,6 +1276,7 @@ export const AIPresetDialog = ({
         provider: preset.provider,
         url: preset.url,
         model: preset.model,
+        acpAgent: preset.acpAgent,
         maxContextChars: preset.maxContextChars,
         ...(preset.provider !== "screenpipe-cloud"
           ? { maxTokens: (preset as any).maxTokens ?? 4096 }
@@ -1186,6 +1325,7 @@ export const AIPresetsSelector = ({
   triggerClassName,
   showModelOnly = false,
   onOpenChange,
+  includeAgentPresets = true,
 }: AIPresetsSelectorProps) => {
   const { settings, updateSettings } = useSettings();
   const [open, setOpen] = useState(false);
@@ -1211,11 +1351,20 @@ export const AIPresetsSelector = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const aiPresets = useMemo(() => {
     const presets = (settings?.aiPresets || []) as AIPreset[];
-    return isManagedDeployment ? filterPresetsForEnterprisePolicy(presets, aiPresetPolicy) : presets;
-  }, [settings?.aiPresets, isManagedDeployment, aiPresetPolicy]);
+    const policyPresets = isManagedDeployment
+      ? filterPresetsForEnterprisePolicy(presets, aiPresetPolicy)
+      : presets;
+    return includeAgentPresets
+      ? policyPresets
+      : policyPresets.filter((preset) => preset.provider !== "acp");
+  }, [settings?.aiPresets, isManagedDeployment, aiPresetPolicy, includeAgentPresets]);
 
   const selectedPreset = useMemo(() => {
-    if (isControlled) return controlledPresetId ?? undefined;
+    if (isControlled) {
+      return aiPresets.some((preset) => preset.id === controlledPresetId)
+        ? controlledPresetId ?? undefined
+        : undefined;
+    }
     // Use the first preset or default preset
     const defaultPreset = aiPresets.find(
       (preset) => preset.defaultPreset,
@@ -1497,14 +1646,12 @@ export const AIPresetsSelector = ({
       }
     }
 
-    if (preset.defaultPreset) {
-      toast.error("Cannot delete default preset", {
-        description: "Please set another preset as default first",
-      });
-      return;
+    let updatedPresets = settings.aiPresets.filter((p) => p.id !== preset.id);
+    // Deleting the default is allowed; promote the first remaining preset so
+    // there is always exactly one default and the user is never stuck.
+    if (preset.defaultPreset && updatedPresets.length > 0 && !updatedPresets.some((p) => p.defaultPreset)) {
+      updatedPresets = updatedPresets.map((p, index) => ({ ...p, defaultPreset: index === 0 }));
     }
-
-    const updatedPresets = settings.aiPresets.filter((p) => p.id !== preset.id);
     updateSettings({
       aiPresets: updatedPresets,
     });
@@ -1770,6 +1917,15 @@ export const AIPresetsSelector = ({
                                 : "opacity-0",
                             )}
                           />
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={presetImageSrc(preset.provider, preset.acpAgent?.id)}
+                            alt=""
+                            className={cn(
+                              "h-4 w-4 rounded-sm shrink-0 opacity-80",
+                              presetImageClass(preset.provider, preset.acpAgent?.id),
+                            )}
+                          />
                           <span className="font-medium truncate max-w-[120px]" title={preset.id}>
                             {formatPresetName(preset.id)}
                           </span>
@@ -1790,7 +1946,9 @@ export const AIPresetsSelector = ({
                               {preset.provider}
                             </span>
                             <span className="truncate max-w-[120px]">
-                              {preset.model}
+                              {preset.provider === "acp"
+                                ? acpAdapterInfo(preset.acpAgent?.id).name
+                                : preset.model}
                             </span>
                           </div>
                           <div className="flex items-center gap-1">
@@ -1833,7 +1991,7 @@ export const AIPresetsSelector = ({
                                 <Star className="h-3.5 w-3.5" />
                               </Button>
                             )}
-                            {!preset.defaultPreset && canManageEmployeePresets && !isEnterpriseManagedPreset(preset) && !isLastCloudPreset(preset) && (
+                            {canManageEmployeePresets && !isEnterpriseManagedPreset(preset) && !isLastCloudPreset(preset) && (
                               <Button
                                 variant="ghost"
                                 size="icon"

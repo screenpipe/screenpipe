@@ -473,54 +473,57 @@ describe.skip('Pipes: discover → install → play', function () {
     expect(existsSync(filepath)).toBe(true);
   });
 
-  // ─── Step 5: hover the row to reveal play button, click it ───────────────
+  // ─── Step 5: select the row, then run/stop from the detail pane ──────────
+  //
+  // The list is master-detail (pipes-section.tsx): the row is a scannable
+  // summary and every action lives in the detail pane it opens. Actions are
+  // therefore scoped to [data-testid="pipe-detail"], not to the row.
 
   it('plays and stops the installed pipe', async function () {
     if (!installedPipeName) {
       this.skip();
       return;
     }
-    // Walk visible buttons inside the pipes section and find the row by
-    // text content, then scroll it into view. wdio's `$('button=NAME')`
-    // text-match selector is recognised by its own parser but the
-    // generated DOM call uses CSS — when slugs contain characters that
-    // make the synthesized expression ambiguous (or when several
-    // sub-tabs are mounted at once), the lookup intermittently fails.
-    // In-page iteration is unambiguous.
+
+    const row = await $(`[data-testid="pipe-row-${installedPipeName}"]`);
+    await row.waitForExist({ timeout: 10_000 });
+    await row.scrollIntoView({ block: 'center' });
+    // Selecting is idempotent, so only click when this row isn't already open.
+    if ((await row.getAttribute('aria-current')) !== 'true') {
+      await row.click();
+    }
+
+    const detail = await $('[data-testid="pipe-detail"]');
+    await detail.waitForExist({ timeout: 10_000 });
     await browser.waitUntil(
-      async () =>
-        (await browser.execute((name: string) => {
-          const btn = Array.from(document.querySelectorAll<HTMLElement>('button, span')).find(
-            (b) => b.textContent?.trim() === name
-          );
-          if (!btn) return false;
-          btn.scrollIntoView({ block: 'center', inline: 'center' });
-          return true;
-        }, installedPipeName)) as boolean,
-      { timeout: 8_000, timeoutMsg: `Pipe name button "${installedPipeName}" not found` }
+      async () => (await detail.getText()).includes(installedPipeName),
+      {
+        timeout: 10_000,
+        timeoutMsg: `detail pane did not open for "${installedPipeName}"`,
+      }
     );
     await browser.pause(400);
 
-    const actionHierarchy = await browser.execute((name: string) => {
-      for (const nameEl of Array.from(document.querySelectorAll<HTMLElement>('button, span'))) {
-        if (nameEl.textContent?.trim() !== name) continue;
-        const row = nameEl.closest<HTMLElement>('div.group');
-        if (!row) continue;
-        const actions = Array.from(row.querySelectorAll<HTMLButtonElement>('[data-testid="pipe-card-actions"] button'));
-        const runButton = row.querySelector<HTMLButtonElement>('button[title="run scheduled task"]');
-        const optimizeButton = row.querySelector<HTMLButtonElement>('button[title^="optimize this scheduled task"]');
-        if (!runButton || !optimizeButton) return null;
-        return {
-          runIndex: actions.indexOf(runButton),
-          optimizeIndex: actions.indexOf(optimizeButton),
-          runHeight: runButton.getBoundingClientRect().height,
-          optimizeHeight: optimizeButton.getBoundingClientRect().height,
-          playIconWidth: runButton.querySelector('svg')?.getBoundingClientRect().width ?? 0,
-          optimizeIconWidth: optimizeButton.querySelector('svg')?.getBoundingClientRect().width ?? 0,
-        };
-      }
-      return null;
-    }, installedPipeName);
+    // Run stays the first and visually largest action, ahead of the AI editing
+    // actions — the hierarchy the detail header is supposed to communicate.
+    const actionHierarchy = await browser.execute(() => {
+      const pane = document.querySelector<HTMLElement>('[data-testid="pipe-detail"]');
+      if (!pane) return null;
+      const actions = Array.from(
+        pane.querySelectorAll<HTMLButtonElement>('[data-testid="pipe-card-actions"] button')
+      );
+      const runButton = pane.querySelector<HTMLButtonElement>('button[title="run scheduled task"]');
+      const optimizeButton = pane.querySelector<HTMLButtonElement>('button[title^="optimize this scheduled task"]');
+      if (!runButton || !optimizeButton) return null;
+      return {
+        runIndex: actions.indexOf(runButton),
+        optimizeIndex: actions.indexOf(optimizeButton),
+        runHeight: runButton.getBoundingClientRect().height,
+        optimizeHeight: optimizeButton.getBoundingClientRect().height,
+        playIconWidth: runButton.querySelector('svg')?.getBoundingClientRect().width ?? 0,
+        optimizeIconWidth: optimizeButton.querySelector('svg')?.getBoundingClientRect().width ?? 0,
+      };
+    });
 
     expect(actionHierarchy).not.toBeNull();
     expect(actionHierarchy!.runIndex).toBe(0);
@@ -528,42 +531,32 @@ describe.skip('Pipes: discover → install → play', function () {
     expect(actionHierarchy!.runHeight).toBeGreaterThan(actionHierarchy!.optimizeHeight);
     expect(actionHierarchy!.playIconWidth).toBeGreaterThan(actionHierarchy!.optimizeIconWidth);
 
-    const played = await browser.execute((name: string) => {
-      for (const nameBtn of Array.from(document.querySelectorAll<HTMLElement>('button, span'))) {
-        if (nameBtn.textContent?.trim() !== name) continue;
-        const row = nameBtn.closest<HTMLElement>('div.group');
-        if (!row) continue;
-        const playBtn = row.querySelector<HTMLButtonElement>('button[title="run scheduled task"]');
-        if (playBtn && !playBtn.disabled) {
-          playBtn.click();
-          return true;
-        }
-      }
-      return false;
-    }, installedPipeName);
+    const played = await browser.execute(() => {
+      const pane = document.querySelector<HTMLElement>('[data-testid="pipe-detail"]');
+      const playBtn = pane?.querySelector<HTMLButtonElement>('button[title="run scheduled task"]');
+      if (!playBtn || playBtn.disabled) return false;
+      playBtn.click();
+      return true;
+    });
 
     // No fallback — if we can't find the play button for the installed pipe, fail explicitly
     expect(played).toBe(true);
 
-    // Wait for THIS pipe's row to actually enter the running state — i.e. its
-    // own "stop pipe" button renders. A manual run starts a real pi subprocess
-    // that stays alive for tens of seconds, but runPipe() first awaits any
-    // pending preset save plus a 2s min-delay before POSTing /run, and the row
-    // only flips after the UI's next status poll — so this legitimately takes a
-    // few seconds. Scope strictly to the row (not a global stop-button query or
-    // page text): the scheduler may be running other pipes concurrently, and a
-    // loose match would let the test race ahead before this run registers.
+    // Wait for THIS pipe to actually enter the running state — i.e. its own
+    // "stop pipe" button renders in the open detail pane. A manual run starts a
+    // real pi subprocess that stays alive for tens of seconds, but runPipe()
+    // first awaits any pending preset save plus a 2s min-delay before POSTing
+    // /run, and the UI only flips after its next status poll — so this
+    // legitimately takes a few seconds. Scope strictly to the detail pane (not a
+    // global stop-button query or page text): the scheduler may be running other
+    // pipes concurrently, and a loose match would let the test race ahead before
+    // this run registers.
     await browser.waitUntil(
       async () =>
-        (await browser.execute((name: string) => {
-          for (const nameBtn of Array.from(document.querySelectorAll<HTMLElement>('button, span'))) {
-            if (nameBtn.textContent?.trim() !== name) continue;
-            const row = nameBtn.closest<HTMLElement>('div.group');
-            if (!row) continue;
-            return !!row.querySelector('button[title="stop scheduled task"]');
-          }
-          return false;
-        }, installedPipeName)) as boolean,
+        (await browser.execute(() => {
+          const pane = document.querySelector<HTMLElement>('[data-testid="pipe-detail"]');
+          return !!pane?.querySelector('button[title="stop scheduled task"]');
+        })) as boolean,
       {
         timeout: 60_000,
         timeoutMsg: `Pipe "${installedPipeName}" did not enter running state within timeout`,
@@ -573,29 +566,18 @@ describe.skip('Pipes: discover → install → play', function () {
     const filepath = await saveScreenshot('pipes-running');
     expect(existsSync(filepath)).toBe(true);
 
-    // Click the row's stop button. Poll-and-click so a brief disabled flicker
+    // Click the stop button. Poll-and-click so a brief disabled flicker
     // (stoppingPipe spinner from an earlier interaction) doesn't lose the race;
     // returns true on the first successful click and stops.
     await browser.waitUntil(
       async () =>
-        (await browser.execute((name: string) => {
-          // Match the name in a <button> OR <span>. The pipe name renders as a
-          // <span> (pipes-section.tsx), so a 'button'-only scan never locates
-          // the row and the stop click times out ("Could not click stop
-          // button") — even though the running-state wait above, which already
-          // uses 'button, span', passed. Keep the two locators in sync.
-          for (const nameEl of Array.from(document.querySelectorAll<HTMLElement>('button, span'))) {
-            if (nameEl.textContent?.trim() !== name) continue;
-            const row = nameEl.closest<HTMLElement>('div.group');
-            if (!row) continue;
-            const stopBtn = row.querySelector<HTMLButtonElement>('button[title="stop scheduled task"]');
-            if (stopBtn && !stopBtn.disabled) {
-              stopBtn.click();
-              return true;
-            }
-          }
-          return false;
-        }, installedPipeName)) as boolean,
+        (await browser.execute(() => {
+          const pane = document.querySelector<HTMLElement>('[data-testid="pipe-detail"]');
+          const stopBtn = pane?.querySelector<HTMLButtonElement>('button[title="stop scheduled task"]');
+          if (!stopBtn || stopBtn.disabled) return false;
+          stopBtn.click();
+          return true;
+        })) as boolean,
       {
         timeout: 10_000,
         timeoutMsg: `Could not click stop button for "${installedPipeName}"`,
@@ -603,21 +585,16 @@ describe.skip('Pipes: discover → install → play', function () {
     );
 
     // Stop is best-effort (SIGTERM then a delayed SIGKILL pass), so give the
-    // subprocess time to die and the row to flip back to the run button.
+    // subprocess time to die and the detail pane to flip back to the run button.
     await browser.waitUntil(
       async () =>
-        (await browser.execute((name: string) => {
-          // Same 'button, span' locator as above — the name is a <span>.
-          for (const nameEl of Array.from(document.querySelectorAll<HTMLElement>('button, span'))) {
-            if (nameEl.textContent?.trim() !== name) continue;
-            const row = nameEl.closest<HTMLElement>('div.group');
-            if (!row) continue;
-            const hasStop = !!row.querySelector('button[title="stop scheduled task"]');
-            const hasRun = !!row.querySelector('button[title="run scheduled task"]');
-            return !hasStop && hasRun;
-          }
-          return false;
-        }, installedPipeName)) as boolean,
+        (await browser.execute(() => {
+          const pane = document.querySelector<HTMLElement>('[data-testid="pipe-detail"]');
+          if (!pane) return false;
+          const hasStop = !!pane.querySelector('button[title="stop scheduled task"]');
+          const hasRun = !!pane.querySelector('button[title="run scheduled task"]');
+          return !hasStop && hasRun;
+        })) as boolean,
       {
         timeout: 60_000,
         timeoutMsg: 'Pipe did not leave running state after clicking stop',

@@ -16,7 +16,7 @@ use oasgen::OaSchema;
 use screenpipe_events::{send_event, subscribe_to_all_events, Event as ScreenpipeEvent};
 
 use futures::{SinkExt, StreamExt};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     future::Future,
     sync::{
@@ -35,6 +35,65 @@ use crate::server::AppState;
 
 use super::health::health_check;
 use super::meetings::{resolve_meeting_status_from, MeetingStatusResponse};
+
+const MEETING_OVERLAY_SNAPSHOT_LIMIT: usize = 50;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MeetingOverlayTranscriptItem {
+    meeting_id: i64,
+    item_id: String,
+    device_type: String,
+    speaker_name: Option<String>,
+    text: String,
+    captured_at: String,
+    is_final: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+enum MeetingOverlayMessage {
+    Status(MeetingStatusResponse),
+    Snapshot {
+        #[serde(rename = "meetingId")]
+        meeting_id: i64,
+        items: Vec<MeetingOverlayTranscriptItem>,
+    },
+    Delta(MeetingOverlayTranscriptItem),
+    Final(MeetingOverlayTranscriptItem),
+}
+
+fn meeting_overlay_item_from_event(
+    value: &serde_json::Value,
+    is_final: bool,
+) -> Option<MeetingOverlayTranscriptItem> {
+    let text_key = if is_final { "transcript" } else { "delta" };
+    let text = value.get(text_key)?.as_str()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+
+    Some(MeetingOverlayTranscriptItem {
+        meeting_id: value.get("meeting_id")?.as_i64()?,
+        item_id: value.get("item_id")?.as_str()?.to_string(),
+        device_type: value
+            .get("device_type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("output")
+            .to_string(),
+        speaker_name: value
+            .get("speaker_name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        text: text.to_string(),
+        captured_at: value
+            .get("captured_at")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        is_final,
+    })
+}
 
 /// Maximum number of concurrent WebSocket connections allowed.
 /// This prevents file descriptor exhaustion from too many open connections.
@@ -363,6 +422,177 @@ pub(crate) async fn ws_meeting_status_handler(
     }
 }
 
+/// Purpose-built stream for the compact meeting overlay. The first frames are
+/// always authoritative status plus a bounded recent transcript snapshot, then
+/// live delta/final events follow on the same socket. This lets a client that
+/// opens halfway through a meeting render immediately without polling or
+/// opening a second all-events connection.
+pub(crate) async fn ws_meeting_overlay_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+    lifecycle: Option<Extension<WebSocketLifecycle>>,
+) -> Response {
+    let lifecycle = WebSocketLifecycle::from_extension(lifecycle);
+    match try_acquire_ws_connection(&state.ws_connection_count) {
+        Some(guard) => lifecycle.on_upgrade(ws, move |socket, lifecycle| {
+            handle_meeting_overlay_socket(socket, state, guard, lifecycle)
+        }),
+        None => Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .body(Body::from("Too many WebSocket connections"))
+            .unwrap(),
+    }
+}
+
+async fn send_meeting_overlay_message(
+    socket: &mut WebSocket,
+    message: &MeetingOverlayMessage,
+) -> bool {
+    let Ok(json) = serde_json::to_string(message) else {
+        return false;
+    };
+    socket.send(Message::Text(json)).await.is_ok()
+}
+
+async fn send_meeting_overlay_snapshot(
+    socket: &mut WebSocket,
+    state: &Arc<AppState>,
+    meeting_id: i64,
+) -> bool {
+    let segments = match state.db.list_meeting_transcript_segments(meeting_id).await {
+        Ok(segments) => segments,
+        Err(error) => {
+            error!(
+                "meeting overlay: failed to load transcript snapshot for {}: {}",
+                meeting_id, error
+            );
+            Vec::new()
+        }
+    };
+    let mut items = segments
+        .into_iter()
+        .rev()
+        .take(MEETING_OVERLAY_SNAPSHOT_LIMIT)
+        .map(|segment| MeetingOverlayTranscriptItem {
+            meeting_id,
+            item_id: segment.item_id,
+            device_type: segment.device_type,
+            speaker_name: segment.speaker_name,
+            text: segment.transcript,
+            captured_at: segment.captured_at,
+            is_final: true,
+        })
+        .collect::<Vec<_>>();
+    items.reverse();
+
+    send_meeting_overlay_message(
+        socket,
+        &MeetingOverlayMessage::Snapshot { meeting_id, items },
+    )
+    .await
+}
+
+async fn handle_meeting_overlay_socket(
+    mut socket: WebSocket,
+    state: Arc<AppState>,
+    _guard: WsConnectionGuard,
+    lifecycle: WebSocketLifecycle,
+) {
+    // Subscribe before reading the snapshot. Events published while the DB
+    // query is running remain queued, and clients dedupe by itemId.
+    let mut status_stream =
+        screenpipe_events::subscribe_to_event::<MeetingStatusResponse>("meeting_status_changed");
+    let mut delta_stream =
+        screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_transcript_delta");
+    let mut final_stream =
+        screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_transcript_final");
+
+    let initial_status = tokio::select! {
+        biased;
+        _ = lifecycle.cancelled() => return,
+        status = resolve_meeting_status_from(state.db.as_ref(), state.manual_meeting.as_ref()) => status,
+    };
+    let Ok(initial_status) = initial_status else {
+        return;
+    };
+    let mut active_meeting_id = initial_status.active_meeting_id;
+    if !send_meeting_overlay_message(&mut socket, &MeetingOverlayMessage::Status(initial_status))
+        .await
+    {
+        return;
+    }
+    if let Some(meeting_id) = active_meeting_id {
+        if !send_meeting_overlay_snapshot(&mut socket, &state, meeting_id).await {
+            return;
+        }
+    }
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = lifecycle.cancelled() => break,
+            event = status_stream.next() => {
+                let Some(event) = event else { break };
+                let previous_id = active_meeting_id;
+                active_meeting_id = event.data.active_meeting_id;
+                if !send_meeting_overlay_message(
+                    &mut socket,
+                    &MeetingOverlayMessage::Status(event.data),
+                ).await {
+                    break;
+                }
+                if active_meeting_id != previous_id {
+                    if let Some(meeting_id) = active_meeting_id {
+                        if !send_meeting_overlay_snapshot(&mut socket, &state, meeting_id).await {
+                            break;
+                        }
+                    }
+                }
+            }
+            event = delta_stream.next() => {
+                let Some(event) = event else { break };
+                let Some(item) = meeting_overlay_item_from_event(&event.data, false) else {
+                    continue;
+                };
+                if active_meeting_id != Some(item.meeting_id) {
+                    continue;
+                }
+                if !send_meeting_overlay_message(
+                    &mut socket,
+                    &MeetingOverlayMessage::Delta(item),
+                ).await {
+                    break;
+                }
+            }
+            event = final_stream.next() => {
+                let Some(event) = event else { break };
+                let Some(item) = meeting_overlay_item_from_event(&event.data, true) else {
+                    continue;
+                };
+                if active_meeting_id != Some(item.meeting_id) {
+                    continue;
+                }
+                if !send_meeting_overlay_message(
+                    &mut socket,
+                    &MeetingOverlayMessage::Final(item),
+                ).await {
+                    break;
+                }
+            }
+            _ = tokio::time::sleep(EVENTS_WEBSOCKET_PING_INTERVAL) => {
+                if socket.send(Message::Ping(vec![])).await.is_err() {
+                    break;
+                }
+            }
+            result = socket.recv() => {
+                if result.is_none() {
+                    break;
+                }
+            }
+        }
+    }
+}
+
 async fn handle_meeting_status_socket(
     mut socket: WebSocket,
     state: Arc<AppState>,
@@ -468,5 +698,55 @@ mod tests {
     #[test]
     fn events_websocket_ping_interval_is_not_busy() {
         assert_eq!(EVENTS_WEBSOCKET_PING_INTERVAL, Duration::from_secs(15));
+    }
+
+    #[test]
+    fn meeting_overlay_normalizes_live_delta_and_final_events() {
+        let delta = serde_json::json!({
+            "meeting_id": 42,
+            "item_id": "segment-1",
+            "device_type": "output",
+            "delta": " still speaking ",
+            "captured_at": "2026-08-06T18:00:00Z",
+        });
+        let item = meeting_overlay_item_from_event(&delta, false).unwrap();
+        assert_eq!(item.meeting_id, 42);
+        assert_eq!(item.item_id, "segment-1");
+        assert_eq!(item.text, "still speaking");
+        assert!(!item.is_final);
+
+        let final_event = serde_json::json!({
+            "meeting_id": 42,
+            "item_id": "segment-1",
+            "device_type": "input",
+            "speaker_name": "Louis",
+            "transcript": "final words",
+            "captured_at": "2026-08-06T18:00:01Z",
+        });
+        let item = meeting_overlay_item_from_event(&final_event, true).unwrap();
+        assert_eq!(item.speaker_name.as_deref(), Some("Louis"));
+        assert_eq!(item.text, "final words");
+        assert!(item.is_final);
+    }
+
+    #[test]
+    fn meeting_overlay_drops_empty_or_unscoped_transcript_events() {
+        assert!(meeting_overlay_item_from_event(
+            &serde_json::json!({
+                "meeting_id": 42,
+                "item_id": "empty",
+                "delta": "   ",
+            }),
+            false,
+        )
+        .is_none());
+        assert!(meeting_overlay_item_from_event(
+            &serde_json::json!({
+                "item_id": "missing-meeting",
+                "transcript": "should not leak",
+            }),
+            true,
+        )
+        .is_none());
     }
 }

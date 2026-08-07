@@ -11,6 +11,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
+import { AcpConfigSelector } from "@/components/chat/standalone/acp-config-selector";
 import { ThinkingLevelSelector } from "@/components/thinking-level-selector";
 import { ComposerUtilityMenu } from "@/components/chat/standalone/composer-utility-menu";
 import type {
@@ -40,6 +41,10 @@ export function ComposerControlsRow({
   sendButton,
 }: ComposerControlsRowProps) {
   const aiPresets = modelControls.settings.aiPresets;
+  // ACP presets drive their own model/mode/toggle selectors (AcpConfigSelector);
+  // the pi thinking-level control belongs to raw screenpipe pi only.
+  const isAcp = modelControls.activePreset?.provider === "acp";
+  const acpAgentId = modelControls.activePreset?.acpAgent?.id ?? null;
 
   return (
     <div
@@ -136,10 +141,24 @@ export function ComposerControlsRow({
           }
         }}
       />
-      <ThinkingLevelSelector
-        streaming={isStreaming}
-        sessionId={modelControls.currentQueueSessionId}
-      />
+      {/* ACP presets get the "config" popover; raw pi gets the thinking-level
+          selector. Gated on the active preset (not on stale session config) so
+          switching to a non-ACP preset hides the config control immediately
+          instead of lingering until the old ACP session tears down. */}
+      {isAcp ? (
+        <AcpConfigSelector
+          sessionId={modelControls.currentQueueSessionId}
+          agentId={acpAgentId}
+          activePreset={modelControls.activePreset}
+          onPersistDefault={modelControls.onAcpConfigDefault}
+          onReauthenticate={modelControls.onReauthenticate}
+        />
+      ) : (
+        <ThinkingLevelSelector
+          streaming={isStreaming}
+          sessionId={modelControls.currentQueueSessionId}
+        />
+      )}
       <Button
         type={sendButton.isStopMode ? "button" : "submit"}
         size="icon"

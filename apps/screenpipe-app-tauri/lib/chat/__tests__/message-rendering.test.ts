@@ -16,6 +16,8 @@ import {
   getMessageIntentLabel,
   hasRenderableAssistantBody,
   isPlaceholderConversationTitle,
+  isPendingAgentActionMessage,
+  hasPendingPermissionRequest,
   isSteeredAssistantMessage,
   type ChatRenderItem,
 } from "../message-rendering";
@@ -27,6 +29,32 @@ function message(overrides: Partial<Message> & Pick<Message, "id" | "role">): Me
     ...overrides,
   };
 }
+
+describe("pending agent-action detection", () => {
+  const permissionCard = message({
+    id: "p1",
+    role: "assistant",
+    contentBlocks: [
+      { type: "agent_action", actionKind: "permission", requestId: "r1", sessionId: "s", title: "run bash", options: [] } as never,
+    ],
+  });
+  const toolsTurn = message({
+    id: "a1",
+    role: "assistant",
+    contentBlocks: [{ type: "tool", toolCall: { id: "t1", toolName: "bash", args: {}, isRunning: false } }],
+  });
+
+  it("flags an agent-action-only assistant message", () => {
+    expect(isPendingAgentActionMessage(permissionCard)).toBe(true);
+    expect(isPendingAgentActionMessage(toolsTurn)).toBe(false);
+    expect(isPendingAgentActionMessage(message({ id: "u", role: "user", content: "hi" }))).toBe(false);
+  });
+
+  it("detects a pending permission request across the transcript", () => {
+    expect(hasPendingPermissionRequest([toolsTurn, permissionCard])).toBe(true);
+    expect(hasPendingPermissionRequest([toolsTurn])).toBe(false);
+  });
+});
 
 describe("message rendering helpers", () => {
   it("formats work duration labels", () => {

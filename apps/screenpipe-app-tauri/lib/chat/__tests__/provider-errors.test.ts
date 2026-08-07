@@ -39,6 +39,20 @@ describe("provider error copy", () => {
     expect(presentation?.message).not.toContain("finish_reason");
   });
 
+  it("maps an account-standing denial to friendly, non-retryable copy", () => {
+    const raw = 'Error: 403 "{\\"error\\":\\"account_not_in_good_standing\\",\\"message\\":\\"This screenpipe account is not in good standing.\\",\\"reason\\":\\"banned\\"}"';
+    const presentation = buildProviderErrorPresentation(raw, {
+      provider: "screenpipe-cloud",
+      model: "auto",
+    });
+
+    expect(presentation).toMatchObject({ kind: "provider", retryable: false });
+    expect(presentation?.message).toContain("not in good standing");
+    expect(presentation?.message).toContain("contact screenpipe support");
+    expect(presentation?.message).not.toContain("403");
+    expect(presentation?.message).not.toContain("account_not_in_good_standing");
+  });
+
   it("does not classify an ordinary provider error as a safety refusal", () => {
     expect(SafetyRefusalError.from("Connection error.")).toBeNull();
     expect(
