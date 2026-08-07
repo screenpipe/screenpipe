@@ -296,19 +296,24 @@ pub async fn livetext_update_position(
 
 #[specta::specta]
 #[tauri::command]
-pub async fn livetext_highlight(terms: Vec<String>) -> Result<i32, String> {
+/// Highlight `terms` on the frame they were matched in. `frame_id` scopes the
+/// request: the bridge only paints when that frame's analysis is on the overlay,
+/// and re-paints automatically once it lands (analysis is asynchronous, so the
+/// highlight request usually arrives first).
+pub async fn livetext_highlight(terms: Vec<String>, frame_id: String) -> Result<i32, String> {
     #[cfg(target_os = "macos")]
     {
         let json = serde_json::to_string(&terms).map_err(|e| format!("json error: {}", e))?;
         let json_c = CString::new(json).map_err(|e| format!("invalid json: {}", e))?;
+        let frame_id_c = CString::new(frame_id).map_err(|e| format!("invalid frame_id: {}", e))?;
         let count = crate::window::with_autorelease_pool(|| unsafe {
-            livetext_ffi::lt_highlight_ranges(json_c.as_ptr())
+            livetext_ffi::lt_highlight_ranges(json_c.as_ptr(), frame_id_c.as_ptr())
         });
         return Ok(count);
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = terms;
+        let _ = (terms, frame_id);
         Ok(-1)
     }
 }

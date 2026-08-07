@@ -119,10 +119,13 @@ async function openPipeAdvanced(): Promise<void> {
   await search.waitForExist({ timeout: t(20_000) });
   await search.setValue(PIPE_NAME);
 
+  // The list is master-detail: the row selects, the detail pane holds config,
+  // runs and advanced. Selecting is idempotent — clicking the already-selected
+  // row keeps the pane open.
   const row = await $(`[data-testid="pipe-row-${PIPE_NAME}"]`);
   await row.waitForExist({ timeout: t(20_000) });
-  if ((await row.$('[role="button"]').getAttribute("aria-expanded")) !== "true") {
-    await row.$('[role="button"]').click();
+  if ((await row.getAttribute("aria-current")) !== "true") {
+    await row.click();
   }
   const advanced = await $(`[data-testid="pipe-advanced-tab-${PIPE_NAME}"]`);
   await advanced.waitForExist({ timeout: t(10_000) });
@@ -322,8 +325,8 @@ describe("Pipes: continue in one chat", function () {
     });
     expect(await historySwitch.getAttribute("data-state")).toBe("checked");
 
-    const row = await $(`[data-testid="pipe-row-${PIPE_NAME}"]`);
-    expect((await row.getText()).toLowerCase()).toContain("one chat");
+    const detail = await $('[data-testid="pipe-detail"]');
+    expect((await detail.getText()).toLowerCase()).toContain("one chat");
     const screenshot = await saveScreenshot("pipe-continuous-chat-setting");
     expect(existsSync(screenshot)).toBe(true);
   });
@@ -491,8 +494,8 @@ describe("Pipes: continue in one chat", function () {
     await piConversation.waitForRequestCount(6, "human reply during reset attempt");
 
     await openPipeAdvanced();
-    const row = await $(`[data-testid="pipe-row-${PIPE_NAME}"]`);
-    const startFresh = await row.$(`[data-testid="pipe-history-reset-${PIPE_NAME}"]`);
+    const detail = await $('[data-testid="pipe-detail"]');
+    const startFresh = await detail.$(`[data-testid="pipe-history-reset-${PIPE_NAME}"]`);
     await startFresh.waitForExist({ timeout: t(10_000) });
     await startFresh.click();
 
@@ -500,7 +503,7 @@ describe("Pipes: continue in one chat", function () {
     await confirm.waitForExist({ timeout: t(10_000) });
     await confirm.click();
     await browser.waitUntil(
-      async () => (await row.getText()).toLowerCase().includes("context was not cleared"),
+      async () => (await detail.getText()).toLowerCase().includes("context was not cleared"),
       {
         timeout: t(10_000),
         interval: 100,
@@ -515,7 +518,7 @@ describe("Pipes: continue in one chat", function () {
     piConversation.setResponseDelay(0);
     await confirm.click();
     await browser.waitUntil(
-      async () => (await row.getText()).toLowerCase().includes("context cleared"),
+      async () => (await detail.getText()).toLowerCase().includes("context cleared"),
       {
         timeout: t(10_000),
         interval: 200,

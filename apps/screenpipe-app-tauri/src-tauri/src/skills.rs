@@ -33,6 +33,17 @@ fn background_ai_tools_home() -> Option<PathBuf> {
     }
     #[cfg(not(feature = "e2e"))]
     {
+        // A dev build gets a fresh data dir, so onboarding reads as incomplete
+        // and this background setup runs — rewriting the developer's real
+        // ~/.claude, ~/.codex/config.toml, ~/.cursor/mcp.json … to point at the
+        // dev port. `dev_isolation` points this at an empty fake home, where no
+        // agent is detected and nothing is written. Release builds and an
+        // explicit override still resolve the real home.
+        if let Some(home) = std::env::var_os(crate::dev_isolation::AI_TOOLS_HOME_ENV) {
+            if !home.is_empty() {
+                return Some(PathBuf::from(home));
+            }
+        }
         dirs::home_dir()
     }
 }

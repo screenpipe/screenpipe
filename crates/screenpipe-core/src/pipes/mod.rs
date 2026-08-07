@@ -1163,6 +1163,13 @@ pub struct PipeStatus {
     /// Whether the user has edited pipe.md since install (source_hash mismatch).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locally_modified: Option<bool>,
+    /// When this pipe is next due to fire, or None when it never will (manual,
+    /// unparseable, or past its end bound). Computed from the same schedule the
+    /// scheduler reads, anchored on the same last-run instant, so the UI cannot
+    /// promise a run the scheduler will not make. A value in the past means
+    /// "due now" — the next tick will pick it up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_run: Option<DateTime<Utc>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1632,13 +1639,29 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
         other => other,
     };
 
+    let is_pipe_compatible = |preset: &serde_json::Value| {
+        preset.get("provider").and_then(|value| value.as_str()) != Some("acp")
+    };
+
     let preset = if normalized_id == "default" {
-        // find the one with defaultPreset: true
-        presets.iter().find(|p| {
-            p.get("defaultPreset")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-        })
+        // An ACP chat preset cannot run in the headless raw-Pi scheduler. If
+        // it is the user's default, preserve existing pipes by preferring the
+        // dedicated `pipes` preset, then another compatible raw preset.
+        presets
+            .iter()
+            .filter(|preset| is_pipe_compatible(preset))
+            .find(|p| {
+                p.get("defaultPreset")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            })
+            .or_else(|| {
+                presets
+                    .iter()
+                    .filter(|preset| is_pipe_compatible(preset))
+                    .find(|p| p.get("id").and_then(|v| v.as_str()) == Some("pipes"))
+            })
+            .or_else(|| presets.iter().find(|preset| is_pipe_compatible(preset)))
     } else {
         presets
             .iter()
@@ -1650,6 +1673,17 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
                     .find(|p| p.get("id").and_then(|v| v.as_str()) == Some(preset_id))
             })
     }?;
+
+    // ACP presets launch an interactive desktop harness through the Tauri
+    // bridge. The headless pipe runtime still uses raw Pi, so treating the ACP
+    // adapter id as a model would silently route to the wrong provider.
+    if preset.get("provider").and_then(|value| value.as_str()) == Some("acp") {
+        warn!(
+            "preset '{}' uses ACP and is not available to the raw Pi pipe runtime",
+            preset_id
+        );
+        return None;
+    }
 
     let model = preset.get("model")?.as_str()?.to_string();
 
@@ -1717,6 +1751,9 @@ fn list_available_preset_ids(pipes_dir: &Path) -> Vec<String> {
         .and_then(|p| p.as_array())
         .map(|arr| {
             arr.iter()
+                .filter(|preset| {
+                    preset.get("provider").and_then(|value| value.as_str()) != Some("acp")
+                })
                 .filter_map(|p| p.get("id").and_then(|v| v.as_str()).map(str::to_string))
                 .collect()
         })
@@ -2188,7 +2225,7 @@ pub type ConnectionCheck = Arc<
 >;
 
 /// Default execution timeout: 10 minutes.
-const DEFAULT_TIMEOUT_SECS: u64 = 600;
+pub(crate) const DEFAULT_TIMEOUT_SECS: u64 = 600;
 
 /// Cooldown held after a scheduled run finishes *when other scheduled pipes
 /// are still queued behind the execution semaphore*. Spaces consecutive runs
@@ -2799,6 +2836,9 @@ impl PipeManager {
                         source_slug: config.source_slug.clone(),
                         installed_version: config.installed_version,
                         locally_modified,
+                        // Filled in below, once the scheduler state has been
+                        // reconciled — it owns the anchor this depends on.
+                        next_run: None,
                     };
                     (name.clone(), status)
                 })
@@ -2815,8 +2855,10 @@ impl PipeManager {
 
         let mut result = Vec::with_capacity(partial.len());
         for (name, mut status) in partial {
+            let mut scheduler_anchor = None;
             if let Some(state) = states.get(&name) {
                 status.consecutive_failures = state.consecutive_failures;
+                scheduler_anchor = state.last_run_at;
                 if state
                     .last_run_at
                     .zip(status.last_run)
@@ -2827,6 +2869,12 @@ impl PipeManager {
                     status.last_success = Some(state.consecutive_failures == 0);
                 }
             }
+            // Anchor on the scheduler's own last-run when it has one. That is
+            // the instant the scheduler counts from, and it is not always the
+            // newest execution: a run skipped by the run guard advances the
+            // scheduler state without producing a log. Using the displayed
+            // `last_run` instead would drift the countdown off the real one.
+            status.next_run = next_run_at(&status.config, scheduler_anchor.or(status.last_run));
             result.push(status);
         }
         result
@@ -2976,15 +3024,19 @@ impl PipeManager {
                     source_slug: config.source_slug.clone(),
                     installed_version: config.installed_version,
                     locally_modified,
+                    // Filled in below, once scheduler state is known.
+                    next_run: None,
                 }
             })
         }?;
         // locks released
 
         // Pass 2: query DB for scheduler state
+        let mut scheduler_anchor = None;
         if let Some(ref store) = self.store {
             if let Ok(Some(state)) = store.get_scheduler_state(name).await {
                 status.consecutive_failures = state.consecutive_failures;
+                scheduler_anchor = state.last_run_at;
                 if state
                     .last_run_at
                     .zip(status.last_run)
@@ -2996,6 +3048,8 @@ impl PipeManager {
                 }
             }
         }
+        // Same anchoring rule as `list_pipes` — see the comment there.
+        status.next_run = next_run_at(&status.config, scheduler_anchor.or(status.last_run));
         Some(status)
     }
 
@@ -7523,6 +7577,77 @@ pub fn next_occurrences(cfg: &ScheduleConfig, n: usize) -> Vec<DateTime<Utc>> {
     out
 }
 
+/// When a structured schedule is next due, anchored on `last_run`.
+///
+/// Deliberately mirrors `should_run_config` step for step — same start/end
+/// gating, same grace/catch-up anchoring — so what the UI promises and what the
+/// scheduler actually does cannot drift apart. Returns None when the schedule
+/// will never fire again (past its `ending` / `max_occurrences` bound).
+///
+/// A returned instant may be in the past: that means "due now", and the next
+/// 30s tick will run it. Callers render that as "now" rather than a negative
+/// duration.
+///
+/// Note this is NOT `next_occurrences(cfg, 1)`. That helper anchors on
+/// `Utc::now()`, which for `Frequency::Minutes|Hours` (`after + interval`)
+/// would report a fresh full interval on every poll — "every 7m" would read
+/// "in 7 minutes" forever, never counting down.
+fn next_run_at_config(cfg: &ScheduleConfig, last_run: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let now = Utc::now();
+    let end = effective_ending(cfg);
+    if end.is_some_and(|e| now > e) {
+        return None;
+    }
+    let mut search_from = if last_run == DateTime::<Utc>::UNIX_EPOCH {
+        now - CRON_GRACE_WINDOW
+    } else {
+        std::cmp::max(last_run, now - CRON_CATCHUP_WINDOW)
+    };
+    if let Some(start) = cfg.starting {
+        search_from = std::cmp::max(search_from, start - ChronoDuration::seconds(1));
+    }
+    let next = next_fire(cfg, search_from)?;
+    if end.is_some_and(|e| next > e) {
+        return None;
+    }
+    Some(next)
+}
+
+/// When a legacy string schedule is next due, anchored on `last_run`.
+/// Counterpart to `should_run`, matching its per-variant semantics.
+fn next_run_at_legacy(schedule: &str, last_run: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    match parse_schedule(schedule) {
+        // "manual" and unparseable schedules never fire on their own.
+        None => None,
+        Some(ParsedSchedule::Interval(interval)) => {
+            let step = ChronoDuration::from_std(interval).ok()?;
+            if last_run == DateTime::<Utc>::UNIX_EPOCH {
+                // Never run: `should_run` fires it on the next tick.
+                Some(Utc::now())
+            } else {
+                Some(last_run + step)
+            }
+        }
+        // Cron is evaluated in local time by `cron_should_fire` (issue #3851),
+        // so the next slot must resolve in local time too.
+        Some(ParsedSchedule::Cron(cron)) => cron
+            .after(&Local::now())
+            .next()
+            .map(|t| t.with_timezone(&Utc)),
+        Some(ParsedSchedule::Once(run_at)) => Some(run_at),
+    }
+}
+
+/// When this pipe is next due, or None if it never is. Structured
+/// `schedule_config` is authoritative when set, exactly as in the scheduler.
+pub fn next_run_at(config: &PipeConfig, last_run: Option<DateTime<Utc>>) -> Option<DateTime<Utc>> {
+    let anchor = last_run.unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
+    match &config.schedule_config {
+        Some(cfg) => next_run_at_config(cfg, anchor),
+        None => next_run_at_legacy(&config.schedule, anchor),
+    }
+}
+
 /// Structured-schedule counterpart to `should_run`. Honors timezone +
 /// start/end bounds and reuses the same grace/catch-up windows as the cron path.
 fn should_run_config(cfg: &ScheduleConfig, last_run: DateTime<Utc>) -> bool {
@@ -9034,6 +9159,44 @@ mod tests {
     }
 
     #[test]
+    fn acp_presets_are_not_exposed_to_raw_pi_pipes() {
+        let temp = tempfile::tempdir().unwrap();
+        let pipes_dir = temp.path().join("pipes");
+        std::fs::create_dir_all(&pipes_dir).unwrap();
+        std::fs::write(
+            temp.path().join("store.bin"),
+            serde_json::to_vec(&serde_json::json!({
+                "settings": {
+                    "aiPresets": [
+                        {
+                            "id": "coding-agent",
+                            "provider": "acp",
+                            "model": "codex-acp",
+                            "defaultPreset": true
+                        },
+                        {
+                            "id": "raw-pi",
+                            "provider": "screenpipe-cloud",
+                            "model": "auto",
+                            "defaultPreset": false
+                        }
+                    ]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let default = resolve_preset(&pipes_dir, "default").expect("raw Pi default fallback");
+        assert_eq!(default.provider.as_deref(), Some("screenpipe"));
+        assert_eq!(default.model, "auto");
+        assert!(resolve_preset(&pipes_dir, "coding-agent").is_none());
+        let raw = resolve_preset(&pipes_dir, "raw-pi").expect("raw Pi preset");
+        assert_eq!(raw.provider.as_deref(), Some("screenpipe"));
+        assert_eq!(list_available_preset_ids(&pipes_dir), vec!["raw-pi"]);
+    }
+
+    #[test]
     fn cron_fires_relative_to_scheduled_time() {
         use chrono::TimeZone;
         // Evaluated in the timezone of `now` (production passes Local::now()).
@@ -10026,6 +10189,121 @@ mod tests {
     }
 
     #[test]
+    fn next_run_counts_down_from_the_last_run_not_from_now() {
+        // The whole point of a dedicated helper: interval schedules anchor on
+        // last_run, so the countdown actually shrinks between polls. Anchoring
+        // on `Utc::now()` (what `next_occurrences` does) would report a fresh
+        // full interval forever.
+        let mut c = cfg(Frequency::Minutes);
+        c.interval = 30;
+        let last = Utc::now() - chrono::Duration::minutes(25);
+        let next = next_run_at_config(&c, last).expect("interval schedule always has a next slot");
+        let remaining = next.signed_duration_since(Utc::now()).num_minutes();
+        // ~5 minutes left, not ~30.
+        assert!(
+            (2..=7).contains(&remaining),
+            "expected ~5 min remaining, got {remaining}"
+        );
+    }
+
+    #[test]
+    fn next_run_agrees_with_should_run() {
+        // Display and behaviour must not drift: a slot in the past means the
+        // scheduler considers it due, and vice versa.
+        let mut c = cfg(Frequency::Minutes);
+        c.interval = 30;
+
+        let overdue = Utc::now() - chrono::Duration::minutes(31);
+        assert!(should_run_config(&c, overdue));
+        assert!(next_run_at_config(&c, overdue).expect("has a slot") <= Utc::now());
+
+        let recent = Utc::now() - chrono::Duration::minutes(5);
+        assert!(!should_run_config(&c, recent));
+        assert!(next_run_at_config(&c, recent).expect("has a slot") > Utc::now());
+    }
+
+    #[test]
+    fn next_run_is_none_past_the_end_bound() {
+        let mut c = cfg(Frequency::Days);
+        c.ending = Some(Utc::now() - chrono::Duration::hours(1));
+        assert!(next_run_at_config(&c, DateTime::UNIX_EPOCH).is_none());
+
+        // Same for a "stop after N runs" rule whose N-th slot has passed.
+        let mut c = cfg(Frequency::Days);
+        c.at_hour = 9;
+        c.starting = Some(utc_dt(2020, 1, 1, 0, 0));
+        c.max_occurrences = Some(2);
+        assert!(next_run_at_config(&c, DateTime::UNIX_EPOCH).is_none());
+    }
+
+    #[test]
+    fn next_run_manual_and_legacy_strings() {
+        let never = DateTime::<Utc>::UNIX_EPOCH;
+        // Manual / unparseable never fire on their own.
+        assert!(next_run_at_legacy("manual", never).is_none());
+        assert!(next_run_at_legacy("", never).is_none());
+        assert!(next_run_at_legacy("not a schedule", never).is_none());
+
+        // Legacy interval anchors on last_run just like the structured path.
+        let last = Utc::now() - chrono::Duration::minutes(10);
+        let next = next_run_at_legacy("every 30m", last).expect("interval has a next slot");
+        let remaining = next.signed_duration_since(Utc::now()).num_minutes();
+        assert!(
+            (17..=22).contains(&remaining),
+            "expected ~20 min remaining, got {remaining}"
+        );
+
+        // Never-run interval pipes are due immediately, matching `should_run`.
+        assert!(should_run("every 30m", never));
+        assert!(next_run_at_legacy("every 30m", never).expect("has a slot") <= Utc::now());
+
+        // Cron resolves to a future slot.
+        let next = next_run_at_legacy("0 9 * * *", never).expect("cron has a next slot");
+        assert!(next > Utc::now());
+
+        // One-off returns its instant.
+        let at = Utc::now() + chrono::Duration::hours(3);
+        let once = next_run_at_legacy(&format!("at {}", at.to_rfc3339()), never);
+        assert!(once.is_some_and(|t| (t - at).num_seconds().abs() <= 1));
+    }
+
+    #[test]
+    fn next_run_at_prefers_structured_config() {
+        // `schedule_config` is authoritative when set — same precedence the
+        // scheduler applies — so a contradictory legacy string is ignored.
+        let mut cfg_every_30m = cfg(Frequency::Minutes);
+        cfg_every_30m.interval = 30;
+        let mut config = PipeConfig {
+            name: "test-pipe".to_string(),
+            schedule: "manual".to_string(),
+            enabled: true,
+            agent: "pi".to_string(),
+            model: "claude-haiku-4-5".to_string(),
+            provider: None,
+            preset: vec!["default".to_string()],
+            permissions: PipePermissionsConfig::default(),
+            schedule_config: Some(cfg_every_30m),
+            config: HashMap::new(),
+            connections: vec![],
+            timeout: None,
+            source_slug: None,
+            installed_version: None,
+            source_hash: None,
+            subagent: false,
+            history: false,
+            privacy_filter: false,
+            artifacts: vec![],
+            trigger: None,
+        };
+        let last = Utc::now() - chrono::Duration::minutes(25);
+        // Legacy "manual" alone would be None; the structured config wins.
+        assert!(next_run_at(&config, Some(last)).is_some());
+
+        config.schedule_config = None;
+        assert!(next_run_at(&config, Some(last)).is_none());
+    }
+
+    #[test]
     fn schedule_config_serde_roundtrip_yaml() {
         let mut c = cfg(Frequency::Weeks);
         c.days_of_week = vec![1, 3, 5];
@@ -10415,6 +10693,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             locally_modified: None,
+            next_run: None,
         };
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"current_execution_id\":99"));

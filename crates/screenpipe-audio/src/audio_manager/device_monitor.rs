@@ -2399,15 +2399,15 @@ async fn run_bluetooth_mic_gate_sweep(audio_manager: &AudioManager) {
     }
 
     for name in candidates {
-        if InputDeviceKind::detect(&name) != InputDeviceKind::Bluetooth {
-            continue;
-        }
         let Ok(device) = parse_audio_device(&name) else {
             continue;
         };
+        if InputDeviceKind::detect_input(&device.name) != InputDeviceKind::Bluetooth {
+            continue;
+        }
         // Per-device: a dedicated mic-only Bluetooth device (no output side
         // on the same hardware) is never gated, regardless of other devices.
-        let is_combo_headset = bluetooth_input_is_combo_headset(&name);
+        let is_combo_headset = bluetooth_input_is_combo_headset(&device.name);
         let allowed = bluetooth_mic_allowed(
             &InputDeviceKind::Bluetooth,
             is_combo_headset,

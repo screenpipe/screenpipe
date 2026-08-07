@@ -28,6 +28,7 @@ interface UseChatMessageActionsOptions {
   onOpenConnectionSetup?: (connectionId: string) => void | Promise<void>;
   onConnectConnectionAction?: (connectionId: string, block?: Extract<ContentBlock, { type: "connection_action" }>) => Promise<InlineConnectStatus | void> | InlineConnectStatus | void;
   onDeclineConnectionAction?: (block: Extract<ContentBlock, { type: "connection_action" }>) => void | Promise<void>;
+  onAnswerAgentAction?: (block: Extract<ContentBlock, { type: "agent_action" }>, selectedOptionId?: string) => Promise<boolean> | boolean;
 }
 
 export function useChatMessageActions({
@@ -46,6 +47,7 @@ export function useChatMessageActions({
   onOpenConnectionSetup,
   onConnectConnectionAction,
   onDeclineConnectionAction,
+  onAnswerAgentAction,
 }: UseChatMessageActionsOptions) {
   const [expandedSteerWorkIds, setExpandedSteerWorkIds] = useState<Set<string>>(() => new Set());
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
@@ -237,6 +239,7 @@ export function useChatMessageActions({
     onConnectConnectionAction,
     onContinueConnectionAction: (prompt, label) => sendMessage(prompt, label),
     onDismissConnectionAction: dismissConnectionAction,
+    onAnswerAgentAction,
     onAskUserReply: (reply, label) => sendMessage(reply, label),
     suppressSourceFooters: true,
   };

@@ -375,6 +375,7 @@ const E2E_COMMANDS: &[&str] = &[
     "set_tray_recording_status",
     "installed_tray_recording_status",
     "shortcut_reminder_visible",
+    "emit_meeting_overlay_transcript",
     "emit_agent_stream",
     "emit_settled_agent_follow_up",
     "emit_pipe_stream",
@@ -389,6 +390,7 @@ const E2E_COMMANDS: &[&str] = &[
     "inject_db_hard_fault",
     "db_hard_fault_state",
     "seed_flags",
+    "capture_pi_start_error",
 ];
 
 fn validate_e2e_command_inventory() {
@@ -723,6 +725,7 @@ int shortcut_show(const char* json) { (void)json; return -2; }
 int shortcut_hide(void) { return -2; }
 int shortcut_is_available(void) { return 0; }
 void shortcut_set_meeting_active(int active) { (void)active; }
+void shortcut_set_meeting_stop_result(int succeeded) { (void)succeeded; }
 void shortcut_set_inbox_unread(int count) { (void)count; }
 int shortcut_set_health_state(const char* state) { (void)state; return -2; }
 int shortcut_get_frame(double* x, double* y, double* w, double* h) {

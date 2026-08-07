@@ -160,6 +160,17 @@ export function buildContextOverflowMessage(errorStr = ""): string {
   return "This chat is too long for the selected model. Match Settings → AI → Advanced → model context tokens to the provider's context window. Start a new chat or remove large attachments/screenshots, then retry.";
 }
 
+export function buildAccountStandingMessage(errorStr: string): string | null {
+  const normalized = errorStr.toLowerCase();
+  if (
+    !normalized.includes("account_not_in_good_standing") &&
+    !normalized.includes("not in good standing")
+  ) {
+    return null;
+  }
+  return "screenpipe cloud AI is blocked for this account — it's flagged as not in good standing. Signing out and back in can refresh your account status. If you believe this is a mistake, contact screenpipe support. Local models and your own provider keys keep working in Settings → AI.";
+}
+
 export function buildChatGptAccountIdMessage(): string {
   return "Your ChatGPT sign-in doesn't include chat access: the login token has no ChatGPT account id. This usually means an Enterprise/Business workspace where the admin hasn't enabled Codex local app access. Reconnect ChatGPT in Settings → AI with a personal account, or ask your workspace admin to enable access.";
 }
@@ -255,6 +266,13 @@ export function buildProviderErrorPresentation(
       message: safetyRefusal.message,
       retryable: safetyRefusal.retryable,
     };
+  }
+
+  // Retrying an account-standing denial resends the same doomed request, so
+  // don't offer the retry affordance the generic provider path gets.
+  const standingMessage = buildAccountStandingMessage(errorStr);
+  if (standingMessage) {
+    return { kind: "provider", message: standingMessage, retryable: false };
   }
 
   const message = buildGenericProviderErrorMessage(errorStr, preset);

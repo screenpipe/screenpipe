@@ -31,19 +31,25 @@ import {
   flushSettingsWrites,
 } from "./settings-write-queue";
 
-/** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
-export const searchIndex: SettingsField[] = [
-  // Mirrors the labels actually rendered by RecordingSettings. Keep in sync.
+/** Search fields for the Audio & meetings destination. */
+export const audioSearchIndex: SettingsField[] = [
   { label: "Audio Recording", keywords: ["mic", "microphone", "audio"] },
+  { label: "Capture audio", keywords: ["continuous", "meetings only"] },
   { label: "Transcription engine", keywords: ["whisper", "cloud", "stt"] },
-  // conditional: rendered only when audio is enabled / engine selected.
   { label: "Live meeting notes", keywords: ["captions", "meeting", "live"], conditional: true },
   { label: "Append typed text to note", keywords: ["note", "append"], conditional: true },
+  { label: "Automatic meeting detection", keywords: ["zoom", "teams", "meet"], conditional: true },
+  { label: "Hide screenpipe from screen capture", keywords: ["screen share", "zoom", "screenshot", "privacy"] },
   { label: "Auto-select audio devices", keywords: ["devices", "bluetooth"], conditional: true },
   { label: "Languages", keywords: ["transcript language", "language"], conditional: true },
   { label: "Custom Vocabulary", keywords: ["vocabulary", "names", "jargon", "replacement"], conditional: true },
   { label: "Smart recording", keywords: ["smart recording", "beta", "meeting", "piggyback", "per-process", "meeting audio"], conditional: true },
   { label: "Always record bluetooth mic", keywords: ["bluetooth", "airpods", "headset", "a2dp", "sco", "meeting"], conditional: true },
+  { label: "Your name", keywords: ["speaker", "voice training"], conditional: true },
+];
+
+/** Search fields for the Screen destination. */
+export const screenSearchIndex: SettingsField[] = [
   { label: "Screen context capture", keywords: ["screen", "video", "accessibility"] },
   { label: "Structured app context", keywords: ["semantic", "ai", "messages", "email", "tasks", "code"], conditional: true },
   { label: "Use it for", keywords: ["memory", "computer use", "automation", "agent", "skills"], conditional: true },
@@ -56,6 +62,12 @@ export const searchIndex: SettingsField[] = [
   { label: "Capture frequency", keywords: ["screenshot", "interval", "idle", "cadence", "every", "minimum"], conditional: true },
   { label: "HD recording for meetings", keywords: ["hd", "meeting"] },
   { label: "Chinese mirror", keywords: ["china", "mirror"] },
+];
+
+/** Backward-compatible aggregate for callers that still treat capture as one area. */
+export const searchIndex: SettingsField[] = [
+  ...audioSearchIndex,
+  ...screenSearchIndex,
 ];
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
 import {
@@ -1743,14 +1755,21 @@ function HighFpsCard({
   );
 }
 
-export function RecordingSettings() {
+type RecordingSettingsSection = "audio" | "screen";
+
+export function RecordingSettings({ section }: { section: RecordingSettingsSection }) {
   const { settings, updateSettings, getDataDir, loadUser } = useSettings();
   const [openLanguages, setOpenLanguages] = React.useState(false);
   // Dev-only: warn if searchIndex drifts from rendered headings. State-gated
   // fields are marked `conditional: true` in the index above, so no false
   // positives while they're hidden — no hardcoded allowlist here.
   const sectionRootRef = React.useRef<HTMLDivElement | null>(null);
-  useSettingsIndexDriftCheck("Recording", searchIndex, sectionRootRef);
+  const activeSearchIndex = section === "audio" ? audioSearchIndex : screenSearchIndex;
+  useSettingsIndexDriftCheck(
+    section === "audio" ? "Audio & meetings" : "Screen",
+    activeSearchIndex,
+    sectionRootRef,
+  );
 
   // Add validation state
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
@@ -2551,6 +2570,23 @@ export function RecordingSettings() {
     handleSettingsChange({ disableAudio: checked }, true);
   };
 
+  const handleScreenSharePrivacyChange = async (hidden: boolean) => {
+    try {
+      await updateSettings({ hideAppInScreenShare: hidden });
+      const result = await commands.setAppScreenCaptureProtection(hidden);
+      if (result.status === "error") {
+        throw new Error(result.error);
+      }
+    } catch (error) {
+      await updateSettings({ hideAppInScreenShare: !hidden });
+      toast({
+        title: "could not update screen-share privacy",
+        description: error instanceof Error ? error.message : String(error),
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleAnalyticsToggle = (checked: boolean) => {
     const newValue = checked;
     handleSettingsChange({ analyticsEnabled: newValue }, true);
@@ -2717,9 +2753,15 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
   };
 
   return (
-    <div className="space-y-5" data-testid="section-settings-recording" ref={sectionRootRef}>
+    <div
+      className="space-y-5"
+      data-testid={`section-settings-${section}`}
+      ref={sectionRootRef}
+    >
       <p className="text-muted-foreground text-sm mb-4">
-        Screen and audio recording preferences
+        {section === "audio"
+          ? "Audio capture, transcription, and meeting notes"
+          : "Screen capture quality, monitors, and power"}
       </p>
 
       <div className="flex items-center justify-end">
@@ -2741,11 +2783,40 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           )}
       </div>
 
+      {section === "audio" && (
+      <>
       {/* Audio */}
-      <LockedSetting settingKey="audio_recording">
       <div className="space-y-2 pt-2">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Audio</h2>
+        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Audio &amp; meetings</h2>
 
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center space-x-2.5">
+                <Shield className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <div className="min-w-0">
+                  <h3 className="text-sm font-medium text-foreground">
+                    Hide screenpipe from screen capture
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    You&apos;ll still see screenpipe, but it stays hidden from screenshots and anyone watching your shared screen.
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="hideAppInScreenShare"
+                data-testid="hide-app-in-screen-share-toggle"
+                checked={settings.hideAppInScreenShare ?? true}
+                onCheckedChange={(checked) => {
+                  void handleScreenSharePrivacyChange(checked);
+                }}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <LockedSetting settingKey="audio_recording">
+        <div className="space-y-2">
         {/* Audio Recording Toggle */}
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
@@ -3774,7 +3845,12 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
 
       </div>
       </LockedSetting>
+      </div>
+      </>
+      )}
 
+      {section === "screen" && (
+      <>
       {/* Screen */}
       <LockedSetting settingKey="screen_recording">
       <div className="space-y-2 pt-2">
@@ -4140,8 +4216,11 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           <BatterySaverSection />
         </div>
       </details>
+      </>
+      )}
 
       {/* Voice Training Dialog */}
+      {section === "audio" && (
       <Dialog open={voiceTraining.dialogOpen} onOpenChange={(open) => {
         if (!open) {
           if (trainingIntervalRef.current) clearInterval(trainingIntervalRef.current);
@@ -4181,6 +4260,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </div>
         </DialogContent>
       </Dialog>
+      )}
 
       {/* Floating apply & restart bar — always visible when changes pending */}
       <ApplyRestartBar

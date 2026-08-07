@@ -84,11 +84,21 @@ describe("registerForeground", () => {
     expect(bgSeen).toEqual(["b"]);
   });
 
-  it("throws when a second foreground is registered for the same session", () => {
-    registerForeground("a", () => {});
-    expect(() => registerForeground("a", () => {})).toThrow(
-      /already registered for session a/,
-    );
+  // Registering twice is still a caller bug, but it must stay recoverable.
+  // This used to throw, and every caller registers from inside an async effect
+  // body — the throw became an unhandled rejection that left the panel owning
+  // nothing, so its session's events silently fell through to the default
+  // router (stuck "analyzing…", composer permanently in queue-only mode).
+  it("lets the newest foreground registration win instead of throwing", async () => {
+    const first: string[] = [];
+    const second: string[] = [];
+    registerForeground("a", () => first.push("first"));
+    expect(() => registerForeground("a", () => second.push("second"))).not.toThrow();
+
+    await __testing.dispatchEvent(env("a"));
+
+    expect(first).toEqual([]);
+    expect(second).toEqual(["second"]);
   });
 
   it("releases ownership when the unregister is called", async () => {
@@ -111,15 +121,16 @@ describe("registerForeground", () => {
     expect(() => registerForeground("a", () => {})).not.toThrow();
   });
 
-  it("does not delete a foreground entry that's been replaced by a different handler", () => {
-    const handler1 = () => {};
-    const handler2 = () => {};
-    const release1 = registerForeground("a", handler1);
+  it("does not delete a foreground entry that's been replaced by a different handler", async () => {
+    const seen: string[] = [];
+    const release1 = registerForeground("a", () => seen.push("handler1"));
     release1(); // a → unregistered
-    registerForeground("a", handler2); // a → handler2
-    release1(); // calling stale release should NOT remove handler2
-    // We can verify by attempting a second registration — should still throw
-    expect(() => registerForeground("a", () => {})).toThrow();
+    registerForeground("a", () => seen.push("handler2")); // a → handler2
+    release1(); // calling the stale release must NOT remove handler2
+
+    await __testing.dispatchEvent(env("a"));
+
+    expect(seen).toEqual(["handler2"]);
   });
 });
 

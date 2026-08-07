@@ -255,16 +255,19 @@ describe("createOnboardingLiveView", () => {
         if (url === "/pipes/meeting-intel/run") {
           const body = JSON.parse(String(init?.body));
           expect(body.trigger_type).toBe("onboarding");
+          // Slot ids differ between an AI plan and the deterministic fallback,
+          // so this shared mock validates the run contract and each test
+          // asserts the exact targets it expects.
           expect(body.run_context).toEqual(
             expect.objectContaining({
               source: "live-view",
               live_view_id: "first-dashboard",
-              target_ids: [
-                "live-view:first-dashboard:open-actions",
-                "live-view:first-dashboard:decisions",
-              ],
             }),
           );
+          expect(body.run_context.target_ids.length).toBeGreaterThan(0);
+          for (const targetId of body.run_context.target_ids) {
+            expect(targetId).toMatch(/^live-view:first-dashboard:/);
+          }
           return response({ success: true });
         }
         throw new Error(`unexpected URL: ${url}`);
@@ -325,8 +328,23 @@ describe("createOnboardingLiveView", () => {
       }),
     );
     expect(progress).toHaveBeenLastCalledWith(
-      expect.objectContaining({ stage: "complete", blockCount: 2 }),
+      expect.objectContaining({
+        stage: "complete",
+        blockCount: 2,
+        planSource: "ai",
+      }),
     );
+    expect(result.planSource).toBe("ai");
+    expect(result.planFallbackReason).toBeNull();
+    const runCall = mocks.localFetch.mock.calls.find(
+      ([url]) => url === "/pipes/meeting-intel/run",
+    );
+    expect(
+      JSON.parse(String(runCall?.[1]?.body)).run_context.target_ids,
+    ).toEqual([
+      "live-view:first-dashboard:open-actions",
+      "live-view:first-dashboard:decisions",
+    ]);
     expect(getOnboardingLiveViewActivation("first-dashboard")).toEqual(
       expect.objectContaining({
         goal: "help me follow through after meetings",
@@ -336,41 +354,100 @@ describe("createOnboardingLiveView", () => {
     );
   });
 
-  it("keeps a recoverable dashboard when AI planning fails", async () => {
+  const meetingPreset = {
+    id: "default",
+    provider: "screenpipe-cloud",
+    url: "",
+    model: "auto",
+    apiKey: null,
+    defaultPreset: true,
+    maxContextChars: 100_000,
+    prompt: "",
+  };
+
+  it("ships the deterministic dashboard when the AI plan call fails", async () => {
     mocks.generateLiveViewWithPi.mockRejectedValueOnce(
       new Error("model unavailable"),
     );
+    const progress = vi.fn();
+
+    const result = await createOnboardingLiveView({
+      goal: "help me follow through after meetings",
+      goalCategory: "meeting_follow_through",
+      preset: meetingPreset as any,
+      userToken: "user-token",
+      onProgress: progress,
+    });
+
+    expect(result.planSource).toBe("fallback");
+    expect(result.planFallbackReason).toBe("ai_plan_call_failed");
+    expect(result.pipeSlugs).toEqual(["meeting-intel"]);
+    expect(result.blockCount).toBeGreaterThan(0);
+    expect(result.refreshStartedCount).toBe(1);
+
+    // The saved dashboard must have real bound slots, not the empty shell the
+    // user used to be left with.
+    const savedSlots = mocks.saveBrainView.mock.calls.at(-1)?.[0].slots;
+    expect(savedSlots.length).toBeGreaterThan(0);
+    for (const slot of savedSlots) {
+      expect(slot.binding).toEqual({ pipeName: "meeting-intel" });
+    }
+
+    expect(getOnboardingLiveViewActivation("first-dashboard")).toEqual(
+      expect.objectContaining({ setupStatus: "ready" }),
+    );
+  });
+
+  it("ships the deterministic dashboard when the AI plan binds no scheduled task", async () => {
+    mocks.generateLiveViewWithPi.mockResolvedValueOnce({
+      title: "Unbound plan",
+      timeRange: "today",
+      note: "",
+      blocks: [
+        {
+          title: "Floating block",
+          intent: "No scheduled task backs this block.",
+          component: "list.v1",
+          width: 12,
+          pipeName: null,
+        },
+      ],
+    });
+
+    const result = await createOnboardingLiveView({
+      goal: "help me follow through after meetings",
+      goalCategory: "meeting_follow_through",
+      preset: meetingPreset as any,
+      userToken: "user-token",
+    });
+
+    expect(result.planSource).toBe("fallback");
+    expect(result.planFallbackReason).toBe("ai_plan_invalid");
+    expect(result.pipeSlugs).toEqual(["meeting-intel"]);
+  });
+
+  it("still fails closed when the AI plan fails and the Store offers nothing", async () => {
+    mocks.generateLiveViewWithPi.mockRejectedValueOnce(
+      new Error("model unavailable"),
+    );
+    mocks.localFetch.mockImplementation(async (url: string) => {
+      if (url === "/health") return response({ status: "healthy" });
+      if (url === "/pipes/store/meeting-intel") return response({}, false, 404);
+      if (url === "/pipes/store?sort=popular") return response({ data: [] });
+      throw new Error(`unexpected URL: ${url}`);
+    });
 
     await expect(
       createOnboardingLiveView({
         goal: "help me follow through after meetings",
         goalCategory: "meeting_follow_through",
-        preset: {
-          id: "default",
-          provider: "screenpipe-cloud",
-          url: "",
-          model: "auto",
-          apiKey: null,
-          defaultPreset: true,
-          maxContextChars: 100_000,
-          prompt: "",
-        },
+        preset: meetingPreset as any,
         userToken: "user-token",
       }),
-    ).rejects.toThrow("model unavailable");
+    ).rejects.toThrow();
 
-    expect(mocks.saveBrainView).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "first-dashboard",
-        title: "Meeting follow-through",
-        slots: [],
-      }),
-    );
     expect(getOnboardingLiveViewActivation("first-dashboard")).toEqual(
-      expect.objectContaining({
-        setupStatus: "needs_retry",
-        setupError: "model unavailable",
-      }),
+      expect.objectContaining({ setupStatus: "needs_retry" }),
     );
   });
 

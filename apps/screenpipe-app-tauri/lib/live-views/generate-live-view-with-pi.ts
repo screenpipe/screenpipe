@@ -18,7 +18,8 @@ import { INTERNAL_TITLE_PREFIX } from "@/lib/utils/internal-session";
 
 const GENERATION_TIMEOUT_MS = 90_000;
 const PROJECT_DIR = "pi-live-views";
-const MAX_PIPE_CANDIDATES = 16;
+const PROPOSE_TOOL = "screenpipe_live_view_propose";
+const READ_ACTIONS = new Set(["get", "list", "pipes", "values"]);
 const COMPONENTS = new Set<BrainViewComponent>([
   "metric.v1",
   "list.v1",
@@ -28,18 +29,7 @@ const COMPONENTS = new Set<BrainViewComponent>([
   "timeline.v1",
   "markdown.v1",
 ]);
-const COMPONENT_ALIASES: Record<string, BrainViewComponent> = {
-  metric: "metric.v1",
-  list: "list.v1",
-  bar: "bar-chart.v1",
-  "bar-chart": "bar-chart.v1",
-  line: "line-chart.v1",
-  "line-chart": "line-chart.v1",
-  table: "table.v1",
-  timeline: "timeline.v1",
-  text: "markdown.v1",
-  markdown: "markdown.v1",
-};
+const TIME_RANGES = new Set<BrainViewTimeRange>(["today", "24h", "7d", "30d"]);
 
 export type LiveViewGenerationScope = "dashboard" | "block";
 
@@ -98,58 +88,29 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function firstJsonObject(raw: string): Record<string, unknown> {
-  const trimmed = raw.trim();
-  const withoutFence = trimmed
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/, "")
-    .trim();
-  const start = withoutFence.indexOf("{");
-  const end = withoutFence.lastIndexOf("}");
-  if (start < 0 || end <= start) {
-    throw new Error("AI did not return a Live View definition");
-  }
-  const parsed = JSON.parse(withoutFence.slice(start, end + 1));
-  const record = asRecord(parsed);
-  if (!record) throw new Error("AI returned an invalid Live View definition");
-  return record;
-}
-
+// The Pi tool schema is the contract. These checks exist so a violation that
+// slipped past it fails loudly here instead of being coerced into a silently
+// different dashboard than the one the model described.
 function componentValue(value: unknown): BrainViewComponent | null {
-  if (typeof value !== "string") return null;
-  if (COMPONENTS.has(value as BrainViewComponent)) {
-    return value as BrainViewComponent;
-  }
-  return COMPONENT_ALIASES[value.toLowerCase()] ?? null;
-}
-
-function nestedPipeName(block: Record<string, unknown>): string | null {
-  for (const value of [block.source, block.binding]) {
-    const source = asRecord(value);
-    if (typeof source?.pipeName === "string") return source.pipeName;
-  }
-  return null;
+  return typeof value === "string" &&
+    COMPONENTS.has(value as BrainViewComponent)
+    ? (value as BrainViewComponent)
+    : null;
 }
 
 function widthValue(value: unknown): 3 | 6 | 12 {
-  if (value === 3 || value === "3" || value === "quarter") return 3;
-  if (value === 12 || value === "12" || value === "full") return 12;
-  return 6;
+  if (value === 3 || value === 6 || value === 12) return value;
+  throw new Error("AI returned a Block width outside 3, 6, or 12");
 }
 
 function timeRangeValue(value: unknown): BrainViewTimeRange {
-  if (typeof value !== "string") return "today";
-  const normalized = value.trim().toLowerCase();
-  if (["24h", "24 hours", "last 24 hours"].includes(normalized)) return "24h";
-  if (["7d", "7 days", "last 7 days", "week", "weekly"].includes(normalized)) {
-    return "7d";
-  }
   if (
-    ["30d", "30 days", "last 30 days", "month", "monthly"].includes(normalized)
+    typeof value === "string" &&
+    TIME_RANGES.has(value as BrainViewTimeRange)
   ) {
-    return "30d";
+    return value as BrainViewTimeRange;
   }
-  return "today";
+  throw new Error("AI returned an unsupported time range");
 }
 
 function periodPolicyValue(
@@ -165,22 +126,22 @@ function periodPolicyValue(
   };
 }
 
+/**
+ * Reads the schema-validated `screenpipe_live_view_propose` arguments. Shape
+ * errors are already the model's problem: the tool rejects them so it can
+ * retry. What is left here is the app's own invariant, that a proposal may
+ * only bind a scheduled task the caller actually offered.
+ */
 export function parseGeneratedLiveView(
-  raw: string,
+  proposal: Record<string, unknown>,
   allowedPipeNames: string[],
   scope: LiveViewGenerationScope,
   currentView: GenerateLiveViewOptions["currentView"] = null,
   targetBlockId: string | null = null,
 ): GeneratedLiveView {
-  const response = firstJsonObject(raw);
-  const wrappedView = asRecord(response.view);
-  const parsed =
-    wrappedView && Array.isArray(wrappedView.blocks) ? wrappedView : response;
-  const rawBlocks = Array.isArray(parsed.blocks)
-    ? parsed.blocks
-    : parsed.block
-      ? [parsed.block]
-      : [];
+  const parsed = asRecord(proposal);
+  if (!parsed) throw new Error("AI returned an invalid Live View proposal");
+  const rawBlocks = Array.isArray(parsed.blocks) ? parsed.blocks : [];
   const allowedPipes = new Set(allowedPipeNames);
   const parseBlocks = (
     values: unknown[],
@@ -191,9 +152,7 @@ export function parseGeneratedLiveView(
       .map(asRecord)
       .filter((block): block is Record<string, unknown> => Boolean(block))
       .map((block) => {
-        const component = componentValue(
-          block.component ?? block.kind ?? block.type,
-        );
+        const component = componentValue(block.component);
         const title = typeof block.title === "string" ? block.title.trim() : "";
         if (!component || !title) return null;
         const intent =
@@ -201,11 +160,7 @@ export function parseGeneratedLiveView(
             ? block.intent.trim().slice(0, 800)
             : title;
         const requestedPipe =
-          typeof block.pipeName === "string"
-            ? block.pipeName
-            : typeof block.pipe === "string"
-              ? block.pipe
-              : nestedPipeName(block);
+          typeof block.pipeName === "string" ? block.pipeName : null;
         return {
           ...(typeof block.id === "string" && block.id.trim()
             ? { id: block.id.trim().slice(0, 120) }
@@ -317,10 +272,9 @@ export function parseGeneratedLiveView(
         ? `Created ${blocks[0].title}.`
         : `Created ${blocks.length} sections.`;
 
-  const hasTimeRange =
-    typeof (parsed.timeRange ?? parsed.time_range) === "string";
+  const hasTimeRange = typeof parsed.timeRange === "string";
   const timeRange = hasTimeRange
-    ? timeRangeValue(parsed.timeRange ?? parsed.time_range)
+    ? timeRangeValue(parsed.timeRange)
     : (currentView?.timeRange ?? "today");
   return {
     title,
@@ -328,105 +282,74 @@ export function parseGeneratedLiveView(
     periodPolicy:
       currentView && !hasTimeRange && parsed.timeRangeBehavior == null
         ? currentView.periodPolicy
-        : periodPolicyValue(
-            parsed.timeRangeBehavior ?? parsed.time_range_behavior,
-            timeRange,
-          ),
+        : periodPolicyValue(parsed.timeRangeBehavior, timeRange),
     blocks,
     note,
   };
 }
 
-function generationSystemPrompt(editing: boolean): string {
-  const outputContract = editing
-    ? `Return only targeted operations. Never return a complete blocks array.
-Use {"op":"add","block":{...}} to append a new Block, {"op":"update","blockId":"existing-id","block":{...}} to update one existing Block, and {"op":"remove","blockId":"existing-id"} only when the user explicitly requested removal. An update may include only changed fields; omitted fields are preserved by the app.
-JSON shape: {"operations":[{"op":"add","block":{"id":"new-stable-id","title":"Block title","intent":"Precise source-backed calculation or summary.","component":"metric.v1","width":6,"pipeName":null}}],"note":"Short explanation"}`
-    : `For a new dashboard, return the complete blocks array.
-JSON shape: {"title":"View title","timeRange":"today","timeRangeBehavior":"selectable","blocks":[{"id":"stable-id","title":"Block title","intent":"Precise source-backed calculation or summary.","component":"metric.v1","width":6,"pipeName":null}],"note":"Short explanation"}`;
-  return `Design a safe Screenpipe Live View and return only one JSON object, with no markdown or prose.
-If a current view id is supplied, you may only call screenpipe_live_view action "get" for that exact id. Never call "save" or any other tool. The app reviews changes before saving. Preserve every unchanged Block id and reuse the id of every edited Block.
-Use only these components: metric.v1, list.v1, bar-chart.v1, line-chart.v1, table.v1, timeline.v1, markdown.v1. Width must be 3, 6, or 12. Use only supplied pipe names, otherwise null. Never invent a pipe.
-Each Block needs a precise, source-backed intent describing the calculation or summary for the selected period and how missing evidence is handled. Avoid duplicate Blocks. For new dashboards create 4 to 7 Blocks; edits may propose 1 to 8 operations. Use timeRange today, 24h, 7d, or 30d. Use timeRangeBehavior fixed only when the view is inherently tied to that period, otherwise selectable.
-${outputContract}`;
-}
+// Two canonical examples instead of an exhaustive rule list. The first is the
+// case the old prompt silently failed: a detail request answered by changing
+// what the Block renders, not by rewriting its intent text.
+const EDIT_EXAMPLES = `Example. The user says "show more detail" about a Block whose values action returns
+{"id":"focus-time","component":"metric.v1","pipeName":"time-breakdown","renders":"{\\"value\\":214,\\"unit\\":\\"minutes\\"}"}
+A single number cannot show more detail, so change what it renders:
+screenpipe_live_view_propose({"operations":[{"op":"update","blockId":"focus-time","block":{"component":"table.v1","width":12,"intent":"Rows of app or project with focused minutes for the selected period, largest first, omitting apps with no recorded time."}}],"note":"Focus time becomes a per-app table instead of one total."})
+
+Example. The user asks to add a missing outcome:
+screenpipe_live_view_propose({"operations":[{"op":"add","block":{"id":"meeting-followups","title":"Meeting follow-ups","intent":"Open commitments captured in meetings during the selected period, with who owes what, or an empty state when no meeting was recorded.","component":"list.v1","width":6,"pipeName":"meeting-summary"}}],"note":"Adds an open follow-ups list from meeting-summary."})`;
 
 export function buildLiveViewGenerationPrompt(
   options: GenerateLiveViewOptions,
 ): string {
+  const editing = Boolean(options.currentViewRef);
   const scopeInstruction =
     options.scope === "block"
       ? options.currentViewRef
         ? `Propose exactly one update operation for Block id ${JSON.stringify(options.targetBlockId)}. Do not add, remove, or change any other Block.`
         : "Create exactly one new section to add to the existing Live View."
       : options.currentViewRef
-        ? "Edit the referenced current Live View with the smallest explicit operation set. Do not restate, remove, or update unrelated Blocks."
-        : "Create a complete Live View with 4 to 7 useful, visually varied sections. Return the full dashboard.";
-  const pipes = relevantPipes(options.prompt, options.pipes).map((pipe) => ({
-    name: pipe.name,
-    description: pipe.description.slice(0, 500),
-    ...(pipe.category ? { category: pipe.category } : {}),
-    ...(pipe.featured ? { featured: true } : {}),
-    ...(typeof pipe.installCount === "number"
-      ? { installCount: pipe.installCount }
-      : {}),
-  }));
+        ? "Edit the referenced Live View with the smallest explicit operation set. Do not restate, remove, or update unrelated Blocks."
+        : "Create a complete Live View with 4 to 7 useful, visually varied sections.";
 
-  const pipeInstruction =
+  // Store candidates are a curated, bounded set the caller already chose and
+  // will install, so they travel with the turn. Installed tasks are looked up
+  // on demand instead, which keeps an unrelated inventory out of the context.
+  const storeCandidates =
     options.pipeAvailability === "store"
-      ? `These are reviewed Pipe Store candidates available for automatic installation. Bind every section to one of them. Use at most ${options.maxSelectedPipes ?? 2} distinct pipes across the dashboard. Prefer the smallest set that works from Screenpipe's local capture alone. Avoid a pipe that mentions syncing or saving to a named external app unless the user explicitly asked for that app.`
-      : "These pipes are already installed. Use null only when no installed pipe can produce the requested section.";
+      ? `
+Installable scheduled tasks (bind every section to one of these, at most ${options.maxSelectedPipes ?? 2} distinct, preferring ones that work from local capture alone):
+${JSON.stringify(
+  options.pipes.map((pipe) => ({
+    name: pipe.name,
+    description: pipe.description.slice(0, 240),
+  })),
+)}`
+      : `
+Find scheduled tasks with screenpipe_live_view action=pipes and a short query. Bind pipeName only to a name that search returned; use null when nothing fits.`;
 
-  return `${generationSystemPrompt(Boolean(options.currentViewRef))}
+  return `Design a Screenpipe Live View change for the user to review, then submit it with screenpipe_live_view_propose. The app applies nothing until the user accepts, so never call action=save.
 
 ${scopeInstruction}
 
-Pipe rules:
-${pipeInstruction}
+Work in this order:
+1. ${editing ? `Call screenpipe_live_view action=values for ${JSON.stringify(options.currentViewRef?.id ?? "")} to see what the Blocks currently render. A Block shows its bound task's last payload, so an intent-only edit changes nothing the user can see.` : "Decide the outcomes the user wants to see."}
+2. ${options.pipeAvailability === "store" ? "Choose from the installable tasks listed below." : "Look up scheduled tasks only if a section needs one."}
+3. Call screenpipe_live_view_propose once with the finished change. Fix and retry if it reports problems.
+
+Each Block needs a precise, source-backed intent covering the selected period and how missing evidence is handled. Avoid duplicate Blocks. Reuse the id of every Block you edit.
+${storeCandidates}
+
+${editing ? EDIT_EXAMPLES : ""}
 
 User request:
 ${options.prompt.trim()}
-
-Available pipes:
-${JSON.stringify(pipes)}
 
 Current Live View reference:
 ${options.currentViewRef ? JSON.stringify(options.currentViewRef) : "null"}
 
 Focused section context:
-${options.targetBlockId ? JSON.stringify({ blockId: options.targetBlockId }) : "null"}
-
-Choose the simplest useful layout. Reply with only the required JSON object.`;
-}
-
-function searchableWords(value: string): Set<string> {
-  return new Set(
-    value
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter((word) => word.length >= 3),
-  );
-}
-
-export function relevantPipes(
-  prompt: string,
-  pipes: LiveViewPipeSummary[],
-): LiveViewPipeSummary[] {
-  const promptWords = searchableWords(prompt);
-  return pipes
-    .map((pipe, index) => {
-      const nameWords = searchableWords(pipe.name);
-      const descriptionWords = searchableWords(pipe.description);
-      let score = 0;
-      for (const word of promptWords) {
-        if (nameWords.has(word)) score += 8;
-        if (descriptionWords.has(word)) score += 2;
-      }
-      return { pipe, index, score };
-    })
-    .sort((left, right) => right.score - left.score || left.index - right.index)
-    .slice(0, MAX_PIPE_CANDIDATES)
-    .map(({ pipe }) => pipe);
+${options.targetBlockId ? JSON.stringify({ blockId: options.targetBlockId }) : "null"}`;
 }
 
 function providerConfig(preset: AIPreset): PiProviderConfig {
@@ -449,10 +372,11 @@ function providerConfig(preset: AIPreset): PiProviderConfig {
       ? { maxContextChars: preset.maxContextChars }
       : {}),
     systemPrompt: null,
-    // This foreground editor only needs a read of the referenced Live View.
-    // Restrict the runtime itself so normal Chat, MCP, web, filesystem, and
-    // artifact tools are never advertised on this private editing surface.
-    allowedTools: ["screenpipe_live_view"],
+    // This foreground editor only needs to read Live Views, look up scheduled
+    // tasks, and submit a reviewable proposal. Restrict the runtime itself so
+    // normal Chat, MCP, web, filesystem, and artifact tools are never
+    // advertised on this private editing surface.
+    allowedTools: ["screenpipe_live_view", PROPOSE_TOOL],
   };
 }
 
@@ -476,43 +400,28 @@ async function liveViewProjectDir(): Promise<string> {
   return await join(await homeDir(), ".screenpipe", PROJECT_DIR);
 }
 
-function textFromAgentEnd(envelope: AgentEventEnvelope): string {
-  const messages = Array.isArray(envelope.event.messages)
-    ? envelope.event.messages
-    : [];
-  return messages
-    .filter((message) => message.role === "assistant")
-    .flatMap((message) =>
-      Array.isArray(message.content)
-        ? (message.content as Array<Record<string, unknown>>)
-            .filter((content) => content.type === "text")
-            .map((content) =>
-              typeof content.text === "string" ? content.text : "",
-            )
-        : [],
-    )
-    .join("\n");
-}
-
-async function rawGeneration(
+async function runGeneration(
   options: GenerateLiveViewOptions,
-): Promise<string> {
+): Promise<Record<string, unknown>> {
   if (options.signal?.aborted) throw abortError();
   const sessionId = `${INTERNAL_TITLE_PREFIX}live-view-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   await mountAgentEventBus();
   const projectDir = await liveViewProjectDir();
 
-  let accumulated = "";
+  // The proposal arrives as tool arguments and is only kept once the tool
+  // accepts it, so a retry after a rejection is what reaches the user.
+  const pendingProposals = new Map<string, Record<string, unknown>>();
+  let proposal: Record<string, unknown> | null = null;
   let settled = false;
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
-  let resolveResponse!: (value: string) => void;
+  let resolveResponse!: (value: Record<string, unknown>) => void;
   let rejectResponse!: (error: Error) => void;
-  const response = new Promise<string>((resolve, reject) => {
+  const response = new Promise<Record<string, unknown>>((resolve, reject) => {
     resolveResponse = resolve;
     rejectResponse = reject;
   });
 
-  const settle = (value: string) => {
+  const settle = (value: Record<string, unknown>) => {
     if (settled) return;
     settled = true;
     if (timeoutId) clearTimeout(timeoutId);
@@ -535,31 +444,41 @@ async function rawGeneration(
 
   const handler = (envelope: AgentEventEnvelope) => {
     const event = envelope.event;
-    const delta =
-      event.type === "text_delta"
-        ? event.delta
-        : event.type === "message_update" &&
-            event.assistantMessageEvent?.type === "text_delta"
-          ? event.assistantMessageEvent.delta
-          : "";
-    if (typeof delta === "string") accumulated += delta;
     if (event.type === "agent_start") options.onPhase?.("working");
     if (event.type === "tool_execution_start") {
+      if (event.toolName === PROPOSE_TOOL) {
+        const args = asRecord(event.args);
+        if (args && event.toolCallId)
+          pendingProposals.set(event.toolCallId, args);
+        options.onPhase?.("reviewing");
+        return;
+      }
       if (event.toolName !== "screenpipe_live_view") {
         fail("Live View editor tried to use an unrelated tool");
         void commands.piStop(sessionId);
         return;
       }
-      const action = event.args?.action;
-      if (action !== "get" && action !== "list") {
+      if (!READ_ACTIONS.has(String(event.args?.action))) {
         fail("Live View editor tried to change data before review");
         void commands.piStop(sessionId);
         return;
       }
     }
+    // Only a proposal the tool accepted may reach review. A rejected call is
+    // the model's retry signal, not a change to apply.
+    if (event.type === "tool_execution_end" && event.toolCallId) {
+      const pending = pendingProposals.get(event.toolCallId);
+      if (pending) {
+        pendingProposals.delete(event.toolCallId);
+        if (event.isError !== true) proposal = pending;
+      }
+    }
     if (event.type === "agent_end") {
-      options.onPhase?.("reviewing");
-      settle(accumulated || textFromAgentEnd(envelope));
+      if (!proposal) {
+        fail("AI finished without proposing a usable Live View change");
+        return;
+      }
+      settle(proposal);
     } else if (event.type === "error") {
       // Keep the provider error intact for quota/rate-limit classification.
       fail(agentEventErrorText(event, "AI failed to generate the Live View"));
@@ -625,9 +544,9 @@ export async function generateLiveViewWithPi(
   ) {
     throw new Error("Select an ACP agent");
   }
-  const raw = await rawGeneration(options);
+  const proposal = await runGeneration(options);
   const generated = parseGeneratedLiveView(
-    raw,
+    proposal,
     options.pipes.map((pipe) => pipe.name),
     options.scope,
     options.currentView,

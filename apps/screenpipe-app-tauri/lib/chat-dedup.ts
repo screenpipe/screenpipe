@@ -77,9 +77,27 @@ export function conversationDedupKey(conv: DedupConvLike | null | undefined): st
   const firstUser = messages.find((m) => m?.role === "user");
   const display = typeof firstUser?.displayContent === "string" ? firstUser.displayContent : "";
   const content = typeof firstUser?.content === "string" ? firstUser.content : "";
-  const semantic = display.trim() || stripPromptPlumbing(content);
-  const cleaned = semantic.trim().toLowerCase().replace(/\s+/g, " ");
-  return cleaned ? cleaned.slice(0, 200) : null;
+  const stripped = stripPromptPlumbing(content);
+  const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+  const displayNorm = norm(display);
+  const strippedNorm = norm(stripped);
+  // Distinguish a starter/summary card opener from a plain typed message that
+  // merely carries a clean-text label. Both set displayContent, but a card's
+  // label is a TITLE ("Day Recap") distinct from its long injected prompt
+  // body, whereas a typed message's label IS its text (e.g. a pasted-file
+  // chat whose bubble shows "dbb" while content folds in an attachment). Two
+  // launches of the same card are DISTINCT chats sharing a fixed template, so
+  // — like repeated pipe runs above — they must never collapse; without this
+  // several card chats made inside the 30-min window vanished into one row on
+  // the next app start (ACP usage is card-driven, hence ACP-correlated).
+  const isTemplatedCardOpener =
+    displayNorm.length > 0 &&
+    strippedNorm.length > 0 &&
+    displayNorm !== strippedNorm &&
+    !strippedNorm.startsWith(displayNorm);
+  if (isTemplatedCardOpener) return null;
+  const semantic = displayNorm || strippedNorm;
+  return semantic ? semantic.slice(0, 200) : null;
 }
 
 /** Stable identity for read-time duplicate collapsing.

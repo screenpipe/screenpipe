@@ -175,6 +175,13 @@ fn replace_with_merged_audio(
 /// Returns both the number of chunks processed and whether the candidate query
 /// hit its cap, which tells the scheduler to keep draining without a 120s nap.
 #[allow(clippy::too_many_arguments)]
+/// The gateway rejected the account itself (banned/deleted), not this batch.
+/// Every retry with the same credentials is guaranteed to fail identically.
+fn is_account_standing_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains("account_not_in_good_standing") || message.contains("not in good standing")
+}
+
 pub async fn reconcile_untranscribed(
     db: &DatabaseManager,
     transcription_engine: &TranscriptionEngine,
@@ -398,6 +405,18 @@ pub async fn reconcile_untranscribed(
                 error!("reconciliation: transcription failed for batch: {}", e);
                 if let Some(metrics) = &metrics {
                     metrics.record_transcription_error();
+                }
+                // An account-standing denial fails every batch in this sweep the
+                // same way; continuing would hammer the API once per batch (seen
+                // in the wild: a 403-denied account produced a request every
+                // ~350ms). Stop the sweep and leave the chunks pending — they
+                // are the user's audio, not bad data — so the next sweep probes
+                // once and everything transcribes when the account recovers.
+                if is_account_standing_error(&e) {
+                    warn!(
+                        "reconciliation: transcription API rejected this account; pausing sweep until the next cycle"
+                    );
+                    break;
                 }
                 // Bump attempts on every chunk in the batch. Once a chunk has
                 // failed MAX_TRANSCRIPTION_ATTEMPTS times in a row the outcome
@@ -1739,6 +1758,20 @@ mod tests {
         let p = dir.join(name);
         std::fs::write(&p, b"not-real-audio").unwrap();
         p.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn account_standing_errors_are_recognized_and_transient_errors_are_not() {
+        let denied = anyhow::anyhow!(
+            "Deepgram API error (HTTP 403 Forbidden): {{\"error\":\"{{\\\"error\\\":\\\"account_not_in_good_standing\\\",\\\"message\\\":\\\"This screenpipe account is not in good standing.\\\"}}\"}}"
+        );
+        assert!(is_account_standing_error(&denied));
+        assert!(!is_account_standing_error(&anyhow::anyhow!(
+            "Deepgram API error (HTTP 429 Too Many Requests): slow down"
+        )));
+        assert!(!is_account_standing_error(&anyhow::anyhow!(
+            "connection reset by peer"
+        )));
     }
 
     #[test]

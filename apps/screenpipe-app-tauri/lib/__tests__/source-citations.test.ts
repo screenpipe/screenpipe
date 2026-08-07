@@ -699,3 +699,79 @@ describe("source citations", () => {
     expect(markdown).toContain("web search");
   });
 });
+
+describe("ACP / mcp__ tool citations", () => {
+  it("derives a screenpipe citation from an mcp__screenpipe__ search tool", () => {
+    const citations = sourceCitationsFromMessage({
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "mcp__screenpipe__search-content",
+            args: { q: "invoice", app_name: "Safari" },
+            result: { content: [{ type: "text", text: "3 results" }] },
+            isRunning: false,
+          },
+        },
+      ],
+    } as any);
+    expect(citations.length).toBeGreaterThan(0);
+    expect(JSON.stringify(citations)).toContain("invoice");
+  });
+
+  it("derives a screenpipe citation from mcp__screenpipe__activity-summary", () => {
+    const citations = sourceCitationsFromMessage({
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "mcp__screenpipe__activity-summary",
+            args: { start_time: "today", end_time: "now" },
+            result: { content: [{ type: "text", text: "summary" }] },
+            isRunning: false,
+          },
+        },
+      ],
+    } as any);
+    expect(citations.length).toBeGreaterThan(0);
+  });
+
+  it("does NOT attribute a third-party MCP 'search' tool to the local timeline", () => {
+    // mcp__tavily__search normalizes to bare "search" — it must not be routed
+    // to a screenpipe (local screen-recording) citation, which would mislabel
+    // an external web query as the user's private timeline and deep-link into it.
+    const citations = sourceCitationsFromMessage({
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "mcp__tavily__search",
+            args: { query: "weather tomorrow" },
+            result: { content: [{ type: "text", text: "sunny" }] },
+            isRunning: false,
+          },
+        },
+      ],
+    } as any);
+    expect(
+      citations.some((c: { kind?: string }) => c.kind === "screenpipe"),
+    ).toBe(false);
+  });
+
+  it("matches a humanized coding-tool title after normalization", () => {
+    const citations = sourceCitationsFromMessage({
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "grep",
+            args: { pattern: "TODO", path: "src" },
+            result: { content: [{ type: "text", text: "" }] },
+            isRunning: false,
+          },
+        },
+      ],
+    } as any);
+    expect(citations.length).toBeGreaterThan(0);
+  });
+});

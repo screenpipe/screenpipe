@@ -37,6 +37,7 @@ export function QueuedPromptsList({
 
   return (
     <div
+      data-testid="chat-queued-prompts"
       className="mb-2 rounded-lg border border-border/60 bg-background/95 backdrop-blur-sm shadow-sm overflow-hidden"
     >
       <div className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-border/50 bg-background">

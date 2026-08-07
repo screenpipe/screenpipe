@@ -28,7 +28,7 @@ export type UsageTier =
   | "business_max"
   | "business_ultra";
 
-export type HostedAiLane = "auto" | "explicit";
+export type HostedAiLane = "auto" | "explicit" | "combined";
 
 export interface HostedAiAllowance {
   lane: HostedAiLane;
@@ -74,7 +74,7 @@ function parseHostedAiAllowance(value: unknown): HostedAiAllowance | null {
   if (!value || typeof value !== "object") return null;
   const candidate = value as Partial<HostedAiAllowance>;
   if (
-    (candidate.lane !== "auto" && candidate.lane !== "explicit") ||
+    (candidate.lane !== "auto" && candidate.lane !== "explicit" && candidate.lane !== "combined") ||
     (candidate.technique !== "fixed" && candidate.technique !== "sliding") ||
     (candidate.resets_at !== null && typeof candidate.resets_at !== "string")
   ) {
@@ -206,7 +206,8 @@ export function useUsageStatus(): UsageStatus | null {
     : null;
 }
 
-/** Return the tightest Cloudflare allowance that applies to a model lane. */
+/** Return the tightest Cloudflare allowance that applies to a model lane.
+ *  A 'combined' allowance covers all lanes and matches any lane query. */
 export function hostedAiAllowanceForLane(
   usage: UsageStatus | null,
   lane: HostedAiLane,
@@ -214,7 +215,7 @@ export function hostedAiAllowanceForLane(
   const allowances = usage?.hosted_ai?.allowances;
   if (!allowances) return null;
   return allowances
-    .filter((allowance) => allowance.lane === lane)
+    .filter((allowance) => allowance.lane === lane || allowance.lane === "combined")
     .sort((left, right) => left.remaining_percent - right.remaining_percent)[0] ?? null;
 }
 

@@ -23,7 +23,6 @@ const mocks = vi.hoisted(() => ({
   loadBrainViewCanvas: vi.fn(),
   saveBrainViewCanvas: vi.fn(),
   generateLiveViewWithPi: vi.fn(),
-  runLiveViewBuilderAgent: vi.fn(),
   showChatWithPrefill: vi.fn(),
   createOnboardingLiveView: vi.fn(),
   localFetch: vi.fn(),
@@ -154,9 +153,6 @@ vi.mock("@/components/rewind/ai-presets-selector", () => ({
 vi.mock("@/lib/live-views/generate-live-view-with-pi", () => ({
   generateLiveViewWithPi: mocks.generateLiveViewWithPi,
 }));
-vi.mock("@/lib/live-views/run-live-view-builder-agent", () => ({
-  runLiveViewBuilderAgent: mocks.runLiveViewBuilderAgent,
-}));
 vi.mock("@/lib/chat-utils", () => ({
   showChatWithPrefill: mocks.showChatWithPrefill,
 }));
@@ -164,7 +160,6 @@ vi.mock("@/lib/live-views/onboarding-live-view", () => ({
   createOnboardingLiveView: mocks.createOnboardingLiveView,
 }));
 import { BrainOverview, type ViewDefinition } from "../brain-overview";
-import { buildLiveViewBuilderAgentPrompt } from "@/lib/live-views/pipe-agent-prompt";
 import { inferLiveViewGenerationIntent } from "../live-view-ai-composer";
 import { getTemplatePipeReadiness } from "../live-view-template-gallery";
 import {
@@ -360,9 +355,6 @@ beforeEach(() => {
     data: [],
   });
   mocks.refetchPipes.mockResolvedValue(undefined);
-  mocks.runLiveViewBuilderAgent.mockImplementation(
-    () => new Promise<void>(() => {}),
-  );
   mocks.showChatWithPrefill.mockResolvedValue(undefined);
   mocks.deleteBrainView.mockResolvedValue({ status: "ok", data: null });
   mocks.loadBrainViewCanvas.mockResolvedValue({ status: "ok", data: null });
@@ -1506,7 +1498,6 @@ describe("BrainOverview", () => {
     expect(
       screen.queryByTestId("live-view-create-dashboard-dialog"),
     ).toBeNull();
-    expect(mocks.runLiveViewBuilderAgent).not.toHaveBeenCalled();
     expect(mocks.showChatWithPrefill).not.toHaveBeenCalled();
   });
 
@@ -2082,9 +2073,8 @@ describe("BrainOverview", () => {
     expect(proposedBlock).toBeTruthy();
     await waitFor(() =>
       expect(
-        proposedBlock.closest<HTMLElement>(
-          '[data-id="block:habit-signals"]',
-        )?.className,
+        proposedBlock.closest<HTMLElement>('[data-id="block:habit-signals"]')
+          ?.className,
       ).toContain("selected"),
     );
     mocks.saveBrainViewCanvas.mockClear();

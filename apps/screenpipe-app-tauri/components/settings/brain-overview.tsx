@@ -90,7 +90,10 @@ import {
   type LiveViewGenerationScope,
 } from "@/lib/live-views/generate-live-view-with-pi";
 import { createOnboardingLiveView } from "@/lib/live-views/onboarding-live-view";
-import type { LiveViewBuilderTarget } from "@/lib/live-views/pipe-agent-prompt";
+/** What an inline Live View AI request is allowed to change. */
+type LiveViewBuilderTarget =
+  | { scope: "dashboard"; operation: "create" | "edit" | "replace" }
+  | { scope: "block"; operation: "edit"; block: { id: string; title: string } };
 import {
   allowedLiveViewTimeRanges,
   buildLiveViewTimeContext,

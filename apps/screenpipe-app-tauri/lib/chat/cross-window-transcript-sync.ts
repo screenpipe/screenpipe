@@ -26,6 +26,8 @@ function blockProgress(block: ContentBlock): number {
       return 1 + (block.toolCall.result?.length ?? 0);
     case "connection_action":
       return 1 + (block.description?.length ?? 0);
+    case "agent_action":
+      return 1 + block.title.length + (block.message?.length ?? 0);
   }
 }
 

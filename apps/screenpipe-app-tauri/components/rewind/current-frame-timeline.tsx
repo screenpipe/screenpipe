@@ -406,6 +406,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 		isSnapshotFrame,
 		isSearchModalOpen,
 		highlightTerms,
+		highlightFrameId,
 		highlightDismissed,
 		isMac,
 		containerRef,

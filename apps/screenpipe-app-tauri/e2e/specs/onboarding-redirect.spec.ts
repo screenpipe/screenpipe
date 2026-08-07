@@ -87,6 +87,87 @@ const canRun = !seedFlags.includes("onboarding");
       expect(bodyText).toContain("ai finally knows what you");
     });
 
+    // ─── system-browser login handoff ────────────────────────────────────
+    //
+    // Windows and Linux no longer sign in through a cold embedded WebView;
+    // `open_login_window` hands off to the user's real browser and polls
+    // `/api/cli-auth`, emitting `login-browser-pending` / `login-browser-failed`
+    // so this window can say what it is waiting for.
+    //
+    // The Rust half is unit-tested (src-tauri/src/browser_login.rs). What can
+    // only be proven in the real app is that those two events actually drive
+    // the real onboarding UI — a renamed event or a mis-scoped state hook
+    // would leave Windows users staring at an unchanged "sign in" button
+    // while their browser waits, which is indistinguishable from a hang.
+    //
+    // Emitting from the webview exercises the same event bus the backend
+    // uses, so this assertion holds on every platform including macOS, where
+    // the backend path itself is compiled out.
+
+    const emitAppEvent = async (name: string, payload: unknown) => {
+      const emitted = await browser.execute(
+        (eventName: string, eventPayload: unknown) => {
+          const g = globalThis as unknown as {
+            __TAURI__?: { event?: { emit?: (n: string, p: unknown) => unknown } };
+          };
+          const emit = g.__TAURI__?.event?.emit;
+          if (!emit) return false;
+          emit(eventName, eventPayload);
+          return true;
+        },
+        name,
+        payload,
+      );
+      if (!emitted) {
+        throw new Error(
+          `could not emit ${name}: __TAURI__.event.emit unavailable in the onboarding webview`,
+        );
+      }
+    };
+
+    const waitForBodyText = async (needle: string, present: boolean) => {
+      await browser.waitUntil(
+        async () => {
+          const text = ((await browser.execute(
+            () => document.body?.innerText || "",
+          )) as string).toLowerCase();
+          return text.includes(needle) === present;
+        },
+        {
+          timeout: t(10_000),
+          timeoutMsg: `expected body text to ${present ? "contain" : "not contain"} "${needle}"`,
+        },
+      );
+    };
+
+    it("shows a waiting state with the confirmation code when the browser takes over", async () => {
+      // Baseline: the plain sign-in affordance, no waiting state.
+      await waitForBodyText("waiting for your browser", false);
+
+      await emitAppEvent("login-browser-pending", { code: "ABCD2345" });
+
+      await waitForBodyText("waiting for your browser", true);
+      // The code must be visible so the user can confirm the browser prompt
+      // belongs to this app rather than approving someone else's session.
+      await waitForBodyText("abcd2345", true);
+
+      const filepath = await saveScreenshot("onboarding-login-browser-waiting");
+      expect(existsSync(filepath)).toBe(true);
+    });
+
+    it("recovers to a retryable sign-in when the browser flow fails", async () => {
+      await emitAppEvent("login-browser-failed", { reason: "cancelled" });
+
+      // Waiting state must clear, or the user is stuck on a dead code.
+      await waitForBodyText("waiting for your browser", false);
+      await waitForBodyText("cancelled in your browser", true);
+      // And the primary action must be immediately available again.
+      await waitForBodyText("sign in", true);
+
+      const filepath = await saveScreenshot("onboarding-login-browser-failed");
+      expect(existsSync(filepath)).toBe(true);
+    });
+
     it("does not open a home window alongside onboarding", async () => {
       // Regression guard: the redirect logic in app/onboarding/page.tsx
       // calls showWindow({Home: …}) only when onboardingData.isCompleted.

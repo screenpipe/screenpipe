@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildInvalidatedAuthTokenMessage,
+  isAcpAuthenticationCancelledError,
   isInvalidatedAuthTokenError,
 } from "@/lib/chat/auth-errors";
 
@@ -32,5 +33,10 @@ describe("auth error classification", () => {
 
   it("has user-facing copy for the forced sign-in message", () => {
     expect(buildInvalidatedAuthTokenMessage()).toContain("Sign in again");
+  });
+
+  it("distinguishes a user-cancelled ACP login from provider failures", () => {
+    expect(isAcpAuthenticationCancelledError("ACP authentication cancelled")).toBe(true);
+    expect(isAcpAuthenticationCancelledError("invalid API key")).toBe(false);
   });
 });

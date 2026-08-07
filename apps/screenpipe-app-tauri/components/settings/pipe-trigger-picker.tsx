@@ -63,7 +63,9 @@ interface Option {
 }
 
 const OPTIONS: Option[] = [
-  { id: "schedule", group: "recurring", label: "on a schedule", sub: "every N minutes, daily, cron" },
+  // "cron" is implementation vocabulary, not the user's — the picker offers
+  // plain cadences and keeps the raw expression as an advanced escape hatch.
+  { id: "schedule", group: "recurring", label: "on a schedule", sub: "hourly, daily, every N minutes" },
   { id: "meeting_started", group: "meetings", label: "meeting starts", sub: "a call is detected" },
   { id: "meeting_ended", group: "meetings", label: "meeting ends", sub: "a call wraps up" },
   { id: "slack", group: "slack", label: "new message", sub: "in a channel you pick", app: "slack" },
