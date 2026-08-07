@@ -16,6 +16,7 @@ import {
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import posthog from "posthog-js";
 import { cacheAnalyticsId, cacheAnalyticsEnabled } from "@/lib/analytics-id";
+import { resolveTelemetryDisabledByEnv, shouldIdentifyInPostHog } from "@/lib/telemetry-env";
 import { User } from "../utils/tauri";
 import { SettingsStore } from "../utils/tauri";
 import { installAuthInterceptor } from "../auth-guard";
@@ -65,7 +66,18 @@ export type AIProviderType =
 	| "custom"
 	| "embedded"
 	| "screenpipe-cloud"
+	| "acp"
 	| "pi";
+
+export type AcpAgentPresetConfig = {
+	/** Stable adapter id from the ACP registry, or "custom". */
+	id: string;
+	/** Only needed for custom/local adapters. Curated adapters are resolved by id. */
+	command?: string;
+	args?: string[];
+	/** Empty values mean "inherit this variable from the app environment". */
+	env?: Record<string, string>;
+};
 
 export type EmbeddedLLMConfig = {
 	enabled: boolean;
@@ -97,6 +109,10 @@ export type AIPreset = {
 	  }
 	| {
 			provider: "screenpipe-cloud";
+	  }
+	| {
+			provider: "acp";
+			acpAgent: AcpAgentPresetConfig;
 	  }
 	| {
 			provider: "anthropic";
@@ -147,6 +163,7 @@ export interface ChatMessage {
 	interruptedBySteer?: boolean;
 	steeredResponse?: boolean;
 	stoppedByUser?: boolean;
+	interruptedByQuit?: boolean;
 	/** Wall-clock work duration for coalesced assistant messages (pipe
 	 *  runs). Used by the chat renderer as a fallback when no thinking
 	 *  blocks contributed a duration, so the work-group can still show
@@ -234,6 +251,10 @@ export interface ChatConversation {
 	 *  the model selection when switching between chats. Persisted to disk
 	 *  so the selection survives app restart. */
 	presetId?: string;
+	/** The last live ACP session id for this conversation. Persisted so a
+	 *  reopen after the agent process is gone can reattach to that session
+	 *  (session/resume) instead of starting fresh. */
+	acpSessionId?: string;
 }
 
 export interface ChatHistoryStore {
@@ -332,6 +353,9 @@ export type Settings = SettingsStore & {
 	powerMode?: "auto" | "performance" | "battery_saver";
 	/** Show restart notifications when audio/vision capture stalls (default: false for now) */
 	showRestartNotifications?: boolean;
+	/** Hide screenpipe windows from screenshots and screen-sharing viewers while
+	 * keeping them visible locally. Defaults on. */
+	hideAppInScreenShare?: boolean;
 	/** Pause all screen capture when a DRM-protected streaming app (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware Horizon) is focused — they blank their windows during screen recording */
 	pauseOnDrmContent?: boolean;
 	/** Skip clipboard capture in the UI recorder (events + content). Defaults to true (clipboard capture OFF) — passwords / API keys often pass through the clipboard, so it's opt-in. */
@@ -776,6 +800,7 @@ let DEFAULT_SETTINGS: Settings = {
 			},
 			overlayMode: "fullscreen",
 			showOverlayInScreenRecording: false,
+			hideAppInScreenShare: true,
 			disableTimeline: false,
 			firstRunGuideDone: false,
 			videoQuality: "balanced",
@@ -1635,36 +1660,65 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		// PostHog opt-in/out on the next boot. See lib/analytics-id.
 		cacheAnalyticsEnabled(settings.analyticsEnabled);
 
-		const clerkId = settings.user?.clerk_id || undefined;
-		const distinctId = clerkId || settings.analyticsId;
+		let cancelled = false;
 
-		if (clerkId) {
-			try { posthog.alias(clerkId); } catch {}
-		}
+		const identifyNow = () => {
+			const clerkId = settings.user?.clerk_id || undefined;
+			const distinctId = clerkId || settings.analyticsId;
 
-		const baseProps = {
-			email: settings.user?.email,
-			name: settings.user?.name,
-			user_id: settings.user?.id,
-			clerk_id: clerkId,
-			github_username: settings.user?.github_username,
-			website: settings.user?.website,
-			contact: settings.user?.contact,
-			cloud_subscribed: !!settings.user?.cloud_subscribed,
-			app_entitled: !!(settings.user as any)?.app_entitled,
-			subscription_plan: (settings.user as any)?.subscription_plan,
-			machine_analytics_id: settings.analyticsId,
+			if (clerkId) {
+				try { posthog.alias(clerkId); } catch {}
+			}
+
+			const baseProps = {
+				email: settings.user?.email,
+				name: settings.user?.name,
+				user_id: settings.user?.id,
+				clerk_id: clerkId,
+				github_username: settings.user?.github_username,
+				website: settings.user?.website,
+				contact: settings.user?.contact,
+				cloud_subscribed: !!settings.user?.cloud_subscribed,
+				app_entitled: !!(settings.user as any)?.app_entitled,
+				subscription_plan: (settings.user as any)?.subscription_plan,
+				machine_analytics_id: settings.analyticsId,
+			};
+
+			getVersion()
+				.then((appVersion) => {
+					if (cancelled) return;
+					posthog.identify(distinctId, { ...baseProps, app_version: appVersion });
+				})
+				.catch(() => {
+					if (cancelled) return;
+					posthog.identify(distinctId, baseProps);
+				});
 		};
 
-		getVersion()
-			.then((appVersion) => {
-				posthog.identify(distinctId, { ...baseProps, app_version: appVersion });
-			})
-			.catch(() => {
-				posthog.identify(distinctId, baseProps);
-			});
+		// alias()/identify() are what actually mint a PostHog person under
+		// `person_profiles: "identified_only"`, so they must clear BOTH opt-out
+		// signals before running:
+		//
+		//  - settings.analyticsEnabled — the user's own preference. providers.tsx
+		//    can only read the localStorage cache, which is EMPTY on a fresh
+		//    profile, so it opt_in's by default. Without this check a user who
+		//    has analytics turned off is still identified once on first boot.
+		//  - the environment guard (CI / SCREENPIPE_DISABLE_TELEMETRY), which is
+		//    known only to Rust. See lib/telemetry-env.
+		void resolveTelemetryDisabledByEnv().then((envDisabled) => {
+			if (cancelled) return;
+			if (!shouldIdentifyInPostHog({ analyticsEnabled: settings.analyticsEnabled, envDisabled })) {
+				try { posthog.opt_out_capturing(); } catch {}
+				return;
+			}
+			identifyNow();
+		});
+
+		return () => {
+			cancelled = true;
+		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [settings.analyticsId, settings.user?.id, settings.user?.clerk_id, settings.user?.cloud_subscribed, (settings.user as any)?.app_entitled, (settings.user as any)?.subscription_plan]);
+	}, [settings.analyticsId, settings.analyticsEnabled, settings.user?.id, settings.user?.clerk_id, settings.user?.cloud_subscribed, (settings.user as any)?.app_entitled, (settings.user as any)?.subscription_plan]);
 
 	// When user becomes a Pro subscriber, default to cloud transcription (one-time)
 	useEffect(() => {

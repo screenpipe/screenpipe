@@ -51,6 +51,7 @@ import {
   type LiveViewListItem,
 } from "@/components/settings/live-view-card";
 import { Button } from "@/components/ui/button";
+import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import {
   CANVAS_GRID,
   canvasBlockNodeId,
@@ -477,6 +478,9 @@ export function LiveViewCanvas({
   );
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const drawSessionRef = useRef<DrawSession | null>(null);
+  const canvasActiveRef = useRef(false);
+  const pointerAnchorRef = useRef<BrainViewCanvasPoint | null>(null);
+  const nativeZoomEndRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const focusAnimationFrameRef = useRef<number | null>(null);
   const focusAnimationTimeoutRef = useRef<number | null>(null);
   const [focusViewport, setFocusViewport] = useState<Viewport | null>(null);
@@ -1082,6 +1086,7 @@ export function LiveViewCanvas({
 
   const handleSurfacePointerMove = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
+      pointerAnchorRef.current = { x: event.clientX, y: event.clientY };
       const session = drawSessionRef.current;
       if (!session || session.pointerId !== event.pointerId) return;
       event.preventDefault();
@@ -1171,29 +1176,69 @@ export function LiveViewCanvas({
   }, [applyDocument, selection, setCanvasSelection]);
 
   const zoomCanvas = useCallback(
-    (factor: number) => {
+    (
+      factor: number,
+      anchor: BrainViewCanvasPoint | null = null,
+      persist = true,
+    ) => {
       const current = latestDocumentRef.current;
       const bounds = surfaceRef.current?.getBoundingClientRect();
       const zoom = clampCanvasZoom(current.viewport.zoom * factor);
       if (!bounds || zoom === current.viewport.zoom) return;
-      const centerX = bounds.width / 2;
-      const centerY = bounds.height / 2;
-      const worldX = (centerX - current.viewport.x) / current.viewport.zoom;
-      const worldY = (centerY - current.viewport.y) / current.viewport.zoom;
+      const anchorX = anchor
+        ? Math.min(bounds.width, Math.max(0, anchor.x - bounds.left))
+        : bounds.width / 2;
+      const anchorY = anchor
+        ? Math.min(bounds.height, Math.max(0, anchor.y - bounds.top))
+        : bounds.height / 2;
+      const worldX = (anchorX - current.viewport.x) / current.viewport.zoom;
+      const worldY = (anchorY - current.viewport.y) / current.viewport.zoom;
       applyDocument(
         {
           ...current,
           viewport: {
-            x: centerX - worldX * zoom,
-            y: centerY - worldY * zoom,
+            x: anchorX - worldX * zoom,
+            y: anchorY - worldY * zoom,
             zoom,
           },
         },
-        true,
+        persist,
       );
     },
     [applyDocument],
   );
+
+  useTauriEvent<number>("native-magnify", (event) => {
+    const magnification = event.payload;
+    if (
+      !canvasActiveRef.current ||
+      !window.document.hasFocus() ||
+      typeof magnification !== "number" ||
+      !Number.isFinite(magnification) ||
+      magnification === 0
+    ) {
+      return;
+    }
+    // A real pinch takes over from an in-flight AI focus animation, the same
+    // way a trusted pan or wheel zoom does.
+    cancelFocusAnimation();
+    zoomCanvas(
+      Math.exp(magnification * 5),
+      pointerAnchorRef.current,
+      false,
+    );
+    if (nativeZoomEndRef.current) clearTimeout(nativeZoomEndRef.current);
+    nativeZoomEndRef.current = setTimeout(() => {
+      applyDocument(latestDocumentRef.current, true);
+      nativeZoomEndRef.current = null;
+    }, 160);
+  });
+
+  useEffect(() => {
+    return () => {
+      if (nativeZoomEndRef.current) clearTimeout(nativeZoomEndRef.current);
+    };
+  }, []);
 
   const fitCanvas = useCallback(() => {
     const current = latestDocumentRef.current;
@@ -1334,6 +1379,8 @@ export function LiveViewCanvas({
   const handleMoveEnd = useCallback(
     (event: MouseEvent | TouchEvent | null, viewport: Viewport) => {
       if (!isTrustedCanvasMove(event)) return;
+      // Native pinch persists once when its gesture burst settles.
+      if (nativeZoomEndRef.current) return;
       const current = latestDocumentRef.current;
       applyDocument({ ...current, viewport }, true);
     },
@@ -1358,6 +1405,17 @@ export function LiveViewCanvas({
         aria-label="Whiteboard canvas. Use the toolbar to select, pan, add notes, connect Blocks, or draw."
         tabIndex={0}
         className="live-view-process-canvas absolute inset-0 outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-inset"
+        onPointerEnter={(event) => {
+          canvasActiveRef.current = true;
+          pointerAnchorRef.current = {
+            x: event.clientX,
+            y: event.clientY,
+          };
+        }}
+        onPointerLeave={() => {
+          canvasActiveRef.current = false;
+          pointerAnchorRef.current = null;
+        }}
         onPointerDownCapture={handleSurfacePointerDown}
         onPointerMoveCapture={handleSurfacePointerMove}
         onPointerUpCapture={finishDrawSession}
@@ -1627,7 +1685,8 @@ export function LiveViewCanvas({
           data-testid="canvas-interaction-hint"
           className="pointer-events-none absolute right-3 top-3 z-20 max-w-[calc(100%-11rem)] border border-border bg-background/95 px-2 py-1 text-right font-mono text-[9px] leading-tight text-muted-foreground"
         >
-          drag nodes · pan tool or middle-drag · ctrl/⌘ + wheel to zoom
+          drag nodes · pan tool or middle-drag · pinch or ctrl/⌘ + wheel to
+          zoom
         </div>
       )}
     </section>

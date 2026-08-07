@@ -288,7 +288,9 @@ export function NotificationInboxPanel({
       <div className="border-b border-border px-3 pt-2.5 pb-2">
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium text-foreground">inbox</span>
-          {inboxView === "all" && history.length > 0 && (
+          {/* Clears both tabs, so it stays reachable from either one — being
+              sent to All just to empty the inbox was busywork. */}
+          {history.length > 0 && (
             <button
               data-testid="notification-bell-clear-all"
               onClick={clearAll}

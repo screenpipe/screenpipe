@@ -55,6 +55,33 @@ pub fn ensure_spotlight_excluded(dir: &Path) -> anyhow::Result<()> {
     set_spotlight_excluded(dir, true)
 }
 
+/// Best-effort variant of [`ensure_spotlight_excluded`] for startup paths.
+///
+/// The exclusion is a privacy/perf hardening step, not a correctness
+/// precondition: `_MDCopyExclusionList` is a private CoreServices call that can
+/// transiently return null, and treating that as fatal aborts the whole app
+/// before any window exists (`Failed to setup app: … Spotlight returned a null
+/// exclusion list`). A directory that is briefly still indexed is a far smaller
+/// problem than an app that will not launch, so failures are logged and
+/// swallowed here.
+///
+/// Returns whether the directory is now excluded, so callers that want to
+/// surface the degraded state can.
+pub fn ensure_spotlight_excluded_best_effort(dir: &Path) -> bool {
+    match ensure_spotlight_excluded(dir) {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(
+                "could not exclude {} from Spotlight indexing: {e:#}. \
+                 continuing without the exclusion — recordings in this directory \
+                 may be indexed until it succeeds on a later start",
+                dir.display()
+            );
+            false
+        }
+    }
+}
+
 /// Return whether the directory is already present in macOS Spotlight's
 /// Search Privacy exclusion list. Returns true on non-macOS, where no
 /// Spotlight migration is required.
@@ -150,12 +177,22 @@ mod macos_spotlight {
             }
         }
 
+        /// `_MDCopyExclusionList` is private and occasionally returns null even
+        /// with indexing enabled (observed at app startup while the same call
+        /// succeeds moments later from the same machine). Retry briefly before
+        /// giving up so a single hiccup does not degrade the exclusion.
         fn exclusions(&self) -> Result<CFArray<CFString>> {
-            let exclusions = unsafe { (self.copy_exclusions)() };
-            if exclusions.is_null() {
-                bail!("Spotlight returned a null exclusion list");
+            const ATTEMPTS: u32 = 3;
+            for attempt in 1..=ATTEMPTS {
+                let exclusions = unsafe { (self.copy_exclusions)() };
+                if !exclusions.is_null() {
+                    return Ok(unsafe { CFArray::wrap_under_create_rule(exclusions) });
+                }
+                if attempt < ATTEMPTS {
+                    std::thread::sleep(std::time::Duration::from_millis(100 * u64::from(attempt)));
+                }
             }
-            Ok(unsafe { CFArray::wrap_under_create_rule(exclusions) })
+            bail!("Spotlight returned a null exclusion list after {ATTEMPTS} attempts");
         }
 
         fn contains(&self, path: &str) -> Result<bool> {
@@ -254,5 +291,36 @@ mod macos_spotlight {
             set_excluded(dir.path(), false).unwrap();
             assert!(!is_excluded(dir.path()).unwrap());
         }
+    }
+}
+
+#[cfg(test)]
+mod best_effort_tests {
+    use super::*;
+
+    /// A directory the Spotlight API cannot possibly accept (it does not
+    /// exist, so canonicalization fails). The strict call must report that,
+    /// and the best-effort call must swallow it — startup depends on never
+    /// aborting over a failed exclusion.
+    #[test]
+    fn best_effort_exclusion_never_fails_startup() {
+        let missing = PathBuf::from("/nonexistent-screenpipe-spotlight-probe/data");
+
+        #[cfg(target_os = "macos")]
+        assert!(
+            ensure_spotlight_excluded(&missing).is_err(),
+            "strict exclusion should surface an unusable directory"
+        );
+
+        // The contract that matters: this returns instead of propagating.
+        let excluded = ensure_spotlight_excluded_best_effort(&missing);
+
+        #[cfg(target_os = "macos")]
+        assert!(
+            !excluded,
+            "a failed exclusion must report the degraded state"
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert!(excluded, "non-macOS needs no exclusion, so it is satisfied");
     }
 }

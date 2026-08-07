@@ -162,9 +162,14 @@ export function formatSourceCitationsMarkdown(citations: SourceCitation[]): stri
 function sourceCitationsFromToolCall(toolCall: ToolCallLike | undefined): SourceCitation[] {
   if (!toolCall || toolCall.isError === true || toolCall.isRunning === true) return [];
 
-  const toolName = normalizeToolName(
-    typeof toolCall.toolName === "string" ? toolCall.toolName : "unknown"
-  );
+  const rawToolName = typeof toolCall.toolName === "string" ? toolCall.toolName : "unknown";
+  const toolName = normalizeToolName(rawToolName);
+  // Which MCP server (if any) produced this call. A tool from a THIRD-PARTY MCP
+  // server (e.g. mcp__tavily__search) must never be attributed to the local
+  // Screenpipe timeline just because its bare name collides with a screenpipe
+  // endpoint ("search"). null = raw pi / non-MCP (its bare names are trusted).
+  const mcpServer = rawToolName.match(/^mcp__([a-z0-9_-]+)__/i)?.[1]?.toLowerCase() ?? null;
+  const isForeignMcp = mcpServer !== null && mcpServer !== "screenpipe";
   const args = isObject(toolCall.args) ? toolCall.args : {};
   const resultText = resultToText(toolCall.result);
 
@@ -176,6 +181,25 @@ function sourceCitationsFromToolCall(toolCall: ToolCallLike | undefined): Source
   }
 
   if (toolName === "screenpipe_search") {
+    return [screenpipeToolCitation(args)];
+  }
+
+  // screenpipe MCP tools (ACP agents surface them as mcp__screenpipe__<name>,
+  // normalized above) mirror the local screen/audio search + activity endpoints.
+  // Skip when the call came from a third-party MCP server, so a foreign tool
+  // whose bare name collides ("search") is not mislabeled as a local recording.
+  if (
+    !isForeignMcp &&
+    (toolName === "search-content" ||
+      toolName === "keyword-search" ||
+      toolName === "search" ||
+      toolName === "screenpipe" ||
+      toolName === "team-search" ||
+      toolName === "activity-summary" ||
+      toolName === "search-elements" ||
+      toolName === "get-frame-elements" ||
+      toolName === "frame-context")
+  ) {
     return [screenpipeToolCitation(args)];
   }
 
@@ -468,8 +492,13 @@ function normalizeExplicitCitations(value: unknown): SourceCitation[] {
 
 function normalizeToolName(toolName: string): string {
   return toolName
+    // ACP agents surface tools as `mcp__<server>__<name>` (e.g.
+    // mcp__screenpipe__search-content) or a human title ("Grep"); strip the MCP
+    // server prefix and lowercase so both match the same branches raw pi hits.
+    .replace(/^mcp__[a-z0-9_-]+__/i, "")
     .replace(/^tool_functions[._-]?/, "")
-    .replace(/^toolfunctions[._-]?/, "");
+    .replace(/^toolfunctions[._-]?/, "")
+    .toLowerCase();
 }
 
 function extractScreenpipeApiCalls(command: string): string[] {

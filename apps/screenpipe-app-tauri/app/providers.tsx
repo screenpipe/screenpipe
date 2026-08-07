@@ -20,6 +20,7 @@ import { DeeplinkHandler } from "@/components/deeplink-handler";
 import { LiveViewOnboardingFollowUp } from "@/components/live-view-onboarding-follow-up";
 import { usePathname } from "next/navigation";
 import { readCachedAnalyticsId, readCachedAnalyticsEnabled } from "@/lib/analytics-id";
+import { resolveTelemetryDisabledByEnv } from "@/lib/telemetry-env";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/query-client";
 import { DesktopRemoteControl } from "@/components/desktop-remote-control";
@@ -101,6 +102,15 @@ export const Providers = forwardRef<
       } else {
         posthog.opt_in_capturing();
       }
+      // The cached preference above is the only SYNCHRONOUS signal available.
+      // An automated environment (CI, SCREENPIPE_DISABLE_TELEMETRY) is known
+      // only to Rust, so ask for it and opt out as soon as it answers. This
+      // lands well before the identify() effect in use-settings — which is what
+      // actually mints a PostHog person under `person_profiles: identified_only`
+      // — so a CI run never becomes a "user". See lib/telemetry-env.
+      void resolveTelemetryDisabledByEnv().then((envDisabled) => {
+        if (envDisabled) posthog.opt_out_capturing();
+      });
       setPosthogReady(true);
     }
   }, []);

@@ -486,6 +486,9 @@ async getActiveDataDir() : Promise<Result<string, string>> {
 async getAppIdentifier() : Promise<string> {
     return await TAURI_INVOKE("get_app_identifier");
 },
+async getAppScreenCaptureProtection() : Promise<ScreenCaptureProtectionStatus> {
+    return await TAURI_INVOKE("get_app_screen_capture_protection");
+},
 /**
  * Get the app-local focus/notification server port.
  */
@@ -896,6 +899,21 @@ async isServerRunning() : Promise<Result<boolean, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Whether an automated environment has force-disabled telemetry
+ * (`SCREENPIPE_DISABLE_TELEMETRY` / `GITHUB_ACTIONS` / `CI`).
+ *
+ * The Rust senders already consult
+ * [`screenpipe_engine::analytics::telemetry_disabled_by_env`] directly, but the
+ * webview cannot: its PostHog gate in `app/providers.tsx` only sees build-time
+ * `process.env`, so a runtime env var never reaches it. Without this command a
+ * CI run of the shipped bundle still fires `$identify` and mints a real
+ * PostHog person — which is exactly how the Docker AppImage smoke test came to
+ * account for a quarter of weekly "app users".
+ */
+async isTelemetryDisabledByEnv() : Promise<boolean> {
+    return await TAURI_INVOKE("is_telemetry_disabled_by_env");
+},
 async listBrainViewTemplateKits() : Promise<Result<BrainViewTemplateKit[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("list_brain_view_template_kits") };
@@ -975,9 +993,15 @@ async livetextHide() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async livetextHighlight(terms: string[]) : Promise<Result<number, string>> {
+/**
+ * Highlight `terms` on the frame they were matched in. `frame_id` scopes the
+ * request: the bridge only paints when that frame's analysis is on the overlay,
+ * and re-paints automatically once it lands (analysis is asynchronous, so the
+ * highlight request usually arrives first).
+ */
+async livetextHighlight(terms: string[], frameId: string) : Promise<Result<number, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("livetext_highlight", { terms }) };
+    return { status: "ok", data: await TAURI_INVOKE("livetext_highlight", { terms, frameId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1293,7 +1317,7 @@ async performOcrOnImage(imageBase64: string) : Promise<Result<string, string>> {
 },
 /**
  * Abort current Pi operation. Priority command — cancels all pending commands
- * in the queue and sends abort directly. Waits for the SDK's done event.
+ * in the queue and sends abort directly. Waits for its exact SDK response.
  */
 async piAbort(sessionId: string | null) : Promise<Result<null, string>> {
     try {
@@ -1309,6 +1333,73 @@ async piAbort(sessionId: string | null) : Promise<Result<null, string>> {
 async piAbortActive(sessionId: string | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("pi_abort_active", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Whether launching this agent will trigger a first-run package install (a
+ * slow, silent-looking wait). The preset editor uses this to show an
+ * "Installing <agent>…" hint instead of a bare "loading…" label. Cheap cache
+ * stat; false for binary/cached agents.
+ */
+async piAcpAgentDownloadPending(agentId: string) : Promise<boolean> {
+    return await TAURI_INVOKE("pi_acp_agent_download_pending", { agentId });
+},
+async piAcpAgentInstallStatus(agentId: string) : Promise<AcpAgentInstallStatus> {
+    return await TAURI_INVOKE("pi_acp_agent_install_status", { agentId });
+},
+/**
+ * Probe an ACP adapter for its advertised model/mode selectors without a
+ * chat: spawn the hidden runtime, let it initialize and create a session,
+ * capture the acp_session_config event, and tear everything down. Returns
+ * the raw event JSON. Fails soft with the adapter's error message (e.g.
+ * sign-in required) so the preset editor can show it as a hint.
+ */
+async piAcpProbeAgent(agent: AcpAgentConfig) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_acp_probe_agent", { agent }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Re-show the agent's sign-in methods without signing out: the runtime re-runs
+ * its auth flow, which re-emits the sign-in card. Picking a method re-runs that
+ * method's login (Claude's `--cli auth login`, Codex's ACP ChatGPT flow), which
+ * overwrites the credential in place. We never force a logout, so a user never
+ * loses their existing login as a side effect of re-authenticating.
+ */
+async piAcpReauthenticate(sessionId: string | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_acp_reauthenticate", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Change one ACP session configuration option (model, mode, or any other
+ * selector the adapter advertised through `acp_session_config`). Select
+ * options take the value id string; boolean options take "true"/"false".
+ */
+async piAcpSetConfigOption(sessionId: string | null, optionId: string, value: string, isBoolean: boolean | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_acp_set_config_option", { sessionId, optionId, value, isBoolean }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Switch the ACP session mode (e.g. a permission mode) advertised through
+ * `acp_session_config`. Allowed while a prompt is streaming.
+ */
+async piAcpSetMode(sessionId: string | null, modeId: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_acp_set_mode", { sessionId, modeId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1399,7 +1490,7 @@ async piListExtensionPackages() : Promise<Result<PiExtensionPackage[], string>> 
 /**
  * Start a new Pi session (clears conversation history).
  * Serialized through the queue — waits for any in-flight work to complete,
- * then sends new_session and waits for the SDK's done event before returning.
+ * then sends new_session and waits for its exact SDK response before returning.
  */
 async piNewSession(sessionId: string | null) : Promise<Result<null, string>> {
     try {
@@ -2024,6 +2115,20 @@ async setApiAuthKey(key: string) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Apply the user's preference immediately to every currently-live webview.
+ * Persistence remains owned by the settings store; accepting the value here
+ * avoids a read-after-write race between the frontend store and native window
+ * APIs when the switch is clicked.
+ */
+async setAppScreenCaptureProtection(hidden: boolean) : Promise<Result<ScreenCaptureProtectionStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_app_screen_capture_protection", { hidden }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async setAutostart(enabled: boolean) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_autostart", { enabled }) };
@@ -2078,7 +2183,7 @@ async setChatAlwaysOnTop(onTop: boolean) : Promise<Result<null, string>> {
  * in the screenpipe-api skill that Pi installs on every run.
  *
  * Mechanism: the screenpipe-core `Pi::ensure_screenpipe_skill` reads
- * `~/.screenpipe/cloud_media_analysis.disabled` at install time and
+ * `<data_dir>/cloud_media_analysis.disabled` at install time and
  * conditionally appends the Gemma 4 E4B confidential-enclave section
  * to `<project>/.pi/skills/screenpipe-api/SKILL.md`. Default (no
  * marker) = enabled. This command just creates or removes the marker.
@@ -2556,36 +2661,60 @@ async writeBrowserLogs(entries: BrowserLogEntry[]) : Promise<void> {
 
 /** user-defined types **/
 
-export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number;
-/**
- * The external adapter to launch when `provider` is `acp`.
- */
-acpAgent?: AcpAgentConfig | null }
-export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi" | "anthropic" |
-/**
- * External Agent Client Protocol adapter, launched via the ACP runtime.
- */
-"acp"
-/**
- * The external ACP adapter to launch when `backend` is `acp`.
- */
+export type AIPreset = { id: string; prompt: string; provider: AIProviderType; acpAgent?: AcpAgentPresetConfig | null; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
+export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "acp" | "pi" | "anthropic"
 export type AcpAgentConfig = {
 /**
- * Catalog id (for example `claude-acp`) or `custom`.
+ * Registry id (for example `codex-acp`) or `custom`.
  */
 id: string;
 /**
- * Executable for a custom adapter; built-in ids resolve by id when absent.
+ * Optional executable. Built-in registry adapters resolve by id when absent.
  */
 command?: string | null;
 /**
- * Arguments passed to the adapter verbatim, without a shell.
+ * Arguments passed verbatim without a shell.
  */
 args?: string[];
 /**
  * Environment passed only to the supervised adapter process.
  */
-env?: { [key in string]: string } }
+env?: { [key in string]: string };
+/**
+ * Optional ACP authentication method id.
+ */
+authMethod?: string | null;
+/**
+ * Default session config option values (option id -> value id), applied
+ * after every session/new.
+ */
+config?: { [key in string]: string };
+/**
+ * Default session mode id, applied after every session/new.
+ */
+modeId?: string | null }
+/**
+ * Whether a built-in agent's CLI is installed on this computer. Binary agents
+ * (OpenCode, Cursor, Kimi) require the user to install the CLI; npx agents run
+ * via the bundled bun and are always available. The preset editor uses this to
+ * gate saving and to show an install prompt instead of a cryptic spawn error.
+ */
+export type AcpAgentInstallStatus = { requiresInstall: boolean; installed: boolean; command: string | null; installUrl: string | null }
+export type AcpAgentPresetConfig = { id: string; command?: string | null; args?: string[];
+/**
+ * Keys with empty values inherit from the desktop process environment.
+ */
+env?: { [key in string]: string };
+/**
+ * Default session config option values (option id -> value id), applied
+ * after every session/new. Options the adapter no longer advertises are
+ * ignored at apply time.
+ */
+config?: { [key in string]: string };
+/**
+ * Default session mode id, applied after every session/new.
+ */
+modeId?: string | null }
 export type AecMode = "off" | "screenpipe" | "macos" | "windows"
 export type AudioDeviceInfo = { name: string; isDefault: boolean;
 /**
@@ -2794,11 +2923,6 @@ downloaded: boolean;
  * True when download failed with 401/403 — user must sign in.
  */
 auth_required: boolean }
-/**
- * Which transport backend Pi uses. Absent means the native Pi RPC agent;
- * `acp` runs an external Agent Client Protocol adapter through the hidden
- * runtime (see acp_runtime.rs).
- */
 export type PiBackend = "acp"
 export type PiCheckResult = { available: boolean; path: string | null }
 export type PiExtensionPackage = { source: string; scope: string; filtered: boolean; installed: boolean }
@@ -2811,20 +2935,25 @@ export type PiInfo = { running: boolean;
  * True while this session has a prompt, queued follow-up, or pending RPC
  * response. Destructive settings use it to avoid clearing live context.
  */
-busy: boolean; projectDir: string | null; pid: number | null; sessionId: string | null }
+busy: boolean; projectDir: string | null; pid: number | null; sessionId: string | null;
+/**
+ * A non-fatal startup outcome, such as the user declining an ACP login.
+ * Genuine process/configuration failures still use the command error.
+ */
+startupError: string | null }
 /**
  * Configuration for which AI provider Pi should use.
- * Not `Hash`: the ACP agent config carries an `env` map, so the launch
- * fingerprint hashes a canonical serialization instead.
+ * Not `Hash` (it carries an `env: HashMap` via the ACP agent config); the
+ * launch fingerprint hashes a canonical serialization instead.
  */
 export type PiProviderConfig = {
 /**
- * Transport backend. Absent keeps the native Pi RPC agent; `acp` runs an
- * external adapter through the hidden ACP runtime.
+ * Transport backend. Omitted keeps the native Pi RPC implementation;
+ * `acp` runs a registry-compatible adapter through the official Rust SDK.
  */
 backend?: PiBackend | null;
 /**
- * Adapter configuration, required when `backend` is `acp`.
+ * ACP adapter configuration when `backend` is `acp`.
  */
 acpAgent?: AcpAgentConfig | null;
 /**
@@ -2860,7 +2989,13 @@ systemPrompt?: string | null;
  * Optional exact Pi tool allowlist for bounded agent surfaces. `None`
  * preserves the normal Chat tool surface; an empty list disables tools.
  */
-allowedTools?: string[] | null }
+allowedTools?: string[] | null;
+/**
+ * A prior ACP session id to reattach to instead of creating a fresh
+ * session, set only when reopening a conversation whose agent process
+ * is gone. Ignored by the native Pi backend.
+ */
+resumeSessionId?: string | null }
 /**
  * A user prompt that's been enqueued but not yet written to Pi's stdin.
  * Surfaced to the UI so the chat can render "queued" cards while a prior
@@ -2969,6 +3104,7 @@ endTime: string;
  */
 recordMode: string }
 export type SchedulerStatus = { running: boolean; last_sync: string | null; last_error: string | null }
+export type ScreenCaptureProtectionStatus = { requestedHidden: boolean; effectiveHidden: boolean; platformSupported: boolean; e2EBypass: boolean; windowLabels: string[] }
 /**
  * Which AI projection to build from the existing screen/accessibility stream.
  *
@@ -3565,6 +3701,11 @@ overlayMode?: string;
  * Disabled by default so the overlay doesn't appear in screenpipe's own recordings.
  */
 showOverlayInScreenRecording?: boolean;
+/**
+ * Hide screenpipe windows from screenshots and screen-sharing viewers
+ * while keeping them visible and interactive on the user's own display.
+ */
+hideAppInScreenShare?: boolean;
 /**
  * When true, the chat window stays above all other windows (default: true).
  */

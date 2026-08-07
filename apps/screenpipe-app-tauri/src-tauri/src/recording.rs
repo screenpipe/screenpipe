@@ -360,7 +360,7 @@ pub async fn get_available_audio_devices() -> Result<Vec<AudioDeviceInfo>, Strin
                 Some(&name) == default_input.as_ref() || Some(&name) == default_output.as_ref();
             let is_combo_bluetooth_mic = d.device_type
                 == screenpipe_audio::core::device::DeviceType::Input
-                && screenpipe_audio::core::device_detection::InputDeviceKind::detect(&d.name)
+                && screenpipe_audio::core::device_detection::InputDeviceKind::detect_input(&d.name)
                     == screenpipe_audio::core::device_detection::InputDeviceKind::Bluetooth
                 && screenpipe_audio::core::device::bluetooth_input_is_combo_headset(&d.name);
             AudioDeviceInfo {

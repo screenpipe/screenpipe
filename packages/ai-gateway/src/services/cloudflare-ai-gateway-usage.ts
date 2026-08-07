@@ -9,6 +9,10 @@ import type {
 	HostedChatLane,
 } from './cloudflare-ai-gateway';
 
+/** Allowance lane exposed to clients. 'combined' means the rule covers all
+ *  traffic for the user without distinguishing auto vs explicit. */
+export type AllowanceLane = HostedChatLane | 'combined';
+
 type SpendDimension = {
 	mode: 'partition' | 'filter';
 	values?: string[];
@@ -25,11 +29,11 @@ type CloudflareSpendRule = {
 };
 
 type ApplicableSpendRule = CloudflareSpendRule & {
-	lane: HostedChatLane;
+	lane: AllowanceLane;
 };
 
 export interface HostedChatUsageAllowance {
-	lane: HostedChatLane;
+	lane: AllowanceLane;
 	used_percent: number;
 	remaining_percent: number;
 	window_seconds: number;
@@ -150,9 +154,14 @@ function filterMatches(dimension: SpendDimension | undefined, value: string): bo
 }
 
 /**
- * Select the per-user lane rules represented by the desktop usage UI.
+ * Select the per-user rules represented by the desktop usage UI.
  * Provider/model rules and rules partitioned by another dimension are separate
- * buckets and cannot truthfully be collapsed into a single Auto/explicit meter.
+ * buckets and cannot truthfully be collapsed into a single meter.
+ *
+ * Rules that filter to a single lane produce an 'auto' or 'explicit' allowance.
+ * Rules with no lane dimension at all produce a 'combined' allowance that sums
+ * all traffic for the user — this is the current production setup where auto
+ * and explicit share a single spend limit.
  */
 function applicableLaneRules(
 	rules: CloudflareSpendRule[],
@@ -165,9 +174,17 @@ function applicableLaneRules(
 			dimension.mode === 'partition' && key !== 'user_id')) return [];
 		if (!filterMatches(rule.metadata.plan, context.plan)) return [];
 		const laneDimension = rule.metadata.lane;
-		if (laneDimension?.mode !== 'filter' || laneDimension.values?.length !== 1) return [];
-		const lane = laneDimension.values[0];
-		if (lane !== 'auto' && lane !== 'explicit') return [];
+		let lane: AllowanceLane;
+		if (!laneDimension) {
+			// No lane dimension — rule covers all traffic for this user+plan.
+			lane = 'combined';
+		} else if (laneDimension.mode === 'filter' && laneDimension.values?.length === 1) {
+			const value = laneDimension.values[0];
+			if (value !== 'auto' && value !== 'explicit') return [];
+			lane = value;
+		} else {
+			return [];
+		}
 		const unsupportedMetadata = Object.keys(rule.metadata)
 			.some((key) => !['user_id', 'plan', 'lane'].includes(key));
 		return unsupportedMetadata ? [] : [{ ...rule, lane }];
@@ -213,7 +230,7 @@ function ruleMatchesRow(
 ): boolean {
 	return row.user_id === context.user_id &&
 		row.plan === context.plan &&
-		row.lane === rule.lane;
+		(rule.lane === 'combined' || row.lane === rule.lane);
 }
 
 async function fetchUsageRows(

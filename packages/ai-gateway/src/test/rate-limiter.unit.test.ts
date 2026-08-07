@@ -128,6 +128,17 @@ function clerkAuth(userId: string): AuthResult {
 		...auth('subscribed', 'caller-device'),
 		userId,
 		clerkUserId: userId,
+		clerkUserIdVerified: true,
+	};
+}
+
+/** Caller whose clerk id came from the website user row, not a verified Clerk JWT. */
+function dbSourcedClerkAuth(userId: string): AuthResult {
+	return {
+		...auth('subscribed', 'caller-device'),
+		userId,
+		clerkUserId: userId,
+		clerkUserIdVerified: false,
 	};
 }
 
@@ -152,6 +163,7 @@ function standingRecord(
 		version: CLERK_STANDING_RECORD_VERSION,
 		userId,
 		standing,
+		...(standing === 'denied' ? { reason: 'banned' as const } : {}),
 		checkedAt: clockNow,
 		revalidateAfter: standingRevalidateAfter(userId, clockNow),
 		...overrides,
@@ -346,11 +358,11 @@ describe('checkRateLimit — freeRpm clamped to never be below paid rpm', () => 
 
 describe('Clerk GOOD-STANDING admission', () => {
 	it.each([
-		['historically banned', (userId: string) => Response.json(clerkUser(userId, { banned: true }))],
-		['historically locked', (userId: string) => Response.json(clerkUser(userId, { locked: true }))],
-		['historically deleted', (_userId: string) => new Response('not found', { status: 404 })],
-	] as const)('denies a %s user on the first request and persists the decision', async (
+		['historically banned', 'banned', (userId: string) => Response.json(clerkUser(userId, { banned: true }))],
+		['historically deleted', 'deleted', (_userId: string) => new Response('not found', { status: 404 })],
+	] as const)('denies a %s verified user on the first request and persists the decision', async (
 		label,
+		reason,
 		clerkResponse,
 	) => {
 		const userId = `user_${label.replace(/\W/g, '_')}`;
@@ -369,8 +381,63 @@ describe('Clerk GOOD-STANDING admission', () => {
 				version: CLERK_STANDING_RECORD_VERSION,
 				userId,
 				standing: 'denied',
+				reason,
 				revalidateAfter: standingRevalidateAfter(userId, clockNow),
 			});
+	});
+
+	it('admits a locked user — a sign-in lockout is not an account revocation', async () => {
+		const userId = 'user_locked_but_valid';
+		const fetchMock = mock(async () =>
+			Response.json(clerkUser(userId, { locked: true }))) as typeof fetch;
+		globalThis.fetch = fetchMock;
+		const harness = makeHarness();
+
+		const result = await checkRateLimit(chatReq(), harness.env, clerkAuth(userId));
+
+		expect(result.allowed).toBe(true);
+		expect(harness.readStorage<ClerkStandingRecord>(userId, CLERK_STANDING_STORAGE_KEY))
+			.toMatchObject({ standing: 'good' });
+	});
+
+	it('surfaces the denial reason in the 403 body for supportability', async () => {
+		const userId = 'user_banned_reason_body';
+		globalThis.fetch = mock(async () =>
+			Response.json(clerkUser(userId, { banned: true }))) as typeof fetch;
+		const harness = makeHarness();
+
+		const result = await checkRateLimit(chatReq(), harness.env, clerkAuth(userId));
+
+		const outer = await result.response!.json() as { error: string };
+		expect(JSON.parse(outer.error)).toMatchObject({
+			error: 'account_not_in_good_standing',
+			reason: 'banned',
+		});
+	});
+
+	it('answers retryable-unavailable, not a ban, when a DB-sourced clerk id 404s', async () => {
+		const userId = 'user_stale_db_clerk_id';
+		const fetchMock = mock(async () => new Response('not found', { status: 404 })) as typeof fetch;
+		globalThis.fetch = fetchMock;
+		const harness = makeHarness();
+
+		const result = await checkRateLimit(chatReq(), harness.env, dbSourcedClerkAuth(userId));
+
+		expect(result.allowed).toBe(false);
+		expect(result.response?.status).toBe(503);
+		expect(await responseErrorCode(result.response!)).toBe('account_status_unavailable');
+	});
+
+	it('still denies a banned user whose clerk id came from the website user row', async () => {
+		const userId = 'user_banned_db_sourced';
+		globalThis.fetch = mock(async () =>
+			Response.json(clerkUser(userId, { banned: true }))) as typeof fetch;
+		const harness = makeHarness();
+
+		const result = await checkRateLimit(chatReq(), harness.env, dbSourcedClerkAuth(userId));
+
+		expect(result.response?.status).toBe(403);
+		expect(await responseErrorCode(result.response!)).toBe('account_not_in_good_standing');
 	});
 
 	it('caches a positive decision and reloads it after Durable Object eviction', async () => {
@@ -423,7 +490,7 @@ describe('Clerk GOOD-STANDING admission', () => {
 		legacyRecord,
 	) => {
 		const userId = 'user_schema_migration';
-		const fetchMock = mock(async () => Response.json(clerkUser(userId, { locked: true }))) as typeof fetch;
+		const fetchMock = mock(async () => Response.json(clerkUser(userId, { banned: true }))) as typeof fetch;
 		globalThis.fetch = fetchMock;
 		const harness = makeHarness();
 		harness.seedStorage(userId, CLERK_STANDING_STORAGE_KEY, legacyRecord);
@@ -443,7 +510,7 @@ describe('Clerk GOOD-STANDING admission', () => {
 			lookup++;
 			return lookup === 1
 				? Response.json(clerkUser(userId))
-				: Response.json(clerkUser(userId, { locked: true }));
+				: Response.json(clerkUser(userId, { banned: true }));
 		}) as typeof fetch;
 		globalThis.fetch = fetchMock;
 		const harness = makeHarness({ LIMIT_SUBSCRIBED_RPM: '1' });

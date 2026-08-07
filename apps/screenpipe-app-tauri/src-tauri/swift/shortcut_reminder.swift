@@ -22,6 +22,13 @@ public func shortcutSetMeetingActive(_ active: Int32) {
     }
 }
 
+@_cdecl("shortcut_set_meeting_stop_result")
+public func shortcutSetMeetingStopResult(_ succeeded: Int32) {
+    if #available(macOS 13.0, *) {
+        ShortcutReminderController.shared.setMeetingStopResult(succeeded != 0)
+    }
+}
+
 /// Unread pipe-notification count, pushed from the Rust notification store —
 /// drives the bell dot on the collapsed pill.
 @_cdecl("shortcut_set_inbox_unread")
@@ -57,6 +64,11 @@ final class OverlayMetrics: ObservableObject {
     @Published var screenActive: Bool = false
     @Published var captureFps: Double = 0
     @Published var meetingActive: Bool = false
+    @Published var activeMeetingId: Int64?
+    @Published var meetingApp: String?
+    @Published var meetingTranscriptItems: [MeetingOverlayTranscriptItem] = []
+    @Published var meetingStopping: Bool = false
+    @Published var meetingStopError: String?
     /// Unread pipe notifications exist — bell dot on the collapsed pill.
     @Published var inboxUnread: Bool = false
     /// "normal" | "failure" | "fixing" | "recovered" — set only via
@@ -72,6 +84,25 @@ final class OverlayMetrics: ObservableObject {
     @Published var isHovering: Bool = false
     /// Set by click in failure state to expand the restart UI.
     @Published var forceExpanded: Bool = false
+}
+
+struct MeetingOverlayTranscriptItem: Identifiable, Equatable {
+    let meetingId: Int64
+    let itemId: String
+    let deviceType: String
+    let speakerName: String?
+    let text: String
+    let capturedAt: String
+    let isFinal: Bool
+
+    var id: String { itemId }
+
+    var displaySpeaker: String {
+        if let speakerName = speakerName, !speakerName.trimmingCharacters(in: .whitespaces).isEmpty {
+            return speakerName
+        }
+        return deviceType == "input" ? "me" : "speaker"
+    }
 }
 
 // MARK: - Font helper (same as notification panel)
@@ -264,6 +295,8 @@ private let kBaseCollapsedW: CGFloat = 62
 private let kBaseCollapsedH: CGFloat = 22
 private let kBaseExpandedW: CGFloat = 200
 private let kBaseExpandedH: CGFloat = 26
+private let kBaseTranscriptW: CGFloat = 280
+private let kBaseTranscriptH: CGFloat = 142
 private let kAnimDur: Double = 0.2
 
 @available(macOS 13.0, *)
@@ -457,9 +490,19 @@ struct ShortcutReminderView: View {
             HStack(spacing: s(3)) {
                 AudioEqualizerView(active: metrics.audioActive, speechRatio: metrics.speechRatio)
                     .frame(width: s(18), height: s(12))
-                ScreenMatrixView(active: metrics.screenActive, captureFps: metrics.captureFps)
-                    .frame(width: s(18), height: s(12))
-                    .clipShape(RoundedRectangle(cornerRadius: 1))
+                ZStack(alignment: .topTrailing) {
+                    ScreenMatrixView(active: metrics.screenActive, captureFps: metrics.captureFps)
+                        .frame(width: s(18), height: s(12))
+                        .clipShape(RoundedRectangle(cornerRadius: 1))
+                    if metrics.meetingActive {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: s(5), height: s(5))
+                            .overlay(Circle().stroke(Color.black.opacity(0.75), lineWidth: s(1)))
+                            .offset(x: s(2), y: -s(2))
+                            .help("meeting live — hover for transcript")
+                    }
+                }
             }
             .padding(.horizontal, s(3))
             .frame(maxHeight: .infinity)
@@ -498,9 +541,18 @@ struct ShortcutReminderView: View {
                 .frame(width: s(24), height: s(12))
                 .padding(.horizontal, s(3))
 
-            ScreenMatrixView(active: metrics.screenActive, captureFps: metrics.captureFps)
-                .frame(width: s(24), height: s(12))
-                .padding(.trailing, s(2))
+            ZStack(alignment: .topTrailing) {
+                ScreenMatrixView(active: metrics.screenActive, captureFps: metrics.captureFps)
+                    .frame(width: s(24), height: s(12))
+                if metrics.meetingActive {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: s(5), height: s(5))
+                        .overlay(Circle().stroke(Color.black.opacity(0.75), lineWidth: s(1)))
+                        .offset(x: s(1), y: -s(2))
+                }
+            }
+            .padding(.trailing, s(2))
 
             Rectangle().fill(.white.opacity(0.15)).frame(width: 0.5)
 
@@ -515,6 +567,112 @@ struct ShortcutReminderView: View {
         .background(Capsule().fill(Color.black.opacity(0.8)))
         .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
         .clipShape(Capsule())
+    }
+}
+
+@available(macOS 13.0, *)
+struct MeetingTranscriptPreview: View {
+    @ObservedObject var metrics: OverlayMetrics
+    let scale: CGFloat
+    let onStop: () -> Void
+
+    private func s(_ value: CGFloat) -> CGFloat { value * scale }
+
+    private var visibleItems: ArraySlice<MeetingOverlayTranscriptItem> {
+        metrics.meetingTranscriptItems.suffix(4)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: s(6)) {
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: s(7), height: s(7))
+                Text("meeting live")
+                    .font(Brand.swiftUIMonoFont(size: 9 * scale, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.92))
+                if let app = metrics.meetingApp, !app.isEmpty {
+                    Text("· \(app.lowercased())")
+                        .font(Brand.swiftUIMonoFont(size: 8 * scale))
+                        .foregroundColor(.white.opacity(0.45))
+                        .lineLimit(1)
+                }
+                Spacer(minLength: s(8))
+                Button(action: onStop) {
+                    HStack(spacing: s(4)) {
+                        if metrics.meetingStopping {
+                            ProgressView()
+                                .scaleEffect(0.45 * scale)
+                                .frame(width: s(9), height: s(9))
+                        } else {
+                            Image(systemName: "stop.fill")
+                                .font(.system(size: 7 * scale, weight: .medium))
+                        }
+                        Text(metrics.meetingStopping ? "stopping" : "stop")
+                            .font(Brand.swiftUIMonoFont(size: 8 * scale, weight: .semibold))
+                    }
+                    .foregroundColor(.white.opacity(0.82))
+                    .padding(.horizontal, s(8))
+                    .frame(height: s(22))
+                    .background(Color.white.opacity(0.06))
+                    .overlay(Rectangle().stroke(Color.white.opacity(0.18), lineWidth: 1))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(metrics.meetingStopping)
+                .help("stop this meeting")
+            }
+            .padding(.horizontal, s(12))
+            .frame(height: s(34))
+
+            Rectangle().fill(Color.white.opacity(0.14)).frame(height: 1)
+
+            VStack(alignment: .leading, spacing: s(7)) {
+                if let error = metrics.meetingStopError {
+                    HStack(alignment: .top, spacing: s(6)) {
+                        Image(systemName: "exclamationmark.circle")
+                            .font(.system(size: 8 * scale))
+                            .foregroundColor(.red)
+                        Text(error)
+                            .font(Brand.swiftUIMonoFont(size: 8 * scale))
+                            .foregroundColor(.white.opacity(0.8))
+                            .lineLimit(2)
+                    }
+                } else if visibleItems.isEmpty {
+                    HStack(spacing: s(6)) {
+                        ProgressView()
+                            .scaleEffect(0.45 * scale)
+                            .frame(width: s(10), height: s(10))
+                        Text("listening for speech…")
+                            .font(Brand.swiftUIMonoFont(size: 8 * scale))
+                            .foregroundColor(.white.opacity(0.48))
+                    }
+                } else {
+                    ForEach(visibleItems) { item in
+                        HStack(alignment: .firstTextBaseline, spacing: s(7)) {
+                            Text(item.displaySpeaker.lowercased())
+                                .font(Brand.swiftUIMonoFont(size: 7 * scale, weight: .medium))
+                                .foregroundColor(.white.opacity(0.4))
+                                .frame(width: s(48), alignment: .trailing)
+                                .lineLimit(1)
+                            Text(item.text)
+                                .font(Brand.swiftUIMonoFont(size: 8 * scale))
+                                .foregroundColor(.white.opacity(item.isFinal ? 0.84 : 0.58))
+                                .lineLimit(2)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, s(12))
+            .padding(.vertical, s(10))
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .frame(width: kBaseTranscriptW * scale, height: kBaseTranscriptH * scale)
+        .background(Color.black.opacity(0.93))
+        .overlay(Rectangle().stroke(Color.white.opacity(0.2), lineWidth: 1))
+        .shadow(color: Color.black.opacity(0.18), radius: s(10), y: s(4))
     }
 }
 
@@ -665,6 +823,13 @@ class ShortcutReminderController: NSObject {
     private var panel: NSPanel?
     private var hostingView: DraggableHostingView<AnyView>?
     private var trackingView: ReminderTrackingView?
+    private var transcriptPanel: NSPanel?
+    private var transcriptHostingView: NSHostingView<AnyView>?
+    private var transcriptTrackingView: ReminderTrackingView?
+    private var pillHovering = false
+    private var transcriptHovering = false
+    private var hoverHideWorkItem: DispatchWorkItem?
+    private var meetingStopTimeoutWorkItem: DispatchWorkItem?
 
     private var overlayShortcut = "⌘⌃S"
     private var chatShortcut = "⌘⌃L"
@@ -678,7 +843,7 @@ class ShortcutReminderController: NSObject {
     private var prevOcrCompleted: Int?
     /// Set from Rust `show_shortcut_reminder` when API auth is enabled (includes ?token=).
     private var metricsWsUrl = "ws://127.0.0.1:3030/ws/metrics"
-    private var eventsWsUrl = "ws://127.0.0.1:3030/ws/meeting-status"
+    private var eventsWsUrl = "ws://127.0.0.1:3030/ws/meeting-overlay"
     private var isVisible = false
 
     private var healthToolTip: String? {
@@ -703,9 +868,13 @@ class ShortcutReminderController: NSObject {
             }
             if panel == nil || prevScale != gOverlayScale {
                 panel?.orderOut(nil)
+                transcriptPanel?.orderOut(nil)
                 panel = nil
                 hostingView = nil
                 trackingView = nil
+                transcriptPanel = nil
+                transcriptHostingView = nil
+                transcriptTrackingView = nil
                 createPanel()
             }
             updateContent()
@@ -723,11 +892,18 @@ class ShortcutReminderController: NSObject {
     func hide() {
         DispatchQueue.main.async { [self] in
             isVisible = false
+            hoverHideWorkItem?.cancel()
+            hoverHideWorkItem = nil
+            meetingStopTimeoutWorkItem?.cancel()
+            meetingStopTimeoutWorkItem = nil
+            pillHovering = false
+            transcriptHovering = false
             metrics.isHovering = false
             metrics.forceExpanded = false
             AnimationTick.shared.setVisible(false, hasActiveSignal: false)
             disconnectWebSocket()
             disconnectMeetingEventsWebSocket()
+            transcriptPanel?.orderOut(nil)
             panel?.orderOut(nil)
         }
     }
@@ -860,8 +1036,61 @@ class ShortcutReminderController: NSObject {
     private func processMeetingEventMessage(_ text: String) {
         guard let data = text.data(using: .utf8),
               let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-        let active = payload["active"] as? Bool ?? false
-        setMeetingActive(active)
+        guard let type = payload["type"] as? String,
+              let message = payload["data"] as? [String: Any] else { return }
+
+        DispatchQueue.main.async { [self] in
+            switch type {
+            case "status":
+                let active = message["active"] as? Bool ?? false
+                let meetingId = (message["activeMeetingId"] as? NSNumber)?.int64Value
+                let previousId = metrics.activeMeetingId
+                metrics.meetingActive = active && meetingId != nil
+                metrics.activeMeetingId = active ? meetingId : nil
+                metrics.meetingApp = active ? message["meetingApp"] as? String : nil
+                if !active || previousId != meetingId {
+                    metrics.meetingTranscriptItems = []
+                    metrics.meetingStopping = false
+                    metrics.meetingStopError = nil
+                    meetingStopTimeoutWorkItem?.cancel()
+                    meetingStopTimeoutWorkItem = nil
+                }
+            case "snapshot":
+                guard let meetingId = (message["meetingId"] as? NSNumber)?.int64Value,
+                      metrics.activeMeetingId == meetingId else { return }
+                let rawItems = message["items"] as? [[String: Any]] ?? []
+                metrics.meetingTranscriptItems = rawItems.compactMap(parseTranscriptItem)
+            case "delta", "final":
+                guard let item = parseTranscriptItem(message),
+                      metrics.activeMeetingId == item.meetingId else { return }
+                var items = metrics.meetingTranscriptItems
+                if let index = items.firstIndex(where: { $0.itemId == item.itemId }) {
+                    items[index] = item
+                } else {
+                    items.append(item)
+                }
+                metrics.meetingTranscriptItems = Array(items.suffix(50))
+            default:
+                return
+            }
+            refreshTranscriptPanelVisibility()
+        }
+    }
+
+    private func parseTranscriptItem(_ raw: [String: Any]) -> MeetingOverlayTranscriptItem? {
+        guard let meetingId = (raw["meetingId"] as? NSNumber)?.int64Value,
+              let itemId = raw["itemId"] as? String,
+              let text = raw["text"] as? String,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return MeetingOverlayTranscriptItem(
+            meetingId: meetingId,
+            itemId: itemId,
+            deviceType: raw["deviceType"] as? String ?? "output",
+            speakerName: raw["speakerName"] as? String,
+            text: text,
+            capturedAt: raw["capturedAt"] as? String ?? "",
+            isFinal: raw["isFinal"] as? Bool ?? false
+        )
     }
 
     func setMeetingActive(_ active: Bool) {
@@ -869,7 +1098,52 @@ class ShortcutReminderController: NSObject {
             if self.metrics.meetingActive != active {
                 self.metrics.meetingActive = active
             }
+            if !active {
+                metrics.activeMeetingId = nil
+                metrics.meetingApp = nil
+                metrics.meetingTranscriptItems = []
+                metrics.meetingStopping = false
+                metrics.meetingStopError = nil
+                meetingStopTimeoutWorkItem?.cancel()
+                meetingStopTimeoutWorkItem = nil
+            }
+            refreshTranscriptPanelVisibility()
         }
+    }
+
+    func setMeetingStopResult(_ succeeded: Bool) {
+        DispatchQueue.main.async { [self] in
+            if succeeded {
+                // Keep the pending label until the authoritative inactive
+                // status arrives from /ws/meeting-overlay.
+                metrics.meetingStopError = nil
+            } else {
+                meetingStopTimeoutWorkItem?.cancel()
+                meetingStopTimeoutWorkItem = nil
+                metrics.meetingStopping = false
+                metrics.meetingStopError = "meeting did not stop — try again"
+            }
+            refreshTranscriptPanelVisibility()
+        }
+    }
+
+    private func beginStopMeeting() {
+        guard metrics.meetingActive, !metrics.meetingStopping else { return }
+        metrics.meetingStopping = true
+        metrics.meetingStopError = nil
+        sendAction("stop_meeting")
+
+        meetingStopTimeoutWorkItem?.cancel()
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self = self,
+                  self.metrics.meetingActive,
+                  self.metrics.meetingStopping else { return }
+            self.metrics.meetingStopping = false
+            self.metrics.meetingStopError = "still active — try stop again"
+            self.refreshTranscriptPanelVisibility()
+        }
+        meetingStopTimeoutWorkItem = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: timeout)
     }
 
     func setInboxUnread(_ unread: Bool) {
@@ -897,6 +1171,7 @@ class ShortcutReminderController: NSObject {
                 self.metrics.forceExpanded = false
             }
             self.updateHealthToolTip()
+            self.refreshTranscriptPanelVisibility()
         }
     }
 
@@ -957,17 +1232,133 @@ class ShortcutReminderController: NSObject {
         let tracking = ReminderTrackingView(frame: NSRect(x: 0, y: 0, width: Int(w), height: Int(h)))
         tracking.autoresizingMask = [.width, .height]
         tracking.onHoverChanged = { [weak self] hovering in
-            guard let self = self else { return }
-            self.metrics.isHovering = hovering
-            if !hovering {
-                self.metrics.forceExpanded = false
-            }
+            self?.setPillHovering(hovering)
         }
         p.contentView = tracking
         self.trackingView = tracking
 
         self.panel = p
         updateHealthToolTip()
+    }
+
+    private func setPillHovering(_ hovering: Bool) {
+        pillHovering = hovering
+        if hovering {
+            hoverHideWorkItem?.cancel()
+            hoverHideWorkItem = nil
+            metrics.isHovering = true
+            refreshTranscriptPanelVisibility()
+        } else {
+            scheduleHoverExit()
+        }
+    }
+
+    private func setTranscriptHovering(_ hovering: Bool) {
+        transcriptHovering = hovering
+        if hovering {
+            hoverHideWorkItem?.cancel()
+            hoverHideWorkItem = nil
+            metrics.isHovering = true
+            refreshTranscriptPanelVisibility()
+        } else {
+            scheduleHoverExit()
+        }
+    }
+
+    private func scheduleHoverExit() {
+        hoverHideWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, !self.pillHovering, !self.transcriptHovering else { return }
+            self.metrics.isHovering = false
+            self.metrics.forceExpanded = false
+            self.transcriptPanel?.orderOut(nil)
+        }
+        hoverHideWorkItem = work
+        // Small bridge between the pill and the card so moving the pointer
+        // downward does not flash-close the transcript panel.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
+    }
+
+    private func refreshTranscriptPanelVisibility() {
+        let hovering = pillHovering || transcriptHovering
+        let shouldShow = isVisible
+            && metrics.meetingActive
+            && metrics.activeMeetingId != nil
+            && metrics.healthState == "normal"
+            && hovering
+        guard shouldShow else {
+            transcriptPanel?.orderOut(nil)
+            return
+        }
+        if transcriptPanel == nil {
+            createTranscriptPanel()
+        }
+        updateTranscriptContent()
+        positionTranscriptPanel()
+        transcriptPanel?.orderFrontRegardless()
+    }
+
+    private func createTranscriptPanel() {
+        let w = kBaseTranscriptW * gOverlayScale
+        let h = kBaseTranscriptH * gOverlayScale
+        let preview = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: Int(w), height: Int(h)),
+            styleMask: [.nonactivatingPanel, .borderless],
+            backing: .buffered,
+            defer: false
+        )
+        preview.isFloatingPanel = true
+        preview.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.floatingWindow)) + 2)
+        preview.collectionBehavior = [.canJoinAllSpaces, .ignoresCycle, .fullScreenAuxiliary]
+        preview.isOpaque = false
+        preview.backgroundColor = .clear
+        preview.hasShadow = false
+        preview.hidesOnDeactivate = false
+        preview.acceptsMouseMovedEvents = true
+        preview.isReleasedWhenClosed = false
+        preview.sharingType = .readOnly
+
+        let tracking = ReminderTrackingView(
+            frame: NSRect(x: 0, y: 0, width: Int(w), height: Int(h))
+        )
+        tracking.autoresizingMask = [.width, .height]
+        tracking.onHoverChanged = { [weak self] hovering in
+            self?.setTranscriptHovering(hovering)
+        }
+        preview.contentView = tracking
+        transcriptPanel = preview
+        transcriptTrackingView = tracking
+        updateTranscriptContent()
+    }
+
+    private func updateTranscriptContent() {
+        guard let contentView = transcriptPanel?.contentView else { return }
+        let view = MeetingTranscriptPreview(
+            metrics: metrics,
+            scale: gOverlayScale,
+            onStop: { [weak self] in self?.beginStopMeeting() }
+        )
+        if let hosting = transcriptHostingView {
+            hosting.rootView = AnyView(view)
+        } else {
+            let hosting = NSHostingView(rootView: AnyView(view))
+            hosting.frame = contentView.bounds
+            hosting.autoresizingMask = [.width, .height]
+            contentView.addSubview(hosting)
+            transcriptHostingView = hosting
+        }
+    }
+
+    private func positionTranscriptPanel() {
+        guard let panel = panel, let transcriptPanel = transcriptPanel else { return }
+        let visible = panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? panel.frame
+        let width = transcriptPanel.frame.width
+        let height = transcriptPanel.frame.height
+        let centeredX = panel.frame.midX - width / 2
+        let x = min(max(centeredX, visible.minX + 4), visible.maxX - width - 4)
+        let belowY = panel.frame.minY - height - 4
+        let y = max(belowY, visible.minY + 4)
+        transcriptPanel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
     private func positionPanel() {
@@ -981,6 +1372,9 @@ class ShortcutReminderController: NSObject {
                 let x = screen.frame.origin.x + (screen.frame.size.width - w) / 2
                 let y = visible.origin.y + visible.size.height - h - 4
                 panel.setFrameOrigin(NSPoint(x: x, y: y))
+                if transcriptPanel?.isVisible == true {
+                    positionTranscriptPanel()
+                }
                 break
             }
         }
@@ -1004,8 +1398,11 @@ class ShortcutReminderController: NSObject {
         } else {
             let hosting = DraggableHostingView(rootView: AnyView(view))
             hosting.onDragStarted = { [weak self] in
+                self?.pillHovering = false
+                self?.transcriptHovering = false
                 self?.metrics.isHovering = false
                 self?.metrics.forceExpanded = false
+                self?.transcriptPanel?.orderOut(nil)
             }
             hosting.frame = contentView.bounds
             hosting.autoresizingMask = [.width, .height]

@@ -9,7 +9,16 @@ import { cn } from "@/lib/utils";
 
 export type MeetingWorkspaceTab = "notes" | "transcript" | "summary";
 
-export const MEETING_READING_COLUMN_CLASS = "mx-auto w-full max-w-[68ch]";
+// One shell owns the horizontal rhythm of the whole meeting view: the header
+// (title, chips, tabs), every tab panel, and the footer. Keeping them on a
+// single centered container is what makes the title line up with the note
+// text beneath it instead of floating on its own wider edge.
+export const MEETING_SHELL_CLASS = "mx-auto w-full max-w-3xl px-5 sm:px-8";
+
+// The shell already bounds the selectable width, so the reading column no
+// longer needs its own cap. It stays a distinct class because selection
+// highlighting must have a width-limited container to paint inside.
+export const MEETING_READING_COLUMN_CLASS = "w-full";
 
 const MEETING_TABS: ReadonlyArray<{
   value: MeetingWorkspaceTab;
@@ -138,7 +147,7 @@ export function MeetingSummarySurface({
       data-testid="meeting-summary-surface"
       className="h-full select-none overflow-y-auto [scrollbar-gutter:stable]"
     >
-      <div className="mx-auto w-full max-w-3xl px-5 py-8 sm:px-8 sm:py-10">
+      <div className={cn(MEETING_SHELL_CLASS, "py-8 sm:py-10")}>
         <div className="mb-8 flex items-start justify-between gap-5 border-b border-border pb-5">
           <div className="min-w-0">
             <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">

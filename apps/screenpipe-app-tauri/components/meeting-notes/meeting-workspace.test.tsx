@@ -7,9 +7,29 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   extractMeetingSummary,
+  MEETING_READING_COLUMN_CLASS,
+  MEETING_SHELL_CLASS,
   MeetingSummarySurface,
   MeetingWorkspaceTabs,
 } from "./meeting-workspace";
+
+describe("meeting shell width contract", () => {
+  // The header (title, chips, tabs) used to sit in max-w-5xl while the note
+  // text sat in max-w-3xl > max-w-[68ch], so the title floated ~190px left of
+  // the text under it. Every meeting surface must resolve to one centered
+  // container, and the reading column must not reintroduce a second cap.
+  it("keeps one centered container width for every meeting surface", () => {
+    expect(MEETING_SHELL_CLASS).toContain("mx-auto");
+    expect(MEETING_SHELL_CLASS).toContain("max-w-3xl");
+    expect(MEETING_SHELL_CLASS).toMatch(/\bpx-5\b/);
+    expect(MEETING_SHELL_CLASS).toMatch(/\bsm:px-8\b/);
+  });
+
+  it("does not let the reading column set a competing width", () => {
+    expect(MEETING_READING_COLUMN_CLASS).not.toMatch(/max-w-/);
+    expect(MEETING_READING_COLUMN_CLASS).not.toMatch(/mx-auto/);
+  });
+});
 
 describe("meeting workspace tabs", () => {
   it("supports arrow-key navigation with one selected tab", () => {
@@ -69,9 +89,16 @@ describe("meeting summary surface", () => {
       "select-none",
     );
     expect(screen.getByTestId("meeting-summary-reading-column")).toHaveClass(
-      "max-w-[68ch]",
       "select-text",
     );
+    // The shell, not the reading column, bounds the selectable width now.
+    // Selection must still have a width-limited container to paint inside so
+    // it never renders as a full-window horizontal band.
+    expect(
+      screen
+        .getByTestId("meeting-summary-reading-column")
+        .closest(".max-w-3xl"),
+    ).not.toBeNull();
     expect(screen.queryByText(/private draft/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "summarize again" }));
     expect(onGenerate).toHaveBeenCalledOnce();

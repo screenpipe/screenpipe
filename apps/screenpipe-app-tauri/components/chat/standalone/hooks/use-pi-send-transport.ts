@@ -5,9 +5,10 @@
 import posthog from "posthog-js";
 import { toast } from "@/components/ui/use-toast";
 import { piProjectDirForSession } from "@/lib/chat/pi-project-dir";
-import { commands, type Result } from "@/lib/utils/tauri";
+import { commands, type PiInfo, type Result } from "@/lib/utils/tauri";
 import { isPlaceholderConversationTitle } from "@/lib/chat/message-rendering";
 import { buildProviderErrorPresentation, preflightChatProvider } from "@/lib/chat/provider-errors";
+import { isAcpAuthenticationCancelledError, isAcpExternalAuthError } from "@/lib/chat/auth-errors";
 import { queuedPreviewForText } from "@/lib/chat/queued-display";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { createPiMessageQueueTransport } from "@/components/chat/standalone/hooks/use-pi-message-queue-transport";
@@ -25,8 +26,55 @@ import {
   promptWithConversationHistory,
 } from "@/components/chat/standalone/hooks/pi-message-preparation";
 import type { ChatSendOptions, Message } from "@/lib/chat/types";
+import { normalizeComposerMentionsForModel } from "@/lib/chat-utils";
 import { chatSendTelemetryContext } from "@/lib/chat/response-feedback";
 import type { PiSendTransportOptions } from "@/components/chat/standalone/hooks/pi-types";
+
+type LivePiSessionCheck =
+  | { running: true; info: PiInfo }
+  // `indeterminate` = the piInfo query itself failed/threw, so liveness is
+  // unknown (transient IPC race), as opposed to a definitive "not running".
+  // Callers must not hard-abort a send on an indeterminate result.
+  | { running: false; error: string; indeterminate: boolean };
+
+export async function awaitPendingPiPresetSwitch(
+  promiseRef: { current: Promise<void> | null },
+): Promise<void> {
+  const pendingSwitch = promiseRef.current;
+  if (pendingSwitch) await pendingSwitch;
+}
+
+/** Read the process manager instead of trusting the render-time `piInfo`. */
+export async function checkLivePiSession(
+  sessionId: string,
+  setPiInfo: (info: PiInfo | null) => void,
+  readPiInfo: (sessionId: string) => Promise<Result<PiInfo, string>> = commands.piInfo,
+): Promise<LivePiSessionCheck> {
+  try {
+    const result = await readPiInfo(sessionId);
+    if (result.status !== "ok") {
+      // Query failed — we could not determine liveness. Don't claim the
+      // session is down; mark indeterminate so callers don't hard-abort.
+      return {
+        running: false,
+        error: result.error || "Could not check the AI assistant",
+        indeterminate: true,
+      };
+    }
+    setPiInfo(result.data);
+    if (!result.data.running) {
+      // Definitive: the backend says the process is not running.
+      return { running: false, error: "The AI assistant is not running", indeterminate: false };
+    }
+    return { running: true, info: result.data };
+  } catch (error) {
+    return {
+      running: false,
+      error: error instanceof Error ? error.message : String(error),
+      indeterminate: true,
+    };
+  }
+}
 
 export function usePiSendTransport(options: PiSendTransportOptions) {
   const {
@@ -50,7 +98,6 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     piActiveStopRequestedRef,
     piContentBlocksRef,
     piCrashCountRef,
-    piInfo,
     piMessageIdRef,
     piPresetSwitchPromiseRef,
     piRateLimitRetries,
@@ -61,6 +108,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     prefillContext,
     prefillFrameId,
     prefillSource,
+    resolveComposerMentions,
     restartCurrentPiSession,
     saveConversation,
     sendDispatchInFlightRef,
@@ -174,12 +222,58 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     sendOptions?: ChatSendOptions,
   ) {
     clearPendingSteerTransportState();
+    // Capture the attempt up front so it survives a failed ACP start — the
+    // "switch to default" sign-in card resends this message on the new preset.
+    lastUserMessageRef.current = userMessage;
 
-    // Auto-start Pi if it's not running yet (new session or crash recovery)
-    if (!piInfo?.running) {
+    // Acknowledge the send in the same frame it was dispatched. The Home
+    // cards are gated on `!isLoading` and the active-turn loader on
+    // `isLoading`, but the real user bubble is only appended ~200 lines
+    // below — behind an unbounded preflight (a pending preset switch, an ACP
+    // sign-in round trip, Pi auto-start with its 5s ChatGPT token pre-check,
+    // two liveness checks, and the interrupt of any active turn). Until this
+    // flag flips, a card click leaves the grid sitting there untouched, so
+    // the click reads as ignored for as long as the preflight takes. Every
+    // abort and throw below restores it.
+    setIsLoading(true);
+
+    // A selector change may be in the narrow gap before React disables the
+    // composer. Wait for it here as the authoritative boundary. Rejections
+    // (including "not now" during ACP authentication) abort this send before
+    // a user bubble is persisted or a provider receives the prompt.
+    try {
+      await awaitPendingPiPresetSwitch(piPresetSwitchPromiseRef);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!isAcpAuthenticationCancelledError(message) && !isAcpExternalAuthError(message)) {
+        toast({
+          title: "could not switch AI assistant",
+          description: message,
+          variant: "destructive",
+        });
+      }
+      setIsLoading(false);
+      return;
+    }
+
+    // React's `piInfo` may still describe the process from before a completed
+    // preset switch. Ask the process manager first so a successful switch is
+    // not immediately started a second time, and a failed one cannot reuse the
+    // stale provider.
+    let liveSession: Awaited<ReturnType<typeof checkLivePiSession>>;
+    try {
+      liveSession = await checkLivePiSession(piSessionIdRef.current, setPiInfo);
+    } catch (e) {
+      setIsLoading(false);
+      throw e;
+    }
+
+    // Auto-start Pi if it is actually not running (new session or recovery).
+    if (!liveSession.running) {
       if (piStartInFlightRef.current) {
         if (!autoSendBypassRef.current) {
           toast({ title: "Pi starting", description: "Please wait a moment", variant: "destructive" });
+          setIsLoading(false);
           return;
         }
         // Prefill auto-send: wait for in-flight start to complete
@@ -187,7 +281,10 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
         while (piStartInFlightRef.current && Date.now() - startWait < 10000) {
           await new Promise(r => setTimeout(r, 300));
         }
-        if (piStartInFlightRef.current) return; // timed out
+        if (piStartInFlightRef.current) {
+          setIsLoading(false);
+          return; // timed out
+        }
       } else {
         console.log("[Pi] Not running, auto-starting before sending message");
         piStartInFlightRef.current = true;
@@ -199,7 +296,11 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
         const activeP = getActivePreset();
         const allPresets = settings.aiPresets ?? [];
         const fallbackPresets = allPresets.filter(
-          (p) => p.id !== activeP?.id && p.model && p.model.trim() !== "",
+          (p) =>
+            p.id !== activeP?.id &&
+            p.provider !== "acp" &&
+            p.model &&
+            p.model.trim() !== "",
         );
         const presetsToTry = activeP ? [activeP, ...fallbackPresets] : [...fallbackPresets];
 
@@ -264,12 +365,56 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
                 started = true;
                 break;
               } else {
-                lastError = result.status === "error" ? result.error ?? "Unknown error" : "Unknown error";
+                lastError = result.status === "error"
+                  ? result.error ?? "Unknown error"
+                  : result.data.startupError ?? "Unknown error";
                 console.warn(`[Pi] Preset "${preset.id}" (${providerConfig.provider}) failed: ${lastError}`);
+                if (
+                  providerConfig.backend === "acp"
+                ) {
+                  // An ACP selection is an explicit harness boundary. Never
+                  // fall through and send its prompt through another provider.
+                  // Auth-cancel and CLI-login-required both render their own
+                  // in-chat card — don't also fire a destructive toast.
+                  if (
+                    !isAcpAuthenticationCancelledError(lastError) &&
+                    !isAcpExternalAuthError(lastError)
+                  ) {
+                    toast({
+                      title: `failed to start AI assistant (${preset.id})`,
+                      description: lastError,
+                      variant: "destructive",
+                    });
+                  }
+                  // The ACP sign-in / auth-cancelled card renders in-chat;
+                  // leave the loader up and it spins behind that card forever.
+                  setIsLoading(false);
+                  return;
+                }
               }
             } catch (e) {
               lastError = String(e);
               console.warn(`[Pi] Preset "${preset.id}" (${providerConfig.provider}) threw: ${lastError}`);
+                if (
+                  providerConfig.backend === "acp"
+                ) {
+                  // Auth-cancel and CLI-login-required both render their own
+                  // in-chat card — don't also fire a destructive toast.
+                  if (
+                    !isAcpAuthenticationCancelledError(lastError) &&
+                    !isAcpExternalAuthError(lastError)
+                  ) {
+                    toast({
+                      title: `failed to start AI assistant (${preset.id})`,
+                      description: lastError,
+                      variant: "destructive",
+                    });
+                  }
+                  // Same as the branch above: the in-chat auth card owns the
+                  // outcome, so the optimistic loader must be handed back.
+                  setIsLoading(false);
+                  return;
+                }
             }
           }
 
@@ -282,8 +427,15 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
                 : lastError,
               variant: "destructive",
             });
+            setIsLoading(false);
             return;
           }
+        } catch (e) {
+          // A throw here (project dir, token check, piStart) aborts the send
+          // before any turn exists. Without this the optimistic loading flag
+          // set above would strand the chat: cards gone, loader forever.
+          setIsLoading(false);
+          throw e;
         } finally {
           setPiStarting(false);
           piStartInFlightRef.current = false;
@@ -291,11 +443,33 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       }
     }
 
-    if (piPresetSwitchPromiseRef.current) {
-      await piPresetSwitchPromiseRef.current;
-    }
+    // Same contract as the auto-start block: everything from here to the user
+    // bubble runs before any turn exists, so an abort or rejection must hand
+    // the view back rather than leave the optimistic loader up with nothing
+    // behind it.
+    try {
+      // Verify once more after a possible start/wait immediately before mutating
+      // chat state or dispatching the prompt. Only hard-abort on a DEFINITIVE
+      // not-running; if the liveness query itself failed (indeterminate, e.g. a
+      // transient IPC race), proceed with the send — the backend command surfaces
+      // a real error if the process is genuinely gone, rather than dropping a send
+      // that would have worked.
+      liveSession = await checkLivePiSession(piSessionIdRef.current, setPiInfo);
+      if (!liveSession.running && !liveSession.indeterminate) {
+        toast({
+          title: "AI assistant is not ready",
+          description: liveSession.error,
+          variant: "destructive",
+        });
+        setIsLoading(false);
+        return;
+      }
 
-    await interruptActivePiTurn();
+      await interruptActivePiTurn();
+    } catch (e) {
+      setIsLoading(false);
+      throw e;
+    }
     forceQueueModeRef.current = true;
 
     const outgoingImages = imageDataUrls ?? pastedImages;
@@ -657,7 +831,22 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     sendOptions?: ChatSendOptions,
   ) {
     if ((!canChat && !autoSendBypassRef.current) || (!getActivePreset() && !autoSendBypassRef.current)) return;
-    const trimmed = userMessage.trim();
+    const originalTrimmed = userMessage.trim();
+    // Composer mentions (`@app`, `@audio`, `@"speaker"`, `#tag`, `~range`,
+    // `$skill`) are resolved into an explicit context block here. Without this
+    // the model receives the raw token and has to guess what the chips above
+    // the input already decided. `resolveComposerMentions` is supplied by the
+    // chat surface because the app-tag map and installed skills live there;
+    // the pure fallback still covers the static aliases.
+    const normalizedMentions = resolveComposerMentions
+      ? await resolveComposerMentions(originalTrimmed)
+      : normalizeComposerMentionsForModel(originalTrimmed);
+    const trimmed = normalizedMentions.modelInput.trim();
+    // The bubble keeps the sentence the user actually typed; only the wire
+    // payload carries the resolved block.
+    const resolvedDisplayLabel = trimmed === originalTrimmed
+      ? displayLabel
+      : (displayLabel ?? originalTrimmed);
     const outgoingImages = imageDataUrls ?? pastedImages;
     const queuedDocs = attachedDocsRef.current;
     if (!trimmed && outgoingImages.length === 0 && queuedDocs.length === 0) return;
@@ -676,7 +865,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       attachmentMetadata,
     } = foldAttachedDocsIntoMessage({
       trimmed,
-      displayLabel,
+      displayLabel: resolvedDisplayLabel,
       docs: queuedDocs,
     });
     if (queuedDocs.length > 0) {

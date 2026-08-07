@@ -53,6 +53,8 @@ function useRuntimeHarness() {
   const messagesRef = useRef([]);
   const handleAgentEventDataRef = useRef<((data: unknown) => void) | null>(null);
   const startNewConversationRef = useRef<(() => Promise<void>) | null>(null);
+  const forceQueueModeRef = useRef(false);
+  const sendDispatchInFlightRef = useRef(false);
 
   useChatSessionRuntime({
     conversationId: SESSION_ID,
@@ -70,9 +72,23 @@ function useRuntimeHarness() {
     messagesRef,
     handleAgentEventDataRef,
     startNewConversationRef,
+    forceQueueModeRef,
+    sendDispatchInFlightRef,
   });
 
-  return { isLoading, isStreaming };
+  return {
+    isLoading,
+    isStreaming,
+    forceQueueModeRef,
+    sendDispatchInFlightRef,
+    piMessageIdRef,
+  };
+}
+
+/** The harness also exposes refs; these assertions are about the visible
+ *  turn flags only. */
+function turnFlags(current: { isLoading: boolean; isStreaming: boolean }) {
+  return { isLoading: current.isLoading, isStreaming: current.isStreaming };
 }
 
 describe("useChatSessionRuntime", () => {
@@ -101,7 +117,10 @@ describe("useChatSessionRuntime", () => {
 
   it("mirrors a store-routed active turn into the visible panel", async () => {
     const { result } = renderHook(() => useRuntimeHarness());
-    expect(result.current).toEqual({ isLoading: false, isStreaming: false });
+    expect(turnFlags(result.current)).toEqual({
+      isLoading: false,
+      isStreaming: false,
+    });
 
     act(() => {
       useChatStore.getState().actions.setStreaming(SESSION_ID, {
@@ -112,7 +131,10 @@ describe("useChatSessionRuntime", () => {
     });
 
     await waitFor(() => {
-      expect(result.current).toEqual({ isLoading: true, isStreaming: true });
+      expect(turnFlags(result.current)).toEqual({
+        isLoading: true,
+        isStreaming: true,
+      });
     });
 
     act(() => {
@@ -120,7 +142,10 @@ describe("useChatSessionRuntime", () => {
     });
 
     await waitFor(() => {
-      expect(result.current).toEqual({ isLoading: false, isStreaming: false });
+      expect(turnFlags(result.current)).toEqual({
+        isLoading: false,
+        isStreaming: false,
+      });
     });
   });
 
@@ -150,5 +175,63 @@ describe("useChatSessionRuntime", () => {
       });
     });
     expect(runtimeMocks.clearPipeExecution).toHaveBeenCalled();
+  });
+
+  // Regression: a turn that ends without this panel's foreground handler
+  // observing `agent_end` (duplicate registration, the gap before the handler
+  // is live, or a completion that lands while the user is on another chat)
+  // used to leave `forceQueueModeRef` / `piMessageIdRef` latched. The visible
+  // flags recovered through the store mirror, so the composer looked idle
+  // while `sendMessage` still routed every message into the queue — messages
+  // piled up in QUEUED and no new turn could start.
+  it("releases the composer dispatch guards when the store ends the turn", async () => {
+    const { result } = renderHook(() => useRuntimeHarness());
+
+    // A send is in flight: guards latched, store marked busy.
+    act(() => {
+      result.current.forceQueueModeRef.current = true;
+      result.current.piMessageIdRef.current = "assistant-active";
+      useChatStore.getState().actions.setStreaming(SESSION_ID, {
+        streamingMessageId: "assistant-active",
+        isLoading: true,
+        isStreaming: true,
+      });
+    });
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(true);
+    });
+
+    // Only the background router sees the end of the turn.
+    act(() => {
+      useChatStore.getState().actions.endTurn(SESSION_ID);
+    });
+
+    await waitFor(
+      () => {
+        expect(result.current.forceQueueModeRef.current).toBe(false);
+        expect(result.current.piMessageIdRef.current).toBeNull();
+      },
+      { timeout: 4000 },
+    );
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.isStreaming).toBe(false);
+  });
+
+  it("leaves the guards alone while a send is still dispatching", async () => {
+    const { result } = renderHook(() => useRuntimeHarness());
+
+    // Mid-`sendPiMessage`: the refs are already set for the new turn but the
+    // store has not been marked busy yet (that write lands after an await), so
+    // the session still reads idle. Releasing here would break the live turn.
+    act(() => {
+      result.current.sendDispatchInFlightRef.current = true;
+      result.current.forceQueueModeRef.current = true;
+      result.current.piMessageIdRef.current = "assistant-dispatching";
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    expect(result.current.forceQueueModeRef.current).toBe(true);
+    expect(result.current.piMessageIdRef.current).toBe("assistant-dispatching");
   });
 });

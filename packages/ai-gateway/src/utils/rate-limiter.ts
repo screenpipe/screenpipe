@@ -191,6 +191,7 @@ export class RateLimiter {
           return Response.json({
             allowed: false,
             standing: 'denied',
+            standing_reason: record.reason,
           });
         }
       } catch (error) {
@@ -349,6 +350,7 @@ export async function checkRateLimit(
   let rateLimitData: {
     allowed?: unknown;
     standing?: unknown;
+    standing_reason?: unknown;
     remaining: number;
     reset_in: number;
     tier: string;
@@ -362,11 +364,24 @@ export async function checkRateLimit(
   }
 
   if (standingRequired && rateLimitData.standing === 'denied') {
+    const reason = rateLimitData.standing_reason;
+    if (reason !== 'banned' && reason !== 'deleted') {
+      console.error('rate limiter returned a denial without a valid reason');
+      return accountStatusUnavailable();
+    }
+    // A Clerk 404 proves deletion only for a subject verified from a Clerk JWT
+    // in this request. When the id came from the website's user row it may be
+    // stale, so answer retryable-unavailable instead of a permanent ban.
+    if (reason === 'deleted' && authResult?.clerkUserIdVerified !== true) {
+      console.error('clerk standing 404 for db-sourced clerk id', clerkUserId);
+      return accountStatusUnavailable();
+    }
     return {
       allowed: false,
       response: createErrorResponse(403, JSON.stringify({
         error: 'account_not_in_good_standing',
         message: 'This screenpipe account is not in good standing.',
+        reason,
       })),
     };
   }

@@ -112,6 +112,7 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		rateLimiterFetch.mockImplementation(async () => Response.json({
 			allowed: false,
 			standing: 'denied',
+			standing_reason: 'banned',
 		}));
 		return authFetch;
 	}

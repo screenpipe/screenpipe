@@ -12,6 +12,8 @@ export function useLiveText(opts: {
 	isSnapshotFrame: boolean;
 	isSearchModalOpen?: boolean;
 	highlightTerms: string[];
+	/** Frame the search hit was matched in — highlights are scoped to it. */
+	highlightFrameId?: number | null;
 	highlightDismissed: boolean;
 	isMac: boolean;
 	containerRef: React.RefObject<HTMLDivElement | null>;
@@ -37,6 +39,7 @@ export function useLiveText(opts: {
 		isSnapshotFrame,
 		isSearchModalOpen,
 		highlightTerms,
+		highlightFrameId,
 		highlightDismissed,
 		isMac,
 		windowLabel: windowLabelProp,
@@ -271,15 +274,24 @@ export function useLiveText(opts: {
 		};
 	}, [nativeLiveTextActive, navBarRef, guardRefs]);
 
-	// Highlight search terms (native Live Text, macOS 14+)
+	// Highlight search terms (native Live Text, macOS 14+).
+	//
+	// The request is scoped to the frame the search actually matched. The
+	// analysis for that frame is usually still in flight when this fires, so
+	// the bridge stores the request and paints it once the matching analysis is
+	// applied. Without the frame id the terms would be painted onto whatever
+	// frame happened to be on the overlay — the source of "false positives".
 	useEffect(() => {
 		if (!nativeLiveTextActive) return;
-		if (highlightTerms.length > 0 && !highlightDismissed) {
-			commands.livetextHighlight(highlightTerms).catch(() => {});
+		const targetFrameId = highlightFrameId != null
+			? String(highlightFrameId)
+			: (debouncedFrame?.frameId ?? "");
+		if (highlightTerms.length > 0 && !highlightDismissed && targetFrameId) {
+			commands.livetextHighlight(highlightTerms, targetFrameId).catch(() => {});
 		} else {
 			commands.livetextClearHighlights().catch(() => {});
 		}
-	}, [nativeLiveTextActive, highlightTerms, highlightDismissed]);
+	}, [nativeLiveTextActive, highlightTerms, highlightDismissed, highlightFrameId, debouncedFrame?.frameId]);
 
 	// Hide overlay when search modal opens, show when it closes
 	useEffect(() => {

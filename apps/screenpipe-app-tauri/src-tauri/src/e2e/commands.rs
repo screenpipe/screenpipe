@@ -177,6 +177,39 @@ fn shortcut_reminder_visible(app_handle: tauri::AppHandle) -> bool {
         .unwrap_or(false)
 }
 
+/// E2E helper: publish the production live-transcript event shape without
+/// depending on microphone hardware or an external transcription provider.
+#[command]
+fn emit_meeting_overlay_transcript(
+    meeting_id: i64,
+    item_id: String,
+    text: String,
+    is_final: bool,
+) -> Result<(), String> {
+    let event_name = if is_final {
+        "meeting_transcript_final"
+    } else {
+        "meeting_transcript_delta"
+    };
+    let mut data = serde_json::json!({
+        "meeting_id": meeting_id,
+        "item_id": item_id,
+        "device_name": "e2e-output",
+        "device_type": "output",
+        "provider": "e2e",
+        "model": "deterministic",
+        "captured_at": chrono::Utc::now().to_rfc3339(),
+    });
+    if is_final {
+        data["transcript"] = serde_json::Value::String(text);
+        data["speaker_name"] = serde_json::Value::String("speaker 1".to_string());
+    } else {
+        data["delta"] = serde_json::Value::String(text);
+        data["replace"] = serde_json::Value::Bool(true);
+    }
+    screenpipe_events::send_event(event_name, data).map_err(|error| error.to_string())
+}
+
 #[derive(serde::Serialize)]
 pub struct AgentStreamResult {
     pub emitted_deltas: u32,
@@ -523,6 +556,33 @@ fn seed_flags() -> Vec<String> {
     super::seeds::flags()
 }
 
+/// E2E helper: run the real Pi/ACP startup path while keeping its expected
+/// failure inside Rust. WebDriver implementations can surface a rejected Tauri
+/// invocation as the browser command result even when page JavaScript catches
+/// the promise, which makes negative-path process cleanup tests nondeterministic.
+#[command]
+async fn capture_pi_start_error(
+    app_handle: tauri::AppHandle,
+    state: State<'_, crate::pi::PiState>,
+    session_id: String,
+    project_dir: String,
+    provider_config: Option<crate::pi::PiProviderConfig>,
+) -> Result<String, String> {
+    match crate::pi::pi_start_inner(
+        app_handle,
+        &state,
+        &session_id,
+        project_dir,
+        None,
+        provider_config,
+    )
+    .await
+    {
+        Ok(_) => Ok(String::new()),
+        Err(error) => Ok(error),
+    }
+}
+
 pub(super) fn plugin() -> TauriPlugin<Wry> {
     Builder::<Wry>::new("e2e")
         // build.rs verifies this inventory matches the feature-only plugin ACL.
@@ -541,6 +601,7 @@ pub(super) fn plugin() -> TauriPlugin<Wry> {
             set_tray_recording_status,
             installed_tray_recording_status,
             shortcut_reminder_visible,
+            emit_meeting_overlay_transcript,
             emit_agent_stream,
             emit_settled_agent_follow_up,
             emit_pipe_stream,
@@ -555,6 +616,7 @@ pub(super) fn plugin() -> TauriPlugin<Wry> {
             inject_db_hard_fault,
             db_hard_fault_state,
             seed_flags,
+            capture_pi_start_error,
         ])
         .build()
 }

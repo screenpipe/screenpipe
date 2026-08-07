@@ -7,6 +7,7 @@ use screenpipe_secrets::keychain;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use specta::Type;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::AppHandle;
@@ -584,23 +585,15 @@ fn build_store_at<R: tauri::Runtime>(
             "store.bin is encrypted and the keychain key is unavailable",
         );
         if !restored {
-            // No snapshot to restore. init_store will treat the empty store
-            // as a fresh install and save defaults at boot — move the blob
-            // aside (in addition to .encrypted.bak) so that save lands on a
-            // genuinely fresh file instead of overwriting ciphertext.
-            let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
-            let aside = store_path.with_extension(format!("bin.locked-{}", ts));
-            match std::fs::rename(&store_path, &aside) {
-                Ok(()) => tracing::error!(
-                    "settings recovery: no healthy snapshot — moved unreadable \
-                     encrypted store.bin to {}; starting fresh",
-                    aside.display()
-                ),
-                Err(e) => tracing::error!(
-                    "settings recovery: failed to move locked store.bin aside: {}",
-                    e
-                ),
-            }
+            // No snapshot to restore. Fail closed before the store plugin can
+            // register an EMPTY store that init_store would treat as fresh and
+            // persist over the user's settings. The canonical ciphertext (and
+            // decrypt_store_file's forensic backup) remains available for a
+            // later keychain recovery instead of being replaced by defaults.
+            return Err(anyhow::anyhow!(
+                "encrypted settings are locked and no healthy recovery snapshot exists at {}",
+                store_path.display()
+            ));
         }
     }
 
@@ -762,6 +755,18 @@ fn build_store_at<R: tauri::Runtime>(
             store_path.display()
         ),
     })
+}
+
+/// Convert store-plugin access into the fail-closed startup contract.
+///
+/// `init_store` may use defaults for a settings *deserialization* error, but it
+/// must never turn an unavailable store handle into defaults: for locked
+/// ciphertext that would let the frontend register an empty plugin store and
+/// save over the user's canonical file.
+fn require_store_access<R: tauri::Runtime>(
+    result: anyhow::Result<Arc<tauri_plugin_store::Store<R>>>,
+) -> Result<Arc<tauri_plugin_store::Store<R>>, String> {
+    result.map_err(|error| format!("Failed to access settings store: {error}"))
 }
 
 pub fn get_store(
@@ -983,6 +988,11 @@ pub struct SettingsStore {
     #[serde(rename = "showOverlayInScreenRecording", default)]
     pub show_overlay_in_screen_recording: bool,
 
+    /// Hide screenpipe windows from screenshots and screen-sharing viewers
+    /// while keeping them visible and interactive on the user's own display.
+    #[serde(rename = "hideAppInScreenShare", default = "default_true")]
+    pub hide_app_in_screen_share: bool,
+
     // NOTE: `disableTimeline` lives on the flattened `recording`
     // (`RecordingSettings::disable_timeline`) so the engine can read it too. The
     // frontend JSON key stays `disableTimeline` at the top level via serde
@@ -1074,13 +1084,33 @@ pub enum AIProviderType {
     Custom,
     #[serde(rename = "screenpipe-cloud", alias = "claude-code")]
     ScreenpipeCloud,
+    #[serde(rename = "acp")]
+    Acp,
     #[serde(rename = "pi", alias = "opencode")]
     Pi,
     #[serde(rename = "anthropic")]
     Anthropic,
-    /// External Agent Client Protocol adapter, launched via the ACP runtime.
-    #[serde(rename = "acp")]
-    Acp,
+}
+
+#[derive(Serialize, Deserialize, Type, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAgentPresetConfig {
+    pub id: String,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Keys with empty values inherit from the desktop process environment.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    /// Default session config option values (option id -> value id), applied
+    /// after every session/new. Options the adapter no longer advertises are
+    /// ignored at apply time.
+    #[serde(default)]
+    pub config: HashMap<String, String>,
+    /// Default session mode id, applied after every session/new.
+    #[serde(default)]
+    pub mode_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Type, Clone)]
@@ -1089,6 +1119,8 @@ pub struct AIPreset {
     pub id: String,
     pub prompt: String,
     pub provider: AIProviderType,
+    #[serde(rename = "acpAgent", default)]
+    pub acp_agent: Option<AcpAgentPresetConfig>,
     #[serde(default)]
     pub url: String,
     #[serde(default)]
@@ -1101,9 +1133,6 @@ pub struct AIPreset {
     pub max_context_chars: i32,
     #[serde(rename = "maxTokens", default = "default_max_tokens")]
     pub max_tokens: i32,
-    /// The external adapter to launch when `provider` is `acp`.
-    #[serde(rename = "acpAgent", default)]
-    pub acp_agent: Option<crate::pi::AcpAgentConfig>,
 }
 
 fn default_max_tokens() -> i32 {
@@ -1116,13 +1145,13 @@ impl Default for AIPreset {
             id: String::new(),
             prompt: String::new(),
             provider: AIProviderType::ScreenpipeCloud,
+            acp_agent: None,
             url: "https://api.screenpipe.com/v1".to_string(),
             model: "qwen/qwen3.5-flash-02-23".to_string(),
             default_preset: false,
             api_key: None,
             max_context_chars: 512000,
             max_tokens: 4096,
-            acp_agent: None,
         }
     }
 }
@@ -1385,13 +1414,13 @@ Rules:
 - Always answer my question/intent, do not make up things
 "#.to_string(),
             provider: AIProviderType::ScreenpipeCloud,
+            acp_agent: None,
             url: "https://api.screenpipe.com/v1".to_string(),
             model: "auto".to_string(),
             default_preset: true,
             api_key: None,
             max_context_chars: 128000,
             max_tokens: 4096,
-            acp_agent: None,
         };
 
         // Rust persists store.bin before the frontend mounts. All-null values
@@ -1519,6 +1548,7 @@ Rules:
             #[cfg(not(target_os = "macos"))]
             overlay_mode: "window".to_string(),
             show_overlay_in_screen_recording: false,
+            hide_app_in_screen_share: true,
             chat_always_on_top: true,
             show_restart_notifications: false,
             stop_recording_on_low_disk: true,
@@ -1579,6 +1609,7 @@ impl SettingsStore {
                 "native-ollama",
                 "custom",
                 "screenpipe-cloud",
+                "acp",
                 "opencode",
                 "pi",
                 "anthropic",
@@ -1996,9 +2027,12 @@ fn restore_headed_mode_for_consumer(
 pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
     println!("Initializing settings store");
 
-    let raw_obj = get_store(app, None)
-        .ok()
-        .and_then(|store| store.get("settings"))
+    // Access errors are not deserialization errors. In particular, the locked
+    // encrypted-store path must reach the setup caller so startup aborts before
+    // any webview can invoke the plugin's unguarded load/save commands.
+    let store_handle = require_store_access(get_store(app, None))?;
+    let raw_obj = store_handle
+        .get("settings")
         .and_then(|raw| raw.as_object().cloned());
 
     let should_persist_restart_notification_migration = raw_obj
@@ -2251,6 +2285,125 @@ impl IcsCalendarSettingsStore {
         store.save().map_err(|e| e.to_string())?;
         reencrypt_store_file(app);
         Ok(())
+    }
+}
+
+/// What the user is told when settings cannot be opened and startup stops.
+///
+/// The failure is deliberately fail-closed: the encrypted `store.bin` is intact
+/// and is *not* replaced with defaults. Without a message the user just sees an
+/// app that refuses to launch, so name the cause, promise the data is safe, and
+/// give the one action that usually fixes it.
+pub fn locked_store_alert_message(detail: &str) -> String {
+    format!(
+        "screenpipe could not open your settings, so it stopped before starting.\n\n\
+         Your settings file is encrypted and screenpipe needs the system keychain \
+         to unlock it. This usually means the keychain is locked or was not \
+         available yet, often right after a restart or an OS update.\n\n\
+         Nothing was deleted or overwritten. Your settings are still on disk.\n\n\
+         Unlock your login keychain, then open screenpipe again. If it keeps \
+         happening, send this to support:\n{detail}"
+    )
+}
+
+/// Show a fatal startup alert without depending on the Tauri event loop.
+///
+/// `tauri_plugin_dialog` needs a running event loop, which does not exist when
+/// `setup` aborts, so a plugin dialog would never paint. Shell out to the
+/// platform's own alert instead. Best effort by design: the log line remains the
+/// source of truth and a missing helper must never turn into a hang or a panic
+/// on top of an already-fatal error.
+pub fn show_fatal_startup_alert(title: &str, message: &str) {
+    use std::process::Command;
+
+    let spawned = if cfg!(target_os = "macos") {
+        // `display alert` with an escaped literal — never interpolate the
+        // message into the script body unescaped.
+        let script = format!(
+            "display alert {} message {} as critical",
+            applescript_string(title),
+            applescript_string(message)
+        );
+        Command::new("osascript").arg("-e").arg(script).spawn()
+    } else if cfg!(target_os = "windows") {
+        Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                &format!(
+                    "Add-Type -AssemblyName PresentationFramework; \
+                     [System.Windows.MessageBox]::Show({}, {}) | Out-Null",
+                    powershell_string(message),
+                    powershell_string(title)
+                ),
+            ])
+            .spawn()
+    } else {
+        Command::new("zenity")
+            .args(["--error", "--title", title, "--text", message])
+            .spawn()
+    };
+
+    match spawned {
+        // Wait so the alert is readable before the process exits, but never
+        // block forever on a wedged helper.
+        Ok(mut child) => {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) if std::time::Instant::now() >= deadline => {
+                        let _ = child.kill();
+                        break;
+                    }
+                    Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+                    Err(_) => break,
+                }
+            }
+        }
+        Err(e) => warn!("could not show fatal startup alert ({e}); message was: {message}"),
+    }
+}
+
+/// Quote a string as an AppleScript literal.
+fn applescript_string(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Quote a string as a PowerShell single-quoted literal.
+fn powershell_string(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+#[cfg(test)]
+mod fatal_alert_tests {
+    use super::*;
+
+    #[test]
+    fn alert_says_the_settings_survived_and_what_to_do() {
+        let message = locked_store_alert_message("store locked at /tmp/store.bin");
+        // The whole point of failing closed is that nothing was overwritten;
+        // if the user is not told that, they will assume data loss.
+        assert!(message.contains("Nothing was deleted or overwritten"));
+        assert!(message.to_lowercase().contains("keychain"));
+        assert!(message.contains("store locked at /tmp/store.bin"));
+    }
+
+    #[test]
+    fn applescript_literals_cannot_break_out_of_the_string() {
+        // The detail carries a filesystem path and an arbitrary error string,
+        // so an embedded quote must not terminate the literal and let the rest
+        // run as script.
+        let quoted = applescript_string("say \"hi\" \\ bye");
+        assert_eq!(quoted, "\"say \\\"hi\\\" \\\\ bye\"");
+        assert!(quoted.starts_with('"') && quoted.ends_with('"'));
+    }
+
+    #[test]
+    fn powershell_literals_escape_embedded_quotes() {
+        assert_eq!(powershell_string("it's fine"), "'it''s fine'");
     }
 }
 
@@ -3205,6 +3358,139 @@ mod tests {
     }
 
     #[test]
+    fn existing_install_locked_store_without_snapshot_fails_closed() {
+        use tauri_plugin_store::StoreExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("db.sqlite"), b"existing recordings").unwrap();
+        let store_path = tmp.path().join("store.bin");
+        let mut ciphertext = STORE_MAGIC.to_vec();
+        ciphertext.extend_from_slice(b"ciphertext whose key is unavailable");
+        std::fs::write(&store_path, &ciphertext).unwrap();
+
+        let app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_store::Builder::default().build())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("failed to build mock app");
+
+        let result = build_store_at(app.handle(), store_path.clone());
+        let canonical = std::fs::read(&store_path).ok();
+        let forensic_backup = std::fs::read(store_path.with_extension("bin.encrypted.bak")).ok();
+        let registered = app.get_store(&store_path);
+
+        assert!(
+            result.is_err()
+                && canonical.as_deref() == Some(ciphertext.as_slice())
+                && forensic_backup.as_deref() == Some(ciphertext.as_slice())
+                && registered.is_none(),
+            "locked existing install must return an error, preserve canonical and forensic ciphertext, and register no wipe-primed store; result_ok={}, canonical_preserved={}, forensic_backup_preserved={}, store_registered={}",
+            result.is_ok(),
+            canonical.as_deref() == Some(ciphertext.as_slice()),
+            forensic_backup.as_deref() == Some(ciphertext.as_slice()),
+            registered.is_some(),
+        );
+    }
+
+    #[test]
+    fn locked_store_aborts_startup_before_plugin_load_and_save() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store_path = tmp.path().join("store.bin");
+        let backup_path = store_path.with_extension("bin.encrypted.bak");
+        let mut ciphertext = STORE_MAGIC.to_vec();
+        ciphertext.extend_from_slice(b"ciphertext whose key is unavailable");
+        std::fs::write(&store_path, &ciphertext).unwrap();
+
+        let app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_store::Builder::default().build())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("failed to build mock app");
+
+        let init_result = build_store_at(app.handle(), store_path.clone());
+        assert!(
+            init_result.is_err(),
+            "precondition: encrypted store is locked"
+        );
+
+        // Exercise the exact startup access gate before the frontend can invoke
+        // plugin:store|load. If the locked-store error is converted to defaults,
+        // reproduce the webview's load followed by an ordinary settings save.
+        let startup_store = require_store_access(init_result);
+        if startup_store.is_ok() {
+            let webview_store = StoreBuilder::new(app.handle(), store_path.clone())
+                .build()
+                .expect("plugin load silently creates an empty handle");
+            webview_store.set("settings", json!(SettingsStore::default()));
+            webview_store
+                .save()
+                .expect("ordinary plugin save overwrites the canonical file");
+        }
+
+        assert!(
+            startup_store.is_err(),
+            "startup must abort before a webview can load the locked store"
+        );
+        assert_eq!(std::fs::read(&store_path).unwrap(), ciphertext);
+        assert_eq!(std::fs::read(&backup_path).unwrap(), ciphertext);
+
+        // Model the next launch after the user unlocks the credential store:
+        // decrypt_store_file has made the canonical settings readable again.
+        // The retry must load that canonical state rather than the empty handle
+        // the plugin would have registered during the locked launch.
+        let recovered = json!({
+            "settings": {
+                "aiPresets": presets_n(2),
+                "audioTranscriptionEngine": "openai-compatible",
+                "openaiCompatibleEndpoint": "https://stt.example.test/v1/audio/transcriptions",
+                "openaiCompatibleApiKey": "preserved-api-key",
+                "openaiCompatibleModel": "preserved-stt-model"
+            }
+        });
+        std::fs::write(&store_path, serde_json::to_vec_pretty(&recovered).unwrap()).unwrap();
+
+        let unlocked_store = build_store_at(app.handle(), store_path.clone())
+            .expect("startup retry should load the unlocked canonical store");
+        let settings = unlocked_store
+            .get("settings")
+            .expect("unlocked settings must be registered");
+        assert_eq!(
+            settings
+                .get("audioTranscriptionEngine")
+                .and_then(Value::as_str),
+            Some("openai-compatible")
+        );
+        assert_eq!(
+            settings
+                .get("openaiCompatibleEndpoint")
+                .and_then(Value::as_str),
+            Some("https://stt.example.test/v1/audio/transcriptions")
+        );
+        assert_eq!(
+            settings
+                .get("openaiCompatibleApiKey")
+                .and_then(Value::as_str),
+            Some("preserved-api-key")
+        );
+        assert_eq!(
+            settings
+                .get("openaiCompatibleModel")
+                .and_then(Value::as_str),
+            Some("preserved-stt-model")
+        );
+
+        unlocked_store
+            .save()
+            .expect("recovered settings should remain saveable");
+        let persisted: Value =
+            serde_json::from_slice(&std::fs::read(&store_path).unwrap()).unwrap();
+        assert_eq!(persisted, recovered);
+        assert_eq!(
+            std::fs::read(&backup_path).unwrap(),
+            ciphertext,
+            "the locked-launch forensic backup must survive recovery"
+        );
+    }
+
+    #[test]
     fn l5_refusal_heals_wipe_primed_store_in_place() {
         // The plugin's build_inner registers a freshly-built store in its
         // registry BEFORE build_store can refuse it, and `.build()` serves
@@ -3289,6 +3575,17 @@ mod tests {
             presets[0].get("provider").unwrap().as_str().unwrap(),
             "custom"
         );
+
+        let acp = json!({
+            "aiPresets": [{
+                "provider": "acp",
+                "acpAgent": {"id": "codex-acp"}
+            }]
+        });
+        let sanitized_acp = SettingsStore::sanitize_legacy_fields(acp);
+        let preset = &sanitized_acp["aiPresets"][0];
+        assert_eq!(preset["provider"].as_str(), Some("acp"));
+        assert_eq!(preset["acpAgent"]["id"].as_str(), Some("codex-acp"));
     }
 
     #[test]

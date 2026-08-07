@@ -250,16 +250,19 @@ export function registerObserver(handler: EventHandler): Unregister {
  * Default handlers do not receive events for this id while the
  * registration is live.
  *
- * Throws if a foreground handler is already registered for the same id —
- * caller bug, two panels racing for the same session is a structural
- * mistake we want to catch loudly. The previous architecture surfaced
- * this as silent double-writes; making it throw keeps the contract
- * clear.
+ * Newest registration wins. Two panels racing for the same session is
+ * still a caller bug and we log it loudly, but this used to *throw* —
+ * and every caller registers from inside an async effect body, where a
+ * throw becomes an unhandled rejection that leaves `off` unassigned.
+ * The panel then silently owned nothing: Pi events fell through to the
+ * default router, so the panel's own `agent_end` handling never ran and
+ * its turn state stayed latched ("analyzing…" forever, every later send
+ * forced into the queue). Replacing is recoverable; throwing was not.
  */
 export function registerForeground(sessionId: string, handler: EventHandler): Unregister {
   if (internals.foreground.has(sessionId)) {
-    throw new Error(
-      `agent-events: foreground handler already registered for session ${sessionId}`,
+    console.warn(
+      `agent-events: foreground handler already registered for session ${sessionId} — replacing with the newest registration`,
     );
   }
   internals.foreground.set(sessionId, handler);
@@ -268,6 +271,14 @@ export function registerForeground(sessionId: string, handler: EventHandler): Un
       internals.foreground.delete(sessionId);
     }
   };
+}
+
+/** Whether `sessionId` currently has a foreground owner. Read-only view of
+ *  the routing decision in `dispatchEventNow`, used by panels that need to
+ *  know whether their own handler (or the default router) will see a
+ *  session's events. */
+export function hasForegroundHandler(sessionId: string): boolean {
+  return internals.foreground.has(sessionId);
 }
 
 /** Broadcast registration for `agent_terminated`. */

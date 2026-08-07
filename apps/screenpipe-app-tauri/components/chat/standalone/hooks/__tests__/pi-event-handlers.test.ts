@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  connectionActionFromToolResult,
   firstAgentEndAssistantError,
   isPiPromptStartTimeout,
   isTerminalQuotaError,
@@ -41,6 +42,40 @@ describe("pi foreground event helpers", () => {
     expect(piPromptStartTimeoutMessage()).toBe(
       "The AI did not start responding, so screenpipe restarted it. Retry your message.",
     );
+  });
+});
+
+describe("connectionActionFromToolResult", () => {
+  it("builds a connect card from a needs_connection sentinel", () => {
+    const block = connectionActionFromToolResult(
+      JSON.stringify({
+        status: "needs_connection",
+        connectionId: "notion",
+        name: "Notion",
+        message: "Connect Notion to continue.",
+      }),
+    );
+    expect(block).toEqual({
+      type: "connection_action",
+      connectionId: "notion",
+      connectionName: "Notion",
+      icon: "notion",
+      extensionReason: "Connect Notion to continue.",
+    });
+  });
+
+  it("falls back to the id when no name is given", () => {
+    const block = connectionActionFromToolResult(
+      JSON.stringify({ status: "needs_connection", connectionId: "gmail" }),
+    );
+    expect(block?.connectionName).toBe("gmail");
+  });
+
+  it("ignores non-sentinel tool output", () => {
+    expect(connectionActionFromToolResult("just some text")).toBeNull();
+    expect(connectionActionFromToolResult(JSON.stringify({ status: "connected", connectionId: "notion" }))).toBeNull();
+    expect(connectionActionFromToolResult(JSON.stringify({ status: "needs_connection" }))).toBeNull();
+    expect(connectionActionFromToolResult('{"status":"needs_connection", broken')).toBeNull();
   });
 });
 

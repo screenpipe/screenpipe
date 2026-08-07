@@ -31,7 +31,11 @@ import { AccountSection, searchIndex as accountSearchIndex } from "@/components/
 import ShortcutSection, { searchIndex as shortcutsSearchIndex } from "@/components/settings/shortcut-section";
 import { AIPresets, searchIndex as aiSearchIndex } from "@/components/settings/ai-presets";
 import { AISettings, searchIndex as aiSettingsSearchIndex } from "@/components/settings/ai-settings";
-import { RecordingSettings, searchIndex as recordingSearchIndex } from "@/components/settings/recording-settings";
+import {
+  RecordingSettings,
+  audioSearchIndex,
+  screenSearchIndex,
+} from "@/components/settings/recording-settings";
 import GeneralSettings, { searchIndex as generalSearchIndex } from "@/components/settings/general-settings";
 import { TeamSection, searchIndex as teamSearchIndex } from "@/components/settings/team-section";
 import { DisplaySection, searchIndex as displaySearchIndex } from "@/components/settings/display-section";
@@ -69,7 +73,8 @@ const ALL_SETTINGS_FIELDS: IndexedSettingsField[] = [
   ...generalSearchIndex.map((f) => ({ ...f, section: "general" })),
   ...aiSearchIndex.map((f) => ({ ...f, section: "ai" })),
   ...aiSettingsSearchIndex.map((f) => ({ ...f, section: "ai-settings" })),
-  ...recordingSearchIndex.map((f) => ({ ...f, section: "recording" })),
+  ...audioSearchIndex.map((f) => ({ ...f, section: "audio" })),
+  ...screenSearchIndex.map((f) => ({ ...f, section: "recording" })),
   ...powerSearchIndex.map((f) => ({ ...f, section: "recording" })),
   ...shortcutsSearchIndex.map((f) => ({ ...f, section: "shortcuts" })),
   ...notificationsSearchIndex.map((f) => ({ ...f, section: "notifications" })),
@@ -88,6 +93,7 @@ import posthog from "posthog-js";
 
 type SettingsSection =
   | "account"
+  | "audio"
   | "recording"
   | "ai"
   | "ai-settings"
@@ -104,7 +110,7 @@ type SettingsSection =
   | "speakers";
 
 const ALL_SETTINGS_SECTIONS: SettingsSection[] = [
-  "display", "general", "ai", "ai-settings", "recording", "shortcuts", "notifications",
+  "display", "general", "ai", "ai-settings", "recording", "audio", "shortcuts", "notifications",
   "usage", "privacy", "permissions", "storage", "speakers",
   "team", "account", "referral",
 ];
@@ -129,7 +135,12 @@ function SettingsContent() {
   const isSettingsSectionHidden = useCallback(
     (sectionId: SettingsSection) => {
       if (sectionId === "permissions" && !showPermissions) return true;
-      return isSectionHidden(sectionId === "ai-settings" ? "ai" : sectionId);
+      const policySection = sectionId === "ai-settings"
+        ? "ai"
+        : sectionId === "audio"
+          ? "recording"
+          : sectionId;
+      return isSectionHidden(policySection);
     },
     [isSectionHidden, showPermissions],
   );
@@ -159,7 +170,8 @@ function SettingsContent() {
     {
       label: "Capture & AI",
       items: [
-        { id: "recording" as const, label: "Recording", icon: <Video className="h-4 w-4" /> },
+        { id: "recording" as const, label: "Screen", icon: <Video className="h-4 w-4" /> },
+        { id: "audio" as const, label: "Audio & meetings", icon: <Mic className="h-4 w-4" /> },
         { id: "ai" as const, label: "AI Presets", icon: <Brain className="h-4 w-4" /> },
         { id: "ai-settings" as const, label: "AI Settings", icon: <SlidersHorizontal className="h-4 w-4" /> },
       ].filter((s) => !isSettingsSectionHidden(s.id)),
@@ -316,7 +328,8 @@ function SettingsContent() {
       case "ai":            return <AIPresets />;
       case "ai-settings":   return <AISettings />;
       case "account":       return <AccountSection />;
-      case "recording":     return <RecordingSettings />;
+      case "recording":     return <RecordingSettings section="screen" />;
+      case "audio":         return <RecordingSettings section="audio" />;
       case "shortcuts":     return <ShortcutSection />;
       case "privacy":       return <PrivacySection />;
       case "permissions":   return showPermissions ? <PermissionsSection /> : null;

@@ -120,6 +120,7 @@ export async function validateAuth(request: Request, env: Env): Promise<AuthResu
       deviceId: resolvedUserId,
       userId: resolvedUserId,
       clerkUserId: resolvedUserId,
+      clerkUserIdVerified: true,
     };
   }
 
@@ -137,8 +138,10 @@ export async function validateAuth(request: Request, env: Env): Promise<AuthResu
         ...usageTierField(screenpipeUser.accountPlan ?? 'unknown', 'subscribed'),
         deviceId: resolvedUserId,
         userId: screenpipeUser.userId,
+        // clerk_id here comes from the website's user row, not a verified Clerk
+        // JWT, so a Clerk 404 on it may just mean the row is stale.
         ...(screenpipeUser.clerkUserId
-          ? { clerkUserId: screenpipeUser.clerkUserId }
+          ? { clerkUserId: screenpipeUser.clerkUserId, clerkUserIdVerified: false }
           : {}),
       };
     }
@@ -151,7 +154,7 @@ export async function validateAuth(request: Request, env: Env): Promise<AuthResu
       deviceId: resolvedUserId,
       userId: screenpipeUser.userId,
       ...(screenpipeUser.clerkUserId
-        ? { clerkUserId: screenpipeUser.clerkUserId }
+        ? { clerkUserId: screenpipeUser.clerkUserId, clerkUserIdVerified: false }
         : {}),
     };
   }

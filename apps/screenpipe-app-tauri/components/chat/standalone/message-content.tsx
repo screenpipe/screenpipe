@@ -6,7 +6,7 @@
 import * as React from "react";
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Calendar, ChevronDown, ChevronRight, ChevronUp, Plug, RefreshCw } from "lucide-react";
+import { Check, Calendar, ChevronDown, ChevronRight, ChevronUp, KeyRound, Loader2, Plug, RefreshCw, ShieldCheck } from "lucide-react";
 import { SourceCitationFooter } from "@/components/chat/source-citation-footer";
 import { MarkdownBlock } from "@/components/chat/markdown-block";
 import { AskUserToolCard, isAskUserToolCall } from "@/components/chat/standalone/ask-user-tool-card";
@@ -33,6 +33,7 @@ import {
   firstExternalWebTarget,
   presentToolActivity,
   presentToolActivityStatus,
+  mcpScreenpipeCommand,
   type WebTargetPresentation,
 } from "@/lib/chat/tool-presentation";
 import {
@@ -158,25 +159,30 @@ export function GridDissolveLoader({
 // can show "Searched ChatGPT 'foo'" instead of the raw curl URL. Pi's pipes
 // emit these as plain bash tool calls (no MCP), with the app name encoded as
 // app_name=X in the query string — see crates/screenpipe-core/assets/pipes/.
-function extractAppFromToolCall(toolCall: ToolCall): string | undefined {
+// The endpoint/method card and its rich metadata are curl-based. Raw pi sends a
+// bash `curl`; ACP screenpipe MCP tools send a name + structured args, which we
+// map to the equivalent curl so the SAME classifier drives both. Any other tool
+// (a native ACP Read/Edit, a non-screenpipe MCP call) has no curl and no card.
+function effectiveCommand(toolCall: ToolCall): string | null {
   if (toolCall.toolName === "bash") {
-    return classifyCurl(String(toolCall.args?.command ?? ""))?.appName;
+    return String(toolCall.args?.command ?? "") || null;
   }
-  return undefined;
+  return mcpScreenpipeCommand(toolCall.toolName, (toolCall.args ?? {}) as Record<string, unknown>);
+}
+
+function extractAppFromToolCall(toolCall: ToolCall): string | undefined {
+  const command = effectiveCommand(toolCall);
+  return command ? classifyCurl(command)?.appName : undefined;
 }
 
 function extractConnectionIconFromToolCall(toolCall: ToolCall): string | undefined {
-  if (toolCall.toolName === "bash") {
-    return classifyCurl(String(toolCall.args?.command ?? ""))?.connectionIconName;
-  }
-  return undefined;
+  const command = effectiveCommand(toolCall);
+  return command ? classifyCurl(command)?.connectionIconName : undefined;
 }
 
 function extractWebTargetFromToolCall(toolCall: ToolCall): WebTargetPresentation | undefined {
-  if (toolCall.toolName === "bash") {
-    return classifyCurl(String(toolCall.args?.command ?? ""))?.webTarget;
-  }
-  return undefined;
+  const command = effectiveCommand(toolCall);
+  return command ? classifyCurl(command)?.webTarget : undefined;
 }
 
 interface ToolDetailField {
@@ -194,7 +200,7 @@ interface BashToolDetailsPresentation {
 }
 
 function bashToolDetailsPresentation(toolCall: ToolCall): BashToolDetailsPresentation | null {
-  const command = String(toolCall.args.command ?? "");
+  const command = effectiveCommand(toolCall);
   if (!command) return null;
 
   const classified = classifyCurl(command);
@@ -259,7 +265,7 @@ function BashToolDetails({ toolCall }: { toolCall: ToolCall }) {
   if (!details) {
     return (
       <div className="py-1.5">
-        <ToolCodeBlock code={sanitizeCommand(String(toolCall.args.command ?? ""))} language="shell" />
+        <ToolCodeBlock code={sanitizeCommand(effectiveCommand(toolCall) ?? "")} language="shell" />
       </div>
     );
   }
@@ -381,7 +387,9 @@ function FriendlyToolDetails({ toolCall }: { toolCall: ToolCall }) {
       </div>
     );
   }
-  if (toolCall.toolName === "bash" && toolCall.args.command) {
+  // Raw pi's bash curl AND screenpipe MCP tool calls both resolve to a local
+  // request, so both render the endpoint/method card.
+  if (effectiveCommand(toolCall)) {
     return <BashToolDetails toolCall={toolCall} />;
   }
   const entries = Object.entries(toolCall.args).filter(([k]) => k !== "path" && k !== "command");
@@ -405,22 +413,45 @@ function formatElapsedSeconds(totalSeconds: number): string {
   return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
 }
 
-/** A tool's elapsed time as a short label: ticking while it runs, then frozen
- *  to its final duration. Empty for tools too quick to be worth showing. */
-function useToolElapsedLabel(toolCall: ToolCall): string | null {
+/** One-line live status for a running tool: subagent type, elapsed time,
+ *  retry hints, and the tail of streamed output. Quiet for quick tools. */
+function RunningToolStatus({ toolCall }: { toolCall: ToolCall }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
     if (!toolCall.isRunning) return;
     const id = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, [toolCall.isRunning]);
+  if (!toolCall.isRunning) return null;
 
-  if (!toolCall.startedAtMs) return null;
-  const endMs = toolCall.isRunning ? nowMs : toolCall.endedAtMs ?? nowMs;
-  const elapsed = (endMs - toolCall.startedAtMs) / 1000;
-  // Quiet for quick tools; the group header already shows the turn total.
-  if (elapsed < 3) return null;
-  return formatElapsedSeconds(elapsed);
+  const localElapsed = toolCall.startedAtMs ? (nowMs - toolCall.startedAtMs) / 1000 : 0;
+  const elapsed = Math.max(toolCall.elapsedSeconds ?? 0, localElapsed);
+  const retry = toolCall.retry;
+  const retryLabel = retry
+    ? typeof retry === "object" && retry !== null && "attempt" in retry
+      ? `retry ${(retry as { attempt?: unknown }).attempt}`
+      : "retrying"
+    : null;
+  const outputTail = toolCall.progress
+    ?.split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .pop();
+  const showStatus = Boolean(
+    toolCall.subagentType || retryLabel || outputTail || elapsed >= 5,
+  );
+  if (!showStatus) return null;
+
+  return (
+    <div className="min-w-0 text-[10px] font-mono text-foreground/40">
+      <div className="truncate">
+        {toolCall.subagentType && <span>{toolCall.subagentType} · </span>}
+        <span>{formatElapsedSeconds(elapsed)}</span>
+        {retryLabel && <span> · {retryLabel}</span>}
+      </div>
+      {outputTail && <div className="truncate text-foreground/30">{outputTail}</div>}
+    </div>
+  );
 }
 
 function ToolCallRailItem({
@@ -435,7 +466,6 @@ function ToolCallRailItem({
   const [expanded, setExpanded] = useState(false);
   const presentation = presentToolActivity(toolCall);
   const label = toolCall.isRunning ? presentation.runningLabel : presentation.completedLabel;
-  const elapsedLabel = useToolElapsedLabel(toolCall);
   const appName = extractAppFromToolCall(toolCall);
   const connectionIconName = extractConnectionIconFromToolCall(toolCall);
   const webTarget = extractWebTargetFromToolCall(toolCall);
@@ -494,11 +524,6 @@ function ToolCallRailItem({
             <span className="truncate flex-1 text-xs text-foreground/70 group-hover:text-foreground transition-colors duration-150">
               {label}
             </span>
-            {elapsedLabel && (
-              <span className="flex-shrink-0 font-mono text-[10px] tabular-nums text-foreground/40">
-                {elapsedLabel}
-              </span>
-            )}
             {expanded ? (
               <ChevronDown className="h-3 w-3 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
             ) : (
@@ -506,6 +531,7 @@ function ToolCallRailItem({
             )}
           </button>
         )}
+        {!isAskUser && <RunningToolStatus toolCall={toolCall} />}
         <AnimatePresence>
           {!isAskUser && expanded && (
             <motion.div
@@ -768,6 +794,7 @@ type GroupedBlock =
   | { type: "text"; text: string; key: number }
   | { type: "thinking"; text: string; isThinking: boolean; durationMs?: number; key: number }
   | { type: "connection-action"; block: Extract<ContentBlock, { type: "connection_action" }>; key: number }
+  | { type: "agent-action"; block: Extract<ContentBlock, { type: "agent_action" }>; key: number }
   | { type: "tool-group"; toolCalls: ToolCall[]; key: number }
   | { type: "work-group"; toolCalls: ToolCall[]; durationMs: number; key: number };
 
@@ -790,6 +817,8 @@ function groupContentBlocks(blocks: ContentBlock[]): GroupedBlock[] {
         result.push({ type: "thinking", text: block.text, isThinking: block.isThinking, durationMs: block.durationMs, key: result.length });
       } else if (block.type === "connection_action") {
         result.push({ type: "connection-action", block, key: result.length });
+      } else if (block.type === "agent_action") {
+        result.push({ type: "agent-action", block, key: result.length });
       }
     }
   }
@@ -895,7 +924,7 @@ function mergeWorkAndIntermediateText(groups: GroupedBlock[]): GroupedBlock[] {
     } else if (g.type === "tool-group") {
       firstKey ??= g.key;
       allToolCalls.push(...g.toolCalls);
-    } else if (g.type === "connection-action") {
+    } else if (g.type === "connection-action" || g.type === "agent-action") {
       finalBlocks.push(g);
     }
     // text and thinking blocks before the boundary are dropped
@@ -1036,6 +1065,152 @@ function InlineConnectionActionCard({
   );
 }
 
+// The ACP permission kinds map to four short button labels. Anything else
+// (auth methods like "Google" / "API key") keeps its own name.
+function permissionOptionLabel(kind: string | undefined): string | null {
+  switch (kind) {
+    case "allow_once":
+      return "allow once";
+    case "allow_always":
+      return "always allow";
+    case "reject_once":
+      return "reject";
+    case "reject_always":
+      return "never allow";
+    default:
+      return null;
+  }
+}
+
+export function InlineAgentActionCard({
+  block,
+  onRespond,
+}: {
+  block: Extract<ContentBlock, { type: "agent_action" }>;
+  onRespond: (selectedOptionId?: string) => Promise<boolean> | boolean;
+}) {
+  const [responseState, setResponseState] = useState<"idle" | "waiting" | "error">("idle");
+  const titleId = React.useId();
+  const isAuth = block.actionKind === "auth";
+  const defaultTitle = isAuth ? "sign in to continue" : "permission needed";
+
+  const respond = async (selectedOptionId?: string) => {
+    if (responseState === "waiting") return;
+    setResponseState("waiting");
+    try {
+      const answered = await onRespond(selectedOptionId);
+      if (!answered) setResponseState("error");
+    } catch {
+      setResponseState("error");
+    }
+  };
+
+  // While the choice is in flight, show a pending state (Zed-style) rather
+  // than vanishing. Completion removes the card entirely: the desktop clears
+  // agent actions on acp_authenticated / acp_fatal / acp_auth_cancelled, so
+  // this spinner can't get stuck. A real failure flips to `error` and brings
+  // the same card back with retry enabled.
+  if (responseState === "waiting") {
+    return (
+      <div
+        className="w-full max-w-xl border border-border bg-background p-3 font-mono"
+        data-testid="agent-action-card"
+        data-agent-action-kind={block.actionKind}
+        role="group"
+        aria-live="polite"
+      >
+        <div className="flex items-center gap-3">
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-foreground" aria-hidden />
+          <div className="text-sm leading-5 text-foreground">
+            {isAuth ? "signing you in…" : "waiting for the agent…"}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="w-full max-w-xl border border-border bg-background p-3 font-mono"
+      data-testid="agent-action-card"
+      data-agent-action-kind={block.actionKind}
+      role="group"
+      aria-live="polite"
+      aria-labelledby={titleId}
+    >
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center text-foreground">
+          {isAuth ? (
+            <KeyRound className="h-4 w-4" strokeWidth={1.8} aria-hidden />
+          ) : (
+            <ShieldCheck className="h-4 w-4" strokeWidth={1.8} aria-hidden />
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div id={titleId} className="text-sm font-semibold leading-5 text-foreground">
+            {block.title || defaultTitle}
+          </div>
+          <div className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
+            {responseState === "error"
+              ? "that did not work. please try again."
+              : block.message ?? (isAuth
+                ? "choose how you want to connect this agent."
+                : "the agent needs your approval before it can continue.")}
+          </div>
+          {block.detail && (
+            <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all border border-border bg-muted/40 px-2 py-1.5 text-xs leading-5 text-foreground/80">
+              {block.detail}
+            </pre>
+          )}
+          <div className="mt-3 flex flex-wrap gap-2">
+            {block.options.map((option, index) => {
+              const semanticKind = `${option.kind ?? ""} ${option.name}`.toLowerCase();
+              const isReject = /reject|deny|decline|cancel/.test(semanticKind);
+              const isPrimary = !isReject && (index === 0 || /allow|approve|connect|sign in|continue/.test(semanticKind));
+              // Adapters spell the allow/reject options out in a full sentence
+              // ("Yes, and don't ask again for curl commands in /Users/..."). For
+              // the standard permission kinds we show a short label and keep the
+              // verbose original as the tooltip. When two options share a kind
+              // (Codex sends two allow_always: "Allow for Session" and "Allow and
+              // Don't Ask Again"), the short label collides, so fall back to each
+              // option's own name to keep the buttons distinct.
+              const shortLabel = permissionOptionLabel(option.kind);
+              const collides =
+                shortLabel != null &&
+                block.options.filter((o) => permissionOptionLabel(o.kind) === shortLabel).length > 1;
+              const label = collides ? option.name : shortLabel ?? option.name;
+              return (
+                <button
+                  key={option.optionId}
+                  type="button"
+                  onClick={() => void respond(option.optionId)}
+                  title={option.name}
+                  className={cn(
+                    "border px-2.5 py-1.5 text-xs uppercase tracking-wide transition-opacity duration-150 disabled:opacity-60",
+                    isPrimary
+                      ? "border-foreground bg-foreground text-background"
+                      : "border-border text-foreground hover:bg-muted/50",
+                  )}
+                >
+                  {label}
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => void respond()}
+              className="border border-border px-2.5 py-1.5 text-xs uppercase tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background disabled:opacity-60"
+            >
+              not now
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function toolCallRenderKey(toolCall: ToolCall, index: number): string {
   return `${toolCall.id || toolCall.toolName || "tool"}:${index}`;
 }
@@ -1079,10 +1254,49 @@ function friendlyCompletedSummary(summary?: string): string | undefined {
   return summary;
 }
 
+// Renders a work summary, animating only the trailing duration of a "Working …"
+// string so the elapsed time can tick without re-animating the whole label.
+function WorkSummaryText({
+  text,
+  animateRunningDuration,
+}: {
+  text: string;
+  animateRunningDuration: boolean;
+}) {
+  const prefix = "Working";
+
+  if (!animateRunningDuration || !text.startsWith(prefix)) {
+    return <>{text}</>;
+  }
+
+  const durationSuffix = text.slice(prefix.length);
+
+  return (
+    <>
+      {prefix}
+      <AnimatePresence initial={false}>
+        {durationSuffix && (
+          <motion.span
+            key="running-duration"
+            initial={{ opacity: 0, y: 2 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -2 }}
+            transition={{ duration: 0.16, ease: "easeOut" }}
+            className="inline-block whitespace-pre"
+          >
+            {durationSuffix}
+          </motion.span>
+        )}
+      </AnimatePresence>
+    </>
+  );
+}
+
 function ToolCallGroup({
   toolCalls,
   defaultExpanded = false,
   isGenerating = false,
+  waitingForApproval = false,
   preferSummaryOverride = false,
   summaryOverride,
   workStartedAtMs,
@@ -1093,6 +1307,7 @@ function ToolCallGroup({
   toolCalls: ToolCall[];
   defaultExpanded?: boolean;
   isGenerating?: boolean;
+  waitingForApproval?: boolean;
   preferSummaryOverride?: boolean;
   summaryOverride?: string;
   workStartedAtMs?: number;
@@ -1106,13 +1321,18 @@ function ToolCallGroup({
   const wasWorkingRef = useRef(false);
 
   const hasRunningTool = toolCalls.some((tc) => tc.isRunning);
-  const isWorking = hasRunningTool || isGenerating;
+  // While blocked on the user's approval the turn is still live, not done.
+  const isWorking = hasRunningTool || isGenerating || waitingForApproval;
   const hasInteractiveTool = toolCalls.some(isAskUserToolCall);
+  const hasError = toolCalls.some((tc) => tc.isError);
   const allDone = !isWorking;
+  const total = toolCalls.length;
   const startedAtMs = toolWorkStartedAt(toolCalls, workStartedAtMs);
   const endedAtMs = allDone ? toolWorkEndedAt(toolCalls) : undefined;
   const completedDurationMs = startedAtMs && endedAtMs ? Math.max(1, endedAtMs - startedAtMs) : undefined;
-  const runningLabel = presentToolActivityStatus(toolCalls, isGenerating);
+  const runningLabel = waitingForApproval
+    ? "Waiting for your approval"
+    : presentToolActivityStatus(toolCalls, isGenerating);
   const justCompletedSummary = !isWorking && wasWorkingRef.current
     ? completedWorkSummaryFromRunning(runningSummary)
     : null;
@@ -1166,6 +1386,10 @@ function ToolCallGroup({
     <div className="w-full min-w-0 self-stretch">
       {!hideSummary && (
         <div className="mb-2 w-full min-w-full">
+          {/* Header toggles the tool list open/closed. It stays interactive
+              while the model is working so the user can inspect steps mid-turn:
+              the running spinner + live step progress show while active, the
+              summary + any failure count once idle. */}
           <button
             onClick={() => setManualExpand(isExpanded ? false : true)}
             className="w-full flex items-center gap-1.5 py-1 text-left min-w-0 group cursor-pointer disabled:cursor-default focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground"
@@ -1180,8 +1404,24 @@ function ToolCallGroup({
                 aria-hidden="true"
               />
             )}
-            <span className="truncate text-xs text-foreground/50 group-hover:text-foreground/80 transition-colors duration-150">
-              {isWorking ? runningSummary : summary}
+            <span className="truncate text-xs font-mono text-foreground/50 group-hover:text-foreground/80 transition-colors duration-150">
+              {isWorking ? (
+                <>
+                  <WorkSummaryText text={runningSummary} animateRunningDuration />
+                  {total > 1 && (
+                    <span className="text-foreground/30">
+                      {" "}· {toolCalls.filter((tc) => !tc.isRunning).length}/{total} done
+                    </span>
+                  )}
+                </>
+              ) : (
+                <>
+                  <WorkSummaryText text={summary || `${total} steps`} animateRunningDuration={false} />
+                  {hasError && (
+                    <span className="ml-1.5 text-foreground/30">· {toolCalls.filter(tc => tc.isError).length} failed</span>
+                  )}
+                </>
+              )}
             </span>
             {!forceCollapsed && !hasInteractiveTool && (isExpanded ? (
               <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
@@ -1204,20 +1444,64 @@ function ToolCallGroup({
             className="overflow-hidden"
           >
             <div className="pl-1 pt-1" data-testid="tool-activity-list">
-              {toolCalls.map((tc, i) => (
-                <motion.div
-                  key={toolCallRenderKey(tc, i)}
-                  initial={{ opacity: 0, x: -8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ duration: 0.15, delay: i * 0.03 }}
-                >
-                  <ToolCallRailItem
-                    toolCall={tc}
-                    isLast={i === toolCalls.length - 1}
-                    onAskUserReply={onAskUserReply}
-                  />
-                </motion.div>
-              ))}
+              {(() => {
+                // Subagent child calls (parentToolCallId) nest under their
+                // spawning Task row instead of cluttering the rail as siblings.
+                // Nesting is one level deep: a call nests only under a
+                // top-level parent. A call whose parent is itself nested is
+                // promoted to top-level rather than dropped, so no tool row can
+                // silently disappear from the rail.
+                const ids = new Set(toolCalls.map((tc) => tc.id));
+                const resolvedParent = (tc: ToolCall): string | undefined => {
+                  const parent = tc.parentToolCallId;
+                  return parent && parent !== tc.id && ids.has(parent) ? parent : undefined;
+                };
+                const parentById = new Map<string, string | undefined>();
+                for (const tc of toolCalls) parentById.set(tc.id, resolvedParent(tc));
+                const isTopLevelId = (id: string) => !parentById.get(id);
+                const childrenByParent = new Map<string, ToolCall[]>();
+                const topLevel: ToolCall[] = [];
+                for (const tc of toolCalls) {
+                  const parent = parentById.get(tc.id);
+                  if (parent && isTopLevelId(parent)) {
+                    const siblings = childrenByParent.get(parent) ?? [];
+                    siblings.push(tc);
+                    childrenByParent.set(parent, siblings);
+                  } else {
+                    topLevel.push(tc);
+                  }
+                }
+                return topLevel.map((tc, i) => {
+                  const children = childrenByParent.get(tc.id) ?? [];
+                  const isLastTop = i === topLevel.length - 1;
+                  return (
+                    <motion.div
+                      key={toolCallRenderKey(tc, i)}
+                      initial={{ opacity: 0, x: -8 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ duration: 0.15, delay: i * 0.03 }}
+                    >
+                      <ToolCallRailItem
+                        toolCall={tc}
+                        isLast={isLastTop && children.length === 0}
+                        onAskUserReply={onAskUserReply}
+                      />
+                      {children.length > 0 && (
+                        <div className="ml-5">
+                          {children.map((child, j) => (
+                            <ToolCallRailItem
+                              key={toolCallRenderKey(child, j)}
+                              toolCall={child}
+                              isLast={isLastTop && j === children.length - 1}
+                              onAskUserReply={onAskUserReply}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </motion.div>
+                  );
+                });
+              })()}
             </div>
           </motion.div>
         )}
@@ -1230,6 +1514,7 @@ function ToolCallGroup({
 export function MessageContent({
   message,
   isGenerating = false,
+  waitingForApproval = false,
   deferSourceFooter = false,
   hideToolSummary = false,
   forceCollapseTools = false,
@@ -1241,10 +1526,12 @@ export function MessageContent({
   onConnectConnectionAction,
   onContinueConnectionAction,
   onDismissConnectionAction,
+  onAnswerAgentAction,
   onAskUserReply,
 }: {
   message: Message;
   isGenerating?: boolean;
+  waitingForApproval?: boolean;
   deferSourceFooter?: boolean;
   hideToolSummary?: boolean;
   forceCollapseTools?: boolean;
@@ -1256,6 +1543,7 @@ export function MessageContent({
   onConnectConnectionAction?: (connectionId: string, block?: Extract<ContentBlock, { type: "connection_action" }>) => Promise<InlineConnectStatus | void> | InlineConnectStatus | void;
   onContinueConnectionAction?: (prompt: string, label?: string) => void | Promise<void>;
   onDismissConnectionAction?: (messageId: string, connectionId: string) => void;
+  onAnswerAgentAction?: (block: Extract<ContentBlock, { type: "agent_action" }>, selectedOptionId?: string) => Promise<boolean> | boolean;
   onAskUserReply?: (reply: string, displayLabel: string) => void | Promise<void>;
 }) {
   const isUser = message.role === "user";
@@ -1399,6 +1687,12 @@ export function MessageContent({
     const stoppedSummary = message.stoppedByUser && hasToolWorkGroup
       ? formatStoppedWorkDuration(message.workDurationMs)
       : undefined;
+    // A turn cut off by app quit / crash: tell the truth on the work
+    // summary instead of showing a normal "Worked for X" completion.
+    const interruptedSummary = message.interruptedByQuit && hasToolWorkGroup
+      ? "interrupted — app closed mid-task"
+      : undefined;
+    const workSummaryOverride = stoppedSummary || interruptedSummary;
     return (
       <div className="space-y-2 min-w-0 w-full overflow-hidden">
         {displayGroups.map((group) => {
@@ -1445,6 +1739,17 @@ export function MessageContent({
               />
             );
           }
+          if (group.type === "agent-action") {
+            return (
+              <InlineAgentActionCard
+                key={`agent-action-${group.block.requestId}`}
+                block={group.block}
+                onRespond={(selectedOptionId) =>
+                  onAnswerAgentAction?.(group.block, selectedOptionId) ?? false
+                }
+              />
+            );
+          }
           if (group.type === "tool-group") {
             return (
               <ToolCallGroup
@@ -1452,8 +1757,9 @@ export function MessageContent({
                 toolCalls={group.toolCalls}
                 defaultExpanded={false}
                 isGenerating={isGenerating && !message.workDurationMs}
-                preferSummaryOverride={Boolean(stoppedSummary)}
-                summaryOverride={stoppedSummary || (message.workDurationMs ? formatWorkDuration(message.workDurationMs) : undefined)}
+                waitingForApproval={waitingForApproval}
+                preferSummaryOverride={Boolean(workSummaryOverride)}
+                summaryOverride={workSummaryOverride || (message.workDurationMs ? formatWorkDuration(message.workDurationMs) : undefined)}
                 workStartedAtMs={message.timestamp}
                 hideSummary={hideToolSummary}
                 forceCollapsed={forceCollapseTools}
@@ -1473,8 +1779,9 @@ export function MessageContent({
                 toolCalls={group.toolCalls}
                 defaultExpanded={false}
                 isGenerating={isGenerating && !message.workDurationMs}
-                preferSummaryOverride={Boolean(stoppedSummary)}
-                summaryOverride={stoppedSummary || formatWorkDuration(durationMs)}
+                waitingForApproval={waitingForApproval}
+                preferSummaryOverride={Boolean(workSummaryOverride)}
+                summaryOverride={workSummaryOverride || formatWorkDuration(durationMs)}
                 workStartedAtMs={message.timestamp}
                 hideSummary={hideToolSummary}
                 forceCollapsed={forceCollapseTools}
@@ -1494,9 +1801,13 @@ export function MessageContent({
   // without displayContent — the displayContent case is handled above before
   // the contentBlocks path).
   // Strip raw "Error:" prefix that leaks from backend — show only the human part
-  const displayText = !isUser && message.content.startsWith("Error: ")
+  const rawText = !isUser && message.content.startsWith("Error: ")
     ? message.content.slice("Error: ".length)
     : message.content;
+  // "(tool result)" is a persistence placeholder given to tool-only messages so
+  // they are not stored empty. It is not user-facing text, so never render it as
+  // an assistant bubble (the tool activity itself renders from contentBlocks).
+  const displayText = rawText === "(tool result)" ? "" : rawText;
   const hasMeaningfulText = Boolean(displayText && displayText !== "Processing...");
 
   if (!isUser && !hasMeaningfulText && !attachmentsRow && !sourceFooter && !retryCta) {

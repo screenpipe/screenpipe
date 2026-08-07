@@ -12,6 +12,13 @@ use tracing::warn;
 const MAX_ENTRIES: usize = 100;
 static STORE_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
+/// How much of the user's attention an alert may take, and how long it lives.
+///
+/// - `High` interrupts now **and** stays in the inbox.
+/// - `Normal` stays in the inbox without interrupting.
+/// - `Low` is ambient status (a display was plugged in, power mode changed):
+///   true while it is on screen, worthless afterwards. It never enters the
+///   inbox — see [`is_transient`].
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum NotificationPriority {
@@ -20,6 +27,26 @@ pub enum NotificationPriority {
     #[serde(alias = "medium", alias = "default")]
     Normal,
     Low,
+}
+
+/// Notification types whose whole value is the moment they fire. `meeting`
+/// covers "meeting starting in 2 min" / "meeting detected": worth interrupting
+/// for while you can still act on it, but by the time you open the bell the
+/// meeting is already running and the row is a log line, not a task.
+///
+/// Interruption and persistence are separate questions — that is why this is
+/// keyed on type rather than folded into priority. Only add a type here when
+/// nothing about it can still need you later.
+const TRANSIENT_TYPES: [&str; 1] = ["meeting"];
+
+/// Whether an alert is toast-only: delivered, never kept. Keeping the inbox
+/// to things you can still act on is what makes an unread dot mean something.
+pub fn is_transient(notification_type: &str, priority: NotificationPriority) -> bool {
+    if priority == NotificationPriority::Low {
+        return true;
+    }
+    let normalized = notification_type.trim().to_ascii_lowercase();
+    TRANSIENT_TYPES.contains(&normalized.as_str())
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -71,6 +98,11 @@ impl NotificationHistoryEntry {
         self.resolved_priority() == NotificationPriority::High
     }
 
+    /// Toast-only chatter that must not occupy the inbox. See [`is_transient`].
+    pub fn is_transient(&self) -> bool {
+        is_transient(&self.notification_type, self.resolved_priority())
+    }
+
     fn legacy_needs_attention(&self) -> bool {
         let has_action = self.actions.iter().any(|action| {
             let action_type = action.get("type").and_then(|value| value.as_str());
@@ -110,11 +142,17 @@ fn path() -> PathBuf {
     screenpipe_core::paths::default_screenpipe_data_dir().join("notifications.json")
 }
 
+/// The inbox as the user sees it. Transient rows written before this
+/// classification shipped are dropped here rather than migrated separately:
+/// every mutation reads through this function and writes the result back, so
+/// an inbox already full of meeting chatter self-cleans on the next write.
 pub fn read_all() -> Vec<NotificationHistoryEntry> {
-    match std::fs::read_to_string(path()) {
+    let mut entries: Vec<NotificationHistoryEntry> = match std::fs::read_to_string(path()) {
         Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
         Err(_) => Vec::new(),
-    }
+    };
+    entries.retain(|entry| !entry.is_transient());
+    entries
 }
 
 pub fn unread_count() -> usize {
@@ -175,6 +213,11 @@ pub fn push(entry: NotificationHistoryEntry) -> Result<bool, String> {
 }
 
 fn push_in(history: &mut Vec<NotificationHistoryEntry>, entry: NotificationHistoryEntry) -> bool {
+    // `/notify` already returns early for these; refuse here too so no future
+    // caller can quietly reintroduce chatter by skipping the route.
+    if entry.is_transient() {
+        return false;
+    }
     if history.iter().any(|existing| existing.id == entry.id) {
         return false;
     }
@@ -328,6 +371,62 @@ mod tests {
 
         notification.priority = Some(NotificationPriority::High);
         assert!(notification.is_high_priority());
+    }
+
+    #[test]
+    fn meeting_lifecycle_and_ambient_status_never_reach_the_inbox() {
+        // "meeting detected" / "meeting starting in 2 min" still interrupt —
+        // they just stop piling up as rows nobody can act on afterwards.
+        let mut meeting = entry("meeting", false);
+        meeting.notification_type = "meeting".to_string();
+        meeting.priority = Some(NotificationPriority::High);
+        assert!(meeting.is_transient());
+        assert!(meeting.is_high_priority());
+
+        // "switched display", "low power mode — saver".
+        let mut ambient = entry("display", false);
+        ambient.notification_type = "system".to_string();
+        ambient.priority = Some(NotificationPriority::Low);
+        assert!(ambient.is_transient());
+
+        // Everything actionable keeps its row.
+        let mut summary = entry("pipe-summary", false);
+        summary.priority = Some(NotificationPriority::Normal);
+        assert!(!summary.is_transient());
+
+        let mut recording = entry("recording-stopped", false);
+        recording.notification_type = "capture_stall".to_string();
+        recording.priority = Some(NotificationPriority::High);
+        assert!(!recording.is_transient());
+    }
+
+    #[test]
+    fn transient_entries_are_refused_and_pruned_from_existing_history() {
+        let mut meeting = entry("meeting", false);
+        meeting.notification_type = "meeting".to_string();
+
+        let mut history = Vec::new();
+        assert!(!push_in(&mut history, meeting));
+        assert!(history.is_empty());
+
+        // A history written before this classification shipped self-cleans:
+        // `read_all` drops the chatter and every mutation writes back the
+        // filtered list.
+        let mut stale = entry("stale-meeting", false);
+        stale.notification_type = "MEETING".to_string();
+        let mut existing = vec![stale, entry("keeper", false)];
+        existing.retain(|candidate| !candidate.is_transient());
+        assert_eq!(existing.len(), 1);
+        assert_eq!(existing[0].id, "keeper");
+    }
+
+    #[test]
+    fn producers_can_override_the_transient_classification() {
+        assert!(is_transient("meeting", NotificationPriority::High));
+        assert!(!is_transient("pipe", NotificationPriority::Normal));
+        assert!(is_transient("pipe", NotificationPriority::Low));
+        // Unknown types default to keeping the row — chatter is opt-in.
+        assert!(!is_transient("some_new_type", NotificationPriority::Normal));
     }
 
     #[test]

@@ -295,6 +295,15 @@ fn request_av_permission(app: tauri::AppHandle, media_type: nokhwa_bindings_maco
 
         let callback = move |granted: BOOL| {
             if is_audio && granted != NO {
+                use tauri::Manager;
+                let capture_intended = app_for_callback
+                    .try_state::<crate::recording::RecordingState>()
+                    .map(|s| s.capture_intended())
+                    .unwrap_or(false);
+                if !capture_intended {
+                    debug!("Microphone permission granted via AV callback — capture not intended, skipping restart");
+                    return;
+                }
                 info!(
                     "Microphone permission granted via AV callback — restarting capture for audio reinit"
                 );
@@ -356,6 +365,15 @@ const BOOT_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30
 #[cfg(target_os = "macos")]
 pub(crate) async fn restart_capture_on_mic_grant(app: tauri::AppHandle) {
     use tauri::Manager;
+
+    let capture_intended = app
+        .try_state::<crate::recording::RecordingState>()
+        .map(|s| s.capture_intended())
+        .unwrap_or(false);
+    if !capture_intended {
+        debug!("start_capture after mic grant: capture not intended (user disabled recording), skipping restart");
+        return;
+    }
 
     if MIC_GRANT_RESTART_IN_FLIGHT
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)

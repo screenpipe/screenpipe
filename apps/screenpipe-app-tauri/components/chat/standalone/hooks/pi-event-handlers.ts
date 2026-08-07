@@ -4,6 +4,7 @@
 
 import { classifyQuotaError } from "@/lib/chat/quota-errors";
 import type { AgentInnerEvent } from "@/lib/events/types";
+import type { ContentBlock } from "@/lib/chat/types";
 
 type TextContentPart = {
   type?: unknown;
@@ -67,6 +68,38 @@ export function textFromMessageContent(content: unknown) {
 export function textFromToolResult(result: unknown) {
   if (!isRecord(result)) return "";
   return textFromContentParts(result.content, "\n");
+}
+
+/**
+ * The bundled screenpipe_connect_app MCP tool returns a
+ * `{status:"needs_connection", connectionId, name, message}` sentinel when the
+ * app isn't connected and the blocking connect broker was unavailable. Detect
+ * it in a tool result and synthesize the connect card so the user can connect
+ * out-of-band and the agent retries. Returns null for any other tool output.
+ */
+export function connectionActionFromToolResult(
+  resultText: string,
+): Extract<ContentBlock, { type: "connection_action" }> | null {
+  const trimmed = resultText.trim();
+  if (!trimmed.startsWith("{") || !trimmed.includes("needs_connection")) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed) || parsed.status !== "needs_connection") return null;
+  const connectionId = typeof parsed.connectionId === "string" ? parsed.connectionId : "";
+  if (!connectionId) return null;
+  const connectionName =
+    typeof parsed.name === "string" && parsed.name ? parsed.name : connectionId;
+  return {
+    type: "connection_action",
+    connectionId,
+    connectionName,
+    icon: connectionId,
+    extensionReason: typeof parsed.message === "string" ? parsed.message : undefined,
+  };
 }
 
 export function textFromAssistantMessages(messages: unknown) {

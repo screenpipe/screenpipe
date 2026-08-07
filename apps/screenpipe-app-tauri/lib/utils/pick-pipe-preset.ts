@@ -22,6 +22,7 @@ export interface PresetLike {
   id?: string;
   defaultPreset?: boolean;
   model?: string;
+  provider?: string;
 }
 
 // Frontier/premium models that must NOT run on a pipe (unattended, often
@@ -44,9 +45,10 @@ export function pickPipePreset<T extends PresetLike>(
   presets: T[] | null | undefined,
 ): T | null {
   if (!presets || presets.length === 0) return null;
+  const pipeCompatible = presets.filter((preset) => preset?.provider !== "acp");
   const picked =
-    presets.find((p) => p?.id === "pipes") ??
-    presets.find((p) => p?.defaultPreset) ??
+    pipeCompatible.find((p) => p?.id === "pipes") ??
+    pipeCompatible.find((p) => p?.defaultPreset) ??
     null;
   // A pipe must never run a frontier model. If the picked preset is pinned to one
   // (e.g. an Opus default), coerce its model to `auto` (cheap + tier-safe).

@@ -122,11 +122,39 @@ fn is_screenpipe_app_name(name: &str) -> bool {
         || name.starts_with("screenpipe_")
 }
 
+/// Decode a libproc `proc_name` buffer into an owned name. Kept out of the
+/// macOS module so the bounds/NUL/UTF-8 contract stays testable everywhere.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn decode_process_name(buffer: &[u8], written: i32) -> Option<String> {
+    if written <= 0 {
+        return None;
+    }
+
+    let end = (written as usize).min(buffer.len());
+    let bytes = &buffer[..end];
+    let nul = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    let name = String::from_utf8_lossy(&bytes[..nul]).trim().to_owned();
+    (!name.is_empty()).then_some(name)
+}
+
 #[cfg(target_os = "macos")]
 mod platform {
-    use super::{excluded_input_process_reason, AudioInputProcess, AudioProcessSnapshot};
-    use cidre::{arc, cf, core_audio as ca, ns};
+    use super::{
+        decode_process_name, excluded_input_process_reason, AudioInputProcess, AudioProcessSnapshot,
+    };
+    use cidre::{arc, cf, core_audio as ca};
+    use std::ffi::c_void;
     use tracing::debug;
+
+    #[link(name = "proc")]
+    extern "C" {
+        fn proc_name(pid: i32, buffer: *mut c_void, buffersize: u32) -> i32;
+    }
+
+    const PROCESS_NAME_BUFFER_SIZE: usize = 1024;
 
     pub fn current_input_processes() -> AudioProcessSnapshot {
         match collect_input_processes() {
@@ -218,27 +246,68 @@ mod platform {
         bundle_id.map(|value| value.to_string())
     }
 
+    /// Owner name straight from libproc, with no Foundation string anywhere in
+    /// the path.
+    ///
+    /// This deliberately does NOT read `NSRunningApplication.localizedName` /
+    /// `.bundleIdentifier` any more. Doing so crashed the recorder on Intel:
+    ///
+    /// ```text
+    /// CFStringGetLength                                    <- EXC_BAD_ACCESS at 0x0
+    /// cidre::cf::string::From<&cf::String> for Cow<str>
+    /// <cidre::ns::String as Display>::fmt
+    /// screenpipe_audio::meeting_processes::current_input_processes
+    /// screenpipe_engine::meeting_watcher::audio_process::resolve
+    /// ```
+    ///
+    /// Source: screenpipe 2.5.188, MacBookPro16,1 (Intel), macOS 26.5.2,
+    /// 2026-08-07 — the app died ~100s after every launch once recording was
+    /// on, because the meeting watcher polls this ~1x/sec.
+    ///
+    /// Two candidate mechanisms were ruled out on the way here, so don't
+    /// re-litigate them: `Option<arc::R<ns::String>>` does honour the null
+    /// niche (a nil getter folds to `None`, `Some(null)` is unrepresentable),
+    /// and cidre does retain these getters (their retain count climbs per call,
+    /// so this is not an over-release). The remaining suspects all live inside
+    /// the Foundation conversion itself, which is why this removes the call
+    /// rather than trying to validate its result. Same resolution as the
+    /// accessibility focus crash in #5922, and the same crash family as #5325 /
+    /// #4874 / #4968.
+    ///
+    /// Dropping `NSRunningApplication` also retires the #4945 autorelease leak
+    /// (~49k retained objects over ~14.5h) at its source instead of draining a
+    /// pool around it: libproc allocates no Objective-C objects at all.
+    ///
+    /// The returned name is the executable name rather than the localized
+    /// display name. For every app the classifier is pinned against these are
+    /// the same string ("FaceTime", "zoom.us", "Google Chrome", "Arc").
     fn owner_metadata(pid: Option<i32>) -> (Option<String>, Option<String>) {
         let Some(pid) = pid else {
             return (None, None);
         };
-        // Wrap in an autorelease pool — `ns::RunningApp::with_pid` returns an
-        // autoreleased NSRunningApplication, and reading its name/bundle-id
-        // lazily allocates an NSLock + a LaunchServices LSASN. Without draining,
-        // every poll of the audio-process meeting watcher leaks one such object
-        // triple: ACTIVE_POLL_INTERVAL is 1s and screenpipe's own always-on mic
-        // process is always in the input list, so this runs ~1x/sec and grew to
-        // ~49k retained instances over ~14.5h. Same precedent as get_frontmost_pid
-        // in screenpipe-screen. See leak_repro below.
-        cidre::objc::ar_pool(|| {
-            let Some(app) = ns::RunningApp::with_pid(pid) else {
-                return (None, None);
-            };
-            (
-                app.localized_name().map(|s| s.to_string()),
-                app.bundle_id().map(|s| s.to_string()),
+        // Owner bundle ID is intentionally `None`: the only non-Foundation way
+        // to get it would be parsing the app bundle's Info.plist per poll. The
+        // classifier already prefers the CoreAudio `bundle_id` above this
+        // field, and every bundle-ID-only rule it feeds (Screenpipe
+        // self-exclusion, the `com.apple.corespeech` voice-daemon gate) matches
+        // on that CoreAudio value, which the audio process reports for itself.
+        (process_name_for_pid(pid), None)
+    }
+
+    fn process_name_for_pid(pid: i32) -> Option<String> {
+        if pid <= 0 {
+            return None;
+        }
+
+        let mut buffer = [0_u8; PROCESS_NAME_BUFFER_SIZE];
+        let written = unsafe {
+            proc_name(
+                pid,
+                buffer.as_mut_ptr().cast::<c_void>(),
+                buffer.len() as u32,
             )
-        })
+        };
+        decode_process_name(&buffer, written)
     }
 
     #[cfg(test)]
@@ -254,12 +323,39 @@ mod platform {
                 std::thread::yield_now();
             }
         }
+
+        /// The owner name must still resolve without Foundation. A regression
+        /// here means mic holders go unnamed and the meeting classifier loses
+        /// its app-name rules.
+        #[test]
+        fn owner_name_resolves_for_the_current_process() {
+            let (name, bundle_id) = super::owner_metadata(Some(std::process::id() as i32));
+            assert!(
+                name.is_some_and(|name| !name.is_empty()),
+                "libproc should name the current process"
+            );
+            assert_eq!(bundle_id, None, "owner bundle id is CoreAudio-sourced now");
+        }
+
+        #[test]
+        fn owner_metadata_tolerates_missing_and_invalid_pids() {
+            assert_eq!(super::owner_metadata(None), (None, None));
+            assert_eq!(super::owner_metadata(Some(0)), (None, None));
+            assert_eq!(super::owner_metadata(Some(-1)), (None, None));
+            // A pid that is almost certainly gone must degrade, not crash.
+            let _ = super::owner_metadata(Some(i32::MAX));
+        }
     }
 
     /// Reproduction + regression guard for the NSRunningApplication autorelease
-    /// leak (2026-07-04). Phase 1 drives the pre-fix (unwrapped) body; phase 2
-    /// drives the fixed [`owner_metadata`]. Peak RSS (`ru_maxrss`) climbs in
-    /// phase 1 and stays flat in phase 2.
+    /// leak (2026-07-04, #4945). Phase 1 drives the historical Foundation body;
+    /// phase 2 drives the current libproc [`owner_metadata`]. Peak RSS
+    /// (`ru_maxrss`) climbs in phase 1 and stays flat in phase 2.
+    ///
+    /// Phase 2 used to be the same Foundation body wrapped in `ar_pool`. It is
+    /// now allocation-free, so this doubles as the guard against reintroducing
+    /// `NSRunningApplication` here — which is what crashed Intel Macs in the
+    /// 2026-08-07 report (see [`owner_metadata`]).
     ///
     /// `#[ignore]` because it's a memory/perf repro, not a fast unit test. Run:
     ///   cargo test -p screenpipe-audio --lib meeting_processes::platform::leak_repro -- --ignored --nocapture
@@ -281,8 +377,9 @@ mod platform {
             format!("{:.1} MB", (b as f64) / (1024.0 * 1024.0))
         }
 
-        /// The pre-fix body, verbatim, so the test can prove the leak the fix
-        /// removes (unwrapped `with_pid` + property reads, no `ar_pool`).
+        /// The historical Foundation body, verbatim, so the test can prove the
+        /// leak the current implementation avoids (unwrapped `with_pid` +
+        /// property reads, no `ar_pool`).
         fn owner_metadata_unwrapped(pid: i32) -> (Option<String>, Option<String>) {
             let Some(app) = ns::RunningApp::with_pid(pid) else {
                 return (None, None);
@@ -324,15 +421,21 @@ mod platform {
                 let _ = owner_metadata_unwrapped(pids[i % pids.len()]);
             }
             let delta1 = peak_rss_bytes().saturating_sub(before1);
-            eprintln!("[repro] {N} calls WITHOUT ar_pool: +{}", fmt_mb(delta1));
+            eprintln!(
+                "[repro] {N} calls via NSRunningApplication: +{}",
+                fmt_mb(delta1)
+            );
 
-            // -- Phase 2: fixed owner_metadata (ar_pool) — should stay flat --
+            // -- Phase 2: current owner_metadata (libproc) — should stay flat --
             let before2 = peak_rss_bytes();
             for i in 0..N {
                 let _ = super::owner_metadata(Some(pids[i % pids.len()]));
             }
             let delta2 = peak_rss_bytes().saturating_sub(before2);
-            eprintln!("[repro] {N} calls WITH    ar_pool: +{}", fmt_mb(delta2));
+            eprintln!(
+                "[repro] {N} calls via libproc:               +{}",
+                fmt_mb(delta2)
+            );
             eprintln!(
                 "[repro] leak delta (phase1 - phase2): {}",
                 fmt_mb(delta1.saturating_sub(delta2))
@@ -340,12 +443,12 @@ mod platform {
 
             assert!(
                 delta1 > 2 * 1024 * 1024,
-                "expected >2 MB growth without ar_pool; got {} — leak not reproduced",
+                "expected >2 MB growth via NSRunningApplication; got {} — leak not reproduced",
                 fmt_mb(delta1)
             );
             assert!(
                 delta1 > 3 * delta2.max(1),
-                "fixed path should leak <=1/3 of unwrapped; phase1={}, phase2={}",
+                "current path should leak <=1/3 of the Foundation body; phase1={}, phase2={}",
                 fmt_mb(delta1),
                 fmt_mb(delta2)
             );
@@ -866,5 +969,72 @@ mod tests {
             Some("com.google.Chrome"),
         );
         assert!(!is_screenpipe_process(&process, 999));
+    }
+
+    /// With `owner_bundle_id` now always `None` on macOS, every bundle-ID rule
+    /// has to keep working off the CoreAudio `bundle_id` alone.
+    #[test]
+    fn bundle_id_rules_hold_without_owner_bundle_id() {
+        let corespeechd = process(
+            Some(42),
+            Some("com.apple.corespeech"),
+            Some("corespeechd"),
+            Some("corespeechd"),
+            None,
+        );
+        assert_eq!(
+            excluded_input_process_reason(&corespeechd, 999),
+            Some("always-on voice daemon")
+        );
+
+        let own = process(
+            Some(42),
+            Some("screenpi.pe"),
+            Some("screenpipe"),
+            Some("screenpipe"),
+            None,
+        );
+        assert_eq!(
+            excluded_input_process_reason(&own, 999),
+            Some("Screenpipe process")
+        );
+
+        let facetime = process(
+            Some(42),
+            Some("com.apple.FaceTime"),
+            Some("FaceTime"),
+            Some("FaceTime"),
+            None,
+        );
+        assert_eq!(excluded_input_process_reason(&facetime, 999), None);
+    }
+
+    #[test]
+    fn decode_process_name_rejects_empty_results() {
+        assert_eq!(super::decode_process_name(b"zoom.us", 0), None);
+        assert_eq!(super::decode_process_name(b"zoom.us", -1), None);
+        assert_eq!(super::decode_process_name(b"\0ignored", 8), None);
+        assert_eq!(super::decode_process_name(b"   ", 3), None);
+    }
+
+    #[test]
+    fn decode_process_name_bounds_and_sanitizes_results() {
+        assert_eq!(
+            super::decode_process_name(b"zoom.us\0ignored", 15),
+            Some("zoom.us".to_string())
+        );
+        assert_eq!(
+            super::decode_process_name(b" FaceTime ", 10),
+            Some("FaceTime".to_string())
+        );
+        // `written` longer than the buffer must not read out of bounds.
+        assert_eq!(
+            super::decode_process_name(b"FaceTime", 4096),
+            Some("FaceTime".to_string())
+        );
+        assert_eq!(
+            super::decode_process_name(b"app-\xFF", 5),
+            Some("app-\u{fffd}".to_string())
+        );
     }
 }

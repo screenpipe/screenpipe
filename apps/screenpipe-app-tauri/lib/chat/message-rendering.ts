@@ -51,6 +51,30 @@ export function hasRenderableAssistantBody(message: Message): boolean {
   return false;
 }
 
+// An assistant message whose only content is agent-action cards (a pending
+// permission or sign-in prompt). It must not count as the turn's latest
+// assistant message: the real turn is still live and blocked on the user's
+// answer, so letting this card become "the active assistant" would demote the
+// real turn's tool group to a false "done".
+export function isPendingAgentActionMessage(message: Message): boolean {
+  if (message.role !== "assistant") return false;
+  const blocks = message.contentBlocks;
+  if (!blocks?.length) return false;
+  return blocks.every((block) => block.type === "agent_action");
+}
+
+// A pending permission card exists in the transcript (the agent is blocked
+// waiting for the user's approval).
+export function hasPendingPermissionRequest(messages: Message[]): boolean {
+  return messages.some(
+    (message) =>
+      isPendingAgentActionMessage(message) &&
+      message.contentBlocks?.some(
+        (block) => block.type === "agent_action" && block.actionKind === "permission",
+      ),
+  );
+}
+
 export function hasAssistantTextBody(message: Message): boolean {
   if (message.role !== "assistant") return false;
   if (message.contentBlocks?.length) {

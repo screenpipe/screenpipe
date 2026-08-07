@@ -8,7 +8,7 @@ import type { SettingsField } from "./settings-search";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
-  { label: "Usage stats", keywords: ["stats", "activity", "analytics", "metrics"] },
+  { label: "Usage stats", keywords: ["stats", "activity", "analytics", "metrics", "ai", "allowance", "quota", "percent"] },
 ];
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -17,6 +17,13 @@ import { loadAllConversations } from "@/lib/chat-storage";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { readTextFile, writeTextFile, exists } from "@tauri-apps/plugin-fs";
 import { localFetch } from "@/lib/api";
+import {
+  useUsageStatus,
+  formatUsagePercent,
+  formatAllowanceWindow,
+  formatAllowanceReset,
+  type HostedAiAllowance,
+} from "@/lib/hooks/use-usage-status";
 
 type TimeRange = "day" | "week" | "month" | "all";
 
@@ -137,7 +144,63 @@ function getTimeSince(range: TimeRange): number | undefined {
   }
 }
 
+function AllowanceMeter({ allowance }: { allowance: HostedAiAllowance }) {
+  const laneLabel =
+    allowance.lane === "combined"
+      ? "all models"
+      : allowance.lane === "auto"
+        ? "auto"
+        : "manual";
+  const windowLabel = formatAllowanceWindow(allowance.window_seconds);
+  const resetLabel = allowance.resets_at
+    ? formatAllowanceReset(allowance.resets_at)
+    : null;
+  const isLow = allowance.remaining_percent < 30;
+  const isExhausted = allowance.remaining_percent <= 0;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between text-sm">
+        <span className="font-medium capitalize">
+          {allowance.lane === "combined" ? laneLabel : `${laneLabel} model`}
+        </span>
+        <span
+          className={`font-mono text-xs ${
+            isExhausted
+              ? "text-red-500"
+              : isLow
+                ? "text-yellow-500"
+                : "text-muted-foreground"
+          }`}
+        >
+          {formatUsagePercent(allowance.used_percent)} used
+        </span>
+      </div>
+      <div className="h-2 bg-muted rounded-full overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all ${
+            isExhausted
+              ? "bg-red-500"
+              : isLow
+                ? "bg-yellow-500"
+                : "bg-foreground/30"
+          }`}
+          style={{ width: `${Math.min(100, allowance.used_percent)}%` }}
+        />
+      </div>
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <span>
+          {formatUsagePercent(allowance.remaining_percent)} remaining
+          {` · ${windowLabel} ${allowance.technique} window`}
+        </span>
+        {resetLabel && <span>resets {resetLabel}</span>}
+      </div>
+    </div>
+  );
+}
+
 export function UsageSection() {
+  const hostedUsage = useUsageStatus();
   const [entries, setEntries] = useState<UsageEntry[]>([]);
   const [totalChats, setTotalChats] = useState(0);
   const [totalChatMessages, setTotalChatMessages] = useState(0);
@@ -385,6 +448,38 @@ export function UsageSection() {
     <div className="space-y-6">
       {updating && (
         <p className="text-xs text-muted-foreground">Updating...</p>
+      )}
+
+      {/* Cloudflare AI usage allowances */}
+      {hostedUsage?.hosted_ai?.allowances && hostedUsage.hosted_ai.allowances.length > 0 && (
+        <Card>
+          <CardContent className="pt-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium">AI usage</h3>
+              {hostedUsage.hosted_ai.plan && (
+                <span className="text-xs text-muted-foreground capitalize">
+                  {hostedUsage.hosted_ai.plan} plan
+                </span>
+              )}
+            </div>
+            {hostedUsage.hosted_ai.allowances.map((allowance, index) => (
+              <AllowanceMeter key={`${allowance.lane}-${index}`} allowance={allowance} />
+            ))}
+            {hostedUsage.hosted_ai.upgrade && (
+              <p className="text-xs text-muted-foreground">
+                need more?{" "}
+                <a
+                  href={hostedUsage.hosted_ai.upgrade.upgradeUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline hover:text-foreground"
+                >
+                  upgrade to {hostedUsage.hosted_ai.upgrade.requiredPlan}
+                </a>
+              </p>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       <div className="grid grid-cols-3 gap-4">

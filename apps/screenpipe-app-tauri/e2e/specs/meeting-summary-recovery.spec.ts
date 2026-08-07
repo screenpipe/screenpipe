@@ -593,12 +593,23 @@ describe("meeting summary recovery controls", function () {
           }
         ).__meetingSummaryRecoveryRunBody,
     );
-    expect(runBody).toEqual({
-      meeting_summary: {
-        meeting_id: meetingId,
-        meeting_end: FIXTURE_END,
-      },
-    });
+    // meeting_end round-trips through the backend, which serialises UTC as
+    // "+00:00" where the fixture's toISOString() writes "Z". Same instant,
+    // different spelling, so compare the instant: pinning the string fails on
+    // the serialiser rather than on the rerun payload being right. The key
+    // checks stay, so an extra or renamed field still fails here.
+    const summaryRun = runBody as {
+      meeting_summary: { meeting_id: number; meeting_end: string };
+    };
+    expect(Object.keys(summaryRun)).toEqual(["meeting_summary"]);
+    expect(Object.keys(summaryRun.meeting_summary).sort()).toEqual([
+      "meeting_end",
+      "meeting_id",
+    ]);
+    expect(summaryRun.meeting_summary.meeting_id).toBe(meetingId);
+    expect(Date.parse(summaryRun.meeting_summary.meeting_end)).toBe(
+      Date.parse(FIXTURE_END),
+    );
     const transcriptCallsAfterSummary = await browser.execute(
       (key: string) => Number(sessionStorage.getItem(key) ?? 0),
       TRANSCRIPT_CALLS_KEY,

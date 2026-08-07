@@ -25,9 +25,17 @@ extern "C" {
 
     pub fn lt_update_position(frame_id: *const c_char, x: f64, y: f64, w: f64, h: f64) -> i32;
 
-    pub fn lt_highlight_ranges(search_terms_json: *const c_char) -> i32;
+    pub fn lt_highlight_ranges(search_terms_json: *const c_char, frame_id: *const c_char) -> i32;
 
     pub fn lt_clear_highlights() -> i32;
+
+    /// Test-only introspection: frame id whose analysis is on the overlay.
+    /// Returned string must be freed with `lt_free_string`.
+    pub fn lt_debug_applied_frame_id() -> *mut c_char;
+
+    /// Test-only introspection: text actually selected on the overlay.
+    /// Returned string must be freed with `lt_free_string`.
+    pub fn lt_debug_selected_text() -> *mut c_char;
 
     pub fn lt_hide() -> i32;
 

@@ -387,13 +387,24 @@ describe('Enterprise managed pipe enforcement', () => {
     await row.waitForExist({ timeout: t(15_000) });
     expect((await row.getText()).toLowerCase()).toContain('managed');
 
-    const enabledSwitch = await row.$('[role="switch"]');
+    // dcffc2950 ("master-detail scheduled tasks list") split this view: the row
+    // is now only the summary, and the auto-run switch plus the read-only
+    // explanation moved into the detail pane that opens when a row is selected.
+    // Selecting first is what a user does anyway — the lock is what they see
+    // when they go looking for the toggle.
+    await row.click();
+    const pipeDetail = await $('[data-testid="pipe-detail"]');
+    await pipeDetail.waitForExist({ timeout: t(10_000) });
+
+    const enabledSwitch = await pipeDetail.$('[role="switch"]');
     await enabledSwitch.waitForExist({ timeout: t(5_000) });
     expect(await enabledSwitch.isEnabled()).toBe(false);
 
-    await row.$('[role="button"]').click();
     await browser.waitUntil(
-      async () => (await row.getText()).toLowerCase().includes('managed by your organization'),
+      async () =>
+        (await pipeDetail.getText())
+          .toLowerCase()
+          .includes('managed by your organization'),
       {
         timeout: t(10_000),
         interval: 250,

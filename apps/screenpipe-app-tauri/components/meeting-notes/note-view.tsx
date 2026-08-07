@@ -138,6 +138,7 @@ import {
 } from "./meeting-summary-stream";
 import {
   MEETING_READING_COLUMN_CLASS,
+  MEETING_SHELL_CLASS,
   MeetingSummarySurface,
   MeetingWorkspaceTabs,
   type MeetingWorkspaceTab,
@@ -1460,7 +1461,7 @@ export function NoteView({
         </div>
       )}
       <header className="z-20 shrink-0 border-b border-border bg-background">
-        <div className="mx-auto w-full max-w-5xl px-4 pt-3 sm:px-8">
+        <div className={cn(MEETING_SHELL_CLASS, "pt-3")}>
           <div className="flex min-w-0 items-center gap-3">
             <Button
               variant="ghost"
@@ -1588,7 +1589,7 @@ export function NoteView({
             activeTab !== "notes" && "hidden",
           )}
         >
-          <div className="mx-auto w-full max-w-3xl px-5 pb-16 pt-8 sm:px-8 sm:pt-10">
+          <div className={cn(MEETING_SHELL_CLASS, "pb-16 pt-8 sm:pt-10")}>
             <NoteEditor
               ref={noteEditorRef}
               key={meeting.id}
@@ -1660,7 +1661,7 @@ export function NoteView({
       </main>
 
       <footer className="z-30 min-w-0 shrink-0 border-t border-border bg-background">
-        <div className="mx-auto w-full max-w-5xl px-4 py-3 sm:px-8">
+        <div className={cn(MEETING_SHELL_CLASS, "py-3")}>
           {!isLive && inactivityPrompt && (
             <InactivityResumeBanner
               resuming={resuming}
@@ -1987,10 +1988,10 @@ function AudioHealthButton({
   const [open, setOpen] = useState(false);
   const anyAudioActive = isLive && (inputActive || outputActive);
 
-  const openRecordingSettings = () => {
+  const openAudioSettings = () => {
     window.dispatchEvent(
       new CustomEvent("open-settings", {
-        detail: { section: "recording" },
+        detail: { section: "audio" },
       }),
     );
   };
@@ -2034,10 +2035,10 @@ function AudioHealthButton({
           </div>
           <button
             type="button"
-            onClick={openRecordingSettings}
+            onClick={openAudioSettings}
             className="flex h-7 w-7 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
-            title="open recording settings"
-            aria-label="open recording settings"
+            title="open audio settings"
+            aria-label="open audio settings"
           >
             <ExternalLink className="h-3.5 w-3.5" />
           </button>

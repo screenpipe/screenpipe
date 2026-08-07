@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { Textarea, TextareaProps } from "./textarea";
 import { Label } from "./label";
 import { cn } from "@/lib/utils";
@@ -40,6 +40,25 @@ export const ValidatedTextarea = React.forwardRef<HTMLTextAreaElement, Validated
     const [value, setValue] = useState(props.value?.toString() || "");
     const [validationResult, setValidationResult] = useState<FieldValidationResult>({ isValid: true });
     const [isTouched, setIsTouched] = useState(false);
+    const innerRef = useRef<HTMLTextAreaElement | null>(null);
+
+    // Sync external value changes into the field, but never while the user
+    // is focused in it: their keystrokes reach the parent through a
+    // debounce, so the prop can briefly lag what they typed.
+    const propValue = props.value?.toString() || "";
+    useEffect(() => {
+      if (document.activeElement === innerRef.current) return;
+      setValue((current) => (current === propValue ? current : propValue));
+    }, [propValue]);
+
+    const setRefs = useCallback(
+      (node: HTMLTextAreaElement | null) => {
+        innerRef.current = node;
+        if (typeof ref === "function") ref(node);
+        else if (ref) ref.current = node;
+      },
+      [ref],
+    );
 
     // Debounced validation function
     const debouncedValidation = useMemo(
@@ -134,7 +153,7 @@ export const ValidatedTextarea = React.forwardRef<HTMLTextAreaElement, Validated
         
         <div className="relative">
           <Textarea
-            ref={ref}
+            ref={setRefs}
             {...props}
             value={value}
             onChange={handleChange}
