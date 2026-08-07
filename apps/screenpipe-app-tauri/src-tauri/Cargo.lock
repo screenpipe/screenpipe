@@ -4036,7 +4036,7 @@ dependencies = [
 [[package]]
 name = "eventkit-rs"
 version = "0.5.6"
-source = "git+https://github.com/divanshu-go/eventkit-rs?rev=9dd52787c8435d734ed443e2d5641f45b0177cae#9dd52787c8435d734ed443e2d5641f45b0177cae"
+source = "git+https://github.com/screenpipe/eventkit-rs?rev=9dd52787c8435d734ed443e2d5641f45b0177cae#9dd52787c8435d734ed443e2d5641f45b0177cae"
 dependencies = [
  "block2 0.6.2",
  "chrono",
@@ -7578,7 +7578,7 @@ dependencies = [
 [[package]]
 name = "muda"
 version = "0.19.3"
-source = "git+https://github.com/divanshu-go/muda?rev=327f3f8198b0ecdc3d58d7be85dfb83b2fa0d05d#327f3f8198b0ecdc3d58d7be85dfb83b2fa0d05d"
+source = "git+https://github.com/screenpipe/muda?rev=327f3f8198b0ecdc3d58d7be85dfb83b2fa0d05d#327f3f8198b0ecdc3d58d7be85dfb83b2fa0d05d"
 dependencies = [
  "crossbeam-channel",
  "dpi",
@@ -11148,7 +11148,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.5.191"
+version = "2.5.192"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -13873,7 +13873,7 @@ dependencies = [
 [[package]]
 name = "tauri-helper"
 version = "0.2.1"
-source = "git+https://github.com/divanshu-go/tauri-helper?rev=e25ff1d2c5026189305a0251a1e06788efe1d2b3#e25ff1d2c5026189305a0251a1e06788efe1d2b3"
+source = "git+https://github.com/screenpipe/tauri-helper?rev=e25ff1d2c5026189305a0251a1e06788efe1d2b3#e25ff1d2c5026189305a0251a1e06788efe1d2b3"
 dependencies = [
  "rayon",
  "serde",
@@ -14420,7 +14420,7 @@ dependencies = [
 [[package]]
 name = "tauri_helper_core"
 version = "0.2.1"
-source = "git+https://github.com/divanshu-go/tauri-helper?rev=e25ff1d2c5026189305a0251a1e06788efe1d2b3#e25ff1d2c5026189305a0251a1e06788efe1d2b3"
+source = "git+https://github.com/screenpipe/tauri-helper?rev=e25ff1d2c5026189305a0251a1e06788efe1d2b3#e25ff1d2c5026189305a0251a1e06788efe1d2b3"
 dependencies = [
  "serde",
  "toml 0.9.12+spec-1.1.0",
@@ -14429,7 +14429,7 @@ dependencies = [
 [[package]]
 name = "tauri_helper_macros"
 version = "0.1.4"
-source = "git+https://github.com/divanshu-go/tauri-helper?rev=e25ff1d2c5026189305a0251a1e06788efe1d2b3#e25ff1d2c5026189305a0251a1e06788efe1d2b3"
+source = "git+https://github.com/screenpipe/tauri-helper?rev=e25ff1d2c5026189305a0251a1e06788efe1d2b3#e25ff1d2c5026189305a0251a1e06788efe1d2b3"
 dependencies = [
  "proc-macro-error",
  "proc-macro2",

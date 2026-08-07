@@ -346,6 +346,29 @@ enum AgentLaunch {
     },
 }
 
+/// How an agent can be pointed at Screenpipe Cloud instead of the user's own
+/// provider account, from the catalog (agents.json).
+///
+/// Only agents whose CLI honours a provider base URL can do this. Claude Code
+/// reads `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`; closed agents like Cursor
+/// and Copilot talk to their own service and simply declare nothing here.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CloudRouting {
+    /// Env var carrying the provider base URL, e.g. `ANTHROPIC_BASE_URL`.
+    pub base_url_env: String,
+    /// Env var carrying the bearer token, e.g. `ANTHROPIC_AUTH_TOKEN`.
+    pub token_env: String,
+    /// Appended to the gateway origin to reach that provider's dialect, e.g.
+    /// `/anthropic` for the gateway's Anthropic Messages route.
+    #[serde(default)]
+    pub path_prefix: String,
+    /// Env the agent must not also see, or it would prefer its own account.
+    /// Claude picks an ambient `ANTHROPIC_API_KEY` over the base URL token.
+    #[serde(default)]
+    pub clear_env: Vec<String>,
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CatalogAgent {
@@ -360,6 +383,66 @@ struct CatalogAgent {
     /// key is `httpMcp`.
     #[serde(default)]
     http_mcp: bool,
+    /// Present only for agents that can be pointed at Screenpipe Cloud.
+    /// JSON key is `cloudRouting`.
+    #[serde(default)]
+    cloud_routing: Option<CloudRouting>,
+}
+
+/// The catalog's cloud-routing declaration for an agent, if it has one.
+pub(crate) fn agent_cloud_routing(agent_id: &str) -> Option<CloudRouting> {
+    agent_catalog()
+        .into_iter()
+        .find(|agent| agent.id == agent_id)
+        .and_then(|agent| agent.cloud_routing)
+}
+
+/// The provider base URL to hand an agent so its model calls go through
+/// Screenpipe Cloud.
+///
+/// Agents append their own `/v1/...` path (Claude Code requests
+/// `<base>/v1/messages`), so the gateway's own `/v1` suffix is stripped first
+/// and the provider dialect prefix appended. Returns None for a URL that is not
+/// usable, so a malformed override can never silently point an agent somewhere
+/// unintended — the caller then leaves the agent on its own account.
+pub(crate) fn cloud_provider_base_url(gateway_url: &str, path_prefix: &str) -> Option<String> {
+    let trimmed = gateway_url.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+    let origin = trimmed.strip_suffix("/v1").unwrap_or(trimmed);
+    if !origin.starts_with("http://") && !origin.starts_with("https://") {
+        return None;
+    }
+    let prefix = path_prefix.trim();
+    if prefix.is_empty() {
+        return Some(origin.to_owned());
+    }
+    Some(format!("{}/{}", origin, prefix.trim_matches('/')))
+}
+
+/// The env that routes an agent through Screenpipe Cloud, plus the names to
+/// remove. Empty when anything required is missing, which leaves the agent on
+/// its own account rather than half-configured.
+pub(crate) fn cloud_routing_env(
+    routing: &CloudRouting,
+    gateway_url: &str,
+    token: &str,
+) -> (Vec<(String, String)>, Vec<String>) {
+    let token = token.trim();
+    if token.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let Some(base_url) = cloud_provider_base_url(gateway_url, &routing.path_prefix) else {
+        return (Vec::new(), Vec::new());
+    };
+    (
+        vec![
+            (routing.base_url_env.clone(), base_url),
+            (routing.token_env.clone(), token.to_owned()),
+        ],
+        routing.clear_env.clone(),
+    )
 }
 
 /// Run a `terminal`-type ACP auth method's login: the agent's own launch
@@ -2233,10 +2316,31 @@ fn terminal_auth_args(method: &Value) -> Option<Vec<String>> {
     Some(args.iter().filter_map(Value::as_str).map(str::to_owned).collect())
 }
 
+/// Consumer Claude subscription sign-in, which Screenpipe must never offer.
+///
+/// Anthropic's guidance to third-party developers is that a product embedding
+/// Claude Code uses an API key (Anthropic Console) or a supported cloud, and
+/// does not put users through Claude.ai login or route Free/Pro/Max credentials
+/// on their behalf. The adapter is launched with `--hide-claude-auth`
+/// (agents.json), which drops exactly these methods and keeps the Console
+/// method. This is the second layer: an adapter upgrade that renames the flag,
+/// ignores it, or advertises the method anyway must not silently put the
+/// subscription option back in front of a user.
+fn is_claude_subscription_auth(id: &str, name: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    let name = name.to_ascii_lowercase();
+    // Codex's ChatGPT method is deliberately not matched: OpenAI supports
+    // signing into Codex with a ChatGPT plan, so it is not the same boundary.
+    id == "claude-ai-login" || id == "claude-login" || name.contains("claude subscription")
+}
+
 fn available_auth_methods(
     init: &InitializeResponse,
 ) -> Vec<&agent_client_protocol::schema::v1::AuthMethod> {
-    init.auth_methods.iter().collect()
+    init.auth_methods
+        .iter()
+        .filter(|method| !is_claude_subscription_auth(&method.id().to_string(), method.name()))
+        .collect()
 }
 
 async fn authenticate(
@@ -3658,6 +3762,131 @@ mod tests {
         // Invalid boolean strings and unknown options are skipped, never sent.
         assert_eq!(default_option_value(&session, "fast", "yes"), None);
         assert_eq!(default_option_value(&session, "gone", "a"), None);
+    }
+
+    /// Anthropic's guidance is that an embedding product uses an API key or a
+    /// supported cloud, not Claude.ai login on the user's behalf. Both layers
+    /// are pinned: the launch flag that makes the adapter withhold the method,
+    /// and the filter that drops it if an adapter advertises it anyway.
+    /// Routing an agent at Screenpipe Cloud is what lets someone use a coding
+    /// agent without their own provider account, so the failure that matters is
+    /// a half-configured launch: a base URL with no token, or a token pointed
+    /// somewhere unintended. Both must fall back to the agent's own account.
+    #[test]
+    fn cloud_base_url_strips_the_gateway_v1_and_adds_the_dialect() {
+        // Agents append their own /v1/..., so the gateway's /v1 must go.
+        assert_eq!(
+            cloud_provider_base_url("https://ai.example.com/v1", "/anthropic").as_deref(),
+            Some("https://ai.example.com/anthropic")
+        );
+        assert_eq!(
+            cloud_provider_base_url("https://ai.example.com/v1/", "anthropic").as_deref(),
+            Some("https://ai.example.com/anthropic")
+        );
+        assert_eq!(
+            cloud_provider_base_url("https://ai.example.com", "").as_deref(),
+            Some("https://ai.example.com")
+        );
+        // Loopback is legitimate: the e2e gateway override is http on localhost.
+        assert_eq!(
+            cloud_provider_base_url("http://127.0.0.1:8787/v1", "/anthropic").as_deref(),
+            Some("http://127.0.0.1:8787/anthropic")
+        );
+        // Anything not a usable http(s) URL routes nowhere.
+        assert_eq!(cloud_provider_base_url("", "/anthropic"), None);
+        assert_eq!(cloud_provider_base_url("   ", "/anthropic"), None);
+        assert_eq!(cloud_provider_base_url("ai.example.com/v1", "/anthropic"), None);
+    }
+
+    #[test]
+    fn cloud_routing_env_is_all_or_nothing() {
+        let routing = CloudRouting {
+            base_url_env: "ANTHROPIC_BASE_URL".into(),
+            token_env: "ANTHROPIC_AUTH_TOKEN".into(),
+            path_prefix: "/anthropic".into(),
+            clear_env: vec!["ANTHROPIC_API_KEY".into()],
+        };
+
+        let (set, clear) = cloud_routing_env(&routing, "https://ai.example.com/v1", "tok");
+        assert_eq!(
+            set,
+            vec![
+                ("ANTHROPIC_BASE_URL".to_string(), "https://ai.example.com/anthropic".to_string()),
+                ("ANTHROPIC_AUTH_TOKEN".to_string(), "tok".to_string()),
+            ]
+        );
+        // The agent prefers an ambient API key over the base-URL token, so the
+        // key has to be cleared or cloud routing silently does nothing.
+        assert_eq!(clear, vec!["ANTHROPIC_API_KEY".to_string()]);
+
+        // Signed out, or a gateway URL we cannot trust: emit nothing, so the
+        // caller leaves the agent on its own account instead of starting it
+        // with a base URL and no credential.
+        assert!(cloud_routing_env(&routing, "https://ai.example.com/v1", "").0.is_empty());
+        assert!(cloud_routing_env(&routing, "https://ai.example.com/v1", "  ").0.is_empty());
+        assert!(cloud_routing_env(&routing, "", "tok").0.is_empty());
+    }
+
+    #[test]
+    fn only_agents_that_honour_a_base_url_declare_cloud_routing() {
+        let claude = agent_cloud_routing("claude-acp").expect("claude routes to cloud");
+        assert_eq!(claude.base_url_env, "ANTHROPIC_BASE_URL");
+        assert_eq!(claude.token_env, "ANTHROPIC_AUTH_TOKEN");
+        assert!(claude.clear_env.iter().any(|name| name == "ANTHROPIC_API_KEY"));
+
+        // Closed services: sign-in and billing are their own account, and there
+        // is no base URL to point anywhere. Claiming otherwise would sell a
+        // capability that cannot work.
+        assert!(agent_cloud_routing("cursor").is_none());
+        assert!(agent_cloud_routing("github-copilot-cli").is_none());
+        assert!(agent_cloud_routing("custom").is_none());
+    }
+
+    #[test]
+    fn claude_adapter_launches_with_subscription_auth_hidden() {
+        let claude = agent_catalog()
+            .into_iter()
+            .find(|agent| agent.id == "claude-acp")
+            .expect("claude-acp in catalog");
+
+        match claude.launch {
+            AgentLaunch::Npx { ref args, .. } => {
+                assert!(
+                    args.iter().any(|arg| arg == "--hide-claude-auth"),
+                    "claude-acp must launch with --hide-claude-auth, got {args:?}"
+                );
+            }
+            AgentLaunch::Binary { .. } => panic!("claude-acp should launch via npx"),
+        }
+    }
+
+    #[test]
+    fn claude_subscription_auth_methods_are_never_offered() {
+        // The adapter's own ids/labels for consumer sign-in.
+        assert!(is_claude_subscription_auth(
+            "claude-ai-login",
+            "Claude Subscription"
+        ));
+        assert!(is_claude_subscription_auth(
+            "claude-login",
+            "Log in with Claude"
+        ));
+        // Matched by label too, so a renamed id still cannot slip through.
+        assert!(is_claude_subscription_auth(
+            "something-new",
+            "Claude subscription "
+        ));
+
+        // The API-key path must survive: hiding every method would leave the
+        // agent unusable rather than compliant.
+        assert!(!is_claude_subscription_auth(
+            "console-login",
+            "Anthropic Console"
+        ));
+        // Codex signs in with a ChatGPT plan, which OpenAI supports. Not the
+        // same boundary, and filtering it would break Codex sign-in.
+        assert!(!is_claude_subscription_auth("chatgpt", "ChatGPT"));
+        assert!(!is_claude_subscription_auth("cursor-login", "Cursor Login"));
     }
 
     #[test]

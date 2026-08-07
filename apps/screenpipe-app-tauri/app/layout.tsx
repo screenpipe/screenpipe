@@ -14,6 +14,7 @@ import { Suspense, useEffect } from "react";
 import { ShortcutTracker } from "@/components/shortcut-reminder";
 import { PipeInstallDialog } from "@/components/pipe-install-dialog";
 import { BrowserPairingDialog } from "@/components/browser-pairing-dialog";
+import { BrowserLoginCodeDialog } from "@/components/browser-login-code-dialog";
 import { RecentChatSwitcherController } from "@/components/chat/recent-chat-switcher-controller";
 import { FeedbackDialog } from "@/components/feedback-dialog";
 import { AnnouncementHost } from "@/components/announcement-host";
@@ -302,6 +303,7 @@ export default function RootLayout({
           {!isOverlay && <ShortcutTracker />}
           {!isOverlay && <PipeInstallDialog />}
           {!isOverlay && <BrowserPairingDialog />}
+          {!isOverlay && <BrowserLoginCodeDialog />}
           <Suspense fallback={null}>
             <RecentChatSwitcherMount />
           </Suspense>

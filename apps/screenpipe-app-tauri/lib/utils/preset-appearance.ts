@@ -22,6 +22,15 @@ export interface AcpAdapterInfo {
   /** Hidden from the picker but kept in the catalog so the runtime and any
    *  existing presets still resolve its name/icon. Flip in agents.json. */
   disabled?: boolean;
+  /** True when the catalog declares how to point this agent at Screenpipe
+   *  Cloud. Closed agents (Cursor, Copilot) talk to their own service and can
+   *  never be routed, so the choice is not offered for them. */
+  supportsCloudRouting?: boolean;
+  /** PostHog flag that has to be on before this agent is offered as a new
+   *  choice. Absent means always offered (Pi, Codex, Claude Code). Set it in
+   *  agents.json for agents whose sign-in or account requirements are not
+   *  something we can support for everyone yet. */
+  flag?: string;
 }
 
 // The whole agent catalog — name, icon, copy, and launch — lives in one static
@@ -36,6 +45,8 @@ const CATALOG_ACP_ADAPTERS: readonly AcpAdapterInfo[] = (
     description: string;
     invertInDark?: boolean;
     disabled?: boolean;
+    flag?: string;
+    cloudRouting?: unknown;
   }>
 ).map((agent) => ({
   id: agent.id,
@@ -45,6 +56,8 @@ const CATALOG_ACP_ADAPTERS: readonly AcpAdapterInfo[] = (
   presetName: agent.presetName,
   description: agent.description,
   disabled: agent.disabled === true,
+  flag: agent.flag,
+  supportsCloudRouting: !!agent.cloudRouting,
 }));
 
 const CUSTOM_ACP_ADAPTER: AcpAdapterInfo = {
@@ -53,6 +66,9 @@ const CUSTOM_ACP_ADAPTER: AcpAdapterInfo = {
   imageSrc: "/images/custom.png",
   presetName: "acp agent",
   description: "Connect any ACP-compatible command installed on this computer.",
+  // Running an arbitrary local command as the agent is the widest surface we
+  // offer, so it is rolled out on its own flag rather than to everyone.
+  flag: "acp_agent_custom",
 };
 
 // custom stays last: acpAdapterInfo() falls back to the final entry.
@@ -65,6 +81,40 @@ export const ACP_ADAPTERS: readonly AcpAdapterInfo[] = [
 // ACP_ADAPTERS above stays complete so existing presets still resolve.
 export const SELECTABLE_ACP_ADAPTERS: readonly AcpAdapterInfo[] =
   ACP_ADAPTERS.filter((adapter) => !adapter.disabled);
+
+/** Every per-agent flag in the catalog, for surfaces that need "all on"
+ *  (e2e builds) without hardcoding the individual keys. */
+export const ACP_ADAPTER_FLAGS: readonly string[] = Array.from(
+  new Set(
+    SELECTABLE_ACP_ADAPTERS.map((adapter) => adapter.flag).filter(
+      (flag): flag is string => !!flag,
+    ),
+  ),
+);
+
+/**
+ * The agents to offer for a given set of active PostHog flags.
+ *
+ * Unflagged agents (Pi and the other first-party adapters) always show, so the
+ * picker can never come back empty — an empty grid would strand anyone whose
+ * flags have not resolved yet. `currentId` is always kept so a user who already
+ * picked a flagged agent still sees which one is selected and is not silently
+ * switched; hiding it would only hide the selection, not the preset.
+ *
+ * Pass `null` for flags that have not resolved yet: it is treated as "none on",
+ * which fails closed the same way the top-level ACP gate does.
+ */
+export function selectableAcpAdapters(
+  activeFlags: readonly string[] | null | undefined,
+  currentId?: string | null,
+): readonly AcpAdapterInfo[] {
+  return SELECTABLE_ACP_ADAPTERS.filter(
+    (adapter) =>
+      !adapter.flag ||
+      adapter.id === currentId ||
+      (activeFlags ?? []).includes(adapter.flag),
+  );
+}
 
 /** Unknown or missing ids resolve to the generic custom adapter. */
 export function acpAdapterInfo(id?: string | null): AcpAdapterInfo {
