@@ -129,7 +129,9 @@ fn pipe_and_wait(
         drop(stdin);
         let _ = child.kill();
         let _ = child.wait();
-        return Err(anyhow::anyhow!("failed to write audio to ffmpeg stdin: {e}"));
+        return Err(anyhow::anyhow!(
+            "failed to write audio to ffmpeg stdin: {e}"
+        ));
     }
 
     debug!("Dropping stdin");
@@ -231,7 +233,10 @@ mod tests {
         // pipe_and_wait — a zombie would return the pid (or 0 with WNOHANG).
         let mut status = 0;
         let ret = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-        assert_eq!(ret, -1, "child {pid} was not reaped (waitpid returned {ret})");
+        assert_eq!(
+            ret, -1,
+            "child {pid} was not reaped (waitpid returned {ret})"
+        );
         let errno = std::io::Error::last_os_error().raw_os_error();
         assert_eq!(errno, Some(libc::ECHILD));
     }
