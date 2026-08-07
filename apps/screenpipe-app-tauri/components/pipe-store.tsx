@@ -359,22 +359,19 @@ export function PipeStoreView() {
 
   return (
     <div className="space-y-4">
-      <div className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Scheduled tasks</h1>
-        <p className="text-sm text-muted-foreground">
-          Run tasks on a schedule, after meetings, or when events happen.
-        </p>
-      </div>
+      <p className="text-sm text-muted-foreground">
+        Run tasks on a schedule, after meetings, or when events happen.
+      </p>
 
       {/* Tab bar */}
-      <div className="flex items-center gap-6 border-b border-border pb-0 mb-6">
+      <div className="mb-6 flex h-10 items-stretch gap-6 border-b border-border">
         {tabs.map(({ key, label }) => (
           <button
             key={key}
             data-testid={`tab-${key}`}
             onClick={() => setActiveTab(key)}
             className={cn(
-              "pb-3 text-sm font-medium transition-colors duration-150 border-b-2 -mb-px",
+              "-mb-px flex items-center border-b-2 text-sm font-medium transition-colors duration-150",
               activeTab === key
                 ? "border-foreground text-foreground"
                 : "border-transparent text-muted-foreground hover:text-foreground"
@@ -384,9 +381,8 @@ export function PipeStoreView() {
           </button>
         ))}
         {/* Notifications are pipe output, so the bell lives here rather
-            than in the global window chrome. mb-3 cancels the tabs'
-            pb-3 so the bell centers on the tab labels, not the row. */}
-        <div className="ml-auto mb-3">
+            than in the global window chrome. */}
+        <div className="ml-auto flex items-center">
           <NotificationBell />
         </div>
       </div>

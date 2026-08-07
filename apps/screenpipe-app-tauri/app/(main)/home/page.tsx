@@ -1329,7 +1329,12 @@ function HomeContent() {
                 </div>
               ) : (
                 <div className="flex-1 overflow-y-auto overflow-x-hidden min-h-0">
-                  <div className="p-6 pb-12 max-w-4xl mx-auto">
+                  <div
+                    className={cn(
+                      "mx-auto max-w-4xl px-6",
+                      activeSection === "pipes" ? "pb-6 pt-10" : "pb-12 pt-6",
+                    )}
+                  >
                     {renderMainSection()}
                   </div>
                 </div>

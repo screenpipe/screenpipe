@@ -2647,13 +2647,19 @@ export function PipesSection() {
                       ?.focus();
                   }}
                   className={cn(
-                    "group flex cursor-pointer select-none items-center gap-2.5 border-l-2 px-3 py-2.5 transition-colors duration-150 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                    "group relative flex cursor-pointer select-none items-center gap-2.5 px-3 py-2.5 transition-colors duration-150 focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
                     isSelected
-                      ? "border-l-foreground bg-accent/60"
-                      : "border-l-transparent hover:bg-accent/30",
+                      ? "bg-accent/60"
+                      : "hover:bg-accent/30",
                     !pipe.config.enabled && !isSelected && "opacity-60",
                   )}
                 >
+                  {isSelected && (
+                    <span
+                      aria-hidden
+                      className="absolute inset-y-0 left-0 w-0.5 bg-foreground"
+                    />
+                  )}
                   {/* In select mode the status dot gives way to a checkbox. */}
                   {selectMode && !enterpriseManaged ? (
                     <Checkbox
@@ -3815,10 +3821,10 @@ export function PipesSection() {
 
             return (
               <>
-                <div className="max-h-[70vh] w-[19rem] shrink-0 divide-y divide-border overflow-y-auto border-r border-border">
+                <div className="scrollbar-minimal max-h-[70vh] w-[19rem] shrink-0 divide-y divide-border overflow-y-auto overscroll-contain border-r border-border [scrollbar-gutter:stable]">
                   {rows}
                 </div>
-                <div className="max-h-[70vh] min-w-0 flex-1 overflow-y-auto">
+                <div className="scrollbar-minimal max-h-[70vh] min-w-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
                   {creating ? (
                     <div className="px-5 pb-6 pt-4" data-testid="pipe-create-pane">
                       <div className="flex items-start gap-2">
