@@ -11220,6 +11220,7 @@ dependencies = [
  "screenpipe-telemetry-wire",
  "screenpipe-vault",
  "security-framework",
+ "semver",
  "sentry 0.42.0",
  "serde",
  "serde_json",

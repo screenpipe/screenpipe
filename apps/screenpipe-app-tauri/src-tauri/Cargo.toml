@@ -42,6 +42,8 @@ tauri-utils = { version = "=2.9.2", features = [] }
 tauri-plugin-fs = "=2.4.5"
 tauri-plugin-notification = "=2.3.3"
 tauri-plugin-updater = "=2.10.0"
+# version ordering for the updater's newer-version promotion (#5784 double update)
+semver = "1"
 # staged-update signature re-verification (same crate/version the updater plugin uses)
 minisign-verify = "0.2"
 tauri-plugin-dialog = "=2.6.0"
