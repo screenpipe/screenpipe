@@ -126,6 +126,7 @@ import {
   aiPresetConnectionFingerprint,
   extractAiProviderErrorMessage,
   isAiApiKeyRequired,
+  normalizeGeminiModelId,
   shouldRequireAiPresetConnectionTest,
   validateAiPresetConnectionFields,
   validateAiProviderUrl,
@@ -294,9 +295,15 @@ const AISection = ({
   // flag, hydrated local entitlement, and gateway eligibility all agree. The
   // gateway's `locked` flag only takes visual effect when this is true.
   const showUpsell = useModelUpsellGating(usage?.upgrade_eligible);
+  // Self-heal presets saved with a Gemini "models/" resource name before we
+  // normalized fetched ids — they fail validation and deadlock the editor.
   const [settingsPreset, setSettingsPreset] = useState<
     Partial<AIPreset> | undefined
-  >(preset);
+  >(() =>
+    preset?.model
+      ? { ...preset, model: normalizeGeminiModelId(preset.model, preset.url) }
+      : preset
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
@@ -733,6 +740,9 @@ const AISection = ({
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState("");
+  // True once the user arrow-navigates the model list; Enter then selects the
+  // highlighted item instead of committing the typed text.
+  const hasNavigatedModelList = useRef(false);
 
   const runDiagnostics = useCallback(async () => {
     if (settingsPreset?.provider === "screenpipe-cloud" || settingsPreset?.provider === "acp") return;
@@ -1091,12 +1101,21 @@ const AISection = ({
               return;
             }
             const customData = await customResponse.json();
+            // Gemini's /models returns "models/gemini-…" resource names that
+            // our own validation rejects — normalize (and dedupe) so every
+            // option in the dropdown is directly selectable.
+            const seenIds = new Set<string>();
             setModels(
-              (customData.data || []).map((model: { id: string }) => ({
-                id: model.id,
-                name: model.id,
-                provider: "custom",
-              }))
+              (customData.data || [])
+                .map((model: { id: string }) =>
+                  normalizeGeminiModelId(model.id, settingsPreset?.url)
+                )
+                .filter((id: string) => !seenIds.has(id) && (seenIds.add(id), true))
+                .map((id: string) => ({
+                  id,
+                  name: id,
+                  provider: "custom",
+                }))
             );
           } catch (error) {
             console.error(
@@ -1588,7 +1607,8 @@ const AISection = ({
             open={isModelPickerOpen}
             onOpenChange={(open) => {
               setIsModelPickerOpen(open);
-                setModelSearch("");
+              setModelSearch("");
+              hasNavigatedModelList.current = false;
             }}
           >
             <PopoverTrigger asChild>
@@ -1618,22 +1638,29 @@ const AISection = ({
                   value={modelSearch}
                   placeholder="Select or type model name" 
                   onKeyDown={(e) => {
+                    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                      // Explicit list navigation: hand Enter back to cmdk so
+                      // it selects the highlighted item.
+                      hasNavigatedModelList.current = true;
+                      return;
+                    }
                     if (e.key === "Enter") {
+                      if (hasNavigatedModelList.current) return;
                       const input = modelSearch.trim();
                       if (!input) return;
-                      const exactModel = models.find((m) => m.id === input);
-                      if (exactModel) {
-                        updateSettingsPreset({ model: exactModel.id });
-                        setIsModelPickerOpen(false);
-                        return;
-                      }
-                      if (models.every(m => m.id !== input)) {
-                        updateSettingsPreset({ model: input });
-                        setIsModelPickerOpen(false);
-                      }
+                      // Otherwise the typed text wins: stop cmdk's own Enter
+                      // handler from replacing it with the highlighted fuzzy
+                      // match (e.g. "gemini-2.5-flash" vs "models/gemini-2.5-flash").
+                      e.preventDefault();
+                      e.stopPropagation();
+                      updateSettingsPreset({
+                        model: models.find((m) => m.id === input)?.id ?? input,
+                      });
+                      setIsModelPickerOpen(false);
                     }
                   }}
                   onValueChange={(value) => {
+                    hasNavigatedModelList.current = false;
                     setModelSearch(value);
                   }}
                 />

@@ -8,6 +8,7 @@ import {
   aiProviderTypeSchema,
   extractAiProviderErrorMessage,
   GEMINI_OPENAI_BASE_URL,
+  normalizeGeminiModelId,
   shouldRequireAiPresetConnectionTest,
   validateAiModel,
   validateAiPresetConnectionFields,
@@ -83,6 +84,23 @@ describe("BYOK connection validation", () => {
     expect(
       validateAiModel("gemini-3.6-flash", "custom", GEMINI_OPENAI_BASE_URL),
     ).toEqual({ isValid: true });
+  });
+
+  it("strips the models/ prefix from Gemini-fetched ids only", () => {
+    expect(
+      normalizeGeminiModelId("models/gemini-3.6-flash", GEMINI_OPENAI_BASE_URL),
+    ).toBe("gemini-3.6-flash");
+    expect(
+      normalizeGeminiModelId("gemini-3.6-flash", GEMINI_OPENAI_BASE_URL),
+    ).toBe("gemini-3.6-flash");
+    // Non-Gemini endpoints may legitimately serve models/-prefixed ids.
+    expect(
+      normalizeGeminiModelId("models/custom-1", "https://provider.example.com/v1"),
+    ).toBe("models/custom-1");
+    expect(normalizeGeminiModelId("models/custom-1", undefined)).toBe(
+      "models/custom-1",
+    );
+    expect(normalizeGeminiModelId("models/custom-1", "")).toBe("models/custom-1");
   });
 
   it("requires credentials for known BYOK providers but leaves generic custom auth optional", () => {

@@ -178,6 +178,17 @@ const parseUrl = (url?: string | null): URL | null => {
 export const isGeminiApiUrl = (url?: string | null): boolean =>
   parseUrl(url)?.hostname.toLowerCase() === GEMINI_API_HOST;
 
+// Gemini's OpenAI-compat /models endpoint returns resource names
+// ("models/gemini-2.5-flash") while chat/completions is documented with bare
+// ids — strip the prefix so fetched options are directly usable.
+export const normalizeGeminiModelId = (
+  model: string,
+  url?: string | null,
+): string =>
+  isGeminiApiUrl(url) && model.startsWith("models/")
+    ? model.slice("models/".length)
+    : model;
+
 export const validateAiProviderUrl = (
   url: string,
   provider?: AIProviderType,

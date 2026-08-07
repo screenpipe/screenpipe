@@ -8,6 +8,7 @@ import { testAiPresetConnection } from "@/lib/utils/ai-preset-connection";
 import {
   aiPresetConnectionFingerprint,
   isAiApiKeyRequired,
+  normalizeGeminiModelId,
   requiresAiPresetConnectionTest,
   shouldRequireAiPresetConnectionTest,
   validateAiPresetConnectionFields,
@@ -412,7 +413,14 @@ export function AIProviderConfig({
       }
 
       const data = await response.json();
-      setOpenAIModels(data.data || []);
+      // Gemini's /models returns "models/gemini-…" resource names; suggest the
+      // bare ids that chat/completions (and our validation) expect.
+      setOpenAIModels(
+        (data.data || []).map((m: { id: string }) => ({
+          ...m,
+          id: normalizeGeminiModelId(m.id, baseUrl),
+        }))
+      );
     } catch (error) {
       console.error("error fetching models:", error);
       setOpenAIModels([]);
