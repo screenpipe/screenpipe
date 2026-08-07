@@ -2177,7 +2177,7 @@ async setChatAlwaysOnTop(onTop: boolean) : Promise<Result<null, string>> {
  * in the screenpipe-api skill that Pi installs on every run.
  *
  * Mechanism: the screenpipe-core `Pi::ensure_screenpipe_skill` reads
- * `~/.screenpipe/cloud_media_analysis.disabled` at install time and
+ * `<data_dir>/cloud_media_analysis.disabled` at install time and
  * conditionally appends the Gemma 4 E4B confidential-enclave section
  * to `<project>/.pi/skills/screenpipe-api/SKILL.md`. Default (no
  * marker) = enabled. This command just creates or removes the marker.

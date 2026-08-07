@@ -50,6 +50,7 @@ mod chatgpt_oauth;
 mod commands;
 mod db_recovery_notifications;
 mod db_relaunch;
+mod dev_isolation;
 mod diagnostic_logs;
 mod disk_usage;
 mod disk_pressure_notifications;
@@ -337,6 +338,13 @@ async fn main() {
         };
         std::process::exit(exit_code);
     }
+
+    // Point debug builds at their own data dir and ports so `bun tauri dev`
+    // can't hand off to (or kill) an installed production app. Must run before
+    // the DB-recovery-lock check, the /focus single-instance handoff and the
+    // telemetry store read below — all of which resolve the data directory or
+    // the focus port. No-op in release builds. See `dev_isolation`.
+    dev_isolation::apply();
 
     #[cfg(target_os = "linux")]
     linux_webkit_env::configure();
@@ -1950,7 +1958,14 @@ async fn main() {
             let is_autostart_enabled = store
                 .auto_start_enabled;
 
-            if is_autostart_enabled {
+            // `auto_start_enabled` defaults to true, so an isolated dev profile
+            // would register a login item pointing at target/debug — launching a
+            // development build at every login alongside the real app. Never
+            // touch the OS login item from a dev build; leave whatever the
+            // installed app registered exactly as it is.
+            if crate::dev_isolation::is_active() {
+                debug!("dev isolation active, skipping autostart registration");
+            } else if is_autostart_enabled {
                 let _ = autostart_manager.enable();
             } else {
                 let _ = autostart_manager.disable();

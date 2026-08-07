@@ -2214,6 +2214,16 @@ fn kill_orphan_pi_processes(managed_alive: bool) {
         return;
     }
 
+    // The pattern below matches every `pi --mode rpc` on the machine, including
+    // the ones owned by an installed production app. Ports and data dirs are
+    // isolated in dev, but this is process-wide, so an isolated build skips it
+    // rather than reaching into another instance. Cost is a stale dev Pi child
+    // surviving a dev crash; killing production's agent mid-turn is worse.
+    if crate::dev_isolation::is_active() {
+        debug!("dev isolation active, skipping machine-wide Pi orphan cleanup");
+        return;
+    }
+
     #[cfg(unix)]
     {
         match Command::new("pkill").args(["-f", "pi --mode rpc"]).output() {

@@ -571,7 +571,7 @@ impl PiExecutor {
     }
 
     /// User policy: when the marker file
-    /// `~/.screenpipe/cloud_media_analysis.disabled` exists, the
+    /// `<data_dir>/cloud_media_analysis.disabled` exists, the
     /// screenpipe-api skill is installed WITHOUT the Gemma 4 E4B
     /// confidential-enclave block. Default (no marker) = enabled, so
     /// fresh installs ship the capability documented and Pi knows to
@@ -582,12 +582,10 @@ impl PiExecutor {
     /// the rendered SKILL.md after the fact — those copies get
     /// overwritten on every Pi run, so post-install edits don't stick.
     fn cloud_media_analysis_enabled() -> bool {
-        let home = match dirs::home_dir() {
-            Some(h) => h,
-            None => return true,
-        };
-        !home
-            .join(".screenpipe")
+        // Data-dir scoped, not `~/.screenpipe` scoped: a dev or relocated
+        // instance must read the marker its own Settings toggle wrote, not
+        // another install's. Identical path for a default install.
+        !crate::paths::default_screenpipe_data_dir()
             .join("cloud_media_analysis.disabled")
             .exists()
     }

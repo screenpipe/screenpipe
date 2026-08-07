@@ -491,7 +491,7 @@ pub fn get_chats_dir() -> Result<String, String> {
 /// in the screenpipe-api skill that Pi installs on every run.
 ///
 /// Mechanism: the screenpipe-core `Pi::ensure_screenpipe_skill` reads
-/// `~/.screenpipe/cloud_media_analysis.disabled` at install time and
+/// `<data_dir>/cloud_media_analysis.disabled` at install time and
 /// conditionally appends the Gemma 4 E4B confidential-enclave section
 /// to `<project>/.pi/skills/screenpipe-api/SKILL.md`. Default (no
 /// marker) = enabled. This command just creates or removes the marker.
@@ -506,8 +506,10 @@ pub fn get_chats_dir() -> Result<String, String> {
 #[tauri::command]
 #[specta::specta]
 pub fn set_cloud_media_analysis_skill(enabled: bool) -> Result<(), String> {
-    let home = dirs::home_dir().ok_or_else(|| "no home directory".to_string())?;
-    let dir = home.join(".screenpipe");
+    // Resolve through the data dir rather than hardcoding ~/.screenpipe, so a
+    // dev or relocated instance writes the marker its own Pi will read. Same
+    // path as before for a default production install.
+    let dir = screenpipe_core::paths::default_screenpipe_data_dir();
     let marker = dir.join("cloud_media_analysis.disabled");
 
     if enabled {
