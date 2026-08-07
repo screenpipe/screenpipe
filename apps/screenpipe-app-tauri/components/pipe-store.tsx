@@ -360,7 +360,9 @@ export function PipeStoreView() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Run tasks on a schedule, after meetings, or when events happen.
+        {activeTab === "discover"
+          ? "browse, install, and review community scheduled tasks"
+          : "Run tasks on a schedule, after meetings, or when events happen."}
       </p>
 
       {/* Tab bar */}
@@ -937,26 +939,13 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
         </div>
       )}
 
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm text-muted-foreground">
-            browse, install, and review community scheduled tasks
-          </p>
-        </div>
-        <Button variant="outline" size="sm" onClick={() => setPublishOpen(true)}>
-          <Upload className="h-4 w-4 mr-1.5" />
-          PUBLISH
-        </Button>
-      </div>
-
       {/* Search & Filters */}
       <div className="space-y-3">
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="search scheduled tasks..."
+              placeholder="search community tasks..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-9 h-9"
@@ -974,6 +963,15 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
               ))}
             </SelectContent>
           </Select>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9 shrink-0"
+            onClick={() => setPublishOpen(true)}
+          >
+            <Upload className="mr-1.5 h-4 w-4" />
+            PUBLISH
+          </Button>
         </div>
 
         {/* Category pills */}
