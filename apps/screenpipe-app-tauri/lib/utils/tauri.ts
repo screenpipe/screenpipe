@@ -1157,8 +1157,17 @@ async openGoogleCalendarAuthWindow(authUrl: string) : Promise<Result<null, strin
  * `fresh_session` is used by "use different account": macOS asks
  * ASWebAuthenticationSession for an ephemeral browser session instead of
  * reusing Safari cookies, and Windows/Linux use a throwaway webview profile.
+ * Returns the device code when this call started the browser device-code flow,
+ * and an empty string for every path that needs no out-of-band confirmation
+ * (macOS auth session, embedded WebView fallback).
+ *
+ * The code is returned as well as broadcast on `login-browser-pending` so a
+ * caller never has to depend on a global event to render it. #5936 changed
+ * this shared command to require the user read a code out of the app, but only
+ * taught onboarding to show one; every other login surface silently opened a
+ * browser asking for a code nothing displayed.
  */
-async openLoginWindow(freshSession: boolean | null) : Promise<Result<null, string>> {
+async openLoginWindow(freshSession: boolean | null) : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("open_login_window", { freshSession }) };
 } catch (e) {
@@ -2692,7 +2701,15 @@ config?: { [key in string]: string };
 /**
  * Default session mode id, applied after every session/new.
  */
-modeId?: string | null }
+modeId?: string | null;
+/**
+ * Send the agent's model calls through Screenpipe Cloud instead of the
+ * user's own provider account. Only honoured for agents whose catalog
+ * entry declares `cloudRouting`; a closed agent (Cursor, Copilot) talks to
+ * its own service and ignores this. `None` means the preset predates the
+ * choice, which keeps the agent on its own account.
+ */
+useScreenpipeCloud?: boolean | null }
 /**
  * Whether a built-in agent's CLI is installed on this computer. Binary agents
  * (OpenCode, Cursor, Kimi) require the user to install the CLI; npx agents run

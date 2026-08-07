@@ -1704,6 +1704,13 @@ pub struct AcpAgentConfig {
     /// Default session mode id, applied after every session/new.
     #[serde(default)]
     pub mode_id: Option<String>,
+    /// Send the agent's model calls through Screenpipe Cloud instead of the
+    /// user's own provider account. Only honoured for agents whose catalog
+    /// entry declares `cloudRouting`; a closed agent (Cursor, Copilot) talks to
+    /// its own service and ignores this. `None` means the preset predates the
+    /// choice, which keeps the agent on its own account.
+    #[serde(default)]
+    pub use_screenpipe_cloud: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -2756,12 +2763,50 @@ pub async fn pi_start_inner(
                 .entry("DISABLE_MCP_CONFIG_FILTERING".to_string())
                 .or_insert_with(|| "true".to_string());
         }
-        // Claude: force ANTHROPIC_API_KEY empty so the Claude Agent SDK ignores
-        // any ambient API key and resolves the subscription/OAuth login it wrote
+        // Route the agent's model calls through Screenpipe Cloud when the
+        // preset asks for it and the catalog says this agent can be pointed at
+        // a provider base URL. The agent still owns its own sign-in; this only
+        // changes which endpoint answers its model calls, so the user does not
+        // need a separate provider account to use a coding agent at all.
+        //
+        // The bearer is the signed-in user's cloud token. It reaches the
+        // adapter as the provider token for that base URL only, and nothing
+        // else here forwards it (the ACP runtime scrubs `SCREENPIPE_API_KEY`
+        // from the child env precisely so it cannot leak as a general
+        // credential).
+        let routing = acp
+            .use_screenpipe_cloud
+            .unwrap_or(false)
+            .then(|| crate::acp_runtime::agent_cloud_routing(agent_id))
+            .flatten();
+        let mut routed_to_cloud = false;
+        if let Some(routing) = routing {
+            let gateway = crate::config::screenpipe_ai_gateway_url().unwrap_or_default();
+            let (set, clear) = crate::acp_runtime::cloud_routing_env(
+                &routing,
+                &gateway,
+                user_token.as_deref().unwrap_or_default(),
+            );
+            // Empty means something required was missing (signed out, bad
+            // gateway URL). Fall through to the agent's own account rather than
+            // starting it half-configured.
+            if !set.is_empty() {
+                for name in clear {
+                    resolved_env.remove(&name);
+                }
+                for (name, value) in set {
+                    resolved_env.insert(name, value);
+                }
+                routed_to_cloud = true;
+            }
+        }
+        // Claude on its own account: force ANTHROPIC_API_KEY empty so the Claude
+        // Agent SDK ignores any ambient API key and resolves the login it wrote
         // itself. We never read or parse Claude Code's credential store — the
         // agent owns its credentials (this is the Zed approach), so nothing here
-        // can break when that store's format changes.
-        if agent_id == "claude-acp" {
+        // can break when that store's format changes. Skipped when routed to
+        // cloud, where an empty key would fight the base-URL token.
+        if agent_id == "claude-acp" && !routed_to_cloud {
             resolved_env.insert("ANTHROPIC_API_KEY".to_string(), String::new());
         }
         cmd.env("SCREENPIPE_ACP_ID", agent_id)

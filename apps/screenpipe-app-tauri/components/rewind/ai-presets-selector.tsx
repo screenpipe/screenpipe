@@ -1724,7 +1724,14 @@ export const AIPresetsSelector = ({
                               : undefined
                           }
                         >
-                          {selectedPresetData?.model || formatPresetName(selectedPreset)}
+                          {/* ACP presets store the adapter id in `model`, so the
+                              raw slug ("claude-acp") is what showed here. Name
+                              the agent instead; the config control beside it
+                              names the model the agent is running. */}
+                          {selectedPresetData?.provider === "acp"
+                            ? acpAdapterInfo(selectedPresetData.acpAgent?.id).name
+                            : selectedPresetData?.model ||
+                              formatPresetName(selectedPreset)}
                         </span>
                       </div>
                     ) : (

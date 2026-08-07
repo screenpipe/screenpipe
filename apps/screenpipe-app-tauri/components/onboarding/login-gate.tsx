@@ -10,6 +10,7 @@ import { commands } from "@/lib/utils/tauri";
 import { motion, AnimatePresence } from "framer-motion";
 import posthog from "posthog-js";
 import { isDevBillingBypassEnabled } from "@/lib/app-entitlement";
+import { claimBrowserLoginPresentation } from "@/lib/login/browser-login-presentation";
 
 /// Emitted only by the system-browser login path (Windows/Linux). macOS uses
 /// ASWebAuthenticationSession and never emits these, so the waiting UI below
@@ -316,6 +317,10 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
       subscriptions.forEach((p) => p.then((fn) => fn()).catch(() => {}));
     };
   }, []);
+
+  // This slide renders the device code inline, so the global
+  // BrowserLoginCodeDialog must not also pop over onboarding.
+  useEffect(() => claimBrowserLoginPresentation(), []);
 
   const handleLogin = useCallback(() => {
     posthog.capture("onboarding_login_clicked");
