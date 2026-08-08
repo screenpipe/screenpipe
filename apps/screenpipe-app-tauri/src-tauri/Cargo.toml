@@ -161,7 +161,7 @@ image = "0.25.5"
 # cargo-machete (which doesn't follow `#[path = ...]` imports) doesn't flag
 # this as unused. Stays cross-platform — the EE sync compiles on Windows
 # too, so this CANNOT live under `cfg(not(target_os = "windows"))`.
-thiserror = { version = "1.0", optional = true }
+thiserror = { version = "2.0", optional = true }
 
 # Generic sync primitives (destination trait + ticketed pipeline + body
 # encryption). Used by `apps/screenpipe-app-tauri/src-tauri/src/enterprise/upload.rs` for the

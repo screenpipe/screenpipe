@@ -57,7 +57,7 @@ serde_yaml = "0.9"
 
 # Error handling
 anyhow = "1.0"
-thiserror = "1"
+thiserror = "2"
 
 # Date/time
 chrono = { version = "0.4", features = ["serde"] }
