@@ -72,7 +72,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           lfs: true
 
@@ -130,7 +130,7 @@ jobs:
       # download alone.
       - name: Cache VoxConverse fixtures
         id: voxconverse-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: crates/screenpipe-audio-eval/evals/fixtures/voxconverse
           key: voxconverse-dev-v1-${{ hashFiles('crates/screenpipe-audio-eval/evals/download_voxconverse.sh') }}
@@ -141,7 +141,7 @@ jobs:
 
       - name: Cache LibriSpeech fixtures
         id: librispeech-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: crates/screenpipe-audio-eval/evals/fixtures/librispeech
           key: librispeech-test-clean-v1-${{ hashFiles('crates/screenpipe-audio-eval/evals/download_librispeech.sh') }}
@@ -437,7 +437,7 @@ jobs:
 
       - name: Upload report artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: eval-results
           path: |

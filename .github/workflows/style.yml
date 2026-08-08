@@ -15,7 +15,7 @@ jobs:
     name: Clippy & Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install dependencies
         run: .github/scripts/install_dependencies.sh
@@ -47,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check for unused dependencies
         uses: bnjbvr/cargo-machete@main
@@ -87,7 +87,7 @@ jobs:
     # this to sdk.yml). Pure dependency resolution — no build, ~1 min.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -104,7 +104,7 @@ jobs:
       run:
         working-directory: apps/screenpipe-app-tauri
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.10
@@ -121,7 +121,7 @@ jobs:
       run:
         working-directory: apps/screenpipe-app-tauri
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.10

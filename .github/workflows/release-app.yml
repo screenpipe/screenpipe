@@ -46,7 +46,7 @@ jobs:
       macos_arm_runner: ${{ steps.check-runner.outputs.macos_arm_runner }}
       windows_runner: ${{ steps.check-runner.outputs.windows_runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 2
       - id: check
@@ -93,7 +93,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || needs.check_commit.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Pin to the triggering SHA (github.sha), not the branch ref: main
           # keeps moving while builds queue/run, so a branch ref lets platforms
@@ -168,7 +168,7 @@ jobs:
             throw "Failed to enable git long paths"
           }
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Pin to the triggering SHA (github.sha), not the branch ref: main
           # keeps moving while builds queue/run, so a branch ref lets platforms
@@ -213,7 +213,7 @@ jobs:
           bun-version: 1.3.10
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.target == 'aarch64-pc-windows-msvc' && '22' || '20' }}
 
@@ -280,7 +280,7 @@ jobs:
           write-secret-access-key: ${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}
 
       - name: Cache Build Artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             target/${{ matrix.target }}/release
@@ -298,7 +298,7 @@ jobs:
 
       - name: Cache Homebrew packages
         if: matrix.platform == 'macos-latest'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/Library/Caches/Homebrew
@@ -311,7 +311,7 @@ jobs:
       # Cache binary dependencies (ffmpeg, tesseract, ollama, vcredist, WixTools)
       # These rarely change - keyed on workflow file hash, not lockfiles
       - name: Cache Binary Dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             apps/screenpipe-app-tauri/src-tauri/ffmpeg
@@ -329,7 +329,7 @@ jobs:
       # Cache node_modules and tauri CLI - changes with bun.lockb
       - name: Cache Node Modules
         id: cache-pre-build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             apps/screenpipe-app-tauri/node_modules

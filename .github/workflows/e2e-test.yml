@@ -37,7 +37,7 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "0"
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Setup Bun
       uses: oven-sh/setup-bun@v2
@@ -86,7 +86,7 @@ jobs:
         }
 
     - name: Cache Windows build artifacts
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           apps/screenpipe-app-tauri/src-tauri/ffmpeg
@@ -174,7 +174,7 @@ jobs:
     # is still staged below for the runtime DLL.
 
     - name: Cache Next.js build
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ./apps/screenpipe-app-tauri/.next
         key: ${{ runner.os }}-next-v2-${{ hashFiles('apps/screenpipe-app-tauri/package.json', 'apps/screenpipe-app-tauri/bun.lock', 'apps/screenpipe-app-tauri/next.config.mjs', 'apps/screenpipe-app-tauri/postcss.config.mjs', 'apps/screenpipe-app-tauri/app/**', 'apps/screenpipe-app-tauri/components/**', 'apps/screenpipe-app-tauri/lib/**', 'apps/screenpipe-app-tauri/styles/**') }}
@@ -182,7 +182,7 @@ jobs:
           ${{ runner.os }}-next-v2-
 
     - name: Build
-      uses: tauri-apps/tauri-action@v0.5.17
+      uses: tauri-apps/tauri-action@v1.0.0
       env:
         OPENBLAS_PATH: ${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas
         # Bypass the billing gate in the e2e build so the suite exercises real
@@ -271,7 +271,7 @@ jobs:
         bun run e2e:coverage:runtime
 
     - name: Upload E2E Test Artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: windows-e2e-test-artifacts
@@ -283,7 +283,7 @@ jobs:
           ./apps/screenpipe-app-tauri/e2e/COVERAGE.runtime.md
 
     - name: Upload Screenpipe data
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: windows-screenpipe-data
@@ -319,7 +319,7 @@ jobs:
       WEBKIT_FORCE_SANDBOX: "0"
       LIBGL_ALWAYS_SOFTWARE: "1"
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Setup Bun
       shell: bash
@@ -517,7 +517,7 @@ jobs:
       run: bun install --frozen-lockfile
 
     - name: Cache Linux build artifacts
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           apps/screenpipe-app-tauri/src-tauri/ffmpeg
@@ -528,7 +528,7 @@ jobs:
           Linux-e2e-artifacts-v2-
 
     - name: Cache Next.js build
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ./apps/screenpipe-app-tauri/.next
         key: ${{ runner.os }}-next-v2-${{ hashFiles('apps/screenpipe-app-tauri/package.json', 'apps/screenpipe-app-tauri/bun.lock', 'apps/screenpipe-app-tauri/next.config.mjs', 'apps/screenpipe-app-tauri/postcss.config.mjs', 'apps/screenpipe-app-tauri/app/**', 'apps/screenpipe-app-tauri/components/**', 'apps/screenpipe-app-tauri/lib/**', 'apps/screenpipe-app-tauri/styles/**') }}
@@ -536,7 +536,7 @@ jobs:
           ${{ runner.os }}-next-v2-
 
     - name: Build
-      uses: tauri-apps/tauri-action@v0.5.17
+      uses: tauri-apps/tauri-action@v1.0.0
       env:
         OPENBLAS_PATH: ${{ env.OPENBLAS_PATH }}
         # Bypass the billing gate in the e2e build so the suite exercises real
@@ -579,7 +579,7 @@ jobs:
         bun run e2e:coverage:runtime
 
     - name: Upload E2E Test Artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: linux-e2e-test-artifacts
@@ -591,7 +591,7 @@ jobs:
           ./apps/screenpipe-app-tauri/e2e/COVERAGE.runtime.md
 
     - name: Upload Screenpipe data
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: linux-screenpipe-data
@@ -611,7 +611,7 @@ jobs:
       WLR_LIBINPUT_NO_DEVICES: "1"
       WLR_RENDERER: pixman
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Set up Rust
       uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -738,7 +738,7 @@ jobs:
 
     - name: Upload Sway log
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: linux-wayland-sway-log
         path: ${{ runner.temp }}/sway/sway.log
@@ -755,7 +755,7 @@ jobs:
     # post-test steps (coverage, artifact upload) finish inside the job budget.
     timeout-minutes: 120
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Setup Bun
       uses: oven-sh/setup-bun@v2
@@ -793,7 +793,7 @@ jobs:
         write-secret-access-key: ${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}
 
     - name: Cache macOS build artifacts
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           apps/screenpipe-app-tauri/src-tauri/ffmpeg-aarch64-apple-darwin
@@ -813,7 +813,7 @@ jobs:
       run: bun install --frozen-lockfile
 
     - name: Cache Next.js build
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ./apps/screenpipe-app-tauri/.next
         key: ${{ runner.os }}-next-v2-${{ hashFiles('apps/screenpipe-app-tauri/package.json', 'apps/screenpipe-app-tauri/bun.lock', 'apps/screenpipe-app-tauri/next.config.mjs', 'apps/screenpipe-app-tauri/postcss.config.mjs', 'apps/screenpipe-app-tauri/app/**', 'apps/screenpipe-app-tauri/components/**', 'apps/screenpipe-app-tauri/lib/**', 'apps/screenpipe-app-tauri/styles/**') }}
@@ -821,7 +821,7 @@ jobs:
           ${{ runner.os }}-next-v2-
 
     - name: Build
-      uses: tauri-apps/tauri-action@v0.5.17
+      uses: tauri-apps/tauri-action@v1.0.0
       env:
         SCREENPIPE_RELEASE_TARGET: aarch64-apple-darwin
         # Bypass the billing gate in the e2e build so the suite exercises real
@@ -872,7 +872,7 @@ jobs:
         bun run e2e:coverage:runtime
 
     - name: Upload E2E Test Artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: macos-e2e-test-artifacts
@@ -884,7 +884,7 @@ jobs:
           ./apps/screenpipe-app-tauri/e2e/COVERAGE.runtime.md
 
     - name: Upload Screenpipe data
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: macos-screenpipe-data
