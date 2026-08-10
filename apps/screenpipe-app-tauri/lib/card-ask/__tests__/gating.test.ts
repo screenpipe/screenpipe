@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 import type { AppUser } from "@/lib/app-entitlement";
 import {
   CARD_ASK_ARMS,
+  GRANT_EXPIRY_WINDOW_MS,
   isCardAskEligible,
+  isExpiringCardlessGrant,
   parseCardAskArm,
   parseShownTriggers,
   resolveStickyArm,
@@ -33,10 +35,19 @@ describe("parseCardAskArm", () => {
 });
 
 describe("triggersForArm", () => {
-  it("maps each arm to exactly its own trigger", () => {
-    expect(triggersForArm("at_login")).toEqual(["login"]);
-    expect(triggersForArm("at_first_value")).toEqual(["first_value"]);
-    expect(triggersForArm("at_limit")).toEqual(["limit"]);
+  it("maps each arm to its own trigger plus the shared expiry trigger", () => {
+    expect(triggersForArm("at_login")).toEqual(["login", "grant_expiry"]);
+    expect(triggersForArm("at_first_value")).toEqual([
+      "first_value",
+      "grant_expiry",
+    ]);
+    expect(triggersForArm("at_limit")).toEqual(["limit", "grant_expiry"]);
+  });
+
+  it("keeps control silent even at grant expiry", () => {
+    // Control is the counterfactual: what conversion looks like when we
+    // never ask. Leaking an expiry ask into it would destroy the baseline.
+    expect(triggersForArm("control")).not.toContain("grant_expiry");
   });
 
   it("gives control no triggers at all", () => {
@@ -239,5 +250,146 @@ describe("parseShownTriggers", () => {
     expect(
       parseShownTriggers(JSON.stringify(["login", "bogus", "limit"])),
     ).toEqual(["login", "limit"]);
+  });
+});
+
+const DAY = 24 * 60 * 60 * 1000;
+const NOW = Date.parse("2026-08-10T00:00:00.000Z");
+
+describe("isCardAskEligible — card on file, not plan label", () => {
+  const grantHolder = {
+    id: "u1",
+    email: "a@b.com",
+    // A cardless grant looks exactly like a paying Business customer by label.
+    subscription_plan: "pro",
+    app_entitled: true,
+    entitlement_source: "manual",
+    has_payment_method: false,
+  } as unknown as AppUser;
+
+  it("ASKS an active cardless grant holder despite a paid-looking plan", () => {
+    // The regression this whole change exists to fix. Before
+    // `has_payment_method`, the "pro" label suppressed the ask for exactly
+    // the users who cannot be billed.
+    expect(isCardAskEligible(grantHolder, true)).toBe(true);
+  });
+
+  it("does NOT ask anyone with a card on file", () => {
+    const withCard = {
+      ...grantHolder,
+      entitlement_source: "subscription",
+      has_payment_method: true,
+    } as AppUser;
+    expect(isCardAskEligible(withCard, true)).toBe(false);
+  });
+
+  it("does NOT ask a card-backed trial, which converts on its own", () => {
+    const cardTrial = {
+      id: "u1",
+      email: "a@b.com",
+      subscription_plan: "standard",
+      entitlement_source: "subscription",
+      has_payment_method: true,
+    } as unknown as AppUser;
+    expect(isCardAskEligible(cardTrial, true)).toBe(false);
+  });
+
+  it.each(["lifetime", "enterprise"])(
+    "does NOT ask %s even though it has no card",
+    (source) => {
+      // No recurring card, but nothing to sell: lifetime already owns the
+      // app, enterprise is billed to the org.
+      const user = {
+        id: "u1",
+        email: "a@b.com",
+        entitlement_source: source,
+        has_payment_method: false,
+      } as unknown as AppUser;
+      expect(isCardAskEligible(user, true)).toBe(false);
+    },
+  );
+
+  it("ASKS a free user with no card", () => {
+    const free = {
+      id: "u1",
+      email: "a@b.com",
+      entitlement_source: "none",
+      has_payment_method: false,
+    } as unknown as AppUser;
+    expect(isCardAskEligible(free, true)).toBe(true);
+  });
+
+  it("falls back to label rules when the server omits the field", () => {
+    // Older server: no has_payment_method. Under-ask rather than nag.
+    const legacyPaid = {
+      id: "u1",
+      email: "a@b.com",
+      subscription_plan: "pro",
+    } as unknown as AppUser;
+    const legacyFree = { id: "u1", email: "a@b.com" } as unknown as AppUser;
+    expect(isCardAskEligible(legacyPaid, true)).toBe(false);
+    expect(isCardAskEligible(legacyFree, true)).toBe(true);
+  });
+
+  it("still suppresses an enterprise account object regardless of card state", () => {
+    const ent = {
+      ...grantHolder,
+      enterprise_account: { org_name: "acme" },
+    } as unknown as AppUser;
+    expect(isCardAskEligible(ent, true)).toBe(false);
+  });
+});
+
+describe("isExpiringCardlessGrant", () => {
+  function grant(expiresInMs: number, extra: Record<string, unknown> = {}) {
+    return {
+      id: "u1",
+      email: "a@b.com",
+      entitlement_source: "manual",
+      has_payment_method: false,
+      plan_expires_at: new Date(NOW + expiresInMs).toISOString(),
+      ...extra,
+    } as unknown as AppUser;
+  }
+
+  it("fires inside the window", () => {
+    expect(isExpiringCardlessGrant(grant(DAY), NOW)).toBe(true);
+  });
+
+  it("does not fire while the grant is still far out", () => {
+    expect(isExpiringCardlessGrant(grant(5 * DAY), NOW)).toBe(false);
+  });
+
+  it("does not fire once already lapsed — that user is on the limit path", () => {
+    expect(isExpiringCardlessGrant(grant(-DAY), NOW)).toBe(false);
+  });
+
+  it("does not fire when a card is already on file", () => {
+    expect(
+      isExpiringCardlessGrant(grant(DAY, { has_payment_method: true }), NOW),
+    ).toBe(false);
+  });
+
+  it("does not fire for a Stripe subscription nearing renewal", () => {
+    // Renewal is not expiry — it bills itself.
+    expect(
+      isExpiringCardlessGrant(
+        grant(DAY, { entitlement_source: "subscription" }),
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  it("tolerates a missing or malformed expiry without throwing", () => {
+    for (const bad of [null, undefined, "", "not-a-date"]) {
+      const user = grant(DAY, { plan_expires_at: bad });
+      expect(isExpiringCardlessGrant(user, NOW)).toBe(false);
+    }
+  });
+
+  it("uses a two-day window by default", () => {
+    expect(GRANT_EXPIRY_WINDOW_MS).toBe(2 * DAY);
+    expect(isExpiringCardlessGrant(grant(2 * DAY - 1000), NOW)).toBe(true);
+    expect(isExpiringCardlessGrant(grant(2 * DAY + 1000), NOW)).toBe(false);
   });
 });

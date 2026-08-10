@@ -39,6 +39,13 @@ const COPY: Record<
     body: "A 7-day Business trial lifts the cap and keeps your pipes running. Cancel anytime before day 7 and you are not charged.",
     cta: "Start trial",
   },
+  // Someone already on a cardless grant is *in* a trial. Offering to "start"
+  // one is nonsense to them; the real ask is to keep what they already have.
+  grant_expiry: {
+    title: "Your trial ends soon",
+    body: "Add a card to keep hosted AI, pipes, and transcription running. Nothing is charged until your trial ends, and you can cancel before then.",
+    cta: "Keep Business",
+  },
 };
 
 type Props = {

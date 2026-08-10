@@ -8,6 +8,9 @@ import { platform } from "@tauri-apps/plugin-os";
 import { CardAskModal } from "@/components/card-ask-modal";
 import { useCardAsk } from "@/lib/hooks/use-card-ask";
 import { emitCardAskTrigger } from "@/lib/card-ask/trigger-bus";
+import { isExpiringCardlessGrant } from "@/lib/card-ask/gating";
+import { useSettings } from "@/lib/hooks/use-settings";
+import type { AppUser } from "@/lib/app-entitlement";
 
 function normalizeOs(): string {
   try {
@@ -36,6 +39,7 @@ function normalizeOs(): string {
  */
 export function CardAskProvider() {
   const { activeTrigger, arm, isFirstAsk, dismiss, consume } = useCardAsk();
+  const { settings, isSettingsLoaded } = useSettings();
   const os = useMemo(normalizeOs, []);
 
   // Fire the login trigger once the arm has resolved. The controller's
@@ -44,6 +48,19 @@ export function CardAskProvider() {
     if (arm !== "at_login") return;
     emitCardAskTrigger("login");
   }, [arm]);
+
+  // Expiring cardless grant: the highest-intent moment in the funnel. The
+  // grant still works, the user is still active, and in a couple of days
+  // everything silently stops with no card to bill. Every non-control arm
+  // listens for this, and the controller still shows it at most once.
+  useEffect(() => {
+    if (!arm || arm === "control") return;
+    if (!isSettingsLoaded) return;
+    if (!isExpiringCardlessGrant(settings?.user as AppUser | null, Date.now())) {
+      return;
+    }
+    emitCardAskTrigger("grant_expiry");
+  }, [arm, isSettingsLoaded, settings?.user]);
 
   return (
     <CardAskModal

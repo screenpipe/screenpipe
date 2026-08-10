@@ -27,7 +27,11 @@ export const CARD_ASK_ARMS = [
 export type CardAskArm = (typeof CARD_ASK_ARMS)[number];
 
 /** The moment that fired the ask. One arm may own more than one trigger. */
-export type CardAskTrigger = "login" | "first_value" | "limit";
+export type CardAskTrigger =
+  | "login"
+  | "first_value"
+  | "limit"
+  | "grant_expiry";
 
 /** Local storage key holding the sticky arm assignment. */
 export const CARD_ASK_ARM_STORAGE_KEY = "screenpipe_card_ask_arm";
@@ -54,23 +58,34 @@ export function parseCardAskArm(flag: unknown): CardAskArm | null {
 export function triggersForArm(arm: CardAskArm): readonly CardAskTrigger[] {
   switch (arm) {
     case "at_login":
-      return ["login"];
+      return ["login", "grant_expiry"];
     case "at_first_value":
-      return ["first_value"];
+      return ["first_value", "grant_expiry"];
     case "at_limit":
-      return ["limit"];
+      return ["limit", "grant_expiry"];
     case "control":
+      // Control stays silent even at expiry. It is the counterfactual: what
+      // conversion looks like when we never ask.
       return [];
   }
 }
 
+/** Sources that mean someone else is paying, or there is nothing to sell. */
+const INELIGIBLE_SOURCES = new Set(["enterprise", "lifetime"]);
+
 /**
  * Is this user someone we may ask for a card at all?
  *
- * Deliberately conservative and symmetric with `shouldShowModelUpsell`: any
- * evidence of an existing paid, team, or enterprise relationship suppresses
- * the ask. Unknown or partially-hydrated entitlement also suppresses it, so a
- * token refresh can never flash a payment prompt at a paying customer.
+ * The question is **"is there a card on file?"**, not **"do they have a
+ * plan?"**. Those are different, and conflating them inverts the answer for
+ * the group that matters most: a cardless signup grant reports
+ * `subscription_plan: "pro"` while having no payment method at all. A
+ * plan-label rule reads that as "already paying" and stays silent — for
+ * precisely the users who will churn at expiry because nothing can bill them.
+ *
+ * Authoritative signal is the server's `has_payment_method`. It is absent on
+ * older builds, so when it is missing we fall back to plan labels and fail
+ * closed rather than guess.
  */
 export function isCardAskEligible(
   user: AppUser | null | undefined,
@@ -82,7 +97,13 @@ export function isCardAskEligible(
   // Signed-out users have no account to attach a subscription to.
   if (!user.id && !user.email) return false;
 
-  if (user.cloud_subscribed === true) return false;
+  // Someone else pays (enterprise seat), or there is no trial to sell
+  // (lifetime already owns the app).
+  const source =
+    typeof user.entitlement_source === "string"
+      ? user.entitlement_source.trim().toLowerCase()
+      : null;
+  if (source && INELIGIBLE_SOURCES.has(source)) return false;
 
   const enterpriseAccount = user.enterprise_account;
   if (
@@ -93,23 +114,59 @@ export function isCardAskEligible(
     return false;
   }
 
-  // Three independent paid signals. They catch different shapes and the
-  // polarity matters:
-  //
-  // `hasVerifiedPaidPlan` fails CLOSED — it demands a complete, fresh,
-  // self-consistent entitlement before granting access. That is right for
-  // unlocking features and wrong here. A user carrying a bare
-  // `subscription_plan: "pro"` with no hydrated entitlement fails that check,
-  // yet is exactly the person we must not show a payment prompt to.
-  //
-  // A payment prompt must fail OPEN: suppress on any *hint* of payment, and
-  // only ask when we positively believe the user has never paid.
+  // A card already on file: they convert on their own, or they are already
+  // paying. Either way asking is noise. This covers the card-backed trial,
+  // which looks like a trial but bills itself.
+  if (user.has_payment_method === true) return false;
+
+  // Authoritative "no card" from a server that knows. Grant holders and free
+  // users land here, and they are the population this exists for — even
+  // though a grant holder's plan label reads "pro".
+  if (user.has_payment_method === false) return true;
+
+  // Field absent: an older server. Fall back to the conservative label rule
+  // so we under-ask rather than nag a payer. This deliberately misses grant
+  // holders, which is the pre-existing behaviour, not a regression.
+  if (user.cloud_subscribed === true) return false;
   if (hasVerifiedPaidPlan(user)) return false;
   if (hasPersistedEntitlementEvidence(user)) return false;
   if (hasAnyPaidPlanHint(user)) return false;
 
   return true;
 }
+
+/**
+ * Is this an entitled user whose access is about to lapse with no card?
+ *
+ * The single highest-intent moment in the funnel: the grant still works, the
+ * user is still active, and in a couple of days everything silently stops.
+ */
+export function isExpiringCardlessGrant(
+  user: AppUser | null | undefined,
+  nowMs: number,
+  windowMs: number = GRANT_EXPIRY_WINDOW_MS,
+): boolean {
+  if (!user) return false;
+  if (user.has_payment_method !== false) return false;
+
+  const source =
+    typeof user.entitlement_source === "string"
+      ? user.entitlement_source.trim().toLowerCase()
+      : null;
+  if (source !== "manual") return false;
+
+  const expiresAt = user.plan_expires_at
+    ? Date.parse(user.plan_expires_at)
+    : NaN;
+  if (!Number.isFinite(expiresAt)) return false;
+
+  // Already lapsed is not "expiring" — that user is on the limit path now.
+  if (expiresAt <= nowMs) return false;
+  return expiresAt - nowMs <= windowMs;
+}
+
+/** How close to grant expiry the expiry ask becomes eligible. */
+export const GRANT_EXPIRY_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
 
 /**
  * Loose paid-plan detection for suppression only.
@@ -207,7 +264,12 @@ export function parseShownTriggers(raw: string | null): CardAskTrigger[] {
   try {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    const valid: CardAskTrigger[] = ["login", "first_value", "limit"];
+    const valid: CardAskTrigger[] = [
+      "login",
+      "first_value",
+      "limit",
+      "grant_expiry",
+    ];
     return parsed.filter((v): v is CardAskTrigger =>
       valid.includes(v as CardAskTrigger),
     );

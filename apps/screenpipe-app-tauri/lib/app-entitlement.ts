@@ -59,6 +59,20 @@ export type AppUser = User & {
   plan_expires_at?: string | null;
   entitlement?: AppEntitlement | JsonValue | null;
   enterprise_account?: AppEnterpriseAccount | JsonValue | null;
+  /**
+   * Whether Stripe holds a payment method for this account. Server-derived
+   * from the entitlement source; see website `/api/user`.
+   *
+   * Distinct from "has a plan": a cardless signup grant reports
+   * `subscription_plan: "pro"` with no card on file. Never infer payment
+   * state from a plan label.
+   *
+   * Absent on older server responses — treat `undefined` as unknown, not
+   * false.
+   */
+  has_payment_method?: boolean | null;
+  /** Why the account has access. `manual` is the cardless signup grant. */
+  entitlement_source?: string | null;
 };
 
 export type LocalPlanPolicy = "verified-free" | "verified-paid" | "unknown";
