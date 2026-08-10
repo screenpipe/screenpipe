@@ -11,6 +11,9 @@ use screenpipe_db::{DatabaseManager, NewDiarizationSegment, Speaker};
 use tracing::{debug, error, warn};
 
 use crate::core::engine::AudioTranscriptionEngine;
+use crate::speaker::identify_gate::{
+    segment_duration_secs, speaker_identify_decision, SpeakerIdentifyDecision,
+};
 
 use super::{
     text_utils::longest_common_word_substring, AudioInput, TranscriptionDiarizationSegment,
@@ -91,9 +94,20 @@ pub async fn process_transcription_result(
         debug!("empty speaker embedding; storing transcript without speaker");
         None
     } else {
-        let speaker = get_or_create_speaker_from_embedding(db, &result.speaker_embedding).await?;
-        debug!("detected speaker id={}", speaker.id);
-        Some(speaker.id)
+        let duration = segment_duration_secs(result.start_time, result.end_time);
+        match get_or_create_speaker_from_embedding(db, &result.speaker_embedding, duration).await? {
+            Some(speaker) => {
+                debug!("detected speaker id={}", speaker.id);
+                Some(speaker.id)
+            }
+            None => {
+                debug!(
+                    "storing transcript without speaker: {:.3}s below identity gate",
+                    duration
+                );
+                None
+            }
+        }
     };
 
     let raw_transcription = result.transcription.clone().unwrap();
@@ -304,33 +318,61 @@ fn diarization_segments_for_insert(
     }]
 }
 
+/// Resolve a speaker for `embedding`, gated on how much real speech produced it.
+///
+/// `speech_duration_secs` is the segment's own duration, not the padded sample
+/// count handed to the embedding model. Segments below
+/// [`MIN_SPEAKER_IDENTIFY_SECS`](crate::speaker::identify_gate::MIN_SPEAKER_IDENTIFY_SECS)
+/// abstain entirely and return `Ok(None)`; segments below
+/// [`MIN_SPEAKER_PROFILE_UPDATE_SECS`](crate::speaker::identify_gate::MIN_SPEAKER_PROFILE_UPDATE_SECS)
+/// may match an existing speaker but never create one or write back into a
+/// stored profile.
 pub async fn get_or_create_speaker_from_embedding(
     db: &DatabaseManager,
     embedding: &[f32],
-) -> Result<Speaker, anyhow::Error> {
+    speech_duration_secs: f64,
+) -> Result<Option<Speaker>, anyhow::Error> {
+    let decision = speaker_identify_decision(speech_duration_secs);
+    if decision == SpeakerIdentifyDecision::Skip {
+        debug!(
+            "speaker identification skipped: {:.3}s below identify gate",
+            speech_duration_secs
+        );
+        return Ok(None);
+    }
+
     let speaker = db.get_speaker_from_embedding(embedding).await?;
     if let Some(speaker) = speaker {
         debug!(
-            "matched speaker id={} name={:?}",
+            "matched speaker id={} name={:?} decision={}",
             speaker.id,
             if speaker.name.is_empty() {
                 "unnamed"
             } else {
                 &speaker.name
-            }
+            },
+            decision.as_str()
         );
-        // Improve cluster over time: update centroid and store diverse embeddings
-        if let Err(e) = db.update_speaker_centroid(speaker.id, embedding).await {
-            debug!("failed to update speaker centroid: {}", e);
+        if decision.may_learn() {
+            // Improve cluster over time: update centroid and store diverse embeddings
+            if let Err(e) = db.update_speaker_centroid(speaker.id, embedding).await {
+                debug!("failed to update speaker centroid: {}", e);
+            }
+            if let Err(e) = db.add_embedding_to_speaker(speaker.id, embedding, 10).await {
+                debug!("failed to add embedding to speaker: {}", e);
+            }
         }
-        if let Err(e) = db.add_embedding_to_speaker(speaker.id, embedding, 10).await {
-            debug!("failed to add embedding to speaker: {}", e);
-        }
-        Ok(speaker)
-    } else {
+        Ok(Some(speaker))
+    } else if decision.may_create() {
         // insert_speaker logs the creation at info level
         let speaker = db.insert_speaker(embedding).await?;
-        Ok(speaker)
+        Ok(Some(speaker))
+    } else {
+        debug!(
+            "no speaker match and {:.3}s below profile-update gate; not creating",
+            speech_duration_secs
+        );
+        Ok(None)
     }
 }
 

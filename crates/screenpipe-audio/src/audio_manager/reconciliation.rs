@@ -42,6 +42,7 @@ pub struct ReconciliationSweep {
 use crate::core::engine::AudioTranscriptionEngine;
 use crate::metrics::AudioPipelineMetrics;
 use crate::segmentation::segmentation_manager::SegmentationManager;
+use crate::speaker::identify_gate::segment_duration_secs;
 use crate::speaker::segment::{get_segments_without_samples, SpeechSegment};
 use crate::transcription::engine::{TranscriptionEngine, TranscriptionSession};
 use crate::transcription::get_or_create_speaker_from_embedding;
@@ -1329,8 +1330,12 @@ async fn extract_local_diarization_segments(
                 let speaker_id = if segment.embedding.is_empty() {
                     None
                 } else {
-                    match get_or_create_speaker_from_embedding(db, &segment.embedding).await {
-                        Ok(speaker) => Some(speaker.id),
+                    let duration = segment_duration_secs(segment.start, segment.end);
+                    match get_or_create_speaker_from_embedding(db, &segment.embedding, duration)
+                        .await
+                    {
+                        Ok(Some(speaker)) => Some(speaker.id),
+                        Ok(None) => None,
                         Err(e) => {
                             debug!("reconciliation: speaker matching failed: {}", e);
                             None
@@ -1497,13 +1502,20 @@ async fn extract_speaker_id(
 
     let embedding = best_embedding?;
 
-    match get_or_create_speaker_from_embedding(db, &embedding).await {
-        Ok(speaker) => {
+    match get_or_create_speaker_from_embedding(db, &embedding, best_duration).await {
+        Ok(Some(speaker)) => {
             debug!(
                 "reconciliation: matched speaker id={} for batch",
                 speaker.id
             );
             Some(speaker.id)
+        }
+        Ok(None) => {
+            debug!(
+                "reconciliation: batch speaker skipped ({:.3}s below identity gate)",
+                best_duration
+            );
+            None
         }
         Err(e) => {
             debug!("reconciliation: speaker matching failed: {}", e);

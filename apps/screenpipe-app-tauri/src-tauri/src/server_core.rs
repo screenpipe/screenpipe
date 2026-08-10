@@ -723,6 +723,21 @@ impl ServerCore {
         if let Some(cb) = on_pipe_output {
             pipe_manager.set_on_output_line(cb);
         }
+        // Give scheduled runs the same Live View target authority the foreground
+        // refresh button sends, so a Pipe feeding several dashboards refreshes
+        // all of them instead of leaving the ones it skipped stale until a
+        // manual click.
+        {
+            let screenpipe_dir_for_live_views = config.data_dir.clone();
+            pipe_manager.set_scheduled_run_context(Arc::new(move |pipe_name: &str| {
+                screenpipe_engine::live_views::scheduled_live_view_run_context_for_dir(
+                    &screenpipe_dir_for_live_views,
+                    pipe_name,
+                    chrono::Local::now(),
+                )
+                .map(|context| screenpipe_engine::pipes_api::format_run_context(&context))
+            }));
+        }
         // Inject local API key so pipe subprocesses can authenticate to localhost
         if config.api_auth {
             pipe_manager.set_local_api_key(config.api_auth_key.clone());

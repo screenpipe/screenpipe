@@ -30,6 +30,20 @@ import {
   loadConversationFile,
 } from "@/lib/chat-storage";
 import { cn } from "@/lib/utils";
+import {
+  DEFAULT_SIDEBAR_NAV_LAYOUT,
+  moveSidebarNavItem,
+  normalizeSidebarNavLayout,
+  resolveHiddenSidebarNavIds,
+  resolveVisibleSidebarNavIds,
+  setSidebarNavItemHidden,
+  shiftSidebarNavItem,
+  isSidebarNavLayoutDefault,
+  type SidebarNavId,
+} from "@/lib/utils/sidebar-nav-layout";
+import { SidebarNavList } from "@/components/sidebar-nav-list";
+import { useToast } from "@/components/ui/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 import { AppSidebar, useSidebarContext } from "@/components/app-sidebar";
 import { UpdateBanner } from "@/components/update-banner";
 import { usePlatform } from "@/lib/hooks/use-platform";
@@ -129,6 +143,7 @@ function HomeContent() {
   const [connectionFocusRequest, setConnectionFocusRequest] = useState<ConnectionFocusRequest | null>(null);
 
   const { settings, updateSettings, isSettingsLoaded } = useSettings();
+  const { toast } = useToast();
   const updateSettingsRef = useRef(updateSettings);
   updateSettingsRef.current = updateSettings;
   const { isTranslucent } = useSidebarContext();
@@ -958,21 +973,93 @@ function HomeContent() {
     }
   };
 
-  // Top-level nav items (filtered by enterprise policy)
-  const mainSections = [
-    // The first nav item doubles as "go to chat view + start a fresh
-    // conversation". Each click allocates a new session id (empty
-    // rows are not reused — that felt like opening an old recent).
-    { id: "home", label: "Chat", icon: <Plus className="h-3.5 w-3.5" /> },
-    { id: "brain", label: "Brain", icon: <Brain className="h-3.5 w-3.5" /> },
-    { id: "pipes", label: "Scheduled", icon: <TimerReset className="h-3.5 w-3.5" /> },
-    { id: "timeline", label: "Timeline", icon: <MonitorPlay className="h-3.5 w-3.5" /> },
-    { id: "connections", label: "Connections", icon: <Plug className="h-3.5 w-3.5" /> },
-  ]
-    .filter((s) => !isSectionHidden(s.id) && !(s.id === "brain" && isSectionHidden("memories")))
+  // Sidebar nav definitions. The user owns order and which rows are visible
+  // (see lib/utils/sidebar-nav-layout); enterprise policy and the
+  // timeline-disabled rule decide what is even eligible, and always win.
+  const SIDEBAR_SECTION_DEFS: Record<SidebarNavId, { label: string; icon: React.ReactNode }> = {
+    // The Chat row doubles as "go to chat view + start a fresh conversation".
+    // Each click allocates a new session id (empty rows are not reused — that
+    // felt like opening an old recent).
+    home: { label: "Chat", icon: <Plus className="h-3.5 w-3.5" /> },
+    brain: { label: "Brain", icon: <Brain className="h-3.5 w-3.5" /> },
+    meetings: { label: "Meetings", icon: <CalendarClock className="h-3.5 w-3.5" /> },
+    pipes: { label: "Scheduled", icon: <TimerReset className="h-3.5 w-3.5" /> },
+    timeline: { label: "Timeline", icon: <MonitorPlay className="h-3.5 w-3.5" /> },
+    connections: { label: "Connections", icon: <Plug className="h-3.5 w-3.5" /> },
+  };
+
+  const sidebarLayout = normalizeSidebarNavLayout(settings.sidebarNavLayout);
+  const availableSidebarIds = (Object.keys(SIDEBAR_SECTION_DEFS) as SidebarNavId[])
+    .filter((id) => !isSectionHidden(id) && !(id === "brain" && isSectionHidden("memories")))
     // Timeline can be turned off in Display settings — when it is, drop it from
     // the sidebar entirely (the "Timeline Disabled" placeholder was poor UX).
-    .filter((s) => !(s.id === "timeline" && (settings.disableTimeline ?? false)));
+    .filter((id) => !(id === "timeline" && (settings.disableTimeline ?? false)));
+
+  const visibleSidebarIds = resolveVisibleSidebarNavIds(sidebarLayout, availableSidebarIds);
+  const hiddenSidebarIds = resolveHiddenSidebarNavIds(sidebarLayout, availableSidebarIds);
+
+  // Meetings is a sidebar row like any other. Hidden means "not a row", which
+  // is exactly when the compact chrome-strip icon takes over — so the two can
+  // never both render, and neither survives policy hiding the section.
+  const meetingsInSidebar = visibleSidebarIds.includes("meetings");
+  const meetingsInToolbar =
+    !meetingsInSidebar && availableSidebarIds.includes("meetings");
+
+  const sidebarCustomizable = Boolean(settings.enableSidebarCustomization);
+  const persistSidebarLayout = (next: ReturnType<typeof normalizeSidebarNavLayout>) => {
+    void updateSettings({ sidebarNavLayout: next });
+  };
+  // Hiding a row is the one edit that removes something from view, so it is the
+  // one that gets an undo. None of the products with this feature offer one —
+  // it is cheap here because the previous layout is right there.
+  const hideSidebarNavItem = (id: SidebarNavId) => {
+    const label = SIDEBAR_SECTION_DEFS[id].label;
+    const previous = sidebarLayout;
+    persistSidebarLayout(
+      setSidebarNavItemHidden(sidebarLayout, availableSidebarIds, id, true),
+    );
+    toast({
+      title: `${label} hidden`,
+      description:
+        id === "meetings"
+          ? "still one click away from the icon next to search."
+          : "find it under Hidden at the bottom of the sidebar.",
+      action: (
+        <ToastAction
+          altText={`Show ${label} in the sidebar again`}
+          onClick={() => persistSidebarLayout(previous)}
+        >
+          Undo
+        </ToastAction>
+      ),
+    });
+  };
+
+  const mainSections = visibleSidebarIds.map((id) => ({
+    id,
+    label: SIDEBAR_SECTION_DEFS[id].label,
+    icon: SIDEBAR_SECTION_DEFS[id].icon,
+    trailing:
+      id === "pipes" && runningPipeCount > 0 ? (
+        <PipeActivityIndicator
+          kind="running"
+          label={runningPipeCount}
+          className="ml-auto shrink-0"
+          labelClassName="text-muted-foreground/60"
+          ariaLabel={`${runningPipeCount} running scheduled task${runningPipeCount === 1 ? "" : "s"}`}
+        />
+      ) : id === "meetings" && meetingState.active ? (
+        // Same live-recording dot the chrome-strip placement shows, so moving
+        // Meetings into the sidebar loses no signal.
+        <>
+          <span
+            aria-hidden="true"
+            className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-red-500"
+          />
+          <span className="sr-only">meeting recording active</span>
+        </>
+      ) : undefined,
+  }));
 
   // Listen for navigation events from other windows (e.g. tray, Rust-side links)
   useTauriEvent<{ url: string }>("navigate", (event) => {
@@ -1084,7 +1171,7 @@ function HomeContent() {
               </Tooltip>
             )}
 
-            {!sidebarCollapsed && !isSectionHidden("meetings") && (
+            {!sidebarCollapsed && meetingsInToolbar && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
@@ -1147,58 +1234,46 @@ function HomeContent() {
                 bottom items would be pushed below the fold by long
                 conversation lists. */}
             <div className="pt-2 pr-2 pb-2 flex-1 flex flex-col min-h-0">
-              {/* Main sections */}
-              <div className="space-y-0.5 shrink-0">
-                {mainSections.map((section) => {
-                  const isActive = activeSection === section.id;
-                  const btn = (
-                    <button
-                      key={section.id}
-                      data-testid={`nav-${section.id}`}
-                      data-announcement-anchor={`sidebar-${section.id}`}
-                      onClick={() => {
-                        setActiveSection(section.id);
-                        // The "home" slot is the New Chat affordance —
-                        // clicking it (from any view) always spawns a
-                        // new chat session and switches to it.
-                        if (section.id === "home") {
-                          startNewChat();
-                        }
-                      }}
-                      className={cn(
-                        "relative w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg border border-transparent transition-all duration-150 text-left group",
-                        isActive
-                          ? isTranslucent
-                            ? "vibrant-nav-active"
-                            : "bg-card shadow-sm border-border text-foreground"
-                          : isTranslucent
-                            ? "vibrant-nav-item vibrant-nav-hover"
-                            : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
-                      )}
-                    >
-                      <div className={cn(
-                        "transition-colors flex-shrink-0",
-                        isActive
-                          ? isTranslucent ? "vibrant-sidebar-fg" : "text-primary"
-                          : isTranslucent ? "vibrant-sidebar-fg-muted" : "text-muted-foreground group-hover:text-foreground"
-                      )}>
-                        {section.icon}
-                      </div>
-                      <span className={cn("text-xs truncate", section.id === "pipes" && runningPipeCount > 0 && "flex-1", isActive && isTranslucent ? "font-semibold vibrant-sidebar-fg" : "font-medium")}>{section.label}</span>
-                      {section.id === "pipes" && runningPipeCount > 0 && (
-                        <PipeActivityIndicator
-                          kind="running"
-                          label={runningPipeCount}
-                          className="ml-auto shrink-0"
-                          labelClassName="text-muted-foreground/60"
-                          ariaLabel={`${runningPipeCount} running scheduled task${runningPipeCount === 1 ? "" : "s"}`}
-                        />
-                      )}
-                    </button>
+              {/* Main sections. Order and visibility are the user's — drag a
+                  row or right-click it (behind the sidebar-customization
+                  rollout gate); enterprise policy still decides eligibility. */}
+              <SidebarNavList
+                items={mainSections}
+                hiddenItems={hiddenSidebarIds.map((id) => ({
+                  id,
+                  label: SIDEBAR_SECTION_DEFS[id].label,
+                }))}
+                activeId={activeSection}
+                isTranslucent={isTranslucent}
+                customizable={sidebarCustomizable}
+                canReset={!isSidebarNavLayoutDefault(sidebarLayout)}
+                onSelect={(id) => {
+                  setActiveSection(id);
+                  // The "home" slot is the New Chat affordance — clicking it
+                  // (from any view) always spawns a new chat session.
+                  if (id === "home") startNewChat();
+                }}
+                onMove={(id, toIndex) =>
+                  persistSidebarLayout(
+                    moveSidebarNavItem(sidebarLayout, availableSidebarIds, id, toIndex),
+                  )
+                }
+                onShift={(id, direction) =>
+                  persistSidebarLayout(
+                    shiftSidebarNavItem(sidebarLayout, availableSidebarIds, id, direction),
+                  )
+                }
+                onSetHidden={(id, hidden) => {
+                  if (hidden) {
+                    hideSidebarNavItem(id);
+                    return;
+                  }
+                  persistSidebarLayout(
+                    setSidebarNavItemHidden(sidebarLayout, availableSidebarIds, id, false),
                   );
-                  return btn;
-                })}
-              </div>
+                }}
+                onReset={() => persistSidebarLayout({ ...DEFAULT_SIDEBAR_NAV_LAYOUT })}
+              />
 
 
               {/* Embedded chat list — sits below the nav, scrolls within

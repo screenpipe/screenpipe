@@ -20,9 +20,9 @@ pub use cancellable_query::{
 pub use db::{
     find_matching_a11y_positions, parse_all_text_positions, DatabaseManager, DeleteTimeRangeResult,
     ImmediateTx, NewMeetingTranscriptSegment, SemanticActor, SemanticActorAlias,
-    SemanticActorReference, SemanticCleanupResult, SemanticContextQuery, SemanticFrameContext,
-    SemanticProjectionWriteResult, MEETING_END_REASON_AUTO_END, MEETING_END_REASON_EXPLICIT_STOP,
-    MEETING_END_REASON_SHUTDOWN,
+    SemanticActorReference, SemanticAttachResult, SemanticCleanupResult, SemanticContextQuery,
+    SemanticFrameContext, SemanticProjectionWriteResult, MEETING_END_REASON_AUTO_END,
+    MEETING_END_REASON_EXPLICIT_STOP, MEETING_END_REASON_SHUTDOWN,
 };
 pub use recovery::{
     rebuild_recovered_fts5_indexes, verify_fresh_sqlite_recovery_candidate, RecoveryVerification,

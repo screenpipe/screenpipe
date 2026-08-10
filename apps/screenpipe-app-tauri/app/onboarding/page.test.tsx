@@ -99,9 +99,6 @@ vi.mock("@/components/onboarding/engine-startup", () => ({
     </div>
   ),
 }));
-vi.mock("@/components/onboarding/first-dashboard", () => ({
-  default: () => <div>first dashboard</div>,
-}));
 vi.mock("@/lib/utils/tauri", () => ({
   commands: {
     setOnboardingStep: mocks.setOnboardingStep,
@@ -177,7 +174,7 @@ describe("enterprise onboarding authentication", () => {
     );
 
     await waitFor(() =>
-      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("permissions"),
+      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("acquisition"),
     );
     expect(
       mocks.capture.mock.calls.filter(
@@ -203,9 +200,9 @@ describe("enterprise onboarding authentication", () => {
 
   it("does not start a new funnel when standard onboarding resumes", async () => {
     mocks.enterprisePolicy.isManagedDeployment = false;
-    onboardingData.currentStep = "first-dashboard";
+    onboardingData.currentStep = "engine";
     render(<OnboardingPage />);
-    await screen.findByText("first dashboard");
+    await screen.findByText("engine");
 
     expect(
       mocks.capture.mock.calls.some(
@@ -215,44 +212,44 @@ describe("enterprise onboarding authentication", () => {
     ).toBe(false);
   });
 
-  it("gives the use-case step more room with a scroll fallback", async () => {
-    onboardingData.currentStep = "first-dashboard";
+  it("keeps the tallest step scrollable rather than clipped", async () => {
+    onboardingData.currentStep = "engine";
 
     render(<OnboardingPage />);
 
     await waitFor(() =>
-      expect(mocks.setWindowSize).toHaveBeenCalledWith("Onboarding", 500, 720),
+      expect(mocks.setWindowSize).toHaveBeenCalledWith("Onboarding", 500, 620),
     );
     expect(screen.getByTestId("onboarding-scroll-region")).toHaveClass(
       "overflow-y-auto",
     );
   });
 
-  it("moves directly from engine startup to the first dashboard", async () => {
+  // The engine slide is the last one: setup no longer asks for a goal or
+  // builds a dashboard, so finishing it completes onboarding outright.
+  it("completes onboarding from the engine slide instead of advancing", async () => {
     onboardingData.currentStep = "engine";
 
     render(<OnboardingPage />);
     fireEvent.click(await screen.findByRole("button", { name: "finish engine" }));
 
     await waitFor(() =>
-      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("first-dashboard"),
+      expect(mocks.completeOnboarding).toHaveBeenCalledWith({
+        method: "setup_finished",
+      }),
     );
-    expect(await screen.findByText("first dashboard")).toBeInTheDocument();
     expect(screen.queryByText("connect apps")).not.toBeInTheDocument();
   });
 
-  it.each(["connect-apps", "integrations", "connections"])(
-    "resumes legacy %s state at the first dashboard",
+  it.each(["connect-apps", "integrations", "connections", "first-dashboard"])(
+    "resumes legacy %s state at the engine slide",
     async (legacyStep) => {
       onboardingData.currentStep = legacyStep;
 
       render(<OnboardingPage />);
 
-      expect(await screen.findByText("first dashboard")).toBeInTheDocument();
+      expect(await screen.findByText("engine")).toBeInTheDocument();
       expect(screen.queryByText("connect apps")).not.toBeInTheDocument();
-      await waitFor(() =>
-        expect(mocks.setWindowSize).toHaveBeenCalledWith("Onboarding", 500, 720),
-      );
     },
   );
 
@@ -263,7 +260,7 @@ describe("enterprise onboarding authentication", () => {
     render(<OnboardingPage />);
 
     await waitFor(() =>
-      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("permissions"),
+      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("acquisition"),
     );
   });
 

@@ -24,6 +24,7 @@ import {
   parseRateLimitWaitSeconds,
   PI_MAX_RATE_LIMIT_RETRIES,
 } from "@/lib/chat/quota-errors";
+import { reportChatDailyLimitWall } from "@/lib/card-ask/wall-hit";
 import {
   clearQuotaUpgrade,
   setQuotaUpgradeFromError,
@@ -473,6 +474,7 @@ export function usePiForegroundEvents({
               startedAtMs: Date.now(),
               ...(toolKind ? { kind: toolKind } : {}),
               ...(parentToolCallId ? { parentToolCallId } : {}),
+              ...(data.subagent === true ? { subagent: true } : {}),
             };
             // Add tool block (text before it is already its own block)
             piContentBlocksRef.current.push({ type: "tool", toolCall });
@@ -605,7 +607,7 @@ export function usePiForegroundEvents({
           // Detect rate limit or daily limit from the error
           if (quotaErrorType === "daily" || quotaErrorType === "hosted_busy" || quotaErrorType === "rate") {
             if (quotaErrorType === "daily") {
-              posthog.capture("wall_hit", { reason: "daily_limit", source: "chat" });
+              reportChatDailyLimitWall();
             }
 
             if (piMessageIdRef.current) {
@@ -902,7 +904,7 @@ export function usePiForegroundEvents({
                 prev.map((m) => m.id === msgId ? { ...m, content: buildInvalidatedAuthTokenMessage() } : m)
               );
             } else if (quotaErrorType === "daily") {
-              posthog.capture("wall_hit", { reason: "daily_limit", source: "chat" });
+              reportChatDailyLimitWall();
               setMessages((prev) =>
                 prev.map((m) => m.id === msgId ? { ...m, content: dailyLimitMessage(errMsg) } : m)
               );
@@ -1069,7 +1071,7 @@ export function usePiForegroundEvents({
                 const lastErr = piLastErrorRef.current;
                 const lastErrKind = lastErr ? classifyQuotaError(lastErr) : "none";
                 if (lastErr && lastErrKind === "daily") {
-                  posthog.capture("wall_hit", { reason: "daily_limit", source: "chat" });
+                  reportChatDailyLimitWall();
                   content = dailyLimitMessage(lastErr);
                 } else if (lastErr && lastErrKind === "rate") {
                   content = buildRateLimitMessage(lastErr);

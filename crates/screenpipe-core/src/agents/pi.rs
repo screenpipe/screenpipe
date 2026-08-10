@@ -20,6 +20,13 @@ pub const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.83.0";
 pub const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.83.0";
 pub const PI_NAMESPACE_DIR: &str = "@earendil-works";
 pub const SCREENPIPE_API_URL: &str = "https://api.screenpipe.com/v1";
+const PI_INSTALL_ARGS: [&str; 5] = [
+    "add",
+    "--ignore-scripts",
+    PI_PACKAGE,
+    PI_AI_PACKAGE,
+    "@anthropic-ai/sdk",
+];
 const CUSTOM_PROVIDER_USER_AGENT: &str = "screenpipe";
 const DEFAULT_CLOUD_MAX_OUTPUT_TOKENS: u64 = 32_000;
 
@@ -2246,20 +2253,21 @@ impl AgentExecutor for PiExecutor {
         // Log the exact command + bun version up front so a failed install is
         // reproducible from the log alone (and a bun that can't even run —
         // e.g. SIGILL on an unsupported CPU — is exposed before the install).
-        let args = ["add", PI_PACKAGE, PI_AI_PACKAGE, "@anthropic-ai/sdk"];
         info!(
             "installing pi into {} via bun at {} (version: {}); command: bun {}",
             install_dir.display(),
             bun,
             bun_version_string(&bun),
-            args.join(" "),
+            PI_INSTALL_ARGS.join(" "),
         );
 
         // Seed package.json with overrides to fix lru-cache resolution on Windows
         seed_pi_package_json(&install_dir);
 
         let mut cmd = tokio_bun_command(&bun);
-        cmd.current_dir(&install_dir).args(args);
+        // CREATE_NO_WINDOW only covers this Bun process. Lifecycle scripts can
+        // launch new consoles, so disable them for this pinned managed install.
+        cmd.current_dir(&install_dir).args(PI_INSTALL_ARGS);
 
         #[cfg(windows)]
         {
@@ -3853,6 +3861,11 @@ pub fn ensure_bash_available() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_pi_install_disables_dependency_lifecycle_scripts() {
+        assert!(PI_INSTALL_ARGS.contains(&"--ignore-scripts"));
+    }
 
     #[test]
     fn tool_use_without_an_executable_call_is_a_protocol_error() {

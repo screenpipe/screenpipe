@@ -25,6 +25,7 @@ import {
   Languages,
   Loader2,
   Mic2,
+  MoreHorizontal,
   Play,
   RefreshCw,
   Sparkles,
@@ -43,6 +44,13 @@ import { readFile } from "@tauri-apps/plugin-fs";
 import posthog from "posthog-js";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -117,13 +125,15 @@ import {
   type TranscriptOpenIntent,
 } from "./transcript-open-state";
 import {
-  findMeetingSummaryExecution,
   latestSummaryInputAt,
   meetingSummaryFailure,
   meetingSummaryFailureCopy,
-  meetingSummaryLifecycle,
-  type MeetingSummaryExecution,
+  meetingSummaryLifecycleFromStatus,
+  summaryLifecycleIsWorking,
+  SUMMARY_ACTIVE_POLL_MS,
+  SUMMARY_IDLE_POLL_MS,
   type MeetingSummaryLifecycle,
+  type MeetingSummaryStatus,
 } from "./meeting-summary-lifecycle";
 import { QUOTA_PLAN_LABELS } from "@/lib/chat/quota-errors";
 import { openExternalUrl } from "@/lib/open-external-url";
@@ -134,6 +144,7 @@ import {
   type MeetingSummaryStreamState,
 } from "./meeting-summary-stream";
 import {
+  MEETING_QUIET_CONTROL_CLASS,
   MEETING_READING_COLUMN_CLASS,
   MEETING_SHELL_CLASS,
   MeetingSummarySurface,
@@ -259,6 +270,11 @@ export function NoteView({
   >([]);
   const [inactivityPrompt, setInactivityPrompt] = useState(false);
   const [dismissedJoinUrl, setDismissedJoinUrl] = useState<string | null>(null);
+  // Which overflow action is awaiting confirmation. One dialog is shared so a
+  // menu item can open it without nesting a trigger inside the menu.
+  const [confirmingAction, setConfirmingAction] = useState<
+    "retranscribe" | "delete" | null
+  >(null);
   const { settings, updateSettings } = useSettings();
   const noteEditorRef = useRef<NoteEditorHandle>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -344,35 +360,6 @@ export function NoteView({
     };
   }, [summaryPipeSlug]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const loadSummaryPipe = async () => {
-      try {
-        const response = await localFetch(
-          `/pipes/${encodeURIComponent(summaryPipeSlug)}`,
-        );
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const payload = await response.json();
-        const config = payload?.data?.config;
-        const triggerEvents = config?.trigger?.events;
-        if (!cancelled) {
-          setAutoSummaryEnabled(
-            config?.enabled === true &&
-              Array.isArray(triggerEvents) &&
-              triggerEvents.includes("meeting_ended"),
-          );
-        }
-      } catch (error) {
-        console.warn("failed to read meeting summary pipe config", error);
-        if (!cancelled) setAutoSummaryEnabled(null);
-      }
-    };
-    void loadSummaryPipe();
-    return () => {
-      cancelled = true;
-    };
-  }, [summaryPipeSlug]);
-
   const refreshedSummaryExecutionRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -422,24 +409,19 @@ export function NoteView({
     let pollHandle: ReturnType<typeof setTimeout> | null = null;
     const poll = async () => {
       try {
+        // One authoritative read. It already accounts for the Pipe being
+        // deleted or disabled, so this is also what keeps an open note from
+        // promising a summary that can no longer happen.
+        const query = new URLSearchParams({ pipe: summaryPipeSlug });
+        if (summaryInputUpdatedAt) query.set("not_before", summaryInputUpdatedAt);
         const response = await localFetch(
-          `/pipes/${encodeURIComponent(summaryPipeSlug)}/executions?limit=20&include_output=false`,
+          `/meetings/${meeting.id}/summary-status?${query.toString()}`,
         );
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const payload = await response.json();
-        const executions = Array.isArray(payload?.data)
-          ? (payload.data as MeetingSummaryExecution[])
-          : [];
-        const execution = findMeetingSummaryExecution(executions, meeting.id, {
-          notBefore: summaryInputUpdatedAt,
-        });
-        const next = meetingSummaryLifecycle(execution, {
-          meetingEnd: meeting.meeting_end,
-          contentUpdatedAt: transcriptUpdatedAt,
-          contentRefreshRequested: transcriptRefreshRequested,
-          autoSummaryEnabled,
-        });
+        const status = (await response.json()) as MeetingSummaryStatus;
+        const next = meetingSummaryLifecycleFromStatus(status);
         if (cancelled) return;
+        setAutoSummaryEnabled(status.auto_summary_enabled);
         if (next.kind === "queued" || next.kind === "running") {
           const buffered = summaryStreamsRef.current.get(next.execution.id);
           if (buffered?.markdown) {
@@ -474,26 +456,21 @@ export function NoteView({
           }
         }
 
-        if (
-          next.kind === "finalizing" ||
-          next.kind === "queued" ||
-          next.kind === "running"
-        ) {
-          pollHandle = setTimeout(() => void poll(), 2000);
-        }
+        // Never stop: settling to idle used to end the poll, which is how a
+        // deleted Pipe or a late run stayed invisible until the note remounted.
+        pollHandle = setTimeout(
+          () => void poll(),
+          summaryLifecycleIsWorking(next)
+            ? SUMMARY_ACTIVE_POLL_MS
+            : SUMMARY_IDLE_POLL_MS,
+        );
       } catch (error) {
         console.warn("failed to read meeting summary status", error);
         if (cancelled) return;
-        const fallback = meetingSummaryLifecycle(null, {
-          meetingEnd: meeting.meeting_end,
-          contentUpdatedAt: transcriptUpdatedAt,
-          contentRefreshRequested: transcriptRefreshRequested,
-          autoSummaryEnabled,
-        });
-        setSummaryLifecycle(fallback);
-        if (fallback.kind === "finalizing") {
-          pollHandle = setTimeout(() => void poll(), 3000);
-        }
+        // The engine owns this answer, so an unreachable engine means unknown,
+        // not "off" and not a spinner for work that may not exist.
+        setAutoSummaryEnabled(null);
+        pollHandle = setTimeout(() => void poll(), SUMMARY_IDLE_POLL_MS);
       }
     };
 
@@ -503,7 +480,6 @@ export function NoteView({
       if (pollHandle) clearTimeout(pollHandle);
     };
   }, [
-    autoSummaryEnabled,
     isLive,
     meeting.id,
     meeting.meeting_end,
@@ -511,8 +487,6 @@ export function NoteView({
     summaryPipeSlug,
     summaryStatusRefreshKey,
     summaryInputUpdatedAt,
-    transcriptRefreshRequested,
-    transcriptUpdatedAt,
   ]);
 
   // Drag-and-drop images straight into the note. Tauri delivers OS file drops
@@ -913,15 +887,10 @@ export function NoteView({
         meetingId: meeting.id,
         meetingEnd,
       });
+      // Optimistic until the next status poll confirms it from the engine.
       setSummaryLifecycle({
         kind: "queued",
-        execution: {
-          id: executionId,
-          status: "queued",
-          started_at: new Date().toISOString(),
-          trigger_event: "meeting_ended",
-          trigger_key: String(meeting.id),
-        },
+        execution: { id: executionId, status: "queued" },
       });
       setSummaryStatusRefreshKey((key) => key + 1);
     } catch (err) {
@@ -1442,18 +1411,25 @@ export function NoteView({
         </div>
       )}
       <header className="z-20 shrink-0 border-b border-border bg-background">
-        <div className={cn(MEETING_SHELL_CLASS, "pt-3")}>
-          <div className="flex min-w-0 items-center gap-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onBack}
-              title="back to meetings"
-              aria-label="back to meetings"
-              className="h-9 w-9 shrink-0 rounded-none border border-border bg-background p-0 hover:bg-muted"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" />
-            </Button>
+        <div className={cn(MEETING_SHELL_CLASS, "pt-2")}>
+          {/* Back sits on its own row so the title's left edge lines up with
+              the note text below it. As a bordered 36px box beside a 24px
+              title it also outweighed the thing it was labelling. */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onBack}
+            aria-label="back to meetings"
+            className={cn(
+              MEETING_QUIET_CONTROL_CLASS,
+              "-ml-2 h-7 gap-1.5 px-2 text-xs",
+            )}
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            meetings
+          </Button>
+
+          <div className="group/title mt-1 flex min-w-0 items-center gap-2">
             <input
               value={title}
               onChange={(event) => setTitle(event.target.value)}
@@ -1462,42 +1438,29 @@ export function NoteView({
               aria-label="meeting title"
               className="min-w-0 flex-1 bg-transparent text-xl font-medium leading-tight tracking-tight text-foreground placeholder:text-muted-foreground/40 focus:outline-none sm:text-2xl"
             />
-            <div className="flex shrink-0 items-center gap-1 border border-border bg-background p-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleCopy}
-                disabled={copying}
-                title="copy meeting + transcript to clipboard"
-                aria-label="copy meeting and transcript"
-                className="h-8 w-8 rounded-none p-0"
-              >
-                {copying ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : copied ? (
-                  <Check className="h-3.5 w-3.5" />
-                ) : (
-                  <Copy className="h-3.5 w-3.5" />
-                )}
-              </Button>
-              {!isLive && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void handleExport()}
-                  disabled={exporting}
-                  title="export meeting to mp4 (video + audio)"
-                  aria-label="export meeting to mp4"
-                  className="hidden h-8 w-8 rounded-none p-0 sm:inline-flex"
-                >
-                  {exporting ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Download className="h-3.5 w-3.5" />
-                  )}
-                </Button>
+            {/* Revealed on intent. Copying is occasional, and a permanent
+                bordered cluster competed with the title for attention. */}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleCopy}
+              disabled={copying}
+              title="copy meeting + transcript to clipboard"
+              aria-label="copy meeting and transcript"
+              className={cn(
+                MEETING_QUIET_CONTROL_CLASS,
+                "h-8 w-8 shrink-0 p-0 opacity-0 focus-visible:opacity-100 group-focus-within/title:opacity-100 group-hover/title:opacity-100",
+                copied && "opacity-100",
               )}
-            </div>
+            >
+              {copying ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : copied ? (
+                <Check className="h-3.5 w-3.5" />
+              ) : (
+                <Copy className="h-3.5 w-3.5" />
+              )}
+            </Button>
           </div>
 
           <div className="mt-3 flex min-w-0 items-center gap-2 overflow-x-auto pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -1581,15 +1544,23 @@ export function NoteView({
               onTranscriptToggle={() => setTranscriptOpen((open) => !open)}
             />
 
+            {/* `activity` is cast from an HTTP body, not validated, so a
+                payload missing `audio_summary` used to throw here and take the
+                whole note — text, transcript, controls — to the global error
+                boundary over a supporting strip. Degrade instead. */}
             {meetingCtx?.activity && (
               <div className="mt-10 select-text space-y-6">
-                <ReplayStrip
-                  meetingId={meeting.id}
-                  segments={
-                    meetingCtx.activity.audio_summary.top_transcriptions
-                  }
-                  timeRange={meetingCtx.activity.time_range}
-                />
+                {Array.isArray(
+                  meetingCtx.activity.audio_summary?.top_transcriptions,
+                ) && (
+                  <ReplayStrip
+                    meetingId={meeting.id}
+                    segments={
+                      meetingCtx.activity.audio_summary.top_transcriptions
+                    }
+                    timeRange={meetingCtx.activity.time_range}
+                  />
+                )}
                 <Receipts activity={meetingCtx.activity} />
               </div>
             )}
@@ -1752,47 +1723,6 @@ export function NoteView({
                   </Button>
                 </MeetingControlTooltip>
                 {!isLive && (
-                  <AlertDialog>
-                    <MeetingControlTooltip label="retranscribe saved audio">
-                      <AlertDialogTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={retranscribing || summaryWorking}
-                          aria-label="retranscribe saved audio"
-                          className="h-9 w-9 rounded-none p-0"
-                        >
-                          {retranscribing ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <AudioLines className="h-3.5 w-3.5" />
-                          )}
-                        </Button>
-                      </AlertDialogTrigger>
-                    </MeetingControlTooltip>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>
-                          retranscribe meeting
-                        </AlertDialogTitle>
-                        <AlertDialogDescription>
-                          rebuild the transcript from saved audio. this replaces
-                          the current transcript and refreshes the summary when
-                          automatic summary is on.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>cancel</AlertDialogCancel>
-                        <AlertDialogAction
-                          onClick={() => void handleRetranscribe()}
-                        >
-                          retranscribe
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                )}
-                {!isLive && (
                   <MeetingControlTooltip label={summaryActionLabel}>
                     <Button
                       variant={
@@ -1821,59 +1751,116 @@ export function NoteView({
                     </Button>
                   </MeetingControlTooltip>
                 )}
+                {/* Everything past summarize is occasional or destructive, so
+                    it lives one level down instead of adding more identical
+                    squares next to the primary action. */}
                 {!isLive && (
-                  <MeetingControlTooltip
-                    label={resuming ? "resuming meeting" : "resume meeting"}
+                  <AlertDialog
+                    open={confirmingAction !== null}
+                    onOpenChange={(open) => {
+                      if (!open) setConfirmingAction(null);
+                    }}
                   >
-                    <Button
-                      variant="default"
-                      size="sm"
-                      onClick={() => void onResume()}
-                      disabled={resuming}
-                      className="h-9 w-9 rounded-none p-0"
-                      aria-label={
-                        resuming ? "resuming meeting" : "resume meeting"
-                      }
-                    >
-                      {resuming ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Play className="h-3.5 w-3.5" />
-                      )}
-                    </Button>
-                  </MeetingControlTooltip>
-                )}
-                {!isLive && (
-                  <AlertDialog>
-                    <MeetingControlTooltip label="delete meeting">
-                      <AlertDialogTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          aria-label="delete meeting"
-                          className="h-9 w-9 rounded-none p-0"
+                    <DropdownMenu>
+                      <MeetingControlTooltip label="more meeting actions">
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            aria-label="more meeting actions"
+                            className={cn(
+                              MEETING_QUIET_CONTROL_CLASS,
+                              "h-9 w-9 p-0",
+                            )}
+                          >
+                            <MoreHorizontal className="h-3.5 w-3.5" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                      </MeetingControlTooltip>
+                      <DropdownMenuContent align="end" className="w-56">
+                        <DropdownMenuItem
+                          disabled={resuming}
+                          onSelect={() => void onResume()}
                         >
-                          <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
-                        </Button>
-                      </AlertDialogTrigger>
-                    </MeetingControlTooltip>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>delete meeting</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          your notes and transcript will be permanently deleted.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>cancel</AlertDialogCancel>
-                        <AlertDialogAction
-                          variant="destructive"
-                          onClick={() => void handleDelete()}
+                          {resuming ? (
+                            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Play className="mr-2 h-3.5 w-3.5" />
+                          )}
+                          {resuming ? "resuming meeting" : "resume meeting"}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          disabled={retranscribing || summaryWorking}
+                          onSelect={() => setConfirmingAction("retranscribe")}
                         >
-                          delete
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
+                          {retranscribing ? (
+                            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <AudioLines className="mr-2 h-3.5 w-3.5" />
+                          )}
+                          retranscribe saved audio
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          disabled={exporting}
+                          onSelect={() => void handleExport()}
+                        >
+                          {exporting ? (
+                            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Download className="mr-2 h-3.5 w-3.5" />
+                          )}
+                          export to mp4
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          onSelect={() => setConfirmingAction("delete")}
+                        >
+                          <Trash2 className="mr-2 h-3.5 w-3.5" />
+                          delete meeting
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                    {confirmingAction === "retranscribe" ? (
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>
+                            retranscribe meeting
+                          </AlertDialogTitle>
+                          <AlertDialogDescription>
+                            rebuild the transcript from saved audio. this
+                            replaces the current transcript and refreshes the
+                            summary when automatic summary is on.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() => void handleRetranscribe()}
+                          >
+                            retranscribe
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    ) : confirmingAction === "delete" ? (
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>delete meeting</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            your notes and transcript will be permanently
+                            deleted.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            variant="destructive"
+                            onClick={() => void handleDelete()}
+                          >
+                            delete
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    ) : null}
                   </AlertDialog>
                 )}
 

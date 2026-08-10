@@ -204,7 +204,7 @@ export const FALLBACK_TEMPLATES: TemplatePipe[] = [
     description: "Today's accomplishments, key moments, and unfinished work",
     icon: "\u{1F4CB}",
     featured: true,
-    prompt: `Analyze my screen and audio recordings from today (last 16 hours). Read the screenpipe skill first. Use limit=10 per search, max 5 searches total. Prefer /raw_sql with COUNT/GROUP BY for app usage. Use the API only — do not write or run code.
+    prompt: `Analyze my screen and audio recordings from today (last 16 hours). Read the screenpipe skill first. Use limit=10 per search, max 5 searches total. For app-usage totals, aggregate by app over the time range using whatever screenpipe query tool you have (a COUNT/GROUP BY query or the activity summary). Use only screenpipe's recorded data, not this project's files or other apps' source.
 
 Use this exact format:
 
@@ -231,7 +231,7 @@ Only report what you can verify from the data. End with: "**Next step:** [most i
     description: "Where your time went — by app, project, and category",
     icon: "⏱",
     featured: true,
-    prompt: `Analyze my app usage from today (last 12 hours). Read the screenpipe skill first. Use limit=10 per search, max 4 searches. Prefer /raw_sql with COUNT(*) and GROUP BY app_name over the frames table — query the API only, do not write or run code.
+    prompt: `Analyze my app usage from today (last 12 hours). Read the screenpipe skill first. Use limit=10 per search, max 4 searches. For time per app, aggregate frames by app over the range using whatever screenpipe query tool you have (a COUNT/GROUP BY query or the activity summary). Use only screenpipe's recorded data, not this project's files or other apps' source.
 
 Use this exact format with durations and percentages:
 
@@ -255,7 +255,7 @@ End with: "**Suggestion:** [one specific change to improve tomorrow]"`,
     description: "Action items from the last few days you may have missed",
     icon: "✅",
     featured: true,
-    prompt: `Find action items and to-dos from the last 3 days that I may have missed. Read the screenpipe skill first. Use limit=10 per search, max 5 searches over the last 3 days. Query the API only — do not write or run code.
+    prompt: `Find action items and to-dos from the last 3 days that I may have missed. Read the screenpipe skill first. Use limit=10 per search, max 5 searches over the last 3 days. Use only screenpipe's recorded data, not this project's files or other apps' source.
 
 Look across messages, meetings, docs, and issue trackers (e.g. Slack, Notion, Linear, GitHub) for commitments and tasks — phrases like "I'll", "can you", "TODO", "follow up", "by Friday", action items, and unchecked checkboxes.
 

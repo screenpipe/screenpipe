@@ -98,6 +98,11 @@ pub(crate) struct MonitorLivenessSnapshot {
     pub last_capture_attempt_ts: u64,
     pub last_capture_loop_heartbeat_ts: u64,
     pub last_db_write_ts: u64,
+    /// Stage the loop entered last, and when. Names the freeze point of a
+    /// gone-silent stall instead of leaving the log with only "heartbeat Ns
+    /// ago" (see [`screenpipe_screen::CaptureLoopStage`]).
+    pub loop_stage: screenpipe_screen::CaptureLoopStage,
+    pub loop_stage_entered_ts: u64,
 }
 
 /// Manages vision recording across multiple monitors with dynamic detection
@@ -852,12 +857,15 @@ impl VisionManager {
             .iter()
             .map(|entry| {
                 let snap = entry.value().snapshot();
+                let (loop_stage, loop_stage_entered_ts) = entry.value().loop_stage();
                 MonitorLivenessSnapshot {
                     monitor_id: *entry.key(),
                     uptime_secs: snap.uptime_secs,
                     last_capture_attempt_ts: snap.last_capture_attempt_ts,
                     last_capture_loop_heartbeat_ts: snap.last_capture_loop_heartbeat_ts,
                     last_db_write_ts: snap.last_db_write_ts,
+                    loop_stage,
+                    loop_stage_entered_ts,
                 }
             })
             .collect()

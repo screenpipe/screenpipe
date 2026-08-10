@@ -11,6 +11,7 @@ import {
   planDisplayName,
   type AppUser,
 } from "@/lib/app-entitlement";
+import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 
 export type PlanExpiration = {
   expiresAt: Date;
@@ -55,7 +56,10 @@ export function PlanExpirationNotice({
 }: PlanExpirationNoticeProps) {
   const expiration = getUserPlanExpiration(user);
   const plan = user?.subscription_plan;
-  const planName = planDisplayName(plan);
+  // Without the build flag this notice called a team/enterprise plan
+  // "Business" while the account section beside it said "Enterprise".
+  const { isManagedDeployment } = useManagedPolicy();
+  const planName = planDisplayName(plan, isManagedDeployment);
   const daysRemaining = expiration?.daysRemaining ?? null;
   const expirationIso = expiration?.expiresAt.toISOString() ?? null;
 

@@ -35,6 +35,7 @@ import {
 } from "@/lib/utils/meeting-context";
 import type { MeetingRecord } from "@/lib/utils/meeting-format";
 import { ListeningSticks } from "./listening-sticks";
+import { MEETING_SHELL_CLASS } from "./meeting-workspace";
 import { splitForHighlight } from "./transcript-highlight";
 import { recorderTranscriptionBacklogMessage } from "./transcript-recovery-copy";
 
@@ -841,6 +842,11 @@ export function TranscriptPanel({
     displayBlocks.length > 0
       ? `${displayBlocks.length} turn${displayBlocks.length === 1 ? "" : "s"}`
       : null;
+  // As a tab surface the transcript sits under the meeting title, chips and
+  // tabs, so it must ride the same centered shell — otherwise every turn hugs
+  // the window edge while the header floats in the middle. The drawer keeps
+  // its own tight padding because it is a narrow panel, not a page column.
+  const contentShellClass = isSurface ? MEETING_SHELL_CLASS : "px-4";
 
   return (
     <>
@@ -899,122 +905,130 @@ export function TranscriptPanel({
             <span className="h-0.5 w-8 rounded-full bg-border transition-colors group-hover:bg-muted-foreground/40" />
           </div>
         )}
-        <header className="flex items-center gap-2 px-4 py-1.5 border-b border-border shrink-0">
-          {showSearch && (searchOpen || Boolean(query.trim())) ? (
-            <input
-              ref={searchInputRef}
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.stopPropagation();
-                  setQuery("");
-                  setSearchOpen(false);
-                }
-              }}
-              placeholder="search transcript..."
-              className="min-w-0 flex-1 bg-transparent text-xs px-2 h-7 border border-input focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
-            />
-          ) : (
-            <div className="flex min-w-0 flex-1 items-center gap-2">
-              <span
-                className="inline-flex min-w-0 items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-foreground"
-                role="status"
-                aria-label={`transcript status: ${transcriptState}`}
-                data-testid="transcript-stream-status"
-              >
+        <header className="shrink-0 border-b border-border">
+          <div
+            className={cn(contentShellClass, "flex items-center gap-2 py-1.5")}
+          >
+            {showSearch && (searchOpen || Boolean(query.trim())) ? (
+              <input
+                ref={searchInputRef}
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.stopPropagation();
+                    setQuery("");
+                    setSearchOpen(false);
+                  }
+                }}
+                placeholder="search transcript..."
+                className="min-w-0 flex-1 bg-transparent text-xs px-2 h-7 border border-input focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
+              />
+            ) : (
+              <div className="flex min-w-0 flex-1 items-center gap-2">
                 <span
-                  aria-hidden
-                  className={cn(
-                    "h-1.5 w-1.5 shrink-0 rounded-full",
-                    transcriptState === "recovering"
-                      ? "bg-amber-500"
-                      : isLive
-                        ? "bg-foreground"
-                        : "bg-muted-foreground/45",
-                    isLive &&
-                      transcriptState !== "recovering" &&
-                      "animate-pulse motion-reduce:animate-none",
-                  )}
-                />
-                <span className="truncate">{transcriptState}</span>
-              </span>
-              {transcriptStateDetail && (
-                <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
-                  {transcriptStateDetail}
+                  className="inline-flex min-w-0 items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-foreground"
+                  role="status"
+                  aria-label={`transcript status: ${transcriptState}`}
+                  data-testid="transcript-stream-status"
+                >
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "h-1.5 w-1.5 shrink-0 rounded-full",
+                      transcriptState === "recovering"
+                        ? "bg-amber-500"
+                        : isLive
+                          ? "bg-foreground"
+                          : "bg-muted-foreground/45",
+                      isLive &&
+                        transcriptState !== "recovering" &&
+                        "animate-pulse motion-reduce:animate-none",
+                    )}
+                  />
+                  <span className="truncate">{transcriptState}</span>
                 </span>
+                {transcriptStateDetail && (
+                  <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">
+                    {transcriptStateDetail}
+                  </span>
+                )}
+              </div>
+            )}
+            {query.trim() && (
+              <span
+                className="shrink-0 text-[10px] tabular-nums text-muted-foreground"
+                title="matching segments"
+              >
+                {filteredBlocks.length}/{displayBlocks.length}
+              </span>
+            )}
+            <div className="flex items-center gap-1 shrink-0">
+              {headerActions}
+              {showSearch && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setSearchOpen((prev) => {
+                      const next = !prev;
+                      if (!next) setQuery("");
+                      return next;
+                    });
+                  }}
+                  className={cn(
+                    "h-7 w-7 p-0",
+                    searchOpen && "bg-accent text-accent-foreground",
+                  )}
+                  title={searchOpen ? "hide search" : "search transcript (⌘F)"}
+                  aria-label={
+                    searchOpen ? "hide transcript search" : "search transcript"
+                  }
+                  aria-pressed={searchOpen}
+                >
+                  <Search className="h-3.5 w-3.5" />
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleCopy}
+                disabled={displayBlocks.length === 0}
+                className="h-7 w-7 p-0"
+                title={copied ? "copied" : "copy transcript"}
+                aria-label={copied ? "transcript copied" : "copy transcript"}
+              >
+                {copied ? (
+                  <Check className="h-3.5 w-3.5" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5" />
+                )}
+              </Button>
+              {!isSurface && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onClose}
+                  className="h-7 w-7 p-0"
+                  title="close transcript"
+                  aria-label="close transcript"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
               )}
             </div>
-          )}
-          {query.trim() && (
-            <span
-              className="shrink-0 text-[10px] tabular-nums text-muted-foreground"
-              title="matching segments"
-            >
-              {filteredBlocks.length}/{displayBlocks.length}
-            </span>
-          )}
-          <div className="flex items-center gap-1 shrink-0">
-            {headerActions}
-            {showSearch && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setSearchOpen((prev) => {
-                    const next = !prev;
-                    if (!next) setQuery("");
-                    return next;
-                  });
-                }}
-                className={cn(
-                  "h-7 w-7 p-0",
-                  searchOpen && "bg-accent text-accent-foreground",
-                )}
-                title={searchOpen ? "hide search" : "search transcript (⌘F)"}
-                aria-label={
-                  searchOpen ? "hide transcript search" : "search transcript"
-                }
-                aria-pressed={searchOpen}
-              >
-                <Search className="h-3.5 w-3.5" />
-              </Button>
-            )}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleCopy}
-              disabled={displayBlocks.length === 0}
-              className="h-7 w-7 p-0"
-              title={copied ? "copied" : "copy transcript"}
-              aria-label={copied ? "transcript copied" : "copy transcript"}
-            >
-              {copied ? (
-                <Check className="h-3.5 w-3.5" />
-              ) : (
-                <Copy className="h-3.5 w-3.5" />
-              )}
-            </Button>
-            {!isSurface && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={onClose}
-                className="h-7 w-7 p-0"
-                title="close transcript"
-                aria-label="close transcript"
-              >
-                <X className="h-3.5 w-3.5" />
-              </Button>
-            )}
           </div>
         </header>
 
         {showRecoveryBanner && (
-          <div className="flex items-start gap-2 border-b border-amber-500/20 bg-amber-500/10 px-4 py-2 text-xs text-amber-900 dark:text-amber-200">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span className="leading-5">{recoveryMessage}</span>
+          <div className="border-b border-amber-500/20 bg-amber-500/10 text-xs text-amber-900 dark:text-amber-200">
+            <div
+              className={cn(contentShellClass, "flex items-start gap-2 py-2")}
+            >
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span className="leading-5">{recoveryMessage}</span>
+            </div>
           </div>
         )}
 
@@ -1036,7 +1050,8 @@ export function TranscriptPanel({
             {emptyCopy && (
               <div
                 className={cn(
-                  "flex items-center gap-3 px-4 text-xs text-muted-foreground",
+                  "flex items-center gap-3 text-xs text-muted-foreground",
+                  contentShellClass,
                   compactEmptyState
                     ? "min-h-14 justify-start text-left"
                     : "min-h-full justify-center py-8 text-center",
@@ -1060,6 +1075,7 @@ export function TranscriptPanel({
                 blocks={filteredBlocks}
                 query={query}
                 onSpeakerAssigned={refetch}
+                className={contentShellClass}
               />
             )}
             <span
@@ -1101,13 +1117,19 @@ export const TranscriptRows = React.memo(function TranscriptRows({
   blocks,
   query,
   onSpeakerAssigned,
+  className,
 }: {
   blocks: SpeakerBlock[];
   query: string;
   onSpeakerAssigned: () => void;
+  /** Horizontal shell so the turns line up with whatever renders above them. */
+  className?: string;
 }) {
   return (
-    <ol className="space-y-0.5 px-4 pb-10 pt-3" aria-label="meeting transcript">
+    <ol
+      className={cn("space-y-0.5 pb-10 pt-3", className ?? "px-4")}
+      aria-label="meeting transcript"
+    >
       {blocks.map((block, index) => (
         <SpeakerParagraph
           key={block.key}

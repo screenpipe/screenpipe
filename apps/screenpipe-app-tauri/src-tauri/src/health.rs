@@ -7,6 +7,7 @@ use anyhow::Result;
 use dark_light::Mode;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
+use serde_json::json;
 use std::sync::{atomic::Ordering, RwLock};
 use std::time::Instant;
 use tauri::{path::BaseDirectory, Emitter, Manager};
@@ -454,6 +455,13 @@ struct HealthCheckResponse {
     last_ui_timestamp: Option<String>,
     #[serde(default)]
     frame_status: Option<String>,
+    /// Capture-loop stage the engine last entered, and its age. Explains a
+    /// `frame_status == "stale"` instead of leaving the incident with only a
+    /// frozen clock. Absent on engines predating the stage marker.
+    #[serde(default)]
+    loop_stage: Option<String>,
+    #[serde(default)]
+    loop_stage_age_secs: Option<u64>,
     #[serde(default)]
     audio_status: Option<String>,
     #[serde(default)]
@@ -1242,6 +1250,9 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
     // One notification per hard-failure run (see the `>=` + latch rationale
     // at the notification site).
     let mut vision_hard_notified = false;
+    // One detected/recovered analytics pair per incident run, independent of
+    // the notification setting (which defaults off).
+    let mut stall_reported = false;
     let mut vision_progress = VisionProgressTracker::default();
     let mut last_audio_notification: Option<Instant> = None;
     let mut last_vision_notification: Option<Instant> = None;
@@ -1720,6 +1731,38 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                                 recovered_after
                             );
                         }
+                        if stall_reported {
+                            stall_reported = false;
+                            send_capture_stall_event(
+                                &app,
+                                "capture_stall_recovered",
+                                json!({
+                                    "stale_checks": recovered_after,
+                                    "user_active": user_active,
+                                }),
+                            )
+                            .await;
+                        }
+                    }
+
+                    // Fleet visibility for the gone-silent stall, emitted on the
+                    // confirmation edge and NOT gated on `show_restart_notifications`:
+                    // that setting defaults off, so gating here would undercount the
+                    // incident to near zero. Content-free — stage name, ages and a
+                    // presence flag only, never window titles, app names or pixels.
+                    if !stall_reported && stale_tier.confirmed() {
+                        stall_reported = true;
+                        send_capture_stall_event(
+                            &app,
+                            "capture_stall_detected",
+                            json!({
+                                "stale_checks": stale_tier.consecutive(),
+                                "user_active": user_active,
+                                "loop_stage": health.loop_stage.clone(),
+                                "loop_stage_age_secs": health.loop_stage_age_secs,
+                            }),
+                        )
+                        .await;
                     }
 
                     // After wake from sleep, reset stall counters and notification
@@ -1896,6 +1939,26 @@ async fn show_port_conflict_notification(app: &tauri::AppHandle, error_msg: &str
         .map_err(|e| anyhow::anyhow!(e))
 }
 
+/// Report a capture-stall incident edge to analytics.
+///
+/// Deliberately NOT gated on `show_restart_notifications`: that setting
+/// defaults off, so gating here would undercount the incident to near zero and
+/// leave us unable to answer "how many users hit this". Respects the user's
+/// analytics opt-out, which `AnalyticsManager::send_event` already enforces.
+///
+/// Payload is content-free by construction: a stage name from a fixed enum,
+/// integer ages and a presence flag. No window titles, app names, monitor
+/// names, paths or pixels.
+async fn send_capture_stall_event(app: &tauri::AppHandle, event: &str, props: serde_json::Value) {
+    let Some(analytics) = app.try_state::<std::sync::Arc<crate::analytics::AnalyticsManager>>()
+    else {
+        return;
+    };
+    if let Err(e) = analytics.send_event(event, Some(props)).await {
+        debug!("failed to send {event} analytics: {e}");
+    }
+}
+
 /// Show a notification telling the user that capture has stalled, with a restart button.
 /// Skips showing if the main overlay panel is visible — the notification panel
 /// steals focus and causes a deadlock with the overlay's focus-loss handler.
@@ -1997,6 +2060,8 @@ mod tests {
             last_audio_timestamp: None,
             last_ui_timestamp: None,
             frame_status: None,
+            loop_stage: None,
+            loop_stage_age_secs: None,
             audio_status: None,
             ui_status: None,
             message: None,
@@ -2022,6 +2087,8 @@ mod tests {
             last_audio_timestamp: None,
             last_ui_timestamp: None,
             frame_status: None,
+            loop_stage: None,
+            loop_stage_age_secs: None,
             audio_status: None,
             ui_status: None,
             message: None,

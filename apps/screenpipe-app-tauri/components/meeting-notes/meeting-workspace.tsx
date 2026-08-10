@@ -20,6 +20,13 @@ export const MEETING_SHELL_CLASS = "mx-auto w-full max-w-3xl px-5 sm:px-8";
 // highlighting must have a width-limited container to paint inside.
 export const MEETING_READING_COLUMN_CLASS = "w-full";
 
+// Secondary controls (back, copy, overflow) share one recessive treatment:
+// no border, no fill, muted until pointer or keyboard intent. The meeting view
+// had accumulated several bordered 36px squares that each read as important as
+// the title or the primary action, which is what made the surface feel busy.
+export const MEETING_QUIET_CONTROL_CLASS =
+  "rounded-none border-0 bg-transparent text-muted-foreground transition-colors hover:bg-transparent hover:text-foreground focus-visible:text-foreground";
+
 const MEETING_TABS: ReadonlyArray<{
   value: MeetingWorkspaceTab;
   label: string;

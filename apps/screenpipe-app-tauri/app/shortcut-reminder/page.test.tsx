@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
     items: [] as Array<{
       meetingId: number;
       itemId: string;
+      deviceName: string;
       deviceType: string;
       speakerName: string | null;
       text: string;
@@ -137,6 +138,7 @@ describe("recording health hover detail", () => {
       {
         meetingId: 42,
         itemId: "live-1",
+        deviceName: "system audio",
         deviceType: "output",
         speakerName: "speaker 1",
         text: "the live transcript keeps moving",
@@ -154,6 +156,36 @@ describe("recording health hover detail", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "stop" }));
     expect(mocks.stopMeeting).toHaveBeenCalledTimes(1);
+  });
+
+  it("stacks the meeting dot under the unread dot on the notifications bell", async () => {
+    mocks.getRecordingHealthState.mockResolvedValue("normal");
+    mocks.meetingOverlayState.active = true;
+    mocks.meetingOverlayState.activeMeetingId = 42;
+    mocks.meetingOverlayState.stoppableMeetingId = 42;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [{ read: false, priority: "high" }],
+      }),
+    );
+
+    render(<ShortcutReminderPage />);
+
+    const meetingDot = await screen.findByRole("status", { name: "Meeting live" });
+    const bell = screen.getByTitle("notifications");
+    // Both live signals hang off the same bell, so a running meeting never
+    // moves the "we are live" marker somewhere else in the pill.
+    expect(bell).toContainElement(meetingDot);
+    const unreadDot = bell.querySelector("span.bg-white");
+    expect(unreadDot).not.toBeNull();
+
+    // Mirrored: unread sits top right, meeting sits bottom right, same column.
+    expect(meetingDot).toHaveStyle({ bottom: "-1px", right: "-1px" });
+    expect(unreadDot).toHaveStyle({ top: "-1px", right: "-1px" });
+    // The dot must never eat the click that opens the inbox.
+    expect(meetingDot.className).toContain("pointer-events-none");
   });
 
   it("keeps recording health ahead of the meeting preview", async () => {

@@ -439,6 +439,12 @@ pub struct HealthCheckResponse {
     pub last_frame_timestamp: Option<chrono::DateTime<Utc>>,
     pub last_audio_timestamp: Option<chrono::DateTime<Utc>>,
     pub frame_status: String,
+    /// Capture-loop stage last entered, and how long ago. A frozen loop is the
+    /// only thing that can make `frame_status` stale (it is a max of the DB
+    /// write, capture attempt and loop heartbeat clocks), so these two fields
+    /// are what turn "stale" into a locatable freeze point.
+    pub loop_stage: String,
+    pub loop_stage_age_secs: Option<u64>,
     pub audio_status: String,
     pub message: String,
     pub verbose_instructions: Option<String>,
@@ -746,6 +752,8 @@ fn degraded_response() -> HealthCheckResponse {
         last_frame_timestamp: None,
         last_audio_timestamp: None,
         frame_status: "unknown".to_string(),
+        loop_stage: "unknown".to_string(),
+        loop_stage_age_secs: None,
         audio_status: "unknown".to_string(),
         message: "health check timed out before producing a snapshot".to_string(),
         verbose_instructions: None,
@@ -927,6 +935,13 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     // basic "is alive" check. Focus-aware capture can intentionally park a
     // non-focused display without attempts for minutes; its loop heartbeat
     // distinguishes that healthy state from a blocked or exited task.
+    // Stage marker for the aggregate loop. Only meaningful alongside a stale
+    // frame_status: a healthy loop overwrites it several times a second.
+    let (vision_loop_stage, vision_loop_stage_entered_ts) = {
+        let (stage, ts) = state.vision_metrics.loop_stage();
+        (stage, (ts > 0).then_some(ts))
+    };
+
     let last_frame_ts = vision_snap
         .last_db_write_ts
         .max(vision_snap.last_capture_attempt_ts)
@@ -1586,6 +1601,9 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
             None
         },
         frame_status: frame_status.to_string(),
+        loop_stage: vision_loop_stage.as_str().to_string(),
+        loop_stage_age_secs: vision_loop_stage_entered_ts
+            .and_then(|ts| (ts > 0).then(|| now_ts.saturating_sub(ts))),
         audio_status,
         message,
         verbose_instructions,
@@ -1954,6 +1972,8 @@ mod tests {
             last_frame_timestamp: None,
             last_audio_timestamp: None,
             frame_status: "ok".to_string(),
+            loop_stage: "unknown".to_string(),
+            loop_stage_age_secs: None,
             audio_status: "ok".to_string(),
             message: "test".to_string(),
             verbose_instructions: None,

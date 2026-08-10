@@ -2068,7 +2068,7 @@ export function BrainSection() {
                         }
                       >
                         <MessageSquare className="mr-2 h-3.5 w-3.5" />
-                        {target.mode === "pipe-run" ? "go to scheduled run" : "go to chat"}
+                        {target.mode === "pipe-run" ? "go to task run" : "go to chat"}
                       </DropdownMenuItem>
                     )}
                     <DropdownMenuItem
@@ -2633,7 +2633,7 @@ export function BrainSection() {
                               >
                                 <MessageSquare className="mr-2 h-3.5 w-3.5" />
                                 {target.mode === "pipe-run"
-                                  ? "go to scheduled run"
+                                  ? "go to task run"
                                   : "go to chat"}
                               </DropdownMenuItem>
                             )}

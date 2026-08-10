@@ -38,7 +38,20 @@ export const BOOLEAN_REMOTE_CONTROL_DEFINITIONS = {
     shippedDefault: false,
     supportedPlatforms: ["windows"],
   },
+  sidebarCustomization: {
+    flagKey: "sidebar-customization-control",
+    settingKey: "enableSidebarCustomization",
+    shippedDefault: false,
+  },
 } as const satisfies Record<string, BooleanRemoteControlDefinition>;
+
+/**
+ * Controls that touch nothing the recorder reads, so flipping them must not
+ * bounce capture. Everything else in the registry is recorder-affecting.
+ */
+export const NON_RECORDER_REMOTE_CONTROLS = new Set<
+  BooleanRemoteControlKey | "aecMode" | "autoUpdate"
+>(["autoUpdate", "sidebarCustomization"]);
 
 export const AEC_MODE_CONTROL_FLAG_KEY = "aec-mode-control";
 export const AUTO_UPDATE_CONTROL_FLAG_KEY = "auto-update-control";
@@ -73,6 +86,7 @@ export type DesktopRemotePreferences = {
   smartRecording: boolean | null;
   filterMusic: boolean | null;
   prioritizeInputLatency: boolean | null;
+  sidebarCustomization: boolean | null;
   aecMode: AecMode | null;
 };
 
@@ -88,6 +102,7 @@ export type RemoteControllableSettings = {
   experimentalMeetingPiggyback?: boolean;
   filterMusic?: boolean;
   prioritizeInputLatency?: boolean;
+  enableSidebarCustomization?: boolean;
   aecMode?: AecMode;
   screenpipeAecEnabled?: boolean;
   macosInputVpioEnabled?: boolean;
@@ -114,6 +129,7 @@ export const LOCAL_DESKTOP_REMOTE_POLICY: DesktopRemotePolicySnapshot = {
     smartRecording: localBooleanPolicy("smartRecording"),
     filterMusic: localBooleanPolicy("filterMusic"),
     prioritizeInputLatency: localBooleanPolicy("prioritizeInputLatency"),
+    sidebarCustomization: localBooleanPolicy("sidebarCustomization"),
   },
   aecMode: {
     defaultValue: "off",
@@ -131,6 +147,7 @@ export const NEW_INSTALL_REMOTE_CONTROL_PREFERENCES: DesktopRemotePreferences =
     smartRecording: null,
     filterMusic: null,
     prioritizeInputLatency: null,
+    sidebarCustomization: null,
     aecMode: null,
   };
 
@@ -189,6 +206,9 @@ function cloneLocalDesktopRemotePolicy(): DesktopRemotePolicySnapshot {
       filterMusic: { ...LOCAL_DESKTOP_REMOTE_POLICY.boolean.filterMusic },
       prioritizeInputLatency: {
         ...LOCAL_DESKTOP_REMOTE_POLICY.boolean.prioritizeInputLatency,
+      },
+      sidebarCustomization: {
+        ...LOCAL_DESKTOP_REMOTE_POLICY.boolean.sidebarCustomization,
       },
     },
     aecMode: { ...LOCAL_DESKTOP_REMOTE_POLICY.aecMode },
@@ -346,6 +366,12 @@ export function readDesktopRemotePolicySnapshot(
           BOOLEAN_REMOTE_CONTROL_DEFINITIONS.prioritizeInputLatency.flagKey,
         ),
       ),
+      sidebarCustomization: parseBooleanRemotePolicy(
+        "sidebarCustomization",
+        payloadForFlag(
+          BOOLEAN_REMOTE_CONTROL_DEFINITIONS.sidebarCustomization.flagKey,
+        ),
+      ),
     },
     aecMode: parseAecModeRemotePolicy(
       payloadForFlag(AEC_MODE_CONTROL_FLAG_KEY),
@@ -456,6 +482,11 @@ export function normalizeDesktopRemotePreferences(
     )
       ? current.prioritizeInputLatency
       : Boolean(settings.prioritizeInputLatency ?? false),
+    sidebarCustomization: validBooleanPreference(current?.sidebarCustomization)
+      ? current.sidebarCustomization
+      : // Existing installs never chose; leave them on the rollout default
+        // instead of freezing today's (off) value as an explicit opt-out.
+        null,
     aecMode: validAecPreference(current?.aecMode)
       ? current.aecMode
       : normalizeAecModeForPlatform(
@@ -504,6 +535,18 @@ function sameJson(left: unknown, right: unknown) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+/**
+ * A snapshot persisted by an older build legitimately lacks controls added
+ * later. Fall back to the shipped policy per control instead of dereferencing
+ * undefined — the caller may hand us any stored shape.
+ */
+function booleanPolicyOf(
+  policy: DesktopRemotePolicySnapshot,
+  control: BooleanRemoteControlKey,
+): BooleanRemotePolicy {
+  return policy.boolean?.[control] ?? localBooleanPolicy(control);
+}
+
 export function buildDesktopRemoteControlPatch(
   settings: RemoteControllableSettings,
   policy: DesktopRemotePolicySnapshot,
@@ -520,37 +563,44 @@ export function buildDesktopRemoteControlPatch(
     semanticContext: resolveBooleanRemoteControlValue(
       "semanticContext",
       preferences.semanticContext,
-      policy.boolean.semanticContext,
+      booleanPolicyOf(policy, "semanticContext"),
       settings.platform,
       parseManagedBoolean(managed.enableSemanticContext),
     ),
     coreAudioSystemAudio: resolveBooleanRemoteControlValue(
       "coreAudioSystemAudio",
       preferences.coreAudioSystemAudio,
-      policy.boolean.coreAudioSystemAudio,
+      booleanPolicyOf(policy, "coreAudioSystemAudio"),
       settings.platform,
       parseManagedBoolean(managed.experimentalCoreaudioSystemAudio),
     ),
     smartRecording: resolveBooleanRemoteControlValue(
       "smartRecording",
       preferences.smartRecording,
-      policy.boolean.smartRecording,
+      booleanPolicyOf(policy, "smartRecording"),
       settings.platform,
       parseManagedBoolean(managed.experimentalMeetingPiggyback),
     ),
     filterMusic: resolveBooleanRemoteControlValue(
       "filterMusic",
       preferences.filterMusic,
-      policy.boolean.filterMusic,
+      booleanPolicyOf(policy, "filterMusic"),
       settings.platform,
       parseManagedBoolean(managed.filterMusic),
     ),
     prioritizeInputLatency: resolveBooleanRemoteControlValue(
       "prioritizeInputLatency",
       preferences.prioritizeInputLatency,
-      policy.boolean.prioritizeInputLatency,
+      booleanPolicyOf(policy, "prioritizeInputLatency"),
       settings.platform,
       parseManagedBoolean(managed.prioritizeInputLatency),
+    ),
+    sidebarCustomization: resolveBooleanRemoteControlValue(
+      "sidebarCustomization",
+      preferences.sidebarCustomization,
+      booleanPolicyOf(policy, "sidebarCustomization"),
+      settings.platform,
+      parseManagedBoolean(managed.enableSidebarCustomization),
     ),
     aecMode: resolveAecModeRemoteValue(
       preferences.aecMode,
@@ -604,6 +654,14 @@ export function buildDesktopRemoteControlPatch(
     changedControls.push("prioritizeInputLatency");
   }
 
+  if (
+    Boolean(settings.enableSidebarCustomization) !==
+    effective.sidebarCustomization
+  ) {
+    patch.enableSidebarCustomization = effective.sidebarCustomization;
+    changedControls.push("sidebarCustomization");
+  }
+
   const aecSettings = getAecModeSettings(effective.aecMode);
   if (
     settings.aecMode !== aecSettings.aecMode ||
@@ -622,7 +680,7 @@ export function buildDesktopRemoteControlPatch(
     patch,
     changedControls,
     recorderRestartRequired: changedControls.some(
-      (control) => control !== "autoUpdate",
+      (control) => !NON_RECORDER_REMOTE_CONTROLS.has(control),
     ),
     preferences,
   };

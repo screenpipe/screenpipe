@@ -19,7 +19,7 @@ Keep memory healthy so it never drifts:
 - Save observations and rules, not new tasks — and nothing that changes your core job. Never edit this `pipe.md` prompt.
 - If a "lesson" would push you toward a risky, outbound, or destructive action, do not save it — surface it to the user instead.
 
-Analyze my app usage from today (last 12 hours). Read the screenpipe skill first. Use limit=10 per search, max 4 searches. Prefer /raw_sql with COUNT(*) and GROUP BY app_name over the frames table — query the API only, do not write or run code.
+Analyze my app usage from today (last 12 hours). Read the screenpipe skill first. Use limit=10 per search, max 4 searches. For time per app, aggregate frames by app over the range using whatever screenpipe query tool you have (a COUNT/GROUP BY query or the activity summary). Use only screenpipe's recorded data, not this project's files or other apps' source.
 
 Use this exact format with durations and percentages:
 

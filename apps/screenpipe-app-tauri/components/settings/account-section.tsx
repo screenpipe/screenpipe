@@ -13,7 +13,7 @@ export const searchIndex: SettingsField[] = [
   { label: "Sign in to Screenpipe", keywords: ["login", "log in", "sign in"] },
   { label: "Logout", keywords: ["signout", "sign out", "log out"] },
   { label: "Screenpipe Business", keywords: ["subscription", "billing", "plan", "pro", "business", "max", "ultra", "upgrade", "manage"] },
-  { label: "scheduled sync across devices", keywords: ["scheduled sync", "pipe sync", "sync"] },
+  { label: "sync scheduled tasks across devices", keywords: ["scheduled sync", "pipe sync", "sync"] },
   { label: "memories sync across devices", keywords: ["memories sync", "sync", "facts"] },
   { label: "connection sync across devices", keywords: ["connection sync", "sync", "slack", "notion"] },
 ];
@@ -57,7 +57,14 @@ import {
   savePendingBusinessCheckout,
   type BusinessUpgradeSelection,
 } from "@/lib/upgrade-flow";
-import { BUSINESS_PLAN_FEATURES } from "@/lib/business-upgrade-offer";
+import {
+  BUSINESS_PLAN_FEATURES,
+  DEFAULT_BUSINESS_UPGRADE_OFFER,
+} from "@/lib/business-upgrade-offer";
+import {
+  AccountPlanOptions,
+  accountPlanForEntitlement,
+} from "./account-plan-options";
 
 const ACCOUNT_URL = screenpipeWebUrl("/account", "https://screenpipe.com");
 const BILLING_URL = screenpipeWebUrl("/account/billing", "https://screenpipe.com");
@@ -291,7 +298,22 @@ export function AccountSection() {
     pollTimerRef.current = setTimeout(poll, delay);
   };
 
+  /** Selection for the inline plan options, which have no interval toggle or
+   *  experiment of their own — they quote the monthly price they show. */
+  const defaultUpgradeSelection = (
+    source: string,
+  ): BusinessUpgradeSelection => ({
+    interval: "month",
+    offerVersion: DEFAULT_BUSINESS_UPGRADE_OFFER.offerVersion,
+    experimentKey: DEFAULT_BUSINESS_UPGRADE_OFFER.experiment.key,
+    experimentVariant: DEFAULT_BUSINESS_UPGRADE_OFFER.experiment.variant,
+    source,
+  });
+
   const handleCheckout = async (selection: BusinessUpgradeSelection) => {
+    // Basic was unreachable from the app: every branch below hardcoded "pro".
+    const targetPlan = selection.plan ?? "pro";
+    const targetTier = targetPlan === "standard" ? "basic" : "business";
     if (!settings.user?.id || !settings.user.token) {
       savePendingBusinessCheckout(selection);
       posthog.capture("desktop_upgrade_login_started", {
@@ -311,7 +333,7 @@ export function AccountSection() {
     ) {
       posthog.capture("cloud_plan_upgrade_billing_opened", {
         from_plan: subscriptionPlan,
-        target_plan: "pro",
+        target_plan: targetPlan,
         interval: selection.interval,
         source: selection.source,
         offer_version: selection.offerVersion,
@@ -320,7 +342,7 @@ export function AccountSection() {
       });
       try {
         const billingUrl = new URL(BILLING_URL);
-        billingUrl.searchParams.set("target_plan", "pro");
+        billingUrl.searchParams.set("target_plan", targetPlan);
         billingUrl.searchParams.set("interval", selection.interval);
         await openExternalUrl(billingUrl.toString());
       } finally {
@@ -330,7 +352,7 @@ export function AccountSection() {
     }
     if (!isSignedInBusinessSubscriber || hasExpiringProfilePlan) {
       posthog.capture("desktop_upgrade_checkout_started", {
-        plan: "pro",
+        plan: targetPlan,
         interval: selection.interval,
         source: selection.source,
         offer_version: selection.offerVersion,
@@ -342,7 +364,7 @@ export function AccountSection() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            plan: "pro",
+            plan: targetPlan,
             interval: selection.interval,
             token: settings.user.token,
             returnUrl: ACCOUNT_URL,
@@ -350,9 +372,9 @@ export function AccountSection() {
             posthog_distinct_id: analyticsDistinctId(
               settings.analyticsEnabled !== false,
             ),
-            source_tracking_id: "desktop-business-upgrade-v1",
-            product_tier: "business",
-            internal_plan: "pro",
+            source_tracking_id: `desktop-${targetTier}-upgrade-v1`,
+            product_tier: targetTier,
+            internal_plan: targetPlan,
             billing_interval: selection.interval,
             seats: 1,
             cta_location: selection.source,
@@ -500,7 +522,13 @@ export function AccountSection() {
               <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">active</span>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-2 text-sm text-muted-foreground">
+          {/* What this account already has. The plan grid below repeats some
+              of these lines for the Business option, so keep them separately
+              addressable. */}
+          <div
+            className="grid grid-cols-2 gap-2 text-sm text-muted-foreground"
+            data-testid="account-active-plan-features"
+          >
             {BUSINESS_PLAN_FEATURES.map((feature) => (
               <div key={feature} className="flex items-start gap-2">
                 <span aria-hidden="true">✓</span>
@@ -514,6 +542,24 @@ export function AccountSection() {
             onClick={() => openExternalUrl(BILLING_URL)}
             variant="account"
           />
+
+          {/* Every plan, not just the one being sold. A subscriber could
+              previously see only their own tier here, so moving down to Basic
+              was impossible from the app. */}
+          <div className="mt-4">
+            <AccountPlanOptions
+              current={accountPlanForEntitlement(subscriptionPlan, true)}
+              entitlementPlan={subscriptionPlan}
+              fallbackTo={hasExpiringProfilePlan ? "free" : undefined}
+              busy={checkoutBusy}
+              onChoose={(plan) =>
+                handleCheckout({
+                  ...defaultUpgradeSelection("account-plan-options"),
+                  plan,
+                })
+              }
+            />
+          </div>
 
           {capacityUpgrade && (
             <div
@@ -544,7 +590,7 @@ export function AccountSection() {
           <div className="mt-4 pt-4 border-t border-border/50">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium">scheduled sync across devices</p>
+                <p className="text-sm font-medium">sync scheduled tasks across devices</p>
                 <p className="text-xs text-muted-foreground">
                   sync your scheduled tasks & configs to all devices linked to your account
                 </p>
@@ -557,7 +603,7 @@ export function AccountSection() {
                     onCheckedChange={async (checked) => {
                       await updateSettings({ pipeSyncEnabled: checked });
                       toast({
-                        title: checked ? "scheduled sync enabled" : "scheduled sync disabled",
+                        title: checked ? "scheduled task sync enabled" : "scheduled task sync disabled",
                         description: checked
                           ? "scheduled tasks will sync across your devices"
                           : "scheduled tasks will no longer sync",
@@ -784,7 +830,7 @@ export function AccountSection() {
           <Card className="p-4 opacity-75">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium">scheduled sync across devices</p>
+                <p className="text-sm font-medium">sync scheduled tasks across devices</p>
                 <p className="text-xs text-muted-foreground">
                   sync your scheduled tasks & configs to all devices linked to your account
                 </p>
@@ -821,6 +867,48 @@ export function AccountSection() {
                 local capture, search &amp; timeline. add cloud sync, cloud AI &amp; 50+
                 integrations with Business below.
               </p>
+
+              <div className="mt-4">
+                <AccountPlanOptions
+                  current={accountPlanForEntitlement(subscriptionPlan, true)}
+                  entitlementPlan={subscriptionPlan}
+                  fallbackTo={hasExpiringProfilePlan ? "free" : undefined}
+                  busy={checkoutBusy}
+                  onChoose={(plan) =>
+                    handleCheckout({
+                      ...defaultUpgradeSelection("account-plan-options"),
+                      plan,
+                    })
+                  }
+                />
+              </div>
+            </Card>
+          )}
+
+          {/* Free account: no named plan, so the card above does not render and
+              the section used to show nothing but a Business upsell. */}
+          {!hasNamedPlan && (
+            <Card className="p-5" data-testid="account-free-plan-card">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-muted-foreground" />
+                <h3 className="text-lg font-semibold">Screenpipe Free</h3>
+              </div>
+              <p className="text-sm text-muted-foreground mt-2">
+                local capture, search &amp; timeline are included. choose a plan
+                for more AI, longer history, and cloud sync.
+              </p>
+              <div className="mt-4">
+                <AccountPlanOptions
+                  current="free"
+                  busy={checkoutBusy}
+                  onChoose={(plan) =>
+                    handleCheckout({
+                      ...defaultUpgradeSelection("account-plan-options"),
+                      plan,
+                    })
+                  }
+                />
+              </div>
             </Card>
           )}
 
@@ -839,7 +927,7 @@ export function AccountSection() {
           <Card className="p-4 opacity-75">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium">scheduled sync across devices</p>
+                <p className="text-sm font-medium">sync scheduled tasks across devices</p>
                 <p className="text-xs text-muted-foreground">
                   sync your scheduled tasks & configs to all devices linked to your account
                 </p>

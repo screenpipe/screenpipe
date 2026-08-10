@@ -461,8 +461,10 @@ fn dir_has_conversations(dir: &std::path::Path) -> bool {
 ///
 /// One-time migration: for a relocated data dir whose `chats/` is still empty,
 /// copy conversations from the legacy `~/.screenpipe/chats` so history isn't
-/// orphaned. Skipped under e2e (`SCREENPIPE_E2E_SEED` set) so isolated runs
-/// stay empty.
+/// orphaned. Skipped under e2e (`SCREENPIPE_E2E_SEED` set) and under dev
+/// isolation so isolated runs stay empty — otherwise `bun tauri dev` copies the
+/// developer's entire production chat history into `~/.screenpipe-dev`, which
+/// is exactly the state sharing dev isolation exists to prevent.
 #[tauri::command]
 #[specta::specta]
 pub fn get_chats_dir() -> Result<String, String> {
@@ -470,8 +472,9 @@ pub fn get_chats_dir() -> Result<String, String> {
     let chats = data_dir.join("chats");
     std::fs::create_dir_all(&chats).map_err(|e| e.to_string())?;
 
-    let is_e2e = std::env::var("SCREENPIPE_E2E_SEED").is_ok();
-    if !is_e2e {
+    let is_isolated = std::env::var("SCREENPIPE_E2E_SEED").is_ok()
+        || crate::dev_isolation::is_active();
+    if !is_isolated {
         if let Some(home) = dirs::home_dir() {
             let legacy = home.join(".screenpipe").join("chats");
             if legacy != chats
@@ -2413,13 +2416,14 @@ pub async fn complete_onboarding(app_handle: tauri::AppHandle) -> Result<(), Str
         return Ok(());
     }
 
-    // Setup ends at Brain. If the user built a first Live View it is selected
-    // there; if they skipped, Brain presents the honest create-your-first-view
-    // state instead of dropping them into an unrelated chat screen.
+    // Setup ends at Home. It no longer builds a first Live View, so opening
+    // Brain would land the user on an empty container before anything has been
+    // captured. Home always has something to render, and it is where the
+    // first-run learning window runs and where its summary chat appears.
     show_window(
         app_handle.clone(),
         ShowRewindWindow::Home {
-            page: Some("brain".to_string()),
+            page: Some("home".to_string()),
         },
     )
     .await?;

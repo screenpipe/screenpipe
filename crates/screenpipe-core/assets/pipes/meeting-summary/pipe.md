@@ -3,7 +3,7 @@ schedule: manual
 enabled: true
 preset:
   - screenpipe-cloud
-timeout: 300
+timeout: 600
 trigger:
   events:
     - meeting_ended

@@ -599,7 +599,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       has_images: outgoingImages.length > 0 || !!prefillFrameId,
       has_context: !!prefillContext,
       message_index: messageIndex,
-      ...chatSendTelemetryContext(sendOptions, messageIndex),
+      ...chatSendTelemetryContext(sendOptions, messageIndex, messages),
     });
 
     // No timeout — Pi can run for minutes on long tasks (e.g. 30-day analysis
@@ -784,7 +784,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
           provider: getActivePreset()?.provider,
           model: getActivePreset()?.model,
           error_type: isPiPromptStartTimeout(rawError) ? "start_timeout" : "prompt_dispatch",
-          ...chatSendTelemetryContext(sendOptions, messageIndex),
+          ...chatSendTelemetryContext(sendOptions, messageIndex, messages),
         });
         forceQueueModeRef.current = false;
         setIsLoading(false);

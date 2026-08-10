@@ -100,6 +100,14 @@ import {
   DEFAULT_LIVE_VIEW_PERIOD_POLICY,
   getLiveViewTimeRangeOption,
 } from "@/lib/live-views/time-range";
+import { summarizeLiveViewFreshness } from "@/lib/live-views/freshness";
+import { planSourceCadence } from "@/lib/live-views/source-cadence";
+import {
+  liveViewSourceStatus,
+  parsePipeScheduleSnapshots,
+  stalledSourcePipes,
+  type PipeScheduleSnapshot,
+} from "@/lib/live-views/source-status";
 import {
   commands,
   type AIPreset,
@@ -184,23 +192,6 @@ type AiBlockProposal = {
 const STARTER_DASHBOARD_ID = "my-dashboard";
 const STARTER_DASHBOARD_TITLE = "My dashboard";
 const LIVE_VIEW_ANALYTICS_SCHEMA_VERSION = 2;
-const LIVE_VIEW_FRESHNESS_FORMATTER = new Intl.DateTimeFormat(undefined, {
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-});
-
-function liveViewLatestUpdate(slots: BrainViewSlot[]): string | null {
-  const timestamps = slots.flatMap((slot) => {
-    const timestamp = slot.value?.updatedAt
-      ? Date.parse(slot.value.updatedAt)
-      : Number.NaN;
-    return Number.isFinite(timestamp) ? [timestamp] : [];
-  });
-  if (timestamps.length === 0) return null;
-  return `Latest update: ${LIVE_VIEW_FRESHNESS_FORMATTER.format(Math.max(...timestamps))}`;
-}
 
 function analyticsErrorType(error: unknown): string {
   return error instanceof Error ? error.name : "unknown";
@@ -541,6 +532,7 @@ export function BrainOverview({
   const [canvasSaving, setCanvasSaving] = useState(false);
   const [aiEditingSlotId, setAiEditingSlotId] = useState<string | null>(null);
   const [templateKits, setTemplateKits] = useState<BrainViewTemplateKit[]>([]);
+  const [pipeSchedules, setPipeSchedules] = useState<PipeScheduleSnapshot[]>([]);
   const [templateGalleryOpen, setTemplateGalleryOpen] = useState(false);
   const [createDashboardOpen, setCreateDashboardOpen] = useState(false);
   const [undoView, setUndoView] = useState<ViewDefinition | null>(null);
@@ -576,6 +568,9 @@ export function BrainOverview({
     signature: string;
   } | null>(null);
   const lastRefreshOutcomeRef = useRef<number | null>(null);
+  // Read inside the refresh callback without making the poll's fresh snapshot
+  // re-create that callback (and re-run every effect that depends on it).
+  const pipeSchedulesRef = useRef<PipeScheduleSnapshot[]>([]);
   const canvasLoadTokenRef = useRef(0);
   const canvasLatestRef = useRef<BrainViewCanvasDocument | null>(null);
   const canvasServerRevisionsRef = useRef(new Map<string, number>());
@@ -993,6 +988,35 @@ export function BrainOverview({
   }, [load]);
 
   useEffect(() => {
+    pipeSchedulesRef.current = pipeSchedules;
+  }, [pipeSchedules]);
+
+  // A Block is only as live as its scheduled task. Track which bound tasks are
+  // paused or manual-only so the dashboard can say a Block will not refresh on
+  // its own, instead of showing a value frozen at the last manual click.
+  useEffect(() => {
+    let cancelled = false;
+    const loadPipeSchedules = async () => {
+      try {
+        const response = await localFetch("/pipes");
+        if (!response.ok) return;
+        const body = (await response.json()) as unknown;
+        if (cancelled) return;
+        setPipeSchedules(parsePipeScheduleSnapshots(body));
+      } catch {
+        // Source status is advisory. A failed read leaves every Block
+        // "unknown", which renders exactly like today's UI.
+      }
+    };
+    void loadPipeSchedules();
+    const interval = setInterval(() => void loadPipeSchedules(), 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
     const selectOnboardingDashboard = () => {
       void load(true, selectedLiveViewDashboardId());
     };
@@ -1068,6 +1092,47 @@ export function BrainOverview({
         filled: 0,
         total: boundSlots.length,
       });
+
+      // Give every source feeding this dashboard a cadence before running it.
+      // Otherwise the refresh fills the Block once and the task goes straight
+      // back to never running, so the value silently freezes again. Enabling a
+      // task is not enough on its own: a `manual` schedule leaves the scheduler
+      // with nothing to fire, which is how bundled tasks ship.
+      const cadencePlans = planSourceCadence(
+        [{ slots: boundSlots, timeRange: targetView.timeRange }],
+        pipeSchedulesRef.current,
+      );
+      if (cadencePlans.length > 0) {
+        await Promise.all(
+          cadencePlans.map(async (plan) => {
+            try {
+              const config: Record<string, unknown> = {};
+              if (plan.schedule) config.schedule = plan.schedule;
+              if (plan.enable) config.enabled = true;
+              await localFetch(`/pipes/${encodeURIComponent(plan.pipeName)}/config`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ config }),
+              });
+            } catch {
+              // Non-fatal: the run below still refreshes the Block once.
+            }
+          }),
+        );
+        posthog.capture("live_view_source_cadence_applied", {
+          ...analyticsProperties,
+          scheduled_pipe_count: cadencePlans.filter((plan) => plan.schedule).length,
+          resumed_pipe_count: cadencePlans.filter((plan) => plan.enable).length,
+        });
+        try {
+          const response = await localFetch("/pipes");
+          if (response.ok) {
+            setPipeSchedules(parsePipeScheduleSnapshots(await response.json()));
+          }
+        } catch {
+          // The 30s poll reconciles source status shortly.
+        }
+      }
 
       const failures: string[] = [];
       await Promise.all(
@@ -2827,7 +2892,14 @@ export function BrainOverview({
   if (!view) return null;
   const boundSlotCount = slots.filter((slot) => slot.binding).length;
   const periodRanges = allowedLiveViewTimeRanges(view.periodPolicy);
-  const latestUpdate = liveViewLatestUpdate(slots);
+  const freshness = summarizeLiveViewFreshness(slots);
+  const latestUpdate = freshness.label;
+  const stalledSources = stalledSourcePipes(
+    slots.flatMap((slot) => (slot.binding ? [slot.binding.pipeName] : [])),
+    pipeSchedules,
+  );
+  const stalledSourceCount =
+    stalledSources.paused.length + stalledSources.manual.length;
   const refreshIsActive =
     dataRefresh?.viewId === view.id &&
     (dataRefresh.status === "starting" || dataRefresh.status === "running");
@@ -2955,6 +3027,23 @@ export function BrainOverview({
             )}
           </div>
         </div>
+        {latestUpdate && !onboardingColdStart && (
+          <p
+            data-testid="overview-freshness"
+            className="mb-3 shrink-0 text-[11px] text-muted-foreground"
+          >
+            {latestUpdate}
+            {stalledSourceCount > 0 && (
+              <>
+                {" · "}
+                <span data-testid="overview-stalled-sources">
+                  {stalledSourceCount} source
+                  {stalledSourceCount === 1 ? "" : "s"} only update on refresh
+                </span>
+              </>
+            )}
+          </p>
+        )}
         {canvasError && (
           <div
             data-testid="live-view-canvas-error"
@@ -3126,6 +3215,9 @@ export function BrainOverview({
             slots={proposalSlots}
             timeRange={view.timeRange}
             refreshingSlotIds={refreshingSlotIds}
+            sourceStatusFor={(slot) =>
+              liveViewSourceStatus(slot.binding?.pipeName, pipeSchedules)
+            }
             aiEditingSlotId={aiEditingSlotId}
             onChange={changeVisibleCanvasDocument}
             onFeedback={recordCardFeedback}

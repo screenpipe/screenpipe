@@ -558,15 +558,6 @@ export default function ShortcutReminderPage() {
               active={overlayData.audioActive}
               speechRatio={overlayData.speechRatio}
             />
-            {meetingOverlay.active && (
-              <span
-                role="status"
-                aria-label="Meeting live"
-                title="Meeting live — hover for transcript"
-                className="ml-auto rounded-full bg-red-500 shrink-0"
-                style={{ width: `${dotPx}px`, height: `${dotPx}px` }}
-              />
-            )}
           </div>
           <div className="bg-white/15" />
           <div className="min-w-0 overflow-hidden flex items-center" style={{ padding: `${padY}px ${padX}px` }}>
@@ -593,6 +584,18 @@ export default function ShortcutReminderPage() {
                 <span
                   className="absolute rounded-full bg-white"
                   style={{ top: -1, right: -1, width: `${dotPx}px`, height: `${dotPx}px` }}
+                />
+              )}
+              {/* Live meeting mirrors the unread dot on the same bell, so both
+                  "we are live" signals share one column instead of the meeting
+                  dot floating in the audio cell. */}
+              {meetingOverlay.active && (
+                <span
+                  role="status"
+                  aria-label="Meeting live"
+                  title="Meeting live — hover for transcript"
+                  className="absolute rounded-full bg-red-500 pointer-events-none"
+                  style={{ bottom: -1, right: -1, width: `${dotPx}px`, height: `${dotPx}px` }}
                 />
               )}
               <Bell

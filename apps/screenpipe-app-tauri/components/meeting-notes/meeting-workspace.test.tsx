@@ -7,6 +7,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   extractMeetingSummary,
+  MEETING_QUIET_CONTROL_CLASS,
   MEETING_READING_COLUMN_CLASS,
   MEETING_SHELL_CLASS,
   MeetingSummarySurface,
@@ -28,6 +29,28 @@ describe("meeting shell width contract", () => {
   it("does not let the reading column set a competing width", () => {
     expect(MEETING_READING_COLUMN_CLASS).not.toMatch(/max-w-/);
     expect(MEETING_READING_COLUMN_CLASS).not.toMatch(/mx-auto/);
+  });
+});
+
+// Back, copy and the overflow menu had each accumulated their own border and
+// fill, so a 36px box outweighed the title it sat next to. Secondary controls
+// share one recessive treatment; only the primary action carries weight.
+describe("secondary control treatment", () => {
+  it("keeps secondary controls free of borders and fills", () => {
+    expect(MEETING_QUIET_CONTROL_CLASS).toMatch(/\bborder-0\b/);
+    expect(MEETING_QUIET_CONTROL_CLASS).toMatch(/\bbg-transparent\b/);
+    expect(MEETING_QUIET_CONTROL_CLASS).not.toMatch(/\bborder-border\b/);
+    expect(MEETING_QUIET_CONTROL_CLASS).not.toMatch(/\bbg-background\b/);
+  });
+
+  it("still resolves to full contrast on pointer and keyboard intent", () => {
+    expect(MEETING_QUIET_CONTROL_CLASS).toMatch(/\btext-muted-foreground\b/);
+    expect(MEETING_QUIET_CONTROL_CLASS).toMatch(/hover:text-foreground/);
+    expect(MEETING_QUIET_CONTROL_CLASS).toMatch(/focus-visible:text-foreground/);
+  });
+
+  it("keeps the app's square geometry", () => {
+    expect(MEETING_QUIET_CONTROL_CLASS).toMatch(/\brounded-none\b/);
   });
 });
 

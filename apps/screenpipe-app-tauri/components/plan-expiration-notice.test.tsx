@@ -17,11 +17,23 @@ vi.mock("posthog-js", () => ({
   default: { capture: analyticsMocks.capture },
 }));
 
+// The notice reads the build flag so a team/enterprise plan is not called
+// "Business" here while the account section beside it says "Enterprise".
+// useManagedPolicy throws outside the app shell's provider, so stand in for it.
+const policyMocks = vi.hoisted(() => ({ isManagedDeployment: false }));
+
+vi.mock("@/lib/hooks/use-managed-policy", () => ({
+  useManagedPolicy: () => ({
+    isManagedDeployment: policyMocks.isManagedDeployment,
+  }),
+}));
+
 describe("PlanExpirationNotice", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
     vi.useRealTimers();
+    policyMocks.isManagedDeployment = false;
   });
 
   it("rounds a partial remaining day up", () => {
@@ -137,4 +149,28 @@ describe("PlanExpirationNotice", () => {
 
     expect(screen.getByText("Basic access ends in 1 day")).toBeInTheDocument();
   });
+
+  it.each([
+    ["consumer", false, "Business access ends in 1 day"],
+    ["managed", true, "Enterprise access ends in 1 day"],
+  ])(
+    "names an enterprise plan the same way the account section does (%s build)",
+    (_build, isManagedDeployment, expected) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-21T12:00:00.000Z"));
+      policyMocks.isManagedDeployment = isManagedDeployment;
+
+      render(
+        <PlanExpirationNotice
+          user={{
+            plan_expires_at: "2026-07-22T12:00:00.000Z",
+            subscription_plan: "enterprise",
+          } as AppUser}
+          onClick={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByText(expected)).toBeInTheDocument();
+    },
+  );
 });

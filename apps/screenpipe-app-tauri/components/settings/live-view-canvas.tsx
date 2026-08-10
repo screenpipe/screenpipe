@@ -45,6 +45,7 @@ import {
   ZoomOut,
   X,
 } from "lucide-react";
+import type { LiveViewSourceStatus } from "@/lib/live-views/source-status";
 import {
   LiveViewCard,
   type LiveViewItemActionRequest,
@@ -91,6 +92,7 @@ type CanvasNodeActions = {
 type LiveViewFlowNodeData = CanvasNodeActions & {
   slot: BrainViewSlot;
   timeRange: BrainViewTimeRange;
+  sourceStatus: LiveViewSourceStatus;
   refreshing: boolean;
   feedback: "up" | "down" | null;
   feedbackCorrection: string | null;
@@ -340,6 +342,7 @@ function LiveViewBlockNode({ id, data }: NodeProps<LiveViewFlowNode>) {
         <LiveViewCard
           slot={slot}
           timeRange={data.timeRange}
+          sourceStatus={data.sourceStatus}
           refreshing={data.refreshing}
           feedback={data.feedback}
           feedbackCorrection={data.feedbackCorrection}
@@ -427,6 +430,7 @@ export function LiveViewCanvas({
   slots,
   timeRange,
   refreshingSlotIds,
+  sourceStatusFor = () => "unknown",
   aiEditingSlotId,
   onChange,
   onFeedback,
@@ -442,6 +446,8 @@ export function LiveViewCanvas({
   slots: BrainViewSlot[];
   timeRange: BrainViewTimeRange;
   refreshingSlotIds: Set<string>;
+  /** How the Block's scheduled task refreshes it, if at all. */
+  sourceStatusFor?: (slot: BrainViewSlot) => LiveViewSourceStatus;
   aiEditingSlotId: string | null;
   onChange: (document: BrainViewCanvasDocument, options: ChangeOptions) => void;
   onFeedback: (
@@ -832,6 +838,7 @@ export function LiveViewCanvas({
           data: {
             slot,
             timeRange,
+            sourceStatus: sourceStatusFor(slot),
             refreshing: refreshingSlotIds.has(slot.id),
             feedback: slot.feedback?.current?.rating ?? null,
             feedbackCorrection: slot.feedback?.current?.correction ?? null,
@@ -910,6 +917,7 @@ export function LiveViewCanvas({
     document.notes,
     proposals,
     refreshingSlotIds,
+    sourceStatusFor,
     selection,
     setCanvasSelection,
     slotsById,

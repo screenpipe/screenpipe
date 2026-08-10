@@ -111,7 +111,21 @@ export const config: TestrunnerConfig = {
   // layout, journey/system specs, plus the workflow's separate core-recording spec.
   specs: isWindowsCi ? windowsCiSpecs : allSpecs,
   maxInstances: 1,
-  capabilities: [{ browserName: 'chrome' }],
+  // The W3C default script timeout is 30s, and every `invoke` helper goes
+  // through Execute Async Script, which that timeout governs. On a cold Windows
+  // runner the app installs Pi on first launch — measured at 119.5s, with the
+  // shared bun cache throwing `EBUSY: failed copying files from cache to
+  // destination` throughout — and an invoke issued while that runs is blocked
+  // behind it. The script timeout fired one second before an install completed,
+  // taking the webview's window with it, which is why `Verify background
+  // AI-tool connection` failed deterministically on Windows while macOS passed.
+  // Raise the ceiling past a cold install rather than leaving it under one.
+  capabilities: [
+    {
+      browserName: 'chrome',
+      timeouts: { script: isWindowsCi ? 180000 : 60000 },
+    },
+  ],
   hostname: '127.0.0.1',
   port: WEBDRIVER_PORT,
   path: '/',

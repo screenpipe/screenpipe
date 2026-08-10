@@ -18,6 +18,7 @@ import { acpAdapterInfo } from "@/lib/utils/preset-appearance";
 import { BrowserSidebar } from "@/components/browser-sidebar";
 import { toast } from "@/components/ui/use-toast";
 import type { AIPreset, JsonValue } from "@/lib/utils/tauri";
+import { pickPipePreset } from "@/lib/utils/pick-pipe-preset";
 // OpenAI SDK no longer used directly — all providers route through Pi agent
 import posthog from "posthog-js";
 import { useAcpWarmup } from "@/components/chat/standalone/hooks/use-acp-warmup";
@@ -43,6 +44,7 @@ import {
   isConversationHistorySyncPrompt,
   isInjectedTitleSourcePrompt,
   normalizeComposerMentionsForModel,
+  type ComposerCommandId,
   type ComposerSkillReference,
 } from "@/lib/chat-utils";
 import { useAutoSuggestions } from "@/lib/hooks/use-auto-suggestions";
@@ -161,6 +163,13 @@ export function StandaloneChat({
     () => ({ ...settings, aiPresets: availableAiPresets }) as typeof settings,
     [settings, availableAiPresets],
   );
+  // Preset the first-run summary is written with. Sourced from the
+  // rollout-filtered list so it inherits the ACP gate, and passed down as a
+  // prop so the pane and banner below stay renderable without a provider.
+  const firstRunAiPreset = React.useMemo(
+    () => pickPipePreset(availableAiPresets as AIPreset[]),
+    [availableAiPresets],
+  );
   const { isMac, isWindows, isLoading: isPlatformLoading } = usePlatform();
   const hardcodedConnectionTiles = useHardcodedTiles();
   // Drop the macOS traffic-light reservation when the window is fullscreen
@@ -169,7 +178,13 @@ export function StandaloneChat({
   const isFullscreen = useIsFullscreen();
   const { items: appItems, isLoading: appsLoading, refresh: refreshAppItems } = useSqlAutocomplete("app");
   const { items: tagItems, isLoading: tagsLoading, refresh: refreshTagItems } = useTagAutocomplete();
-  const { suggestions: autoSuggestions, refreshing: suggestionsRefreshing, forceRefresh: refreshSuggestions } = useAutoSuggestions();
+  const {
+    suggestions: autoSuggestions,
+    mode: suggestionMode,
+    loading: suggestionsLoading,
+    refreshing: suggestionsRefreshing,
+    forceRefresh: refreshSuggestions,
+  } = useAutoSuggestions();
   const {
     pipes,
     templatePipes,
@@ -229,6 +244,25 @@ export function StandaloneChat({
     setChipScrollTop,
     clearConnectionChip,
   } = useChatComposerShell();
+  // Holds the exact text a contextual starter put in the composer, so the send
+  // can tell "sent the starter as-is" from "reworked it into their own
+  // question". The second is the outcome the experiment is actually testing —
+  // a click alone proves neither. Cleared once the composer is emptied.
+  const pendingContextualHomeSuggestionRef = useRef<string | null>(null);
+  const fillContextualHomeSuggestion = useCallback(
+    (text: string) => {
+      pendingContextualHomeSuggestionRef.current = text;
+      setInput(text);
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        inputRef.current?.setSelectionRange(text.length, text.length);
+      });
+    },
+    [inputRef, setInput],
+  );
+  useEffect(() => {
+    if (!input.trim()) pendingContextualHomeSuggestionRef.current = null;
+  }, [input]);
   useTryInChatEvent({
     startNewRef: tryInChatStartNewRef,
     setConnectionChip,
@@ -393,6 +427,11 @@ export function StandaloneChat({
   const openMentionConversationRef = useRef<
     ((conversationId: string) => void | Promise<void>) | null
   >(null);
+  // `/` commands run handlers that are declared further down this component, so
+  // they are reached through a ref rather than reordering the whole file.
+  const runComposerCommandRef = useRef<
+    ((commandId: ComposerCommandId) => void | Promise<void>) | null
+  >(null);
 
   const atMentionSuggestions = React.useMemo(
     () => [...STATIC_MENTION_SUGGESTIONS, ...appMentionSuggestions],
@@ -450,6 +489,7 @@ export function StandaloneChat({
     allTagMentionSuggestions,
     onOpenConversation: (targetConversationId) =>
       openMentionConversationRef.current?.(targetConversationId),
+    onRunCommand: (commandId) => runComposerCommandRef.current?.(commandId),
   });
   const dropdownRef = useRef<HTMLDivElement>(null);
   // Root of the chat surface. The webview drag-drop event is window-global and
@@ -1147,6 +1187,27 @@ export function StandaloneChat({
     turnIntentLedgerRef,
   });
 
+  const sendComposerMessage = useCallback(
+    (message: string, displayLabel?: string) => {
+      const filledSuggestion = pendingContextualHomeSuggestionRef.current;
+      pendingContextualHomeSuggestionRef.current = null;
+      if (filledSuggestion === null) {
+        return sendMessage(message, displayLabel, undefined, {
+          composerAuthorship: "user_authored",
+        });
+      }
+      return sendMessage(message, displayLabel, undefined, {
+        entrySource: "home_card",
+        entryCard: "contextual_suggestion",
+        composerAuthorship:
+          message.trim() === filledSuggestion.trim()
+            ? "template_unmodified"
+            : "template_edited",
+      });
+    },
+    [sendMessage],
+  );
+
   // E2E-only: expose the stop action so specs can end a turn and drive sends
   // back-to-back without the Pi subprocess staying busy. Render assignment (the
   // repo's preferred pattern over mirror effects); harmless no-op in production.
@@ -1154,6 +1215,25 @@ export function StandaloneChat({
   if (typeof window !== "undefined") {
     (window as any).__e2eStopChat = handleStop;
   }
+
+  // Render assignment, matching openMentionConversationRef above: every handler
+  // a `/` command needs is defined by this point.
+  runComposerCommandRef.current = async (commandId: ComposerCommandId) => {
+    switch (commandId) {
+      case "new-chat":
+        await startNewConversationRef.current?.();
+        return;
+      case "stop":
+        await handleStop();
+        return;
+      case "inspector":
+        toggleInspector();
+        return;
+      case "pipes":
+        await commands.showWindow({ Home: { page: "pipes" } });
+        return;
+    }
+  };
 
 
   const answerPiExtensionUiRequest = useCallback(async (
@@ -1669,7 +1749,7 @@ export function StandaloneChat({
     isKnownConnectionId: (id) => INTEGRATION_ICON_KEYS.has(id),
     handlePastedFiles,
     attachPastedText,
-    sendMessage,
+    sendMessage: sendComposerMessage,
     steerMessage,
     steerQueuedPrompt,
   });
@@ -1949,6 +2029,8 @@ export function StandaloneChat({
       <div className="flex-1 flex min-h-0" data-browser-panel-host>
       <div className="flex-1 flex flex-col min-w-0" data-firstrun-target="messages">
       <ChatMainPane
+        firstRunAiPreset={firstRunAiPreset}
+        firstRunUserToken={settings?.user?.token ?? null}
         hideInlineHistory={hideInlineHistory}
         showHistory={showHistory}
         onCloseHistory={() => setShowHistory(false)}
@@ -1983,8 +2065,16 @@ export function StandaloneChat({
           await commands.showWindow({ Home: { page: "pipes" } });
         }}
         summaryCardsProps={{
-          onSendMessage: (message, displayLabel, entrySource, entryCard) =>
-            sendMessage(message, displayLabel, undefined, { entrySource, entryCard }),
+          onSendMessage: (message, displayLabel, entrySource, entryCard) => {
+            pendingContextualHomeSuggestionRef.current = null;
+            // Control cards send their prompt on click without ever showing it,
+            // so the user authored nothing.
+            return sendMessage(message, displayLabel, undefined, {
+              entrySource,
+              entryCard,
+              composerAuthorship: "template_unmodified",
+            });
+          },
           customTemplates,
           onSaveCustomTemplate: saveCustomTemplate,
           onUpdateCustomTemplate: updateCustomTemplate,
@@ -2007,6 +2097,14 @@ export function StandaloneChat({
               enabled: pipe.config.enabled,
               schedule: pipe.config.schedule,
             })),
+        }}
+        homeStarterProps={{
+          suggestions: connectionAwareSuggestions,
+          activityMode: suggestionMode,
+          isLoading: suggestionsLoading,
+          isRefreshing: suggestionsRefreshing,
+          onFillSuggestion: fillContextualHomeSuggestion,
+          onRefresh: refreshVisibleSuggestions,
         }}
         messageListProps={messageListProps}
         isUserScrolledUp={isUserScrolledUp}

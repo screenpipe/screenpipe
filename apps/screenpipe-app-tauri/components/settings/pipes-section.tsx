@@ -990,8 +990,8 @@ function PipePresetSelector({
           allowNone
           includeAgentPresets={false}
           controlledPresetId={primaryPreset}
-          onControlledSelect={(presetId) =>
-            savePresets(presetId || null, fallbackPreset)
+          onControlledSelect={(preset) =>
+            savePresets(preset?.id ?? null, fallbackPreset)
           }
         />
       </div>
@@ -1015,8 +1015,8 @@ function PipePresetSelector({
             allowNone
             includeAgentPresets={false}
             controlledPresetId={fallbackPreset}
-            onControlledSelect={(presetId) =>
-              savePresets(primaryPreset, presetId || null)
+            onControlledSelect={(preset) =>
+              savePresets(primaryPreset, preset?.id ?? null)
             }
           />
           <p className="text-[10px] text-muted-foreground mt-1">
@@ -1938,7 +1938,7 @@ export function PipesSection() {
     if (isEnterpriseManagedName(name)) {
       toast({
         title: "managed by your organization",
-        description: "an organization admin controls this scheduled task's schedule and enabled state",
+        description: "an organization admin controls when this task runs and whether it is enabled",
       });
       return;
     }
@@ -3117,7 +3117,7 @@ export function PipesSection() {
                           ? "configure required connections before enabling auto-run"
                           : pipe.config.enabled
                             ? "auto-running on schedule — click to disable"
-                            : "auto-run disabled — scheduled task can still be run manually"
+                            : "auto-run disabled — you can still run this task manually"
                       }
                     >
                       {/* A naked switch doesn't say what it controls. Name the

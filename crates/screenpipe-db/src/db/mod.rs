@@ -457,8 +457,9 @@ mod text_positions;
 mod write_ops;
 
 pub use self::semantic::{
-    SemanticActor, SemanticActorAlias, SemanticActorReference, SemanticCleanupResult,
-    SemanticContextQuery, SemanticFrameContext, SemanticProjectionWriteResult,
+    SemanticActor, SemanticActorAlias, SemanticActorReference, SemanticAttachResult,
+    SemanticCleanupResult, SemanticContextQuery, SemanticFrameContext,
+    SemanticProjectionWriteResult,
 };
 pub(crate) use self::text_positions::calculate_confidence;
 pub use self::text_positions::{

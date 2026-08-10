@@ -354,6 +354,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				usageTier,
 				cloudflareManaged ? undefined : authResult.userId,
 				usageAccountPlan,
+				{ readLegacyDailyCounter: !cloudflareManaged },
 			);
 			if (cloudflareManaged) {
 				let cloudflareContext: HostedChatGatewayContext | null = null;

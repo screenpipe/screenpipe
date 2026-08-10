@@ -9,9 +9,13 @@ From `apps/screenpipe-app-tauri`:
 **1. Build**
 
 ```bash
-bun tauri build --no-sign --debug --verbose --no-bundle -- --features e2e
+NEXT_PUBLIC_SCREENPIPE_E2E=true bun tauri build --no-sign --debug --verbose --no-bundle -- --features e2e
 ```
 
+- `NEXT_PUBLIC_SCREENPIPE_E2E=true` — compiles in the frontend E2E hooks. CI sets
+  this (see `.github/workflows/e2e-test.yml`); without it the app-entitlement
+  account seed is compiled out, so any spec that needs a signed-in surface
+  (Brain, Chat) silently renders "sign in required" instead
 - `--no-sign` — skip code signing (dev)
 - `--debug` — debug build, faster than release
 - `--verbose` — show build output

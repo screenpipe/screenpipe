@@ -1437,6 +1437,7 @@ Rules:
                     "smartRecording": null,
                     "filterMusic": null,
                     "prioritizeInputLatency": null,
+                    "sidebarCustomization": null,
                     "aecMode": null,
                 }),
             ),
@@ -1462,6 +1463,13 @@ Rules:
                             "forceDisabled": false,
                         },
                         "prioritizeInputLatency": {
+                            "defaultEnabled": false,
+                            "forceDisabled": false,
+                        },
+                        // UI-only rollout gate: no engine setting to clamp, so
+                        // its force-off is applied by the frontend registry
+                        // rather than the recording-settings pass below.
+                        "sidebarCustomization": {
                             "defaultEnabled": false,
                             "forceDisabled": false,
                         },

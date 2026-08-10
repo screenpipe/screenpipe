@@ -390,6 +390,7 @@ const E2E_COMMANDS: &[&str] = &[
     "db_hard_fault_state",
     "seed_flags",
     "capture_pi_start_error",
+    "set_onboarding_completed_ago",
 ];
 
 fn validate_e2e_command_inventory() {

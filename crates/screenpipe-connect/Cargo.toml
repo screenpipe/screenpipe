@@ -31,7 +31,7 @@ tracing = { workspace = true }
 # host accepts; if a user genuinely needs RSA SSH key support, re-enable
 # this feature and pin `rsa` to a version compatible with the resolved
 # `pkcs8`. v2.4.170 left this broken on a pristine cargo check.
-russh = { version = "0.60", default-features = false, features = ["ring", "flate2"] }
+russh = { version = "0.62", default-features = false, features = ["ring", "flate2"] }
 russh-sftp = "2.1"
 dirs = { workspace = true }
 chrono = { workspace = true }

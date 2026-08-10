@@ -854,6 +854,19 @@ fn record_capture_loop_heartbeat(
     monitor.record_capture_loop_heartbeat();
 }
 
+/// Mark the stage the loop is entering on both the aggregate and per-monitor
+/// metrics, so a frozen loop names its own freeze point (see
+/// [`screenpipe_screen::CaptureLoopStage`]). Per-monitor is what the watchdog
+/// reads: the aggregate is overwritten by whichever display iterated last.
+fn record_loop_stage(
+    aggregate: &screenpipe_screen::PipelineMetrics,
+    monitor: &screenpipe_screen::PipelineMetrics,
+    stage: screenpipe_screen::CaptureLoopStage,
+) {
+    aggregate.record_loop_stage(stage);
+    monitor.record_loop_stage(stage);
+}
+
 fn record_persisted_capture(
     aggregate: &screenpipe_screen::PipelineMetrics,
     monitor: &screenpipe_screen::PipelineMetrics,
@@ -1171,6 +1184,11 @@ pub(crate) async fn event_driven_capture_loop(
         // monitors in Warm/Cold state, but the loop is still healthy and wakes
         // on focus notifications or its bounded backstop.
         record_capture_loop_heartbeat(&vision_metrics, &monitor_liveness);
+        record_loop_stage(
+            &vision_metrics,
+            &monitor_liveness,
+            screenpipe_screen::CaptureLoopStage::Heartbeat,
+        );
 
         #[cfg(debug_assertions)]
         e2e_park_capture_loop_once(&vision_metrics, monitor_id).await;
@@ -1186,6 +1204,11 @@ pub(crate) async fn event_driven_capture_loop(
         // to the normal capture path further down, bypassing other trigger
         // detection. This lets the Warm path capture only when pixels
         // actually changed without duplicating the whole capture machinery.
+        record_loop_stage(
+            &vision_metrics,
+            &monitor_liveness,
+            screenpipe_screen::CaptureLoopStage::FocusGate,
+        );
         let mut warm_trigger_override: Option<CaptureTrigger> = None;
         {
             use crate::focus_aware_controller::CaptureState;
@@ -1202,6 +1225,11 @@ pub(crate) async fn event_driven_capture_loop(
             // churn sck-rs / WGC locks.
             let is_cold = matches!(capture_state, CaptureState::Cold);
             if is_cold && !was_cold {
+                record_loop_stage(
+                    &vision_metrics,
+                    &monitor_liveness,
+                    screenpipe_screen::CaptureLoopStage::ReleaseStream,
+                );
                 monitor.release_capture_stream();
             }
             was_cold = is_cold;
@@ -1306,6 +1334,11 @@ pub(crate) async fn event_driven_capture_loop(
                     }
                     // Block until focus returns. 5s backstop guards against
                     // stuck waiters if a focus event is ever missed.
+                    record_loop_stage(
+                        &vision_metrics,
+                        &monitor_liveness,
+                        screenpipe_screen::CaptureLoopStage::ColdWait,
+                    );
                     let notify = focus_controller.notify_for(monitor_id);
                     tokio::select! {
                         _ = notify.notified() => {}
@@ -1323,6 +1356,11 @@ pub(crate) async fn event_driven_capture_loop(
         // composing + delivering frames at the stream's frame interval into a
         // sleeping reader for the entire pause window — the exact cost the
         // user expected `capture_paused` to eliminate.
+        record_loop_stage(
+            &vision_metrics,
+            &monitor_liveness,
+            screenpipe_screen::CaptureLoopStage::PauseGate,
+        );
         let in_pause_state = crate::sleep_monitor::screen_is_locked()
             || power_profile_rx
                 .as_ref()
@@ -1522,6 +1560,11 @@ pub(crate) async fn event_driven_capture_loop(
             let mut lagged_force_manual = false;
             let mut closed_now = false;
 
+            record_loop_stage(
+                &vision_metrics,
+                &monitor_liveness,
+                screenpipe_screen::CaptureLoopStage::TriggerWait,
+            );
             match tokio::time::timeout(poll_interval, trigger_rx.recv()).await {
                 Ok(Ok(msg)) => drained.push(msg),
                 Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
@@ -1664,11 +1707,21 @@ pub(crate) async fn event_driven_capture_loop(
             // SCK screenshot may freeze the loop — a wedged probe previously
             // starved the idle-capture heartbeat and produced a false
             // "recording needs help" incident (see VISUAL_PROBE_TIMEOUT).
+            record_loop_stage(
+                &vision_metrics,
+                &monitor_liveness,
+                screenpipe_screen::CaptureLoopStage::ExclusionProbe,
+            );
             let fresh_ids = probe_excluded_sck_window_ids(&capture_params.window_filters).await;
             if fresh_ids != cached_excluded_ids {
                 cached_excluded_ids = fresh_ids;
             }
             if let Some(ref mut comparer) = frame_comparer {
+                record_loop_stage(
+                    &vision_metrics,
+                    &monitor_liveness,
+                    screenpipe_screen::CaptureLoopStage::VisualProbe,
+                );
                 match bounded_visual_probe(&monitor, &cached_excluded_ids, monitor_id).await {
                     Ok(Some((image, _dur))) => {
                         let diff = comparer.compare(&image);
@@ -1814,6 +1867,11 @@ pub(crate) async fn event_driven_capture_loop(
                 // builds; macOS gets a little more room for its bounded SCK ->
                 // CoreGraphics recovery chain. The semaphore serializes writes
                 // so they don't pile up, but each write still needs time.
+                record_loop_stage(
+                    &vision_metrics,
+                    &monitor_liveness,
+                    screenpipe_screen::CaptureLoopStage::Capture,
+                );
                 let capture_result = capture_with_timeout(
                     CAPTURE_OPERATION_TIMEOUT,
                     do_capture(
@@ -1918,6 +1976,11 @@ pub(crate) async fn event_driven_capture_loop(
                             }
 
                             if let Some(ref cache) = hot_frame_cache {
+                                record_loop_stage(
+                                    &vision_metrics,
+                                    &monitor_liveness,
+                                    screenpipe_screen::CaptureLoopStage::HotCachePush,
+                                );
                                 push_to_hot_cache(cache, result, &device_name, &trigger).await;
                             }
 

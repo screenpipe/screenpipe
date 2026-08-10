@@ -13,7 +13,9 @@ import {
   mentionSuggestionIdentity,
   parseMentions,
   resolvePinnedMentionIndex,
+  COMPOSER_COMMAND_SUGGESTIONS,
   TIME_RANGE_MENTION_SUGGESTIONS,
+  type ComposerCommandId,
   type MentionSuggestion as ChatMentionSuggestion,
   type MentionTrigger,
 } from "@/lib/chat-utils";
@@ -53,6 +55,7 @@ interface UseChatMentionsOptions {
   tagMentionSuggestions: MentionSuggestion[];
   allTagMentionSuggestions: MentionSuggestion[];
   onOpenConversation: (conversationId: string) => void | Promise<void>;
+  onRunCommand: (commandId: ComposerCommandId) => void | Promise<void>;
 }
 
 export function useChatMentions({
@@ -66,6 +69,7 @@ export function useChatMentions({
   tagMentionSuggestions,
   allTagMentionSuggestions,
   onOpenConversation,
+  onRunCommand,
 }: UseChatMentionsOptions) {
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
@@ -631,6 +635,22 @@ export function useChatMentions({
   }, [hasConnectionChip, setChipScrollTop, setInput]);
 
   const insertMention = useCallback((tag: string) => {
+    // A `/` entry is an action, not a token. Consume the typed command and run
+    // it, keeping anything the cursor was sitting in front of.
+    const command = COMPOSER_COMMAND_SUGGESTIONS.find(
+      (suggestion) => suggestion.tag === tag,
+    );
+    if (command?.commandId) {
+      const cursorPos = inputRef.current?.selectionStart ?? input.length;
+      setInput(input.slice(cursorPos));
+      setShowMentionDropdown(false);
+      setMentionFilter("");
+      setMentionTrigger("@");
+      inputRef.current?.focus();
+      void onRunCommand(command.commandId);
+      return;
+    }
+
     const chatSuggestion = recentChatSuggestions.find(
       (suggestion) => suggestion.tag === tag && suggestion.conversationId,
     );
@@ -661,7 +681,7 @@ export function useChatMentions({
     setMentionFilter("");
     setMentionTrigger("@");
     inputRef.current?.focus();
-  }, [input, inputRef, onOpenConversation, recentChatSuggestions, setInput]);
+  }, [input, inputRef, onOpenConversation, onRunCommand, recentChatSuggestions, setInput]);
 
   return {
     showMentionDropdown,

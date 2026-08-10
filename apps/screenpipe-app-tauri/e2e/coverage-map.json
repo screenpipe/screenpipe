@@ -720,7 +720,7 @@
       "criticality": "high",
       "confidence": "partial",
       "ux": "synthetic",
-      "notes": "A turn that ends while the panel does not own the session on the agent-event bus must still release the composer dispatch guards and must not duplicate the user message; regression for the stuck 'analyzing\u2026' chat whose later messages all piled into QUEUED."
+      "notes": "A turn that ends while the panel does not own the session on the agent-event bus must still release the composer dispatch guards and must not duplicate the user message; regression for the stuck 'analyzing…' chat whose later messages all piled into QUEUED."
     },
     {
       "spec": "chat-sidebar-groups.spec.ts",
@@ -816,7 +816,7 @@
       "criticality": "medium",
       "confidence": "partial",
       "ux": "synthetic",
-      "notes": "QUARANTINED (#4610): cross-window prefill duplicate regression. The autoSend persist precondition is racy in CI \u2014 times out with 0 conversations (not the duplicate=2 it guards) ~100% Linux + ~33% macOS. Re-enable once it seeds the persisted conversation deterministically."
+      "notes": "QUARANTINED (#4610): cross-window prefill duplicate regression. The autoSend persist precondition is racy in CI — times out with 0 conversations (not the duplicate=2 it guards) ~100% Linux + ~33% macOS. Re-enable once it seeds the persisted conversation deterministically."
     },
     {
       "spec": "chat-prefill-context-leak.spec.ts",
@@ -1407,6 +1407,25 @@
       "notes": "Opt-in real-audio lifecycle lane: configured devices stay closed outside meetings and open only across a manual meeting edge."
     },
     {
+      "spec": "capture-restart-device-recovery.spec.ts",
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "layers": [
+        "audio-device",
+        "local-api",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "audio-device-health"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "Opt-in real-audio continuous lane for #6089: a capture-session restart must bring back the same running device set, and the device monitor must survive to recover a device stopped afterwards."
+    },
+    {
       "spec": "notification-viewer-link.spec.ts",
       "platforms": [
         "windows",
@@ -1447,6 +1466,50 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "notes": "Isolated agent-home CI lane verifies private native config writes, the resolved local API credential, a real authenticated MCP tool call, skills setup, and removal of the connection slide."
+    },
+    {
+      "spec": "onboarding-first-run.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "onboarding",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "onboarding",
+        "first-run-learning",
+        "settings-persistence"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "tests": 7,
+      "notes": "Fresh-install setup walk: the acquisition slide is reachable in the shipped slide order and counted by the progress bar, offers no free-text field, one tap persists through to store.bin via the real settings command, skip records nothing, and the engine slide is the last one with no goal picker after it."
+    },
+    {
+      "spec": "first-run-learning-window.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "onboarding",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "onboarding",
+        "first-run-learning"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "tests": 6,
+      "notes": "Post-setup learning window on Home under the authenticated seed: opens from a real complete_onboarding with nothing seeded (guards the cross-window webview localStorage handoff), live countdown, settles to the real engine-reported reason when nothing was captured, stays dismissed across a reload, offers a ready summary and clears after use, and never renders in idle or done."
     },
     {
       "spec": "onboarding-h1-follow-up.spec.ts",
@@ -1589,6 +1652,25 @@
       "confidence": "conditional",
       "ux": "api",
       "notes": "Opt-in macOS fault injection wedges a visual-change probe; asserts the bounded probe keeps the capture loop and its /health heartbeat live (no false stale/incident)."
+    },
+    {
+      "spec": "capture-stall-stage-marker.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "capture-ocr",
+        "local-api",
+        "os-integration"
+      ],
+      "features": [
+        "app-launch",
+        "capture-ocr"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "api",
+      "notes": "Opt-in macOS fault injection parks the capture loop; asserts /health names the frozen CaptureLoopStage with an advancing age while frame_status is stale, and that the stage age collapses once the watchdog recovers capture."
     },
     {
       "spec": "capture-stall-recovery.spec.ts",

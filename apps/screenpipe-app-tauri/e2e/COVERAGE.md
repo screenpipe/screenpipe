@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 101
-- Declared test blocks: 285
-- Weighted coverage points: 219.9
+- Mapped specs: 105
+- Declared test blocks: 304
+- Weighted coverage points: 236.5
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 79 | 247 | 199.4 | 15 | 88 | 91% |
-| macos | 97 | 248 | 190.7 | 17 | 90 | 90% |
-| linux | 69 | 207 | 169.2 | 14 | 83 | 88% |
+| windows | 82 | 265 | 215.6 | 15 | 89 | 91% |
+| macos | 101 | 267 | 207.3 | 17 | 91 | 90% |
+| linux | 71 | 222 | 184.2 | 14 | 84 | 88% |
 
 ## Runtime Results
 
@@ -33,22 +33,22 @@ pass/fail/skip counts.
 
 | Layer | windows | macos | linux |
 | --- | --- | --- | --- |
-| audio-device | 3 specs / 29 tests / 20.6 pts | 3 specs / 3 tests / 1.7 pts | - |
+| audio-device | 4 specs / 32 tests / 21.8 pts | 4 specs / 6 tests / 2.9 pts | - |
 | auth | - | 1 specs / 1 tests / 1.0 pts | - |
 | billing | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts |
-| capture-ocr | 2 specs / 16 tests / 6.4 pts | 7 specs / 11 tests / 4.4 pts | 1 specs / 3 tests / 1.2 pts |
+| capture-ocr | 2 specs / 16 tests / 6.4 pts | 8 specs / 12 tests / 4.8 pts | 1 specs / 3 tests / 1.2 pts |
 | chat-ai | 25 specs / 50 tests / 36.9 pts | 34 specs / 69 tests / 48.5 pts | 24 specs / 49 tests / 36.4 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
-| local-api | 21 specs / 106 tests / 88.8 pts | 25 specs / 90 tests / 76.4 pts | 17 specs / 77 tests / 68.2 pts |
+| local-api | 22 specs / 109 tests / 90.0 pts | 27 specs / 94 tests / 78.0 pts | 17 specs / 77 tests / 68.2 pts |
 | notifications | 4 specs / 25 tests / 16.3 pts | 3 specs / 5 tests / 3.4 pts | 2 specs / 4 tests / 3.1 pts |
-| onboarding | 4 specs / 11 tests / 8.0 pts | 5 specs / 12 tests / 8.4 pts | 4 specs / 11 tests / 8.0 pts |
-| os-integration | 7 specs / 29 tests / 24.8 pts | 12 specs / 24 tests / 14.4 pts | 2 specs / 12 tests / 8.7 pts |
+| onboarding | 6 specs / 26 tests / 23.0 pts | 7 specs / 27 tests / 23.4 pts | 6 specs / 26 tests / 23.0 pts |
+| os-integration | 7 specs / 29 tests / 24.8 pts | 13 specs / 25 tests / 14.8 pts | 2 specs / 12 tests / 8.7 pts |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
 | pipes | 6 specs / 19 tests / 19.0 pts | 7 specs / 24 tests / 24.0 pts | 6 specs / 19 tests / 19.0 pts |
-| real-ui-e2e | 54 specs / 152 tests / 123.8 pts | 63 specs / 151 tests / 122.9 pts | 50 specs / 130 tests / 110.2 pts |
+| real-ui-e2e | 57 specs / 170 tests / 140.0 pts | 66 specs / 169 tests / 139.1 pts | 52 specs / 145 tests / 125.2 pts |
 | settings | 14 specs / 38 tests / 35.0 pts | 16 specs / 33 tests / 28.7 pts | 13 specs / 30 tests / 27.0 pts |
 | storage-privacy | 9 specs / 40 tests / 31.3 pts | 9 specs / 26 tests / 25.1 pts | 6 specs / 19 tests / 18.1 pts |
-| tauri-command | 15 specs / 35 tests / 24.4 pts | 19 specs / 40 tests / 27.3 pts | 14 specs / 34 tests / 23.4 pts |
+| tauri-command | 16 specs / 42 tests / 31.4 pts | 20 specs / 47 tests / 34.3 pts | 15 specs / 41 tests / 30.4 pts |
 | window-lifecycle | 18 specs / 63 tests / 53.0 pts | 18 specs / 44 tests / 31.4 pts | 13 specs / 39 tests / 29.9 pts |
 
 ## Critical Feature Matrix
@@ -68,7 +68,7 @@ pass/fail/skip counts.
 | Privacy API auth settings UX | settings | covered (strong; settings-sections, windows-user-journey) | covered (strong; settings-sections, privacy-api-auth) | covered (strong; settings-sections, privacy-api-auth) |
 | Permissions settings recovery UX | settings | - | covered (strong; settings-sections) | - |
 | Notification history and viewer paths | notifications | covered (strong; windows-user-journey, notification-viewer-link) | covered (strong; notification-viewer-link, onboarding-h1-follow-up) | covered (strong; notification-viewer-link, onboarding-h1-follow-up) |
-| Audio device health | audio-device | covered (strong; windows-system-integration, windows-core-recording) | weak (conditional; meetings-only-audio-lifecycle, audio-fallback) | gap |
+| Audio device health | audio-device | covered (strong; windows-system-integration, windows-core-recording) | weak (conditional; capture-restart-device-recovery, meetings-only-audio-lifecycle) | gap |
 | Meetings-only audio device ownership | audio-device, local-api, real-ui-e2e | weak (conditional; meetings-only-audio-lifecycle) | weak (conditional; meetings-only-audio-lifecycle) | - |
 | Window lifecycle, focus, and dedupe | window-lifecycle | covered (strong; windows-system-integration, window-lifecycle) | covered (strong; window-lifecycle, viewer-deeplink) | covered (strong; window-lifecycle, viewer-deeplink) |
 | Meeting note creation and editing | real-ui-e2e | covered (strong; windows-user-journey, meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click, meeting-workspace-tabs) | covered (strong; meeting-note-bottom-click, meeting-workspace-tabs) |
@@ -111,7 +111,9 @@ pass/fail/skip counts.
 | brain-section.spec.ts | windows, macos, linux | real-ui-e2e | brain, artifacts, memories, viewer-deeplink | medium | strong | real-user-flow | 10 | Brain coverage for filters, search, delete flows, selection pruning, add memory, and inline artifact markdown preview. |
 | capture-frequency-floor.spec.ts | macos | capture-ocr, settings, real-ui-e2e | capture-ocr, settings-recording, restart-flow | high | conditional | real-user-flow | 1 | macOS fixed screenshot cadence regression: persists the 1s setting before immediate Apply & Restart, then verifies real capture attempts and frame writes. |
 | capture-loop-liveness.spec.ts | macos | capture-ocr, local-api, os-integration | app-launch, capture-ocr | high | conditional | api | 1 | Opt-in macOS fault injection wedges a visual-change probe; asserts the bounded probe keeps the capture loop and its /health heartbeat live (no false stale/incident). |
+| capture-restart-device-recovery.spec.ts | windows, macos | audio-device, local-api, real-ui-e2e | audio-device-health | high | conditional | real-user-flow | 3 | Opt-in real-audio continuous lane for #6089: a capture-session restart must bring back the same running device set, and the device monitor must survive to recover a device stopped afterwards. |
 | capture-stall-recovery.spec.ts | macos | capture-ocr, local-api, os-integration, real-ui-e2e | app-launch, capture-ocr, health, recording-health-alerts | high | conditional | mixed | 3 | Opt-in macOS full-stack lane proves all selected user-paused monitors remain an intentional disabled/normal state and resume cleanly, bounds a wedged SCK frame worker, proves the privacy-gated CoreGraphics fallback, reproduces a status-Running capture loop going silent, verifies stale and the failure pill, independent per-monitor stall detection with a VisionManager restart and resumed terminal capture progress, same-process UI recovery, and bounded id-based SCK lookup retry. |
+| capture-stall-stage-marker.spec.ts | macos | capture-ocr, local-api, os-integration | app-launch, capture-ocr | high | conditional | api | 1 | Opt-in macOS fault injection parks the capture loop; asserts /health names the frozen CaptureLoopStage with an advancing age while frame_status is stale, and that the stage age collapses once the watchdog recovers capture. |
 | chat-ask-user-tool-card.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-tools, pi-ask-user | medium | partial | mixed | 1 | Synthetic assistant tool block renders the Pi ask_user dropdown and sends the selected answer through the normal chat reply path. |
 | chat-automation-card-duplicate.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-sidebar-dedupe | medium | partial | real-user-flow | 1 | Home automation card clicks must create exactly one persisted conversation per card, guarding the #4719 duplicate-row path. |
 | chat-composer-isolation.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-drafts | medium | partial | mixed | 1 | Composer draft isolation across conversations. |
@@ -144,6 +146,7 @@ pass/fail/skip counts.
 | chat-within-session-context-loss.spec.ts | macos | chat-ai | chat, chat-context | medium | conditional | synthetic | 5 | macOS-only within-chat context retention regression. |
 | db-hard-fault-fail-closed.spec.ts | windows, macos, linux | local-api, tauri-command, real-ui-e2e | database-hard-fault-containment, app-launch | high | strong | mixed | 1 | Opt-in packaged-desktop regression: causes real SQLITE_CORRUPT in the isolated E2E database, then proves the engine API and database owners stop while the desktop stays alive and does not respawn across the watchdog window. |
 | first-run-guide.spec.ts | windows, macos, linux | onboarding, chat-ai, real-ui-e2e | onboarding, chat, first-run-guide | high | strong | real-user-flow | 3 | Replayed first-run guide verifies the composer remains focused and clickable above its scrim, fails open when stacking defeats the lift, and remembers decline across reloads. |
+| first-run-learning-window.spec.ts | windows, macos, linux | onboarding, real-ui-e2e | onboarding, first-run-learning | high | strong | real-user-flow | 8 | Post-setup learning window on Home under the authenticated seed: opens from a real complete_onboarding with nothing seeded (guards the cross-window webview localStorage handoff), live countdown, settles to the real engine-reported reason when nothing was captured, stays dismissed across a reload, offers a ready summary and clears after use, and never renders in idle or done. |
 | focus-server.spec.ts | windows, macos, linux | local-api, window-lifecycle, tauri-command | window-lifecycle, focus-server, deeplink | medium | partial | api | 2 | Focus server opens windows and forwards deeplink args. |
 | hd-recording-pipeline.spec.ts | macos | capture-ocr, local-api, performance | capture-ocr, hd-recording, timeline | high | conditional | api | 1 | Opt-in macOS HD capture and OCR indexing. |
 | help-discord-link.spec.ts | windows, macos, linux | real-ui-e2e | help | low | smoke | real-user-flow | 2 | Help section Discord invite link. |
@@ -162,6 +165,7 @@ pass/fail/skip counts.
 | meetings-only-audio-lifecycle.spec.ts | windows, macos | audio-device, local-api, real-ui-e2e | meetings-only-audio-lifecycle, audio-device-health | high | conditional | real-user-flow | 1 | Opt-in real-audio lifecycle lane: configured devices stay closed outside meetings and open only across a manual meeting edge. |
 | notification-viewer-link.spec.ts | windows, macos, linux | notifications, local-api, window-lifecycle | notifications, viewer-deeplink | high | partial | mixed | 3 | Notification local file links rewrite into in-app viewer links. |
 | onboarding-background-ai-tools.spec.ts | windows, macos, linux | onboarding, real-ui-e2e, storage-privacy | onboarding, settings-ai | high | strong | real-user-flow | 2 | Isolated agent-home CI lane verifies private native config writes, the resolved local API credential, a real authenticated MCP tool call, skills setup, and removal of the connection slide. |
+| onboarding-first-run.spec.ts | windows, macos, linux | onboarding, real-ui-e2e, tauri-command | onboarding, first-run-learning, settings-persistence | high | strong | real-user-flow | 7 | Fresh-install setup walk: the acquisition slide is reachable in the shipped slide order and counted by the progress bar, offers no free-text field, one tap persists through to store.bin via the real settings command, skip records nothing, and the engine slide is the last one with no goal picker after it. |
 | onboarding-h1-follow-up.spec.ts | windows, macos, linux | onboarding, notifications, pipes, real-ui-e2e | onboarding, notifications, pipes | high | strong | real-user-flow | 1 | A due H1 activation runs its real Pipe, sends one visible prompt through the app-control notification server, and remains exactly-once across repeated scheduler ticks. |
 | onboarding-redirect.spec.ts | windows, macos, linux | onboarding, real-ui-e2e, window-lifecycle | onboarding, app-launch | high | conditional | real-user-flow | 5 | Opt-in no-onboarding seed verifies onboarding redirect. |
 | owned-browser.spec.ts | windows, macos | os-integration, window-lifecycle | owned-browser, window-lifecycle | low | smoke | command | 1 | Embedded agent browser hides safely without an attached child. |

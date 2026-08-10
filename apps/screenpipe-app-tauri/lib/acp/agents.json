@@ -23,7 +23,7 @@
     "description": "Use your existing Claude Code account and configuration.",
     "launch": {
       "kind": "npx",
-      "package": "@agentclientprotocol/claude-agent-acp@0.61.0",
+      "package": "@agentclientprotocol/claude-agent-acp@0.66.0",
       "args": ["--hide-claude-auth"]
     },
     "cloudRouting": {

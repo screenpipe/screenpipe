@@ -139,6 +139,10 @@ describe('Cloudflare hosted-chat routing', () => {
 			expect(json.allowance).toEqual({ lane: 'auto', plan: accountPlan, managed_by: 'cloudflare' });
 			expect(json.required_plan).toBe(requiredPlan);
 			expect(json.upgrade_url).toBe(upgradeUrl);
+			expect(json.error.message).toBe(requiredPlan
+				? 'Your hosted AI usage limit is reached. Switch to Auto or upgrade.'
+				: 'Your hosted AI usage limit is reached. Switch to Auto.');
+			expect(json.error.message).not.toMatch(/explicit|allowance for Auto/i);
 			expect(JSON.stringify(json)).not.toMatch(/usd|dollar|amount/i);
 
 			const streamResponse = allowanceErrorResponse({ ...body, model: 'auto', stream: true }, error);

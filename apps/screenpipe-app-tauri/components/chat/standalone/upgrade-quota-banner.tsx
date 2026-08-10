@@ -9,7 +9,6 @@ import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import {
   formatAllowanceReset,
-  formatAllowanceWindow,
   formatResetTime,
   formatUsagePercent,
   useUsageStatus,
@@ -18,13 +17,8 @@ import { useModelUpsellGating } from "@/lib/hooks/use-model-upsell-gating";
 import { clearQuotaUpgrade, useQuotaUpgrade } from "@/lib/chat/quota-upgrade";
 import { openExternalUrl } from "@/lib/open-external-url";
 import { openBusinessUpgradeSurface } from "@/lib/upgrade-flow";
+import { quotaPlanLabel } from "@/lib/chat/quota-errors";
 
-const PLAN_LABELS = {
-  basic: "Basic",
-  business: "Business",
-  business_max: "Business Max",
-  business_ultra: "Business Ultra",
-} as const;
 
 /**
  * At-the-cap upgrade prompt (the "intensity" lever). Appears in the composer
@@ -121,11 +115,17 @@ export function UpgradeQuotaBanner() {
     }
   };
 
+  // One label map (quotaPlanLabel) instead of a second copy that drifts.
+  // Null when the gateway names a plan this build predates — the sentence still
+  // has to read, so prose falls back to a generic phrase instead of a blank.
   const requiredPlanLabel = activeUpgrade
-    ? PLAN_LABELS[activeUpgrade.requiredPlan]
-    : "Business";
-  const blockedTitle = cloudflareBlocked
-    ? `${cloudflareAllowance.lane === "auto" ? "Auto" : "Explicit model"} hosted AI limit reached`
+    ? quotaPlanLabel(activeUpgrade.requiredPlan)
+    : null;
+  const requiredPlanProse = requiredPlanLabel ?? "a higher plan";
+  const weeklyAllowance =
+    cloudflareBlocked && cloudflareAllowance.window_seconds === 7 * 86_400;
+  const blockedTitle = weeklyAllowance
+    ? "Weekly hosted AI limit reached"
     : "Hosted AI usage limit reached";
 
   return (
@@ -154,18 +154,15 @@ export function UpgradeQuotaBanner() {
             <div className="mt-0.5 text-muted-foreground">
               {cloudflareBlocked ? (
                 <>
-                  {formatUsagePercent(cloudflareAllowance.used_percent)} used for this{" "}
-                  {formatAllowanceWindow(cloudflareAllowance.window_seconds)}{" "}
-                  {cloudflareAllowance.technique} period.
+                  {formatUsagePercent(cloudflareAllowance.used_percent)} used
+                  {weeklyAllowance ? " this week." : "."}
                   {resets ? ` Resets ${resets}.` : " Usage falls as the window moves."}{" "}
-                  {cloudflareAllowance.lane === "auto"
-                    ? "Choose an explicit hosted model, or use a local or own-key preset."
-                    : "Switch to Auto, or use a local or own-key preset."}
+                  {activeUpgrade ? "Switch to Auto or upgrade." : "Switch to Auto."}
                 </>
               ) : legacyCostBlocked ? (
                 activeUpgrade ? (
                   <>
-                    Upgrade to {requiredPlanLabel} for a higher hosted AI allowance,
+                    Upgrade to {requiredPlanProse} for a higher hosted AI allowance,
                     or switch to a local or own-key AI preset.
                   </>
                 ) : (
@@ -174,7 +171,7 @@ export function UpgradeQuotaBanner() {
               ) : blockedUpgrade ? (
                 <>
                   {resets ? `Resets ${resets}. ` : ""}
-                  Upgrade to {requiredPlanLabel} for a higher limit, or switch to a
+                  Upgrade to {requiredPlanProse} for a higher limit, or switch to a
                   local or own-key AI preset.
                 </>
               ) : (
@@ -192,9 +189,14 @@ export function UpgradeQuotaBanner() {
                 onClick={onUpgrade}
                 disabled={busy}
               >
-                {activeUpgrade
+                {/* Name where the click actually goes. With no server upgrade
+                    this opens the Business offer, so it says so; only an
+                    upgrade to a plan this build cannot name is generic. */}
+                {requiredPlanLabel
                   ? `Upgrade to ${requiredPlanLabel}`
-                  : "View Business"}
+                  : activeUpgrade
+                    ? "See plans"
+                    : "View Business"}
               </Button>
             )}
             <button
