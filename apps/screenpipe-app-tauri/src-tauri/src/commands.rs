@@ -11,6 +11,7 @@ use crate::{
     updates::is_enterprise_build,
     window::{RewindWindowId, ShowRewindWindow},
 };
+use futures::TryStreamExt;
 use sha2::{Digest, Sha256};
 use tauri::{Emitter, Manager};
 #[cfg(not(target_os = "macos"))]
@@ -4217,4 +4218,225 @@ pub fn set_autostart(app_handle: tauri::AppHandle, enabled: bool) -> Result<(), 
         manager.is_enabled().unwrap_or(false)
     );
     Ok(())
+}
+
+/// Known public AI providers that are allowed even though they resolve to
+/// public (non-private) IP addresses. These are pinned by exact host match.
+const ALLOWED_PUBLIC_AI_HOSTS: &[&str] = &[
+    "api.openai.com",
+    "api.anthropic.com",
+    "api.screenpipe.com",
+    "api.screenpi.pe",
+];
+
+/// Returns true for IPs that live inside the local/private network perimeter we
+/// intentionally allow the AI-endpoint proxy to reach (loopback, RFC1918,
+/// IPv6 ULA/link-local).
+fn is_private_or_loopback_ip(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ipv4) => ipv4.is_loopback() || ipv4.is_private(),
+        std::net::IpAddr::V6(ipv6) => {
+            ipv6.is_loopback()
+                || (ipv6.segments()[0] & 0xfe00) == 0xfc00 // ULA
+                || (ipv6.segments()[0] & 0xffc0) == 0xfe80 // Link-Local
+        }
+    }
+}
+
+fn is_safe_ai_url(url_str: &str) -> bool {
+    let parsed = match url::Url::parse(url_str) {
+        Ok(u) => u,
+        Err(_) => return false,
+    };
+
+    let host = match parsed.host_str() {
+        Some(h) => h.to_lowercase(),
+        None => return false,
+    };
+
+    // Allow known public AI providers
+    if ALLOWED_PUBLIC_AI_HOSTS.contains(&host.as_str()) {
+        return true;
+    }
+
+    if host == "localhost" || host.ends_with(".local") {
+        return true;
+    }
+
+    // Check if host is an IP address literal
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        is_private_or_loopback_ip(&ip)
+    } else {
+        false
+    }
+}
+
+/// Resolve the URL's host and confirm every resolved address is acceptable,
+/// returning the pinned `(host, socket_addrs)` so the connection can be locked
+/// to exactly those IPs.
+///
+/// Why: `is_safe_ai_url` only validates the *hostname string*. A hostname such
+/// as `attacker.local` (or one of the allow-listed public API hosts if its DNS
+/// were poisoned) is resolved again by reqwest at connect time, so without
+/// pinning, DNS rebinding could point the request at an arbitrary IP. We resolve
+/// here, validate the IPs, and hand reqwest a fixed address list via
+/// `resolve_to_addrs()` so it never performs its own (re-resolvable) lookup.
+async fn resolve_and_verify_ai_host(
+    url_str: &str,
+) -> Result<(String, Vec<std::net::SocketAddr>), String> {
+    let parsed =
+        url::Url::parse(url_str).map_err(|e| format!("invalid url: {}", e))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "url has no host".to_string())?
+        .to_lowercase();
+
+    // Literal-IP hosts were already range-checked by is_safe_ai_url; reqwest
+    // will connect straight to the literal, so there is nothing to rebind.
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return Ok((host, Vec::new()));
+    }
+
+    let is_allowed_public = ALLOWED_PUBLIC_AI_HOSTS.contains(&host.as_str());
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| "url has no port".to_string())?;
+
+    // Resolve on a blocking thread to avoid pulling in an async resolver.
+    let lookup_host = host.clone();
+    let addrs: Vec<std::net::SocketAddr> = tokio::task::spawn_blocking(move || {
+        use std::net::ToSocketAddrs;
+        (lookup_host.as_str(), port)
+            .to_socket_addrs()
+            .map(|iter| iter.collect::<Vec<_>>())
+    })
+    .await
+    .map_err(|e| format!("dns resolution task failed: {}", e))?
+    .map_err(|e| format!("failed to resolve host '{}': {}", host, e))?;
+
+    if addrs.is_empty() {
+        return Err(format!("host '{}' resolved to no addresses", host));
+    }
+
+    // For non-public hosts (localhost / *.local) every resolved IP must be
+    // inside the private/loopback perimeter. Public AI hosts are exempt from the
+    // private-range check but are still pinned to the addresses resolved here.
+    if !is_allowed_public {
+        for addr in &addrs {
+            if !is_private_or_loopback_ip(&addr.ip()) {
+                return Err(format!(
+                    "host '{}' resolved to non-local address {} (blocked to prevent DNS rebinding)",
+                    host,
+                    addr.ip()
+                ));
+            }
+        }
+    }
+
+    Ok((host, addrs))
+}
+
+const AI_TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+const MAX_AI_TEST_BODY_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
+
+#[tauri::command]
+#[specta::specta]
+pub async fn test_ai_endpoint(
+    url: String,
+    method: String,
+    headers: std::collections::HashMap<String, String>,
+    body: Option<serde_json::Value>,
+) -> Result<String, String> {
+    if !is_safe_ai_url(&url) {
+        return Err("URL is blocked for security (only loopback, private IP ranges, .local, or official AI providers allowed)".to_string());
+    }
+
+    // Resolve the host now and pin the connection to exactly those addresses.
+    // This closes the DNS-rebinding gap: is_safe_ai_url only checks the hostname
+    // string, but reqwest would otherwise resolve the host again at connect time,
+    // letting a hostname that passed the string check point at an arbitrary IP.
+    let (pinned_host, pinned_addrs) = resolve_and_verify_ai_host(&url).await?;
+
+    // Bound request body size to avoid proxying huge payloads to private IPs.
+    let body_bytes: Option<Vec<u8>> = match body {
+        Some(b) => {
+            let bytes = serde_json::to_vec(&b)
+                .map_err(|e| format!("failed to serialize body: {}", e))?;
+            if bytes.len() > MAX_AI_TEST_BODY_BYTES {
+                return Err(format!(
+                    "request body too large: {} bytes (max {} MiB)",
+                    bytes.len(),
+                    MAX_AI_TEST_BODY_BYTES / (1024 * 1024)
+                ));
+            }
+            Some(bytes)
+        }
+        None => None,
+    };
+
+    let mut client_builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(AI_TEST_TIMEOUT);
+
+    // Pin the resolved+verified addresses so reqwest connects only to them and
+    // never performs its own (re-resolvable) DNS lookup for this host.
+    if !pinned_addrs.is_empty() {
+        client_builder = client_builder.resolve_to_addrs(&pinned_host, &pinned_addrs);
+    }
+
+    let client = client_builder
+        .build()
+        .map_err(|e| format!("failed to build http client: {}", e))?;
+
+    let mut req = match method.to_uppercase().as_str() {
+        "POST" => client.post(&url),
+        "GET" => client.get(&url),
+        _ => return Err("unsupported method".to_string()),
+    };
+
+    for (k, v) in headers {
+        if let Ok(hk) = reqwest::header::HeaderName::from_bytes(k.as_bytes()) {
+            if let Ok(hv) = reqwest::header::HeaderValue::from_str(&v) {
+                req = req.header(hk, hv);
+            }
+        }
+    }
+
+    if let Some(bytes) = body_bytes {
+        req = req.body(bytes);
+    }
+
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("connection failed: {}", e))?;
+
+    let status = resp.status();
+    let body_stream = resp.bytes_stream();
+    let limited = body_stream
+        .map(|chunk| chunk.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
+        .try_fold(Vec::new(), |mut acc, chunk| async move {
+            acc.extend_from_slice(&chunk);
+            if acc.len() > MAX_AI_TEST_BODY_BYTES {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "response body exceeded {} MiB limit",
+                        MAX_AI_TEST_BODY_BYTES / (1024 * 1024)
+                    ),
+                ))
+            } else {
+                Ok(acc)
+            }
+        });
+    let text = limited
+        .await
+        .map(|v| String::from_utf8_lossy(&v).into_owned())
+        .map_err(|e| format!("failed to read response: {}", e))?;
+
+    if !status.is_success() {
+        return Err(format!("HTTP error {}: {}", status.as_u16(), text));
+    }
+
+    Ok(text)
 }
