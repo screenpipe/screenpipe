@@ -7,6 +7,8 @@ import { aiEndpointUrl } from "./ai-endpoint-url";
 import {
   buildChatTestBody,
   shouldRetryWithMaxCompletionTokens,
+  looksLikeSsePayload,
+  parseSseChatContent,
 } from "./chat-test-body";
 import {
   extractAiProviderErrorMessage,
@@ -111,17 +113,34 @@ export async function testAiPresetConnection(
 
   if (!response.ok) throw await errorFromResponse(response);
 
-  const data = await response.json();
+  // Some OpenAI-compatible gateways (OmniRoute, LiteLLM, vLLM, LM Studio, …)
+  // answer with a Server-Sent Events stream even when we never set
+  // `stream: true`. Calling response.json() on that stream throws — and on
+  // macOS (WKWebView / JavaScriptCore) the surfaced message is the opaque
+  // "The string did not match the expected pattern." Read the body as text
+  // first and reconstruct the assistant reply when it is an SSE payload.
+  const rawText = await response.text();
   let reply: string;
   if (isAnthropic) {
+    const data = JSON.parse(rawText);
     if (!data.content?.[0]) throw new Error("Provider returned no message");
     reply = data.content[0].text?.slice(0, 100) || "Valid message received";
   } else {
-    if (!data.choices?.[0]?.message) {
-      throw new Error("Provider returned no chat message");
+    const isSse =
+      response.headers.get("content-type")?.includes("text/event-stream") ||
+      looksLikeSsePayload(rawText);
+    if (isSse) {
+      reply =
+        parseSseChatContent(rawText).slice(0, 100) ||
+        "Valid chat response received";
+    } else {
+      const data = JSON.parse(rawText);
+      if (!data.choices?.[0]?.message) {
+        throw new Error("Provider returned no chat message");
+      }
+      reply = data.choices[0].message.content?.slice(0, 100) ||
+        "Valid chat response received";
     }
-    reply = data.choices[0].message.content?.slice(0, 100) ||
-      "Valid chat response received";
   }
 
   return {
