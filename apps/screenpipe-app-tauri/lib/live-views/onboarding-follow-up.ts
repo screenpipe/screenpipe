@@ -13,7 +13,14 @@ import { buildLiveViewTimeContext } from "@/lib/live-views/time-range";
 import { appServerFetch } from "@/lib/notifications/app-server";
 import { commands, type BrainViewDefinition } from "@/lib/utils/tauri";
 
-const FOLLOW_UP_RETRY_DELAY_MS = 5 * 60 * 1_000;
+const FOLLOW_UP_RETRY_BASE_MS = 5 * 60 * 1_000;
+const FOLLOW_UP_RETRY_MAX_MS = 60 * 60 * 1_000;
+const MAX_FOLLOW_UP_ATTEMPTS = 6;
+
+type FollowUpRetryReason =
+  | "no_pipe_started"
+  | "notification_rejected"
+  | "unexpected_failure";
 
 type FollowUpDependencies = {
   now?: () => Date;
@@ -26,6 +33,7 @@ export type OnboardingLiveViewFollowUpResult =
   | { status: "idle" }
   | { status: "notified"; viewId: string; pipeCount: number }
   | { status: "retry_scheduled"; viewId: string }
+  | { status: "retries_exhausted"; viewId: string }
   | { status: "view_missing"; viewId: string };
 
 function dueAt(activation: OnboardingLiveViewActivation): number | null {
@@ -63,13 +71,47 @@ function claimDueFollowUp(now: Date): OnboardingLiveViewActivation | null {
   return claimed?.followUp?.startedAt === startedAt ? claimed : null;
 }
 
-function scheduleRetry(viewId: string, now: Date): void {
+function retryDelayMs(attempts: number): number {
+  const backoff = FOLLOW_UP_RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1);
+  return Math.min(backoff, FOLLOW_UP_RETRY_MAX_MS);
+}
+
+function scheduleRetry(viewId: string, now: Date, attempts: number): void {
   updateOnboardingLiveViewFollowUp(viewId, (followUp) => ({
     ...followUp,
     status: "scheduled",
-    retryAt: new Date(now.getTime() + FOLLOW_UP_RETRY_DELAY_MS).toISOString(),
+    attempts,
+    retryAt: new Date(now.getTime() + retryDelayMs(attempts)).toISOString(),
     startedAt: null,
   }));
+}
+
+function markFollowUpFailed(viewId: string, attempts: number): void {
+  updateOnboardingLiveViewFollowUp(viewId, (followUp) => ({
+    ...followUp,
+    status: "failed",
+    attempts,
+    retryAt: null,
+    startedAt: null,
+  }));
+}
+
+// A failed attempt schedules a backed-off retry until the cap, then gives up so
+// a permanently failing activation stops re-running every few minutes forever.
+function retryOrGiveUp(
+  activation: OnboardingLiveViewActivation,
+  now: Date,
+  reason: FollowUpRetryReason,
+): OnboardingLiveViewFollowUpResult {
+  const attempts = (activation.followUp?.attempts ?? 0) + 1;
+  if (attempts >= MAX_FOLLOW_UP_ATTEMPTS) {
+    markFollowUpFailed(activation.viewId, attempts);
+    captureOnboardingH1FollowUp("retry_exhausted", activation.goalCategory, reason);
+    return { status: "retries_exhausted", viewId: activation.viewId };
+  }
+  scheduleRetry(activation.viewId, now, attempts);
+  captureOnboardingH1FollowUp("retry_scheduled", activation.goalCategory, reason);
+  return { status: "retry_scheduled", viewId: activation.viewId };
 }
 
 function markFollowUpSent(viewId: string, now: Date): void {
@@ -224,13 +266,7 @@ export async function runDueOnboardingLiveViewFollowUp(
 
     const pipeCount = await startDashboardPipes(view, engineFetch);
     if (pipeCount === 0) {
-      scheduleRetry(activation.viewId, now);
-      captureOnboardingH1FollowUp(
-        "retry_scheduled",
-        activation.goalCategory,
-        "no_pipe_started",
-      );
-      return { status: "retry_scheduled", viewId: activation.viewId };
+      return retryOrGiveUp(activation, now, "no_pipe_started");
     }
 
     const notification = await notificationFetch("/notify", {
@@ -239,13 +275,7 @@ export async function runDueOnboardingLiveViewFollowUp(
       body: JSON.stringify(followUpNotification(view, activation)),
     });
     if (!notification.ok) {
-      scheduleRetry(activation.viewId, now);
-      captureOnboardingH1FollowUp(
-        "retry_scheduled",
-        activation.goalCategory,
-        "notification_rejected",
-      );
-      return { status: "retry_scheduled", viewId: activation.viewId };
+      return retryOrGiveUp(activation, now, "notification_rejected");
     }
 
     markFollowUpSent(activation.viewId, now);
@@ -255,12 +285,6 @@ export async function runDueOnboardingLiveViewFollowUp(
     );
     return { status: "notified", viewId: activation.viewId, pipeCount };
   } catch {
-    scheduleRetry(activation.viewId, now);
-    captureOnboardingH1FollowUp(
-      "retry_scheduled",
-      activation.goalCategory,
-      "unexpected_failure",
-    );
-    return { status: "retry_scheduled", viewId: activation.viewId };
+    return retryOrGiveUp(activation, now, "unexpected_failure");
   }
 }

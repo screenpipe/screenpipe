@@ -10,7 +10,8 @@ type Stage =
   | "delivery_attempted"
   | "notification_accepted"
   | "delivery_skipped"
-  | "retry_scheduled";
+  | "retry_scheduled"
+  | "retry_exhausted";
 type Reason =
   | "none"
   | "view_missing"

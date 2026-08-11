@@ -206,4 +206,54 @@ describe("onboarding Live View follow-up", () => {
       retryAt: "2026-07-30T20:05:00.000Z",
     });
   });
+
+  it("backs off and gives up after the attempt cap instead of looping forever", async () => {
+    const engineFetch = vi.fn().mockResolvedValue({ ok: false } as Response);
+    const notificationFetch = vi.fn().mockResolvedValue(okResponse());
+
+    let clock = now.getTime();
+    const delaysMin: number[] = [];
+    let lastStatus = "";
+    for (let i = 0; i < 20; i++) {
+      const runNow = new Date(clock);
+      const result = await runDueOnboardingLiveViewFollowUp({
+        now: () => runNow,
+        listViews: async () => [dashboard],
+        engineFetch,
+        notificationFetch,
+      });
+      lastStatus = result.status;
+      if (result.status !== "retry_scheduled") break;
+      const followUp = getOnboardingLiveViewActivation("first-dashboard")!
+        .followUp!;
+      delaysMin.push(Math.round((Date.parse(followUp.retryAt!) - clock) / 60_000));
+      clock = Date.parse(followUp.retryAt!);
+    }
+
+    expect(delaysMin).toEqual([5, 10, 20, 40, 60]);
+    expect(lastStatus).toBe("retries_exhausted");
+    expect(notificationFetch).not.toHaveBeenCalled();
+    expect(
+      getOnboardingLiveViewActivation("first-dashboard")?.followUp,
+    ).toMatchObject({ status: "failed", retryAt: null });
+
+    // A failed follow-up is terminal: no timer, and no further runs.
+    expect(
+      nextOnboardingLiveViewFollowUpAt(clock + 60 * 60 * 1_000),
+    ).toBeNull();
+    await expect(
+      runDueOnboardingLiveViewFollowUp({
+        now: () => new Date(clock + 60 * 60 * 1_000),
+        listViews: async () => [dashboard],
+        engineFetch,
+        notificationFetch,
+      }),
+    ).resolves.toEqual({ status: "idle" });
+    expect(
+      capture.mock.calls.some(
+        ([, props]: [string, { stage?: string }]) =>
+          props.stage === "retry_exhausted",
+      ),
+    ).toBe(true);
+  });
 });

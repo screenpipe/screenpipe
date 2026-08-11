@@ -48,7 +48,8 @@ export type OnboardingLiveViewActivation = {
 
 export type OnboardingLiveViewFollowUp = {
   dueAt: string;
-  status: "scheduled" | "running" | "sent";
+  status: "scheduled" | "running" | "sent" | "failed";
+  attempts: number;
   retryAt: string | null;
   startedAt: string | null;
   sentAt: string | null;
@@ -88,6 +89,7 @@ function normalizeFollowUp(value: unknown): OnboardingLiveViewFollowUp | null {
   const status =
     followUp.status === "running" ||
     followUp.status === "sent" ||
+    followUp.status === "failed" ||
     followUp.status === "scheduled"
       ? followUp.status
       : "scheduled";
@@ -99,6 +101,10 @@ function normalizeFollowUp(value: unknown): OnboardingLiveViewFollowUp | null {
   return {
     dueAt: followUp.dueAt,
     status: runningIsStale ? "scheduled" : status,
+    attempts:
+      typeof followUp.attempts === "number" && Number.isFinite(followUp.attempts)
+        ? followUp.attempts
+        : 0,
     retryAt: runningIsStale ? null : (followUp.retryAt ?? null),
     startedAt: runningIsStale ? null : (followUp.startedAt ?? null),
     sentAt: followUp.sentAt ?? null,
@@ -278,6 +284,7 @@ export function markOnboardingLiveViewSetupReady(
     followUp: current.followUp ?? {
       dueAt: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
       status: "scheduled",
+      attempts: 0,
       retryAt: null,
       startedAt: null,
       sentAt: null,
