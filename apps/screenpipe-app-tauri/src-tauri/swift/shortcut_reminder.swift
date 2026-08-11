@@ -368,6 +368,7 @@ private let kBaseDisclosureH: CGFloat = 26
 private let kBaseDisclosureGap: CGFloat = 4
 private let kBaseTranscriptW: CGFloat = 280
 private let kBaseTranscriptH: CGFloat = 142
+private let kRestingOpacity: Double = 0.82
 private let kAnimDur: Double = 0.2
 private let kDockControls = ["timeline", "chat", "search", "audio", "screen", "close"]
 
@@ -704,12 +705,13 @@ struct ShortcutReminderView: View {
         .frame(width: kBaseCollapsedW * collapsedScale, height: kBaseCollapsedH * collapsedScale)
         .background(
             RoundedRectangle(cornerRadius: c(kBaseCollapsedCornerRadius), style: .continuous)
-                .fill(Color.black.opacity(0.82))
+                .fill(Color.black)
         )
         .overlay(
             RoundedRectangle(cornerRadius: c(kBaseCollapsedCornerRadius), style: .continuous)
                 .stroke(.white.opacity(0.24), lineWidth: 1)
         )
+        .opacity(kRestingOpacity)
     }
 
     // MARK: - Expanded bar
@@ -914,7 +916,6 @@ private struct DockStatusCell<Content: View>: View {
 struct CollapsedAppIconButton: View {
     let scale: CGFloat
     let action: () -> Void
-    @State private var hovered = false
 
     var body: some View {
         Button(action: action) {
@@ -923,14 +924,12 @@ struct CollapsedAppIconButton: View {
                     Image(nsImage: appIcon)
                         .resizable()
                         .frame(width: 12 * scale, height: 12 * scale)
-                        .opacity(hovered ? 1.0 : 0.85)
                 }
             }
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { h in hovered = h }
     }
 }
 
