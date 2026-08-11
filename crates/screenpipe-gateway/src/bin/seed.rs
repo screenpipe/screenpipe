@@ -19,7 +19,7 @@ use std::sync::Arc;
 use screenpipe_gateway::{GatewayConfig, S3BlobSource};
 use screenpipe_telemetry_wire::{
     build_jsonl_with_parsed, compute_batch_id, direct_batch_key, AudioRow, DirectUploadCursors,
-    DirectUploadRecordCounts, FrameRow, MemoryRow, ParsedRow, UiEventRow,
+    DirectUploadRecordCounts, FrameRow, MemoryRow, ParsedRow, TelemetryRecord, UiEventRow,
 };
 
 struct Device {
@@ -47,7 +47,7 @@ const DEVICES: &[Device] = &[
 fn batch_for(device: &Device) -> Vec<u8> {
     let ts = |m: u32| format!("2026-07-22T{:02}:{:02}:00Z", device.hour, m);
     let parsed_text = format!("Ada: quarterly roadmap {} structured update", device.marker);
-    build_jsonl_with_parsed(
+    let mut body = build_jsonl_with_parsed(
         device.id,
         device.label,
         &[
@@ -130,7 +130,26 @@ fn batch_for(device: &Device) -> Vec<u8> {
             importance: 0.8,
             frame_id: Some(1),
         }],
-    )
+    );
+    if device.id == "dev-alice" {
+        body.extend_from_slice(
+            &serde_json::to_vec(&TelemetryRecord::Frame {
+                device_id: device.id.to_string(),
+                device_label: device.label.to_string(),
+                frame: FrameRow {
+                    frame_id: 999,
+                    timestamp: "2026-07-12T09:00:00Z".to_string(),
+                    app_name: Some("Arc".to_string()),
+                    window_name: Some("stale batch member".to_string()),
+                    browser_url: None,
+                    text: Some("roadmap stale-window regression sentinel".to_string()),
+                },
+            })
+            .expect("stale conformance frame serializes"),
+        );
+        body.push(b'\n');
+    }
+    body
 }
 
 /// One org-wide daily rollup, byte-identical to the conformance fixture.
@@ -159,7 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for device in DEVICES {
         let body = batch_for(device);
         let counts = DirectUploadRecordCounts {
-            frames: 2,
+            frames: if device.id == "dev-alice" { 3 } else { 2 },
             parsed: 1,
             audio: 1,
             ui: 1,
