@@ -82,6 +82,17 @@ private final class OverlayMenuState: ObservableObject {
     @Published var hoveredItem: String?
 }
 
+private struct SettingsMenuAnalyticsSession {
+    let openedAt: TimeInterval
+    var currentItem: String?
+    var currentItemEnteredAt: TimeInterval?
+    var hoverSequence: [String] = []
+    var hoverMilliseconds: [String: Int] = [:]
+    var longestHoverMilliseconds = 0
+    var longestHoverItem: String?
+    var revisitCount = 0
+}
+
 struct MeetingOverlayTranscriptItem: Identifiable, Equatable {
     let meetingId: Int64
     let itemId: String
@@ -1003,6 +1014,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
     private var settingsMenuHideWorkItem: DispatchWorkItem?
     private var meetingStopTimeoutWorkItem: DispatchWorkItem?
     private var settingsMenuOpen = false
+    private var settingsMenuAnalyticsSession: SettingsMenuAnalyticsSession?
     private let overlayMenuState = OverlayMenuState()
 
     private var overlayShortcut = "Cmd+Ctrl+S"
@@ -1039,6 +1051,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
                 parseShortcuts(shortcuts)
             }
             if panel == nil || prevScale != gOverlayScale {
+                emitSettingsMenuEngagement(selectedItem: nil)
                 settingsMenuHideWorkItem?.cancel()
                 settingsMenuHideWorkItem = nil
                 settingsMenuOpen = false
@@ -1076,6 +1089,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
     func hide() {
         DispatchQueue.main.async { [self] in
             isVisible = false
+            emitSettingsMenuEngagement(selectedItem: nil)
             hoverHideWorkItem?.cancel()
             hoverHideWorkItem = nil
             settingsMenuHideWorkItem?.cancel()
@@ -1739,7 +1753,9 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
 
     private func showSettingsMenu() {
         guard !settingsMenuOpen else { return }
-        sendAction("settings_menu_opened")
+        settingsMenuAnalyticsSession = SettingsMenuAnalyticsSession(
+            openedAt: ProcessInfo.processInfo.systemUptime
+        )
         hoverHideWorkItem?.cancel()
         hoverHideWorkItem = nil
         settingsMenuHideWorkItem?.cancel()
@@ -1857,6 +1873,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
             settingsMenuHideWorkItem = nil
         } else {
             overlayMenuState.hoveredItem = nil
+            updateSettingsMenuAnalyticsHover(nil)
             scheduleSettingsMenuExit()
         }
     }
@@ -1870,12 +1887,77 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
     private func updateOverlaySubmenuHover(at point: NSPoint?) {
         guard let point = point else {
             overlayMenuState.hoveredItem = nil
+            updateSettingsMenuAnalyticsHover(nil)
             return
         }
         let height = kBaseOverlaySubmenuH * gOverlayScale
         let rowHeight = kBaseOverlaySubmenuRowH * gOverlayScale
         let index = min(2, max(0, Int((height - point.y) / rowHeight)))
-        overlayMenuState.hoveredItem = ["today", "week", "settings"][index]
+        let item = ["today", "week", "settings"][index]
+        overlayMenuState.hoveredItem = item
+        updateSettingsMenuAnalyticsHover(item)
+    }
+
+    private func updateSettingsMenuAnalyticsHover(_ item: String?) {
+        guard var session = settingsMenuAnalyticsSession,
+              session.currentItem != item else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+
+        if let currentItem = session.currentItem,
+           let enteredAt = session.currentItemEnteredAt {
+            let elapsed = max(0, Int(((now - enteredAt) * 1_000).rounded()))
+            session.hoverMilliseconds[currentItem, default: 0] += elapsed
+            if elapsed > session.longestHoverMilliseconds {
+                session.longestHoverMilliseconds = elapsed
+                session.longestHoverItem = currentItem
+            }
+        }
+
+        session.currentItem = nil
+        session.currentItemEnteredAt = nil
+        if let item = item {
+            if session.hoverSequence.contains(item) {
+                session.revisitCount += 1
+            }
+            session.hoverSequence.append(item)
+            session.currentItem = item
+            session.currentItemEnteredAt = now
+        }
+        settingsMenuAnalyticsSession = session
+    }
+
+    private func emitSettingsMenuEngagement(selectedItem: String?) {
+        updateSettingsMenuAnalyticsHover(nil)
+        guard let session = settingsMenuAnalyticsSession else { return }
+        settingsMenuAnalyticsSession = nil
+        guard !session.hoverSequence.isEmpty || selectedItem != nil else { return }
+
+        var hoveredItems: [String] = []
+        for item in session.hoverSequence where !hoveredItems.contains(item) {
+            hoveredItems.append(item)
+        }
+        let openMilliseconds = max(
+            0,
+            Int(((ProcessInfo.processInfo.systemUptime - session.openedAt) * 1_000).rounded())
+        )
+        let properties: [String: Any] = [
+            "hovered_items": hoveredItems,
+            "hover_sequence": session.hoverSequence,
+            "hover_transition_count": max(0, session.hoverSequence.count - 1),
+            "revisit_count": session.revisitCount,
+            "menu_open_ms": openMilliseconds,
+            "today_hover_ms": session.hoverMilliseconds["today", default: 0],
+            "week_hover_ms": session.hoverMilliseconds["week", default: 0],
+            "settings_hover_ms": session.hoverMilliseconds["settings", default: 0],
+            "longest_hover_ms": session.longestHoverMilliseconds,
+            "longest_hover_item": session.longestHoverItem ?? NSNull(),
+            "dwell_over_one_second": session.longestHoverMilliseconds >= 1_000,
+            "selected_item": selectedItem ?? NSNull(),
+            "outcome": selectedItem == nil ? "closed" : "selected",
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: properties),
+              let json = String(data: data, encoding: .utf8) else { return }
+        sendAction("settings_menu_engaged:\(json)")
     }
 
     private func scheduleSettingsMenuExit() {
@@ -1891,7 +1973,11 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
     }
 
-    private func closeSettingsMenu(scheduleCollapse: Bool = true) {
+    private func closeSettingsMenu(
+        scheduleCollapse: Bool = true,
+        selectedItem: String? = nil
+    ) {
+        emitSettingsMenuEngagement(selectedItem: selectedItem)
         settingsMenuHideWorkItem?.cancel()
         settingsMenuHideWorkItem = nil
         settingsMenuOpen = false
@@ -1944,12 +2030,13 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
     }
 
     private func selectOverlayDismissal(_ action: String) {
-        closeSettingsMenu(scheduleCollapse: false)
+        let selectedItem = action == "dismiss_today" ? "today" : "week"
+        closeSettingsMenu(scheduleCollapse: false, selectedItem: selectedItem)
         sendAction(action)
     }
 
     private func openOverlaySettings() {
-        closeSettingsMenu()
+        closeSettingsMenu(selectedItem: "settings")
         sendAction("open_overlay_settings")
     }
 

@@ -173,6 +173,12 @@ pub(crate) fn track_native_overlay_event(
     }
 }
 
+fn settings_menu_engagement_properties(action: &str) -> Option<serde_json::Value> {
+    let payload = action.strip_prefix("settings_menu_engaged:")?;
+    let properties: serde_json::Value = serde_json::from_str(payload).ok()?;
+    properties.is_object().then_some(properties)
+}
+
 fn native_notif_action_callback_inner(json_ptr: *const std::os::raw::c_char) {
     if json_ptr.is_null() {
         return;
@@ -755,6 +761,14 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
         let app_clone = app.clone();
         std::thread::spawn(move || {
             let app_for_show = app_clone.clone();
+            if let Some(properties) = settings_menu_engagement_properties(&action) {
+                track_native_overlay_event(
+                    &app_clone,
+                    "shortcut_reminder_settings_menu_engaged",
+                    properties,
+                );
+                return;
+            }
             match action.as_str() {
                 "open_timeline" => {
                     track_native_overlay_event(
@@ -785,13 +799,6 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
                     let _ = app_clone.run_on_main_thread(move || {
                         let _ = (ShowRewindWindow::Search { query: None }).show(&app_for_show);
                     });
-                }
-                "settings_menu_opened" => {
-                    track_native_overlay_event(
-                        &app_clone,
-                        "shortcut_reminder_settings_menu_opened",
-                        serde_json::json!({}),
-                    );
                 }
                 "open_overlay_settings" => {
                     track_native_overlay_event(
@@ -912,7 +919,8 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
 mod tests {
     use super::{
         apply_shortcut_overlay_dismissal, notification_copy_value, notification_source_url,
-        parse_meeting_deeplink, ShortcutOverlayDismissScope, SHORTCUT_OVERLAY_DAY_SNOOZE_SECONDS,
+        parse_meeting_deeplink, settings_menu_engagement_properties,
+        ShortcutOverlayDismissScope, SHORTCUT_OVERLAY_DAY_SNOOZE_SECONDS,
         SHORTCUT_OVERLAY_WEEK_SNOOZE_SECONDS,
     };
     use crate::store::SettingsStore;
@@ -945,6 +953,20 @@ mod tests {
         apply_shortcut_overlay_dismissal(&mut store, ShortcutOverlayDismissScope::Persistent, 100);
         assert!(!store.show_shortcut_overlay);
         assert_eq!(store.shortcut_overlay_snoozed_until, None);
+    }
+
+    #[test]
+    fn parses_settings_menu_engagement_summary() {
+        let action = concat!(
+            "settings_menu_engaged:",
+            r#"{"hovered_items":["today","week"],"revisit_count":1,"longest_hover_ms":1400}"#
+        );
+        let properties = settings_menu_engagement_properties(action).expect("valid summary");
+        assert_eq!(properties["hovered_items"], json!(["today", "week"]));
+        assert_eq!(properties["revisit_count"], 1);
+        assert_eq!(properties["longest_hover_ms"], 1400);
+        assert!(settings_menu_engagement_properties("settings_menu_engaged:[]").is_none());
+        assert!(settings_menu_engagement_properties("settings_menu_opened").is_none());
     }
 
     #[test]
