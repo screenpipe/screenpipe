@@ -25,6 +25,44 @@ const canRun = E2E_SEED_FLAGS.split(",").some(
   (flag) => flag.trim().toLowerCase() === "background-ai-tools",
 );
 
+async function hasTauriInvoke(): Promise<boolean> {
+  return Boolean(
+    await browser
+      .execute(() => {
+        const g = globalThis as unknown as {
+          __TAURI__?: { core?: { invoke?: unknown } };
+          __TAURI_INTERNALS__?: { invoke?: unknown };
+        };
+        return Boolean(g.__TAURI__?.core?.invoke ?? g.__TAURI_INTERNALS__?.invoke);
+      })
+      .catch(() => false),
+  );
+}
+
+async function switchToTauriWindow(label?: string): Promise<void> {
+  await browser.waitUntil(
+    async () => {
+      if (label) {
+        if (!(await browser.getWindowHandles()).includes(label)) return false;
+        await browser.switchToWindow(label);
+        return hasTauriInvoke();
+      }
+      for (const handle of await browser.getWindowHandles()) {
+        await browser.switchToWindow(handle);
+        if (await hasTauriInvoke()) return true;
+      }
+      return false;
+    },
+    {
+      timeout: t(15_000),
+      interval: 250,
+      timeoutMsg: label
+        ? `Window handle "${label}" did not expose Tauri invoke`
+        : "no Tauri WebView context was available for E2E invokes",
+    },
+  );
+}
+
 interface LocalApiConfig {
   key: string | null;
   port: number;
@@ -148,9 +186,11 @@ async function callActivitySummaryThroughMcp(
 
     before(async () => {
       await waitForAppReady();
+      await switchToTauriWindow();
     });
 
     it("connects detected Codex and Cursor configs in the Rust background task", async () => {
+      await switchToTauriWindow();
       const codexConfig = resolve(E2E_AI_TOOLS_HOME, ".codex", "config.toml");
       const cursorConfig = resolve(E2E_AI_TOOLS_HOME, ".cursor", "mcp.json");
       const requiredSkills = [
@@ -238,6 +278,7 @@ async function callActivitySummaryThroughMcp(
     });
 
     it("resumes a saved connection slide at the engine step and finishes setup", async () => {
+      await switchToTauriWindow();
       // Retries must start from an incomplete store. The engine slide finishes
       // setup on its own, and once `isCompleted` is true `show_window` correctly
       // routes Onboarding to Home — so without this reset, attempt 2 would fail
@@ -247,13 +288,13 @@ async function callActivitySummaryThroughMcp(
 
       await showWindow({ Home: { page: "home" } });
       await waitForWindowHandle("home", t(10_000));
-      await browser.switchToWindow("home");
+      await switchToTauriWindow("home");
 
       await closeWindow("Onboarding");
       await waitForWindowClosed("onboarding", t(10_000));
       await showWindow("Onboarding");
       await waitForWindowHandle("onboarding", t(10_000));
-      await browser.switchToWindow("onboarding");
+      await switchToTauriWindow("onboarding");
       await waitForWindowUrl("/onboarding", undefined, t(15_000));
 
       // Best effort: the engine slide completes setup on its own, so the window
@@ -306,6 +347,7 @@ async function callActivitySummaryThroughMcp(
           }
 
           await browser.switchToWindow("home");
+          if (!(await hasTauriInvoke())) return false;
           const status = await invokeOrThrow<{ isCompleted: boolean }>(
             "get_onboarding_status",
           );

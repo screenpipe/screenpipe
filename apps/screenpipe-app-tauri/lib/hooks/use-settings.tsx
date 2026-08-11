@@ -737,6 +737,7 @@ let DEFAULT_SETTINGS: Settings = {
 				credits_balance: null,
 				app_entitled: null,
 				subscription_plan: null,
+				has_payment_method: null,
 				entitlement: null,
 				enterprise_account: null,
 			},

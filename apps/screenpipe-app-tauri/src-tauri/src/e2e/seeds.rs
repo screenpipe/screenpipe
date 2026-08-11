@@ -116,8 +116,26 @@ pub(crate) fn apply_settings(app: &AppHandle, store: &mut SettingsStore) {
         info!("E2E seed: screenpipe cloud audio fallback");
     }
     if e2e_flags.iter().any(|f| f == "background-ai-tools") {
+        if let Ok(port) = std::env::var("SCREENPIPE_PORT")
+            .unwrap_or_default()
+            .parse::<u16>()
+        {
+            store.recording.port = port;
+        }
+        store.user.id = Some("e2e-background-ai-tools-user".to_string());
+        store.user.email = Some("background-ai-tools@screenpipe.test".to_string());
         store.user.cloud_subscribed = Some(true);
-        info!("E2E seed: background AI tools skips consumer billing step");
+        store.user.app_entitled = Some(true);
+        store.user.subscription_plan = Some("standard".to_string());
+        store.user.has_payment_method = Some(true);
+        store.user.entitlement = Some(json!({
+            "active": true,
+            "checked_at": Utc::now().to_rfc3339(),
+            "features": { "app": true, "cloud": false },
+            "plan": "standard",
+            "source": "subscription",
+        }));
+        info!("E2E seed: background AI tools uses subscribed test account");
     }
     if e2e_flags.iter().any(|f| f == "meetings-only-audio") {
         // Real audio lifecycle lane for meetings-only capture. Keep

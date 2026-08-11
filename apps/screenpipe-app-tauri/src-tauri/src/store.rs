@@ -1177,6 +1177,7 @@ pub struct User {
     pub credits_balance: Option<i32>,
     pub app_entitled: Option<bool>,
     pub subscription_plan: Option<String>,
+    pub has_payment_method: Option<bool>,
     pub entitlement: Option<serde_json::Value>,
     pub enterprise_account: Option<serde_json::Value>,
 }
@@ -1202,6 +1203,7 @@ impl Default for User {
             credits_balance: None,
             app_entitled: None,
             subscription_plan: None,
+            has_payment_method: None,
             entitlement: None,
             enterprise_account: None,
         }
