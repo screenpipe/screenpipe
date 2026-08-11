@@ -7,8 +7,8 @@ and layer declared in the manifest, weighted by confidence and criticality.
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
 - Mapped specs: 105
-- Declared test blocks: 304
-- Weighted coverage points: 236.5
+- Declared test blocks: 305
+- Weighted coverage points: 237.5
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 82 | 265 | 215.6 | 15 | 89 | 91% |
-| macos | 101 | 267 | 207.3 | 17 | 91 | 90% |
-| linux | 71 | 222 | 184.2 | 14 | 84 | 88% |
+| windows | 82 | 266 | 216.6 | 15 | 89 | 91% |
+| macos | 101 | 268 | 208.3 | 17 | 91 | 90% |
+| linux | 71 | 223 | 185.2 | 14 | 84 | 88% |
 
 ## Runtime Results
 
@@ -41,14 +41,14 @@ pass/fail/skip counts.
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
 | local-api | 22 specs / 109 tests / 90.0 pts | 27 specs / 94 tests / 78.0 pts | 17 specs / 77 tests / 68.2 pts |
 | notifications | 4 specs / 25 tests / 16.3 pts | 3 specs / 5 tests / 3.4 pts | 2 specs / 4 tests / 3.1 pts |
-| onboarding | 6 specs / 26 tests / 23.0 pts | 7 specs / 27 tests / 23.4 pts | 6 specs / 26 tests / 23.0 pts |
+| onboarding | 6 specs / 27 tests / 24.0 pts | 7 specs / 28 tests / 24.4 pts | 6 specs / 27 tests / 24.0 pts |
 | os-integration | 7 specs / 29 tests / 24.8 pts | 13 specs / 25 tests / 14.8 pts | 2 specs / 12 tests / 8.7 pts |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
 | pipes | 6 specs / 19 tests / 19.0 pts | 7 specs / 24 tests / 24.0 pts | 6 specs / 19 tests / 19.0 pts |
-| real-ui-e2e | 57 specs / 170 tests / 140.0 pts | 66 specs / 169 tests / 139.1 pts | 52 specs / 145 tests / 125.2 pts |
+| real-ui-e2e | 57 specs / 171 tests / 141.0 pts | 66 specs / 170 tests / 140.1 pts | 52 specs / 146 tests / 126.2 pts |
 | settings | 14 specs / 38 tests / 35.0 pts | 16 specs / 33 tests / 28.7 pts | 13 specs / 30 tests / 27.0 pts |
 | storage-privacy | 9 specs / 40 tests / 31.3 pts | 9 specs / 26 tests / 25.1 pts | 6 specs / 19 tests / 18.1 pts |
-| tauri-command | 16 specs / 42 tests / 31.4 pts | 20 specs / 47 tests / 34.3 pts | 15 specs / 41 tests / 30.4 pts |
+| tauri-command | 16 specs / 43 tests / 32.4 pts | 20 specs / 48 tests / 35.3 pts | 15 specs / 42 tests / 31.4 pts |
 | window-lifecycle | 18 specs / 63 tests / 53.0 pts | 18 specs / 44 tests / 31.4 pts | 13 specs / 39 tests / 29.9 pts |
 
 ## Critical Feature Matrix
@@ -165,7 +165,7 @@ pass/fail/skip counts.
 | meetings-only-audio-lifecycle.spec.ts | windows, macos | audio-device, local-api, real-ui-e2e | meetings-only-audio-lifecycle, audio-device-health | high | conditional | real-user-flow | 1 | Opt-in real-audio lifecycle lane: configured devices stay closed outside meetings and open only across a manual meeting edge. |
 | notification-viewer-link.spec.ts | windows, macos, linux | notifications, local-api, window-lifecycle | notifications, viewer-deeplink | high | partial | mixed | 3 | Notification local file links rewrite into in-app viewer links. |
 | onboarding-background-ai-tools.spec.ts | windows, macos, linux | onboarding, real-ui-e2e, storage-privacy | onboarding, settings-ai | high | strong | real-user-flow | 2 | Isolated agent-home CI lane verifies private native config writes, the resolved local API credential, a real authenticated MCP tool call, skills setup, and removal of the connection slide. |
-| onboarding-first-run.spec.ts | windows, macos, linux | onboarding, real-ui-e2e, tauri-command | onboarding, first-run-learning, settings-persistence | high | strong | real-user-flow | 7 | Fresh-install setup walk: the acquisition slide is reachable in the shipped slide order and counted by the progress bar, offers no free-text field, one tap persists through to store.bin via the real settings command, skip records nothing, and the engine slide is the last one with no goal picker after it. |
+| onboarding-first-run.spec.ts | windows, macos, linux | onboarding, real-ui-e2e, tauri-command | onboarding, first-run-learning, settings-persistence | high | strong | real-user-flow | 8 | Fresh-install setup walk: the acquisition slide is reachable in the shipped slide order and counted by the progress bar, offers no free-text field, one tap persists through to store.bin via the real settings command, skip records nothing, and the engine slide is the last one with no goal picker after it. |
 | onboarding-h1-follow-up.spec.ts | windows, macos, linux | onboarding, notifications, pipes, real-ui-e2e | onboarding, notifications, pipes | high | strong | real-user-flow | 1 | A due H1 activation runs its real Pipe, sends one visible prompt through the app-control notification server, and remains exactly-once across repeated scheduler ticks. |
 | onboarding-redirect.spec.ts | windows, macos, linux | onboarding, real-ui-e2e, window-lifecycle | onboarding, app-launch | high | conditional | real-user-flow | 5 | Opt-in no-onboarding seed verifies onboarding redirect. |
 | owned-browser.spec.ts | windows, macos | os-integration, window-lifecycle | owned-browser, window-lifecycle | low | smoke | command | 1 | Embedded agent browser hides safely without an attached child. |
