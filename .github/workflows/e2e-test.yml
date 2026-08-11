@@ -250,10 +250,6 @@ jobs:
       env:
         RECORD_VIDEO: "true"
       run: |
-        if ("${{ github.event_name }}" -eq "pull_request") {
-          Write-Host "Skipping broad Windows WDIO suite on pull_request; focused onboarding and core recording lanes still run."
-          exit 0
-        }
         Remove-Item -LiteralPath ./.e2e -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath ./e2e/results -Recurse -Force -ErrorAction SilentlyContinue
         bun run test:e2e
@@ -572,10 +568,6 @@ jobs:
         export RECORD_VIDEO=1
 
         bun run test:e2e:onboarding-background-ai-tools
-        if [ "${{ github.event_name }}" = "pull_request" ]; then
-          echo "Skipping broad Linux WDIO suite on pull_request; focused onboarding and Wayland lanes still run."
-          exit 0
-        fi
         rm -rf ./.e2e ./e2e/results
         bun run test:e2e
 
