@@ -25,10 +25,6 @@ import {
 	hasAppEntitlement,
 	normalizeAppUser,
 } from "@/lib/app-entitlement";
-import {
-	resolveFreePlanRetentionTransition,
-	type LocalRetentionPreference,
-} from "@/lib/free-plan-retention";
 import { screenpipeWebUrl } from "@/lib/web-url";
 import type { SourceCitation } from "@/lib/source-citations";
 import type {
@@ -274,9 +270,7 @@ export type Settings = SettingsStore & {
 	/** Where the user says they found screenpipe, answered once during setup.
 	 *  A fixed enum from the onboarding step — never free text. */
 	acquisitionSource?: string;
-	/** Internal marker/snapshot used to unwind the forced free-plan policy. */
-	_freePlanRetentionApplied?: boolean;
-	_preFreePlanRetention?: LocalRetentionPreference | null;
+	/** Stable local identifier used for device-scoped behavior. */
 	deviceId?: string;
 	/** Device-key values enforced by the current enterprise policy. */
 	enterpriseManagedSettings?: Record<string, ManagedSettingValue>;
@@ -631,30 +625,6 @@ export function makeDefaultPresets(isPro: boolean): AIPreset[] {
 const DEFAULT_CLOUD_PRESET: AIPreset = makeDefaultPresets(false)[0];
 
 const DEFAULT_AUDIO_ENGINE = "whisper-large-v3-turbo-quantized";
-
-async function configureLocalRetention(
-	policy: LocalRetentionPreference,
-): Promise<void> {
-	try {
-		const { localFetch } = await import("@/lib/api");
-		const response = await localFetch("/retention/configure", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				enabled: policy.enabled,
-				retention_days: policy.days,
-				mode: policy.mode,
-			}),
-		});
-		if (!response.ok) {
-			console.warn(`failed to configure local retention (${response.status})`);
-		}
-	} catch (error) {
-		// Persisted settings are still applied by the native startup path on the
-		// next launch. A temporarily unavailable local server must not fail login.
-		console.warn("failed to configure local retention", error);
-	}
-}
 
 // "Paid" = any active app entitlement (Basic / Business / Enterprise / Lifetime)
 // OR the legacy cloud-sync subscription. Broadened from `cloud_subscribed`-only so
@@ -1809,18 +1779,12 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		await settingsStore.set(updates);
 		// Settings will be updated via the listener
 		if (clearsAccount) {
-			// Signed-out state is Unknown. Apply the non-destructive feature cap and
-			// stop any cleanup loop left running by a previously verified account.
+			// Account changes must not alter the user's local retention policy.
 			try {
 				await commands.setCloudToken(null);
 			} catch (error) {
 				console.warn("failed to clear cloud token after sign-out:", error);
 			}
-			await configureLocalRetention({
-				enabled: false,
-				days: 14,
-				mode: "media",
-			});
 		}
 
 		// Only update the port in the API module immediately — auth changes
@@ -1939,20 +1903,10 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				} catch (e) {
 					console.warn("failed to apply unknown-plan restrictions:", e);
 				}
-				// A free-plan cleanup loop may already be running from the prior
-				// verified state. Pause it without overwriting the saved preference;
-				// unknown evidence can cap features, but it cannot authorize deletion.
-				await configureLocalRetention({
-					enabled: false,
-					days: 14,
-					mode: "media",
-				});
 				throw new Error(
 					"account response did not contain verified free or paid plan truth",
 				);
 			}
-			const isFreePlan = localPlanPolicy === "verified-free";
-			const isPaidPlan = localPlanPolicy === "verified-paid";
 
 			// if user was not logged in, send posthog event and bridge identity
 			if (!settings.user?.id) {
@@ -1972,29 +1926,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				}
 			}
 
-			const retentionTransition = resolveFreePlanRetentionTransition(
-				settingsRef.current,
-				isFreePlan,
-				isPaidPlan,
-			);
-			const retentionUpdates =
-				retentionTransition.kind === "enforce"
-					? {
-							_freePlanRetentionApplied: true,
-							_preFreePlanRetention: retentionTransition.previous,
-							localRetentionEnabled: retentionTransition.policy.enabled,
-							localRetentionDays: retentionTransition.policy.days,
-							localRetentionMode: retentionTransition.policy.mode,
-						}
-					: retentionTransition.kind === "restore"
-						? {
-								_freePlanRetentionApplied: false,
-								localRetentionEnabled: retentionTransition.policy.enabled,
-								localRetentionDays: retentionTransition.policy.days,
-								localRetentionMode: retentionTransition.policy.mode,
-							}
-						: {};
-			await updateSettings({ user: userData, ...retentionUpdates } as any);
+			await updateSettings({ user: userData });
 
 			// Push the fresh token into the running sidecar so the
 			// `Server.cloud_token` (used by /v1/chat/completions proxy) and
@@ -2009,21 +1941,6 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				console.warn("failed to push cloud token to sidecar:", e);
 			}
 
-			const verifiedRetentionPolicy =
-				retentionTransition.kind !== "none"
-					? retentionTransition.policy
-					: isPaidPlan
-						? {
-								enabled: settingsRef.current.localRetentionEnabled === true,
-								days: settingsRef.current.localRetentionDays ?? 14,
-								mode: settingsRef.current.localRetentionMode ?? "media",
-							}
-						: null;
-			if (verifiedRetentionPolicy) {
-				// setCloudToken updates native enforcement first. Then apply or resume
-				// the verified policy on the already-running retention task.
-				await configureLocalRetention(verifiedRetentionPolicy);
-			}
 		} catch (err) {
 			console.error("failed to load user:", err instanceof Error ? err.message : err);
 			throw err;

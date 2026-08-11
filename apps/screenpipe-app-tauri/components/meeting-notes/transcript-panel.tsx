@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { MediaComponent } from "@/components/rewind/media";
 import { SpeakerAssignPopover } from "@/components/speaker-assign-popover";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
+import { usePlatform } from "@/lib/hooks/use-platform";
 import type { LiveCaptureState } from "@/lib/utils/live-capture-state";
 import {
   fetchMeetingAudio,
@@ -303,6 +304,7 @@ export function TranscriptPanel({
   headerActions,
   captureState,
 }: TranscriptPanelProps) {
+  const { isMac } = usePlatform();
   const [chunks, setChunks] = useState<MeetingAudioChunk[]>([]);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -981,7 +983,7 @@ export function TranscriptPanel({
                     "h-7 w-7 p-0",
                     searchOpen && "bg-accent text-accent-foreground",
                   )}
-                  title={searchOpen ? "hide search" : "search transcript (⌘F)"}
+                  title={searchOpen ? "hide search" : `search transcript (${isMac ? "⌘F" : "Ctrl+F"})`}
                   aria-label={
                     searchOpen ? "hide transcript search" : "search transcript"
                   }

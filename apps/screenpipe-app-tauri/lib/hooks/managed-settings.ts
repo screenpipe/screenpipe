@@ -155,12 +155,9 @@ export const MANAGED_SETTING_DEFINITIONS: readonly ManagedSettingDefinition[] = 
   enumeration("piiBackend", ["local", "tinfoil"], "local"),
   stringArray("piiRedactionLabels", ["secret"], ["secret"]),
 
-  // Local disk retention. Without these the only way an org can cap local
-  // growth is the Storage settings tab, which a headless deployment hides —
-  // so a fleet with the UI hidden had no reachable retention control at all
-  // and its databases grew unbounded. Marked "engine" so a policy change
-  // restarts the recorder, and that restart is what re-runs
-  // `auto_start_retention` and pushes the new window to the running engine.
+  // Enterprise retention is an explicit fleet policy, separate from account
+  // plan changes. Headless managed deployments need this control because the
+  // user-facing Storage settings may be unavailable.
   bool("localRetentionEnabled", false),
   number("localRetentionDays", 1, 3650, 14),
   enumeration("localRetentionMode", ["media", "lean", "all"], "media"),

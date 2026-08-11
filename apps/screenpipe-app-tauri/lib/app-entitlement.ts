@@ -80,8 +80,6 @@ export type LocalPlanPolicy = "verified-free" | "verified-paid" | "unknown";
 export const APP_ENTITLEMENT_MAX_STALE_MS = 72 * 60 * 60 * 1000;
 export const APP_ENTITLEMENT_CLOCK_SKEW_MS = 5 * 60 * 1000;
 export const TOKEN_HYDRATION_GRACE_MS = 60 * 1000;
-export const FREE_PLAN_RETENTION_DAYS = 7;
-export const FREE_PLAN_RETENTION_MODE = "all" as const;
 export const PRICING_URL = screenpipeWebUrl("/onboarding", "https://screenpipe.com");
 export const ENTERPRISE_BUILDS_URL = screenpipeWebUrl("/enterprise?tab=builds", "https://screenpipe.com");
 export const ENTERPRISE_DOWNLOAD_URL = screenpipeWebUrl("/api/download", "https://screenpipe.com");

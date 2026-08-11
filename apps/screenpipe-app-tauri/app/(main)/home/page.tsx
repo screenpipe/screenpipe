@@ -42,6 +42,7 @@ import {
   type SidebarNavId,
 } from "@/lib/utils/sidebar-nav-layout";
 import { SidebarNavList } from "@/components/sidebar-nav-list";
+import { CommandPalette } from "@/components/command-palette";
 import { useToast } from "@/components/ui/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { AppSidebar, useSidebarContext } from "@/components/app-sidebar";
@@ -1097,6 +1098,42 @@ function HomeContent() {
       {/* Drag region — always absolute so it works with full-bleed translucent layout */}
       <div className="absolute top-0 left-0 right-0 h-8 z-10" data-tauri-drag-region />
 
+      {/* ⌘K command palette — a second door to actions the sidebar, toolbar,
+          and global shortcuts already own. Each row prints its shortcut, so
+          palette use teaches the direct key. Home window only: the settings
+          page binds its own ⌘K for search focus while mounted. */}
+      <CommandPalette
+        deps={{
+          openSearch: () => {
+            void commands.showWindow({ Search: { query: null } });
+          },
+          openTimelineOverlay: () => {
+            void commands.showWindow("Main");
+          },
+          newChat: () => {
+            void setActiveSection("home");
+            startNewChat();
+            void emit("chat-focus-input", {});
+          },
+          pauseRecording: () => {
+            void pauseRecording();
+          },
+          resumeRecording: () => {
+            void resumeRecording();
+          },
+          goToSection: (id) => {
+            void setActiveSection(id);
+          },
+          toggleSidebar,
+          openSettings,
+          sections: availableSidebarIds.map((id) => ({
+            id,
+            label: SIDEBAR_SECTION_DEFS[id].label,
+          })),
+          timelineDisabled: settings.disableTimeline ?? false,
+        }}
+      />
+
           {/* Sidebar */}
           <TooltipProvider delayDuration={0}>
           {/* Top-left chrome strip — pinned next to the macOS traffic
@@ -1138,7 +1175,7 @@ function HomeContent() {
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-xs">
-                {sidebarCollapsed ? "expand sidebar" : "collapse sidebar"} <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">⌘B</kbd>
+                {sidebarCollapsed ? "expand sidebar" : "collapse sidebar"} <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]" suppressHydrationWarning>{isMac ? "⌘B" : "Ctrl+B"}</kbd>
               </TooltipContent>
             </Tooltip>
 

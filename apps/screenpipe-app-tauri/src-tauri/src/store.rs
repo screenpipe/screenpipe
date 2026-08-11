@@ -1790,11 +1790,9 @@ impl SettingsStore {
         match self.local_plan_policy() {
             LocalPlanPolicy::VerifiedFree => {
                 config.max_non_template_pipes = Some(2);
-                config.enforce_free_plan_retention = true;
             }
             LocalPlanPolicy::Unknown => {
-                // Unknown must never inherit paid/unlimited behavior, but it is
-                // not safe evidence for destructive free-plan retention.
+                // Unknown must never inherit paid/unlimited behavior.
                 config.max_non_template_pipes = Some(2);
             }
             LocalPlanPolicy::VerifiedPaid => {}
@@ -1897,10 +1895,6 @@ impl SettingsStore {
         } else {
             LocalPlanPolicy::Unknown
         }
-    }
-
-    pub(crate) fn has_free_plan_policy(&self) -> bool {
-        self.local_plan_policy() == LocalPlanPolicy::VerifiedFree
     }
 
     pub(crate) fn restricts_paid_local_features(&self) -> bool {
@@ -2651,11 +2645,9 @@ mod tests {
             "features": { "app": true, "cloud": false }
         }));
 
-        assert!(store.has_free_plan_policy());
         assert_eq!(store.local_plan_policy(), LocalPlanPolicy::VerifiedFree);
         let config = store.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
         assert_eq!(config.max_non_template_pipes, Some(2));
-        assert!(config.enforce_free_plan_retention);
     }
 
     #[test]
@@ -2667,7 +2659,7 @@ mod tests {
             "plan": "none",
             "checked_at": (chrono::Utc::now() - chrono::Duration::hours(73)).to_rfc3339()
         }));
-        assert!(stale.has_free_plan_policy());
+        assert_eq!(stale.local_plan_policy(), LocalPlanPolicy::VerifiedFree);
 
         let mut lifetime = SettingsStore::default();
         lifetime.user.id = Some("user_paid".to_string());
@@ -2680,15 +2672,13 @@ mod tests {
             "checked_at": chrono::Utc::now().to_rfc3339(),
             "features": { "app": true }
         }));
-        assert!(!lifetime.has_free_plan_policy());
         assert_eq!(lifetime.local_plan_policy(), LocalPlanPolicy::VerifiedPaid);
         let config = lifetime.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
         assert_eq!(config.max_non_template_pipes, None);
-        assert!(!config.enforce_free_plan_retention);
     }
 
     #[test]
-    fn unknown_plan_is_pipe_limited_without_enabling_destructive_retention() {
+    fn unknown_plan_is_pipe_limited() {
         let mut store = SettingsStore::default();
         store.user.id = Some("user_unknown".to_string());
         store.user.subscription_plan = Some("standard".to_string());
@@ -2705,17 +2695,15 @@ mod tests {
         assert!(store.restricts_paid_local_features());
         let config = store.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
         assert_eq!(config.max_non_template_pipes, Some(2));
-        assert!(!config.enforce_free_plan_retention);
     }
 
     #[test]
-    fn missing_identity_is_still_pipe_limited_but_cannot_trigger_retention() {
+    fn missing_identity_is_still_pipe_limited() {
         let store = SettingsStore::default();
         assert_eq!(store.local_plan_policy(), LocalPlanPolicy::Unknown);
         assert!(store.restricts_paid_local_features());
         let config = store.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
         assert_eq!(config.max_non_template_pipes, Some(2));
-        assert!(!config.enforce_free_plan_retention);
     }
 
     #[test]

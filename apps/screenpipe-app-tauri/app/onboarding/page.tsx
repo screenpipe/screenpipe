@@ -19,6 +19,7 @@ import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt"
 import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
 import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
+import type { AppUser } from "@/lib/app-entitlement";
 
 type SlideKey =
   | "login"
@@ -127,6 +128,7 @@ export default function OnboardingPage() {
   );
   const { onboardingData, isLoading, completeOnboarding } = useOnboarding();
   const { settings, isSettingsLoaded } = useSettings();
+  const user = settings.user as AppUser | null | undefined;
   const completedForHiddenUiRef = React.useRef(false);
   const transitioningRef = React.useRef(false);
   const funnelStartedRef = React.useRef(false);
@@ -162,7 +164,7 @@ export default function OnboardingPage() {
       ? settings.deviceTier
       : "unknown";
   const shouldShowPlanSelection =
-    !isManagedDeployment && settings.user?.cloud_subscribed !== true;
+    !isManagedDeployment && user?.has_payment_method !== true;
   const visibleOrder = useMemo(
     () =>
       SLIDE_ORDER.filter(

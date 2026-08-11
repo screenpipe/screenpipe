@@ -10,13 +10,19 @@ const mocks = vi.hoisted(() => ({
   loadUser: vi.fn(async () => undefined),
   capture: vi.fn(),
   fetch: vi.fn(),
+  settings: {
+    user: {
+      token: "token-1",
+      cloud_subscribed: true,
+      has_payment_method: false,
+      subscription_plan: "pro",
+    },
+  },
 }));
 
 vi.mock("@/lib/hooks/use-settings", () => ({
   useSettings: () => ({
-    settings: {
-      user: { token: "token-1", cloud_subscribed: false },
-    },
+    settings: mocks.settings,
     loadUser: mocks.loadUser,
   }),
 }));
@@ -29,6 +35,12 @@ import PlanSelectionStep from "./plan-selection-step";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.settings.user = {
+    token: "token-1",
+    cloud_subscribed: true,
+    has_payment_method: false,
+    subscription_plan: "pro",
+  };
   vi.stubGlobal("fetch", mocks.fetch);
   mocks.fetch.mockImplementation(async (input: RequestInfo | URL) => ({
     ok: true,
@@ -40,6 +52,22 @@ beforeEach(() => {
 });
 
 describe("onboarding card capture", () => {
+  it("waits for a payment method even when the trial already has cloud access", async () => {
+    const next = vi.fn();
+    const view = render(<PlanSelectionStep handleNextSlide={next} />);
+
+    await waitFor(() => expect(mocks.fetch).toHaveBeenCalledOnce());
+    expect(next).not.toHaveBeenCalled();
+
+    mocks.settings.user = {
+      ...mocks.settings.user,
+      has_payment_method: true,
+    };
+    view.rerender(<PlanSelectionStep handleNextSlide={next} />);
+
+    await waitFor(() => expect(next).toHaveBeenCalledOnce());
+  });
+
   it("replaces plan cards with an embedded annual Business checkout", async () => {
     render(<PlanSelectionStep handleNextSlide={vi.fn()} />);
 

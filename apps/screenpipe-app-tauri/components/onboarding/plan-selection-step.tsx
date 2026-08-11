@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import posthog from "posthog-js";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { screenpipeWebUrl } from "@/lib/web-url";
+import type { AppUser } from "@/lib/app-entitlement";
 
 const CHECKOUT_URL = screenpipeWebUrl(
   "/api/subscription/checkout",
@@ -30,6 +31,7 @@ export default function PlanSelectionStep({
   handleNextSlide: () => void | Promise<void>;
 }) {
   const { settings, loadUser } = useSettings();
+  const user = settings.user as AppUser | null | undefined;
   const [interval, setInterval] = useState<BillingInterval>("year");
   const [frameUrl, setFrameUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(true);
@@ -41,7 +43,7 @@ export default function PlanSelectionStep({
   const requestRef = useRef(0);
   const advancedRef = useRef(false);
   const loadUserRef = useRef(loadUser);
-  const userToken = settings.user?.token;
+  const userToken = user?.token;
   loadUserRef.current = loadUser;
 
   useEffect(() => {
@@ -150,17 +152,17 @@ export default function PlanSelectionStep({
 
   useEffect(() => {
     if (
-      settings.user?.cloud_subscribed !== true ||
+      user?.has_payment_method !== true ||
       advancedRef.current
     ) {
       return;
     }
     advancedRef.current = true;
     posthog.capture("onboarding_plan_activated", {
-      plan: settings.user.subscription_plan || "unknown",
+      plan: user.subscription_plan || "unknown",
     });
     void handleNextSlide();
-  }, [handleNextSlide, settings.user]);
+  }, [handleNextSlide, user?.has_payment_method, user?.subscription_plan]);
 
   const continueWithoutCard = async () => {
     if (!userToken || startingCardlessTrial) return;

@@ -64,6 +64,7 @@ import {
 import { usePipes } from "@/lib/hooks/use-pipes";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
+import { usePlatform } from "@/lib/hooks/use-platform";
 import { useToast } from "@/components/ui/use-toast";
 import { localFetch } from "@/lib/api";
 import { showChatWithPrefill } from "@/lib/chat-utils";
@@ -511,6 +512,7 @@ export function BrainOverview({
   const { pipes, refetch: refetchPipes } = usePipes();
   const { settings, isSettingsLoaded } = useSettings();
   const { health, isServerDown, isLoading: healthLoading } = useHealthCheck();
+  const { isMac } = usePlatform();
   const [views, setViews] = useState<ViewDefinition[]>([]);
   const [view, setView] = useState<ViewDefinition | null>(null);
   const [draft, setDraft] = useState<ViewDefinition | null>(null);
@@ -2971,7 +2973,7 @@ export function BrainOverview({
                 size="icon"
                 className="h-9 w-9 shrink-0 rounded-none"
                 aria-label="undo last Live View change"
-                title="Undo last Live View change (⌘Z)"
+                title={`Undo last Live View change (${isMac ? "⌘Z" : "Ctrl+Z"})`}
                 disabled={saving}
                 onClick={() => void restorePreviousView()}
               >

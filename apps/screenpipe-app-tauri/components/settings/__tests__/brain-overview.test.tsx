@@ -1993,9 +1993,11 @@ describe("BrainOverview", () => {
         ],
       }),
     );
+    // jsdom has no tauri os plugin, so usePlatform resolves non-mac and the
+    // hint renders the Ctrl form (platform-correct hints, not hardcoded ⌘).
     expect(await screen.findByTestId("overview-undo")).toHaveAttribute(
       "title",
-      "Undo last Live View change (⌘Z)",
+      "Undo last Live View change (Ctrl+Z)",
     );
 
     fireEvent.keyDown(window, { key: "z", metaKey: true });

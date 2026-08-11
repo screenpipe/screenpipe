@@ -24,7 +24,10 @@ const mocks = vi.hoisted(() => ({
   isSettingLocked: vi.fn((_key: string) => false),
   settings: {
     deviceTier: "low" as string | null | undefined,
-    user: null as null | { cloud_subscribed?: boolean },
+    user: null as null | {
+      cloud_subscribed?: boolean;
+      has_payment_method?: boolean;
+    },
   },
   isSettingsLoaded: true,
 }));
@@ -278,9 +281,27 @@ describe("enterprise onboarding authentication", () => {
     expect(screen.queryByText("plan selection")).not.toBeInTheDocument();
   });
 
-  it("does not show pricing to an existing paid consumer", async () => {
+  it("collects payment during a cardless trial", async () => {
     mocks.enterprisePolicy.isManagedDeployment = false;
-    mocks.settings.user = { cloud_subscribed: true };
+    mocks.settings.user = {
+      cloud_subscribed: true,
+      has_payment_method: false,
+    };
+    onboardingData.currentStep = "engine";
+
+    render(<OnboardingPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "finish engine" }));
+
+    expect(await screen.findByText("plan selection")).toBeInTheDocument();
+    expect(mocks.completeOnboarding).not.toHaveBeenCalled();
+  });
+
+  it("does not collect payment when the account already has a payment method", async () => {
+    mocks.enterprisePolicy.isManagedDeployment = false;
+    mocks.settings.user = {
+      cloud_subscribed: true,
+      has_payment_method: true,
+    };
     onboardingData.currentStep = "engine";
 
     render(<OnboardingPage />);
