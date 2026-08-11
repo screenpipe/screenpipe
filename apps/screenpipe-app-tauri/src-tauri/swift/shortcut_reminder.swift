@@ -325,7 +325,7 @@ private let kBaseDisclosureH: CGFloat = 26
 private let kBaseDisclosureGap: CGFloat = 4
 private let kBaseTranscriptW: CGFloat = 280
 private let kBaseTranscriptH: CGFloat = 142
-private let kRestingOpacity: Double = 0.82
+private let kRestingOpacity: Double = 0.50
 private let kAnimDur: Double = 0.2
 private let kDockControls = ["search", "chat", "timeline", "audio", "close"]
 
