@@ -115,6 +115,10 @@ pub(crate) fn apply_settings(app: &AppHandle, store: &mut SettingsStore) {
             .insert("_proCloudMigrationDone".to_string(), json!(true));
         info!("E2E seed: screenpipe cloud audio fallback");
     }
+    if e2e_flags.iter().any(|f| f == "background-ai-tools") {
+        store.user.cloud_subscribed = Some(true);
+        info!("E2E seed: background AI tools skips consumer billing step");
+    }
     if e2e_flags.iter().any(|f| f == "meetings-only-audio") {
         // Real audio lifecycle lane for meetings-only capture. Keep
         // vision and transcription disabled so the spec isolates OS
