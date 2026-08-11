@@ -4,12 +4,112 @@
 
 //! macOS native notification and shortcut action routing.
 
-use crate::{native_notification, native_shortcut_reminder, window::ShowRewindWindow};
+use crate::{
+    native_notification, native_shortcut_reminder, store::SettingsStore, window::ShowRewindWindow,
+};
 use tauri::{Emitter, Manager};
 use tracing::{error, info, warn};
 
 /// Global app handle stored so native action callbacks can emit events.
 static GLOBAL_APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
+const SHORTCUT_OVERLAY_DAY_SNOOZE_SECONDS: i64 = 24 * 60 * 60;
+const SHORTCUT_OVERLAY_WEEK_SNOOZE_SECONDS: i64 = 7 * SHORTCUT_OVERLAY_DAY_SNOOZE_SECONDS;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShortcutOverlayDismissScope {
+    Today,
+    Week,
+    Persistent,
+}
+
+impl ShortcutOverlayDismissScope {
+    fn analytics_value(self) -> &'static str {
+        match self {
+            Self::Today => "today",
+            Self::Week => "week",
+            Self::Persistent => "persistent",
+        }
+    }
+
+    fn snooze_seconds(self) -> Option<i64> {
+        match self {
+            Self::Today => Some(SHORTCUT_OVERLAY_DAY_SNOOZE_SECONDS),
+            Self::Week => Some(SHORTCUT_OVERLAY_WEEK_SNOOZE_SECONDS),
+            Self::Persistent => None,
+        }
+    }
+}
+
+fn apply_shortcut_overlay_dismissal(
+    store: &mut SettingsStore,
+    scope: ShortcutOverlayDismissScope,
+    now_unix: i64,
+) {
+    if let Some(duration) = scope.snooze_seconds() {
+        store.show_shortcut_overlay = true;
+        store.shortcut_overlay_snoozed_until = Some(now_unix.saturating_add(duration));
+    } else {
+        store.show_shortcut_overlay = false;
+        store.shortcut_overlay_snoozed_until = None;
+    }
+}
+
+fn persist_shortcut_overlay_dismissal(
+    app: &tauri::AppHandle,
+    scope: ShortcutOverlayDismissScope,
+) -> bool {
+    match SettingsStore::get(app) {
+        Ok(Some(mut store)) => {
+            apply_shortcut_overlay_dismissal(&mut store, scope, chrono::Utc::now().timestamp());
+            match store.save(app) {
+                Ok(()) => true,
+                Err(error) => {
+                    warn!("failed to persist shortcut overlay dismissal: {}", error);
+                    false
+                }
+            }
+        }
+        Ok(None) => false,
+        Err(error) => {
+            warn!("failed to read settings for overlay dismissal: {}", error);
+            false
+        }
+    }
+}
+
+fn handle_shortcut_overlay_dismissal(
+    app: &tauri::AppHandle,
+    scope: ShortcutOverlayDismissScope,
+    open_display_settings: bool,
+) {
+    let persist_succeeded = persist_shortcut_overlay_dismissal(app, scope);
+    track_native_overlay_event(
+        app,
+        "shortcut_reminder_dismissed",
+        serde_json::json!({
+            "dismiss_scope": scope.analytics_value(),
+            "snooze_hours": scope.snooze_seconds().map(|seconds| seconds / 3_600),
+            "persist_succeeded": persist_succeeded,
+        }),
+    );
+    native_shortcut_reminder::hide();
+
+    if open_display_settings {
+        let app_for_show = app.clone();
+        if let Err(error) = app.run_on_main_thread(move || {
+            if let Err(error) = (ShowRewindWindow::Home {
+                page: Some("display".to_string()),
+            })
+            .show(&app_for_show)
+            {
+                warn!("failed to open Display settings after overlay turn-off: {error}");
+            }
+        }) {
+            warn!("failed to schedule Display settings after overlay turn-off: {error}");
+        }
+    }
+}
 
 pub(super) fn install_notification_action_callback(app_handle: &tauri::AppHandle) {
     let _ = GLOBAL_APP_HANDLE.set(app_handle.clone());
@@ -686,15 +786,33 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
                         let _ = (ShowRewindWindow::Search { query: None }).show(&app_for_show);
                     });
                 }
-                "close" => {
+                "dismiss_menu_opened" => {
                     track_native_overlay_event(
                         &app_clone,
-                        "shortcut_reminder_dismissed",
+                        "shortcut_reminder_dismiss_menu_opened",
                         serde_json::json!({}),
                     );
-                    // Emit to JS so it can persist the setting, then hide
-                    let _ = app_clone.emit("native-shortcut-close", "");
-                    native_shortcut_reminder::hide();
+                }
+                "dismiss_today" => {
+                    handle_shortcut_overlay_dismissal(
+                        &app_clone,
+                        ShortcutOverlayDismissScope::Today,
+                        false,
+                    );
+                }
+                "dismiss_week" => {
+                    handle_shortcut_overlay_dismissal(
+                        &app_clone,
+                        ShortcutOverlayDismissScope::Week,
+                        false,
+                    );
+                }
+                "dismiss_persistent" => {
+                    handle_shortcut_overlay_dismissal(
+                        &app_clone,
+                        ShortcutOverlayDismissScope::Persistent,
+                        true,
+                    );
                 }
                 "restart_recording" => {
                     // Recording-health overlay: restart the engine in place.
@@ -708,17 +826,6 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
                     tauri::async_runtime::spawn(crate::overlay_health::dismiss_incident(
                         app_clone.clone(),
                     ));
-                }
-                "open_inbox" => {
-                    track_native_overlay_event(
-                        &app_clone,
-                        "shortcut_reminder_inbox_clicked",
-                        serde_json::json!({}),
-                    );
-                    let app = app_clone.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let _ = crate::commands::show_notification_inbox(app).await;
-                    });
                 }
                 "stop_meeting" => {
                     if let Err(error) = stop_native_overlay_meeting(&app_clone) {
@@ -787,8 +894,42 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
 
 #[cfg(test)]
 mod tests {
-    use super::{notification_copy_value, notification_source_url, parse_meeting_deeplink};
+    use super::{
+        apply_shortcut_overlay_dismissal, notification_copy_value, notification_source_url,
+        parse_meeting_deeplink, ShortcutOverlayDismissScope, SHORTCUT_OVERLAY_DAY_SNOOZE_SECONDS,
+        SHORTCUT_OVERLAY_WEEK_SNOOZE_SECONDS,
+    };
+    use crate::store::SettingsStore;
     use serde_json::json;
+
+    #[test]
+    fn temporary_overlay_dismissals_keep_the_feature_enabled() {
+        for (scope, expected_until) in [
+            (
+                ShortcutOverlayDismissScope::Today,
+                100 + SHORTCUT_OVERLAY_DAY_SNOOZE_SECONDS,
+            ),
+            (
+                ShortcutOverlayDismissScope::Week,
+                100 + SHORTCUT_OVERLAY_WEEK_SNOOZE_SECONDS,
+            ),
+        ] {
+            let mut store = SettingsStore::default();
+            store.show_shortcut_overlay = false;
+            apply_shortcut_overlay_dismissal(&mut store, scope, 100);
+            assert!(store.show_shortcut_overlay);
+            assert_eq!(store.shortcut_overlay_snoozed_until, Some(expected_until));
+        }
+    }
+
+    #[test]
+    fn permanent_overlay_dismissal_clears_any_snooze() {
+        let mut store = SettingsStore::default();
+        store.shortcut_overlay_snoozed_until = Some(1_000);
+        apply_shortcut_overlay_dismissal(&mut store, ShortcutOverlayDismissScope::Persistent, 100);
+        assert!(!store.show_shortcut_overlay);
+        assert_eq!(store.shortcut_overlay_snoozed_until, None);
+    }
 
     #[test]
     fn parses_meeting_deeplink_path_id() {

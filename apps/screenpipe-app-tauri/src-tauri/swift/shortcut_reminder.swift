@@ -6,7 +6,7 @@ import Foundation
 import AppKit
 import SwiftUI
 
-// MARK: - Callback for actions (close, open window, toggle meeting)
+// MARK: - Callback for actions (dismiss, open window, toggle meeting)
 public typealias ShortcutActionCallback = @convention(c) (UnsafePointer<CChar>) -> Void
 private var gShortcutCallback: ShortcutActionCallback?
 
@@ -26,15 +26,6 @@ public func shortcutSetMeetingActive(_ active: Int32) {
 public func shortcutSetMeetingStopResult(_ succeeded: Int32) {
     if #available(macOS 13.0, *) {
         ShortcutReminderController.shared.setMeetingStopResult(succeeded != 0)
-    }
-}
-
-/// Unread pipe-notification count, pushed from the Rust notification store —
-/// drives the bell dot on the collapsed pill.
-@_cdecl("shortcut_set_inbox_unread")
-public func shortcutSetInboxUnread(_ count: Int32) {
-    if #available(macOS 13.0, *) {
-        ShortcutReminderController.shared.setInboxUnread(count > 0)
     }
 }
 
@@ -69,8 +60,6 @@ final class OverlayMetrics: ObservableObject {
     @Published var meetingTranscriptItems: [MeetingOverlayTranscriptItem] = []
     @Published var meetingStopping: Bool = false
     @Published var meetingStopError: String?
-    /// Unread pipe notifications exist — bell dot on the collapsed pill.
-    @Published var inboxUnread: Bool = false
     /// "normal" | "failure" | "fixing" | "recovered" — set only via
     /// ShortcutReminderController.setHealthState (pushed from Rust).
     @Published var healthState: String = "normal"
@@ -86,7 +75,7 @@ final class OverlayMetrics: ObservableObject {
     @Published var forceExpanded: Bool = false
     /// Progressive disclosure opens away from the nearest screen edge.
     @Published var disclosureDown: Bool = true
-    /// Control under the pointer in the expanded seven-cell dock.
+    /// Control under the pointer in the expanded dock.
     @Published var hoveredControl: String? = nil
 }
 
@@ -365,12 +354,14 @@ struct ScreenMatrixView: View {
 }
 
 // MARK: - Main shortcut reminder view
-// Concept #4: Audio-reactive pill that expands on hover
+// Minimal app icon that expands into the control dock on hover.
 
 // Base sizes — multiplied by gOverlayScale at panel creation
-private let kBaseCollapsedW: CGFloat = 81
-private let kBaseCollapsedH: CGFloat = 18
-private let kBaseExpandedW: CGFloat = 224
+private let kBaseCollapsedW: CGFloat = 22
+private let kBaseCollapsedH: CGFloat = 16
+private let kBaseHealthH: CGFloat = 18
+private let kBaseCollapsedCornerRadius: CGFloat = 4
+private let kBaseExpandedW: CGFloat = 192
 private let kBaseExpandedH: CGFloat = 62
 private let kBaseDockH: CGFloat = 30
 private let kBaseDisclosureH: CGFloat = 26
@@ -378,7 +369,37 @@ private let kBaseDisclosureGap: CGFloat = 4
 private let kBaseTranscriptW: CGFloat = 280
 private let kBaseTranscriptH: CGFloat = 142
 private let kAnimDur: Double = 0.2
-private let kDockControls = ["timeline", "chat", "search", "audio", "screen", "close", "inbox"]
+private let kDockControls = ["timeline", "chat", "search", "audio", "screen", "close"]
+
+/// Convert configured shortcuts to one stable, readable macOS order.
+/// Settings historically stored both `Super+Control+…` and
+/// `Control+Super+…`; the overlay should always read `Cmd+Ctrl+…`.
+func prettifyShortcut(_ raw: String) -> String {
+    let normalized = raw
+        .replacingOccurrences(of: "⌘", with: "Cmd+")
+        .replacingOccurrences(of: "⌃", with: "Ctrl+")
+        .replacingOccurrences(of: "⌥", with: "Opt+")
+        .replacingOccurrences(of: "⇧", with: "Shift+")
+
+    var modifiers = Set<String>()
+    var keys: [String] = []
+    for part in normalized.split(separator: "+", omittingEmptySubsequences: true) {
+        let trimmed = part.trimmingCharacters(in: .whitespaces)
+        switch trimmed.lowercased() {
+        case "super", "cmd", "command", "meta": modifiers.insert("Cmd")
+        case "ctrl", "control": modifiers.insert("Ctrl")
+        case "alt", "option", "opt": modifiers.insert("Opt")
+        case "shift": modifiers.insert("Shift")
+        default:
+            if !trimmed.isEmpty {
+                keys.append(trimmed.uppercased())
+            }
+        }
+    }
+
+    let canonicalModifiers = ["Cmd", "Ctrl", "Opt", "Shift"].filter(modifiers.contains)
+    return (canonicalModifiers + keys).joined(separator: "+")
+}
 
 func overlayHoverRect(
     in bounds: NSRect,
@@ -412,7 +433,6 @@ func disclosureContent(
     case "screen":
         let fps = metrics.screenActive ? String(format: "%.0f fps", metrics.captureFps) : "idle"
         return ("screen capture", fps)
-    case "inbox": return ("notifications", metrics.inboxUnread ? "new" : nil)
     case "close": return ("hide dock", nil)
     default: return nil
     }
@@ -515,14 +535,14 @@ struct ShortcutReminderView: View {
         .accessibilityHidden(true)
         .animation(.easeInOut(duration: kAnimDur), value: isExpanded)
         .animation(.easeInOut(duration: kAnimDur), value: metrics.healthState)
-        // Trailing-aligned so the collapsed pill and the expanded bar share one
-        // right edge while `positionPanel` keeps the collapsed pill centred.
+        // Trailing-aligned so the collapsed icon and expanded dock share one
+        // right edge while `positionPanel` keeps the resting icon centred.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: panelAlignment)
     }
 
     // MARK: - Recording-health states (issue #5127)
     // Rendered from metrics.healthState, which the Rust health loop pushes.
-    // Failure keeps the collapsed pill footprint and expands horizontally on
+    // Failure keeps its compact health footprint and expands horizontally on
     // hover to show the repair action, per the issue's mockups.
 
     private var failureView: some View {
@@ -610,9 +630,15 @@ struct ShortcutReminderView: View {
                 .buttonStyle(.plain)
             }
         }
-        .frame(height: kBaseCollapsedH * scale)
-        .background(Capsule().fill(Color.black.opacity(0.85)))
-        .overlay(Capsule().stroke(Color.red.opacity(0.4), lineWidth: 0.5))
+        .frame(height: kBaseHealthH * scale)
+        .background(
+            RoundedRectangle(cornerRadius: s(kBaseCollapsedCornerRadius), style: .continuous)
+                .fill(Color.black.opacity(0.85))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: s(kBaseCollapsedCornerRadius), style: .continuous)
+                .stroke(Color.red.opacity(0.4), lineWidth: 0.5)
+        )
         .contentShape(Rectangle())
     }
 
@@ -632,9 +658,15 @@ struct ShortcutReminderView: View {
                 .foregroundColor(.white.opacity(0.85))
                 .padding(.trailing, s(8))
         }
-        .frame(height: kBaseCollapsedH * scale)
-        .background(Capsule().fill(Color.black.opacity(0.85)))
-        .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
+        .frame(height: kBaseHealthH * scale)
+        .background(
+            RoundedRectangle(cornerRadius: s(kBaseCollapsedCornerRadius), style: .continuous)
+                .fill(Color.black.opacity(0.85))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: s(kBaseCollapsedCornerRadius), style: .continuous)
+                .stroke(.white.opacity(0.15), lineWidth: 0.5)
+        )
     }
 
     private var recoveredView: some View {
@@ -649,45 +681,35 @@ struct ShortcutReminderView: View {
                 .foregroundColor(.white.opacity(0.85))
                 .padding(.trailing, s(8))
         }
-        .frame(height: kBaseCollapsedH * scale)
-        .background(Capsule().fill(Color.black.opacity(0.85)))
-        .overlay(Capsule().stroke(Color.green.opacity(0.4), lineWidth: 0.5))
+        .frame(height: kBaseHealthH * scale)
+        .background(
+            RoundedRectangle(cornerRadius: s(kBaseCollapsedCornerRadius), style: .continuous)
+                .fill(Color.black.opacity(0.85))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: s(kBaseCollapsedCornerRadius), style: .continuous)
+                .stroke(Color.green.opacity(0.4), lineWidth: 0.5)
+        )
     }
 
-    // MARK: - Collapsed pill
-    // Hovering the visible pill expands to the full bar (driven by
-    // ReminderTrackingView's .activeAlways NSTrackingArea). The app icon opens
-    // the timeline; the bell opens the notification inbox.
+    // MARK: - Collapsed icon
+    // Hovering the visible icon expands to the full dock (driven by
+    // ReminderTrackingView's .activeAlways NSTrackingArea). Clicking opens the
+    // timeline.
     private var collapsedView: some View {
-        HStack(spacing: 0) {
-            CollapsedAppIconButton(
-                scale: collapsedScale,
-                action: { onAction("open_timeline") }
-            )
-            .padding(.leading, c(5))
-
-            HStack(spacing: c(3)) {
-                AudioEqualizerView(active: metrics.audioActive, speechRatio: metrics.speechRatio)
-                    .frame(width: c(18), height: c(12))
-                ScreenMatrixView(active: metrics.screenActive, captureFps: metrics.captureFps)
-                    .frame(width: c(18), height: c(12))
-                    .clipShape(RoundedRectangle(cornerRadius: 1))
-            }
-            .padding(.horizontal, c(3))
-            .frame(maxHeight: .infinity)
-            .contentShape(Rectangle())
-
-            OverlayBellButton(
-                unread: metrics.inboxUnread,
-                meetingActive: metrics.meetingActive,
-                scale: collapsedScale,
-                action: { onAction("open_inbox") }
-            )
-            .padding(.trailing, c(5))
-        }
+        CollapsedAppIconButton(
+            scale: collapsedScale,
+            action: { onAction("open_timeline") }
+        )
         .frame(width: kBaseCollapsedW * collapsedScale, height: kBaseCollapsedH * collapsedScale)
-        .background(Capsule().fill(Color.black.opacity(0.82)))
-        .overlay(Capsule().stroke(.white.opacity(0.24), lineWidth: 1))
+        .background(
+            RoundedRectangle(cornerRadius: c(kBaseCollapsedCornerRadius), style: .continuous)
+                .fill(Color.black.opacity(0.82))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: c(kBaseCollapsedCornerRadius), style: .continuous)
+                .stroke(.white.opacity(0.24), lineWidth: 1)
+        )
     }
 
     // MARK: - Expanded bar
@@ -734,15 +756,8 @@ struct ShortcutReminderView: View {
             Rectangle().fill(.white.opacity(0.28)).frame(width: 1).padding(.vertical, s(4))
 
             DockIconButton(icon: "xmark", active: metrics.hoveredControl == "close", scale: scale) {
-                onAction("close")
+                onAction("show_dismiss_menu")
             }
-            DockInboxButton(
-                active: metrics.hoveredControl == "inbox",
-                unread: metrics.inboxUnread,
-                meetingActive: metrics.meetingActive,
-                scale: scale,
-                action: { onAction("open_inbox") }
-            )
         }
         .frame(width: kBaseExpandedW * scale, height: kBaseDockH * scale)
         .background(Color.black)
@@ -882,45 +897,6 @@ private struct DockIconButton: View {
 }
 
 @available(macOS 13.0, *)
-private struct DockInboxButton: View {
-    let active: Bool
-    let unread: Bool
-    let meetingActive: Bool
-    let scale: CGFloat
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            ZStack(alignment: .trailing) {
-                Color.clear
-                ZStack {
-                    Image(systemName: "bell.fill")
-                        .font(.system(size: 10 * scale, weight: .medium))
-                        .foregroundColor(unread ? .white : .white.opacity(active ? 1 : 0.68))
-                    if unread {
-                        Circle().fill(.white)
-                            .frame(width: 4 * scale, height: 4 * scale)
-                            .offset(x: 5 * scale, y: -5 * scale)
-                    }
-                    if meetingActive {
-                        Circle().fill(Color.red)
-                            .frame(width: 4 * scale, height: 4 * scale)
-                            .offset(x: 5 * scale, y: 5 * scale)
-                            .help("meeting live — hover for transcript")
-                    }
-                }
-                .frame(width: 14 * scale)
-                .padding(.trailing, 5 * scale)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(active ? Color.white.opacity(0.14) : Color.clear)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-@available(macOS 13.0, *)
 private struct DockStatusCell<Content: View>: View {
     let active: Bool
     @ViewBuilder let content: () -> Content
@@ -933,7 +909,7 @@ private struct DockStatusCell<Content: View>: View {
     }
 }
 
-// App icon button shown in the collapsed pill. Click opens the timeline.
+// App icon button shown at rest. Click opens the timeline.
 @available(macOS 13.0, *)
 struct CollapsedAppIconButton: View {
     let scale: CGFloat
@@ -950,56 +926,6 @@ struct CollapsedAppIconButton: View {
                         .opacity(hovered ? 1.0 : 0.85)
                 }
             }
-            .frame(maxHeight: .infinity)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { h in hovered = h }
-    }
-}
-
-// Bell button shown in the collapsed pill (replaced the phone / meeting
-// toggle, which still lives in the expanded bar). Opens the notification
-// inbox; the dot mirrors the pipes-store bell's unread marker. Crucially:
-// no .onHover wired to isExpanded — clicking it opens the inbox without
-// forcing the user through the expanded layout.
-//
-// Both live signals sit in one column on the bell: unread notifications is
-// the white dot above it, a live meeting is the red dot mirrored below it.
-// Before, the meeting dot floated over the screen matrix mid-pill, so "we
-// are live" moved around depending on which signal fired.
-@available(macOS 13.0, *)
-/// Bell plus its two status dots for the collapsed pill. The expanded dock uses
-/// the same stacked status treatment in its trailing notification cell.
-struct OverlayBellButton: View {
-    let unread: Bool
-    let meetingActive: Bool
-    let scale: CGFloat
-    let action: () -> Void
-    @State private var hovered = false
-
-    var body: some View {
-        Button(action: action) {
-            ZStack {
-                Image(systemName: "bell.fill")
-                    .font(.system(size: 6 * scale))
-                    .foregroundColor(
-                        unread ? .white.opacity(hovered ? 1.0 : 0.85) :
-                            (hovered ? .white.opacity(0.6) : .white.opacity(0.2))
-                    )
-                if unread {
-                    Circle().fill(.white)
-                        .frame(width: 4 * scale, height: 4 * scale)
-                        .offset(x: 5 * scale, y: -5 * scale)
-                }
-                if meetingActive {
-                    Circle().fill(Color.red)
-                        .frame(width: 4 * scale, height: 4 * scale)
-                        .offset(x: 5 * scale, y: 5 * scale)
-                        .help("meeting live — hover for transcript")
-                }
-            }
-            .frame(width: 14 * scale)
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
         }
@@ -1037,6 +963,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
     private var transcriptHovering = false
     private var hoverHideWorkItem: DispatchWorkItem?
     private var meetingStopTimeoutWorkItem: DispatchWorkItem?
+    private var dismissMenuOpen = false
 
     private var overlayShortcut = "Cmd+Ctrl+S"
     private var chatShortcut = "Cmd+Ctrl+L"
@@ -1110,6 +1037,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
             metrics.isHovering = false
             metrics.forceExpanded = false
             metrics.hoveredControl = nil
+            dismissMenuOpen = false
             AnimationTick.shared.setVisible(false, hasActiveSignal: false)
             disconnectWebSocket()
             disconnectMeetingEventsWebSocket()
@@ -1359,19 +1287,10 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: timeout)
     }
 
-    func setInboxUnread(_ unread: Bool) {
-        DispatchQueue.main.async { [self] in
-            if self.metrics.inboxUnread != unread {
-                self.metrics.inboxUnread = unread
-                self.refreshActiveDisclosure()
-            }
-        }
-    }
-
     /// Apply a recording-health state pushed from Rust. Kept even while the
     /// panel is hidden so a later show renders the active incident. The panel
     /// frame is deliberately NOT resized — all health content is sized to fit
-    /// the existing 200pt panel, because setFrame on this nonactivating panel
+    /// the fixed expanded panel, because setFrame on this nonactivating panel
     /// breaks its mouse routing (dead-click pill).
     func setHealthState(_ state: String, detail: String = "") {
         DispatchQueue.main.async { [self] in
@@ -1409,27 +1328,6 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         if let s = dict["shortcutOverlaySize"] { setOverlayScale(s) }
         if let s = dict["metrics_ws_url"] { metricsWsUrl = s }
         if let s = dict["events_ws_url"] { eventsWsUrl = s }
-    }
-
-    /// Convert configured modifiers to readable macOS abbreviations.
-    private func prettifyShortcut(_ raw: String) -> String {
-        let normalized = raw
-            .replacingOccurrences(of: "⌘", with: "Cmd+")
-            .replacingOccurrences(of: "⌃", with: "Ctrl+")
-            .replacingOccurrences(of: "⌥", with: "Opt+")
-            .replacingOccurrences(of: "⇧", with: "Shift+")
-        return normalized
-            .split(separator: "+", omittingEmptySubsequences: true)
-            .map { part in
-                switch part.trimmingCharacters(in: .whitespaces).lowercased() {
-                case "super", "cmd", "command", "meta": return "Cmd"
-                case "ctrl", "control": return "Ctrl"
-                case "alt", "option", "opt": return "Opt"
-                case "shift": return "Shift"
-                default: return part.uppercased()
-                }
-            }
-            .joined(separator: "+")
     }
 
     private func createPanel() {
@@ -1500,14 +1398,14 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
             metrics.hoveredControl = nil
             return
         }
-        let cellWidth = (kBaseExpandedW * gOverlayScale) / 7
+        let cellWidth = (kBaseExpandedW * gOverlayScale) / CGFloat(kDockControls.count)
         let dockHeight = kBaseDockH * gOverlayScale
         let panelHeight = kBaseExpandedH * gOverlayScale
         let pointerIsInDock = metrics.disclosureDown
             ? point.y >= panelHeight - dockHeight
             : point.y <= dockHeight
         guard pointerIsInDock else { return }
-        let index = min(6, max(0, Int(point.x / cellWidth)))
+        let index = min(kDockControls.count - 1, max(0, Int(point.x / cellWidth)))
         let control = kDockControls[index]
         if metrics.hoveredControl != control {
             metrics.hoveredControl = control
@@ -1518,7 +1416,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
     private func refreshActiveDisclosure() {
         guard disclosurePanel?.isVisible == true,
               let control = metrics.hoveredControl,
-              ["audio", "screen", "inbox"].contains(control),
+              ["audio", "screen"].contains(control),
               let index = kDockControls.firstIndex(of: control) else { return }
         showDisclosurePanel(for: control, index: index)
     }
@@ -1604,7 +1502,10 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
     private func scheduleHoverExit() {
         hoverHideWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self = self, !self.pillHovering, !self.transcriptHovering else { return }
+            guard let self = self,
+                  !self.pillHovering,
+                  !self.transcriptHovering,
+                  !self.dismissMenuOpen else { return }
             self.metrics.isHovering = false
             self.metrics.forceExpanded = false
             self.metrics.hoveredControl = nil
@@ -1763,7 +1664,11 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
             metrics: metrics,
             scale: gOverlayScale,
             onAction: { [weak self] action in
-                self?.sendAction(action)
+                if action == "show_dismiss_menu" {
+                    self?.showDismissMenu()
+                } else {
+                    self?.sendAction(action)
+                }
             }
         )
         let contentView = panel.contentView!
@@ -1788,16 +1693,82 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         updateHealthToolTip()
     }
 
+    private func showDismissMenu() {
+        guard let panel = panel, let contentView = panel.contentView else { return }
+
+        sendAction("dismiss_menu_opened")
+        hoverHideWorkItem?.cancel()
+        hoverHideWorkItem = nil
+        dismissMenuOpen = true
+        metrics.forceExpanded = true
+        disclosurePanel?.orderOut(nil)
+
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.minimumWidth = 196 * gOverlayScale
+
+        let today = NSMenuItem(
+            title: "hide for today",
+            action: #selector(dismissOverlayForToday),
+            keyEquivalent: ""
+        )
+        today.target = self
+        menu.addItem(today)
+
+        let week = NSMenuItem(
+            title: "hide for a week",
+            action: #selector(dismissOverlayForWeek),
+            keyEquivalent: ""
+        )
+        week.target = self
+        menu.addItem(week)
+
+        let persistent = NSMenuItem(
+            title: "turn off · settings > display",
+            action: #selector(dismissOverlayPersistently),
+            keyEquivalent: ""
+        )
+        persistent.target = self
+        persistent.attributedTitle = NSAttributedString(
+            string: persistent.title,
+            attributes: [.foregroundColor: NSColor.secondaryLabelColor]
+        )
+        menu.addItem(persistent)
+
+        let clickPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
+        let anchor = NSPoint(
+            x: min(max(clickPoint.x - 12 * gOverlayScale, contentView.bounds.minX),
+                   contentView.bounds.maxX),
+            y: clickPoint.y - 4 * gOverlayScale
+        )
+        _ = menu.popUp(positioning: nil, at: anchor, in: contentView)
+
+        dismissMenuOpen = false
+        if !pillHovering && !transcriptHovering {
+            scheduleHoverExit()
+        }
+    }
+
+    @objc private func dismissOverlayForToday() {
+        sendAction("dismiss_today")
+    }
+
+    @objc private func dismissOverlayForWeek() {
+        sendAction("dismiss_week")
+    }
+
+    @objc private func dismissOverlayPersistently() {
+        sendAction("dismiss_persistent")
+    }
+
     private func sendAction(_ action: String) {
         guard let cb = gShortcutCallback else { return }
         action.withCString { cb($0) }
     }
 
-    /// Frame of the *visible* pill in screen coords, or nil while hidden — lets
-    /// the notification inbox anchor itself under the (draggable) pill. The
-    /// window is wider than the collapsed pill and the content hugs its trailing
-    /// edge, so reporting the raw window frame would drop the inbox to the left
-    /// of the bell that opened it.
+    /// Frame of the visible overlay in screen coords, or nil while hidden.
+    /// The window is wider than the resting icon and the content hugs its
+    /// trailing edge, so return only the visible footprint while collapsed.
     func panelFrameIfVisible() -> NSRect? {
         guard isVisible, let panel = panel else { return nil }
         let frame = panel.frame

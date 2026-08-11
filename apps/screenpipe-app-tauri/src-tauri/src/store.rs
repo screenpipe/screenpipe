@@ -953,6 +953,12 @@ pub struct SettingsStore {
     pub lock_vault_shortcut: String,
     #[serde(rename = "showShortcutOverlay", default = "default_true")]
     pub show_shortcut_overlay: bool,
+    /// Unix timestamp until which the user asked to hide the shortcut overlay.
+    #[serde(rename = "shortcutOverlaySnoozedUntil", default)]
+    pub shortcut_overlay_snoozed_until: Option<i64>,
+    /// Version marker for the bounded re-show of the smaller overlay design.
+    #[serde(rename = "shortcutOverlayMinimalReshowVersion", default)]
+    pub shortcut_overlay_minimal_reshow_version: u32,
     /// Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
     #[serde(rename = "shortcutOverlaySize", default = "default_overlay_size")]
     pub shortcut_overlay_size: String,
@@ -1544,6 +1550,8 @@ Rules:
             #[cfg(not(target_os = "windows"))]
             lock_vault_shortcut: "Super+Shift+L".to_string(),
             show_shortcut_overlay: true,
+            shortcut_overlay_snoozed_until: None,
+            shortcut_overlay_minimal_reshow_version: 0,
             shortcut_overlay_size: "small".to_string(),
             device_id: uuid::Uuid::new_v4().to_string(),
             auto_update: true,
@@ -2419,6 +2427,20 @@ mod tests {
     #[test]
     fn auto_update_defaults_to_enabled() {
         assert!(SettingsStore::default().auto_update);
+    }
+
+    #[test]
+    fn shortcut_overlay_snooze_and_reshow_state_default_cleanly() {
+        let defaults = SettingsStore::default();
+        assert_eq!(defaults.shortcut_overlay_snoozed_until, None);
+        assert_eq!(defaults.shortcut_overlay_minimal_reshow_version, 0);
+
+        let missing: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": []
+        }))
+        .unwrap();
+        assert_eq!(missing.shortcut_overlay_snoozed_until, None);
+        assert_eq!(missing.shortcut_overlay_minimal_reshow_version, 0);
     }
 
     #[test]
