@@ -77,6 +77,11 @@ final class OverlayMetrics: ObservableObject {
     @Published var hoveredControl: String? = nil
 }
 
+@available(macOS 13.0, *)
+private final class OverlayMenuState: ObservableObject {
+    @Published var hoveredItem: String?
+}
+
 struct MeetingOverlayTranscriptItem: Identifiable, Equatable {
     let meetingId: Int64
     let itemId: String
@@ -325,9 +330,14 @@ private let kBaseDisclosureH: CGFloat = 26
 private let kBaseDisclosureGap: CGFloat = 4
 private let kBaseTranscriptW: CGFloat = 280
 private let kBaseTranscriptH: CGFloat = 142
+private let kBaseSettingsMenuW: CGFloat = 116
+private let kBaseSettingsMenuH: CGFloat = 30
+private let kBaseOverlaySubmenuW: CGFloat = 164
+private let kBaseOverlaySubmenuRowH: CGFloat = 28
+private let kBaseOverlaySubmenuH: CGFloat = 85
 private let kRestingOpacity: Double = 0.50
 private let kAnimDur: Double = 0.2
-private let kDockControls = ["search", "chat", "timeline", "audio", "close"]
+private let kDockControls = ["search", "chat", "timeline", "audio", "settings"]
 
 /// Convert configured shortcuts to one stable, readable macOS order.
 /// Settings historically stored both `Super+Control+…` and
@@ -388,7 +398,7 @@ func disclosureContent(
     case "chat": return ("ask chat", chatShortcut)
     case "search": return ("search", searchShortcut)
     case "audio": return ("mic capture", metrics.audioActive ? "live" : "idle")
-    case "close": return ("hide dock", nil)
+    case "settings": return ("settings", nil)
     default: return nil
     }
 }
@@ -706,8 +716,8 @@ struct ShortcutReminderView: View {
 
             Rectangle().fill(.white.opacity(0.28)).frame(width: 1).padding(.vertical, s(4))
 
-            DockIconButton(icon: "xmark", active: metrics.hoveredControl == "close", scale: scale) {
-                onAction("show_dismiss_menu")
+            DockIconButton(icon: "gearshape", active: metrics.hoveredControl == "settings", scale: scale) {
+                onAction("show_settings_menu")
             }
         }
         .frame(width: kBaseExpandedW * scale, height: kBaseDockH * scale)
@@ -860,6 +870,82 @@ private struct DockStatusCell<Content: View>: View {
     }
 }
 
+@available(macOS 13.0, *)
+private struct OverlaySettingsMenuView: View {
+    let scale: CGFloat
+    let onOpenOverlayMenu: () -> Void
+
+    private func s(_ value: CGFloat) -> CGFloat { value * scale }
+
+    var body: some View {
+        Button(action: onOpenOverlayMenu) {
+            HStack(spacing: s(7)) {
+                Image(systemName: "rectangle.inset.filled")
+                    .font(.system(size: 9 * scale, weight: .medium))
+                Text("overlay")
+                    .font(Brand.swiftUIMonoFont(size: 9 * scale, weight: .medium))
+                Spacer(minLength: s(8))
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8 * scale, weight: .semibold))
+            }
+            .foregroundColor(.white.opacity(0.88))
+            .padding(.horizontal, s(9))
+            .frame(
+                width: kBaseSettingsMenuW * scale,
+                height: kBaseSettingsMenuH * scale
+            )
+            .background(Color.white.opacity(0.08))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(Color.black)
+        .overlay(Rectangle().stroke(Color.white.opacity(0.42), lineWidth: 1))
+    }
+}
+
+@available(macOS 13.0, *)
+private struct OverlaySettingsSubmenuView: View {
+    @ObservedObject var menuState: OverlayMenuState
+    let scale: CGFloat
+    let onHideToday: () -> Void
+    let onHideWeek: () -> Void
+    let onOpenSettings: () -> Void
+
+    private func s(_ value: CGFloat) -> CGFloat { value * scale }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            menuRow("hide for today", id: "today", action: onHideToday)
+            menuRow("hide for a week", id: "week", action: onHideWeek)
+            Rectangle()
+                .fill(Color.white.opacity(0.18))
+                .frame(height: 1)
+                .padding(.horizontal, s(8))
+            menuRow("overlay settings", id: "settings", action: onOpenSettings)
+        }
+        .frame(
+            width: kBaseOverlaySubmenuW * scale,
+            height: kBaseOverlaySubmenuH * scale
+        )
+        .background(Color.black)
+        .overlay(Rectangle().stroke(Color.white.opacity(0.42), lineWidth: 1))
+    }
+
+    private func menuRow(_ title: String, id: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(Brand.swiftUIMonoFont(size: 9 * scale, weight: .medium))
+                .foregroundColor(.white.opacity(0.88))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, s(10))
+                .frame(height: kBaseOverlaySubmenuRowH * scale)
+                .background(menuState.hoveredItem == id ? Color.white.opacity(0.14) : Color.clear)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 // App icon button shown at rest. Click opens the timeline.
 @available(macOS 13.0, *)
 struct CollapsedAppIconButton: View {
@@ -905,13 +991,19 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
     private var trackingView: ReminderTrackingView?
     private var disclosurePanel: NSPanel?
     private var transcriptPanel: NSPanel?
+    private var settingsMenuPanel: NSPanel?
+    private var overlaySubmenuPanel: NSPanel?
     private var transcriptHostingView: NSHostingView<AnyView>?
     private var transcriptTrackingView: ReminderTrackingView?
     private var pillHovering = false
     private var transcriptHovering = false
+    private var settingsMenuHovering = false
+    private var overlaySubmenuHovering = false
     private var hoverHideWorkItem: DispatchWorkItem?
+    private var settingsMenuHideWorkItem: DispatchWorkItem?
     private var meetingStopTimeoutWorkItem: DispatchWorkItem?
-    private var dismissMenuOpen = false
+    private var settingsMenuOpen = false
+    private let overlayMenuState = OverlayMenuState()
 
     private var overlayShortcut = "Cmd+Ctrl+S"
     private var chatShortcut = "Cmd+Ctrl+L"
@@ -947,9 +1039,17 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
                 parseShortcuts(shortcuts)
             }
             if panel == nil || prevScale != gOverlayScale {
+                settingsMenuHideWorkItem?.cancel()
+                settingsMenuHideWorkItem = nil
+                settingsMenuOpen = false
+                settingsMenuHovering = false
+                overlaySubmenuHovering = false
+                overlayMenuState.hoveredItem = nil
                 panel?.orderOut(nil)
                 disclosurePanel?.orderOut(nil)
                 transcriptPanel?.orderOut(nil)
+                settingsMenuPanel?.orderOut(nil)
+                overlaySubmenuPanel?.orderOut(nil)
                 panel = nil
                 hostingView = nil
                 trackingView = nil
@@ -957,6 +1057,8 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
                 transcriptPanel = nil
                 transcriptHostingView = nil
                 transcriptTrackingView = nil
+                settingsMenuPanel = nil
+                overlaySubmenuPanel = nil
                 createPanel()
             }
             updateContent()
@@ -976,19 +1078,26 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
             isVisible = false
             hoverHideWorkItem?.cancel()
             hoverHideWorkItem = nil
+            settingsMenuHideWorkItem?.cancel()
+            settingsMenuHideWorkItem = nil
             meetingStopTimeoutWorkItem?.cancel()
             meetingStopTimeoutWorkItem = nil
             pillHovering = false
             transcriptHovering = false
+            settingsMenuHovering = false
+            overlaySubmenuHovering = false
             metrics.isHovering = false
             metrics.forceExpanded = false
             metrics.hoveredControl = nil
-            dismissMenuOpen = false
+            overlayMenuState.hoveredItem = nil
+            settingsMenuOpen = false
             AnimationTick.shared.setVisible(false, hasActiveSignal: false)
             disconnectWebSocket()
             disconnectMeetingEventsWebSocket()
             disclosurePanel?.orderOut(nil)
             transcriptPanel?.orderOut(nil)
+            settingsMenuPanel?.orderOut(nil)
+            overlaySubmenuPanel?.orderOut(nil)
             panel?.orderOut(nil)
         }
     }
@@ -1239,6 +1348,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
                 if state != "normal" {
                     self.metrics.hoveredControl = nil
                     self.disclosurePanel?.orderOut(nil)
+                    self.closeSettingsMenu(scheduleCollapse: false)
                 }
                 // Normal states are trailing-anchored, health states centred —
                 // the window origin differs, so re-place it on that boundary.
@@ -1340,6 +1450,15 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         guard pointerIsInDock else { return }
         let index = min(kDockControls.count - 1, max(0, Int(point.x / cellWidth)))
         let control = kDockControls[index]
+        if control == "settings" {
+            metrics.hoveredControl = control
+            disclosurePanel?.orderOut(nil)
+            showSettingsMenu()
+            return
+        }
+        if settingsMenuOpen {
+            closeSettingsMenu(scheduleCollapse: false)
+        }
         if metrics.hoveredControl != control {
             metrics.hoveredControl = control
             showDisclosurePanel(for: control, index: index)
@@ -1438,7 +1557,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
             guard let self = self,
                   !self.pillHovering,
                   !self.transcriptHovering,
-                  !self.dismissMenuOpen else { return }
+                  !self.settingsMenuOpen else { return }
             self.metrics.isHovering = false
             self.metrics.forceExpanded = false
             self.metrics.hoveredControl = nil
@@ -1542,6 +1661,9 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         if metrics.disclosureDown != disclosureDown {
             metrics.disclosureDown = disclosureDown
             positionDisclosurePanel()
+            if settingsMenuOpen {
+                positionSettingsMenuPanels()
+            }
             if transcriptPanel?.isVisible == true {
                 positionTranscriptPanel()
             }
@@ -1584,9 +1706,10 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
             metrics: metrics,
             scale: gOverlayScale,
             onAction: { [weak self] action in
-                if action == "show_dismiss_menu" {
-                    self?.showDismissMenu()
+                if action == "show_settings_menu" {
+                    self?.showSettingsMenu()
                 } else {
+                    self?.closeSettingsMenu(scheduleCollapse: false)
                     self?.sendAction(action)
                 }
             }
@@ -1604,6 +1727,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
                 self?.metrics.hoveredControl = nil
                 self?.disclosurePanel?.orderOut(nil)
                 self?.transcriptPanel?.orderOut(nil)
+                self?.closeSettingsMenu(scheduleCollapse: false)
             }
             hosting.frame = contentView.bounds
             hosting.autoresizingMask = [.width, .height]
@@ -1613,72 +1737,220 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         updateHealthToolTip()
     }
 
-    private func showDismissMenu() {
-        guard let panel = panel, let contentView = panel.contentView else { return }
-
-        sendAction("dismiss_menu_opened")
+    private func showSettingsMenu() {
+        guard !settingsMenuOpen else { return }
+        sendAction("settings_menu_opened")
         hoverHideWorkItem?.cancel()
         hoverHideWorkItem = nil
-        dismissMenuOpen = true
+        settingsMenuHideWorkItem?.cancel()
+        settingsMenuHideWorkItem = nil
+        settingsMenuOpen = true
         metrics.forceExpanded = true
+        metrics.hoveredControl = "settings"
         disclosurePanel?.orderOut(nil)
+        transcriptPanel?.orderOut(nil)
 
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        menu.minimumWidth = 196 * gOverlayScale
+        ensureSettingsMenuPanels()
+        positionSettingsMenuPanels()
+        overlaySubmenuPanel?.orderOut(nil)
+        settingsMenuPanel?.orderFrontRegardless()
+    }
 
-        let today = NSMenuItem(
-            title: "hide for today",
-            action: #selector(dismissOverlayForToday),
-            keyEquivalent: ""
+    private func ensureSettingsMenuPanels() {
+        guard let panel = panel else { return }
+
+        if settingsMenuPanel == nil {
+            let size = NSSize(
+                width: kBaseSettingsMenuW * gOverlayScale,
+                height: kBaseSettingsMenuH * gOverlayScale
+            )
+            let (menu, tracking) = makeSettingsMenuPanel(
+                size: size,
+                level: NSWindow.Level(rawValue: panel.level.rawValue + 1)
+            )
+            tracking.onHoverChanged = { [weak self] hovering in
+                self?.setSettingsMenuHovering(hovering)
+            }
+            let view = OverlaySettingsMenuView(
+                scale: gOverlayScale,
+                onOpenOverlayMenu: { [weak self] in self?.showOverlaySubmenu() }
+            )
+            let hosting = OverlayMenuHostingView(rootView: AnyView(view))
+            hosting.frame = tracking.bounds
+            hosting.autoresizingMask = [.width, .height]
+            tracking.addSubview(hosting)
+            settingsMenuPanel = menu
+        }
+
+        if overlaySubmenuPanel == nil {
+            let size = NSSize(
+                width: kBaseOverlaySubmenuW * gOverlayScale,
+                height: kBaseOverlaySubmenuH * gOverlayScale
+            )
+            let (submenu, tracking) = makeSettingsMenuPanel(
+                size: size,
+                level: NSWindow.Level(rawValue: panel.level.rawValue + 2)
+            )
+            tracking.onHoverChanged = { [weak self] hovering in
+                self?.setOverlaySubmenuHovering(hovering)
+            }
+            tracking.onPointerMoved = { [weak self] point in
+                self?.updateOverlaySubmenuHover(at: point)
+            }
+            let view = OverlaySettingsSubmenuView(
+                menuState: overlayMenuState,
+                scale: gOverlayScale,
+                onHideToday: { [weak self] in self?.selectOverlayDismissal("dismiss_today") },
+                onHideWeek: { [weak self] in self?.selectOverlayDismissal("dismiss_week") },
+                onOpenSettings: { [weak self] in self?.openOverlaySettings() }
+            )
+            let hosting = OverlayMenuHostingView(rootView: AnyView(view))
+            hosting.frame = tracking.bounds
+            hosting.autoresizingMask = [.width, .height]
+            tracking.addSubview(hosting)
+            overlaySubmenuPanel = submenu
+        }
+    }
+
+    private func makeSettingsMenuPanel(
+        size: NSSize,
+        level: NSWindow.Level
+    ) -> (NSPanel, ReminderTrackingView) {
+        let menu = NSPanel(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.nonactivatingPanel, .borderless],
+            backing: .buffered,
+            defer: false
         )
-        today.target = self
-        menu.addItem(today)
+        menu.isFloatingPanel = true
+        menu.level = level
+        menu.collectionBehavior = [.canJoinAllSpaces, .ignoresCycle, .fullScreenAuxiliary]
+        menu.isOpaque = false
+        menu.backgroundColor = .clear
+        menu.hasShadow = false
+        menu.hidesOnDeactivate = false
+        menu.acceptsMouseMovedEvents = true
+        menu.isReleasedWhenClosed = false
+        menu.sharingType = panel?.sharingType ?? .readOnly
 
-        let week = NSMenuItem(
-            title: "hide for a week",
-            action: #selector(dismissOverlayForWeek),
-            keyEquivalent: ""
-        )
-        week.target = self
-        menu.addItem(week)
+        let tracking = ReminderTrackingView(frame: NSRect(origin: .zero, size: size))
+        tracking.autoresizingMask = [.width, .height]
+        menu.contentView = tracking
+        return (menu, tracking)
+    }
 
-        let persistent = NSMenuItem(
-            title: "turn off · settings > display",
-            action: #selector(dismissOverlayPersistently),
-            keyEquivalent: ""
-        )
-        persistent.target = self
-        persistent.attributedTitle = NSAttributedString(
-            string: persistent.title,
-            attributes: [.foregroundColor: NSColor.secondaryLabelColor]
-        )
-        menu.addItem(persistent)
+    private func setSettingsMenuHovering(_ hovering: Bool) {
+        settingsMenuHovering = hovering
+        if hovering {
+            settingsMenuHideWorkItem?.cancel()
+            settingsMenuHideWorkItem = nil
+            showOverlaySubmenu()
+        } else {
+            scheduleSettingsMenuExit()
+        }
+    }
 
-        let clickPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
-        let anchor = NSPoint(
-            x: min(max(clickPoint.x - 12 * gOverlayScale, contentView.bounds.minX),
-                   contentView.bounds.maxX),
-            y: clickPoint.y - 4 * gOverlayScale
-        )
-        _ = menu.popUp(positioning: nil, at: anchor, in: contentView)
+    private func setOverlaySubmenuHovering(_ hovering: Bool) {
+        overlaySubmenuHovering = hovering
+        if hovering {
+            settingsMenuHideWorkItem?.cancel()
+            settingsMenuHideWorkItem = nil
+        } else {
+            overlayMenuState.hoveredItem = nil
+            scheduleSettingsMenuExit()
+        }
+    }
 
-        dismissMenuOpen = false
-        if !pillHovering && !transcriptHovering {
+    private func showOverlaySubmenu() {
+        guard settingsMenuOpen else { return }
+        positionSettingsMenuPanels()
+        overlaySubmenuPanel?.orderFrontRegardless()
+    }
+
+    private func updateOverlaySubmenuHover(at point: NSPoint?) {
+        guard let point = point else {
+            overlayMenuState.hoveredItem = nil
+            return
+        }
+        let height = kBaseOverlaySubmenuH * gOverlayScale
+        let rowHeight = kBaseOverlaySubmenuRowH * gOverlayScale
+        let index = min(2, max(0, Int((height - point.y) / rowHeight)))
+        overlayMenuState.hoveredItem = ["today", "week", "settings"][index]
+    }
+
+    private func scheduleSettingsMenuExit() {
+        settingsMenuHideWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self,
+                  !self.pillHovering,
+                  !self.settingsMenuHovering,
+                  !self.overlaySubmenuHovering else { return }
+            self.closeSettingsMenu()
+        }
+        settingsMenuHideWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
+    }
+
+    private func closeSettingsMenu(scheduleCollapse: Bool = true) {
+        settingsMenuHideWorkItem?.cancel()
+        settingsMenuHideWorkItem = nil
+        settingsMenuOpen = false
+        settingsMenuHovering = false
+        overlaySubmenuHovering = false
+        overlayMenuState.hoveredItem = nil
+        settingsMenuPanel?.orderOut(nil)
+        overlaySubmenuPanel?.orderOut(nil)
+        if scheduleCollapse && !pillHovering && !transcriptHovering {
             scheduleHoverExit()
         }
     }
 
-    @objc private func dismissOverlayForToday() {
-        sendAction("dismiss_today")
+    private func positionSettingsMenuPanels() {
+        guard let panel = panel,
+              let menu = settingsMenuPanel,
+              let submenu = overlaySubmenuPanel else { return }
+        let visible = panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? panel.frame
+        let gap = kBaseDisclosureGap * gOverlayScale
+        let dockHeight = kBaseDockH * gOverlayScale
+        let rootSize = menu.frame.size
+        let submenuSize = submenu.frame.size
+
+        let rootX = min(
+            max(panel.frame.maxX - rootSize.width, visible.minX),
+            visible.maxX - rootSize.width
+        )
+        let preferredRootY = metrics.disclosureDown
+            ? panel.frame.maxY - dockHeight - gap - rootSize.height
+            : panel.frame.minY + dockHeight + gap
+        let rootY = min(
+            max(preferredRootY, visible.minY),
+            visible.maxY - rootSize.height
+        )
+        menu.setFrameOrigin(NSPoint(x: rootX, y: rootY))
+
+        let rightX = menu.frame.maxX + gap
+        let leftX = menu.frame.minX - gap - submenuSize.width
+        let submenuX = rightX + submenuSize.width <= visible.maxX
+            ? rightX
+            : max(visible.minX, leftX)
+        let preferredSubmenuY = metrics.disclosureDown
+            ? menu.frame.maxY - submenuSize.height
+            : menu.frame.minY
+        let submenuY = min(
+            max(preferredSubmenuY, visible.minY),
+            visible.maxY - submenuSize.height
+        )
+        submenu.setFrameOrigin(NSPoint(x: submenuX, y: submenuY))
     }
 
-    @objc private func dismissOverlayForWeek() {
-        sendAction("dismiss_week")
+    private func selectOverlayDismissal(_ action: String) {
+        closeSettingsMenu(scheduleCollapse: false)
+        sendAction(action)
     }
 
-    @objc private func dismissOverlayPersistently() {
-        sendAction("dismiss_persistent")
+    private func openOverlaySettings() {
+        closeSettingsMenu()
+        sendAction("open_overlay_settings")
     }
 
     private func sendAction(_ action: String) {
@@ -1708,10 +1980,20 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
     func windowDidMove(_ notification: Notification) {
         updateDisclosureDirection()
         positionDisclosurePanel()
+        if settingsMenuOpen {
+            positionSettingsMenuPanels()
+        }
     }
 }
 
 // MARK: - Tracking view for hover
+
+@available(macOS 13.0, *)
+private final class OverlayMenuHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+}
 
 @available(macOS 13.0, *)
 private class ReminderTrackingView: NSView {

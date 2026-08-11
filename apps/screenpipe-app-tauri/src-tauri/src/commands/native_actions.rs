@@ -786,12 +786,28 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
                         let _ = (ShowRewindWindow::Search { query: None }).show(&app_for_show);
                     });
                 }
-                "dismiss_menu_opened" => {
+                "settings_menu_opened" => {
                     track_native_overlay_event(
                         &app_clone,
-                        "shortcut_reminder_dismiss_menu_opened",
+                        "shortcut_reminder_settings_menu_opened",
                         serde_json::json!({}),
                     );
+                }
+                "open_overlay_settings" => {
+                    track_native_overlay_event(
+                        &app_clone,
+                        "shortcut_reminder_overlay_settings_clicked",
+                        serde_json::json!({}),
+                    );
+                    let _ = app_clone.run_on_main_thread(move || {
+                        if let Err(error) = (ShowRewindWindow::Home {
+                            page: Some("display".to_string()),
+                        })
+                        .show(&app_for_show)
+                        {
+                            warn!("failed to open overlay settings: {error}");
+                        }
+                    });
                 }
                 "dismiss_today" => {
                     handle_shortcut_overlay_dismissal(
