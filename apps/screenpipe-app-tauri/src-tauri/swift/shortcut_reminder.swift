@@ -1267,6 +1267,15 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         }
     }
 
+#if OVERLAY_PREVIEW
+    func setPreviewExpanded(_ expanded: Bool) {
+        DispatchQueue.main.async { [self] in
+            metrics.isHovering = expanded
+            metrics.forceExpanded = expanded
+        }
+    }
+#endif
+
     private func beginStopMeeting() {
         guard metrics.meetingActive, !metrics.meetingStopping else { return }
         metrics.meetingStopping = true
