@@ -327,7 +327,7 @@ private let kBaseTranscriptW: CGFloat = 280
 private let kBaseTranscriptH: CGFloat = 142
 private let kRestingOpacity: Double = 0.82
 private let kAnimDur: Double = 0.2
-private let kDockControls = ["timeline", "chat", "search", "audio", "close"]
+private let kDockControls = ["search", "chat", "timeline", "audio", "close"]
 
 /// Convert configured shortcuts to one stable, readable macOS order.
 /// Settings historically stored both `Super+Control+…` and
@@ -687,14 +687,14 @@ struct ShortcutReminderView: View {
 
     private var dockView: some View {
         HStack(spacing: 0) {
-            DockIconButton(icon: "rectangle.split.1x2", active: metrics.hoveredControl == "timeline", scale: scale) {
-                onAction("open_timeline")
+            DockIconButton(icon: "magnifyingglass", active: metrics.hoveredControl == "search", scale: scale) {
+                onAction("open_search")
             }
             DockIconButton(icon: "bubble.left.fill", active: metrics.hoveredControl == "chat", scale: scale) {
                 onAction("open_chat")
             }
-            DockIconButton(icon: "magnifyingglass", active: metrics.hoveredControl == "search", scale: scale) {
-                onAction("open_search")
+            DockIconButton(icon: "rectangle.split.1x2", active: metrics.hoveredControl == "timeline", scale: scale) {
+                onAction("open_timeline")
             }
 
             Rectangle().fill(.white.opacity(0.28)).frame(width: 1).padding(.vertical, s(4))
