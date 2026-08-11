@@ -250,6 +250,7 @@ jobs:
       env:
         RECORD_VIDEO: "true"
       run: |
+        Remove-Item -LiteralPath ./.e2e -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath ./e2e/results -Recurse -Force -ErrorAction SilentlyContinue
         bun run test:e2e
 
@@ -567,7 +568,7 @@ jobs:
         export RECORD_VIDEO=1
 
         bun run test:e2e:onboarding-background-ai-tools
-        rm -rf ./e2e/results
+        rm -rf ./.e2e ./e2e/results
         bun run test:e2e
 
     - name: Generate E2E Coverage Report
