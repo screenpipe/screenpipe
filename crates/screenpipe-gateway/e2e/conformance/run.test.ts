@@ -181,7 +181,7 @@ describe(`binary routes [${impl}]`, () => {
     // The bytes are the wire format, not a re-serialization.
     const text = await res.text();
     const lines = text.trim().split("\n");
-    expect(lines.length).toBe(6); // 2 frames + 1 parsed + 1 audio + 1 ui + 1 memory
+    expect(lines.length).toBe(7); // the six in-window records + one stale record
     const kinds = lines.map((l) => JSON.parse(l).kind);
     expect(new Set(kinds)).toEqual(new Set(["frame", "parsed", "audio", "ui", "memory"]));
     for (const line of lines) {

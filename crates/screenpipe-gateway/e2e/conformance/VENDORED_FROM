@@ -1,7 +1,7 @@
 repo:   screenpipe/website (PRIVATE)
-branch: codex/cloud-pipes-control-plane-ux
-commit: a8af80284e3d334c3827e43442977c4872b8d53a
-date:   2026-08-03T22:31:14Z
+branch: main
+commit: c3fc73b43c496d86fad54ecff65a4e350d179a7c
+date:   2026-08-11T16:43:39Z
 files:  openapi/enterprise-v1.yaml       -> enterprise-v1.yaml
         conformance/spec.ts              -> spec.ts
         conformance/cases.ts             -> cases.ts

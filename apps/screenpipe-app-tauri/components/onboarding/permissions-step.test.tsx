@@ -138,7 +138,9 @@ describe("onboarding permission wheel", () => {
       screen.queryByRole("button", { name: /capture browser urls/i })
     ).toBeNull();
     expect(
-      screen.getByText("Three permissions unlock recording. Optional access can wait.")
+      screen.getByText(
+        "Three permissions turn on recording. Your recordings are stored on this computer."
+      )
     ).toBeInTheDocument();
   });
 

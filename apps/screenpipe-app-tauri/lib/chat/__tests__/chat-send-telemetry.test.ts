@@ -4,6 +4,7 @@
 
 import { describe, it, expect } from "vitest";
 import { chatSendTelemetryContext } from "../response-feedback";
+import { postChatSuggestionSendOptions } from "../suggestion-telemetry";
 import type { Message } from "../types";
 
 const userMessage = (overrides: Partial<Message> = {}): Message =>
@@ -99,9 +100,10 @@ describe("chatSendTelemetryContext — composer authorship", () => {
   });
 
   it("defaults to user_authored when nothing prefilled the composer", () => {
-    expect(chatSendTelemetryContext(undefined, 0, []).composer_authorship).toBe(
-      "user_authored",
-    );
+    expect(chatSendTelemetryContext(undefined, 0, [])).toMatchObject({
+      composer_authorship: "user_authored",
+      composer_origin: "user_input",
+    });
   });
 
   it("treats a typed follow-up in a card thread as user_authored", () => {
@@ -111,5 +113,36 @@ describe("chatSendTelemetryContext — composer authorship", () => {
 
     expect(ctx.entry_source).toBe("home_card");
     expect(ctx.composer_authorship).toBe("user_authored");
+  });
+
+  it("marks a post-chat suggestion without leaking its content", () => {
+    const privateSuggestion = {
+      text: "Alice's private roadmap in /Users/alice/secret",
+      preview: "Confidential calendar details",
+      connectionIcon: "gmail",
+    };
+    const options = postChatSuggestionSendOptions(privateSuggestion, 2);
+    const ctx = chatSendTelemetryContext(options, 1, [
+      userMessage(),
+      assistantMessage(),
+    ]);
+
+    expect(ctx).toMatchObject({
+      entry_source: "normal_chat",
+      entry_card: "none",
+      response_position: "followup",
+      composer_authorship: "template_unmodified",
+      composer_origin: "post_chat_suggestion",
+      suggestion_authorship: "unmodified",
+      suggestion_source: "connection",
+      suggestion_position: 2,
+    });
+    expect(JSON.stringify({ options, ctx })).not.toContain(
+      privateSuggestion.text,
+    );
+    expect(JSON.stringify({ options, ctx })).not.toContain(
+      privateSuggestion.preview,
+    );
+    expect(JSON.stringify({ options, ctx })).not.toContain("gmail");
   });
 });

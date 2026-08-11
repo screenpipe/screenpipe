@@ -1184,9 +1184,9 @@ async openGoogleCalendarAuthWindow(authUrl: string) : Promise<Result<null, strin
  * taught onboarding to show one; every other login surface silently opened a
  * browser asking for a code nothing displayed.
  */
-async openLoginWindow(freshSession: boolean | null) : Promise<Result<string, string>> {
+async openLoginWindow(freshSession: boolean | null, authMode: LoginMode | null) : Promise<Result<string, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("open_login_window", { freshSession }) };
+    return { status: "ok", data: await TAURI_INVOKE("open_login_window", { freshSession, authMode }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2915,6 +2915,7 @@ export type JobEvent = { kind: "started"; jobId: string; label: string; message:
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }
 export type LogFile = { name: string; path: string; modified_at: number }
+export type LoginMode = "sign-in" | "sign-up"
 /**
  * Stable low-disk safety values shared with the settings UI.
  *

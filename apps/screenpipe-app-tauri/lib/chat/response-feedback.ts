@@ -4,10 +4,14 @@
 
 import type {
   ChatComposerAuthorship,
+  ChatComposerOrigin,
   ChatEntryCard,
   ChatEntrySource,
   ChatResponsePosition,
   ChatSendOptions,
+  ChatSuggestionAuthorship,
+  ChatSuggestionPosition,
+  ChatSuggestionSource,
   Message,
 } from "@/lib/chat/types";
 
@@ -26,6 +30,10 @@ export type ChatTelemetryContext = {
  *  composer of its own, so it stays off {@link ChatTelemetryContext}. */
 export type ChatSendTelemetryContext = ChatTelemetryContext & {
   composer_authorship: ChatComposerAuthorship;
+  composer_origin: ChatComposerOrigin;
+  suggestion_authorship?: ChatSuggestionAuthorship;
+  suggestion_source?: ChatSuggestionSource;
+  suggestion_position?: ChatSuggestionPosition;
 };
 
 const SAFE_ENTRY_CARDS = new Set<ChatEntryCard>([
@@ -110,7 +118,27 @@ export function chatSendTelemetryContext(
   const response_position: ChatResponsePosition =
     messageIndex === 0 ? "initial" : "followup";
   const authorship = options?.composerAuthorship;
-  const composer_authorship: ChatComposerAuthorship = authorship ?? "user_authored";
+  const composer_authorship: ChatComposerAuthorship =
+    authorship ?? "user_authored";
+  const composer_origin: ChatComposerOrigin =
+    options?.composerOrigin ??
+    (options?.entrySource === "home_card" ? "home_card" : "user_input");
+  const suggestion_context =
+    composer_origin === "post_chat_suggestion"
+      ? {
+          suggestion_authorship:
+            options?.suggestionAuthorship ??
+            (composer_authorship === "template_edited"
+              ? "edited"
+              : "unmodified"),
+          ...(options?.suggestionSource
+            ? { suggestion_source: options.suggestionSource }
+            : {}),
+          ...(options?.suggestionPosition
+            ? { suggestion_position: options.suggestionPosition }
+            : {}),
+        }
+      : {};
 
   if (options?.entrySource === "home_card") {
     const card = normalizeChatEntryCard(options.entryCard);
@@ -119,12 +147,20 @@ export function chatSendTelemetryContext(
       entry_card: card === "none" ? "unknown_home_card" : card,
       response_position,
       composer_authorship,
+      composer_origin,
+      ...suggestion_context,
     };
   }
 
   // No explicit origin on this send — inherit the thread's.
   const inherited = chatEntryContextFromMessages(conversation);
-  return { ...inherited, response_position, composer_authorship };
+  return {
+    ...inherited,
+    response_position,
+    composer_authorship,
+    composer_origin,
+    ...suggestion_context,
+  };
 }
 
 export function chatEntrySourceFromMessages(messages: Message[]): ChatEntrySource {

@@ -47,7 +47,11 @@ import {
   type ComposerCommandId,
   type ComposerSkillReference,
 } from "@/lib/chat-utils";
-import { useAutoSuggestions } from "@/lib/hooks/use-auto-suggestions";
+import {
+  useAutoSuggestions,
+  type Suggestion,
+} from "@/lib/hooks/use-auto-suggestions";
+import { postChatSuggestionSendOptions } from "@/lib/chat/suggestion-telemetry";
 import {
   buildInvalidatedAuthTokenMessage,
 } from "@/lib/chat/auth-errors";
@@ -626,7 +630,7 @@ export function StandaloneChat({
     });
 
     try {
-      await commands.openLoginWindow(null);
+      await commands.openLoginWindow(null, null);
     } catch (e) {
       console.warn("failed to open login after Pi auth error:", e);
     }
@@ -1205,6 +1209,17 @@ export function StandaloneChat({
             : "template_edited",
       });
     },
+    [sendMessage],
+  );
+
+  const sendPostChatSuggestion = useCallback(
+    (suggestion: Suggestion, position: number) =>
+      sendMessage(
+        suggestion.text,
+        undefined,
+        undefined,
+        postChatSuggestionSendOptions(suggestion, position),
+      ),
     [sendMessage],
   );
 
@@ -2056,7 +2071,7 @@ export function StandaloneChat({
         hasValidModel={hasValidModel}
         needsLogin={needsLogin}
         onOpenLogin={async () => {
-          await commands.openLoginWindow(null);
+          await commands.openLoginWindow(null, null);
         }}
         onOpenSettings={async () => {
           await commands.showWindow({ Home: { page: null } });
@@ -2127,7 +2142,7 @@ export function StandaloneChat({
           suggestions: connectionAwareSuggestions,
           inputSectionWidth,
           isRefreshing: suggestionsRefreshing,
-          onSendSuggestion: sendMessage,
+          onSendSuggestion: sendPostChatSuggestion,
           onRefresh: refreshVisibleSuggestions,
           onHide: () => updateSettings({ showChatSuggestions: false }),
         }}

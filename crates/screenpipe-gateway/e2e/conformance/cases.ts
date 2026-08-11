@@ -119,8 +119,9 @@ export const cases: Case[] = [
           throw new Error(`missing kind ${k} in ${Array.from(kinds).join(", ")}`);
         }
       }
-      // Every result must be INSIDE the requested window on both targets, even
-      // though the two derive the window differently (objects vs. records).
+      // Every result must be INSIDE the requested window on both targets. The
+      // fixture includes an old record in an in-window hosted object so this
+      // assertion catches object-time-only filtering.
       for (const r of b.results) {
         if (!(r.t >= "2026-07-22" && r.t <= "2026-07-23")) {
           throw new Error(`result outside the window: ${r.t}`);

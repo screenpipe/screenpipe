@@ -322,7 +322,7 @@ export function AccountSection() {
         offer_version: selection.offerVersion,
         pricing_experiment_variant: selection.experimentVariant,
       });
-      await commands.openLoginWindow(null);
+      await commands.openLoginWindow(null, null);
       return;
     }
 
@@ -501,7 +501,7 @@ export function AccountSection() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => commands.openLoginWindow(null)}
+              onClick={() => commands.openLoginWindow(null, null)}
             >
               login <ExternalLinkIcon className="w-3.5 h-3.5 ml-1.5" />
             </Button>
@@ -808,7 +808,7 @@ export function AccountSection() {
             <Button
               className="w-full max-w-xs bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150"
               size="lg"
-              onClick={() => commands.openLoginWindow(null)}
+              onClick={() => commands.openLoginWindow(null, null)}
             >
               Log in
               <ExternalLinkIcon className="w-4 h-4 ml-2" />
