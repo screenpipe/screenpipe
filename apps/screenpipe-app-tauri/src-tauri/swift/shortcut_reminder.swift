@@ -52,8 +52,6 @@ public func shortcutSetHealthState(_ statePtr: UnsafePointer<CChar>?) -> Int32 {
 final class OverlayMetrics: ObservableObject {
     @Published var audioActive: Bool = false
     @Published var speechRatio: Double = 0
-    @Published var screenActive: Bool = false
-    @Published var captureFps: Double = 0
     @Published var meetingActive: Bool = false
     @Published var activeMeetingId: Int64?
     @Published var meetingApp: String?
@@ -312,47 +310,6 @@ struct AudioEqualizerView: View {
     }
 }
 
-// MARK: - Screen Matrix (native Canvas reimplementation)
-
-@available(macOS 13.0, *)
-struct ScreenMatrixView: View {
-    let active: Bool
-    let captureFps: Double
-    @ObservedObject private var anim = AnimationTick.shared
-
-    var body: some View {
-        Canvas { context, size in
-            let tick = anim.value
-            let fill = active ? min(1, captureFps / 2.0) : 0.0
-            let speed = 0.003 + fill * 0.007
-            let sweepX = active ? fmod(tick * speed * 60, 1.0) * size.width : 0
-
-            let capturedAlpha = active ? 0.06 + fill * 0.06 : 0.02
-            context.fill(
-                Path(CGRect(x: 0, y: 0, width: sweepX, height: size.height)),
-                with: .color(.white.opacity(capturedAlpha))
-            )
-            context.fill(
-                Path(CGRect(x: sweepX, y: 0, width: size.width - sweepX, height: size.height)),
-                with: .color(.white.opacity(0.015))
-            )
-            let barAlpha = active ? 0.5 + fill * 0.2 : 0.08
-            context.fill(
-                Path(CGRect(x: round(sweepX), y: 0, width: 1, height: size.height)),
-                with: .color(.white.opacity(barAlpha))
-            )
-            let scanLines = 5
-            for i in 1..<scanLines {
-                let y = round(Double(i) * size.height / Double(scanLines))
-                context.fill(
-                    Path(CGRect(x: 0, y: y, width: size.width, height: 1)),
-                    with: .color(.black.opacity(0.35))
-                )
-            }
-        }
-    }
-}
-
 // MARK: - Main shortcut reminder view
 // Minimal app icon that expands into the control dock on hover.
 
@@ -361,7 +318,7 @@ private let kBaseCollapsedW: CGFloat = 22
 private let kBaseCollapsedH: CGFloat = 16
 private let kBaseHealthH: CGFloat = 18
 private let kBaseCollapsedCornerRadius: CGFloat = 4
-private let kBaseExpandedW: CGFloat = 192
+private let kBaseExpandedW: CGFloat = 160
 private let kBaseExpandedH: CGFloat = 62
 private let kBaseDockH: CGFloat = 30
 private let kBaseDisclosureH: CGFloat = 26
@@ -370,7 +327,7 @@ private let kBaseTranscriptW: CGFloat = 280
 private let kBaseTranscriptH: CGFloat = 142
 private let kRestingOpacity: Double = 0.82
 private let kAnimDur: Double = 0.2
-private let kDockControls = ["timeline", "chat", "search", "audio", "screen", "close"]
+private let kDockControls = ["timeline", "chat", "search", "audio", "close"]
 
 /// Convert configured shortcuts to one stable, readable macOS order.
 /// Settings historically stored both `Super+Control+…` and
@@ -412,7 +369,7 @@ func overlayHoverRect(
     let width = expanded ? kBaseExpandedW * scale : kBaseCollapsedW * collapsedScale
     let height = expanded ? kBaseDockH * scale : kBaseCollapsedH * collapsedScale
     return NSRect(
-        x: bounds.maxX - width,
+        x: bounds.midX - width / 2,
         y: disclosureDown ? bounds.maxY - height : bounds.minY,
         width: width,
         height: height
@@ -431,9 +388,6 @@ func disclosureContent(
     case "chat": return ("ask chat", chatShortcut)
     case "search": return ("search", searchShortcut)
     case "audio": return ("mic capture", metrics.audioActive ? "live" : "idle")
-    case "screen":
-        let fps = metrics.screenActive ? String(format: "%.0f fps", metrics.captureFps) : "idle"
-        return ("screen capture", fps)
     case "close": return ("hide dock", nil)
     default: return nil
     }
@@ -513,7 +467,7 @@ struct ShortcutReminderView: View {
 
     private var panelAlignment: Alignment {
         guard metrics.healthState == "normal" else { return .center }
-        return metrics.disclosureDown ? .topTrailing : .bottomTrailing
+        return metrics.disclosureDown ? .top : .bottom
     }
 
     var body: some View {
@@ -536,8 +490,7 @@ struct ShortcutReminderView: View {
         .accessibilityHidden(true)
         .animation(.easeInOut(duration: kAnimDur), value: isExpanded)
         .animation(.easeInOut(duration: kAnimDur), value: metrics.healthState)
-        // Trailing-aligned so the collapsed icon and expanded dock share one
-        // right edge while `positionPanel` keeps the resting icon centred.
+        // Centre-aligned so the dock expands evenly around the resting icon.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: panelAlignment)
     }
 
@@ -748,10 +701,6 @@ struct ShortcutReminderView: View {
 
             DockStatusCell(active: metrics.hoveredControl == "audio") {
                 AudioEqualizerView(active: metrics.audioActive, speechRatio: metrics.speechRatio)
-                    .frame(width: s(22), height: s(14))
-            }
-            DockStatusCell(active: metrics.hoveredControl == "screen") {
-                ScreenMatrixView(active: metrics.screenActive, captureFps: metrics.captureFps)
                     .frame(width: s(22), height: s(14))
             }
 
@@ -972,8 +921,6 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
     private var wsRetryTimer: Timer?
     private var meetingWsTask: URLSessionWebSocketTask?
     private var meetingWsRetryTimer: Timer?
-    private var prevFramesCaptured: Int?
-    private var prevOcrCompleted: Int?
     /// Set from Rust `show_shortcut_reminder` when API auth is enabled (includes ?token=).
     private var metricsWsUrl = "ws://127.0.0.1:3030/ws/metrics"
     private var eventsWsUrl = "ws://127.0.0.1:3030/ws/meeting-overlay"
@@ -1017,7 +964,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
             panel?.orderFrontRegardless()
             AnimationTick.shared.setVisible(
                 true,
-                hasActiveSignal: metrics.audioActive || metrics.screenActive
+                hasActiveSignal: metrics.audioActive
             )
             connectWebSocket()
             connectMeetingEventsWebSocket()
@@ -1092,26 +1039,12 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
 
         let audio = json["audio"] as? [String: Any]
-        let vision = json["vision"] as? [String: Any]
-
         let audioLevel = audio?["audio_level_rms"] as? Double ?? 0
-        let curFrames = vision?["frames_captured"] as? Int ?? 0
-        let curOcr = vision?["ocr_completed"] as? Int ?? 0
-
-        // Compute deltas (same logic as webview use-overlay-data.ts)
-        var deltaFrames = 0
-        if let prev = prevFramesCaptured {
-            deltaFrames = curFrames - prev
-        }
-        prevFramesCaptured = curFrames
-        prevOcrCompleted = curOcr
 
         DispatchQueue.main.async { [self] in
             guard self.isVisible else { return }
             let audioActive = audioLevel > 0.001
             let speechRatio = min(1, audioLevel * 15)
-            let screenActive = deltaFrames > 0
-            let captureFps = Double(deltaFrames) / 0.5
 
             if self.metrics.audioActive != audioActive {
                 self.metrics.audioActive = audioActive
@@ -1119,16 +1052,8 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
             if self.metrics.speechRatio != speechRatio {
                 self.metrics.speechRatio = speechRatio
             }
-            if self.metrics.screenActive != screenActive {
-                self.metrics.screenActive = screenActive
-            }
-            if self.metrics.captureFps != captureFps {
-                self.metrics.captureFps = captureFps
-            }
             self.refreshActiveDisclosure()
-            AnimationTick.shared.setActiveSignal(
-                audioActive || screenActive
-            )
+            AnimationTick.shared.setActiveSignal(audioActive)
         }
     }
 
@@ -1424,7 +1349,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
     private func refreshActiveDisclosure() {
         guard disclosurePanel?.isVisible == true,
               let control = metrics.hoveredControl,
-              ["audio", "screen"].contains(control),
+              control == "audio",
               let index = kDockControls.firstIndex(of: control) else { return }
         showDisclosurePanel(for: control, index: index)
     }
@@ -1601,11 +1526,8 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         let visible = panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? panel.frame
         let width = transcriptPanel.frame.width
         let height = transcriptPanel.frame.height
-        // Hang the card off the same right edge the pill is anchored to, not the
-        // window's centre — the window extends well to the left of the collapsed
-        // pill, so a centred card would sit off to one side of its own trigger.
-        let anchoredX = panel.frame.maxX - width
-        let x = min(max(anchoredX, visible.minX + 4), visible.maxX - width - 4)
+        let centeredX = panel.frame.midX - width / 2
+        let x = min(max(centeredX, visible.minX + 4), visible.maxX - width - 4)
         let preferredY = metrics.disclosureDown
             ? panel.frame.minY - height - 4
             : panel.frame.maxY + 4
@@ -1626,22 +1548,12 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Left edge of the panel window. The content is trailing-aligned, so the
-    /// window sits further left than the pixels the user sees: offsetting it by
-    /// the hidden part of the expanded bar puts the collapsed pill dead centre
-    /// on screen while every wider state grows leftwards from one right edge.
-    /// Health pills are centre-aligned inside the panel, so they keep the plain
-    /// centred origin and look exactly as they did before.
-    private func anchoredOriginX(on screen: NSScreen) -> CGFloat {
+    /// Keep the fixed-width panel centred so both the resting icon and expanded
+    /// dock share one midpoint and expansion grows evenly in both directions.
+    private func centeredOriginX(on screen: NSScreen) -> CGFloat {
         let expanded = kBaseExpandedW * gOverlayScale
-        guard metrics.healthState == "normal" else {
-            return screen.frame.origin.x + (screen.frame.size.width - expanded) / 2
-        }
-        let collapsedScale = 1 + (gOverlayScale - 1) * 0.2
-        let collapsed = kBaseCollapsedW * collapsedScale
         return screen.frame.origin.x
-            + (screen.frame.size.width + collapsed) / 2
-            - expanded
+            + (screen.frame.size.width - expanded) / 2
     }
 
     private func positionPanel() {
@@ -1651,7 +1563,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
             if NSMouseInRect(mouseLocation, screen.frame, false) {
                 let visible = screen.visibleFrame
                 let h = kBaseExpandedH * gOverlayScale
-                let x = max(visible.minX, anchoredOriginX(on: screen))
+                let x = max(visible.minX, centeredOriginX(on: screen))
                 let y = visible.origin.y + visible.size.height - h - 4
                 panel.setFrameOrigin(NSPoint(x: x, y: y))
                 updateDisclosureDirection()
@@ -1775,8 +1687,8 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
     }
 
     /// Frame of the visible overlay in screen coords, or nil while hidden.
-    /// The window is wider than the resting icon and the content hugs its
-    /// trailing edge, so return only the visible footprint while collapsed.
+    /// The window is wider than the centred resting icon, so return only the
+    /// visible footprint while collapsed.
     func panelFrameIfVisible() -> NSRect? {
         guard isVisible, let panel = panel else { return nil }
         let frame = panel.frame
@@ -1786,7 +1698,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         let collapsedScale = 1 + (gOverlayScale - 1) * 0.2
         let collapsed = min(kBaseCollapsedW * collapsedScale, frame.width)
         return NSRect(
-            x: frame.maxX - collapsed,
+            x: frame.midX - collapsed / 2,
             y: frame.minY,
             width: collapsed,
             height: frame.height
