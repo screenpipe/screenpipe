@@ -1015,6 +1015,16 @@ async fn main() {
             }
             let app_handle = app.handle();
 
+            // Go non-activating before the first window exists. Tauri defaults to
+            // `Regular`, and a launching Regular app is activated by macOS — which
+            // swaps a developer out of their fullscreen Space every time an agent
+            // starts the suite. `reset_to_regular_and_refresh_tray` re-applies this
+            // later in setup; it has to be set here to beat window creation.
+            #[cfg(all(target_os = "macos", feature = "e2e"))]
+            if !crate::window::window_activation_allowed() {
+                let _ = app_handle.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            }
+
             // Create macOS app menu with Settings
             #[cfg(target_os = "macos")]
             {

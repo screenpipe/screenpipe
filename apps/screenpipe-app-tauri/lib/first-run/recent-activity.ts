@@ -29,9 +29,25 @@ export async function fetchRecentActivity(
     include_key_texts: "false",
     include_recording: "false",
     include_memories: "false",
-    include_snippets: "false",
+    // What was actually on screen and said, rather than which app it happened
+    // in. Without this the model can only restate the window list, which is
+    // why the first summary read like a template even though a model wrote it.
+    //
+    // `include_key_texts` stays off deliberately: the engine reuses the same
+    // a11y sample for screen snippets, so this is the bounded, deduped view of
+    // that work rather than a second scan. Measured against a real first-run
+    // window (48 frames, 4 windows) the detail call returns in ~1.2s with
+    // snippets on and key_texts off, versus ~17.8s with key_texts on.
+    include_snippets: options.withDetail ? "true" : "false",
     include_guidance: "false",
   });
+  if (options.withDetail) {
+    // Well under the route's caps (12 / 1200). The prompt asks for 2-4
+    // sentences, so more excerpts buy nothing and only widen what leaves the
+    // machine at the one moment the user has not yet chosen to trust us.
+    params.set("max_snippets", "6");
+    params.set("max_snippet_chars", "240");
+  }
 
   try {
     const response = await localFetch(`/activity-summary?${params.toString()}`, {

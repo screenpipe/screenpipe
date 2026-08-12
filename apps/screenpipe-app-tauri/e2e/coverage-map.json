@@ -302,6 +302,18 @@
       "layers": [
         "real-ui-e2e"
       ]
+    },
+    {
+      "id": "speaker-rename-scope",
+      "label": "Speaker rename scope and reference integrity",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api"
+      ]
     }
   ],
   "specs": [
@@ -720,7 +732,7 @@
       "criticality": "high",
       "confidence": "partial",
       "ux": "synthetic",
-      "notes": "A turn that ends while the panel does not own the session on the agent-event bus must still release the composer dispatch guards and must not duplicate the user message; regression for the stuck 'analyzing…' chat whose later messages all piled into QUEUED."
+      "notes": "A turn that ends while the panel does not own the session on the agent-event bus must still release the composer dispatch guards and must not duplicate the user message; regression for the stuck 'analyzing\u2026' chat whose later messages all piled into QUEUED."
     },
     {
       "spec": "chat-sidebar-groups.spec.ts",
@@ -816,7 +828,7 @@
       "criticality": "medium",
       "confidence": "partial",
       "ux": "synthetic",
-      "notes": "QUARANTINED (#4610): cross-window prefill duplicate regression. The autoSend persist precondition is racy in CI — times out with 0 conversations (not the duplicate=2 it guards) ~100% Linux + ~33% macOS. Re-enable once it seeds the persisted conversation deterministically."
+      "notes": "QUARANTINED (#4610): cross-window prefill duplicate regression. The autoSend persist precondition is racy in CI \u2014 times out with 0 conversations (not the duplicate=2 it guards) ~100% Linux + ~33% macOS. Re-enable once it seeds the persisted conversation deterministically."
     },
     {
       "spec": "chat-prefill-context-leak.spec.ts",
@@ -1510,6 +1522,28 @@
       "ux": "real-user-flow",
       "tests": 6,
       "notes": "Post-setup learning window on Home under the authenticated seed: opens from a real complete_onboarding with nothing seeded (guards the cross-window webview localStorage handoff), live countdown, settles to the real engine-reported reason when nothing was captured, stays dismissed across a reload, offers a ready summary and clears after use, and never renders in idle or done."
+    },
+    {
+      "spec": "first-run-ai-summary.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "onboarding",
+        "chat-ai",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "onboarding",
+        "first-run-learning",
+        "chat"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "tests": 1,
+      "notes": "Opt-in hosted-AI lane for the post-setup summary: the real app starts its own Pi session through the Rust command and the production Worker under Miniflare, and the forwarded provider request is asserted to carry the screen and audio excerpts plus the browser URL, not just app names. Guards the regression where the summary was AI-written but built from containers only, so it read templated. The seeded chat must hold the model's text and never the deterministic opener."
     },
     {
       "spec": "onboarding-h1-follow-up.spec.ts",
@@ -2456,6 +2490,26 @@
       "confidence": "strong",
       "ux": "mixed",
       "notes": "Opt-in packaged-desktop regression: causes real SQLITE_CORRUPT in the isolated E2E database, then proves the engine API and database owners stop while the desktop stays alive and does not respawn across the watchdog window."
+    },
+    {
+      "spec": "speaker-rename-scope.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api"
+      ],
+      "features": [
+        "meeting-notes",
+        "speaker-rename-scope"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "tests": 3,
+      "notes": "Seeds one unnamed voice across three chunks through the public API, renames a single line with scope=auto, and verifies the whole voice is relabelled while a correction on a named speaker stays on its line. Also asserts the orphaned-speaker repair migration is recorded applied after a real app boot and leaves no row pointing at a deleted speaker."
     }
   ]
 }

@@ -16,6 +16,7 @@ import {
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import posthog from "posthog-js";
 import { cacheAnalyticsId, cacheAnalyticsEnabled } from "@/lib/analytics-id";
+import { captureSettingsChange } from "@/lib/analytics/settings-change";
 import { resolveTelemetryDisabledByEnv, shouldIdentifyInPostHog } from "@/lib/telemetry-env";
 import { User } from "../utils/tauri";
 import { SettingsStore } from "../utils/tauri";
@@ -1761,6 +1762,14 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 	}, [settings.fontSize]);
 
 	const updateSettings = async (updates: Partial<Settings>) => {
+		// Every settings mutation funnels through here, which makes this the one
+		// place that can answer "which controls do people actually change" without
+		// wiring ~40 call sites. The payload is redacted to booleans and numbers
+		// before it leaves — see lib/analytics/settings-change.
+		captureSettingsChange(
+			updates as Record<string, unknown>,
+			typeof window === "undefined" ? undefined : window.location.pathname,
+		);
 		const clearsAccount = "user" in updates && !updates.user;
 		// Sign-out (user → null) must invalidate any loadUser() request that is
 		// currently in flight so the cleared session can't be resurrected when a

@@ -148,6 +148,21 @@ export type ActivityWindow = {
   minutes?: number;
 };
 
+/**
+ * A bounded, deduped excerpt of what was on screen or said out loud.
+ *
+ * Mirrors the engine's `ActivitySnippet`. This is the only field that carries
+ * what the work actually WAS rather than which container it happened in, which
+ * is why the summary reads like a real observation instead of a window list.
+ */
+export type ActivitySnippet = {
+  /** "screen" | "audio" */
+  source?: string;
+  text?: string;
+  app_name?: string | null;
+  window_name?: string | null;
+};
+
 export type ActivitySnapshot = {
   data_status?: string;
   total_frames?: number;
@@ -155,6 +170,7 @@ export type ActivitySnapshot = {
   apps?: ActivityApp[] | null;
   windows?: ActivityWindow[] | null;
   edited_files?: ActivityEditedFile[] | null;
+  snippets?: ActivitySnippet[] | null;
   // Mirrors the engine's AudioSummary exactly. These are not the names a
   // reasonable guess would produce, and getting them wrong fails silently:
   // the count reads 0 and the audio line simply never appears.

@@ -206,4 +206,45 @@ describe("summarizeFirstRunWithAi — session lifecycle", () => {
     ).toBeNull();
     expect(piPrompt).not.toHaveBeenCalled();
   });
+
+  // Every fallback above was reported only to a webview console, which never
+  // reaches the app log — so in production "why is this not using AI?" had no
+  // answer at all. The reason has to reach the caller to be reportable.
+  it("reports why it fell back, without the summary or the observations", async () => {
+    reset();
+    const reasons: string[] = [];
+    await summarizeFirstRunWithAi(activity, {
+      elapsedMs: 60_000,
+      preset: null,
+      onFallback: (reason) => reasons.push(reason),
+    });
+    await summarizeFirstRunWithAi(activity, {
+      elapsedMs: 60_000,
+      preset,
+      userToken: null,
+      onFallback: (reason) => reasons.push(reason),
+    });
+    expect(reasons).toEqual(["no_preset", "cloud_preset_without_token"]);
+  });
+
+  it("does not call back when the model wrote the summary", async () => {
+    reset();
+    const reasons: string[] = [];
+    const pending = summarizeFirstRunWithAi(activity, {
+      elapsedMs: 60_000,
+      preset,
+      userToken: "token",
+      onFallback: (reason) => reasons.push(reason),
+    });
+    await emit([
+      {
+        type: "text_delta",
+        delta:
+          "You spent the last few minutes in a Meet call while a note was open next to it.",
+      },
+      { type: "agent_end" },
+    ]);
+    expect(await pending).toContain("Meet call");
+    expect(reasons).toEqual([]);
+  });
 });

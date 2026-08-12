@@ -203,7 +203,8 @@ export function buildPaletteEntries(
       group: "settings",
       hint: "",
       icon: SettingsIcon,
-      run: () => deps.openSettings("general"),
+      // No section: "open settings" means the panel, not the General page.
+      run: () => deps.openSettings(),
     },
     {
       id: "open_shortcut_settings",

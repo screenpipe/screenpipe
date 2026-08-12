@@ -32,6 +32,7 @@ interface ChatMainPaneProps {
    *  stay renderable without a settings provider. */
   firstRunAiPreset?: AIPreset | null;
   firstRunUserToken?: string | null;
+  firstRunAiSettingsLoaded?: boolean;
   hideInlineHistory?: boolean;
   showHistory: boolean;
   onCloseHistory: () => void;
@@ -104,6 +105,7 @@ export function ChatMainPane({
   scrollToBottom,
   firstRunAiPreset,
   firstRunUserToken,
+  firstRunAiSettingsLoaded,
 }: ChatMainPaneProps) {
   return (
     <div className="flex-1 flex overflow-hidden">
@@ -256,6 +258,7 @@ export function ChatMainPane({
                 <FirstRunLearningBanner
                   aiPreset={firstRunAiPreset}
                   userToken={firstRunUserToken}
+                  aiSettingsLoaded={firstRunAiSettingsLoaded}
                 />
               </div>
             )}

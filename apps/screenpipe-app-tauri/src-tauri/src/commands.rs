@@ -11,6 +11,8 @@ use crate::{
     updates::is_enterprise_build,
     window::{RewindWindowId, ShowRewindWindow},
 };
+#[cfg(target_os = "macos")]
+use crate::window::GatedPanelPlacement;
 use sha2::{Digest, Sha256};
 use tauri::{Emitter, Manager};
 #[cfg(not(target_os = "macos"))]
@@ -3123,10 +3125,10 @@ pub(crate) async fn show_shortcut_reminder_impl(
                     use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
                     // Re-set level, style mask, and behaviors on every show —
                     // order_out may have cleared the Space association.
-                    panel.set_level(1001);
+                    panel.set_level_gated(1001);
                     panel.set_style_mask(128); // NonActivatingPanel
                     panel.set_hides_on_deactivate(false);
-                    panel.set_collection_behaviour(
+                    panel.set_collection_behaviour_gated(
                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces |
                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle |
                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
@@ -3195,7 +3197,7 @@ pub(crate) async fn show_shortcut_reminder_impl(
                     use objc::{msg_send, sel, sel_impl};
 
                     // Level 1001 = above CGShieldingWindowLevel, shows over fullscreen
-                    panel.set_level(1001);
+                    panel.set_level_gated(1001);
                     // NonActivatingPanel (128) so the reminder doesn't activate
                     // the app (which would cause Space switching on fullscreen).
                     // style_mask(0) was wrong — it cleared NonActivatingPanel.
@@ -3211,7 +3213,7 @@ pub(crate) async fn show_shortcut_reminder_impl(
 
                     // CanJoinAllSpaces: visible on ALL Spaces simultaneously
                     // (not MoveToActiveSpace which only follows the active Space)
-                    panel.set_collection_behaviour(
+                    panel.set_collection_behaviour_gated(
                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces |
                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle |
                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
@@ -3585,10 +3587,10 @@ pub async fn show_notification_panel(
                 if let Ok(panel) = app_clone.get_webview_panel("notification-panel") {
                     use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
                     use objc::{msg_send, sel, sel_impl};
-                    panel.set_level(1001);
+                    panel.set_level_gated(1001);
                     panel.set_style_mask(128); // NSNonactivatingPanelMask
                     panel.set_hides_on_deactivate(false);
-                    panel.set_collection_behaviour(
+                    panel.set_collection_behaviour_gated(
                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
                             | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle
                             | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary,
@@ -3670,7 +3672,7 @@ pub async fn show_notification_panel(
                 if let Ok(panel) = window_clone.to_panel() {
                     use objc::{msg_send, sel, sel_impl};
 
-                    panel.set_level(1001);
+                    panel.set_level_gated(1001);
                     panel.set_style_mask(128);
                     panel.set_hides_on_deactivate(false);
 
@@ -3682,7 +3684,7 @@ pub async fn show_notification_panel(
                     // which blocks webview hover events. This re-enables mouse tracking.
                     let _: () = unsafe { msg_send![&*panel, setAcceptsMouseMovedEvents: true] };
 
-                    panel.set_collection_behaviour(
+                    panel.set_collection_behaviour_gated(
                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
                             | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle
                             | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary,

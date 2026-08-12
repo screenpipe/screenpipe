@@ -391,6 +391,7 @@ const E2E_COMMANDS: &[&str] = &[
     "seed_flags",
     "capture_pi_start_error",
     "set_onboarding_completed_ago",
+    "e2e_set_activation_allowed",
 ];
 
 fn validate_e2e_command_inventory() {

@@ -49,6 +49,17 @@ export type LearningWindowOptions = {
    *  with something we will not show. */
   aiPreset?: AIPreset | null;
   userToken?: string | null;
+  /**
+   * Whether `aiPreset`/`userToken` are known yet.
+   *
+   * Settings hydrate asynchronously, so before they land both read as absent —
+   * indistinguishable from a user who genuinely has no preset. Resolving in
+   * that gap spends the one-shot seed claim on a deterministic summary and the
+   * account never gets an AI-written one, because the claim is durable and the
+   * window only ever resolves once. Defaults to true so callers that already
+   * pass settled values are unaffected.
+   */
+  aiSettingsLoaded?: boolean;
 };
 
 /**
@@ -139,6 +150,12 @@ export function useLearningWindow(
       // Both gates: enough captured, and old enough that the summary is not
       // reporting on a few seconds of work.
       if (!hasEnoughEvidence(activity) || !canResolveYet(startedAt)) return;
+      // Third gate, and the reason it is worth having: the claim below is
+      // one-shot and durable. Resolving while the preset is still unknown
+      // costs the account its only AI-written summary, permanently, for a
+      // reason that resolves itself a moment later. The ceiling still settles
+      // the window if settings somehow never arrive.
+      if (aiRef.current.aiSettingsLoaded === false) return;
       if (seedingRef.current || !claimLearningSeed()) return;
       seedingRef.current = true;
 
@@ -154,10 +171,14 @@ export function useLearningWindow(
       // the same facts. If it declines, errors, times out, or answers with
       // something we will not show, the user still gets a real summary.
       const fallback = buildLearningSummary(detailed, { elapsedMs });
+      let fallbackReason: string | null = null;
       const written = await summarizeFirstRunWithAi(detailed, {
         elapsedMs,
         preset: aiRef.current.aiPreset,
         userToken: aiRef.current.userToken,
+        onFallback: (reason) => {
+          fallbackReason = reason;
+        },
       });
       // Writing the summary can take tens of seconds, and the user is free to
       // close this window or navigate during it. Hand the claim back so the
@@ -204,6 +225,16 @@ export function useLearningWindow(
         frame_count: Number(activity.total_frames ?? 0),
         // Whether the model wrote it or we fell back. Content is never sent.
         summary_source: written ? "ai" : "deterministic",
+        // WHY it fell back. `summary_source` alone said the model did not
+        // write it but never which of "no preset", "signed out", "timed out"
+        // or "output rejected" happened, and those have different fixes.
+        fallback_reason: written ? null : (fallbackReason ?? "unknown"),
+        // Whether the model had anything beyond app names to work with. A
+        // summary written from containers alone reads templated even when a
+        // model wrote it, which is indistinguishable from AI being off.
+        snippet_count: Array.isArray(detailed.snippets)
+          ? detailed.snippets.length
+          : 0,
         // Whether the proof made it in. Media is the strongest part of the
         // first impression and the part most likely to be silently absent.
         has_media: Boolean(media),

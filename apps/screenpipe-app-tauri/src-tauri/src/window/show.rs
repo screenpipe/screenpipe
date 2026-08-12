@@ -31,6 +31,8 @@ use super::util::screen_aware_size;
 
 use tauri::Emitter;
 #[cfg(target_os = "macos")]
+use super::GatedPanelPlacement;
+#[cfg(target_os = "macos")]
 use tauri_nspanel::ManagerExt;
 #[cfg(target_os = "macos")]
 use tauri_nspanel::WebviewWindowExt;
@@ -47,7 +49,7 @@ use tauri_nspanel::WebviewWindowExt;
 pub fn apply_chat_panel_on_top(panel: &tauri_nspanel::raw_nspanel::RawNSPanel, on_top: bool) {
     use objc::{msg_send, sel, sel_impl};
     if on_top {
-        panel.set_level(1001);
+        panel.set_level_gated(1001);
         // NonActivatingPanel (128) so clicking doesn't activate app
         unsafe {
             let current: i32 = msg_send![panel, styleMask];
@@ -55,7 +57,7 @@ pub fn apply_chat_panel_on_top(panel: &tauri_nspanel::raw_nspanel::RawNSPanel, o
         }
     } else {
         // Normal window level — allow it to go behind other windows
-        panel.set_level(0);
+        panel.set_level_gated(0);
         // Remove NonActivatingPanel bit (128) so it behaves normally
         unsafe {
             let current: i32 = msg_send![panel, styleMask];
@@ -309,8 +311,8 @@ impl ShowRewindWindow {
                     if let Ok(panel) = app_clone.get_webview_panel(&lbl) {
                         use objc::{msg_send, sel, sel_impl};
                         use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-                        panel.set_level(1001);
-                        panel.set_collection_behaviour(
+                        panel.set_level_gated(1001);
+                        panel.set_collection_behaviour_gated(
                             NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace |
                             NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
                         );
@@ -323,7 +325,7 @@ impl ShowRewindWindow {
                         }
 
                         // Remove MoveToActiveSpace so panel stays pinned to this Space
-                        panel.set_collection_behaviour(
+                        panel.set_collection_behaviour_gated(
                             NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
                         );
                     }
@@ -343,7 +345,7 @@ impl ShowRewindWindow {
                 {
                     tracing::warn!("Failed to center window-mode overlay: {}", e);
                 }
-                window.set_focus().ok();
+                crate::window::focus_window(&window);
                 let _ = app.emit("window-focused", true);
             }
         } else {
@@ -389,7 +391,7 @@ impl ShowRewindWindow {
                                 let _: () = msg_send![&*panel, setFrame:frame display:true];
                             }
                         }
-                        panel.set_level(1001);
+                        panel.set_level_gated(1001);
                         let _: () = unsafe {
                             objc::msg_send![&*panel, setMovableByWindowBackground: false]
                         };
@@ -399,7 +401,7 @@ impl ShowRewindWindow {
                         // MoveToActiveSpace so the panel appears on the current Space,
                         // then we remove it after showing so the panel doesn't
                         // follow the user to other Spaces (which caused a blink).
-                        panel.set_collection_behaviour(
+                        panel.set_collection_behaviour_gated(
                             NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace |
                             NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle |
                             NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
@@ -412,7 +414,7 @@ impl ShowRewindWindow {
                         // Remove MoveToActiveSpace now that the panel is shown.
                         // This keeps it pinned to THIS Space so it won't follow
                         // three-finger swipes (no blink on the destination Space).
-                        panel.set_collection_behaviour(
+                        panel.set_collection_behaviour_gated(
                             NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle |
                             NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
                         );
@@ -448,7 +450,7 @@ impl ShowRewindWindow {
             #[cfg(target_os = "linux")]
             {
                 window.show().ok();
-                window.set_focus().ok();
+                crate::window::focus_window(&window);
                 let _ = app.emit("window-focused", true);
             }
         }
@@ -592,7 +594,7 @@ impl ShowRewindWindow {
                 #[cfg(not(target_os = "macos"))]
                 {
                     window.show().ok();
-                    window.set_focus().ok();
+                    crate::window::focus_window(&window);
                 }
                 return Ok(window);
             }
@@ -631,9 +633,11 @@ impl ShowRewindWindow {
                         if let Ok(ns_win) = window_clone.ns_window() {
                             unsafe {
                                 // Activate the app so it comes to the foreground
-                                let ns_app: cocoa_id =
-                                    msg_send![objc::class!(NSApplication), sharedApplication];
-                                let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
+                                if crate::window::window_activation_allowed() {
+                                    let ns_app: cocoa_id =
+                                        msg_send![objc::class!(NSApplication), sharedApplication];
+                                    let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
+                                }
 
                                 // Move the window to the active space (current workspace)
                                 // NSWindowCollectionBehaviorMoveToActiveSpace = 1 << 1 = 2
@@ -664,7 +668,7 @@ impl ShowRewindWindow {
                     if window.is_minimized().unwrap_or(false) {
                         window.unminimize().ok();
                     }
-                    window.set_focus().ok();
+                    crate::window::focus_window(&window);
                 }
 
                 return Ok(window);
@@ -693,18 +697,18 @@ impl ShowRewindWindow {
                                 unsafe { msg_send![&*panel, setMovableByWindowBackground: true] };
                             let sharing: u64 = if capturable { 1 } else { 0 };
                             let _: () = unsafe { msg_send![&*panel, setSharingType: sharing] };
-                            panel.set_collection_behaviour(
+                            panel.set_collection_behaviour_gated(
                                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace |
                                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
                             );
                             panel.order_front_regardless();
-                            panel.make_key_window();
+                            crate::window::make_panel_key_if_allowed(&panel);
                             // Set WKWebView as first responder AFTER make_key_window
                             unsafe {
                                 make_webview_first_responder(&panel);
                             }
                             // Remove MoveToActiveSpace now that the panel is shown.
-                            panel.set_collection_behaviour(
+                            panel.set_collection_behaviour_gated(
                                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
                             );
                         }
@@ -721,7 +725,7 @@ impl ShowRewindWindow {
                         .chat_always_on_top;
                     window.set_always_on_top(chat_on_top).ok();
                     window.show().ok();
-                    window.set_focus().ok();
+                    crate::window::focus_window(&window);
                     return Ok(window);
                 }
             }
@@ -826,7 +830,7 @@ impl ShowRewindWindow {
                                             e
                                         );
                                     }
-                                    win.set_focus().ok();
+                                    crate::window::focus_window(&win);
                                     let _ = app_clone.emit("window-focused", true);
                                 }
                             });
@@ -848,7 +852,7 @@ impl ShowRewindWindow {
 
                                 if let Ok(panel) = window_clone.to_panel() {
                                     // Same level as overlay — above fullscreen
-                                    panel.set_level(1001);
+                                    panel.set_level_gated(1001);
                                     panel.released_when_closed(true);
                                     // Do NOT set NSNonactivatingPanelMask (128) for window mode.
                                     // That mask prevents the app from activating, which breaks
@@ -863,7 +867,7 @@ impl ShowRewindWindow {
                                     let sharing: u64 = if capturable { 1 } else { 0 };
                                     let _: () =
                                         unsafe { msg_send![&*panel, setSharingType: sharing] };
-                                    panel.set_collection_behaviour(
+                                    panel.set_collection_behaviour_gated(
                                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace |
                                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
                                     );
@@ -874,7 +878,7 @@ impl ShowRewindWindow {
                                     }
 
                                     // Remove MoveToActiveSpace so panel stays pinned to this Space
-                                    panel.set_collection_behaviour(
+                                    panel.set_collection_behaviour_gated(
                                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
                                     );
                                 }
@@ -978,13 +982,15 @@ impl ShowRewindWindow {
                                                 // route to the WKWebView (same reason as
                                                 // show_existing_main — NonActivatingPanel
                                                 // won't activate the app on its own).
-                                                let ns_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
-                                                let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
+                                                if crate::window::window_activation_allowed() {
+                                                    let ns_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
+                                                    let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
+                                                }
                                             }
                                             // Ensure panel is key window before setting first
                                             // responder, otherwise magnifyWithEvent: won't
                                             // reach the WKWebView (pinch-to-zoom breaks).
-                                            panel.make_key_window();
+                                            crate::window::make_panel_key_if_allowed(&panel);
                                             unsafe { make_webview_first_responder(&panel); }
                                         }
                                         MAIN_PANEL_SHOWN.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1199,7 +1205,7 @@ impl ShowRewindWindow {
                         .on_page_load(move |win, payload| {
                             if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
                                 win.show().ok();
-                                win.set_focus().ok();
+                                crate::window::focus_window(&win);
                                 let _ = app_clone.emit("window-focused", true);
                             }
                         });
@@ -1224,7 +1230,7 @@ impl ShowRewindWindow {
 
                                 // Use a very high window level to appear above fullscreen apps
                                 // CGShieldingWindowLevel (1000) + 1 ensures it appears above everything including fullscreen
-                                panel.set_level(1001);
+                                panel.set_level_gated(1001);
 
                                 panel.released_when_closed(true);
 
@@ -1248,7 +1254,7 @@ impl ShowRewindWindow {
                                 // MoveToActiveSpace for first creation so the panel
                                 // appears on the current fullscreen Space.
                                 // show_existing_main manages this for subsequent shows.
-                                panel.set_collection_behaviour(
+                                panel.set_collection_behaviour_gated(
                                     NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace |
                                     NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle |
                                     NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
@@ -1261,7 +1267,7 @@ impl ShowRewindWindow {
 
                                 // Remove MoveToActiveSpace so the panel stays pinned to
                                 // this Space (same as show_existing_main).
-                                panel.set_collection_behaviour(
+                                panel.set_collection_behaviour_gated(
                                     NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle |
                                     NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
                                 );
@@ -1388,7 +1394,7 @@ impl ShowRewindWindow {
                                         // Ensure panel is key window before setting first
                                         // responder, otherwise magnifyWithEvent: won't
                                         // reach the WKWebView (pinch-to-zoom breaks).
-                                        panel.make_key_window();
+                                        crate::window::make_panel_key_if_allowed(&panel);
                                         unsafe { make_webview_first_responder(&panel); }
                                     }
                                     MAIN_PANEL_SHOWN.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1594,7 +1600,7 @@ impl ShowRewindWindow {
 
                                 if chat_on_top {
                                     // Level 1001 to appear above fullscreen apps
-                                    panel.set_level(1001);
+                                    panel.set_level_gated(1001);
                                     // NonActivatingPanel (128) so clicking the chat doesn't
                                     // activate the app (which would switch Spaces away from
                                     // fullscreen apps). Preserve existing style bits.
@@ -1603,7 +1609,7 @@ impl ShowRewindWindow {
                                         panel.set_style_mask(current | 128);
                                     }
                                 } else {
-                                    panel.set_level(0);
+                                    panel.set_level_gated(0);
                                 }
 
                                 // Don't hide when app deactivates
@@ -1625,7 +1631,7 @@ impl ShowRewindWindow {
 
                                 // MoveToActiveSpace so show_existing can pull
                                 // it to any Space (including fullscreen).
-                                panel.set_collection_behaviour(
+                                panel.set_collection_behaviour_gated(
                                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace |
                                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle |
                                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
@@ -1805,7 +1811,7 @@ impl ShowRewindWindow {
         {
             if focus {
                 let _ = window.show();
-                window.set_focus().ok();
+                crate::window::focus_window(&window);
             }
             // Pre-warm (focus=false): leave hidden (visible(false)). The
             // existing-window branch in show() shows()+focuses on first open.

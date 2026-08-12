@@ -55,6 +55,16 @@ async function waitForAnyMainHandle(timeoutMs = t(12_000)): Promise<MainLabel> {
       await waitForAppReady();
       // Ensure we have a stable Tauri-origin webview for invoke() calls.
       await openHomeWindow();
+      // E2E builds are non-activating so a run never yanks a developer out of
+      // their fullscreen Space. This is the one spec whose subject *is*
+      // activation, so it opts in for its own duration.
+      await invokeOrThrow("plugin:e2e|e2e_set_activation_allowed", { allowed: true });
+    });
+
+    after(async () => {
+      await invokeOrThrow("plugin:e2e|e2e_set_activation_allowed", {
+        allowed: false,
+      }).catch(() => {});
     });
 
     afterEach(async () => {

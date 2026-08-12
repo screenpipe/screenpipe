@@ -26,6 +26,11 @@ const IDLE_SETTLE_MS = 900;
 const SUMMARY_PROJECT_DIR = "pi-first-run";
 const MAX_WINDOWS = 8;
 const MAX_FILES = 5;
+/** Matches the cap requested in `fetchRecentActivity`; this is the backstop for
+ *  a snapshot that arrived from somewhere else. */
+const MAX_SNIPPETS = 6;
+/** A snippet is evidence, not a transcript. Enough to identify the work. */
+const MAX_SNIPPET_CHARS = 240;
 
 /**
  * Everything the model is allowed to know, as plain lines.
@@ -56,7 +61,11 @@ export function buildActivityFacts(
     .map((w) => {
       const app = (w.app_name ?? "").trim();
       const title = (w.window_name as string).replace(/\s+/g, " ").trim();
-      return app ? `- "${title}" in ${app}` : `- "${title}"`;
+      // The page, when the container is a browser. "Arc" plus a tab title is
+      // ambiguous in a way "Arc + meet.google.com" is not.
+      const url = (w.browser_url ?? "").trim().slice(0, 120);
+      const where = app ? `- "${title}" in ${app}` : `- "${title}"`;
+      return url ? `${where} (${url})` : where;
     });
   if (windows.length > 0) lines.push(`window_titles:\n${windows.join("\n")}`);
 
@@ -65,6 +74,24 @@ export function buildActivityFacts(
     .filter(Boolean)
     .slice(0, MAX_FILES);
   if (files.length > 0) lines.push(`files_open: ${files.join(", ")}`);
+
+  // What was actually on screen or said. Everything above this point describes
+  // containers — which app, which window, how many frames — and a model given
+  // only containers can do no better than list them back. These excerpts are
+  // the difference between "you had Arc open" and naming the work itself.
+  const snippets = (Array.isArray(activity.snippets) ? activity.snippets : [])
+    .filter((s) => typeof s?.text === "string" && s.text.trim())
+    .slice(0, MAX_SNIPPETS)
+    .map((s) => {
+      const text = (s.text as string)
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, MAX_SNIPPET_CHARS);
+      const where = (s.app_name ?? "").trim();
+      const kind = s.source === "audio" ? "heard" : "screen";
+      return where ? `- [${kind}, ${where}] ${text}` : `- [${kind}] ${text}`;
+    });
+  if (snippets.length > 0) lines.push(`excerpts:\n${snippets.join("\n")}`);
 
   const transcriptions = Number(activity.audio_summary?.segment_count ?? 0);
   if (transcriptions > 0) {
@@ -86,7 +113,8 @@ function buildSummaryPrompt(facts: string): string {
 
 Rules:
 - Use ONLY the observations below. Never invent an app, file, task, project, or outcome that is not listed.
-- Window titles are your best evidence. Name the specific thing they were looking at, not just the app.
+- Excerpts and window titles are your best evidence. Name the specific thing they were working on, not just the app it happened in.
+- Excerpts are evidence, not quotes. Say what the work was; do not reproduce their text or repeat what anyone said word for word.
 - Do not guess why they were doing something, or whether they finished it. You watched for minutes, not hours.
 - Second person, present-tense-ish, plain language. No hype, no emoji, no headings, no bullet list unless it genuinely helps.
 - 2 to 4 sentences. End by inviting them to ask you about any of it.
@@ -142,6 +170,9 @@ export function validateSummaryCandidate(
     "minutes_since_setup",
     "files_open",
     "audio_transcripts",
+    "excerpts:",
+    "[screen,",
+    "[heard,",
     "observations",
     "the rules",
   ];
@@ -175,17 +206,23 @@ export async function summarizeFirstRunWithAi(
     elapsedMs: number;
     preset: AIPreset | null | undefined;
     userToken?: string | null;
+    /** Called with the decline reason when the model does not write the
+     *  summary, so the caller can report it. A `console.warn` in a webview
+     *  nobody has open is not an answer to "why is this not using AI?" — it
+     *  never reaches the app log, so the reason was unobservable in
+     *  production, which is exactly how this went unnoticed. */
+    onFallback?: (reason: string) => void;
   },
 ): Promise<string | null> {
   const { preset } = options;
-  // Falling back is correct but silent, which makes "why is this not using
-  // AI?" unanswerable from the outside — the first thing asked of it in a real
-  // session. Name the reason; the content itself is never logged.
   const decline = (reason: string): null => {
     console.warn("[first-run] summary fell back to deterministic", {
       reason,
       provider: preset?.provider ?? "none",
     });
+    // Reason only. The summary text and the observations behind it never leave
+    // the machine through this path.
+    options.onFallback?.(reason);
     return null;
   };
 

@@ -151,3 +151,49 @@ describe("useLearningWindow opening", () => {
     expect(startedEvents()).toHaveLength(0);
   });
 });
+
+describe("useLearningWindow settings race", () => {
+  // The seed claim is one-shot and durable, so resolving before settings
+  // hydrate does not merely produce one plain summary — it is the ONLY
+  // summary that account will ever get. Both reads are absent before
+  // hydration, which is indistinguishable from having no preset at all.
+  it("waits for the preset to be known before spending the one-shot claim", async () => {
+    const { fetchRecentActivity } = await import(
+      "@/lib/first-run/recent-activity"
+    );
+    const { summarizeFirstRunWithAi } = await import(
+      "@/lib/first-run/summarize-with-ai"
+    );
+    vi.mocked(fetchRecentActivity).mockResolvedValue({
+      data_status: "ok",
+      total_frames: 48,
+      apps: [{ name: "Arc", frame_count: 30 }, { name: "Obsidian", frame_count: 18 }],
+    } as never);
+    getOnboardingStatus.mockResolvedValue(
+      okStatus(completedAgo(3 * 60_000)) as never,
+    );
+
+    const { rerender } = renderHook(
+      (props: { aiSettingsLoaded: boolean }) =>
+        useLearningWindow({
+          aiPreset: null,
+          userToken: null,
+          aiSettingsLoaded: props.aiSettingsLoaded,
+        }),
+      { initialProps: { aiSettingsLoaded: false } },
+    );
+
+    await waitFor(() => expect(startedEvents().length).toBe(1));
+    // Enough evidence and past the floor, but the preset is still unknown.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(summarizeFirstRunWithAi).not.toHaveBeenCalled();
+
+    rerender({ aiSettingsLoaded: true });
+    // Picked up on the next poll tick (LEARNING_POLL_INTERVAL_MS = 3s), not on
+    // the render itself — the options are read through a ref so a settings
+    // refresh cannot restart the polling effect mid-window.
+    await waitFor(() => expect(summarizeFirstRunWithAi).toHaveBeenCalled(), {
+      timeout: 8_000,
+    });
+  });
+});

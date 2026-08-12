@@ -27,6 +27,12 @@ import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { AppSidebar, useSidebarContext } from "@/components/app-sidebar";
 import { useQueryState } from "nuqs";
 import { useRouter, useSearchParams } from "next/navigation";
+import {
+  ALL_SETTINGS_SECTIONS,
+  DEFAULT_SETTINGS_SECTION,
+  rememberSettingsSection,
+  type SettingsSection,
+} from "@/lib/settings-sections";
 import { AccountSection, searchIndex as accountSearchIndex } from "@/components/settings/account-section";
 import ShortcutSection, { searchIndex as shortcutsSearchIndex } from "@/components/settings/shortcut-section";
 import { AIPresets, searchIndex as aiSearchIndex } from "@/components/settings/ai-presets";
@@ -91,29 +97,15 @@ import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import posthog from "posthog-js";
 
-type SettingsSection =
-  | "account"
-  | "audio"
-  | "recording"
-  | "ai"
-  | "ai-settings"
-  | "general"
-  | "display"
-  | "shortcuts"
-  | "privacy"
-  | "permissions"
-  | "storage"
-  | "team"
-  | "notifications"
-  | "referral"
-  | "usage"
-  | "speakers";
-
-const ALL_SETTINGS_SECTIONS: SettingsSection[] = [
-  "display", "general", "ai", "ai-settings", "recording", "audio", "shortcuts", "notifications",
-  "usage", "privacy", "permissions", "storage", "speakers",
-  "team", "account", "referral",
-];
+/**
+ * Nav layout revision, stamped onto `settings_viewed`.
+ *
+ * Section ids are stable across layouts, which is what makes a before/after
+ * comparison of `settings_section_viewed` meaningful — but only if we can tell
+ * which layout produced a given view. Bump this whenever the grouping or
+ * ordering changes so the split is unambiguous in analysis.
+ */
+const NAV_LAYOUT_VERSION = "v2-demand-ordered";
 
 function ReferralSection() {
   return <ReferralCard />;
@@ -145,9 +137,15 @@ function SettingsContent() {
     [isSectionHidden, showPermissions],
   );
 
+  // Static default, not the remembered section: callers pass an explicit
+  // `?section=`, and reading localStorage during render would risk a hydration
+  // mismatch. Restoring the last section is the entry point's job.
   const [section, setSection] = useQueryState<SettingsSection>("section", {
-    defaultValue: "display",
-    parse: (v) => (ALL_SETTINGS_SECTIONS.includes(v as SettingsSection) ? (v as SettingsSection) : "display"),
+    defaultValue: DEFAULT_SETTINGS_SECTION,
+    parse: (v) =>
+      ALL_SETTINGS_SECTIONS.includes(v as SettingsSection)
+        ? (v as SettingsSection)
+        : DEFAULT_SETTINGS_SECTION,
     serialize: (v) => v,
   });
 
@@ -162,34 +160,63 @@ function SettingsContent() {
   useEffect(() => {
     if (isPlatformLoading) return;
     if (!isSettingsSectionHidden(section)) return;
-    const fallback = ALL_SETTINGS_SECTIONS.find((s) => !isSettingsSectionHidden(s)) ?? "display";
+    const fallback =
+      ALL_SETTINGS_SECTIONS.find((s) => !isSettingsSectionHidden(s)) ??
+      DEFAULT_SETTINGS_SECTION;
     setSection(fallback as SettingsSection);
   }, [section, isSettingsSectionHidden, isPlatformLoading, setSection]);
 
+  // Grouping and order follow measured demand — deliberate navigations, i.e.
+  // section views minus the forced landing that opens the panel. Two changes
+  // carry almost all of the benefit:
+  //
+  //   * Account was 15th of 16 while ranking 5th on demand, and it is the only
+  //     surface where a subscription starts. Its group now sits above App.
+  //   * "AI Presets" / "AI Settings" read as synonyms and drove ~3.8k round
+  //     trips a month between the two pages. They are now "Models & keys" and
+  //     "AI features", which say what is on each page. Same for Storage/Usage,
+  //     where "Usage" was widely read as disk usage rather than AI credits.
+  //
+  // Group headers cost attention, so six groups collapse to four while keeping
+  // every section reachable. Section ids are deliberately unchanged: deep
+  // links, enterprise policy filters and `settings-nav-*` E2E selectors all key
+  // off the id, not the label.
   const navGroups = [
     {
-      label: "Capture & AI",
+      label: "Capture & data",
       items: [
         { id: "recording" as const, label: "Screen", icon: <Video className="h-4 w-4" /> },
         { id: "audio" as const, label: "Audio & meetings", icon: <Mic className="h-4 w-4" /> },
-        { id: "ai" as const, label: "AI Presets", icon: <Brain className="h-4 w-4" /> },
-        { id: "ai-settings" as const, label: "AI Settings", icon: <SlidersHorizontal className="h-4 w-4" /> },
-      ].filter((s) => !isSettingsSectionHidden(s.id)),
-    },
-    {
-      label: "Privacy & security",
-      items: [
+        // Speaker identification is meeting work; it does not deserve a group
+        // of its own directly below the one it belongs to.
+        { id: "speakers" as const, label: "Speakers", icon: <Users className="h-4 w-4" /> },
+        { id: "storage" as const, label: "Disk & retention", icon: <HardDrive className="h-4 w-4" /> },
         { id: "privacy" as const, label: "Privacy", icon: <Shield className="h-4 w-4" /> },
         ...(showPermissions
           ? [{ id: "permissions" as const, label: "Permissions", icon: <KeyRound className="h-4 w-4" /> }]
           : []),
-      ].filter((s) => !isSectionHidden(s.id)),
+      ].filter((s) => !isSettingsSectionHidden(s.id)),
     },
     {
-      label: "Data",
+      label: "AI",
       items: [
-        { id: "storage" as const, label: "Storage", icon: <HardDrive className="h-4 w-4" /> },
-        { id: "usage" as const, label: "Usage", icon: <BarChart3 className="h-4 w-4" /> },
+        { id: "ai-settings" as const, label: "AI features", icon: <SlidersHorizontal className="h-4 w-4" /> },
+        { id: "ai" as const, label: "Models & keys", icon: <Brain className="h-4 w-4" /> },
+        { id: "usage" as const, label: "AI credits", icon: <BarChart3 className="h-4 w-4" /> },
+      ].filter((s) => !isSettingsSectionHidden(s.id)),
+    },
+    {
+      label: "Account",
+      items: [
+        { id: "account" as const, label: "Account", icon: <User className="h-4 w-4" /> },
+        // Hide "Team" on enterprise builds — those installs are already
+        // org-managed; the desktop has nothing to manage. Admins use the
+        // /enterprise dashboard on the web. On consumer builds we still
+        // surface Team as a marketing entry point to /team.
+        ...(isManagedDeployment
+          ? []
+          : [{ id: "team" as const, label: "Team", icon: <Users className="h-4 w-4" /> }]),
+        { id: "referral" as const, label: "Get free month", icon: <Gift className="h-4 w-4" /> },
       ].filter((s) => !isSectionHidden(s.id)),
     },
     {
@@ -202,26 +229,6 @@ function SettingsContent() {
         { id: "display" as const, label: "Appearance", icon: <Layout className="h-4 w-4" /> },
         { id: "notifications" as const, label: "Notifications", icon: <Bell className="h-4 w-4" /> },
         { id: "shortcuts" as const, label: "Shortcuts", icon: <Keyboard className="h-4 w-4" /> },
-      ].filter((s) => !isSectionHidden(s.id)),
-    },
-    {
-      label: "Audio",
-      items: [
-        { id: "speakers" as const, label: "Speakers", icon: <Mic className="h-4 w-4" /> },
-      ].filter((s) => !isSectionHidden(s.id)),
-    },
-    {
-      label: "Account",
-      items: [
-        // Hide "Team" on enterprise builds — those installs are already
-        // org-managed; the desktop has nothing to manage. Admins use the
-        // /enterprise dashboard on the web. On consumer builds we still
-        // surface Team as a marketing entry point to /team.
-        ...(isManagedDeployment
-          ? []
-          : [{ id: "team" as const, label: "Team", icon: <Users className="h-4 w-4" /> }]),
-        { id: "account" as const, label: "Account", icon: <User className="h-4 w-4" /> },
-        { id: "referral" as const, label: "Get free month", icon: <Gift className="h-4 w-4" /> },
       ].filter((s) => !isSectionHidden(s.id)),
     },
   ];
@@ -247,7 +254,10 @@ function SettingsContent() {
   const results = searchSettingsNav(searchQuery, flatItems, searchableFields);
 
   useEffect(() => {
-    posthog.capture("settings_viewed", { initial_section: section });
+    posthog.capture("settings_viewed", {
+      initial_section: section,
+      nav_layout: NAV_LAYOUT_VERSION,
+    });
   // The initial page view should be sent once per settings mount.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -257,6 +267,8 @@ function SettingsContent() {
     if (section === "general") {
       posthog.capture("settings_general_opened");
     }
+    // Reopen here next time rather than dropping the user on a fixed page.
+    rememberSettingsSection(section);
   }, [section]);
 
   // Reset highlight to top whenever the query changes.
@@ -266,6 +278,11 @@ function SettingsContent() {
     posthog.capture("settings_search_result_selected", {
       section: result.item.id,
       matched_field: Boolean(result.matchedFieldLabel),
+      // 98% of searches resolve to a specific field rather than a section name,
+      // and we were discarding which one — the most direct signal we have about
+      // labels people cannot find. The label is a static string from our own
+      // searchIndex, never anything the user typed or stored.
+      matched_field_label: result.matchedFieldLabel ?? null,
     });
     setSection(result.item.id as SettingsSection);
     setSearchQuery("");

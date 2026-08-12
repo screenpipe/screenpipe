@@ -23,6 +23,7 @@
     "mock-updates": "bun ./e2e/mock-updates/updater-harness.ts serve",
     "test:e2e": "bun run wdio run e2e/wdio.conf.ts",
     "test:e2e:local-ai-gateway:macos": "SCREENPIPE_E2E_LOCAL_AI_GATEWAY=true bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/chat-local-ai-gateway.spec.ts",
+    "test:e2e:first-run-ai-summary:macos": "SCREENPIPE_E2E_LOCAL_AI_GATEWAY=true SCREENPIPE_E2E_SEED=onboarding,no-recording SCREENPIPE_PORT=3050 bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/first-run-ai-summary.spec.ts",
     "test:e2e:db-hard-fault": "SCREENPIPE_E2E_SEED=onboarding,no-recording,db-hard-fault SCREENPIPE_PORT=3043 bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/db-hard-fault-fail-closed.spec.ts",
     "e2e:coverage": "bun e2e/scripts/generate-coverage-report.ts",
     "e2e:coverage:check": "bun e2e/scripts/generate-coverage-report.ts --check",

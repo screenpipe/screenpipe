@@ -607,6 +607,20 @@ async fn capture_pi_start_error(
     }
 }
 
+/// E2E helper: allow (or re-suppress) real macOS window activation.
+///
+/// The suite runs on a developer's desktop, so e2e builds are non-activating by
+/// default — otherwise every window show swaps them out of their fullscreen
+/// Space. The specs that assert activation itself turn it on for their own
+/// duration and hand it back.
+#[command]
+fn e2e_set_activation_allowed(allowed: bool) {
+    #[cfg(target_os = "macos")]
+    crate::window::set_window_activation_allowed(allowed);
+    #[cfg(not(target_os = "macos"))]
+    let _ = allowed;
+}
+
 pub(super) fn plugin() -> TauriPlugin<Wry> {
     Builder::<Wry>::new("e2e")
         // build.rs verifies this inventory matches the feature-only plugin ACL.
@@ -642,6 +656,7 @@ pub(super) fn plugin() -> TauriPlugin<Wry> {
             seed_flags,
             capture_pi_start_error,
             set_onboarding_completed_ago,
+            e2e_set_activation_allowed,
         ])
         .build()
 }

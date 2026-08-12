@@ -2046,6 +2046,7 @@ export function StandaloneChat({
       <ChatMainPane
         firstRunAiPreset={firstRunAiPreset}
         firstRunUserToken={settings?.user?.token ?? null}
+        firstRunAiSettingsLoaded={isSettingsLoaded}
         hideInlineHistory={hideInlineHistory}
         showHistory={showHistory}
         onCloseHistory={() => setShowHistory(false)}
