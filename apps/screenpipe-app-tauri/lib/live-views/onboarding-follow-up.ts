@@ -36,6 +36,12 @@ export type OnboardingLiveViewFollowUpResult =
     }
   | { status: "view_missing"; viewId: string };
 
+type RetryableFailureReason =
+  | "no_pipe_started"
+  | "notification_rejected"
+  | "unexpected_failure";
+type TerminalFailureReason = "no_pipe_targets" | "retry_exhausted";
+
 function dueAt(activation: OnboardingLiveViewActivation): number | null {
   const followUp = activation.followUp;
   if (!followUp || followUp.status !== "scheduled") return null;
@@ -89,10 +95,7 @@ function followUpIsExpired(
 function scheduleRetry(
   viewId: string,
   now: Date,
-  failureReason:
-    | "no_pipe_started"
-    | "notification_rejected"
-    | "unexpected_failure",
+  failureReason: RetryableFailureReason,
 ): "retry_scheduled" | "retry_exhausted" {
   let result: "retry_scheduled" | "retry_exhausted" = "retry_scheduled";
   updateOnboardingLiveViewFollowUp(viewId, (followUp) => {
@@ -132,7 +135,7 @@ function scheduleRetry(
 
 function markFollowUpFailed(
   viewId: string,
-  reason: "no_pipe_targets" | "retry_exhausted",
+  reason: TerminalFailureReason,
 ): void {
   updateOnboardingLiveViewFollowUp(viewId, (followUp) => ({
     ...followUp,
@@ -141,6 +144,36 @@ function markFollowUpFailed(
     startedAt: null,
     failureReason: reason,
   }));
+}
+
+function failFollowUp(
+  activation: OnboardingLiveViewActivation,
+  reason: TerminalFailureReason,
+): OnboardingLiveViewFollowUpResult {
+  markFollowUpFailed(activation.viewId, reason);
+  captureOnboardingH1FollowUp(
+    "delivery_skipped",
+    activation.goalCategory,
+    reason,
+  );
+  return { status: "failed", viewId: activation.viewId, reason };
+}
+
+function retryFollowUp(
+  activation: OnboardingLiveViewActivation,
+  now: Date,
+  reason: RetryableFailureReason,
+): OnboardingLiveViewFollowUpResult {
+  const retry = scheduleRetry(activation.viewId, now, reason);
+  const failed = retry === "retry_exhausted";
+  captureOnboardingH1FollowUp(
+    failed ? "delivery_skipped" : "retry_scheduled",
+    activation.goalCategory,
+    failed ? "retry_exhausted" : reason,
+  );
+  return failed
+    ? { status: "failed", viewId: activation.viewId, reason: "retry_exhausted" }
+    : { status: "retry_scheduled", viewId: activation.viewId };
 }
 
 function markFollowUpSent(viewId: string, now: Date): void {
@@ -274,17 +307,7 @@ export async function runDueOnboardingLiveViewFollowUp(
   const activation = claimDueFollowUp(now);
   if (!activation) return { status: "idle" };
   if (followUpIsExpired(activation.followUp, now)) {
-    markFollowUpFailed(activation.viewId, "retry_exhausted");
-    captureOnboardingH1FollowUp(
-      "delivery_skipped",
-      activation.goalCategory,
-      "retry_exhausted",
-    );
-    return {
-      status: "failed",
-      viewId: activation.viewId,
-      reason: "retry_exhausted",
-    };
+    return failFollowUp(activation, "retry_exhausted");
   }
   captureOnboardingH1FollowUp(
     "delivery_attempted",
@@ -317,36 +340,10 @@ export async function runDueOnboardingLiveViewFollowUp(
 
     const pipeResult = await startDashboardPipes(view, engineFetch);
     if (pipeResult.attempted === 0) {
-      markFollowUpFailed(activation.viewId, "no_pipe_targets");
-      captureOnboardingH1FollowUp(
-        "delivery_skipped",
-        activation.goalCategory,
-        "no_pipe_targets",
-      );
-      return {
-        status: "failed",
-        viewId: activation.viewId,
-        reason: "no_pipe_targets",
-      };
+      return failFollowUp(activation, "no_pipe_targets");
     }
     if (pipeResult.started === 0) {
-      const retry = scheduleRetry(
-        activation.viewId,
-        now,
-        "no_pipe_started",
-      );
-      captureOnboardingH1FollowUp(
-        retry === "retry_scheduled" ? "retry_scheduled" : "delivery_skipped",
-        activation.goalCategory,
-        retry === "retry_scheduled" ? "no_pipe_started" : "retry_exhausted",
-      );
-      return retry === "retry_scheduled"
-        ? { status: "retry_scheduled", viewId: activation.viewId }
-        : {
-            status: "failed",
-            viewId: activation.viewId,
-            reason: "retry_exhausted",
-          };
+      return retryFollowUp(activation, now, "no_pipe_started");
     }
 
     const notification = await notificationFetch("/notify", {
@@ -355,25 +352,7 @@ export async function runDueOnboardingLiveViewFollowUp(
       body: JSON.stringify(followUpNotification(view, activation)),
     });
     if (!notification.ok) {
-      const retry = scheduleRetry(
-        activation.viewId,
-        now,
-        "notification_rejected",
-      );
-      captureOnboardingH1FollowUp(
-        retry === "retry_scheduled" ? "retry_scheduled" : "delivery_skipped",
-        activation.goalCategory,
-        retry === "retry_scheduled"
-          ? "notification_rejected"
-          : "retry_exhausted",
-      );
-      return retry === "retry_scheduled"
-        ? { status: "retry_scheduled", viewId: activation.viewId }
-        : {
-            status: "failed",
-            viewId: activation.viewId,
-            reason: "retry_exhausted",
-          };
+      return retryFollowUp(activation, now, "notification_rejected");
     }
 
     markFollowUpSent(activation.viewId, now);
@@ -387,22 +366,6 @@ export async function runDueOnboardingLiveViewFollowUp(
       pipeCount: pipeResult.started,
     };
   } catch {
-    const retry = scheduleRetry(
-      activation.viewId,
-      now,
-      "unexpected_failure",
-    );
-    captureOnboardingH1FollowUp(
-      retry === "retry_scheduled" ? "retry_scheduled" : "delivery_skipped",
-      activation.goalCategory,
-      retry === "retry_scheduled" ? "unexpected_failure" : "retry_exhausted",
-    );
-    return retry === "retry_scheduled"
-      ? { status: "retry_scheduled", viewId: activation.viewId }
-      : {
-          status: "failed",
-          viewId: activation.viewId,
-          reason: "retry_exhausted",
-        };
+    return retryFollowUp(activation, now, "unexpected_failure");
   }
 }
