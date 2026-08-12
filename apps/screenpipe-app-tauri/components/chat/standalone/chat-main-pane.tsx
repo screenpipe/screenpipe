@@ -7,11 +7,14 @@ import * as React from "react";
 import { ChevronDown, Loader2, Settings, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SummaryCards } from "@/components/chat/summary-cards";
+import { FirstRunLearningBanner } from "@/components/first-run/learning-banner";
+import { HomeStarterSurface } from "@/components/chat/home-starter-surface";
 import { PipeContextBanner } from "@/components/chat/pipe-context-banner";
 import { PipeAIIconLarge } from "@/components/pipe-ai-icon";
 import { InlineChatHistory } from "@/components/chat/standalone/inline-chat-history";
 import { ChatMessageList, type ChatMessageListProps } from "@/components/chat/standalone/chat-message-list";
 import type { ConversationMeta } from "@/lib/chat-storage";
+import type { AIPreset } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
 import type { Message } from "@/lib/chat/types";
 import type { ContinuousPipeChatPolicy } from "@/lib/pipe-chat-policy";
@@ -24,6 +27,12 @@ type ActivePipeExecution = {
 } | null;
 
 interface ChatMainPaneProps {
+  /** Preset the first-run summary is written with, and the token it needs.
+   *  Passed down rather than read here so this pane (and the banner below it)
+   *  stay renderable without a settings provider. */
+  firstRunAiPreset?: AIPreset | null;
+  firstRunUserToken?: string | null;
+  firstRunAiSettingsLoaded?: boolean;
   hideInlineHistory?: boolean;
   showHistory: boolean;
   onCloseHistory: () => void;
@@ -52,6 +61,10 @@ interface ChatMainPaneProps {
   onOpenSettings: () => void | Promise<void>;
   onOpenPipeSettings: () => void | Promise<void>;
   summaryCardsProps: React.ComponentProps<typeof SummaryCards>;
+  homeStarterProps: Omit<
+    React.ComponentProps<typeof HomeStarterSurface>,
+    "summaryCardsProps"
+  >;
   messageListProps: ChatMessageListProps;
   isUserScrolledUp: boolean;
   scrollToBottom: () => void;
@@ -86,9 +99,13 @@ export function ChatMainPane({
   onOpenSettings,
   onOpenPipeSettings,
   summaryCardsProps,
+  homeStarterProps,
   messageListProps,
   isUserScrolledUp,
   scrollToBottom,
+  firstRunAiPreset,
+  firstRunUserToken,
+  firstRunAiSettingsLoaded,
 }: ChatMainPaneProps) {
   return (
     <div className="flex-1 flex overflow-hidden">
@@ -232,14 +249,38 @@ export function ChatMainPane({
                   )}
                 </div>
               )}
+            {/* Post-setup learning window. Renders only while the window is
+                open, so it is inert for everyone else. It sits on the empty
+                chat because that is where setup now lands and where the
+                summary chat appears once the window resolves. */}
+            {messages.length === 0 && !activePipeExecution && (
+              <div className="mx-auto w-full max-w-3xl px-4 pb-4">
+                <FirstRunLearningBanner
+                  aiPreset={firstRunAiPreset}
+                  userToken={firstRunUserToken}
+                  aiSettingsLoaded={firstRunAiSettingsLoaded}
+                />
+              </div>
+            )}
             {messages.length === 0 &&
               !isPreparingPrefill &&
               !activePipeExecution &&
               !isLoading &&
               !isStreaming &&
               hasPresets &&
-              hasValidModel && <SummaryCards {...summaryCardsProps} />}
-            <ChatMessageList {...messageListProps} />
+              hasValidModel && (
+                <HomeStarterSurface
+                  summaryCardsProps={summaryCardsProps}
+                  {...homeStarterProps}
+                />
+              )}
+            {/* A conversation switch is a hard visual boundary. Remounting the
+                list prevents AnimatePresence from carrying an outgoing chat's
+                exit nodes into the new chat's empty state. */}
+            <ChatMessageList
+              key={conversationId ?? "blank-chat"}
+              {...messageListProps}
+            />
 
             <div ref={messagesEndRef} />
           </div>

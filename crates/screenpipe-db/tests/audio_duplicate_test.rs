@@ -673,3 +673,108 @@ mod tests {
         println!("=== TEST COMPLETE ===\n");
     }
 }
+
+/// SCREENPIPE-CLI-SN: the cross-device dedup pre-check runs a 50-row scan on
+/// the *read* pool for every single transcription insert, and its failure used
+/// to abort the whole call with `?` — before the write was ever attempted.
+///
+/// The read pool is shared with search, the timeline, the local API and pipes,
+/// so saturating it threw away transcriptions the write path could have stored
+/// perfectly well. Dedup is an optimization; the recording is not.
+#[cfg(test)]
+mod dedup_check_is_not_load_bearing {
+    use screenpipe_config::DbConfig;
+    use screenpipe_db::{AudioDevice, DatabaseManager, DeviceType};
+
+    /// Starve the read pool and leave the write pool alone — the exact
+    /// production shape. Every read-pool acquire then times out while the write
+    /// path is perfectly healthy.
+    #[tokio::test]
+    async fn a_starved_read_pool_does_not_lose_the_transcription() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("db.sqlite");
+        let db = DatabaseManager::new(
+            db_path.to_str().unwrap(),
+            DbConfig {
+                read_pool_max: 1,
+                read_pool_min: 1,
+                ..DbConfig::for_tier(screenpipe_config::DeviceTier::Low)
+            },
+        )
+        .await
+        .unwrap();
+
+        let device = AudioDevice {
+            name: "Microphone Array (input)".to_string(),
+            device_type: DeviceType::Input,
+        };
+
+        // Baseline: with the read pool free, the insert lands.
+        db.insert_audio_chunk_and_transcription(
+            "/tmp/sn-baseline.wav",
+            "the quick brown fox jumped over the lazy dog",
+            0,
+            "whisper-large-v3-turbo",
+            &device,
+            None,
+            Some(0.0),
+            Some(1.0),
+            None,
+        )
+        .await
+        .expect("baseline insert must succeed");
+
+        // Hold the only read connection, then release it mid-insert. This is
+        // the production shape: read-pool pressure is a burst from search /
+        // timeline / pipes, not a permanent condition. Before the fix the very
+        // first stalled read failed the whole insert and the audio was gone.
+        let hog = db.pool.acquire().await.unwrap();
+        tokio::spawn(async move {
+            // Longer than the read pool's own 5s acquire timeout, so the
+            // first lookup genuinely fails — that is the production failure.
+            // Shorter than the retry budget, so a retry can still succeed.
+            tokio::time::sleep(std::time::Duration::from_millis(5_500)).await;
+            drop(hog);
+        });
+
+        let result = db
+            .insert_audio_chunk_and_transcription(
+                "/tmp/sn-starved.wav",
+                "a completely different sentence worth keeping",
+                0,
+                "whisper-large-v3-turbo",
+                &device,
+                None,
+                Some(0.0),
+                Some(1.0),
+                None,
+            )
+            .await;
+
+        // Before the fix this returned Err from the pre-read phase and the
+        // audio was gone. The write path was never even asked.
+        assert!(
+            result.is_ok(),
+            "a starved read pool must not lose a transcription the write path could store: {:?}",
+            result.err()
+        );
+
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT t.transcription FROM audio_transcriptions t \
+             JOIN audio_chunks c ON c.id = t.audio_chunk_id \
+             WHERE c.file_path = ?1",
+        )
+        .bind("/tmp/sn-starved.wav")
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "the transcription must be on the timeline, not dropped"
+        );
+        assert_eq!(rows[0].0, "a completely different sentence worth keeping");
+
+        db.close().await;
+    }
+}

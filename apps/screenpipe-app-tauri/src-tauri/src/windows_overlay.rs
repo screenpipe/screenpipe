@@ -314,30 +314,6 @@ pub fn reposition_to_cursor_monitor(
     Ok(())
 }
 
-/// Brings the overlay window to the front without activating it
-pub fn bring_to_front(window: &WebviewWindow) -> Result<(), String> {
-    let hwnd = get_hwnd(window).ok_or("Failed to get HWND")?;
-
-    unsafe {
-        // Keep existing position and size — just re-assert TOPMOST
-        let result = SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOSIZE,
-        );
-
-        if let Err(e) = result {
-            return Err(format!("Failed to bring to front: {}", e));
-        }
-    }
-
-    Ok(())
-}
-
 /// Brings the overlay window to the front AND activates it so it receives keyboard focus.
 /// Use this when responding to a user action (e.g. global shortcut) where we want
 /// the window to be interactive, not just visible.

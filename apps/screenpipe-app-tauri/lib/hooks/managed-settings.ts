@@ -155,6 +155,13 @@ export const MANAGED_SETTING_DEFINITIONS: readonly ManagedSettingDefinition[] = 
   enumeration("piiBackend", ["local", "tinfoil"], "local"),
   stringArray("piiRedactionLabels", ["secret"], ["secret"]),
 
+  // Enterprise retention is an explicit fleet policy, separate from account
+  // plan changes. Headless managed deployments need this control because the
+  // user-facing Storage settings may be unavailable.
+  bool("localRetentionEnabled", false),
+  number("localRetentionDays", 1, 3650, 14),
+  enumeration("localRetentionMode", ["media", "lean", "all"], "media"),
+
   bool("listen_on_lan", false, "engine", "listenOnLan"),
   bool("analyticsEnabled", true, "live"),
 ];

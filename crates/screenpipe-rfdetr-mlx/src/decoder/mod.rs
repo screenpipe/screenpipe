@@ -28,7 +28,6 @@ use crate::weights::Weights;
 use crate::{Error, Result};
 
 const DIM: i32 = 256;
-const NUM_CLASSES: i32 = 13;
 const NUM_QUERIES: i32 = 300;
 const HW: i32 = 576;
 const H: i32 = 24;

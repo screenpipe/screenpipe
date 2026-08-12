@@ -47,9 +47,7 @@ impl<S: Send + Sync> FromRequestParts<S> for OptionalPipePerms {
 impl oasgen::OaParameter for OptionalPipePerms {}
 
 use chrono::{DateTime, Datelike, Local, Timelike, Utc};
-use screenpipe_db::{
-    ContentType, DatabaseManager, Order, SearchResult, SemanticContextQuery, SemanticFrameContext,
-};
+use screenpipe_db::{ContentType, Order, SearchResult, SemanticContextQuery, SemanticFrameContext};
 use screenpipe_semantic::{IdentityQuality, SemanticKind};
 
 use futures::stream::{self, StreamExt};
@@ -1439,21 +1437,17 @@ pub(crate) async fn keyword_search_handler(
     State(state): State<Arc<AppState>>,
 ) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
     if query.group {
-        // Lightweight query: skips text/text_json columns (no OCR blob reads,
-        // no JSON parsing). max_per_app=30 ensures app diversity via ROW_NUMBER.
-        // FTS subquery capped at 5000 to limit scan. Typically <200ms.
-        let matches = state
+        let groups = state
             .db
-            .search_for_grouping(
+            .search_grouped_matches(
                 &query.query,
-                500,
-                0,
+                query.limit,
+                query.offset,
                 query.start_time,
                 query.end_time,
                 query.fuzzy_match,
                 query.order,
                 query.app_names,
-                Some(30),
             )
             .await
             .map_err(|e| {
@@ -1463,14 +1457,11 @@ pub(crate) async fn keyword_search_handler(
                 )
             })?;
 
-        let filtered: Vec<_> = matches
+        let filtered: Vec<_> = groups
             .into_iter()
-            .filter(|m| !is_screenpipe_app(&m.app_name))
+            .filter(|group| !is_screenpipe_app(&group.representative.app_name))
             .collect();
-
-        let groups = DatabaseManager::cluster_search_matches(filtered, 120);
-
-        Ok(JsonResponse(json!(groups)))
+        Ok(JsonResponse(json!(filtered)))
     } else {
         let matches = state
             .db

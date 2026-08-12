@@ -712,6 +712,8 @@ pub(crate) fn discord_profile() -> Option<MeetingDetectionProfile> {
 #[cfg(test)]
 mod windows_live_tests {
     use super::*;
+    // `use super::*` already re-exports the shared helpers this test needs.
+    #[allow(unused_imports)]
     use crate::meeting_watcher::shared::*;
 
     /// Run with: cargo test -p screenpipe-engine --no-default-features --lib -- windows_live_tests::test_live_zoom_detection --nocapture --ignored

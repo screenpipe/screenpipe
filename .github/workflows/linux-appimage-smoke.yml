@@ -269,7 +269,6 @@ jobs:
                 libasound2t64 \
                 libayatana-appindicator3-1 \
                 libgtk-3-0 \
-                libopenblas0 \
                 libpulse0 \
                 librsvg2-2 \
                 libsecret-1-0 \
@@ -352,9 +351,15 @@ jobs:
               check_ldd squashfs-root/usr/bin/ffmpeg /tmp/ffmpeg.ldd
               check_ldd squashfs-root/usr/bin/ffprobe /tmp/ffprobe.ldd
               check_ldd squashfs-root/usr/bin/tesseract /tmp/tesseract.ldd
-              if [ -e squashfs-root/usr/lib/libopenblas.so.0 ]; then
-                check_ldd squashfs-root/usr/lib/libopenblas.so.0 /tmp/openblas.ldd
+              # OpenBLAS is bundled by bundle-appimage-runtime-deps.sh because OCR
+              # needs it and Debian does not install it by default. This container
+              # deliberately does not install libopenblas0, so a missing bundle is a
+              # hard failure here rather than something the host quietly satisfies.
+              if [ ! -e squashfs-root/usr/lib/libopenblas.so.0 ]; then
+                echo "::error::libopenblas.so.0 is not bundled in the AppImage; OCR breaks on hosts without the system package"
+                exit 1
               fi
+              check_ldd squashfs-root/usr/lib/libopenblas.so.0 /tmp/openblas.ldd
               if grep -R "not found" /tmp/ffmpeg.ldd /tmp/ffprobe.ldd /tmp/tesseract.ldd /tmp/openblas.ldd 2>/dev/null; then
                 exit 1
               fi

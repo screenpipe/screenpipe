@@ -1341,7 +1341,42 @@ struct ObserverCallbackState {
     refresh_requested: Arc<AtomicBool>,
 }
 
-fn emit_focus_state(state: &ObserverCallbackState) {
+/// Every AX notification the focus observer subscribes to on the frontmost app.
+///
+/// Registration and teardown MUST walk this same list. Two hand-maintained
+/// copies are how a notification ends up added but never removed, which leaves
+/// Chromium/Electron in accessibility mode and makes it replay the keystrokes
+/// it buffered while we were attached (see the shutdown comment in
+/// `run_app_observer`).
+///
+/// Deliberately excluded, because every callback costs a system-wide AX focus
+/// query in `emit_focus_state` and these fire per keystroke or per frame:
+/// `value_changed` (text fields, progress bars, clocks), `selected_text_changed`
+/// (we already get typed text from the CGEventTap) and `layout_changed`
+/// (fires continuously on web content).
+fn observed_ax_notifications() -> [&'static ax::Notification; 5] {
+    [
+        ax::notification::app_activated(),
+        ax::notification::app_deactivated(),
+        ax::notification::focused_window_changed(),
+        ax::notification::focused_ui_element_changed(),
+        // The only signal for in-app navigation that leaves focus where it is:
+        // a browser tab loading a new page, an Obsidian note switch, a document
+        // being saved under a new name. Without it those transitions are
+        // invisible to the recorder until the capture loop's periodic visual
+        // check notices the pixels changed, up to `WARM_VISUAL_CHECK_INTERVAL`
+        // later, and the resulting frame has no `ui_events` row to link to.
+        ax::notification::title_changed(),
+    ]
+}
+
+/// `focused_elem` is the element the AX callback already handed us. When the
+/// notification is about the focused element itself we reuse it instead of
+/// asking the system for the focused element a second time: it saves an AX
+/// round trip per event and, more importantly, it is the element the
+/// notification actually described. A fresh query races the transition and can
+/// return the *next* element on a fast app switch.
+fn emit_focus_state(state: &ObserverCallbackState, focused_elem: Option<&ax::UiElement>) {
     let Some((pid, name)) = get_focused_app_info() else {
         return;
     };
@@ -1359,7 +1394,7 @@ fn emit_focus_state(state: &ObserverCallbackState) {
         state.current_app.store(Arc::new(Some(name.clone())));
 
         if state.config.capture_app_switch {
-            let focused_element = get_focused_element_context(&state.config);
+            let focused_element = focused_element_context(&state.config, focused_elem);
 
             let mut event = UiEvent::app_switch(
                 Utc::now(),
@@ -1385,7 +1420,7 @@ fn emit_focus_state(state: &ObserverCallbackState) {
         state.current_window.store(Arc::new(window_title.clone()));
 
         if state.config.capture_window_focus {
-            let focused_element = get_focused_element_context(&state.config);
+            let focused_element = focused_element_context(&state.config, focused_elem);
 
             let event = UiEvent {
                 id: None,
@@ -1408,10 +1443,16 @@ fn emit_focus_state(state: &ObserverCallbackState) {
     }
 }
 
+/// AXObserverCallbackWithInfo. The `info` dictionary is macOS's per-notification
+/// payload; we don't read it yet, but the info variant is the callback the
+/// element-carrying notifications are documented against, and taking it now
+/// means adding a notification that needs its payload later is a one-line
+/// change instead of re-creating every observer.
 extern "C" fn ax_focus_observer_callback(
     _observer: &mut ax::Observer,
-    _elem: &mut ax::UiElement,
+    elem: &mut ax::UiElement,
     notification: &ax::Notification,
+    _info: &cf::DictionaryOf<cf::String, cf::Type>,
     context: *mut std::ffi::c_void,
 ) {
     if context.is_null() {
@@ -1426,7 +1467,16 @@ extern "C" fn ax_focus_observer_callback(
         state.refresh_requested.store(true, Ordering::SeqCst);
     }
 
-    emit_focus_state(state);
+    // Only `focused_ui_element_changed` describes the focused element itself.
+    // For the others `elem` is the application or the window that changed, so
+    // reusing it as "the focused element" would mislabel the event.
+    let focused_elem = if notification == ax::notification::focused_ui_element_changed() {
+        Some(&*elem)
+    } else {
+        None
+    };
+
+    emit_focus_state(state, focused_elem);
 }
 
 fn run_app_observer(
@@ -1528,7 +1578,7 @@ fn run_app_observer(
         };
 
         if observed_pid == pid {
-            emit_focus_state(unsafe { &*callback_state_ptr });
+            emit_focus_state(unsafe { &*callback_state_ptr }, None);
             return;
         }
 
@@ -1537,7 +1587,7 @@ fn run_app_observer(
         }
 
         let app = ax::UiElement::with_app_pid(pid);
-        let mut new_observer = match ax::Observer::with_cb(pid, ax_focus_observer_callback) {
+        let mut new_observer = match ax::Observer::with_info_cb(pid, ax_focus_observer_callback) {
             Ok(observer) => observer,
             Err(err) => {
                 error!("failed to create AXObserver for pid {}: {:?}", pid, err);
@@ -1547,12 +1597,7 @@ fn run_app_observer(
         };
 
         let context = callback_state_ptr as *mut std::ffi::c_void;
-        for notification in [
-            ax::notification::app_activated(),
-            ax::notification::app_deactivated(),
-            ax::notification::focused_window_changed(),
-            ax::notification::focused_ui_element_changed(),
-        ] {
+        for notification in observed_ax_notifications() {
             if let Err(err) = new_observer.add_notification(&app, notification, context) {
                 debug!(
                     "failed to register AX notification {:?} for pid {}: {:?}",
@@ -1564,7 +1609,7 @@ fn run_app_observer(
         run_loop.add_src(new_observer.run_loop_src(), run_loop_mode);
         observed_pid = pid;
         observer = Some(new_observer);
-        emit_focus_state(unsafe { &*callback_state_ptr });
+        emit_focus_state(unsafe { &*callback_state_ptr }, None);
     };
 
     while !stop.load(Ordering::Acquire) {
@@ -1593,12 +1638,7 @@ fn run_app_observer(
     if let Some(mut existing) = observer.take() {
         if observed_pid != 0 {
             let mut app = ax::UiElement::with_app_pid(observed_pid);
-            for notification in [
-                ax::notification::app_activated(),
-                ax::notification::app_deactivated(),
-                ax::notification::focused_window_changed(),
-                ax::notification::focused_ui_element_changed(),
-            ] {
+            for notification in observed_ax_notifications() {
                 let _ = existing.remove_notification(&app, notification);
             }
 
@@ -2014,6 +2054,25 @@ fn get_focused_window_title(pid: i32) -> Option<String> {
     }
 }
 
+/// Build the focused-element context, preferring an element the caller already
+/// holds. `hint` comes from the AX observer callback, which is handed the
+/// element the notification was about, so the common case skips the
+/// system-wide focused-element lookup entirely.
+fn focused_element_context(
+    config: &UiCaptureConfig,
+    hint: Option<&ax::UiElement>,
+) -> Option<ElementContext> {
+    match hint {
+        Some(elem) => {
+            // Same serialization guard as the query path: building the context
+            // still reads role/title/value/bounds attributes off the element.
+            let _guard = AX_QUERY_LOCK.try_lock()?;
+            build_element_context(elem, config)
+        }
+        None => get_focused_element_context(config),
+    }
+}
+
 /// Get the currently focused UI element's context (for capturing text field values)
 fn get_focused_element_context(config: &UiCaptureConfig) -> Option<ElementContext> {
     // Serialize accessibility queries (same guard as get_element_at_position)
@@ -2028,6 +2087,11 @@ fn get_focused_element_context(config: &UiCaptureConfig) -> Option<ElementContex
 
     let elem: &ax::UiElement = unsafe { std::mem::transmute(&*focused) };
 
+    build_element_context(elem, config)
+}
+
+/// Caller must already hold `AX_QUERY_LOCK`.
+fn build_element_context(elem: &ax::UiElement, config: &UiCaptureConfig) -> Option<ElementContext> {
     let role = elem.role().ok().map(|r| {
         let s = format!("{:?}", r);
         if let Some(start) = s.find("AX") {

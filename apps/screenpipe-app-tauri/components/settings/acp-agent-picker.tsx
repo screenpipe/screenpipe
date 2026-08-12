@@ -9,7 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import type { AcpAgentConfig } from "@/lib/utils/tauri";
-import { SELECTABLE_ACP_ADAPTERS, acpAdapterInfo } from "@/lib/utils/preset-appearance";
+import { acpAdapterInfo } from "@/lib/utils/preset-appearance";
+import { useSelectableAcpAdapters } from "@/lib/acp-rollout";
 import { AcpInstallGate } from "@/components/settings/acp-install-gate";
 import { AcpPresetDefaults } from "@/components/settings/acp-preset-defaults";
 import { AcpBoundaries } from "@/components/settings/acp-boundaries";
@@ -51,8 +52,18 @@ export function AcpAgentPicker({
   compact?: boolean;
 }) {
   const [installBlocked, setInstallBlocked] = useState(false);
+  // Advanced settings stay hidden until the agent is actually usable. Showing a
+  // custom command box and an env editor next to "sign in to continue" implies
+  // they are part of signing in, and buries the one thing left to do.
+  const [agentConnected, setAgentConnected] = useState(false);
   const currentId = agent?.id || DEFAULT_AGENT_ID;
   const info = acpAdapterInfo(currentId);
+  // Some agents roll out on their own flag; the already-selected one is always
+  // included so a user on a flagged agent still sees their selection.
+  const adapters = useSelectableAcpAdapters(currentId);
+  // A preset saved before this choice existed has no value; those keep running
+  // on the agent's own account, so only an explicit true means cloud.
+  const useCloud = agent?.useScreenpipeCloud === true;
 
   // Merge a partial change into the current agent and emit the full object.
   const merge = (change: Partial<AcpAgentConfig>) =>
@@ -65,6 +76,12 @@ export function AcpAgentPicker({
       command: id === "custom" ? agent?.command ?? "" : undefined,
       args: id === "custom" ? agent?.args ?? [] : undefined,
       env: agent?.env ?? {},
+      // Picking an agent that can run on Screenpipe Cloud defaults to that, so
+      // a new preset works without the user first getting a provider account.
+      // Re-selecting the same agent keeps whatever they chose.
+      useScreenpipeCloud: isSwitch
+        ? acpAdapterInfo(id).supportsCloudRouting === true
+        : agent?.useScreenpipeCloud ?? null,
       // Model/mode overrides are per-agent: an option/mode id from one agent is
       // meaningless to another. Preserve them only when re-selecting the same
       // agent; drop them on a real switch so a stale override can't apply.
@@ -101,7 +118,7 @@ export function AcpAgentPicker({
         aria-label={compact ? "agent" : "Agent"}
         className={cn("grid", compact ? "grid-cols-2 gap-1.5" : "grid-cols-2 gap-2 sm:grid-cols-3")}
       >
-        {SELECTABLE_ACP_ADAPTERS.map((adapter) => {
+        {adapters.map((adapter) => {
           const isSelected = currentId === adapter.id;
           return (
             <button
@@ -143,6 +160,60 @@ export function AcpAgentPicker({
         {info.description}
       </p>
 
+      {/* Where the agent's model calls go. Only shown for agents the catalog
+          knows how to point at the gateway; a closed agent (Cursor, Copilot)
+          talks to its own service and has no such choice. */}
+      {info.supportsCloudRouting && (
+        <div className="space-y-1">
+          <Label className={compact ? "text-xs" : undefined}>
+            {compact ? "model billing" : "Model calls"}
+          </Label>
+          <div
+            role="radiogroup"
+            aria-label="Where the agent's model calls go"
+            className="grid grid-cols-2 gap-1.5"
+          >
+            {[
+              { cloud: true, label: "Screenpipe Cloud", hint: "included in your plan" },
+              { cloud: false, label: `Your ${info.name} account`, hint: "billed by them" },
+            ].map((choice) => {
+              const selected = useCloud === choice.cloud;
+              return (
+                <button
+                  key={String(choice.cloud)}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  data-acp-cloud-option={String(choice.cloud)}
+                  onClick={() => merge({ useScreenpipeCloud: choice.cloud })}
+                  className={cn(
+                    "rounded-md border px-2 py-1.5 text-left transition-colors hover:bg-accent",
+                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                    compact ? "text-xs" : "text-sm",
+                    selected ? "border-primary ring-1 ring-primary" : "border-input",
+                  )}
+                >
+                  <span className="block truncate">{choice.label}</span>
+                  <span
+                    className={cn(
+                      "block truncate text-muted-foreground",
+                      compact ? "text-[10px]" : "text-xs",
+                    )}
+                  >
+                    {choice.hint}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <p className={cn("text-muted-foreground", compact ? "text-[10px]" : "text-xs")}>
+            {useCloud
+              ? `${info.name} still runs locally and signs in as itself. Only its model calls go through Screenpipe.`
+              : `${info.name} bills its own account for model use. You need to be signed in to it.`}
+          </p>
+        </div>
+      )}
+
       {/* Ownership split. Sits above the install gate so the answer to "does my
           Anthropic key configure this?" is visible before the user starts
           troubleshooting a sign-in. */}
@@ -167,9 +238,12 @@ export function AcpAgentPicker({
           config={agent?.config}
           modeId={agent?.modeId}
           onChange={(change) => merge(change)}
+          onConnectedChange={setAgentConnected}
         />
       )}
 
+      {/* A custom agent needs its command before it can connect at all, so that
+          one field stays visible; everything else waits. */}
       {currentId === "custom" &&
         (compact ? (
           <div className="space-y-1">
@@ -240,7 +314,7 @@ export function AcpAgentPicker({
           </div>
         ))}
 
-      {!compact && (
+      {!compact && agentConnected && (
         <div className="space-y-2 border-t pt-4">
           <Label htmlFor="acpEnv">Additional environment variables</Label>
           <Textarea

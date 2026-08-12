@@ -16,12 +16,25 @@ use sqlx::{FromRow, QueryBuilder, Sqlite};
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
+/// Keeps one attach statement well under SQLite's bound-parameter limit.
+const SEMANTIC_ATTACH_FRAME_CHUNK: usize = 256;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SemanticProjectionWriteResult {
     pub run_id: i64,
     pub reused_run: bool,
     pub items_inserted: u32,
     pub items_reused: u32,
+}
+
+/// Outcome of reattaching already-stored parse runs to newly captured frames.
+///
+/// `missing_run_ids` reports runs that cleanup removed between the caller
+/// observing them and this write, so the caller can drop its cached copy.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SemanticAttachResult {
+    pub frames_attached: u64,
+    pub missing_run_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -333,6 +346,89 @@ impl DatabaseManager {
                 reused_run,
                 items_inserted,
                 items_reused,
+            })
+        }
+        .await;
+
+        match result {
+            Ok(result) => {
+                tx.commit().await?;
+                Ok(result)
+            }
+            Err(error) => {
+                tx.rollback().await?;
+                Err(error)
+            }
+        }
+    }
+
+    /// Attach already-stored parse runs to newly captured frames in one
+    /// transaction.
+    ///
+    /// An unchanged screen re-parses to the exact same run fingerprint, so the
+    /// full store path would take the process-wide write lock and replay the
+    /// same statements only to point a new frame at an existing run. Callers
+    /// that already know the run id batch those attachments here instead, which
+    /// turns one serialized transaction per captured frame into one per batch.
+    /// Runs deleted by cleanup in the meantime are skipped and reported rather
+    /// than leaving a dangling reference.
+    pub async fn attach_semantic_runs_to_frames(
+        &self,
+        attachments: &[(i64, i64)],
+    ) -> Result<SemanticAttachResult, sqlx::Error> {
+        if attachments.is_empty() {
+            return Ok(SemanticAttachResult::default());
+        }
+
+        let mut frames_by_run: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+        for (frame_id, run_id) in attachments {
+            frames_by_run.entry(*run_id).or_default().push(*frame_id);
+        }
+
+        let mut tx = self.begin_immediate_with_retry().await?;
+        let result: Result<SemanticAttachResult, sqlx::Error> = async {
+            let run_ids: Vec<i64> = frames_by_run.keys().copied().collect();
+            let mut existing =
+                QueryBuilder::<Sqlite>::new("SELECT id FROM semantic_runs WHERE id IN (");
+            let mut separated = existing.separated(", ");
+            for run_id in &run_ids {
+                separated.push_bind(*run_id);
+            }
+            existing.push(")");
+            let live_runs: Vec<i64> = existing
+                .build_query_scalar()
+                .fetch_all(&mut **tx.conn())
+                .await?;
+
+            let mut frames_attached = 0_u64;
+            for (run_id, frame_ids) in &frames_by_run {
+                if !live_runs.contains(run_id) {
+                    continue;
+                }
+                for chunk in frame_ids.chunks(SEMANTIC_ATTACH_FRAME_CHUNK) {
+                    let mut update =
+                        QueryBuilder::<Sqlite>::new("UPDATE frames SET semantic_run_id = ");
+                    update.push_bind(*run_id);
+                    update.push(" WHERE id IN (");
+                    let mut separated = update.separated(", ");
+                    for frame_id in chunk {
+                        separated.push_bind(*frame_id);
+                    }
+                    update.push(")");
+                    frames_attached += update
+                        .build()
+                        .execute(&mut **tx.conn())
+                        .await?
+                        .rows_affected();
+                }
+            }
+
+            Ok(SemanticAttachResult {
+                frames_attached,
+                missing_run_ids: run_ids
+                    .into_iter()
+                    .filter(|run_id| !live_runs.contains(run_id))
+                    .collect(),
             })
         }
         .await;

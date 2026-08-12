@@ -5,6 +5,7 @@
 import { localFetch } from "@/lib/api";
 import type { Suggestion } from "@/lib/hooks/use-auto-suggestions";
 import type { ConnectionSetupSuggestion } from "@/components/chat/summary-cards";
+import { PRIORITY_CONNECTION_IDS } from "@/lib/constants/connections";
 
 const CONNECTION_SUGGESTION_LIMIT = 3;
 const VISIBLE_SUGGESTION_LIMIT = 2;
@@ -299,15 +300,18 @@ export function buildConnectionSetupSuggestions(
   connections: ConnectionListItem[],
   appItems: ActivityAppItem[]
 ): ConnectionSetupSuggestion[] {
+  // Same priority as the settings suggested row: calendar and mail first, then
+  // the rest of the daily-context surface. Kept in one place so the two
+  // surfaces cannot drift apart.
   const fallbackConnectionOrder = [
+    ...PRIORITY_CONNECTION_IDS,
     "slack",
+    "obsidian",
+    "notion",
     "github",
     "github-issues",
     "linear",
-    "google-calendar",
-    "notion",
     "google-docs",
-    "obsidian",
     "jira",
   ];
 

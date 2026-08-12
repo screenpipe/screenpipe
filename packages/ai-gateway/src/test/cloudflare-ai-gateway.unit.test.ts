@@ -7,6 +7,7 @@ import type { AuthResult, Env } from '../types';
 import spendLimitFixture from './fixtures/cloudflare-spend-limit-429.json';
 import {
 	buildHostedChatGatewayContext,
+	cloudflareSpendLimitRuleId,
 	gatewayProviderForModel,
 	getHostedChatGatewayConnection,
 	getHostedChatGatewayMode,
@@ -51,7 +52,7 @@ describe('Cloudflare hosted-chat metadata', () => {
 	it('preserves Max and Ultra allowance tiers while collapsing catalog-equivalent plans', async () => {
 		for (const accountPlan of ['business', 'team', 'enterprise'] as const) {
 			const context = await buildHostedChatGatewayContext(auth({ accountPlan }), 'gpt-5.6-sol', 'background');
-			expect(context).toMatchObject({ plan: 'business', lane: 'explicit', workload: 'background' });
+			expect(context).toMatchObject({ plan: 'business', lane: 'frontier', workload: 'background' });
 		}
 		for (const accountPlan of ['business_max', 'business_ultra'] as const) {
 			const context = await buildHostedChatGatewayContext(auth({ accountPlan }), 'auto', 'background');
@@ -74,8 +75,12 @@ describe('Cloudflare hosted-chat metadata', () => {
 
 	it('changes the lane only when final routing rewrites the requested lane', async () => {
 		const explicit = await buildHostedChatGatewayContext(auth(), 'gpt-5.6-sol', 'background');
-		expect(withHostedChatLane(explicit, 'auto')).toEqual({ ...explicit, lane: 'auto' });
-		expect(withHostedChatLane(explicit, 'claude-sonnet-5')).toBe(explicit);
+		expect(withHostedChatLane(explicit, 'auto', 'auto')).toEqual({ ...explicit, lane: 'auto' });
+		expect(withHostedChatLane(explicit, 'claude-sonnet-5', 'explicit')).toEqual({
+			...explicit,
+			lane: 'explicit',
+		});
+		expect(withHostedChatLane(explicit, 'claude-opus-5', 'explicit')).toBe(explicit);
 	});
 });
 
@@ -117,7 +122,6 @@ describe('Cloudflare provider-native connection', () => {
 			CLOUDFLARE_AI_GATEWAY_BASE_URL:
 				'https://gateway.ai.cloudflare.com/v1/account-id/gateway-staging/compat/chat/completions',
 			CLOUDFLARE_AI_GATEWAY_TOKEN: 'local-gateway-token',
-			AI: { gateway: () => { throw new Error('remote binding must not be called'); } },
 		} as unknown as Env;
 		const context = await buildHostedChatGatewayContext(auth(), 'claude-sonnet-5', 'interactive');
 		const connection = await getHostedChatGatewayConnection(env, 'anthropic', context);
@@ -139,10 +143,12 @@ describe('Cloudflare spend-limit classification', () => {
 	it('recognizes the pinned staging Gateway 429 fixture', () => {
 		expect(spendLimitFixture.body.name).toBe('AiGatewayError');
 		expect(spendLimitFixture.body.internalCode).toBe(2041);
-		expect(isCloudflareSpendLimitError({
+		const error = {
 			status: spendLimitFixture.status,
 			body: spendLimitFixture.body,
-		})).toBe(true);
+		};
+		expect(isCloudflareSpendLimitError(error)).toBe(true);
+		expect(cloudflareSpendLimitRuleId(error)).toBe('REDACTED');
 	});
 
 	it('recognizes a 429 spend/budget block', () => {

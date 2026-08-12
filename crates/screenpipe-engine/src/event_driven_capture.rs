@@ -854,6 +854,19 @@ fn record_capture_loop_heartbeat(
     monitor.record_capture_loop_heartbeat();
 }
 
+/// Mark the stage the loop is entering on both the aggregate and per-monitor
+/// metrics, so a frozen loop names its own freeze point (see
+/// [`screenpipe_screen::CaptureLoopStage`]). Per-monitor is what the watchdog
+/// reads: the aggregate is overwritten by whichever display iterated last.
+fn record_loop_stage(
+    aggregate: &screenpipe_screen::PipelineMetrics,
+    monitor: &screenpipe_screen::PipelineMetrics,
+    stage: screenpipe_screen::CaptureLoopStage,
+) {
+    aggregate.record_loop_stage(stage);
+    monitor.record_loop_stage(stage);
+}
+
 fn record_persisted_capture(
     aggregate: &screenpipe_screen::PipelineMetrics,
     monitor: &screenpipe_screen::PipelineMetrics,
@@ -1063,7 +1076,7 @@ pub(crate) async fn event_driven_capture_loop(
                 None, // first capture — no elements ref
                 &mut walk_budget,
                 &mut ocr_gate,
-                false, // screenshot enabled on startup
+                screenshot_disabled,
                 false, // hd not active at startup (Manual is dedup-exempt anyway)
                 false, // not in a meeting at startup
                 true,  // focus unknown at startup — controller defaults to Active
@@ -1171,6 +1184,11 @@ pub(crate) async fn event_driven_capture_loop(
         // monitors in Warm/Cold state, but the loop is still healthy and wakes
         // on focus notifications or its bounded backstop.
         record_capture_loop_heartbeat(&vision_metrics, &monitor_liveness);
+        record_loop_stage(
+            &vision_metrics,
+            &monitor_liveness,
+            screenpipe_screen::CaptureLoopStage::Heartbeat,
+        );
 
         #[cfg(debug_assertions)]
         e2e_park_capture_loop_once(&vision_metrics, monitor_id).await;
@@ -1186,9 +1204,16 @@ pub(crate) async fn event_driven_capture_loop(
         // to the normal capture path further down, bypassing other trigger
         // detection. This lets the Warm path capture only when pixels
         // actually changed without duplicating the whole capture machinery.
+        record_loop_stage(
+            &vision_metrics,
+            &monitor_liveness,
+            screenpipe_screen::CaptureLoopStage::FocusGate,
+        );
         let mut warm_trigger_override: Option<CaptureTrigger> = None;
         {
             use crate::focus_aware_controller::CaptureState;
+            // Only the debug-only e2e override below reassigns this.
+            #[cfg_attr(not(debug_assertions), allow(unused_mut))]
             let mut capture_state = focus_controller.state_for_monitor(&monitor);
             #[cfg(debug_assertions)]
             if e2e_force_focus_cold(monitor_id) {
@@ -1200,6 +1225,11 @@ pub(crate) async fn event_driven_capture_loop(
             // churn sck-rs / WGC locks.
             let is_cold = matches!(capture_state, CaptureState::Cold);
             if is_cold && !was_cold {
+                record_loop_stage(
+                    &vision_metrics,
+                    &monitor_liveness,
+                    screenpipe_screen::CaptureLoopStage::ReleaseStream,
+                );
                 monitor.release_capture_stream();
             }
             was_cold = is_cold;
@@ -1304,6 +1334,11 @@ pub(crate) async fn event_driven_capture_loop(
                     }
                     // Block until focus returns. 5s backstop guards against
                     // stuck waiters if a focus event is ever missed.
+                    record_loop_stage(
+                        &vision_metrics,
+                        &monitor_liveness,
+                        screenpipe_screen::CaptureLoopStage::ColdWait,
+                    );
                     let notify = focus_controller.notify_for(monitor_id);
                     tokio::select! {
                         _ = notify.notified() => {}
@@ -1321,6 +1356,11 @@ pub(crate) async fn event_driven_capture_loop(
         // composing + delivering frames at the stream's frame interval into a
         // sleeping reader for the entire pause window — the exact cost the
         // user expected `capture_paused` to eliminate.
+        record_loop_stage(
+            &vision_metrics,
+            &monitor_liveness,
+            screenpipe_screen::CaptureLoopStage::PauseGate,
+        );
         let in_pause_state = crate::sleep_monitor::screen_is_locked()
             || power_profile_rx
                 .as_ref()
@@ -1520,6 +1560,11 @@ pub(crate) async fn event_driven_capture_loop(
             let mut lagged_force_manual = false;
             let mut closed_now = false;
 
+            record_loop_stage(
+                &vision_metrics,
+                &monitor_liveness,
+                screenpipe_screen::CaptureLoopStage::TriggerWait,
+            );
             match tokio::time::timeout(poll_interval, trigger_rx.recv()).await {
                 Ok(Ok(msg)) => drained.push(msg),
                 Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
@@ -1662,11 +1707,21 @@ pub(crate) async fn event_driven_capture_loop(
             // SCK screenshot may freeze the loop — a wedged probe previously
             // starved the idle-capture heartbeat and produced a false
             // "recording needs help" incident (see VISUAL_PROBE_TIMEOUT).
+            record_loop_stage(
+                &vision_metrics,
+                &monitor_liveness,
+                screenpipe_screen::CaptureLoopStage::ExclusionProbe,
+            );
             let fresh_ids = probe_excluded_sck_window_ids(&capture_params.window_filters).await;
             if fresh_ids != cached_excluded_ids {
                 cached_excluded_ids = fresh_ids;
             }
             if let Some(ref mut comparer) = frame_comparer {
+                record_loop_stage(
+                    &vision_metrics,
+                    &monitor_liveness,
+                    screenpipe_screen::CaptureLoopStage::VisualProbe,
+                );
                 match bounded_visual_probe(&monitor, &cached_excluded_ids, monitor_id).await {
                     Ok(Some((image, _dur))) => {
                         let diff = comparer.compare(&image);
@@ -1812,6 +1867,11 @@ pub(crate) async fn event_driven_capture_loop(
                 // builds; macOS gets a little more room for its bounded SCK ->
                 // CoreGraphics recovery chain. The semaphore serializes writes
                 // so they don't pile up, but each write still needs time.
+                record_loop_stage(
+                    &vision_metrics,
+                    &monitor_liveness,
+                    screenpipe_screen::CaptureLoopStage::Capture,
+                );
                 let capture_result = capture_with_timeout(
                     CAPTURE_OPERATION_TIMEOUT,
                     do_capture(
@@ -1825,13 +1885,10 @@ pub(crate) async fn event_driven_capture_loop(
                         screenshot_disabled,
                         hd_active,
                         in_meeting,
-                        // Meeting-OCR-gate scope (#5054): only the monitor
-                        // hosting the focused window is gated; Active is also
-                        // the controller's safe fallback when focus is unknown.
-                        matches!(
-                            focus_controller.state_for_monitor(&monitor),
-                            crate::focus_aware_controller::CaptureState::Active
-                        ),
+                        // AX pairing requires confirmed focus ownership.
+                        // CaptureState::Active is broader: it also covers
+                        // hysteresis and unknown/stale focus fallbacks.
+                        focus_controller.hosts_focus_for_monitor(&monitor),
                     ),
                 )
                 .await;
@@ -1916,6 +1973,11 @@ pub(crate) async fn event_driven_capture_loop(
                             }
 
                             if let Some(ref cache) = hot_frame_cache {
+                                record_loop_stage(
+                                    &vision_metrics,
+                                    &monitor_liveness,
+                                    screenpipe_screen::CaptureLoopStage::HotCachePush,
+                                );
                                 push_to_hot_cache(cache, result, &device_name, &trigger).await;
                             }
 
@@ -2700,30 +2762,38 @@ async fn do_capture(
     // the name directly; for all other triggers (visual change, idle, manual)
     // we do a lightweight platform query. This ensures the walk budget applies
     // to ALL captures, not just app switches.
-    let lightweight_focused_metadata = match trigger {
-        CaptureTrigger::AppSwitch { .. } => None,
-        _ => match tokio::time::timeout(
-            Duration::from_secs(1),
-            tokio::task::spawn_blocking(get_focused_metadata_lightweight),
-        )
-        .await
-        {
-            Ok(Ok(metadata)) => metadata,
-            Ok(Err(err)) => {
-                debug!("focused metadata lookup task failed: {}", err);
-                None
-            }
-            Err(_) => {
-                debug!("focused metadata lookup timed out");
-                None
-            }
-        },
+    let lightweight_focused_metadata = if monitor_hosts_focus {
+        match trigger {
+            CaptureTrigger::AppSwitch { .. } => None,
+            _ => match tokio::time::timeout(
+                Duration::from_secs(1),
+                tokio::task::spawn_blocking(get_focused_metadata_lightweight),
+            )
+            .await
+            {
+                Ok(Ok(metadata)) => metadata,
+                Ok(Err(err)) => {
+                    debug!("focused metadata lookup task failed: {}", err);
+                    None
+                }
+                Err(_) => {
+                    debug!("focused metadata lookup timed out");
+                    None
+                }
+            },
+        }
+    } else {
+        None
     };
-    let trigger_app = match trigger {
-        CaptureTrigger::AppSwitch { app_name, .. } => Some(app_name.clone()),
-        _ => lightweight_focused_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.app_name.clone()),
+    let trigger_app = if monitor_hosts_focus {
+        match trigger {
+            CaptureTrigger::AppSwitch { app_name, .. } => Some(app_name.clone()),
+            _ => lightweight_focused_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.app_name.clone()),
+        }
+    } else {
+        None
     };
 
     // Terminal OCR rate-limit: wezterm/alacritty/kitty/hyper/warp all bypass AX
@@ -2783,10 +2853,20 @@ async fn do_capture(
         config.walk_timeout_override = Some(decision.timeout);
     }
 
-    let tree_walk_result = tokio::task::spawn_blocking(move || {
-        screenpipe_capture::paired_capture::walk_accessibility_tree(&config)
-    })
-    .await?;
+    // The AX walker returns the one globally focused window. Walking it for a
+    // different monitor would both waste work and pair unrelated pixels with
+    // that window's tree, identity, and dedup hash. Non-focused monitors use
+    // the screenshot/OCR path below instead.
+    let tree_walk_result = if monitor_hosts_focus {
+        Some(
+            tokio::task::spawn_blocking(move || {
+                screenpipe_capture::paired_capture::walk_accessibility_tree(&config)
+            })
+            .await?,
+        )
+    } else {
+        None
+    };
 
     // If the window was skipped (incognito/private browsing or user filter),
     // bail out entirely — don't OCR the screenshot.
@@ -2797,8 +2877,8 @@ async fn do_capture(
     // hash matches the previous frame under the same dedup gate used below);
     // NotFound → error. Skipped windows are intentionally NOT counted as walk
     // attempts — they're user/incognito filters, not real walks.
-    match tree_walk_result {
-        TreeWalkResult::Found(ref snap) => {
+    match tree_walk_result.as_ref() {
+        Some(TreeWalkResult::Found(snap)) => {
             walk_budget.record_walk(&snap.app_name, snap.walk_duration, snap.truncated);
             if snap.walk_duration > std::time::Duration::from_millis(100) {
                 let next = walk_budget.should_walk(&snap.app_name);
@@ -2857,16 +2937,16 @@ async fn do_capture(
                 crate::ui_recorder::record_tree_walk(outcome);
             }
         }
-        TreeWalkResult::NotFound => {
+        Some(TreeWalkResult::NotFound) => {
             crate::ui_recorder::record_tree_walk(crate::ui_recorder::TreeWalkOutcome::Error);
         }
         // Skipped: user filter / incognito — not a walk attempt, don't count.
-        TreeWalkResult::Skipped(_) => {}
+        Some(TreeWalkResult::Skipped(_)) | None => {}
     }
 
     let tree_snapshot = match tree_walk_result {
-        TreeWalkResult::Found(snap) => Some(snap),
-        TreeWalkResult::Skipped(reason) => {
+        Some(TreeWalkResult::Found(snap)) => Some(snap),
+        Some(TreeWalkResult::Skipped(reason)) => {
             debug!(
                 "skipping capture: window filtered ({}) on monitor {}",
                 reason, params.monitor_id
@@ -2878,7 +2958,7 @@ async fn do_capture(
                 corrupt: None,
             });
         }
-        TreeWalkResult::NotFound => None,
+        Some(TreeWalkResult::NotFound) | None => None,
     };
 
     // Safety net: when the tree walk returned NotFound (AX failure, budget skip,

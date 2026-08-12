@@ -8,6 +8,7 @@ export type ChatEntrySource = "home_card" | "normal_chat";
 
 export type ChatEntryCard =
   | "automate_my_work"
+  | "contextual_suggestion"
   | "day_recap"
   | "other_builtin"
   | "custom"
@@ -16,9 +17,34 @@ export type ChatEntryCard =
 
 export type ChatResponsePosition = "initial" | "followup";
 
+/**
+ * Who wrote the prompt that was sent.
+ *
+ * The experiment's thesis is that a prefilled, editable starter teaches people
+ * to phrase their own questions. A click-through rate cannot show that — only
+ * the split between sending a starter untouched and reworking it can, so this
+ * is recorded as its own dimension. Content-free: never carries prompt text.
+ */
+export type ChatComposerAuthorship =
+  | "user_authored"
+  | "template_unmodified"
+  | "template_edited";
+
+export type ChatComposerOrigin =
+  "user_input" | "home_card" | "post_chat_suggestion";
+
+export type ChatSuggestionAuthorship = "unmodified" | "edited";
+export type ChatSuggestionSource = "activity" | "connection";
+export type ChatSuggestionPosition = 1 | 2 | 3;
+
 export type ChatSendOptions = {
   entrySource?: ChatEntrySource;
   entryCard?: ChatEntryCard;
+  composerAuthorship?: ChatComposerAuthorship;
+  composerOrigin?: ChatComposerOrigin;
+  suggestionAuthorship?: ChatSuggestionAuthorship;
+  suggestionSource?: ChatSuggestionSource;
+  suggestionPosition?: ChatSuggestionPosition;
 };
 
 // Per-message attachment metadata. The extracted text lives inside the message
@@ -44,6 +70,9 @@ export interface ToolCall {
   endedAtMs?: number;
   /** Spawning Task's tool call id for subagent child calls (ACP `_meta`). */
   parentToolCallId?: string;
+  /** This call is the launch of a subagent (Claude's Task/Agent tool), so it
+   *  is a container for the nested transcript rather than a step of its own. */
+  subagent?: boolean;
   /** Agent-reported elapsed seconds from the latest progress heartbeat. */
   elapsedSeconds?: number;
   /** Subagent type from the heartbeat, e.g. "researcher". */

@@ -15,6 +15,7 @@ import { mountAgentEventBus, registerForeground } from "@/lib/events/bus";
 import { agentEventErrorText } from "@/lib/events/error-text";
 import type { AgentEventEnvelope } from "@/lib/events/types";
 import { INTERNAL_TITLE_PREFIX } from "@/lib/utils/internal-session";
+import { applyResolvedModelLimits } from "@/lib/model-metadata";
 
 const GENERATION_TIMEOUT_MS = 90_000;
 const PROJECT_DIR = "pi-live-views";
@@ -353,6 +354,7 @@ ${options.targetBlockId ? JSON.stringify({ blockId: options.targetBlockId }) : "
 }
 
 function providerConfig(preset: AIPreset): PiProviderConfig {
+  const effectivePreset = applyResolvedModelLimits(preset);
   // This editor is deliberately isolated from the normal Chat preset prompt.
   // Its bounded contract travels with the private user turn instead of the Pi
   // launch args, which also avoids reusing any normal Chat system context.
@@ -367,9 +369,9 @@ function providerConfig(preset: AIPreset): PiProviderConfig {
     apiKey: preset.apiKey || null,
     // Respect small/local-model limits instead of silently forcing 2k output
     // tokens, which can exceed the model context before egress even starts.
-    maxTokens: Math.max(64, Math.min(preset.maxTokens ?? 4_096, 8_192)),
-    ...(preset.maxContextChars != null
-      ? { maxContextChars: preset.maxContextChars }
+    maxTokens: Math.max(64, Math.min(effectivePreset.maxTokens ?? 4_096, 8_192)),
+    ...(effectivePreset.maxContextChars != null
+      ? { maxContextChars: effectivePreset.maxContextChars }
       : {}),
     systemPrompt: null,
     // This foreground editor only needs to read Live Views, look up scheduled

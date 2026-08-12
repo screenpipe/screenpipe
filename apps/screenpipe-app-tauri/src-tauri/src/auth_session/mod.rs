@@ -10,11 +10,5 @@ mod apple;
 #[cfg(target_os = "macos")]
 pub use apple::start_session;
 
-#[cfg(not(target_os = "macos"))]
-pub async fn start_session(
-    _auth_url: String,
-    _callback_url_scheme: String,
-    _ephemeral: bool,
-) -> Result<String, String> {
-    Err("In-app auth sessions are only available on macOS".to_string())
-}
+// No non-macOS fallback: `open_login_window` only calls `start_session` from
+// its `cfg(target_os = "macos")` branch. Windows/Linux use `browser_login`.

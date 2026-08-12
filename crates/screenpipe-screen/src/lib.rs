@@ -23,7 +23,7 @@ pub mod utils;
 #[cfg(target_os = "macos")]
 pub use apple::perform_ocr_apple;
 pub use core::RealtimeVisionEvent;
-pub use metrics::{MetricsSnapshot, OcrGateDecision, PipelineMetrics};
+pub use metrics::{CaptureLoopStage, MetricsSnapshot, OcrGateDecision, PipelineMetrics};
 pub use utils::OcrEngine;
 pub mod capture_screenshot_by_window;
 pub use custom_ocr::perform_ocr_custom;

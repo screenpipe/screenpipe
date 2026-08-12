@@ -143,6 +143,11 @@ import {
   filterAcpPresets,
   useAcpRolloutEnabled,
 } from "@/lib/acp-rollout";
+import {
+  applyResolvedModelLimits,
+  ollamaContextWindowFromShow,
+  resolveModelLimits,
+} from "@/lib/model-metadata";
 
 // Helper to detect UUID-like strings and format preset names nicely
 const formatPresetName = (name: string): string => {
@@ -203,6 +208,9 @@ export interface AIModel {
   tags?: string[];
   free?: boolean;
   context_window?: number;
+  max_output_tokens?: number;
+  max_input_tokens?: number;
+  max_tokens?: number;
   best_for?: string[];
   speed?: string;
   intelligence?: string;
@@ -308,6 +316,7 @@ const AISection = ({
   const [testResults, setTestResults] = useState<DiagnosticResults>(INITIAL_DIAGNOSTICS);
   const [lastValidatedConnectionFingerprint, setLastValidatedConnectionFingerprint] = useState<string | null>(null);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [modelLimitsOpen, setModelLimitsOpen] = useState(false);
   const diagnosticsAbortRef = useRef<AbortController | null>(null);
   const [chatgptLoggedIn, setChatgptLoggedIn] = useState(false);
   const [chatgptLoading, setChatgptLoading] = useState(false);
@@ -572,42 +581,6 @@ const AISection = ({
     updateSettingsPreset({ apiKey: value });
   }, [updateSettingsPreset]);
 
-  // Auto-set max output tokens based on model name
-  const getDefaultMaxTokens = useCallback((model: string): number | null => {
-    const m = model.toLowerCase();
-    // Claude models
-    if (m.includes("opus")) return 64000;
-    if (m.includes("sonnet-5")) return 128000;
-    if (m.includes("sonnet-4") || m.includes("sonnet-3.7")) return 64000;
-    // OpenAI models
-    if (m.includes("gpt-5")) return 128000;
-    if (m.includes("o3") || m.includes("o4") || m.includes("o1")) return 100000;
-    if (m.includes("gpt-4.1")) return 32768;
-    // Qwen
-    if (m.includes("qwen")) return 8192;
-    // Mistral
-    if (m.includes("mistral")) return 4096;
-    // Local/OSS models
-    if (m.includes("llama")) return 4096;
-    if (m.includes("phi")) return 16384;
-    return null; // unknown model, don't change
-  }, []);
-
-  // Only auto-set max tokens when the user actually changes the model name,
-  // not on mount — otherwise the saved maxTokens value gets overwritten.
-  const prevModelRef = useRef(settingsPreset?.model);
-  useEffect(() => {
-    const model = settingsPreset?.model;
-    if (!model) return;
-    if (model === prevModelRef.current) return; // no change — preserve saved value
-    prevModelRef.current = model;
-    if (settingsPreset?.provider === "screenpipe-cloud") return;
-    const tokens = getDefaultMaxTokens(model);
-    if (tokens) {
-      updateSettingsPreset({ maxTokens: tokens } as any);
-    }
-  }, [settingsPreset?.model, settingsPreset?.provider, getDefaultMaxTokens, updateSettingsPreset]);
-
   const handleCustomPromptChange = useCallback((value: string, isValid: boolean) => {
     updateSettingsPreset({ prompt: value });
   }, [updateSettingsPreset]);
@@ -733,6 +706,61 @@ const AISection = ({
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState("");
+  const selectedModelMetadata = useMemo(
+    () => models.find((candidate) => candidate.id === settingsPreset?.model),
+    [models, settingsPreset?.model],
+  );
+  const resolvedModelLimits = useMemo(
+    () => resolveModelLimits(
+      settingsPreset?.provider,
+      settingsPreset?.model,
+      selectedModelMetadata,
+    ),
+    [settingsPreset?.provider, settingsPreset?.model, selectedModelMetadata],
+  );
+
+  // Known limits are runtime facts, not user preferences. Re-resolve existing
+  // presets too, so old generic defaults stop constraining current models.
+  useEffect(() => {
+    if (!resolvedModelLimits || !settingsPreset) return;
+    const resolved = applyResolvedModelLimits(settingsPreset, selectedModelMetadata);
+    if (
+      resolved.maxContextChars === settingsPreset.maxContextChars &&
+      resolved.maxTokens === settingsPreset.maxTokens
+    ) return;
+    updateSettingsPreset({
+      maxContextChars: resolved.maxContextChars,
+      maxTokens: resolved.maxTokens,
+    });
+  }, [resolvedModelLimits, selectedModelMetadata, settingsPreset, updateSettingsPreset]);
+
+  useEffect(() => {
+    if (settingsPreset?.provider !== "native-ollama" || !settingsPreset.model) return;
+    let cancelled = false;
+    const ollamaBaseUrl = (settingsPreset.url || "http://localhost:11434/v1")
+      .replace(/\/v1\/?$/, "")
+      .replace(/\/$/, "");
+    void tauriFetchWithDeadline(`${ollamaBaseUrl}/api/show`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: settingsPreset.model }),
+    }).then(async (response) => {
+      if (!response.ok || cancelled) return;
+      const contextWindow = ollamaContextWindowFromShow(await response.json());
+      if (!contextWindow || cancelled) return;
+      setModels((current) => current.some((model) => model.id === settingsPreset.model)
+        ? current.map((model) => model.id === settingsPreset.model
+          ? { ...model, context_window: contextWindow }
+          : model)
+        : [...current, {
+            id: settingsPreset.model!,
+            name: settingsPreset.model!,
+            provider: "ollama",
+            context_window: contextWindow,
+          }]);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [settingsPreset?.provider, settingsPreset?.model, settingsPreset?.url]);
 
   const runDiagnostics = useCallback(async () => {
     if (settingsPreset?.provider === "screenpipe-cloud" || settingsPreset?.provider === "acp") return;
@@ -1092,7 +1120,8 @@ const AISection = ({
             }
             const customData = await customResponse.json();
             setModels(
-              (customData.data || []).map((model: { id: string }) => ({
+              (customData.data || []).map((model: AIModel) => ({
+                ...model,
                 id: model.id,
                 name: model.id,
                 provider: "custom",
@@ -1125,6 +1154,8 @@ const AISection = ({
                     id: m.id,
                     name: m.display_name || m.id,
                     provider: "anthropic",
+                    max_input_tokens: m.max_input_tokens,
+                    max_tokens: m.max_tokens,
                   }))
               );
             } else {
@@ -1211,6 +1242,7 @@ const AISection = ({
                 tags: m.tags,
                 free: m.free,
                 context_window: m.context_window,
+                max_output_tokens: m.max_output_tokens,
                 best_for: m.best_for,
                 speed: m.speed,
                 intelligence: m.intelligence,
@@ -1823,50 +1855,74 @@ const AISection = ({
         helperText="This prompt will be used to guide the AI's responses"
       />
 
-      {settingsPreset?.provider !== "screenpipe-cloud" && settingsPreset?.provider !== "acp" && (
-        <div className="w-full">
-          <Label htmlFor="maxTokens" className="text-sm font-medium">
-            Max Output Tokens
-          </Label>
-          <p className="text-xs text-muted-foreground mb-2">
-            Maximum tokens the model can generate per response.
-          </p>
-          <Input
-            id="maxTokens"
-            type="number"
-            min={256}
-            max={128000}
-            step={256}
-            value={(settingsPreset as any)?.maxTokens ?? 4096}
-            onChange={(e) => updateSettingsPreset({ maxTokens: parseInt(e.target.value) || 4096 } as any)}
-            className="w-full"
-          />
-          <div className="flex flex-wrap gap-1.5 mt-2">
-            {[
-              { label: "8k", value: 8192, hint: "haiku / qwen" },
-              { label: "32k", value: 32768, hint: "gpt-4.1" },
-              { label: "64k", value: 64000, hint: "opus / sonnet" },
-              { label: "65k", value: 65536, hint: "long responses" },
-              { label: "100k", value: 100000, hint: "o3 / o4" },
-              { label: "128k", value: 128000, hint: "gpt-5" },
-            ].map((preset) => (
-              <button
-                key={preset.value}
-                type="button"
-                className={`px-2 py-1 text-xs rounded-md border transition-colors ${
-                  (settingsPreset as any)?.maxTokens === preset.value
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "bg-muted/50 hover:bg-muted border-border"
-                }`}
-                onClick={() => updateSettingsPreset({ maxTokens: preset.value } as any)}
-              >
-                {preset.label}
-                <span className="text-[10px] ml-1 opacity-60">{preset.hint}</span>
-              </button>
-            ))}
+      {settingsPreset?.provider !== "screenpipe-cloud" &&
+        settingsPreset?.provider !== "acp" &&
+        (!resolvedModelLimits?.contextWindow || !resolvedModelLimits?.maxOutputTokens) && (
+          <div className="w-full border rounded-lg">
+            <button
+              type="button"
+              className="flex items-center justify-between w-full px-4 py-3 text-sm font-medium text-left hover:bg-accent/50 transition-colors rounded-lg"
+              onClick={() => setModelLimitsOpen(!modelLimitsOpen)}
+            >
+              <span>Advanced model limits</span>
+              {modelLimitsOpen ? (
+                <ChevronUp className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              )}
+            </button>
+            {modelLimitsOpen && (
+              <div className="space-y-4 px-4 pb-4">
+                {!resolvedModelLimits?.contextWindow && (
+                  <div>
+                    <Label htmlFor="maxContextTokens" className="text-sm font-medium">
+                      Model Context Tokens
+                    </Label>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Only needed when the provider does not publish this model&apos;s context window.
+                    </p>
+                    <Input
+                      id="maxContextTokens"
+                      type="number"
+                      min={32768}
+                      max={2000000}
+                      step={1024}
+                      value={Math.ceil(((settingsPreset as any)?.maxContextChars ?? 512000) / 4)}
+                      onChange={(e) =>
+                        updateSettingsPreset({
+                          maxContextChars: (parseInt(e.target.value) || 128000) * 4,
+                        } as any)
+                      }
+                      className="w-full"
+                    />
+                  </div>
+                )}
+                {!resolvedModelLimits?.maxOutputTokens && (
+                  <div>
+                    <Label htmlFor="maxTokens" className="text-sm font-medium">
+                      Max Output Tokens
+                    </Label>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Only needed when the provider does not publish this model&apos;s output limit.
+                    </p>
+                    <Input
+                      id="maxTokens"
+                      type="number"
+                      min={256}
+                      max={128000}
+                      step={256}
+                      value={(settingsPreset as any)?.maxTokens ?? 4096}
+                      onChange={(e) =>
+                        updateSettingsPreset({ maxTokens: parseInt(e.target.value) || 4096 } as any)
+                      }
+                      className="w-full"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        )}
 
       {settingsPreset?.provider !== "screenpipe-cloud" && settingsPreset?.provider !== "acp" && (
         <div className="w-full border rounded-lg">

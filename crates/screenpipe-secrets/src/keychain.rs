@@ -172,7 +172,7 @@ pub fn get_or_create_key() -> Option<[u8; 32]> {
     // Generate a new random 32-byte key
     let mut key = [0u8; 32];
     use rand::RngCore;
-    rand::thread_rng().fill_bytes(&mut key);
+    rand::rng().fill_bytes(&mut key);
 
     let b64 = B64.encode(key);
 

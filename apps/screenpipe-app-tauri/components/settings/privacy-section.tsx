@@ -1977,11 +1977,12 @@ export function PrivacySection() {
               <div className="flex items-center space-x-2.5">
                 <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
-                  <h3 className="text-sm font-medium text-foreground">
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                     Analytics
+                    <HelpTooltip text="Product usage events only — features used, errors, performance. Never your screen recordings, audio, transcripts, or OCR text. Signed out, events carry only a random device ID. Signed in, they are linked to your account, including your email." />
                   </h3>
                   <p className="text-xs text-muted-foreground">
-                    Anonymous usage data
+                    Usage data, linked to your account when signed in
                   </p>
                 </div>
               </div>

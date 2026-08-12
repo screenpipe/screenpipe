@@ -67,7 +67,7 @@ impl EmbeddingExtractor {
         })?;
         let (rows, cols) = features_016.dim();
         let features: Array2<f32> =
-            Array2::from_shape_vec((rows, cols), features_016.into_raw_vec())
+            Array2::from_shape_vec((rows, cols), features_016.into_raw_vec_and_offset().0)
                 .context("fbank shape roundtrip failed")?;
         let features = features.insert_axis(ndarray::Axis(0)); // Add batch dimension
         let inputs = ort::inputs!["feats" => ort::value::TensorRef::from_array_view(&features)

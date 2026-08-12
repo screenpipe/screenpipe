@@ -53,7 +53,7 @@ export const screenSearchIndex: SettingsField[] = [
   { label: "Screen context capture", keywords: ["screen", "video", "accessibility"] },
   { label: "Structured app context", keywords: ["semantic", "ai", "messages", "email", "tasks", "code"], conditional: true },
   { label: "Use it for", keywords: ["memory", "computer use", "automation", "agent", "skills"], conditional: true },
-  { label: "Screenshot images", keywords: ["screenshot", "pixels", "ocr", "jpeg"] },
+  { label: "Screen recording", keywords: ["screenshot", "pixels", "ocr", "jpeg", "capture"] },
   { label: "Use all monitors", keywords: ["monitor", "display"], conditional: true },
   // conditional: monitor picker only renders when "Use all monitors" is off — paired right under that toggle.
   { label: "Monitors", conditional: true },
@@ -3970,8 +3970,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 <div className="flex items-center space-x-2.5">
                   <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
                   <div>
-                    <h3 className="text-sm font-medium text-foreground">Screenshot images</h3>
-                    <p className="text-xs text-muted-foreground">Capture screen pixels and store JPEG screenshots for visual evidence and OCR fallback</p>
+                    <h3 className="text-sm font-medium text-foreground">Screen recording</h3>
+                    <p className="text-xs text-muted-foreground">Record screen pixels for the timeline and image-only text. Turn this off to stop screen recording; accessibility text stays searchable.</p>
                   </div>
                 </div>
                 <ManagedSwitch

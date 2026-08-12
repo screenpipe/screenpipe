@@ -6,6 +6,8 @@ import { waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	queryHighlightTokens,
+	type SearchMatch,
+	type SearchMatchGroup,
 	useKeywordSearchStore,
 	visibleMatchingPositions,
 } from "../use-keyword-search-store";
@@ -40,6 +42,16 @@ function jsonResponse(body: unknown) {
 		status: 200,
 		headers: { "Content-Type": "application/json" },
 	});
+}
+
+function grouped(matches: SearchMatch[]): SearchMatchGroup[] {
+	return matches.map((representative) => ({
+		representative,
+		group_size: 1,
+		start_time: representative.timestamp,
+		end_time: representative.timestamp,
+		frame_ids: [representative.frame_id],
+	}));
 }
 
 describe("useKeywordSearchStore search scheduling", () => {
@@ -82,11 +94,12 @@ describe("useKeywordSearchStore search scheduling", () => {
 		expect(calls).toHaveLength(1);
 		expect(calls[0]).toContain("/search/keyword?");
 		expect(calls[0]).toContain("query=screenpipe");
+		expect(calls[0]).toContain("group=true");
 		expect(useKeywordSearchStore.getState().isSearching).toBe(true);
 		expect(useKeywordSearchStore.getState().isSearchingUiEvents).toBe(false);
 
 		keywordResponse.resolve(
-			jsonResponse([
+			jsonResponse(grouped([
 				{
 					frame_id: 1,
 					timestamp: "2026-06-19T00:00:00.000Z",
@@ -102,7 +115,7 @@ describe("useKeywordSearchStore search scheduling", () => {
 					url: "",
 					text_source: "ocr",
 				},
-			]),
+			])),
 		);
 
 		await searchPromise;
@@ -180,7 +193,7 @@ describe("useKeywordSearchStore search scheduling", () => {
 		const newSearch = useKeywordSearchStore.getState().searchKeywords("new-query");
 		expect(oldSignal?.aborted).toBe(true);
 
-		newResponse.resolve(jsonResponse([{
+		newResponse.resolve(jsonResponse(grouped([{
 			frame_id: 2,
 			timestamp: "2026-07-13T01:00:00.000Z",
 			text_positions: [{
@@ -194,10 +207,10 @@ describe("useKeywordSearchStore search scheduling", () => {
 			text: "new result",
 			url: "",
 			text_source: "ocr",
-		}]));
+		}])));
 		await newSearch;
 
-		oldResponse.resolve(jsonResponse([{
+		oldResponse.resolve(jsonResponse(grouped([{
 			frame_id: 1,
 			timestamp: "2026-07-13T00:00:00.000Z",
 			text_positions: [{
@@ -211,7 +224,7 @@ describe("useKeywordSearchStore search scheduling", () => {
 			text: "old result",
 			url: "",
 			text_source: "ocr",
-		}]));
+		}])));
 		await oldSearch;
 
 		expect(useKeywordSearchStore.getState().searchQuery).toBe("new-query");
@@ -222,7 +235,7 @@ describe("useKeywordSearchStore search scheduling", () => {
 		vi.mocked(localFetch).mockImplementation((input) => {
 			const url = String(input);
 			if (url.startsWith("/search/keyword?")) {
-				return Promise.resolve(jsonResponse([{
+				return Promise.resolve(jsonResponse(grouped([{
 					frame_id: 566,
 					timestamp: "2026-07-30T03:27:38.299898Z",
 					text_positions: [{
@@ -241,7 +254,7 @@ describe("useKeywordSearchStore search scheduling", () => {
 					text: "Deterministic",
 					url: "",
 					text_source: "ocr",
-				}]));
+				}])));
 			}
 			if (url.startsWith("/search?")) {
 				return Promise.resolve(jsonResponse({ data: [] }));
@@ -258,307 +271,72 @@ describe("useKeywordSearchStore search scheduling", () => {
 		).toEqual([566]);
 	});
 
-	it("excludes accessibility-only candidates that screenshot OCR cannot verify", async () => {
+	it("keeps accessibility candidates instead of re-verifying them with screenshot OCR", async () => {
+		// Accessibility is the primary capture source and dominates real result
+		// sets. Gating it on a screenshot-OCR second opinion deleted correct results
+		// and competed with the recorder for the single shared capture OCR permit.
 		const candidates = Array.from({ length: 5 }, (_, index) => ({
 			frame_id: index + 1,
-			timestamp: `2026-07-30T07:4${index}:00.000Z`,
+			timestamp: "2026-07-30T03:27:38.299898Z",
 			text_positions: [{
-				text: "offset from accessibility",
+				text: "quarterly retention review",
 				confidence: 1,
-				bounds: { left: 0.1, top: 0.1, width: 0.3, height: 0.05 },
+				bounds: { left: 0.1, top: 0.1, width: 0.4, height: 0.05 },
 			}],
-			app_name: "Safari",
-			window_name: `candidate ${index + 1}`,
+			app_name: "Notion",
+			window_name: "Notion",
 			confidence: 1,
-			text: "offset from hidden accessibility data",
+			text: "quarterly retention review",
 			url: "",
 			text_source: "accessibility" as const,
 		}));
+		const requestedUrls: string[] = [];
+		vi.mocked(localFetch).mockImplementation((input) => {
+			const url = String(input);
+			requestedUrls.push(url);
+			if (url.startsWith("/search/keyword?")) {
+				return Promise.resolve(jsonResponse(grouped(candidates)));
+			}
+			if (url.startsWith("/search?")) {
+				return Promise.resolve(jsonResponse({ data: [] }));
+			}
+			throw new Error(`unexpected request: ${url}`);
+		});
 
+		await useKeywordSearchStore.getState().searchKeywords("retention");
+
+		expect(
+			useKeywordSearchStore
+				.getState()
+				.searchResults.map((result) => result.frame_id),
+		).toEqual([1, 2, 3, 4, 5]);
+		expect(
+			requestedUrls.some((url) => url.includes("/text?persist=false")),
+		).toBe(false);
+	});
+
+	it("keeps a result whose match spans a larger element than any single position", async () => {
+		// Accessibility bounds are element-level: one box can cover a whole block of
+		// text. A coarse highlight is acceptable; deleting the row is not.
+		const position = {
+			text: "a long accessibility block with the term buried inside it",
+			confidence: 1,
+			bounds: { left: 0, top: 0, width: 1, height: 0.2 },
+		};
 		vi.mocked(localFetch).mockImplementation((input) => {
 			const url = String(input);
 			if (url.startsWith("/search/keyword?")) {
-				return Promise.resolve(jsonResponse(candidates));
-			}
-			if (
-				url === "/frames/2/text?persist=false" ||
-				url === "/frames/5/text?persist=false"
-			) {
-				return Promise.resolve(jsonResponse({
-					frame_id: Number(url.match(/\d+/)?.[0]),
-					text_positions: [{
-						text: "visible offset text",
-						confidence: 0.98,
-						bounds: { left: 0.25, top: 0.3, width: 0.12, height: 0.04 },
-					}],
-				}));
-			}
-			if (url.startsWith("/frames/")) {
-				return Promise.resolve(jsonResponse({
-					frame_id: Number(url.match(/\d+/)?.[0]),
-					text_positions: [{
-						text: "pixels contain something else",
-						confidence: 0.99,
-						bounds: { left: 0.2, top: 0.2, width: 0.2, height: 0.04 },
-					}],
-				}));
-			}
-			if (url.startsWith("/search?")) {
-				return Promise.resolve(jsonResponse({ data: [] }));
-			}
-			throw new Error(`unexpected request: ${url}`);
-		});
-
-		await useKeywordSearchStore.getState().searchKeywords("offset");
-
-		const state = useKeywordSearchStore.getState();
-		expect(state.searchResults.map((result) => result.frame_id)).toEqual([2, 5]);
-		expect(state.searchGroups.map((group) => group.representative.frame_id)).toEqual([2, 5]);
-		expect(state.currentResultIndex).toBe(0);
-		expect(state.searchResults).toHaveLength(2);
-		expect(state.lastCandidatePageSize).toBe(5);
-		expect(state.searchResults[0].text_positions[0].text).toBe(
-			"visible offset text",
-		);
-		expect(localFetch).toHaveBeenCalledWith(
-			"/frames/1/text?persist=false",
-			expect.objectContaining({ method: "POST" }),
-		);
-	});
-
-	it("keeps verified candidates when another frame OCR request fails", async () => {
-		const candidate = (frameId: number) => ({
-			frame_id: frameId,
-			timestamp: `2026-07-30T08:0${frameId}:00.000Z`,
-			text_positions: [],
-			app_name: "Safari",
-			window_name: `candidate ${frameId}`,
-			confidence: 1,
-			text: "offset from accessibility",
-			url: "",
-			text_source: "accessibility" as const,
-		});
-
-		vi.mocked(localFetch).mockImplementation((input) => {
-			const url = String(input);
-			if (url.startsWith("/search/keyword?")) {
-				return Promise.resolve(jsonResponse([candidate(1), candidate(2)]));
-			}
-			if (url === "/frames/1/text?persist=false") {
-				return Promise.reject(new TypeError("temporary connection failure"));
-			}
-			if (url === "/frames/2/text?persist=false") {
-				return Promise.resolve(jsonResponse({
-					text_positions: [{
-						text: "visible offset",
-						confidence: 0.98,
-						bounds: { left: 0.2, top: 0.2, width: 0.1, height: 0.04 },
-					}],
-				}));
-			}
-			if (url.startsWith("/search?")) {
-				return Promise.resolve(jsonResponse({ data: [] }));
-			}
-			throw new Error(`unexpected request: ${url}`);
-		});
-
-		await useKeywordSearchStore.getState().searchKeywords("offset");
-
-		expect(
-			useKeywordSearchStore.getState().searchResults.map((result) => result.frame_id),
-		).toEqual([2]);
-	});
-
-	it("publishes OCR matches before bounded accessibility verification finishes", async () => {
-		let activeFrameRequests = 0;
-		let maxConcurrentFrameRequests = 0;
-		let releaseVerification!: () => void;
-		const verificationGate = new Promise<void>((resolve) => {
-			releaseVerification = resolve;
-		});
-		const candidate = (
-			frameId: number,
-			textSource: "accessibility" | "ocr",
-		) => ({
-			frame_id: frameId,
-			timestamp: "2026-07-30T09:00:00.000Z",
-			text_positions:
-				textSource === "ocr"
-					? [{
-							text: "visible offset",
-							confidence: 1,
-							bounds: {
-								left: 0.1,
-								top: 0.1,
-								width: 0.1,
-								height: 0.04,
-							},
-						}]
-					: [],
-			app_name: "Safari",
-			window_name: `candidate ${frameId}`,
-			confidence: 1,
-			text: "offset",
-			url: "",
-			text_source: textSource,
-		});
-		const candidates = [
-			candidate(50_100, "ocr"),
-			...Array.from(
-				{ length: 6 },
-				(_, index) => candidate(50_101 + index, "accessibility"),
-			),
-		];
-
-		vi.mocked(localFetch).mockImplementation(async (input) => {
-			const url = String(input);
-			if (url.startsWith("/search/keyword?")) {
-				return jsonResponse(candidates);
-			}
-			if (url.startsWith("/frames/")) {
-				activeFrameRequests += 1;
-				maxConcurrentFrameRequests = Math.max(
-					maxConcurrentFrameRequests,
-					activeFrameRequests,
-				);
-				await verificationGate;
-				activeFrameRequests -= 1;
-				return jsonResponse({
-					text_positions: [{
-						text: "visible offset",
-						confidence: 0.98,
-						bounds: {
-							left: 0.2,
-							top: 0.2,
-							width: 0.1,
-							height: 0.04,
-						},
-					}],
-				});
-			}
-			if (url.startsWith("/search?")) {
-				return jsonResponse({ data: [] });
-			}
-			throw new Error(`unexpected request: ${url}`);
-		});
-
-		const search = useKeywordSearchStore
-			.getState()
-			.searchKeywords("offset");
-
-		await waitFor(() => {
-			expect(
-				useKeywordSearchStore
-					.getState()
-					.searchResults.map((result) => result.frame_id),
-			).toEqual([50_100]);
-		});
-		expect(useKeywordSearchStore.getState().isSearching).toBe(true);
-
-		releaseVerification();
-		await search;
-
-		expect(useKeywordSearchStore.getState().searchResults).toHaveLength(7);
-		expect(maxConcurrentFrameRequests).toBeLessThanOrEqual(3);
-	});
-
-	it("aborts obsolete different-frame verification when a replacement query arrives", async () => {
-		let obsoleteSignal: AbortSignal | undefined;
-		const obsoleteStarted = deferred<void>();
-		const candidate = (
-			frameId: number,
-			text: string,
-			textSource: "accessibility" | "ocr",
-		) => ({
-			frame_id: frameId,
-			timestamp: "2026-07-30T09:00:00.000Z",
-			text_positions: textSource === "ocr"
-				? [{
-						text,
-						confidence: 1,
-						bounds: { left: 0.1, top: 0.1, width: 0.2, height: 0.05 },
-					}]
-				: [],
-			app_name: "Safari",
-			window_name: `candidate ${frameId}`,
-			confidence: 1,
-			text,
-			url: "",
-			text_source: textSource,
-		});
-
-		vi.mocked(localFetch).mockImplementation((input, init) => {
-			const url = String(input);
-			if (url.includes("query=oldtoken")) {
-				return Promise.resolve(jsonResponse([
-					candidate(12_010, "oldtoken", "accessibility"),
-				]));
-			}
-			if (url.includes("query=newtoken")) {
-				return Promise.resolve(jsonResponse([
-					candidate(12_011, "newtoken", "ocr"),
-				]));
-			}
-			if (url === "/frames/12010/text?persist=false") {
-				obsoleteSignal = init?.signal ?? undefined;
-				obsoleteStarted.resolve();
-				return new Promise<Response>((_resolve, reject) => {
-					obsoleteSignal?.addEventListener(
-						"abort",
-						() => reject(new DOMException("Aborted", "AbortError")),
-						{ once: true },
-					);
-				});
-			}
-			if (url.startsWith("/search?")) {
-				return Promise.resolve(jsonResponse({ data: [] }));
-			}
-			throw new Error(`unexpected request: ${url}`);
-		});
-
-		const oldSearch = useKeywordSearchStore.getState().searchKeywords("oldtoken");
-		await obsoleteStarted.promise;
-		expect(obsoleteSignal?.aborted).toBe(false);
-
-		const newSearch = useKeywordSearchStore.getState().searchKeywords("newtoken");
-		await newSearch;
-		expect(obsoleteSignal?.aborted).toBe(true);
-		await oldSearch;
-
-		expect(
-			useKeywordSearchStore.getState().searchResults.map((result) => result.frame_id),
-		).toEqual([12_011]);
-	});
-
-	it("aborts queued frame verification when search is reset", async () => {
-		let frameSignal: AbortSignal | undefined;
-		const frameStarted = deferred<void>();
-
-		vi.mocked(localFetch).mockImplementation((input, init) => {
-			const url = String(input);
-			if (url.startsWith("/search/keyword?")) {
-				return Promise.resolve(jsonResponse([{
-					frame_id: 12_012,
-					timestamp: "2026-07-30T09:00:00.000Z",
-					text_positions: [],
-					app_name: "Safari",
-					window_name: "reset candidate",
+				return Promise.resolve(jsonResponse(grouped([{
+					frame_id: 99,
+					timestamp: "2026-07-30T03:27:38.299898Z",
+					text_positions: [position],
+					app_name: "Arc",
+					window_name: "Arc",
 					confidence: 1,
-					text: "resettoken",
+					text: position.text,
 					url: "",
-					text_source: "accessibility",
-				}]));
-			}
-			if (url === "/frames/12012/text?persist=false") {
-				frameSignal = init?.signal ?? undefined;
-				frameStarted.resolve();
-				return new Promise<Response>((_resolve, reject) => {
-					frameSignal?.addEventListener(
-						"abort",
-						() => reject(new DOMException("Aborted", "AbortError")),
-						{ once: true },
-					);
-				});
+					text_source: "accessibility" as const,
+				}])));
 			}
 			if (url.startsWith("/search?")) {
 				return Promise.resolve(jsonResponse({ data: [] }));
@@ -566,269 +344,11 @@ describe("useKeywordSearchStore search scheduling", () => {
 			throw new Error(`unexpected request: ${url}`);
 		});
 
-		const search = useKeywordSearchStore.getState().searchKeywords("resettoken");
-		await frameStarted.promise;
-		useKeywordSearchStore.getState().resetSearch();
-		expect(frameSignal?.aborted).toBe(true);
-		await search;
-		expect(useKeywordSearchStore.getState().isSearching).toBe(false);
-	});
+		await useKeywordSearchStore.getState().searchKeywords("unrelatedtoken");
 
-	it("reuses screenshot verification for the same frame and query", async () => {
-		let frameTextRequests = 0;
-		const candidate = {
-			frame_id: 12_001,
-			timestamp: "2026-07-30T09:00:00.000Z",
-			text_positions: [],
-			app_name: "Safari",
-			window_name: "cached candidate",
-			confidence: 1,
-			text: "retentionverify",
-			url: "",
-			text_source: "accessibility" as const,
-		};
-
-		vi.mocked(localFetch).mockImplementation(async (input) => {
-			const url = String(input);
-			if (url.startsWith("/search/keyword?")) {
-				return jsonResponse([candidate]);
-			}
-			if (url === "/frames/12001/text?persist=false") {
-				frameTextRequests += 1;
-				return jsonResponse({
-					text_positions: [{
-						text: "visible retentionverify",
-						confidence: 0.98,
-						bounds: {
-							left: 0.2,
-							top: 0.2,
-							width: 0.2,
-							height: 0.04,
-						},
-					}],
-				});
-			}
-			if (url.startsWith("/search?")) {
-				return jsonResponse({ data: [] });
-			}
-			throw new Error(`unexpected request: ${url}`);
-		});
-
-		await useKeywordSearchStore
-			.getState()
-			.searchKeywords("retentionverify");
-		useKeywordSearchStore.getState().resetSearch();
-		await useKeywordSearchStore
-			.getState()
-			.searchKeywords("retentionverify");
-
-		expect(frameTextRequests).toBe(1);
-		expect(useKeywordSearchStore.getState().searchResults).toHaveLength(1);
-	});
-
-	it("reuses screenshot verification for the same frame across different queries", async () => {
-		// A frame's OCR text does not depend on the query, so editing the query
-		// must not re-OCR frames already read. Keying the cache on (frame, query)
-		// re-ran every frame on every keystroke.
-		let frameTextRequests = 0;
-		const candidate = {
-			frame_id: 12_002,
-			timestamp: "2026-07-30T09:00:00.000Z",
-			text_positions: [],
-			app_name: "Safari",
-			window_name: "requeried candidate",
-			confidence: 1,
-			text: "retentionverify",
-			url: "",
-			text_source: "accessibility" as const,
-		};
-
-		vi.mocked(localFetch).mockImplementation(async (input) => {
-			const url = String(input);
-			if (url.startsWith("/search/keyword?")) {
-				return jsonResponse([candidate]);
-			}
-			if (url === "/frames/12002/text?persist=false") {
-				frameTextRequests += 1;
-				return jsonResponse({
-					text_positions: [{
-						text: "visible retentionverify",
-						confidence: 0.98,
-						bounds: { left: 0.2, top: 0.2, width: 0.2, height: 0.04 },
-					}],
-				});
-			}
-			if (url.startsWith("/search?")) {
-				return jsonResponse({ data: [] });
-			}
-			throw new Error(`unexpected request: ${url}`);
-		});
-
-		await useKeywordSearchStore.getState().searchKeywords("retentionverify");
-		useKeywordSearchStore.getState().resetSearch();
-		// Same frame, different query — the backspace case from the bug report.
-		await useKeywordSearchStore.getState().searchKeywords("retentionverif");
-
-		expect(frameTextRequests).toBe(1);
-		expect(useKeywordSearchStore.getState().searchResults).toHaveLength(1);
-	});
-
-	it("shares one screenshot verification request between overlapping searches", async () => {
-		// Two search epochs in flight at once must not each start their own OCR
-		// for the same frame: the server cannot cancel OCR already running, so a
-		// duplicate is work that is paid for twice and thrown away once.
-		let frameTextRequests = 0;
-		const frameText = deferred<Response>();
-		const candidate = {
-			frame_id: 12_003,
-			timestamp: "2026-07-30T09:00:00.000Z",
-			text_positions: [],
-			app_name: "Safari",
-			window_name: "coalesced candidate",
-			confidence: 1,
-			text: "retentionverify",
-			url: "",
-			text_source: "accessibility" as const,
-		};
-
-		vi.mocked(localFetch).mockImplementation(async (input) => {
-			const url = String(input);
-			if (url.startsWith("/search/keyword?")) {
-				return jsonResponse([candidate]);
-			}
-			if (url === "/frames/12003/text?persist=false") {
-				frameTextRequests += 1;
-				return frameText.promise;
-			}
-			if (url.startsWith("/search?")) {
-				return jsonResponse({ data: [] });
-			}
-			throw new Error(`unexpected request: ${url}`);
-		});
-
-		const first = useKeywordSearchStore
-			.getState()
-			.searchKeywords("retentionverify");
-		await waitFor(() => expect(frameTextRequests).toBe(1));
-
-		// Second epoch starts while the first frame read is still outstanding.
-		const second = useKeywordSearchStore
-			.getState()
-			.searchKeywords("retentionverif");
-
-		frameText.resolve(
-			jsonResponse({
-				text_positions: [{
-					text: "visible retentionverify",
-					confidence: 0.98,
-					bounds: { left: 0.2, top: 0.2, width: 0.2, height: 0.04 },
-				}],
-			}),
-		);
-		await Promise.all([first, second]);
-
-		expect(frameTextRequests).toBe(1);
-	});
-
-	it("keeps same-frame verification alive while a replacement query debounces", async () => {
-		let frameTextRequests = 0;
-		let frameSignal: AbortSignal | undefined;
-		const frameText = deferred<Response>();
-		const candidate = {
-			frame_id: 12_013,
-			timestamp: "2026-07-30T09:00:00.000Z",
-			text_positions: [],
-			app_name: "Safari",
-			window_name: "replacement candidate",
-			confidence: 1,
-			text: "retentionverify",
-			url: "",
-			text_source: "accessibility" as const,
-		};
-
-		vi.mocked(localFetch).mockImplementation(async (input, init) => {
-			const url = String(input);
-			if (url.startsWith("/search/keyword?")) return jsonResponse([candidate]);
-			if (url === "/frames/12013/text?persist=false") {
-				frameTextRequests += 1;
-				frameSignal = init?.signal ?? undefined;
-				return frameText.promise;
-			}
-			if (url.startsWith("/search?")) return jsonResponse({ data: [] });
-			throw new Error(`unexpected request: ${url}`);
-		});
-
-		const first = useKeywordSearchStore
-			.getState()
-			.searchKeywords("retentionverify");
-		await waitFor(() => expect(frameTextRequests).toBe(1));
-
-		useKeywordSearchStore
-			.getState()
-			.prepareForReplacementSearch("retentionverif");
-		expect(frameSignal?.aborted).toBe(false);
-		const second = useKeywordSearchStore
-			.getState()
-			.searchKeywords("retentionverif");
-
-		frameText.resolve(jsonResponse({
-			text_positions: [{
-				text: "visible retentionverify",
-				confidence: 0.98,
-				bounds: { left: 0.2, top: 0.2, width: 0.2, height: 0.04 },
-			}],
-		}));
-		await Promise.all([first, second]);
-
-		expect(frameTextRequests).toBe(1);
-		expect(useKeywordSearchStore.getState().searchQuery).toBe("retentionverif");
-		expect(useKeywordSearchStore.getState().searchResults).toHaveLength(1);
-	});
-
-	it("cancels frame verification when the replacement cannot run keyword search", async () => {
-		let frameSignal: AbortSignal | undefined;
-		const frameStarted = deferred<void>();
-
-		vi.mocked(localFetch).mockImplementation((input, init) => {
-			const url = String(input);
-			if (url.startsWith("/search/keyword?")) {
-				return Promise.resolve(jsonResponse([{
-					frame_id: 12_014,
-					timestamp: "2026-07-30T09:00:00.000Z",
-					text_positions: [],
-					app_name: "Safari",
-					window_name: "short replacement candidate",
-					confidence: 1,
-					text: "retentionverify",
-					url: "",
-					text_source: "accessibility",
-				}]));
-			}
-			if (url === "/frames/12014/text?persist=false") {
-				frameSignal = init?.signal ?? undefined;
-				frameStarted.resolve();
-				return new Promise<Response>((_resolve, reject) => {
-					frameSignal?.addEventListener(
-						"abort",
-						() => reject(new DOMException("Aborted", "AbortError")),
-						{ once: true },
-					);
-				});
-			}
-			if (url.startsWith("/search?")) {
-				return Promise.resolve(jsonResponse({ data: [] }));
-			}
-			throw new Error(`unexpected request: ${url}`);
-		});
-
-		const search = useKeywordSearchStore
-			.getState()
-			.searchKeywords("retentionverify");
-		await frameStarted.promise;
-		useKeywordSearchStore.getState().prepareForReplacementSearch("re");
-
-		expect(frameSignal?.aborted).toBe(true);
-		await search;
+		const results = useKeywordSearchStore.getState().searchResults;
+		expect(results.map((result) => result.frame_id)).toEqual([99]);
+		expect(results[0].text_positions).toEqual([position]);
 	});
 });
 

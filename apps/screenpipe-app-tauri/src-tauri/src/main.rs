@@ -42,7 +42,6 @@ mod agent_event_emitter;
 mod audio_exclusions;
 mod auth_token;
 mod brain_views;
-mod browser_login;
 mod calendar;
 mod capture_session;
 mod chatgpt_oauth;
@@ -50,6 +49,7 @@ mod chatgpt_oauth;
 mod commands;
 mod db_recovery_notifications;
 mod db_relaunch;
+mod db_self_heal;
 mod dev_isolation;
 mod diagnostic_logs;
 mod disk_usage;
@@ -161,6 +161,10 @@ mod notifications;
 mod safe_icon;
 mod shortcuts;
 mod skills;
+// Binding generation runs from `cargo test` (`bun run bindings:generate` /
+// `bindings:check`) and from the debug-build refresh in `async_main`. Release
+// binaries never export TypeScript, so the whole module stays out of them.
+#[cfg(any(debug_assertions, test))]
 mod specta_bindings;
 mod vault;
 mod viewer;
@@ -271,7 +275,9 @@ const _: () = assert!(
     "generated Tauri command registry must not be empty"
 );
 
-/// Shared tauri-specta registry body.
+/// Shared tauri-specta registry body. Only the debug-build binding refresh and
+/// the `cfg(test)` exporter build the registry — release binaries never do.
+#[cfg(any(debug_assertions, test))]
 macro_rules! define_specta_builder {
     () => {{
         use crate::store::{OnboardingStore, SettingsStore};
@@ -1010,6 +1016,16 @@ async fn main() {
             }
             let app_handle = app.handle();
 
+            // Go non-activating before the first window exists. Tauri defaults to
+            // `Regular`, and a launching Regular app is activated by macOS — which
+            // swaps a developer out of their fullscreen Space every time an agent
+            // starts the suite. `reset_to_regular_and_refresh_tray` re-applies this
+            // later in setup; it has to be set here to beat window creation.
+            #[cfg(all(target_os = "macos", feature = "e2e"))]
+            if !crate::window::window_activation_allowed() {
+                let _ = app_handle.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            }
+
             // Create macOS app menu with Settings
             #[cfg(target_os = "macos")]
             {
@@ -1554,22 +1570,20 @@ async fn main() {
             // the chat (standalone-chat.tsx calls pi_start). An idle watchdog in pi.rs
             // auto-stops it after 5 minutes of inactivity to avoid stale processes.
 
-            // Show shortcut reminder overlay on app startup if enabled AND onboarding is completed
-            // Don't show reminder during first-time onboarding to reduce overwhelm.
-            // Skip entirely when the timeline is disabled — the shortcut it
-            // advertises only opens the (now-off) timeline overlay.
-            if store.show_shortcut_overlay
-                && onboarding_store.is_completed
+            // Show the shortcut overlay after onboarding. The command applies
+            // saved snoozes/preferences and the bounded re-show of the smaller
+            // cross-platform design. Skip when the timeline itself is unavailable.
+            if onboarding_store.is_completed
                 && !app_ui_hidden
                 && !headless_startup
                 && !store.recording.disable_timeline
             {
-                let shortcut = store.show_screenpipe_shortcut.clone();
                 let app_handle_reminder = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     // Small delay to ensure windows are ready
                     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                    let _ = commands::show_shortcut_reminder(app_handle_reminder, shortcut).await;
+                    let _ = commands::maybe_show_shortcut_reminder_on_startup(app_handle_reminder)
+                        .await;
                 });
             }
 
@@ -2039,17 +2053,34 @@ async fn main() {
             crate::db_recovery_notifications::start(app_handle.clone());
             if launch_db_quarantined {
                 // A new process must preserve the same fail-closed state as the
-                // process that observed the hard fault. Start the notification
-                // subscriber first, then publish recovery-required immediately.
+                // process that observed the hard fault — unless the fault was
+                // the transient I/O family and this generation still verifies
+                // healthy, in which case the fresh WAL index already undid the
+                // damage and parking recording until a human intervenes costs
+                // hours of capture for nothing. Verification runs off the setup
+                // thread: it reads the whole file, which is seconds on a large
+                // database, and the UI must not wait for it.
+                let self_heal_app = app_handle.clone();
+                let self_heal_db_path = launch_db_path.clone();
+                let notify_data_dir = data_dir.clone();
+                let surface_recovery = !app_ui_hidden && !headless_startup;
                 tauri::async_runtime::spawn(async move {
+                    if crate::db_self_heal::try_self_heal_at_launch(
+                        self_heal_app,
+                        self_heal_db_path,
+                    )
+                    .await
+                    {
+                        return;
+                    }
                     crate::db_relaunch::surface_quarantined_recovery_at_launch(&launch_db_path)
                         .await;
+                    if surface_recovery {
+                        crate::db_recovery_notifications::notify_quarantined_database(
+                            notify_data_dir,
+                        );
+                    }
                 });
-                if !app_ui_hidden && !headless_startup {
-                    crate::db_recovery_notifications::notify_quarantined_database(
-                        data_dir.clone(),
-                    );
-                }
             }
             crate::disk_pressure_notifications::start(app_handle.clone());
 

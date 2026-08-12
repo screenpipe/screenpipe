@@ -20,11 +20,13 @@ Public publication includes any of the following:
 - creating an `app-v*` or `app-beta-v*` tag or GitHub release;
 - notifying subscribers or announcing availability.
 
-GitHub ruleset `Human-only app publication tags` denies app publication-tag creation, update, and deletion by default. Environment `app-publication` requires Louis as reviewer, prevents self-review, and does not allow administrator bypass.
+The human gate is the click. The authenticated releases control in the website admin UI is the only publication path: it requires an internal `releases:write` permission plus Clerk reverification, and it is the single action that writes updater pointers, creates the GitHub release, and dispatches the changelog. Before clicking, the human verifies the exact bump commit, required CI, all signed platform artifacts, and the intended channel.
 
-The human publication path is the authenticated releases control in the website admin UI. Before publishing, the human must verify the exact bump commit, required CI, all signed platform artifacts, and the intended channel. If a stable GitHub release is required, the human temporarily changes the tag ruleset in GitHub's web settings, publishes from the admin UI, verifies the release, and immediately restores the ruleset to active enforcement.
+Automation cannot reach that path because the release workflows hold no publication credentials at all: `076735b17` removed them, leaving `Release App` and `Release Enterprise` with only the artifact-uploader service described above. Credential scoping, not tag protection, is what keeps publication human-only.
 
-AI agents must not operate the admin UI, call its publication endpoint, approve the environment, or disable/bypass the tag ruleset.
+GitHub ruleset `Human-only app publication tags` protects `app-v*` and `app-beta-v*` against creation, update, and deletion, and bypasses the repository `admin` role so the dashboard's own publish can create its tag. It is a guard against stray write-scoped tokens, not the human gate. Do not remove the bypass: doing so blocks the dashboard itself, which is exactly what silently stopped every GitHub release between `app-v2.5.176` and `2.6.0` while `latest.json` kept shipping. Environment `app-publication` requires Louis as reviewer, prevents self-review, and does not allow administrator bypass.
+
+AI agents must not operate the admin UI, call its publication endpoint, approve the environment, or weaken the tag ruleset.
 
 ## Emergency stop
 

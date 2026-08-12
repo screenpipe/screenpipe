@@ -246,6 +246,8 @@ fn check_screen_locked_cgsession() -> bool {
 #[cfg(target_os = "macos")]
 fn handle_screen_unlock_transition() {
     screenpipe_screen::stream_invalidation::request();
+    // Displays are routinely attached, detached or rearranged while locked.
+    screenpipe_screen::monitor::invalidate_monitor_lookup_cache();
     crate::permission_monitor::notify_wake();
     SCREEN_UNLOCK_NOTIFY.notify_one();
 }
@@ -453,6 +455,10 @@ pub fn start_sleep_monitor() {
             // and audio streams (CoreAudio can go silent after display changes)
             #[cfg(target_os = "macos")]
             screenpipe_screen::stream_invalidation::request();
+            // Authoritative topology change: drop the cached monitor list so
+            // geometry reads re-enumerate instead of serving the old layout.
+            #[cfg(target_os = "macos")]
+            screenpipe_screen::monitor::invalidate_monitor_lookup_cache();
             screenpipe_audio::stream_invalidation::request();
             // SCStream re-creation after a reconfiguration transiently reports
             // `denied`; arm the permission-monitor grace so it isn't surfaced
@@ -575,6 +581,9 @@ fn on_did_wake(handle: &tokio::runtime::Handle) {
     // recreates them with fresh frames after wake.
     #[cfg(target_os = "macos")]
     screenpipe_screen::stream_invalidation::request();
+    // A Mac often wakes into a different display layout than it slept in.
+    #[cfg(target_os = "macos")]
+    screenpipe_screen::monitor::invalidate_monitor_lookup_cache();
 
     // Invalidate audio streams so the device monitor force-restarts all
     // audio devices. CoreAudio streams can go silent after sleep/wake

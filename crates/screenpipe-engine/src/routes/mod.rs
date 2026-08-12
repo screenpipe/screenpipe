@@ -17,6 +17,7 @@ pub mod frames;
 pub mod health;
 pub mod internal_telemetry;
 pub mod live_views;
+pub mod meeting_summary_status;
 pub mod meetings;
 pub mod memories;
 pub mod pipe_store;

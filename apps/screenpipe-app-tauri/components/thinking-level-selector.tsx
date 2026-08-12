@@ -5,22 +5,11 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Button } from "@/components/ui/button";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { Brain, Check } from "lucide-react";
+import { Brain } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
-import { cn } from "@/lib/utils";
 import { usePiThinkingLevel } from "@/lib/hooks/use-pi-thinking-level";
+import { ComposerSettingsPopover } from "@/components/chat/standalone/composer-settings-popover";
+import { ComposerEffortSlider } from "@/components/chat/standalone/composer-effort-slider";
 
 export type ThinkingLevel = "low" | "medium" | "high";
 
@@ -132,57 +121,33 @@ export function ThinkingLevelSelector({ streaming = false, sessionId = null }: T
     void sendRpc(level);
   };
 
+  // Same shell the ACP agent control uses, so switching preset does not
+  // rearrange the composer row. The trigger keeps naming the active level.
   return (
-    <TooltipProvider delayDuration={400}>
-    <Popover open={isOpen} onOpenChange={setIsOpen}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="inline-flex">
-            <PopoverTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={isRpcLoading || piThinkingUnsupported}
-                className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50"
-              >
-                <Brain className="h-3.5 w-3.5" />
-                <span className="font-medium">{currentLabel}</span>
-              </Button>
-            </PopoverTrigger>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="top" className="text-xs">
-          {disabledReason || "Thinking Level: Controls reasoning depth of the model"}
-        </TooltipContent>
-      </Tooltip>
-      <PopoverContent className="w-44 p-0" align="end" sideOffset={5}>
-        <div className="px-3 py-2 border-b border-border/50">
-          <p className="text-xs font-medium">Thinking Level</p>
-          <p className="text-[11px] text-muted-foreground mt-0.5">Controls reasoning depth</p>
-        </div>
-        <div className="p-1">
-          {THINKING_LEVELS.map((level) => (
-            <button
-              key={level.value}
-              onClick={() => handleSetLevel(level.value)}
-              disabled={isRpcLoading || piThinkingUnsupported}
-              className={cn(
-                "w-full px-3 py-1.5 text-left text-sm rounded transition-colors",
-                "hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed",
-                currentLevel === level.value && "bg-accent",
-              )}
-            >
-              <div className="flex items-center justify-between">
-                <span>{level.label}</span>
-                {currentLevel === level.value && (
-                  <Check className="h-3 w-3 text-primary" />
-                )}
-              </div>
-            </button>
-          ))}
-        </div>
-      </PopoverContent>
-    </Popover>
-    </TooltipProvider>
+    <ComposerSettingsPopover
+      icon={Brain}
+      label={currentLabel}
+      title={disabledReason || "Thinking level: controls reasoning depth"}
+      ariaLabel="Thinking level"
+      triggerTestId="thinking-level-trigger"
+      contentTestId="thinking-level-popover"
+      open={isOpen}
+      onOpenChange={setIsOpen}
+      disabled={isRpcLoading || piThinkingUnsupported}
+    >
+      <ComposerEffortSlider
+        label="effort"
+        testId="thinking-level-slider"
+        value={currentLevel}
+        disabled={isRpcLoading || piThinkingUnsupported}
+        steps={THINKING_LEVELS.map((level) => ({
+          value: level.value,
+          name: level.label,
+        }))}
+        onValueChange={(value) => {
+          if (isValidLevel(value)) void handleSetLevel(value);
+        }}
+      />
+    </ComposerSettingsPopover>
   );
 }

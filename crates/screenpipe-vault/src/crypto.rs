@@ -67,7 +67,7 @@ pub fn encrypt_file(path: &std::path::Path, key: &[u8; KEY_SIZE]) -> VaultResult
         .map_err(|e| VaultError::Crypto(format!("invalid key: {}", e)))?;
 
     let mut base_nonce = [0u8; NONCE_SIZE];
-    rand::thread_rng().fill_bytes(&mut base_nonce);
+    rand::rng().fill_bytes(&mut base_nonce);
 
     // Write to temp file, then atomic rename
     let tmp_path = path.with_extension("vault_tmp");
@@ -206,7 +206,7 @@ pub fn encrypt_small(plaintext: &[u8], key: &[u8; KEY_SIZE]) -> VaultResult<Vec<
         .map_err(|e| VaultError::Crypto(format!("invalid key: {}", e)))?;
 
     let mut nonce_bytes = [0u8; NONCE_SIZE];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    rand::rng().fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     let ciphertext = cipher
@@ -259,14 +259,14 @@ pub fn derive_key(
 /// Generate a random master key.
 pub fn generate_master_key() -> Zeroizing<[u8; KEY_SIZE]> {
     let mut key = Zeroizing::new([0u8; KEY_SIZE]);
-    rand::thread_rng().fill_bytes(key.as_mut());
+    rand::rng().fill_bytes(key.as_mut());
     key
 }
 
 /// Generate a random salt.
 pub fn generate_salt() -> [u8; SALT_SIZE] {
     let mut salt = [0u8; SALT_SIZE];
-    rand::thread_rng().fill_bytes(&mut salt);
+    rand::rng().fill_bytes(&mut salt);
     salt
 }
 

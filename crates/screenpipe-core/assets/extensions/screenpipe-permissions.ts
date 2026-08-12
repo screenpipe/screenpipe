@@ -231,6 +231,10 @@ function checkCurlCommand(cmd: string): string | null {
 export const __testing = {
   extractUrlFromCurl,
   checkCurlCommand,
+  checkFilesystemWrite: (cmd: string) => checkFilesystemWrite(cmd),
+  checkFileToolWrite: (tool: string, input: Record<string, unknown> | undefined) =>
+    checkFileToolWrite(tool, input),
+  isFileWriteTool: (tool: string) => FILE_WRITE_TOOLS.has(tool),
   setPermissions(permissions: Permissions | null) {
     PERMS = permissions;
   },
@@ -262,87 +266,473 @@ function isInsidePipeDir(targetPath: string, pipeDir: string): boolean {
   );
 }
 
-function checkFilesystemWrite(cmd: string): string | null {
+/// A shell token. `expandable` is true when the source text contained a
+/// substitution outside single quotes, so `'$HOME/f'` is a literal path while
+/// `"$HOME/f"` and `$(cat x)` are not.
+interface Token {
+  text: string;
+  expandable: boolean;
+  operator: boolean;
+}
+
+/// Operators that separate one command from the next.
+const SEGMENT_SEPARATORS = new Set(["&&", "||", "|", ";", "&", "\n"]);
+
+/// Split a command into tokens, honouring quotes so a path containing spaces
+/// stays one operand, and splitting shell operators even when unspaced
+/// (`x>f`, `a&&b`). Substitutions are flagged rather than resolved.
+function tokenize(cmd: string): Token[] {
+  const tokens: Token[] = [];
+  let buf = "";
+  let expandable = false;
+  let started = false;
+  let quote: '"' | "'" | null = null;
+
+  const flush = () => {
+    if (started) tokens.push({ text: buf, expandable, operator: false });
+    buf = "";
+    expandable = false;
+    started = false;
+  };
+  const pushOperator = (text: string) => {
+    flush();
+    tokens.push({ text, expandable: false, operator: true });
+  };
+
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i];
+
+    if (quote) {
+      if (c === quote) {
+        quote = null;
+        continue;
+      }
+      // Inside double quotes substitutions still run; inside single quotes
+      // every character is literal.
+      if (quote === '"' && (c === "$" || c === "`")) expandable = true;
+      buf += c;
+      started = true;
+      continue;
+    }
+
+    if (c === '"' || c === "'") {
+      quote = c;
+      started = true;
+      continue;
+    }
+    if (c === "\\") {
+      const next = cmd[i + 1];
+      if (next !== undefined) {
+        buf += next;
+        started = true;
+        i++;
+      }
+      continue;
+    }
+    if (c === "$" || c === "`") {
+      expandable = true;
+      buf += c;
+      started = true;
+      continue;
+    }
+    if (c === "\n") {
+      pushOperator("\n");
+      continue;
+    }
+    if (/\s/.test(c)) {
+      flush();
+      continue;
+    }
+
+    const two = cmd.slice(i, i + 2);
+    if (two === "&&" || two === "||") {
+      pushOperator(two);
+      i++;
+      continue;
+    }
+    if (two === ">>" || two === "&>") {
+      flush();
+      tokens.push({ text: two, expandable: false, operator: true });
+      i++;
+      continue;
+    }
+    if (c === ";" || c === "|" || c === "&") {
+      pushOperator(c);
+      continue;
+    }
+    if (c === ">" || c === "<") {
+      // Keep a leading descriptor number attached: `2>`.
+      if (/^\d+$/.test(buf)) {
+        const fd = buf;
+        buf = "";
+        started = false;
+        tokens.push({ text: fd + c, expandable: false, operator: true });
+      } else {
+        flush();
+        tokens.push({ text: c, expandable: false, operator: true });
+      }
+      continue;
+    }
+
+    buf += c;
+    started = true;
+  }
+  flush();
+  return tokens;
+}
+
+/// A write target we cannot resolve statically could point anywhere.
+function hasUnresolvableExpansion(token: Token): boolean {
+  return token.expandable;
+}
+
+type TargetRule =
+  /// Every operand is written to.
+  | "all"
+  /// Skip N leading operands (a mode, owner, or size), rest are written to.
+  | "skipOne"
+  /// Only the final operand is a destination.
+  | "last"
+  /// `dd of=PATH`
+  | "dd"
+  /// `sed -i ... FILE...` (only in-place edits write)
+  | "sed"
+  /// `find PATH... -delete|-exec` writes under the search roots.
+  | "find"
+  /// `git` operates on its own working tree; only a relocated tree escapes.
+  | "git"
+  /// Targets come from stdin or an opaque child process.
+  | "unresolvable";
+
+const WRITE_COMMANDS: Record<string, TargetRule> = {
+  rm: "all",
+  unlink: "all",
+  shred: "all",
+  touch: "all",
+  mkdir: "all",
+  rmdir: "all",
+  tee: "all",
+  truncate: "all",
+  chmod: "skipOne",
+  chown: "skipOne",
+  chgrp: "skipOne",
+  cp: "last",
+  mv: "last",
+  ln: "last",
+  install: "last",
+  rsync: "last",
+  scp: "last",
+  dd: "dd",
+  sed: "sed",
+  find: "find",
+  xargs: "unresolvable",
+  git: "git",
+};
+
+/// Shells. An inline `-c` snippet is shell source, so it is re-scanned with
+/// the same rules rather than being refused outright.
+const SHELL_INTERPRETERS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
+
+/// Interpreters for other languages. Their code is not shell, so it cannot be
+/// scanned by these rules and any invocation carrying code is refused.
+const CODE_INTERPRETERS = new Set([
+  "python",
+  "python3",
+  "node",
+  "bun",
+  "deno",
+  "ruby",
+  "perl",
+  "php",
+  "osascript",
+]);
+
+function isFlag(text: string): boolean {
+  return text.startsWith("-") && text !== "-";
+}
+
+function isRedirect(token: Token): boolean {
+  return token.operator && /^(?:\d*>{1,2}|&>|<)$/.test(token.text);
+}
+
+/// Split tokens into command segments at shell separators.
+function segments(tokens: Token[]): Token[][] {
+  const out: Token[][] = [];
+  let current: Token[] = [];
+  for (const t of tokens) {
+    if (t.operator && SEGMENT_SEPARATORS.has(t.text)) {
+      if (current.length) out.push(current);
+      current = [];
+      continue;
+    }
+    current.push(t);
+  }
+  if (current.length) out.push(current);
+  return out;
+}
+
+/// Collect write targets from redirects anywhere in a segment.
+/// `2>&1` duplicates a descriptor and is not a file target.
+function redirectTargets(tokens: Token[]): Token[] {
+  const targets: Token[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (!isRedirect(t) || t.text === "<") continue;
+    const next = tokens[i + 1];
+    if (!next || next.operator) continue;
+    if (next.text.startsWith("&")) continue;
+    targets.push(next);
+    i++;
+  }
+  return targets;
+}
+
+/// Operands for a segment, ignoring the command word, flags, redirect
+/// destinations, and leading `NAME=value` environment assignments.
+function operands(tokens: Token[], startIndex: number): Token[] {
+  const out: Token[] = [];
+  for (let i = startIndex; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (isRedirect(t)) {
+      i++;
+      continue;
+    }
+    if (t.operator) continue;
+    if (isFlag(t.text)) continue;
+    out.push(t);
+  }
+  return out;
+}
+
+function commandWordIndex(tokens: Token[]): number {
+  let i = 0;
+  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i].text)) {
+    i++;
+  }
+  return i;
+}
+
+function baseName(text: string): string {
+  const slash = text.lastIndexOf("/");
+  return slash === -1 ? text : text.slice(slash + 1);
+}
+
+/// Resolve the write targets a single segment would touch.
+/// Returns `null` when the segment cannot be analysed safely.
+function segmentTargets(tokens: Token[]): Token[] | null {
+  const targets: Token[] = redirectTargets(tokens);
+
+  const cmdIndex = commandWordIndex(tokens);
+  const cmdToken = tokens[cmdIndex];
+  if (!cmdToken) return targets;
+
+  const cmd = baseName(cmdToken.text);
+
+  if (SHELL_INTERPRETERS.has(cmd)) {
+    const args = tokens.slice(cmdIndex + 1);
+    const inline = args.some((a) => !a.operator && a.text === "-c");
+    // `sh -c '<shell>'` is re-scanned by the caller. A script file argument is
+    // opaque, so refuse to certify the segment.
+    if (!inline && args.some((a) => !a.operator && !isFlag(a.text))) return null;
+    return targets;
+  }
+
+  if (CODE_INTERPRETERS.has(cmd)) {
+    const args = tokens.slice(cmdIndex + 1);
+    // A bare `python3 --version` writes nothing. Anything carrying code, inline
+    // or as a script file, is opaque to a shell-level scan.
+    const carriesCode = args.some(
+      (a) =>
+        !a.operator &&
+        (a.text === "-c" || a.text === "-e" || a.text === "-i" || !isFlag(a.text))
+    );
+    return carriesCode ? null : targets;
+  }
+
+  const rule = WRITE_COMMANDS[cmd];
+  if (!rule) return targets;
+  if (rule === "unresolvable") return null;
+
+  const ops = operands(tokens, cmdIndex + 1);
+
+  switch (rule) {
+    case "all":
+      return targets.concat(ops);
+    case "skipOne":
+      return targets.concat(ops.slice(1));
+    case "last":
+      return ops.length ? targets.concat([ops[ops.length - 1]]) : targets;
+    case "dd": {
+      const of = tokens.find((t) => !t.operator && t.text.startsWith("of="));
+      return of
+        ? targets.concat([
+            { text: of.text.slice(3), expandable: of.expandable, operator: false },
+          ])
+        : targets;
+    }
+    case "sed": {
+      const inPlace = tokens.some(
+        (t) => t.text === "-i" || t.text.startsWith("-i.")
+      );
+      // `sed -i` consumes the script operand before the files.
+      return inPlace ? targets.concat(ops.slice(1)) : targets;
+    }
+    case "git": {
+      // Without a relocation flag git works in the cwd, which is the pipe
+      // directory. `-C`, `--git-dir` and `--work-tree` move that anywhere.
+      const relocations: Token[] = [];
+      for (let i = cmdIndex + 1; i < tokens.length; i++) {
+        const t = tokens[i];
+        if (t.operator) continue;
+        if (t.text === "-C") {
+          const next = tokens[i + 1];
+          if (next && !next.operator) relocations.push(next);
+          i++;
+          continue;
+        }
+        const eq = t.text.match(/^--(?:git-dir|work-tree)=(.*)$/);
+        if (eq) {
+          relocations.push({
+            text: eq[1],
+            expandable: t.expandable,
+            operator: false,
+          });
+          continue;
+        }
+        if (t.text === "--git-dir" || t.text === "--work-tree") {
+          const next = tokens[i + 1];
+          if (next && !next.operator) relocations.push(next);
+          i++;
+        }
+      }
+      return targets.concat(relocations);
+    }
+    case "find": {
+      const writes = tokens.some(
+        (t) =>
+          t.text === "-delete" ||
+          t.text === "-exec" ||
+          t.text === "-execdir" ||
+          t.text === "-fprint"
+      );
+      if (!writes) return targets;
+      const roots = ops.filter((o) => !o.text.startsWith("-"));
+      return targets.concat(roots);
+    }
+  }
+  return targets;
+}
+
+/// Extract inline interpreter code so it can be scanned as a nested command.
+function inlineSnippets(tokens: Token[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].text !== "-c" && tokens[i].text !== "-e") continue;
+    const next = tokens[i + 1];
+    if (next) out.push(next.text);
+  }
+  return out;
+}
+
+function outsideMessage(target: string, pipeDir: string): string {
+  return (
+    `Filesystem write blocked: "${target}" is outside the pipe directory. ` +
+    `Pipes can only write files within: ${pipeDir}`
+  );
+}
+
+function unverifiableMessage(detail: string, pipeDir: string): string {
+  return (
+    `Filesystem write blocked: ${detail}. This pipe may only write inside ` +
+    `${pipeDir}, so every write target must be a literal path. Use a relative ` +
+    `path such as ./output.json, or run the write from a script kept inside ` +
+    `the pipe directory.`
+  );
+}
+
+/// Check a bash command against the pipe's filesystem sandbox.
+///
+/// Fails closed: a segment whose write targets cannot be resolved statically
+/// is blocked rather than allowed. This mirrors `checkCurlCommand`, which
+/// already rejects a request whose URL it cannot parse.
+function checkFilesystemWrite(cmd: string, depth = 0): string | null {
   if (!PERMS?.pipe_dir) return null;
   const pipeDir = PERMS.pipe_dir;
+  if (depth > 3) {
+    return unverifiableMessage("the command nests interpreters too deeply", pipeDir);
+  }
 
-  // Extract file targets from common write operations
-  const writePatterns: Array<{
-    regex: RegExp;
-    extract: (m: RegExpMatchArray) => string[];
-  }> = [
-    // Redirect: > file, >> file, 2> file, &> file
-    {
-      regex: /(?:>{1,2}|2>|&>)\s*["']?([^\s"'|;&>]+)["']?/g,
-      extract: (m) => [m[1]],
-    },
-    // tee [-a] file
-    {
-      regex: /\btee\s+(?:-[a-zA-Z]\s+)*["']?([^\s"'|;&]+)["']?/g,
-      extract: (m) => [m[1]],
-    },
-    // cp [-r] src dest
-    {
-      regex:
-        /\bcp\s+(?:-[a-zA-Z]+\s+)*(?:["'][^"']+["']|[^\s"']+)\s+["']?([^\s"'|;&]+)["']?/g,
-      extract: (m) => [m[1]],
-    },
-    // mv src dest
-    {
-      regex:
-        /\bmv\s+(?:-[a-zA-Z]+\s+)*(?:["'][^"']+["']|[^\s"']+)\s+["']?([^\s"'|;&]+)["']?/g,
-      extract: (m) => [m[1]],
-    },
-    // mkdir [-p] dir
-    {
-      regex: /\bmkdir\s+(?:-[a-zA-Z]+\s+)*["']?([^\s"'|;&]+)["']?/g,
-      extract: (m) => [m[1]],
-    },
-    // touch file
-    {
-      regex: /\btouch\s+["']?([^\s"'|;&]+)["']?/g,
-      extract: (m) => [m[1]],
-    },
-    // rm [-rf] path
-    {
-      regex: /\brm\s+(?:-[a-zA-Z]+\s+)*["']?([^\s"'|;&]+)["']?/g,
-      extract: (m) => [m[1]],
-    },
-    // sed -i
-    {
-      regex:
-        /\bsed\s+(?:.*?)-i['"=]?\s*(?:\S+\s+)?["']?([^\s"'|;&]+)["']?/g,
-      extract: (m) => [m[1]],
-    },
-    // chmod / chown target
-    {
-      regex:
-        /\b(?:chmod|chown)\s+(?:-[a-zA-Z]+\s+)*\S+\s+["']?([^\s"'|;&]+)["']?/g,
-      extract: (m) => [m[1]],
-    },
-    // dd of=path
-    {
-      regex: /\bdd\b[^|;]*\bof=["']?([^\s"'|;&]+)["']?/g,
-      extract: (m) => [m[1]],
-    },
-  ];
+  const tokens = tokenize(cmd);
 
-  for (const { regex, extract } of writePatterns) {
-    regex.lastIndex = 0;
-    let match;
-    while ((match = regex.exec(cmd)) !== null) {
-      const targets = extract(match);
-      for (const target of targets) {
-        if (target && !isInsidePipeDir(target, pipeDir)) {
-          return (
-            `Filesystem write blocked: "${target}" is outside the pipe directory. ` +
-            `Pipes can only write files within: ${pipeDir}`
-          );
-        }
+  for (const segment of segments(tokens)) {
+    for (const snippet of inlineSnippets(segment)) {
+      const nested = checkFilesystemWrite(snippet, depth + 1);
+      if (nested) return nested;
+    }
+
+    const targets = segmentTargets(segment);
+    if (targets === null) {
+      const cmdToken = segment[commandWordIndex(segment)];
+      const name = cmdToken ? baseName(cmdToken.text) : "this command";
+      return unverifiableMessage(
+        `\`${name}\` runs code this sandbox cannot inspect`,
+        pipeDir
+      );
+    }
+
+    for (const target of targets) {
+      if (!target.text) continue;
+      if (hasUnresolvableExpansion(target)) {
+        return unverifiableMessage(
+          `write target "${target.text}" expands at runtime`,
+          pipeDir
+        );
+      }
+      if (!isInsidePipeDir(target.text, pipeDir)) {
+        return outsideMessage(target.text, pipeDir);
       }
     }
   }
 
+  return null;
+}
+
+/// Pi's built-in file-mutating tools. These bypass bash entirely, so the
+/// sandbox has to gate them on their own target path.
+const FILE_WRITE_TOOLS = new Set([
+  "write",
+  "edit",
+  "multiedit",
+  "str_replace",
+  "str_replace_editor",
+  "create",
+  "notebook_edit",
+]);
+
+/// Check a direct file-tool call (`write`, `edit`, …) against the sandbox.
+/// These never pass through bash, so they need their own gate.
+function checkFileToolWrite(
+  tool: string,
+  input: Record<string, unknown> | undefined
+): string | null {
+  if (!PERMS?.pipe_dir) return null;
+  const pipeDir = PERMS.pipe_dir;
+
+  const raw =
+    (input?.file_path as string) ??
+    (input?.filePath as string) ??
+    (input?.path as string) ??
+    null;
+
+  if (typeof raw !== "string" || raw.length === 0) {
+    return unverifiableMessage(
+      `\`${tool}\` was called without a readable file path`,
+      pipeDir
+    );
+  }
+  if (!isInsidePipeDir(raw, pipeDir)) {
+    return outsideMessage(raw, pipeDir);
+  }
   return null;
 }
 
@@ -410,7 +800,20 @@ function buildPermissionRules(): string {
       "Writing, moving, copying, or deleting files outside this directory is BLOCKED."
     );
     rules.push(
+      "This applies to the `write` and `edit` tools as well as to bash."
+    );
+    rules.push(
       "Use relative paths (e.g. `./output.json`) to stay within your directory."
+    );
+    rules.push(
+      "Write targets must be literal paths. A target built from a variable or " +
+        "command substitution (e.g. `$OUT`, `$(…)`) is blocked because it " +
+        "cannot be checked before it runs."
+    );
+    rules.push(
+      "Running a script through an interpreter (python, node, ruby, …) is " +
+        "blocked, because its writes cannot be checked. Do the file work in " +
+        "bash with literal relative paths instead."
     );
   }
   if (PERMS.pipe_token) {
@@ -432,7 +835,19 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", async (event: any) => {
-    if (event.tool !== "bash" && event.name !== "bash") return;
+    const tool: string = event.tool || event.name || "";
+
+    // Filesystem sandbox: Pi's built-in file tools never pass through bash,
+    // so they need the same pipe_dir check on their exact target path.
+    if (FILE_WRITE_TOOLS.has(tool)) {
+      const violation = checkFileToolWrite(tool, event.input);
+      if (violation) {
+        return { block: true, reason: violation };
+      }
+      return;
+    }
+
+    if (tool !== "bash") return;
     const cmd: string = event.input?.command || "";
 
     // Filesystem sandbox: block writes outside pipe_dir

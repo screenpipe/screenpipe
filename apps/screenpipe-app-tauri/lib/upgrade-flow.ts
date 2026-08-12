@@ -12,12 +12,19 @@ const PENDING_CHECKOUT_STORAGE_KEY =
 const ENTRY_TTL_MS = 5 * 60_000;
 const CHECKOUT_TTL_MS = 30 * 60_000;
 
+/** Self-serve plans the account settings can start a checkout for. Basic was
+ *  never one of them: every checkout path hardcoded `pro`, so the only plan the
+ *  app could sell was Business. */
+export type SelectablePlan = "standard" | "pro";
+
 export type BusinessUpgradeSelection = {
   interval: BusinessBillingInterval;
   offerVersion: string;
   experimentKey: string;
   experimentVariant: string;
   source: string;
+  /** Defaults to Business when omitted, preserving every existing caller. */
+  plan?: SelectablePlan;
 };
 
 type StoredEntry = { source: string; createdAt: number };

@@ -19,7 +19,7 @@ describe("AdvisoryOverlay", () => {
         {
           id: "pipe:summary",
           title: "27 scheduled tasks couldn't run",
-          body: "daily hosted AI allowance reached",
+          body: "daily AI allowance reached",
           severity: "warn",
           details: {
             label: "view 27 affected scheduled tasks",

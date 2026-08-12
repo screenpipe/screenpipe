@@ -217,6 +217,9 @@ pub fn request_app_relaunch(app: AppHandle, reason: &'static str, delay: Duratio
 }
 
 /// Guards against stacking confirmation dialogs on repeated Cmd+Q presses.
+/// macOS-only: `confirm_and_request_app_quit` and the NSAlert that clears the
+/// flag are both `cfg(target_os = "macos")`.
+#[cfg(target_os = "macos")]
 static QUIT_CONFIRM_SHOWING: AtomicBool = AtomicBool::new(false);
 
 /// True when the in-flight `terminate:` request comes from OS shutdown,

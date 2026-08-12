@@ -613,6 +613,7 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		cloudSubscribed,
 	) => {
 		const gatewayId = `hosted-chat-${cloudflarePlan}-test`;
+		const frontierPoolTest = cloudflarePlan === 'business';
 		globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
 			const url = String(input);
 			if (url === 'https://screenpipe.com/api/user') {
@@ -634,24 +635,35 @@ describe('/v1/chat/completions free-plan route policy', () => {
 				return new Response('[]', { status: 200 });
 			}
 			if (url.includes(`/ai-gateway/gateways/${gatewayId}`)) {
+				const rules = [{
+					id: `${cloudflarePlan}-combined`,
+					enabled: true,
+					limit: frontierPoolTest ? 10 : 8,
+					limitType: 'cost',
+					window: 2_592_000,
+					technique: 'fixed',
+					metadata: {
+						user_id: { mode: 'partition' },
+						plan: { mode: 'filter', values: [cloudflarePlan] },
+					},
+				}];
+				if (frontierPoolTest) {
+					rules.push({
+						...rules[0],
+						id: `${cloudflarePlan}-frontier`,
+						limit: 5,
+						metadata: {
+							...rules[0].metadata,
+							lane: { mode: 'filter', values: ['frontier'] },
+						},
+					});
+				}
 				return new Response(JSON.stringify({
 					success: true,
 					result: {
 						spend_limits: {
 							enabled: true,
-							rules: [{
-								id: `${cloudflarePlan}-auto`,
-								enabled: true,
-								limit: 8,
-								limitType: 'cost',
-								window: 2_592_000,
-								technique: 'fixed',
-								metadata: {
-									user_id: { mode: 'partition' },
-									plan: { mode: 'filter', values: [cloudflarePlan] },
-									lane: { mode: 'filter', values: ['auto'] },
-								},
-							}],
+							rules,
 						},
 					},
 				}), { status: 200 });
@@ -670,11 +682,11 @@ describe('/v1/chat/completions free-plan route policy', () => {
 										metadataRaw: JSON.stringify({
 											user_id: hashedUserId,
 											plan: cloudflarePlan,
-											lane: 'auto',
+											lane: frontierPoolTest ? 'frontier' : 'auto',
 											workload: 'interactive',
 										}),
 									},
-									sum: { cost: 8 },
+									sum: { cost: frontierPoolTest ? 5 : 8 },
 								}],
 							}],
 						},
@@ -718,24 +730,30 @@ describe('/v1/chat/completions free-plan route policy', () => {
 
 		expect(response.status).toBe(200);
 		expect(body.upsell_banner).toBe(expectedUpgrade !== null);
-		expect(body.cost_limit_reached).toBe(true);
+		expect(body.cost_limit_reached).toBe(!frontierPoolTest);
 		expect(body.upgrade_eligible).toBe(expectedUpgrade !== null);
+		const expectedAllowances = frontierPoolTest
+			? [
+				{ lane: 'combined', used_percent: 50, remaining_percent: 50 },
+				{ lane: 'frontier', used_percent: 100, remaining_percent: 0 },
+			]
+			: [{ lane: 'combined', used_percent: 100, remaining_percent: 0 }];
 		expect(body.hosted_ai).toMatchObject({
 			plan: cloudflarePlan,
 			allowance_managed_by: 'cloudflare',
 			included_credits: null,
 			used_credits: null,
 			remaining_credits: null,
-			allowances: [{
-				lane: 'auto',
-				used_percent: 100,
-				remaining_percent: 0,
-			}],
+			allowances: expectedAllowances,
 		});
+		const expectedFrontierModels = cloudSubscribed
+			? ['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.5-pro', 'gpt-5.4-pro', 'claude-opus-5', 'claude-fable-5']
+			: [];
+		expect(body.hosted_ai.frontier_models).toEqual(expectedFrontierModels);
 		expect(body.hosted_ai.required_plan).toBe(expectedUpgrade?.requiredPlan ?? null);
 		expect(body.hosted_ai.upgrade_url).toBe(expectedUpgrade?.upgradeUrl ?? null);
 		expect(JSON.stringify(body.hosted_ai)).not.toMatch(/(?:limit|used|remaining)_usd/);
-		expect(Object.keys(body.hosted_ai.allowances[0]).sort()).toEqual([
+		for (const allowance of body.hosted_ai.allowances) expect(Object.keys(allowance).sort()).toEqual([
 			'lane',
 			'remaining_percent',
 			'resets_at',

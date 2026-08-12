@@ -649,7 +649,9 @@ pub struct RecordingSettings {
     #[serde(rename = "useChineseMirror")]
     pub use_chinese_mirror: bool,
 
-    /// Enable anonymous analytics (PostHog).
+    /// Enable product analytics (PostHog). Events carry only a random device
+    /// ID when signed out; when signed in they are linked to the account,
+    /// including its email. Never includes recordings, audio, or OCR text.
     #[serde(rename = "analyticsEnabled")]
     pub analytics_enabled: bool,
 

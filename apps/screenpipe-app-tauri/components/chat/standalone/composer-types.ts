@@ -46,7 +46,10 @@ export interface ComposerSuggestionsProps {
   suggestions: Suggestion[];
   inputSectionWidth: number;
   isRefreshing: boolean;
-  onSendSuggestion: (text: string) => void | Promise<void>;
+  onSendSuggestion: (
+    suggestion: Suggestion,
+    position: number,
+  ) => void | Promise<void>;
   onRefresh: () => void;
   onHide: () => void;
 }

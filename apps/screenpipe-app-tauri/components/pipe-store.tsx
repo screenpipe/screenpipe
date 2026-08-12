@@ -359,22 +359,21 @@ export function PipeStoreView() {
 
   return (
     <div className="space-y-4">
-      <div className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Scheduled tasks</h1>
-        <p className="text-sm text-muted-foreground">
-          Run tasks on a schedule, after meetings, or when events happen.
-        </p>
-      </div>
+      <p className="text-sm text-muted-foreground">
+        {activeTab === "discover"
+          ? "browse, install, and review community scheduled tasks"
+          : "Run tasks on a schedule, after meetings, or when events happen."}
+      </p>
 
       {/* Tab bar */}
-      <div className="flex items-center gap-6 border-b border-border pb-0 mb-6">
+      <div className="mb-6 flex h-10 items-stretch gap-6 border-b border-border">
         {tabs.map(({ key, label }) => (
           <button
             key={key}
             data-testid={`tab-${key}`}
             onClick={() => setActiveTab(key)}
             className={cn(
-              "pb-3 text-sm font-medium transition-colors duration-150 border-b-2 -mb-px",
+              "-mb-px flex items-center border-b-2 text-sm font-medium transition-colors duration-150",
               activeTab === key
                 ? "border-foreground text-foreground"
                 : "border-transparent text-muted-foreground hover:text-foreground"
@@ -384,9 +383,8 @@ export function PipeStoreView() {
           </button>
         ))}
         {/* Notifications are pipe output, so the bell lives here rather
-            than in the global window chrome. mb-3 cancels the tabs'
-            pb-3 so the bell centers on the tab labels, not the row. */}
-        <div className="ml-auto mb-3">
+            than in the global window chrome. */}
+        <div className="ml-auto flex items-center">
           <NotificationBell />
         </div>
       </div>
@@ -941,26 +939,13 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
         </div>
       )}
 
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm text-muted-foreground">
-            browse, install, and review community scheduled tasks
-          </p>
-        </div>
-        <Button variant="outline" size="sm" onClick={() => setPublishOpen(true)}>
-          <Upload className="h-4 w-4 mr-1.5" />
-          PUBLISH
-        </Button>
-      </div>
-
       {/* Search & Filters */}
       <div className="space-y-3">
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="search scheduled tasks..."
+              placeholder="search community tasks..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-9 h-9"
@@ -978,6 +963,15 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
               ))}
             </SelectContent>
           </Select>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9 shrink-0"
+            onClick={() => setPublishOpen(true)}
+          >
+            <Upload className="mr-1.5 h-4 w-4" />
+            PUBLISH
+          </Button>
         </div>
 
         {/* Category pills */}

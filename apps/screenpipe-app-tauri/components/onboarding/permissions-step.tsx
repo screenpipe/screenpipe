@@ -184,7 +184,7 @@ export default function PermissionsStep({
       title: "Capture your screen",
       subtitle: (
         <>
-          Lets Screenpipe index what&apos;s on your screen — windows, docs,
+          Lets Screenpipe index what&apos;s on your screen: windows, docs,
           chats, code. {" "}
           <strong className="font-bold">
             restart after granting this permission.
@@ -389,8 +389,18 @@ export default function PermissionsStep({
         <h1 className="font-mono text-base font-bold text-foreground">
           Unlock the full experience
         </h1>
+        {/* The locality claim is deliberately scoped to STORAGE, not
+            transmission. Paid users are auto-switched to cloud transcription
+            (use-settings.tsx applyProCloudAudioDefaults), so "nothing ever
+            leaves" / "we never store your data" would be false for exactly
+            the users we ask to pay. "Stored on this computer" is true in every
+            configuration: frames, audio files and the index are local even
+            when a transcript round-trips through a provider. Device-neutral
+            wording on purpose so it matches the login-gate line, which is the
+            copy Windows and Linux users see (this step is mac-only). */}
         <p className="font-mono text-[10px] text-muted-foreground mt-1 text-center max-w-xs">
-          Three permissions unlock recording. Optional access can wait.
+          Three permissions turn on recording. Your recordings are stored on
+          this computer.
         </p>
       </div>
 

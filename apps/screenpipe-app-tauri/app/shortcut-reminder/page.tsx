@@ -7,17 +7,26 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { invoke } from "@tauri-apps/api/core";
+import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import posthog from "posthog-js";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { getStore, saveAndEncrypt } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
-import { X, Bell, RotateCw, Loader2, CheckCircle2, Square } from "lucide-react";
+import {
+  CheckCircle2,
+  Loader2,
+  MessageCircle,
+  PanelLeft,
+  RotateCw,
+  Search,
+  Settings,
+  Square,
+  X,
+} from "lucide-react";
 import { useOverlayData } from "./use-overlay-data";
 import { useMeetingOverlay } from "./use-meeting-overlay";
 import { AudioEqualizer } from "./audio-equalizer";
-import { ScreenMatrix } from "./screen-matrix";
-import { isHighPriorityNotification } from "@/lib/notifications/priority";
+import { formatShortcut } from "./format-shortcut";
 
 type ReminderSettings = {
   disabledShortcuts?: string[];
@@ -27,47 +36,15 @@ type ReminderSettings = {
   searchShortcut?: string;
 };
 
-/// Unread-dot state for the overlay's inbox bell — a light poll of the app
-/// server's notification history (same source as the pipes-store bell).
-function useInboxUnread(): boolean {
-  const [unread, setUnread] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const config = await invoke<{ port: number }>("get_app_server_config").catch(
-          () => ({ port: 11435 }),
-        );
-        const res = await fetch(
-          `http://localhost:${config.port || 11435}/notifications`,
-        );
-        if (res.ok && !cancelled) {
-          const entries: Array<{
-            read: boolean;
-            priority?: string;
-            type?: string;
-            title?: string;
-            actions?: Array<{ type?: string; label?: string }>;
-          }> = await res.json();
-          setUnread(entries.some((n) => !n.read && isHighPriorityNotification(n)));
-        }
-      } catch {
-        // app server not ready yet
-      }
-    };
-    poll();
-    const timer = setInterval(poll, 30000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, []);
-
-  return unread;
-}
-
 type RecordingHealthState = "normal" | "failure" | "fixing" | "recovered";
+
+const COLLAPSED_SIZE = { width: 22, height: 16 };
+const EXPANDED_SIZE = { width: 160, height: 62 };
+const SETTINGS_SIZE = { width: 164, height: 119 };
+const INCIDENT_SIZE = { width: 160, height: 40 };
+const MEETING_SIZE = { width: 280, height: 80 };
+const DAY_SECONDS = 24 * 60 * 60;
+const WEEK_SECONDS = 7 * DAY_SECONDS;
 
 export default function ShortcutReminderPage() {
   const { isMac, isLoading } = usePlatform();
@@ -78,9 +55,12 @@ export default function ShortcutReminderPage() {
   const [searchShortcut, setSearchShortcut] = useState<string | null>(null);
   const overlayData = useOverlayData();
   const meetingOverlay = useMeetingOverlay();
-  const inboxUnread = useInboxUnread();
   const [meetingHovering, setMeetingHovering] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [hoveredControl, setHoveredControl] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [overlayScale, setOverlayScale] = useState(1);
+  const resizeQueue = useRef(Promise.resolve());
   const isMacRef = useRef(isMac);
   isMacRef.current = isMac;
 
@@ -164,6 +144,10 @@ export default function ShortcutReminderPage() {
   useEffect(() => {
     // Listen for explicit shortcut-reminder-update event (from Rust side)
     const unlistenShortcut = listen<string>("shortcut-reminder-update", () => {
+      setExpanded(false);
+      setSettingsOpen(false);
+      setHoveredControl(null);
+      setMeetingHovering(false);
       loadShortcutsFromFile();
     });
 
@@ -202,6 +186,61 @@ export default function ShortcutReminderPage() {
     };
   }, []);
 
+  const resizeOverlay = useCallback(
+    (baseSize: { width: number; height: number }) => {
+      const target = {
+        width: baseSize.width * overlayScale,
+        height: baseSize.height * overlayScale,
+      };
+
+      // Serialize resize requests so quick enter/leave transitions cannot
+      // apply out of order. Keep the overlay centered while its hit area
+      // changes from the 22x16 resting icon to the expanded dock.
+      resizeQueue.current = resizeQueue.current
+        .then(async () => {
+          const appWindow = getCurrentWindow();
+          const [physicalPosition, physicalSize, scaleFactor] = await Promise.all([
+            appWindow.outerPosition(),
+            appWindow.outerSize(),
+            appWindow.scaleFactor(),
+          ]);
+          const position = physicalPosition.toLogical(scaleFactor);
+          const size = physicalSize.toLogical(scaleFactor);
+          const nextPosition = new LogicalPosition(
+            position.x + (size.width - target.width) / 2,
+            position.y,
+          );
+          await appWindow.setSize(new LogicalSize(target.width, target.height));
+          await appWindow.setPosition(nextPosition);
+        })
+        .catch(() => {
+          // The overlay can be hidden while a queued resize is resolving.
+        });
+    },
+    [overlayScale],
+  );
+
+  useEffect(() => {
+    if (healthState !== "normal") {
+      resizeOverlay(INCIDENT_SIZE);
+    } else if (meetingOverlay.active && meetingHovering) {
+      resizeOverlay(MEETING_SIZE);
+    } else if (settingsOpen) {
+      resizeOverlay(SETTINGS_SIZE);
+    } else if (expanded) {
+      resizeOverlay(EXPANDED_SIZE);
+    } else {
+      resizeOverlay(COLLAPSED_SIZE);
+    }
+  }, [
+    expanded,
+    healthState,
+    meetingHovering,
+    meetingOverlay.active,
+    resizeOverlay,
+    settingsOpen,
+  ]);
+
   const handleRestartRecording = useCallback(async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -235,29 +274,45 @@ export default function ShortcutReminderPage() {
     }
   }, []);
 
-  // Handle close button - hide overlay permanently
-  const handleClose = useCallback(async (e: React.MouseEvent) => {
-    // Prevent any event bubbling that might trigger drag
+  const handleSnooze = useCallback(async (
+    e: React.MouseEvent,
+    scope: "today" | "week",
+  ) => {
     e.preventDefault();
     e.stopPropagation();
-    
+
+    const snoozeSeconds = scope === "today" ? DAY_SECONDS : WEEK_SECONDS;
     try {
       const store = await getStore();
       const settings = await store.get<Record<string, unknown>>("settings") || {};
-      await store.set("settings", { ...settings, showShortcutOverlay: false });
+      await store.set("settings", {
+        ...settings,
+        showShortcutOverlay: true,
+        shortcutOverlaySnoozedUntil:
+          Math.floor(Date.now() / 1000) + snoozeSeconds,
+      });
       await saveAndEncrypt(store);
-      posthog.capture("shortcut_reminder_dismissed");
-      // Use Tauri command instead of getCurrentWindow().hide() for better panel support
+      posthog.capture("shortcut_reminder_dismissed", {
+        dismiss_scope: scope,
+        snooze_hours: snoozeSeconds / 3600,
+      });
       await commands.hideShortcutReminder();
-    } catch (e) {
-      console.error("Failed to hide shortcut reminder:", e);
-      // Fallback to direct window hide
+    } catch (error) {
+      console.error("Failed to snooze shortcut reminder:", error);
       try {
         await getCurrentWindow().hide();
       } catch {
-        // Ignore fallback errors
+        // Ignore fallback hide errors.
       }
     }
+  }, []);
+
+  const handleOpenSettings = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setSettingsOpen(false);
+    posthog.capture("shortcut_reminder_overlay_settings_clicked");
+    void commands.showWindow({ Home: { page: "display" } });
   }, []);
 
   // Size tokens are scaled inline instead of via CSS `transform: scale()` so
@@ -265,7 +320,6 @@ export default function ShortcutReminderPage() {
   // and don't double-compensate the window — Rust already sizes the Tauri
   // window to base * overlayScale in `commands.rs:show_shortcut_reminder`.
   const fontPx = 9 * overlayScale;
-  const iconPx = 9 * overlayScale;
   const padX = 4 * overlayScale;
   const padY = 2 * overlayScale;
   const gap = 2 * overlayScale;
@@ -460,196 +514,223 @@ export default function ShortcutReminderPage() {
     );
   }
 
+  const disclosure = hoveredControl === "search"
+    ? ["search", searchShortcut]
+    : hoveredControl === "chat"
+      ? ["ask chat", chatShortcut]
+      : hoveredControl === "timeline"
+        ? ["timeline", overlayShortcut]
+        : hoveredControl === "audio"
+          ? ["mic capture", overlayData.audioActive ? "live" : "idle"]
+          : hoveredControl === "settings"
+            ? ["settings", null]
+            : null;
+
+  const openTimeline = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    void commands.showWindow("Main");
+    posthog.capture("shortcut_reminder_timeline_clicked");
+  };
+
+  if (!expanded && !settingsOpen) {
+    return (
+      <div
+        data-testid="shortcut-reminder-root"
+        className="relative w-full h-full flex items-center justify-center"
+        style={{ background: "transparent" }}
+        onMouseEnter={() => {
+          if (meetingOverlay.active) setMeetingHovering(true);
+          else setExpanded(true);
+        }}
+      >
+        <button
+          onClick={openTimeline}
+          onMouseDown={(e) => e.stopPropagation()}
+          className="relative w-full h-full flex items-center justify-center border border-white/25 hover:opacity-100 transition-opacity"
+          style={{
+            background: "rgba(0, 0, 0, 0.88)",
+            borderRadius: `${4 * overlayScale}px`,
+            opacity: 0.5,
+            WebkitAppRegion: "no-drag",
+          } as React.CSSProperties}
+          title="Open timeline"
+        >
+          <span
+            aria-hidden="true"
+            className="bg-contain bg-center bg-no-repeat"
+            style={{
+              width: `${12 * overlayScale}px`,
+              height: `${12 * overlayScale}px`,
+              backgroundImage: "url('/32x32.png')",
+            }}
+          />
+          {meetingOverlay.active && (
+            <span
+              role="status"
+              aria-label="Meeting live"
+              title="Meeting live — hover for transcript"
+              className="absolute rounded-full bg-red-500 pointer-events-none"
+              style={{
+                top: `${-1 * overlayScale}px`,
+                right: `${-1 * overlayScale}px`,
+                width: `${dotPx}px`,
+                height: `${dotPx}px`,
+              }}
+            />
+          )}
+        </button>
+      </div>
+    );
+  }
+
+  const dockButtonClass =
+    "h-full flex-1 flex items-center justify-center text-white/65 hover:text-white hover:bg-white/10 transition-colors";
+  const dockButtonStyle = {
+    WebkitAppRegion: "no-drag",
+  } as React.CSSProperties;
+
   return (
     <div
       data-testid="shortcut-reminder-root"
-      className="w-full h-full flex items-center justify-center"
+      className="w-full h-full flex flex-col items-center"
       style={{ background: "transparent" }}
-      onMouseEnter={() => {
-        if (meetingOverlay.active) setMeetingHovering(true);
+      onMouseLeave={() => {
+        setExpanded(false);
+        setSettingsOpen(false);
+        setHoveredControl(null);
       }}
     >
       <div
         onMouseDown={handleMouseDown}
-        className="select-none w-full h-full"
-        style={{ cursor: "grab" }}
+        className="select-none flex shrink-0 border border-white/40"
+        style={{
+          width: `${160 * overlayScale}px`,
+          height: `${30 * overlayScale}px`,
+          background: "rgba(0, 0, 0, 0.94)",
+          borderRadius: `${4 * overlayScale}px`,
+          cursor: "grab",
+        }}
       >
-        <div
-          className="w-full h-full border border-white/25"
-          style={{
-            background: "rgba(0, 0, 0, 0.88)",
-            display: "grid",
-            gridTemplateColumns: "1fr 1px 1fr 1px 1fr",
-            gridTemplateRows: "1fr 1px 1fr",
+        <button
+          title="Open search"
+          className={dockButtonClass}
+          style={dockButtonStyle}
+          onMouseEnter={() => setHoveredControl("search")}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            void commands.showWindow({ Search: { query: null } });
+            posthog.capture("shortcut_reminder_search_clicked");
           }}
         >
-          {/* Row 1: Shortcuts */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              commands.showWindow("Main");
-              posthog.capture("shortcut_reminder_timeline_clicked");
-            }}
-            onMouseDown={(e) => e.stopPropagation()}
-            className="flex items-center justify-center hover:bg-white/10 transition-colors cursor-pointer min-w-0"
-            style={{ gap: `${gap}px`, padding: `${padY}px ${padX}px`, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            title="Open timeline"
-          >
-            <svg width={iconPx} height={iconPx} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-white/70 shrink-0">
-              <rect x="3" y="3" width="18" height="18" />
-              <line x1="3" y1="9" x2="21" y2="9" />
-            </svg>
-            {overlayShortcut ? (
-              <span className="font-mono font-medium text-white whitespace-nowrap truncate" style={{ fontSize: `${fontPx}px` }}>
-                {overlayShortcut}
-              </span>
-            ) : null}
-          </button>
-          <div className="bg-white/25" />
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              commands.showWindow("Chat");
-              posthog.capture("shortcut_reminder_chat_clicked");
-            }}
-            onMouseDown={(e) => e.stopPropagation()}
-            className="flex items-center justify-center hover:bg-white/10 transition-colors cursor-pointer min-w-0"
-            style={{ gap: `${gap}px`, padding: `${padY}px ${padX}px`, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            title="Open chat"
-          >
-            <svg width={iconPx} height={iconPx} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-white/70 shrink-0">
-              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
-            </svg>
-            {chatShortcut ? (
-              <span className="font-mono font-medium text-white whitespace-nowrap truncate" style={{ fontSize: `${fontPx}px` }}>
-                {chatShortcut}
-              </span>
-            ) : null}
-          </button>
-          <div className="bg-white/25" />
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              commands.showWindow({ Search: { query: null } });
-              posthog.capture("shortcut_reminder_search_clicked");
-            }}
-            onMouseDown={(e) => e.stopPropagation()}
-            className="flex items-center justify-center hover:bg-white/10 transition-colors cursor-pointer min-w-0"
-            style={{ gap: `${gap}px`, padding: `${padY}px ${padX}px`, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            title="Open search"
-          >
-            <svg width={iconPx} height={iconPx} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-white/70 shrink-0">
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-            {searchShortcut ? (
-              <span className="font-mono font-medium text-white whitespace-nowrap truncate" style={{ fontSize: `${fontPx}px` }}>
-                {searchShortcut}
-              </span>
-            ) : null}
-          </button>
-
-          {/* Divider row */}
-          <div className="col-span-5 bg-white/15" />
-
-          {/* Row 2: Status + close */}
-          <div className="min-w-0 overflow-hidden flex items-center" style={{ padding: `${padY}px ${padX}px` }}>
-            <AudioEqualizer
-              active={overlayData.audioActive}
-              speechRatio={overlayData.speechRatio}
-            />
-            {meetingOverlay.active && (
-              <span
-                role="status"
-                aria-label="Meeting live"
-                title="Meeting live — hover for transcript"
-                className="ml-auto rounded-full bg-red-500 shrink-0"
-                style={{ width: `${dotPx}px`, height: `${dotPx}px` }}
-              />
-            )}
-          </div>
-          <div className="bg-white/15" />
-          <div className="min-w-0 overflow-hidden flex items-center" style={{ padding: `${padY}px ${padX}px` }}>
-            <ScreenMatrix
-              active={overlayData.screenActive}
-              captureFps={overlayData.captureFps}
-              ocrPulseTimestamp={overlayData.ocrPulseTimestamp}
-            />
-          </div>
-          <div className="bg-white/15" />
-          <div className="flex items-center justify-center" style={{ gap: `${gap}px`, padding: `${padY}px ${padX}px` }}>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                commands.showNotificationInbox();
-                posthog.capture("shortcut_reminder_inbox_clicked");
-              }}
-              onMouseDown={(e) => e.stopPropagation()}
-              className="relative flex items-center justify-center hover:bg-white/10 transition-colors cursor-pointer"
-              title="notifications"
-              style={{ padding: `${padY}px`, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            >
-              {inboxUnread && (
-                <span
-                  className="absolute rounded-full bg-white"
-                  style={{ top: -1, right: -1, width: `${dotPx}px`, height: `${dotPx}px` }}
-                />
-              )}
-              <Bell
-                style={{ width: `${smIconPx}px`, height: `${smIconPx}px` }}
-                className={inboxUnread ? "text-white" : "text-white/60 hover:text-white"}
-              />
-            </button>
-            <button
-              onClick={handleClose}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-              }}
-              className="flex items-center justify-center hover:bg-white/10 transition-colors cursor-pointer"
-              title="Hide shortcut reminder"
-              style={{ padding: `${padY}px`, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            >
-              <X
-                style={{ width: `${smIconPx}px`, height: `${smIconPx}px` }}
-                className="text-white/60 hover:text-white"
-              />
-            </button>
-          </div>
+          <Search style={{ width: `${12 * overlayScale}px`, height: `${12 * overlayScale}px` }} />
+        </button>
+        <button
+          title="Open chat"
+          className={dockButtonClass}
+          style={dockButtonStyle}
+          onMouseEnter={() => setHoveredControl("chat")}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            void commands.showWindow("Chat");
+            posthog.capture("shortcut_reminder_chat_clicked");
+          }}
+        >
+          <MessageCircle style={{ width: `${12 * overlayScale}px`, height: `${12 * overlayScale}px` }} />
+        </button>
+        <button
+          title="Open timeline"
+          className={dockButtonClass}
+          style={dockButtonStyle}
+          onMouseEnter={() => setHoveredControl("timeline")}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={openTimeline}
+        >
+          <PanelLeft style={{ width: `${12 * overlayScale}px`, height: `${12 * overlayScale}px` }} />
+        </button>
+        <div className="my-1 bg-white/25" style={{ width: "1px" }} />
+        <div
+          title="Microphone capture status"
+          className={`${dockButtonClass} min-w-0 overflow-hidden`}
+          onMouseEnter={() => setHoveredControl("audio")}
+        >
+          <AudioEqualizer
+            active={overlayData.audioActive}
+            speechRatio={overlayData.speechRatio}
+          />
         </div>
+        <div className="my-1 bg-white/25" style={{ width: "1px" }} />
+        <button
+          title="Overlay settings"
+          className={dockButtonClass}
+          style={dockButtonStyle}
+          onMouseEnter={() => setHoveredControl("settings")}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            setSettingsOpen((open) => !open);
+          }}
+        >
+          <Settings style={{ width: `${12 * overlayScale}px`, height: `${12 * overlayScale}px` }} />
+        </button>
       </div>
+
+      {settingsOpen ? (
+        <div
+          className="flex flex-col overflow-hidden border border-white/40 font-mono text-white/85"
+          style={{
+            width: `${164 * overlayScale}px`,
+            height: `${85 * overlayScale}px`,
+            marginTop: `${4 * overlayScale}px`,
+            background: "rgba(0, 0, 0, 0.96)",
+            borderRadius: `${4 * overlayScale}px`,
+            fontSize: `${fontPx}px`,
+          }}
+        >
+          <button
+            className="flex-1 px-2 text-left hover:bg-white/15"
+            title="Hide for today"
+            onClick={(e) => void handleSnooze(e, "today")}
+          >
+            hide for today
+          </button>
+          <button
+            className="flex-1 px-2 text-left hover:bg-white/15"
+            title="Hide for a week"
+            onClick={(e) => void handleSnooze(e, "week")}
+          >
+            hide for a week
+          </button>
+          <div className="mx-2 bg-white/20" style={{ height: "1px" }} />
+          <button
+            className="flex-1 px-2 text-left hover:bg-white/15"
+            title="Open overlay settings"
+            onClick={handleOpenSettings}
+          >
+            overlay settings
+          </button>
+        </div>
+      ) : (
+        <div
+          className="flex items-center justify-center border border-white/25 font-mono text-white/75"
+          style={{
+            width: `${160 * overlayScale}px`,
+            height: `${26 * overlayScale}px`,
+            marginTop: `${4 * overlayScale}px`,
+            background: "rgba(0, 0, 0, 0.9)",
+            borderRadius: `${4 * overlayScale}px`,
+            fontSize: `${fontPx}px`,
+          }}
+        >
+          {disclosure ? (
+            <span>
+              {disclosure[0]}
+              {disclosure[1] ? `  ${disclosure[1]}` : ""}
+            </span>
+          ) : null}
+        </div>
+      )}
     </div>
   );
-}
-
-/**
- * Format a shortcut string for display.
- * On macOS: replace modifier names with compact symbols (⌘, ⌃, ⌥, ⇧).
- * On Windows/Linux: translate to platform-standard names (Super→Win, Control→Ctrl).
- */
-function formatShortcut(shortcut: string, isMac: boolean): string {
-  if (!shortcut) return "";
-
-  const parts = shortcut.split("+").map(p => p.trim().toLowerCase());
-
-  if (isMac) {
-    const macSymbols: Record<string, string> = {
-      super: "⌘", command: "⌘", cmd: "⌘",
-      ctrl: "⌃", control: "⌃",
-      alt: "⌥", option: "⌥",
-      shift: "⇧",
-    };
-    return parts.map(p => macSymbols[p] || p.toUpperCase()).join("");
-  }
-
-  // Windows/Linux: translate modifier names to platform-standard display
-  const winNames: Record<string, string> = {
-    super: "Win", command: "Win", cmd: "Win", meta: "Win",
-    ctrl: "Ctrl", control: "Ctrl",
-    alt: "Alt", option: "Alt",
-    shift: "Shift",
-  };
-  return parts
-    .map(p => winNames[p] || p.toUpperCase())
-    .join("+");
 }

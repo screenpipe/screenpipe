@@ -80,8 +80,8 @@ export function PermissionBanner() {
           </span>
           <span className="text-destructive-foreground/80 hidden sm:inline text-sm">
             {permissions.screenRestartRequired
-              ? "— screenpipe won’t work until you restart"
-              : "— recording is paused"}
+              ? "screenpipe won’t work until you restart"
+              : "recording is paused"}
           </span>
         </div>
       </div>

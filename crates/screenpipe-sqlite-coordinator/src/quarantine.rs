@@ -414,6 +414,92 @@ pub fn archive_resolved_sqlite_quarantine(
     Ok(Some(archive_path.to_path_buf()))
 }
 
+/// True only for the hard fault proven not to damage bytes on disk.
+///
+/// `SQLITE_IOERR_SHORT_READ` (522) is the exact extended result code
+/// screenpipe has hit under heavy concurrent load: the WAL index desyncs in
+/// memory, SQLite reports a short read, and every pool is torn down. Forensics
+/// on three separate incidents found the file itself intact each time —
+/// `PRAGMA quick_check` returned `ok`, and the cure was a fresh process, not a
+/// rebuilt database.
+///
+/// The generic `SQLITE_IOERR` primary code and every other extended IOERR
+/// variant remain fail-closed: WRITE, FSYNC, and TRUNCATE can describe failed
+/// persistence rather than a transient in-memory index. Missing result codes,
+/// `SQLITE_CORRUPT` (11), `SQLITE_FULL` (13), and `SQLITE_NOTADB` (26) also
+/// require the existing verified-replacement recovery path.
+pub fn sqlite_quarantine_is_self_healable(code: i32) -> bool {
+    code == libsqlite3_sys::SQLITE_IOERR_SHORT_READ
+}
+
+/// Resolve a quarantine on the *same* physical generation, after the caller
+/// has independently verified that generation is healthy.
+///
+/// Sibling of [`archive_resolved_sqlite_quarantine`], which deliberately
+/// refuses this case: it exists for recovery, where a new file replaces the
+/// faulted one, and treating an unchanged generation as resolved would let a
+/// genuinely corrupt database be waved through. Self-heal needs the inverse
+/// contract, so the identity check is inverted too — the installed generation
+/// must be exactly the one the marker recorded. A generation that changed
+/// under us was not the thing that got verified.
+///
+/// Callers must have proven health first; this function only moves metadata.
+pub fn resolve_verified_sqlite_quarantine(
+    database_path: impl AsRef<Path>,
+    archive_path: impl AsRef<Path>,
+) -> io::Result<Option<PathBuf>> {
+    let database_path = database_path.as_ref();
+    let Some(marker_path) = sqlite_quarantine_marker_path(database_path) else {
+        return Ok(None);
+    };
+    if !marker_path.exists() {
+        return Ok(None);
+    }
+
+    let marker = read_sqlite_quarantine(database_path)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "SQLite quarantine marker disappeared while resolving it",
+        )
+    })?;
+    let code = marker.sqlite_code.unwrap_or(10);
+    if !sqlite_quarantine_is_self_healable(code) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("SQLite hard fault {code} is not self-healable; it needs a verified replacement generation"),
+        ));
+    }
+
+    let installed_identity = sqlite_file_identity(database_path)?;
+    match marker.file_identity.as_ref() {
+        Some(recorded) if recorded == &installed_identity => {}
+        Some(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "SQLite generation changed since the quarantine; verify the installed generation before resolving",
+            ));
+        }
+        None => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "SQLite quarantine marker records no generation identity; refusing to self-resolve",
+            ));
+        }
+    }
+
+    let archive_path = archive_path.as_ref();
+    if let Some(parent) = archive_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::rename(&marker_path, archive_path)?;
+    if let Err(error) = sync_parent(&marker_path).and_then(|_| sync_parent(archive_path)) {
+        let _ = fs::rename(archive_path, &marker_path);
+        let _ = sync_parent(&marker_path);
+        return Err(error);
+    }
+    Ok(Some(archive_path.to_path_buf()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,6 +528,98 @@ mod tests {
             .expect("persist quarantine");
         assert_eq!(marker.sqlite_code, Some(522));
         assert_eq!(marker.file_identity, Some(expected_identity));
+        assert!(sqlite_quarantine_exists(&db));
+    }
+
+    /// Only the observed SHORT_READ result self-heals. Generic IOERR and other
+    /// extended IOERR variants can represent failed persistence and must stay
+    /// fail-closed alongside corruption, disk-full, and not-a-database.
+    #[test]
+    fn only_short_read_is_self_healable() {
+        assert!(sqlite_quarantine_is_self_healable(
+            libsqlite3_sys::SQLITE_IOERR_SHORT_READ
+        ));
+
+        // SQLITE_IOERR, IOERR_READ, IOERR_WRITE, IOERR_FSYNC, and
+        // IOERR_TRUNCATE respectively, followed by the other hard-fault
+        // primary/extended codes handled by the quarantine gate.
+        for code in [10, 266, 778, 1034, 1546, 8202, 8458, 11, 13, 26, 267, 779] {
+            assert!(
+                !sqlite_quarantine_is_self_healable(code),
+                "{code} must not self-heal"
+            );
+        }
+    }
+
+    /// The happy path: a transient IOERR marker on an unchanged generation is
+    /// resolvable in place, and the marker is preserved rather than deleted so
+    /// support can still see the fault happened.
+    #[test]
+    fn verified_resolution_clears_a_transient_fault_in_place() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = dir.path().join("db.sqlite");
+        fs::write(&db, b"healthy generation").expect("write db");
+        persist_sqlite_quarantine(&db, Some(522), "disk I/O error").expect("persist");
+        assert!(sqlite_quarantine_exists(&db));
+
+        let archive = dir.path().join("db.sqlite.quarantine.self-healed.json");
+        let resolved =
+            resolve_verified_sqlite_quarantine(&db, &archive).expect("resolve verified generation");
+        assert_eq!(resolved.as_deref(), Some(archive.as_path()));
+        assert!(!sqlite_quarantine_exists(&db));
+        assert!(archive.exists(), "marker must be archived, not deleted");
+    }
+
+    /// Corruption is never self-resolvable, even though the generation is
+    /// unchanged. This is the guard that keeps "verify then clear" from
+    /// becoming "clear whatever the user is stuck on".
+    #[test]
+    fn verified_resolution_refuses_corruption() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = dir.path().join("db.sqlite");
+        fs::write(&db, b"corrupt generation").expect("write db");
+        persist_sqlite_quarantine(&db, Some(11), "malformed database").expect("persist");
+
+        let archive = dir.path().join("archived.json");
+        resolve_verified_sqlite_quarantine(&db, &archive)
+            .expect_err("corruption must not self-resolve");
+        assert!(
+            sqlite_quarantine_exists(&db),
+            "the marker must survive a refused resolution"
+        );
+    }
+
+    /// Legacy or reserve markers can lack an extended SQLite result. Absence
+    /// is not evidence of SHORT_READ, so even a healthy unchanged generation
+    /// must remain quarantined.
+    #[test]
+    fn verified_resolution_refuses_a_missing_result_code() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = dir.path().join("db.sqlite");
+        fs::write(&db, b"healthy generation").expect("write db");
+        persist_sqlite_quarantine(&db, None, "unknown hard fault").expect("persist");
+
+        let archive = dir.path().join("archived.json");
+        resolve_verified_sqlite_quarantine(&db, &archive)
+            .expect_err("a marker without exact SHORT_READ evidence must not self-resolve");
+        assert!(sqlite_quarantine_exists(&db));
+    }
+
+    /// A generation swapped underneath us was never the thing that got
+    /// verified, so the health probe's result does not apply to it.
+    #[test]
+    fn verified_resolution_refuses_a_swapped_generation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = dir.path().join("db.sqlite");
+        fs::write(&db, b"faulted generation").expect("write db");
+        persist_sqlite_quarantine(&db, Some(522), "disk I/O error").expect("persist");
+
+        fs::rename(&db, dir.path().join("old.sqlite")).expect("archive old generation");
+        fs::write(&db, b"different generation").expect("install replacement");
+
+        let archive = dir.path().join("archived.json");
+        resolve_verified_sqlite_quarantine(&db, &archive)
+            .expect_err("a replaced generation must go through recovery");
         assert!(sqlite_quarantine_exists(&db));
     }
 

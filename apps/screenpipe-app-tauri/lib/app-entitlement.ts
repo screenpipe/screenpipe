@@ -59,6 +59,20 @@ export type AppUser = User & {
   plan_expires_at?: string | null;
   entitlement?: AppEntitlement | JsonValue | null;
   enterprise_account?: AppEnterpriseAccount | JsonValue | null;
+  /**
+   * Whether Stripe holds a payment method for this account. Server-derived
+   * from the entitlement source; see website `/api/user`.
+   *
+   * Distinct from "has a plan": a cardless signup grant reports
+   * `subscription_plan: "pro"` with no card on file. Never infer payment
+   * state from a plan label.
+   *
+   * Absent on older server responses — treat `undefined` as unknown, not
+   * false.
+   */
+  has_payment_method?: boolean | null;
+  /** Why the account has access. `manual` is the cardless signup grant. */
+  entitlement_source?: string | null;
 };
 
 export type LocalPlanPolicy = "verified-free" | "verified-paid" | "unknown";
@@ -66,8 +80,6 @@ export type LocalPlanPolicy = "verified-free" | "verified-paid" | "unknown";
 export const APP_ENTITLEMENT_MAX_STALE_MS = 72 * 60 * 60 * 1000;
 export const APP_ENTITLEMENT_CLOCK_SKEW_MS = 5 * 60 * 1000;
 export const TOKEN_HYDRATION_GRACE_MS = 60 * 1000;
-export const FREE_PLAN_RETENTION_DAYS = 7;
-export const FREE_PLAN_RETENTION_MODE = "all" as const;
 export const PRICING_URL = screenpipeWebUrl("/onboarding", "https://screenpipe.com");
 export const ENTERPRISE_BUILDS_URL = screenpipeWebUrl("/enterprise?tab=builds", "https://screenpipe.com");
 export const ENTERPRISE_DOWNLOAD_URL = screenpipeWebUrl("/api/download", "https://screenpipe.com");
@@ -196,7 +208,7 @@ function isEntitlementFresh(entitlement: AppEntitlement | null) {
  */
 function hasVerifiedFreePlan(user: AppUser | null | undefined): boolean {
   const stableAccountId = getStableAccountId(user);
-  if (!user || !stableAccountId || user.cloud_subscribed === true) return false;
+  if (!user || !stableAccountId || user.cloud_subscribed !== false) return false;
 
   const entitlement = asEntitlement(user.entitlement);
   // Once verified, free limits persist offline; merely waiting 72 hours must
@@ -221,10 +233,10 @@ function hasVerifiedFreePlan(user: AppUser | null | undefined): boolean {
       ? entitlement.source.trim().toLowerCase()
       : null;
   if (
-    source === "manual" ||
-    source === "enterprise" ||
-    source === "lifetime" ||
-    source === "dev" ||
+    source !== "none" ||
+    typeof entitlement?.active !== "boolean" ||
+    typeof entitlement.features?.app !== "boolean" ||
+    entitlement.features.cloud === true ||
     hasFutureGrace(entitlement)
   ) {
     return false;
@@ -253,7 +265,11 @@ export function hasFreePlanPolicy(user: AppUser | null | undefined): boolean {
 export function isAuthenticatedFreeUser(
   user: AppUser | null | undefined,
 ): boolean {
-  return Boolean(user?.token) && hasFreePlanPolicy(user);
+  return (
+    typeof user?.token === "string" &&
+    user.token.trim().length > 0 &&
+    hasFreePlanPolicy(user)
+  );
 }
 
 function hasVerifiedPaidPlanAt(
@@ -558,9 +574,16 @@ export function normalizeAppUser(rawUser: any, token: string): AppUser {
       : rawEntitlement
         ? rawEntitlement.features?.app === true
         : cloudSubscribed;
+  const legacyVerifiedFree =
+    rawUser?.cloud_subscribed === false &&
+    rawUser?.app_entitled === undefined &&
+    rawUser?.subscription_plan === undefined &&
+    rawUser?.entitlement === undefined;
   // Explicit server denial is stronger than a stale users.plan label left by a
   // canceled or refunded account.
-  const explicitlyFree = rawUser?.app_entitled === false && !cloudSubscribed;
+  const explicitlyFree =
+    legacyVerifiedFree ||
+    (rawUser?.app_entitled === false && !cloudSubscribed);
   // The server computes `subscription_plan` per request and can omit it while
   // still returning a full entitlement. The cloud_subscribed/app_entitled
   // fallbacks below invent a *label* ("pro"/"standard"), and the entitlement is

@@ -47,12 +47,18 @@ use std::sync::OnceLock;
 /// Data directory used by isolated debug builds. A sibling of `~/.screenpipe`
 /// rather than a child so production's disk-usage accounting, retention sweeps
 /// and Spotlight exclusion never see dev data.
+// Read only by the debug-only `apply_inner` (and the tests below).
+#[cfg_attr(not(any(debug_assertions, test)), allow(dead_code))]
 pub const DEV_DATA_DIR_NAME: &str = ".screenpipe-dev";
 
 /// Local API port. Production defaults to 3030.
+// Read only by the debug-only `apply_inner` (and the tests below).
+#[cfg_attr(not(any(debug_assertions, test)), allow(dead_code))]
 pub const DEV_API_PORT: &str = "3130";
 
 /// Focus / notification server port. Production defaults to 11435.
+// Read only by the debug-only `apply_inner` (and the tests below).
+#[cfg_attr(not(any(debug_assertions, test)), allow(dead_code))]
 pub const DEV_FOCUS_PORT: &str = "11535";
 
 /// Fake `$HOME` for agent-config detection, so the background MCP setup finds
@@ -60,6 +66,8 @@ pub const DEV_FOCUS_PORT: &str = "11535";
 pub const AI_TOOLS_HOME_ENV: &str = "SCREENPIPE_AI_TOOLS_HOME";
 
 /// Opt-out: run a debug build against the production profile.
+// Read only by the debug-only `apply_inner` (and the tests below).
+#[cfg_attr(not(any(debug_assertions, test)), allow(dead_code))]
 pub const OPT_OUT_ENV: &str = "SCREENPIPE_DEV_USE_PROD_DATA";
 
 static ACTIVE: OnceLock<bool> = OnceLock::new();

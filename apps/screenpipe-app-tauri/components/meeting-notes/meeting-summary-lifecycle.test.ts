@@ -4,82 +4,112 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  findMeetingSummaryExecution,
   latestSummaryInputAt,
   meetingSummaryFailure,
   meetingSummaryFailureCopy,
-  meetingSummaryLifecycle,
+  meetingSummaryLifecycleFromStatus,
+  summaryLifecycleIsWorking,
   type MeetingSummaryExecution,
+  type MeetingSummaryStatus,
 } from "./meeting-summary-lifecycle";
 
 const execution: MeetingSummaryExecution = {
   id: 12,
   status: "running",
-  trigger_event: "meeting_ended",
-  trigger_key: "42",
-  started_at: "2026-07-31T18:00:05.000Z",
 };
 
+const status = (
+  overrides: Partial<MeetingSummaryStatus> = {},
+): MeetingSummaryStatus => ({
+  state: "idle",
+  pipe: "meeting-summary",
+  auto_summary_enabled: true,
+  execution_id: null,
+  execution_status: null,
+  error_type: null,
+  error_message: null,
+  ...overrides,
+});
+
 describe("meeting summary lifecycle", () => {
-  it("selects the execution for the exact meeting trigger", () => {
+  it("maps each engine state onto what the note renders", () => {
     expect(
-      findMeetingSummaryExecution(
-        [
-          { ...execution, id: 13, trigger_key: "43" },
-          execution,
-          { ...execution, id: 11, trigger_event: "manual" },
-        ],
-        42,
+      meetingSummaryLifecycleFromStatus(
+        status({ state: "running", execution_id: 12 }),
       ),
-    ).toEqual(execution);
+    ).toEqual({ kind: "running", execution: { ...execution, error_type: null, error_message: null } });
+
+    expect(
+      meetingSummaryLifecycleFromStatus(
+        status({ state: "ready", execution_id: 12, execution_status: "completed" }),
+      ).kind,
+    ).toBe("completed");
+
+    expect(
+      meetingSummaryLifecycleFromStatus(status({ state: "off" })),
+    ).toEqual({ kind: "idle" });
   });
 
-  it("shows finalizing while the event-triggered run is being discovered", () => {
-    const now = Date.parse("2026-07-31T18:00:30.000Z");
+  /// The scheduler claims a run before it can create the execution row, so
+  /// pending-without-a-row is the honest "finalizing" state.
+  it("shows finalizing while a claimed run has no execution row yet", () => {
     expect(
-      meetingSummaryLifecycle(null, {
-        meetingEnd: "2026-07-31T18:00:00.000Z",
-        autoSummaryEnabled: true,
-        now,
-      }),
+      meetingSummaryLifecycleFromStatus(status({ state: "pending" })),
     ).toEqual({ kind: "finalizing" });
   });
 
-  it("ignores a summary that started before the resumed meeting finally ended", () => {
+  it("shows queued once the run has a row", () => {
     expect(
-      findMeetingSummaryExecution([execution], 42, {
-        notBefore: "2026-07-31T18:30:00.000Z",
-      }),
-    ).toBeNull();
+      meetingSummaryLifecycleFromStatus(
+        status({ state: "pending", execution_id: 12, execution_status: "queued" }),
+      ).kind,
+    ).toBe("queued");
   });
 
-  it("selects the new execution after a resumed meeting's final end", () => {
-    const fresh = {
-      ...execution,
-      id: 13,
-      started_at: "2026-07-31T18:30:01.000Z",
-    };
-    expect(
-      findMeetingSummaryExecution([fresh, execution], 42, {
-        notBefore: "2026-07-31T18:30:00.000Z",
-      }),
-    ).toEqual(fresh);
+  /// Regression: the old client stopwatch expired after 90s and reverted a
+  /// genuinely queued run to idle, which stopped the poll entirely.
+  it("keeps polling for any state the engine still calls work", () => {
+    for (const state of ["pending", "running"] as const) {
+      expect(
+        summaryLifecycleIsWorking(
+          meetingSummaryLifecycleFromStatus(status({ state })),
+        ),
+      ).toBe(true);
+    }
+    for (const state of ["off", "idle", "ready"] as const) {
+      expect(
+        summaryLifecycleIsWorking(
+          meetingSummaryLifecycleFromStatus(status({ state })),
+        ),
+      ).toBe(false);
+    }
   });
 
-  it("does not treat an execution with no start timestamp as fresh", () => {
+  it("does not claim a terminal state it cannot explain or retry", () => {
     expect(
-      findMeetingSummaryExecution([{ ...execution, started_at: null }], 42, {
-        notBefore: "2026-07-31T18:30:00.000Z",
-      }),
-    ).toBeNull();
+      meetingSummaryLifecycleFromStatus(status({ state: "failed" })),
+    ).toEqual({ kind: "idle" });
+    expect(
+      meetingSummaryLifecycleFromStatus(status({ state: "ready" })),
+    ).toEqual({ kind: "idle" });
   });
 
-  it("keeps legacy selection when the freshness boundary is malformed", () => {
-    expect(
-      findMeetingSummaryExecution([execution], 42, {
-        notBefore: "not-a-timestamp",
+  it("carries the failure detail the note needs to explain itself", () => {
+    const lifecycle = meetingSummaryLifecycleFromStatus(
+      status({
+        state: "failed",
+        execution_id: 12,
+        execution_status: "failed",
+        error_type: "daily_limit",
       }),
-    ).toEqual(execution);
+    );
+    expect(lifecycle.kind).toBe("failed");
+    if (lifecycle.kind !== "failed") throw new Error("expected failure");
+    expect(meetingSummaryFailure(lifecycle.execution).kind).toBe("daily_limit");
+  });
+
+  it("treats a missing status as idle rather than guessing", () => {
+    expect(meetingSummaryLifecycleFromStatus(null)).toEqual({ kind: "idle" });
   });
 
   it("treats a replaced transcript as newer summary input", () => {
@@ -95,53 +125,6 @@ describe("meeting summary lifecycle", () => {
     expect(
       latestSummaryInputAt("2026-07-31T18:00:00.000Z", "not-a-timestamp"),
     ).toBe("2026-07-31T18:00:00.000Z");
-  });
-
-  it("shows finalizing after a recent transcript replacement", () => {
-    const now = Date.parse("2026-07-31T19:00:30.000Z");
-    expect(
-      meetingSummaryLifecycle(null, {
-        meetingEnd: "2026-07-31T18:00:00.000Z",
-        contentUpdatedAt: "2026-07-31T19:00:00.000Z",
-        autoSummaryEnabled: true,
-        now,
-      }),
-    ).toEqual({ kind: "finalizing" });
-  });
-
-  it("does not promise an automatic summary when refresh dispatch failed", () => {
-    const now = Date.parse("2026-07-31T19:00:30.000Z");
-    expect(
-      meetingSummaryLifecycle(null, {
-        meetingEnd: "2026-07-31T18:00:00.000Z",
-        contentUpdatedAt: "2026-07-31T19:00:00.000Z",
-        contentRefreshRequested: false,
-        autoSummaryEnabled: true,
-        now,
-      }),
-    ).toEqual({ kind: "idle" });
-  });
-
-  it("does not promise a summary when the automatic pipe is disabled", () => {
-    expect(
-      meetingSummaryLifecycle(null, {
-        meetingEnd: "2026-07-31T18:00:00.000Z",
-        autoSummaryEnabled: false,
-        now: Date.parse("2026-07-31T18:00:01.000Z"),
-      }),
-    ).toEqual({ kind: "idle" });
-  });
-
-  it("maps terminal non-success statuses to a recoverable failure", () => {
-    expect(
-      meetingSummaryLifecycle(
-        { ...execution, status: "cancelled" },
-        {
-          meetingEnd: "2026-07-31T18:00:00.000Z",
-          autoSummaryEnabled: true,
-        },
-      ).kind,
-    ).toBe("failed");
   });
 
   it("explains daily limits without implying the meeting was lost", () => {

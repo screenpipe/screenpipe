@@ -307,6 +307,9 @@ impl AudioStream {
         windows_input_aec: bool,
         macos_input_vpio: bool,
     ) -> Result<(AudioStreamConfig, tokio::task::JoinHandle<()>)> {
+        // Only the macOS VoiceProcessingIO branch below reassigns `config`, so the
+        // `mut` is dead weight on every other target.
+        #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
         let (cpal_audio_device, mut config) = get_cpal_device_and_config(device).await?;
         let is_running_weak = Arc::downgrade(is_running);
         let input_aec = windows_input_aec && device.device_type == super::device::DeviceType::Input;

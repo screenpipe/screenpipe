@@ -35,6 +35,7 @@ import { getFrameThumbnailSources } from "@/lib/frame-thumbnails";
 import { NearViewport } from "./near-viewport";
 import { localFetch, getApiBaseUrl, appendAuthToken } from "@/lib/api";
 import { searchInputBehaviorProps } from "@/lib/search-input-behavior";
+import { usePlatform } from "@/lib/hooks/use-platform";
 import posthog from "posthog-js";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
 
@@ -575,6 +576,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     : embedded
       ? "embedded"
       : "modal";
+  const { isMac } = usePlatform();
   const [query, setQuery] = useState("");
   // Index into `navItems` — the single selection shared by every section
   const [navIndex, setNavIndex] = useState(0);
@@ -2227,9 +2229,9 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             line was typed or copied — and Enter opens the main timeline there. */}
         <span>{activeNavItem.kind === "chat" ? "⏎ open chat" : "⏎ go to timeline"}</span>
         {activeNavItem.kind === "frame" && (
-          <span className="flex items-center gap-1">
+          <span className="flex items-center gap-1" suppressHydrationWarning>
             <MessageSquare className="w-2.5 h-2.5" />
-            ⌘⏎ ask AI
+            {isMac ? "⌘⏎" : "Ctrl+⏎"} ask AI
           </span>
         )}
       </>

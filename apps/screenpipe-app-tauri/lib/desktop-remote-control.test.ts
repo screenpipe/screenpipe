@@ -133,6 +133,8 @@ describe("desktop remote control", () => {
       smartRecording: true,
       filterMusic: false,
       prioritizeInputLatency: true,
+      // Never chosen: stays null so the rollout default still applies.
+      sidebarCustomization: null,
       aecMode: "screenpipe",
     });
 
@@ -181,6 +183,10 @@ describe("desktop remote control", () => {
         ...legacySnapshot.boolean,
         filterMusic: { defaultEnabled: true, forceDisabled: false },
         prioritizeInputLatency: {
+          defaultEnabled: false,
+          forceDisabled: false,
+        },
+        sidebarCustomization: {
           defaultEnabled: false,
           forceDisabled: false,
         },

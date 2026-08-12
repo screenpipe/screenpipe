@@ -3909,15 +3909,16 @@ export function ConnectionsSection({
           apiCache.set(cacheKey, data.data, 30_000); // 30s TTL
           setIntegrations(data.data);
           setIntegrationsLoaded(true);
-          // Track active connections as user property (IDs only, no credentials)
+          // Track active connections as user property (IDs only, no credentials).
+          // Fires at zero too: gating this on connected.length > 0 made every
+          // user who has connected nothing invisible, which is exactly the
+          // cohort the suggested row exists to convert.
           const connected = data.data
             .filter((i: any) => i.connected)
             .map((i: any) => i.id);
-          if (connected.length > 0) {
-            posthog.capture("connections_loaded", {
-              $set: { active_connections: connected, connection_count: connected.length },
-            });
-          }
+          posthog.capture("connections_loaded", {
+            $set: { active_connections: connected, connection_count: connected.length },
+          });
           return;
         }
       } catch { /* server may not be running yet */ }

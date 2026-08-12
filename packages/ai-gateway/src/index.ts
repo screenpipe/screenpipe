@@ -31,6 +31,7 @@ import {
 	getStreamSettlementCost,
 	getSpendSummary,
 	inferProvider,
+	isFrontierModel,
 	logCost,
 	monthlyCostKey,
 	trialCostKey,
@@ -354,6 +355,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				usageTier,
 				cloudflareManaged ? undefined : authResult.userId,
 				usageAccountPlan,
+				{ readLegacyDailyCounter: !cloudflareManaged },
 			);
 			if (cloudflareManaged) {
 				let cloudflareContext: HostedChatGatewayContext | null = null;
@@ -373,6 +375,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				}
 				const allowanceExhausted = cloudflareUsage?.allowances
 					.some((allowance) => allowance.remaining_percent <= 0) ?? null;
+				const totalAllowanceExhausted = cloudflareUsage?.allowances
+					.some((allowance) =>
+						allowance.lane === 'combined' && allowance.remaining_percent <= 0) ?? null;
 				const capacityUpgrade = getHostedAiCapacityUpgrade(usageAccountPlan);
 				const upgradeEligible = capacityUpgrade !== null;
 				const enriched = {
@@ -381,7 +386,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					// legacy query counters remain in the compatibility envelope, but
 					// cannot be presented as a live provider-cost meter.
 					upsell_banner: allowanceExhausted === true && upgradeEligible,
-					cost_limit_reached: allowanceExhausted,
+					cost_limit_reached: totalAllowanceExhausted,
 					upgrade_eligible: upgradeEligible,
 					hosted_ai: {
 						// Use the exact plan sent to Cloudflare. Max and Ultra have
@@ -395,6 +400,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						usage_as_of: cloudflareUsage?.usage_as_of ?? null,
 						allowances: cloudflareUsage?.allowances ?? null,
 						model_access: [...getHostedAiAllowedModels(usageAccountPlan)],
+						frontier_models: getHostedAiAllowedModels(usageAccountPlan)
+							.filter((model) => isFrontierModel(model)),
 						required_plan: capacityUpgrade?.requiredPlan ?? null,
 						upgrade_url: capacityUpgrade?.upgradeUrl ?? null,
 						can_buy_credits: false,
@@ -422,7 +429,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				console.error('usage cost control configuration unavailable', error);
 				return addCorsHeaders(createErrorResponse(503, JSON.stringify({
 					error: 'cost_control_unavailable',
-					message: 'Hosted AI usage controls are temporarily unavailable. Try again shortly.',
+					message: 'AI usage controls are temporarily unavailable. Try again shortly.',
 				})));
 			}
 			let monthlyCost: number | null = null;
@@ -457,6 +464,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						? null
 						: Math.max(0, includedCredits - usedCredits),
 					model_access: [...getHostedAiAllowedModels(usageAccountPlan)],
+					frontier_models: getHostedAiAllowedModels(usageAccountPlan)
+						.filter((model) => isFrontierModel(model)),
 					required_plan: capacityUpgrade?.requiredPlan ?? null,
 					upgrade_url: capacityUpgrade?.upgradeUrl ?? null,
 					// Legacy query credits do not raise the provider-cost ceiling yet.
@@ -502,7 +511,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				return freeChatErrorResponse({
 					status: 401,
 					code: 'authentication_required',
-					message: 'Sign in to use screenpipe hosted AI.',
+					message: 'Sign in to use screenpipe AI.',
 				});
 			}
 			if (!hasPaidHostedAiPlan(authResult) && authResult.accountPlan !== 'free') {
@@ -523,7 +532,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 							return freeChatErrorResponse({
 								status: 413,
 								code: 'free_chat_request_too_large',
-								message: `Free hosted chat requests are limited to ${FREE_CHAT_MAX_REQUEST_BYTES} bytes.`,
+								message: `Free AI chat requests are limited to ${FREE_CHAT_MAX_REQUEST_BYTES} bytes.`,
 							});
 						}
 						throw new Error('invalid JSON');
@@ -649,7 +658,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						},
 						subscribe: {
 							url: 'https://screenpi.pe/onboarding',
-							benefit: 'Frontier Claude and GPT models, higher hosted AI limits, and encrypted sync',
+							benefit: 'Frontier Claude and GPT models, higher AI limits, and encrypted sync',
 							price: '$29/mo',
 						},
 					},
@@ -999,13 +1008,13 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				console.error('transcription cost control unavailable', error);
 				return addCorsHeaders(createErrorResponse(503, JSON.stringify({
 					error: 'cost_control_unavailable',
-					message: 'Hosted transcription controls are temporarily unavailable. Local transcription still works.',
+					message: 'Cloud transcription controls are temporarily unavailable. Local transcription still works.',
 				})));
 			}
 			if (dailyCost >= maxCost) {
 				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 					error: 'daily_cost_limit_exceeded',
-					message: "You've reached today's hosted transcription allowance. Audio will be transcribed locally until tomorrow.",
+					message: "You've reached today's cloud transcription allowance. Audio will be transcribed locally until tomorrow.",
 				})));
 			}
 
@@ -1047,14 +1056,14 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				if (dailyCost >= maxCost) {
 					return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 						error: 'daily_cost_limit_exceeded',
-						message: "You've reached today's hosted transcription allowance. Use local transcription or try again tomorrow.",
+						message: "You've reached today's cloud transcription allowance. Use local transcription or try again tomorrow.",
 					})));
 				}
 			} catch (error) {
 				console.error('realtime transcription cost control unavailable', error);
 				return addCorsHeaders(createErrorResponse(503, JSON.stringify({
 					error: 'cost_control_unavailable',
-					message: 'Hosted transcription controls are temporarily unavailable. Local transcription still works.',
+					message: 'Cloud transcription controls are temporarily unavailable. Local transcription still works.',
 				})));
 			}
 			return await handleRealtimeTranscriptionUpgrade(request, env, ctx, authResult);

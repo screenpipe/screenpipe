@@ -4,6 +4,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useRef } from "react";
+import { RefreshCw } from "lucide-react";
 import type { SettingsField } from "./settings-search";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
@@ -17,12 +18,12 @@ import { loadAllConversations } from "@/lib/chat-storage";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { readTextFile, writeTextFile, exists } from "@tauri-apps/plugin-fs";
 import { localFetch } from "@/lib/api";
+import { quotaPlanLabel } from "@/lib/chat/quota-errors";
+import { UsageLimitRow } from "@/components/usage/usage-limit-row";
 import {
-  useUsageStatus,
-  formatUsagePercent,
-  formatAllowanceWindow,
-  formatAllowanceReset,
-  type HostedAiAllowance,
+  sortHostedAiAllowances,
+  type UsageStatusQuery,
+  useUsageStatusQuery,
 } from "@/lib/hooks/use-usage-status";
 
 type TimeRange = "day" | "week" | "month" | "all";
@@ -144,63 +145,137 @@ function getTimeSince(range: TimeRange): number | undefined {
   }
 }
 
-function AllowanceMeter({ allowance }: { allowance: HostedAiAllowance }) {
-  const laneLabel =
-    allowance.lane === "combined"
-      ? "all models"
-      : allowance.lane === "auto"
-        ? "auto"
-        : "manual";
-  const windowLabel = formatAllowanceWindow(allowance.window_seconds);
-  const resetLabel = allowance.resets_at
-    ? formatAllowanceReset(allowance.resets_at)
+export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
+  const hosted = query.usage?.hosted_ai;
+  const allowances = hosted?.allowances;
+
+  if (query.isLoading) {
+    return (
+      <Card>
+        <CardContent className="space-y-4 pt-6">
+          <Skeleton className="h-5 w-44" />
+          <Skeleton className="h-14 w-full" />
+          <Skeleton className="h-14 w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (query.isUnavailable) {
+    return (
+      <Card>
+        <CardContent className="flex items-center justify-between gap-4 pt-6">
+          <div>
+            <h2 className="text-sm font-medium lowercase">usage unavailable</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              no balance was assumed. try refreshing.
+            </p>
+          </div>
+          <Button type="button" variant="outline" size="sm" onClick={query.refresh}>
+            refresh
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (hosted?.allowance_managed_by !== "cloudflare") {
+    return null;
+  }
+
+  if (!allowances?.length) {
+    return (
+      <Card data-testid="hosted-usage-limits">
+        <CardContent className="flex items-center justify-between gap-4 pt-6">
+          <div>
+            <h2 className="text-sm font-medium lowercase">usage unavailable</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {hosted.plan === "unknown"
+                ? "sign in to view your usage limits."
+                : "no balance was assumed. try refreshing."}
+            </p>
+          </div>
+          {hosted.plan !== "unknown" && (
+            <Button type="button" variant="outline" size="sm" onClick={query.refresh}>
+              refresh
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const plan = quotaPlanLabel(hosted.plan);
+  const updatedAt = hosted.usage_as_of
+    ? new Date(hosted.usage_as_of).toLocaleTimeString([], {
+        hour: "numeric",
+        minute: "2-digit",
+      })
     : null;
-  const isLow = allowance.remaining_percent < 30;
-  const isExhausted = allowance.remaining_percent <= 0;
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between text-sm">
-        <span className="font-medium capitalize">
-          {allowance.lane === "combined" ? laneLabel : `${laneLabel} model`}
-        </span>
-        <span
-          className={`font-mono text-xs ${
-            isExhausted
-              ? "text-red-500"
-              : isLow
-                ? "text-yellow-500"
-                : "text-muted-foreground"
-          }`}
-        >
-          {formatUsagePercent(allowance.used_percent)} used
-        </span>
-      </div>
-      <div className="h-2 bg-muted rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all ${
-            isExhausted
-              ? "bg-red-500"
-              : isLow
-                ? "bg-yellow-500"
-                : "bg-foreground/30"
-          }`}
-          style={{ width: `${Math.min(100, allowance.used_percent)}%` }}
-        />
-      </div>
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>
-          {formatUsagePercent(allowance.remaining_percent)} remaining
-          {` · ${windowLabel} ${allowance.technique} window`}
-        </span>
-        {resetLabel && <span>resets {resetLabel}</span>}
-      </div>
-    </div>
+    <Card data-testid="hosted-usage-limits">
+      <CardContent className="space-y-5 pt-6">
+        <div className="flex items-baseline justify-between gap-4 border-b border-border pb-4">
+          <div>
+            <h2 className="text-base font-medium lowercase">your usage limits</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              each listed allowance applies independently.
+            </p>
+          </div>
+          {plan && (
+            <span className="shrink-0 font-mono text-xs text-muted-foreground">
+              {plan}
+            </span>
+          )}
+        </div>
+
+        <div className="space-y-5">
+          {sortHostedAiAllowances(allowances).map((allowance, index) => (
+            <UsageLimitRow
+              key={`${allowance.lane}-${allowance.window_seconds}-${allowance.technique}-${index}`}
+              allowance={allowance}
+            />
+          ))}
+        </div>
+
+        <div className="flex items-center justify-between border-t border-border pt-4 text-[11px] text-muted-foreground">
+          <span className="font-mono">
+            {updatedAt ? `last updated ${updatedAt}` : "last updated unavailable"}
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 rounded-none px-2 text-xs"
+            disabled={query.isRefreshing}
+            onClick={query.refresh}
+          >
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${query.isRefreshing ? "animate-spin" : ""}`}
+              aria-hidden
+            />
+            refresh
+          </Button>
+        </div>
+
+        {hosted.upgrade && (
+          <a
+            href={hosted.upgrade.upgradeUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-block text-xs underline underline-offset-4 hover:text-foreground"
+          >
+            upgrade to {quotaPlanLabel(hosted.upgrade.requiredPlan) ?? "a higher plan"}
+          </a>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
 export function UsageSection() {
-  const hostedUsage = useUsageStatus();
+  const hostedUsageQuery = useUsageStatusQuery();
   const [entries, setEntries] = useState<UsageEntry[]>([]);
   const [totalChats, setTotalChats] = useState(0);
   const [totalChatMessages, setTotalChatMessages] = useState(0);
@@ -410,9 +485,10 @@ export function UsageSection() {
   if (loading) {
     return (
       <div className="space-y-6">
-        <div>
-          <Skeleton className="h-6 w-16" />
-          <Skeleton className="h-4 w-56 mt-1.5" />
+        <HostedUsageLimits query={hostedUsageQuery} />
+        <div className="border-t border-border pt-6">
+          <Skeleton className="h-5 w-20" />
+          <Skeleton className="mt-1.5 h-4 w-56" />
         </div>
         <div className="grid grid-cols-3 gap-4">
           {[0, 1, 2].map((i) => (
@@ -446,40 +522,17 @@ export function UsageSection() {
 
   return (
     <div className="space-y-6">
+      <HostedUsageLimits query={hostedUsageQuery} />
+
+      <div className="border-t border-border pt-6">
+        <h2 className="text-base font-medium lowercase">activity</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          local conversations and scheduled runs. these do not determine your allowance.
+        </p>
+      </div>
+
       {updating && (
         <p className="text-xs text-muted-foreground">Updating...</p>
-      )}
-
-      {/* Cloudflare AI usage allowances */}
-      {hostedUsage?.hosted_ai?.allowances && hostedUsage.hosted_ai.allowances.length > 0 && (
-        <Card>
-          <CardContent className="pt-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-medium">AI usage</h3>
-              {hostedUsage.hosted_ai.plan && (
-                <span className="text-xs text-muted-foreground capitalize">
-                  {hostedUsage.hosted_ai.plan} plan
-                </span>
-              )}
-            </div>
-            {hostedUsage.hosted_ai.allowances.map((allowance, index) => (
-              <AllowanceMeter key={`${allowance.lane}-${index}`} allowance={allowance} />
-            ))}
-            {hostedUsage.hosted_ai.upgrade && (
-              <p className="text-xs text-muted-foreground">
-                need more?{" "}
-                <a
-                  href={hostedUsage.hosted_ai.upgrade.upgradeUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline hover:text-foreground"
-                >
-                  upgrade to {hostedUsage.hosted_ai.upgrade.requiredPlan}
-                </a>
-              </p>
-            )}
-          </CardContent>
-        </Card>
       )}
 
       <div className="grid grid-cols-3 gap-4">
@@ -498,7 +551,7 @@ export function UsageSection() {
         <Card>
           <CardContent className="pt-6">
             <div className="text-2xl font-bold">{filteredPipeExecs}</div>
-            <p className="text-xs text-muted-foreground">Scheduled runs</p>
+            <p className="text-xs text-muted-foreground">Task runs</p>
           </CardContent>
         </Card>
       </div>

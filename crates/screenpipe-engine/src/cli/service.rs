@@ -42,6 +42,8 @@ pub async fn handle_service_command(cmd: &ServiceCommand) -> Result<()> {
     }
 }
 
+// Only the linux systemd paths interpolate this.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const SERVICE_NAME: &str = "screenpipe";
 const LAUNCHD_LABEL: &str = "com.screenpipe.agent";
 
@@ -97,6 +99,8 @@ fn xml_escape(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
+// linux + macos install/uninstall paths only.
+#[cfg_attr(windows, allow(dead_code))]
 fn screenpipe_exe() -> Result<String> {
     Ok(std::env::current_exe()
         .context("could not resolve the screenpipe binary path")?
@@ -104,6 +108,8 @@ fn screenpipe_exe() -> Result<String> {
         .into_owned())
 }
 
+// linux + macos install/uninstall paths only.
+#[cfg_attr(windows, allow(dead_code))]
 fn run(cmd: &str, args: &[&str]) -> Result<()> {
     let status = std::process::Command::new(cmd)
         .args(args)

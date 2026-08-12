@@ -18,6 +18,23 @@ fn livetext_bridge_survives_race_stress() {
     }
 }
 
+// Guards per-window isolation: the `home` panel and the `main` window both
+// mount the timeline, and a single shared overlay let each one evict the
+// other's overlay, clear its pending analysis and flip its coordinates against
+// the wrong contentView height. Exit 3 = environment skip.
+#[test]
+fn livetext_overlay_is_scoped_to_its_window() {
+    let exe = env!("CARGO_BIN_EXE_livetext-window-scope");
+    let status = std::process::Command::new(exe)
+        .status()
+        .expect("failed to spawn window-scope binary");
+    match status.code() {
+        Some(0) => {}
+        Some(3) => eprintln!("skipped: VisionKit unavailable in this environment"),
+        _ => panic!("livetext window scoping regressed: {status}"),
+    }
+}
+
 // Guards the overlay's frame identity: a pending analysis must never be bound
 // to a different frame (breaks text selection), and a search highlight must be
 // re-applied when its own analysis lands and never painted onto another frame.

@@ -66,6 +66,10 @@ screenpipe-core = { path = "../screenpipe-core" }
 screenpipe-events = { path = "../screenpipe-events" }
 screenpipe-config = { path = "../screenpipe-config" }
 screenpipe-db = { path = "../screenpipe-db" }
+# Already linked transitively through screenpipe-db, whose write APIs return
+# sqlx::Error. Declared directly so the audio write path can classify *which*
+# failure it got instead of string-matching the Display output.
+sqlx = { workspace = true }
 
 # crossbeam
 crossbeam = { workspace = true }

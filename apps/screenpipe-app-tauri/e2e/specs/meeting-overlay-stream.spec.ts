@@ -160,6 +160,47 @@ describe("meeting overlay stream", function () {
       { timeout: t(15_000), interval: 100, timeoutMsg: "live transcript replacement did not stream" },
     );
 
+    // Providers namespace `item_id` per connection, so the mic and system-audio
+    // streams can mint the same id. Each frame must carry its own device or the
+    // overlay collapses the two captures into one and drops a speaker.
+    await invokeOrThrow("plugin:e2e|emit_meeting_overlay_transcript", {
+      meetingId,
+      itemId: "overlay-shared-id",
+      text: "the remote participant said this over system audio",
+      isFinal: true,
+      deviceName: "e2e-output",
+      deviceType: "output",
+    });
+    await invokeOrThrow("plugin:e2e|emit_meeting_overlay_transcript", {
+      meetingId,
+      itemId: "overlay-shared-id",
+      text: "and the local mic captured a different sentence",
+      isFinal: true,
+      deviceName: "e2e-input",
+      deviceType: "input",
+    });
+
+    await browser.waitUntil(
+      async () => {
+        const shared = (await overlayMessages()).filter(
+          (message) =>
+            message.type === "final" &&
+            message.data.itemId === "overlay-shared-id",
+        );
+        return (
+          shared.length === 2 &&
+          new Set(shared.map((message) => message.data.deviceName)).size === 2 &&
+          new Set(shared.map((message) => message.data.deviceType)).size === 2
+        );
+      },
+      {
+        timeout: t(15_000),
+        interval: 100,
+        timeoutMsg:
+          "overlay frames did not carry the device that produced each transcript",
+      },
+    );
+
     await apiRequest(config, "/meetings/stop", {
       method: "POST",
       body: JSON.stringify({ id: meetingId, append_typed_text: false }),

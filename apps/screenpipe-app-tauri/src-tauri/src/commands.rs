@@ -11,8 +11,12 @@ use crate::{
     updates::is_enterprise_build,
     window::{RewindWindowId, ShowRewindWindow},
 };
+#[cfg(target_os = "macos")]
+use crate::window::GatedPanelPlacement;
 use sha2::{Digest, Sha256};
 use tauri::{Emitter, Manager};
+#[cfg(not(target_os = "macos"))]
+use tauri_plugin_opener::OpenerExt;
 use tracing::{debug, error, info, warn};
 
 /// Log a `WebviewWindowBuilder::build()` failure with structured context.
@@ -47,8 +51,49 @@ mod tests {
         merge_enterprise_file_configs, persist_enterprise_device_config,
         persist_recovered_enterprise_device_config, read_enterprise_config_from_path,
         recovery_anchor_license_key, save_enterprise_team_config, scan_chat_entries_by_mtime,
-        EnterpriseFileConfig, RecoveredEnterpriseDeviceConfig,
+        shortcut_overlay_startup_decision, EnterpriseFileConfig, RecoveredEnterpriseDeviceConfig,
+        SHORTCUT_OVERLAY_MINIMAL_RESHOW_VERSION,
     };
+
+    #[test]
+    fn minimal_overlay_gets_one_bounded_reshow() {
+        let first = shortcut_overlay_startup_decision(false, 0, None, 100, true);
+        assert!(first.should_show);
+        assert!(first.consume_reshow);
+
+        let second = shortcut_overlay_startup_decision(
+            false,
+            SHORTCUT_OVERLAY_MINIMAL_RESHOW_VERSION,
+            None,
+            100,
+            true,
+        );
+        assert!(!second.should_show);
+        assert!(!second.consume_reshow);
+    }
+
+    #[test]
+    fn active_overlay_snooze_wins_over_reshow() {
+        let decision = shortcut_overlay_startup_decision(false, 0, Some(101), 100, true);
+        assert!(!decision.should_show);
+        assert!(!decision.consume_reshow);
+        assert!(!decision.clear_expired_snooze);
+    }
+
+    #[test]
+    fn expired_overlay_snooze_is_cleared_and_shown() {
+        let decision = shortcut_overlay_startup_decision(true, 0, Some(100), 100, true);
+        assert!(decision.should_show);
+        assert!(decision.consume_reshow);
+        assert!(decision.clear_expired_snooze);
+    }
+
+    #[test]
+    fn minimal_webview_overlay_gets_the_same_bounded_reshow() {
+        let decision = shortcut_overlay_startup_decision(false, 0, None, 100, true);
+        assert!(decision.should_show);
+        assert!(decision.consume_reshow);
+    }
 
     /// The whole point of SCR-300: `gateway_url` is the ONE name the server,
     /// this file, and all three readers use, and this is its only writer.
@@ -458,8 +503,10 @@ fn dir_has_conversations(dir: &std::path::Path) -> bool {
 ///
 /// One-time migration: for a relocated data dir whose `chats/` is still empty,
 /// copy conversations from the legacy `~/.screenpipe/chats` so history isn't
-/// orphaned. Skipped under e2e (`SCREENPIPE_E2E_SEED` set) so isolated runs
-/// stay empty.
+/// orphaned. Skipped under e2e (`SCREENPIPE_E2E_SEED` set) and under dev
+/// isolation so isolated runs stay empty — otherwise `bun tauri dev` copies the
+/// developer's entire production chat history into `~/.screenpipe-dev`, which
+/// is exactly the state sharing dev isolation exists to prevent.
 #[tauri::command]
 #[specta::specta]
 pub fn get_chats_dir() -> Result<String, String> {
@@ -467,8 +514,9 @@ pub fn get_chats_dir() -> Result<String, String> {
     let chats = data_dir.join("chats");
     std::fs::create_dir_all(&chats).map_err(|e| e.to_string())?;
 
-    let is_e2e = std::env::var("SCREENPIPE_E2E_SEED").is_ok();
-    if !is_e2e {
+    let is_isolated = std::env::var("SCREENPIPE_E2E_SEED").is_ok()
+        || crate::dev_isolation::is_active();
+    if !is_isolated {
         if let Some(home) = dirs::home_dir() {
             let legacy = home.join(".screenpipe").join("chats");
             if legacy != chats
@@ -558,6 +606,9 @@ struct RecoveredEnterpriseDeviceConfig {
 }
 
 impl EnterpriseFileConfig {
+    /// Assertion helper for the `enterprise.json` parser tests — production
+    /// code branches on the individual fields instead.
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.license_key.is_none() && self.ingest_url.is_none()
     }
@@ -981,29 +1032,19 @@ pub async fn set_cloud_token(
     }
 
     // `loadUser` writes the fresh plan before calling this command. Refresh the
-    // already-running manager before any fallible persistence, so a keychain
-    // error cannot leave a paid→free transition temporarily unlimited.
+    // already-running pipe manager before any fallible persistence.
     let settings = crate::store::SettingsStore::get(&app).ok().flatten();
-    let is_free_plan = settings
-        .as_ref()
-        .is_some_and(|settings| settings.has_free_plan_policy());
     // Missing/corrupt settings are Unknown, never paid. Keep the non-destructive
     // cap until positive paid truth is available.
     let restrict_paid_features = settings
         .as_ref()
         .map(|settings| settings.restricts_paid_local_features())
         .unwrap_or(true);
-    let server_handles = {
+    let pipe_manager = {
         let server = state.server.lock().await;
-        server.as_ref().map(|core| {
-            (
-                core.pipe_manager.clone(),
-                core.enforce_free_plan_retention.clone(),
-            )
-        })
+        server.as_ref().map(|core| core.pipe_manager.clone())
     };
-    if let Some((pipe_manager, enforce_free_plan_retention)) = server_handles {
-        enforce_free_plan_retention.store(is_free_plan, std::sync::atomic::Ordering::SeqCst);
+    if let Some(pipe_manager) = pipe_manager {
         let mut pipe_manager = pipe_manager.lock().await;
         if pipe_manager.set_max_non_template_pipes(restrict_paid_features.then_some(2)) {
             pipe_manager
@@ -1615,6 +1656,81 @@ fn login_url() -> String {
     crate::web_base::screenpipe_web_url("/login")
 }
 
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum LoginMode {
+    SignIn,
+    SignUp,
+}
+
+impl LoginMode {
+    fn as_query_value(self) -> &'static str {
+        match self {
+            Self::SignIn => "sign-in",
+            Self::SignUp => "sign-up",
+        }
+    }
+}
+
+fn login_url_with_intent(
+    auth_mode: Option<LoginMode>,
+    return_scheme: Option<&str>,
+) -> Result<String, String> {
+    let mut url: tauri::Url = login_url()
+        .parse()
+        .map_err(|error| format!("invalid login URL: {error}"))?;
+    {
+        let mut query = url.query_pairs_mut();
+        if let Some(mode) = auth_mode {
+            query.append_pair("mode", mode.as_query_value());
+        }
+        if let Some(scheme) = return_scheme {
+            query.append_pair("return_scheme", scheme);
+        }
+    }
+    Ok(url.to_string())
+}
+
+#[cfg(test)]
+mod login_url_intent_tests {
+    use super::{login_url_with_intent, LoginMode};
+
+    #[test]
+    fn carries_explicit_signup_intent_and_return_scheme() {
+        let login_url = login_url_with_intent(Some(LoginMode::SignUp), Some("screenpipe"))
+            .expect("valid login URL");
+        let parsed: tauri::Url = login_url.parse().expect("parse generated login URL");
+        let pairs = parsed
+            .query_pairs()
+            .collect::<std::collections::HashMap<_, _>>();
+
+        assert_eq!(
+            pairs.get("mode").map(|value| value.as_ref()),
+            Some("sign-up")
+        );
+        assert_eq!(
+            pairs.get("return_scheme").map(|value| value.as_ref()),
+            Some("screenpipe")
+        );
+    }
+
+    #[test]
+    fn keeps_neutral_login_urls_free_of_mode() {
+        let login_url =
+            login_url_with_intent(None, Some("screenpipe-enterprise")).expect("valid login URL");
+        let parsed: tauri::Url = login_url.parse().expect("parse generated login URL");
+        let pairs = parsed
+            .query_pairs()
+            .collect::<std::collections::HashMap<_, _>>();
+
+        assert!(!pairs.contains_key("mode"));
+        assert_eq!(
+            pairs.get("return_scheme").map(|value| value.as_ref()),
+            Some("screenpipe-enterprise")
+        );
+    }
+}
+
 /// The custom URL scheme this build registers for deep links. The enterprise
 /// build uses a distinct scheme so it does not collide with the consumer app's
 /// `screenpipe://` on machines that have both installed (see #3890). Login
@@ -1658,10 +1774,20 @@ fn reset_existing_login_window<R: tauri::Runtime>(
 /// reusing Safari cookies, and Windows/Linux use a throwaway webview profile.
 #[tauri::command]
 #[specta::specta]
+/// Returns the device code when this call started the browser device-code flow,
+/// and an empty string for every path that needs no out-of-band confirmation
+/// (macOS auth session, embedded WebView fallback).
+///
+/// The code is returned as well as broadcast on `login-browser-pending` so a
+/// caller never has to depend on a global event to render it. #5936 changed
+/// this shared command to require the user read a code out of the app, but only
+/// taught onboarding to show one; every other login surface silently opened a
+/// browser asking for a code nothing displayed.
 pub async fn open_login_window(
     app_handle: tauri::AppHandle,
     fresh_session: Option<bool>,
-) -> Result<(), String> {
+    auth_mode: Option<LoginMode>,
+) -> Result<String, String> {
     let fresh_session = fresh_session.unwrap_or(false);
     #[cfg(target_os = "macos")]
     {
@@ -1670,7 +1796,7 @@ pub async fn open_login_window(
         // with another installed build here (#3890) and stays correct until
         // the website honours `return_scheme`.
         let callback_url = match crate::auth_session::start_session(
-            login_url(),
+            login_url_with_intent(auth_mode, None)?,
             "screenpipe".to_string(),
             fresh_session,
         )
@@ -1679,7 +1805,7 @@ pub async fn open_login_window(
             Ok(url) => url,
             Err(e) if e == "user_cancelled" => {
                 info!("login auth session cancelled");
-                return Ok(());
+                return Ok(String::new());
             }
             Err(e) => return Err(e),
         };
@@ -1689,7 +1815,7 @@ pub async fn open_login_window(
             .emit("deep-link-received", callback_url)
             .map_err(|e| e.to_string())?;
 
-        return Ok(());
+        return Ok(String::new());
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -1706,18 +1832,31 @@ pub async fn open_login_window(
         // WebView: it needs an isolated profile directory, which we cannot
         // force in the user's default browser.
         if !fresh_session {
-            match crate::browser_login::start_browser_login(
-                app_handle.clone(),
-                crate::web_base::screenpipe_web_base(),
-                deep_link_scheme().to_string(),
-            )
-            .await
+            // Open the user's real browser at the ordinary login URL and let the
+            // website deep-link `screenpipe://auth?api_key=…` straight back.
+            //
+            // #5936 correctly wanted the real browser here — the embedded
+            // WebView is a cold browser with no cookies, SSO or password
+            // manager — but reached for the CLI's device-code flow to get it,
+            // which made the user read an 8-character code out of the app and
+            // type it into a page telling them to look in a terminal. The
+            // redirect the WebView path already relies on works just as well
+            // from the default browser, so none of that is necessary: the
+            // deep-link handler (mounted outside the entitlement gate) receives
+            // the token exactly as it does today.
+            let login_url = login_url_with_intent(auth_mode, Some(deep_link_scheme()))?;
+            match app_handle
+                .opener()
+                .open_url(login_url.as_str(), None::<&str>)
             {
-                Ok(_) => return Ok(()),
+                Ok(()) => {
+                    info!("opened system browser for login");
+                    return Ok(String::new());
+                }
                 Err(e) => {
                     // No usable default browser — fall through to the WebView
                     // rather than stranding the user with no way to sign in.
-                    warn!("browser login unavailable, falling back to webview: {e}");
+                    warn!("could not open system browser, falling back to webview: {e}");
                 }
             }
         }
@@ -1732,7 +1871,7 @@ pub async fn open_login_window(
             "login-browser".to_string()
         };
 
-        let login_url = format!("{}?return_scheme={}", login_url(), deep_link_scheme());
+        let login_url = login_url_with_intent(auth_mode, Some(deep_link_scheme()))?;
         let parsed_login_url = login_url
             .parse()
             .map_err(|e| format!("invalid login URL: {e}"))?;
@@ -1744,7 +1883,7 @@ pub async fn open_login_window(
         } else if let Some(w) = app_handle.get_webview_window(&label) {
             info!("resetting existing login window");
             reset_existing_login_window(&w, parsed_login_url)?;
-            return Ok(());
+            return Ok(String::new());
         }
 
         let app_for_nav = app_handle.clone();
@@ -1784,7 +1923,9 @@ pub async fn open_login_window(
                 e.to_string()
             })?;
 
-        Ok(())
+        // The embedded WebView completes the whole flow in-window, so there is
+        // no code for the user to read back.
+        Ok(String::new())
     }
 }
 
@@ -2383,13 +2524,14 @@ pub async fn complete_onboarding(app_handle: tauri::AppHandle) -> Result<(), Str
         return Ok(());
     }
 
-    // Setup ends at Brain. If the user built a first Live View it is selected
-    // there; if they skipped, Brain presents the honest create-your-first-view
-    // state instead of dropping them into an unrelated chat screen.
+    // Setup ends at Home. It no longer builds a first Live View, so opening
+    // Brain would land the user on an empty container before anything has been
+    // captured. Home always has something to render, and it is where the
+    // first-run learning window runs and where its summary chat appears.
     show_window(
         app_handle.clone(),
         ShowRewindWindow::Home {
-            page: Some("brain".to_string()),
+            page: Some("home".to_string()),
         },
     )
     .await?;
@@ -2718,12 +2860,80 @@ fn shortcut_reminder_payload(
     map
 }
 
+const SHORTCUT_OVERLAY_MINIMAL_RESHOW_VERSION: u32 = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ShortcutOverlayStartupDecision {
+    should_show: bool,
+    consume_reshow: bool,
+    clear_expired_snooze: bool,
+}
+
+fn shortcut_overlay_startup_decision(
+    setting_enabled: bool,
+    consumed_reshow_version: u32,
+    snoozed_until: Option<i64>,
+    now_unix: i64,
+    allow_minimal_reshow: bool,
+) -> ShortcutOverlayStartupDecision {
+    let snoozed = snoozed_until.is_some_and(|until| until > now_unix);
+    let reintroduce_minimal = allow_minimal_reshow
+        && !snoozed
+        && consumed_reshow_version < SHORTCUT_OVERLAY_MINIMAL_RESHOW_VERSION;
+    ShortcutOverlayStartupDecision {
+        should_show: !snoozed && (setting_enabled || reintroduce_minimal),
+        consume_reshow: reintroduce_minimal,
+        clear_expired_snooze: snoozed_until.is_some_and(|until| until <= now_unix),
+    }
+}
+
+/// Apply the simple startup policy for the minimal overlay on every platform.
+/// Existing dismissals get one bounded re-show; active snoozes always win.
+pub(crate) async fn maybe_show_shortcut_reminder_on_startup(
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    let mut store = crate::store::SettingsStore::get(&app_handle)?.unwrap_or_default();
+    let decision = shortcut_overlay_startup_decision(
+        store.show_shortcut_overlay,
+        store.shortcut_overlay_minimal_reshow_version,
+        store.shortcut_overlay_snoozed_until,
+        chrono::Utc::now().timestamp(),
+        true,
+    );
+
+    let mut store_changed = false;
+    if decision.clear_expired_snooze {
+        store.shortcut_overlay_snoozed_until = None;
+        store_changed = true;
+    }
+    if decision.consume_reshow {
+        // Commit before rendering so a crash cannot turn this into a loop.
+        store.shortcut_overlay_minimal_reshow_version = SHORTCUT_OVERLAY_MINIMAL_RESHOW_VERSION;
+        store_changed = true;
+    }
+    if store_changed {
+        store.save(&app_handle)?;
+    }
+
+    if !decision.should_show {
+        info!("shortcut overlay suppressed by saved preference or active snooze");
+        return Ok(());
+    }
+
+    show_shortcut_reminder_impl(app_handle, true, true).await
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn show_shortcut_reminder(
     app_handle: tauri::AppHandle,
     _shortcut: String,
 ) -> Result<(), String> {
+    if let Some(mut store) = crate::store::SettingsStore::get(&app_handle)? {
+        if store.shortcut_overlay_snoozed_until.take().is_some() {
+            store.save(&app_handle)?;
+        }
+    }
     show_shortcut_reminder_impl(app_handle, true, true).await
 }
 
@@ -2739,6 +2949,11 @@ pub(crate) async fn show_shortcut_reminder_impl(
     wait_for_server: bool,
 ) -> Result<(), String> {
     use tauri::{Emitter, WebviewWindowBuilder};
+
+    // Only the macOS native-reminder path below performs the wait-for-server
+    // handshake; the webview fallback shows immediately on every platform.
+    #[cfg(not(target_os = "macos"))]
+    let _ = wait_for_server;
 
     let label = "shortcut-reminder";
 
@@ -2828,14 +3043,9 @@ pub(crate) async fn show_shortcut_reminder_impl(
                     serde_json::json!({}),
                 );
                 // A recording incident may already be active (e.g. this show IS
-                // the incident reveal) — sync the panel's health state. Same
-                // for the bell's unread dot, which is otherwise only pushed on
-                // notification-store writes.
+                // the incident reveal), so sync the panel's health state.
                 native_shortcut_reminder::set_health_state(
                     &crate::overlay_health::current_state_payload(),
-                );
-                native_shortcut_reminder::set_inbox_unread(
-                    crate::notifications::store::unread_count() as i32,
                 );
                 return Ok(());
             }
@@ -2843,15 +3053,15 @@ pub(crate) async fn show_shortcut_reminder_impl(
         }
     }
 
-    // Window dimensions: 2-row grid (3 shortcuts + activity viz)
-    // Scale based on overlay size setting
+    // The webview fallback matches the native overlay's tiny resting icon.
+    // React grows the real window hit area only while the dock is expanded.
     let scale = match shortcut_overlay_size.as_str() {
         "large" => 2.0_f64,
         "medium" => 1.5,
         _ => 1.0,
     };
-    let window_width = 160.0 * scale;
-    let window_height = 40.0 * scale;
+    let window_width = 22.0 * scale;
+    let window_height = 16.0 * scale;
 
     // Position at top center of the screen where the cursor is
     let (x, y) = {
@@ -2915,10 +3125,10 @@ pub(crate) async fn show_shortcut_reminder_impl(
                     use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
                     // Re-set level, style mask, and behaviors on every show —
                     // order_out may have cleared the Space association.
-                    panel.set_level(1001);
+                    panel.set_level_gated(1001);
                     panel.set_style_mask(128); // NonActivatingPanel
                     panel.set_hides_on_deactivate(false);
-                    panel.set_collection_behaviour(
+                    panel.set_collection_behaviour_gated(
                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces |
                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle |
                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
@@ -2987,7 +3197,7 @@ pub(crate) async fn show_shortcut_reminder_impl(
                     use objc::{msg_send, sel, sel_impl};
 
                     // Level 1001 = above CGShieldingWindowLevel, shows over fullscreen
-                    panel.set_level(1001);
+                    panel.set_level_gated(1001);
                     // NonActivatingPanel (128) so the reminder doesn't activate
                     // the app (which would cause Space switching on fullscreen).
                     // style_mask(0) was wrong — it cleared NonActivatingPanel.
@@ -3003,7 +3213,7 @@ pub(crate) async fn show_shortcut_reminder_impl(
 
                     // CanJoinAllSpaces: visible on ALL Spaces simultaneously
                     // (not MoveToActiveSpace which only follows the active Space)
-                    panel.set_collection_behaviour(
+                    panel.set_collection_behaviour_gated(
                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces |
                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle |
                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
@@ -3035,7 +3245,7 @@ pub(crate) async fn show_shortcut_reminder_impl(
             if let Ok(Some(monitor)) = app_handle_clone.primary_monitor() {
                 let screen_size = monitor.size();
                 let scale_factor = monitor.scale_factor();
-                let new_x = ((screen_size.width as f64 / scale_factor) - 220.0) / 2.0;
+                let new_x = ((screen_size.width as f64 / scale_factor) - window_width) / 2.0;
                 let new_y = 12.0;
 
                 if let Some(window) = app_handle_clone.get_webview_window("shortcut-reminder") {
@@ -3377,10 +3587,10 @@ pub async fn show_notification_panel(
                 if let Ok(panel) = app_clone.get_webview_panel("notification-panel") {
                     use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
                     use objc::{msg_send, sel, sel_impl};
-                    panel.set_level(1001);
+                    panel.set_level_gated(1001);
                     panel.set_style_mask(128); // NSNonactivatingPanelMask
                     panel.set_hides_on_deactivate(false);
-                    panel.set_collection_behaviour(
+                    panel.set_collection_behaviour_gated(
                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
                             | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle
                             | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary,
@@ -3462,7 +3672,7 @@ pub async fn show_notification_panel(
                 if let Ok(panel) = window_clone.to_panel() {
                     use objc::{msg_send, sel, sel_impl};
 
-                    panel.set_level(1001);
+                    panel.set_level_gated(1001);
                     panel.set_style_mask(128);
                     panel.set_hides_on_deactivate(false);
 
@@ -3474,7 +3684,7 @@ pub async fn show_notification_panel(
                     // which blocks webview hover events. This re-enables mouse tracking.
                     let _: () = unsafe { msg_send![&*panel, setAcceptsMouseMovedEvents: true] };
 
-                    panel.set_collection_behaviour(
+                    panel.set_collection_behaviour_gated(
                         NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
                             | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle
                             | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary,
@@ -3889,6 +4099,22 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("clipboard error: {}", e))?;
     clipboard
         .set_text(text)
+        .map_err(|e| format!("failed to set clipboard: {}", e))?;
+    Ok(())
+}
+
+/// Copy rich text to the system clipboard: HTML plus a plain-text alternative
+/// on the same clipboard write. Pasting into Gmail, Notion, Slack, or Docs keeps
+/// headings, bold, and lists; plain-text targets get `text` instead. Used by the
+/// meeting summary share actions so a summary lands formatted, not as raw
+/// markdown.
+#[tauri::command]
+#[specta::specta]
+pub async fn copy_rich_text_to_clipboard(html: String, text: String) -> Result<(), String> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("clipboard error: {}", e))?;
+    clipboard
+        .set()
+        .html(html, Some(text))
         .map_err(|e| format!("failed to set clipboard: {}", e))?;
     Ok(())
 }

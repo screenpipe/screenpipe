@@ -432,6 +432,9 @@ export function AudioTranscript({
 						audio_chunk_id: chunkId,
 						new_speaker_name: firstChunkNewSpeakerName,
 						propagate_similar: false,
+						// The user hand-picked these chunks, so they mean these
+						// chunks — not every line the voice ever spoke.
+						scope: "chunk",
 					}),
 				}).catch((err) => console.error("bulk reassign error:", err));
 			}

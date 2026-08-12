@@ -219,7 +219,7 @@ export function LiveViewAiComposer({
           }
           placeholder={
             hostedUsageExhausted
-              ? "Hosted AI limit reached"
+              ? "AI limit reached"
               : compact
                 ? "Ask AI to change this Live View..."
                 : "For example: show how I spend my time and what changed this week"
@@ -280,7 +280,9 @@ export function LiveViewAiComposer({
         >
           <AIPresetsSelector
             controlledPresetId={selectedPresetId}
-            onControlledSelect={onSelectedPresetIdChange}
+            onControlledSelect={(preset) =>
+              onSelectedPresetIdChange(preset?.id ?? null)
+            }
             compact
             showModelOnly
             showLoginCta
@@ -301,7 +303,9 @@ export function LiveViewAiComposer({
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <AIPresetsSelector
               controlledPresetId={selectedPresetId}
-              onControlledSelect={onSelectedPresetIdChange}
+              onControlledSelect={(preset) =>
+                onSelectedPresetIdChange(preset?.id ?? null)
+              }
               compact
               showModelOnly
               showLoginCta

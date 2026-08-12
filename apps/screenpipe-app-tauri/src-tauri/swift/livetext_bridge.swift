@@ -21,6 +21,14 @@ public func ltFreeString(_ ptr: UnsafeMutablePointer<CChar>?) {
     if let ptr = ptr { free(ptr) }
 }
 
+/// Window key carried by every window-scoped entry point. Nil/empty is kept as
+/// its own distinct key rather than aliasing onto a shared instance — sharing
+/// one overlay between windows is exactly the bug this keying prevents.
+private func windowKey(_ ptr: UnsafePointer<CChar>?) -> String {
+    guard let ptr = ptr else { return "" }
+    return String(cString: ptr)
+}
+
 // MARK: - Click Guard View
 
 /// Transparent NSView placed above the Live Text overlay in the nav bar region.
@@ -33,7 +41,7 @@ private class ClickGuardView: NSView {
     }
 }
 
-// MARK: - LiveTextManager Singleton
+// MARK: - LiveText per-window state
 
 #if canImport(VisionKit)
 
@@ -60,14 +68,133 @@ private final class AnalysisBox: @unchecked Sendable {
     func get() -> ImageAnalysis? { lock.lock(); defer { lock.unlock() }; return value }
 }
 
+/// Process-wide state that is genuinely window independent: the VisionKit
+/// analyzer, the analysis cache (keyed by image path, so two windows showing
+/// the same frame share the work) and the image fetch session.
 @available(macOS 13.0, *)
-private class LiveTextManager {
-    static let shared = LiveTextManager()
+private final class LiveTextShared: @unchecked Sendable {
+    static let shared = LiveTextShared()
 
+    private let stateLock = NSLock()
+    private var _analyzer: ImageAnalyzer?
+
+    private init() {}
+
+    func ensureAnalyzer() -> ImageAnalyzer {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        if let existing = _analyzer { return existing }
+        let a = ImageAnalyzer()
+        _analyzer = a
+        return a
+    }
+
+    func dropAnalyzer() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        _analyzer = nil
+    }
+
+    // MARK: - Analysis LRU Cache
+    /// Caches ImageAnalysis objects keyed by image path so revisiting frames
+    /// and prefetched adjacent frames are instant (no re-analysis needed).
+    private let cacheMaxSize = 30
+    private var cacheOrder: [String] = []  // oldest first
+    private var cacheMap: [String: ImageAnalysis] = [:]
+    private let cacheLock = NSLock()
+
+    func getCachedAnalysis(_ key: String) -> ImageAnalysis? {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        guard let analysis = cacheMap[key] else { return nil }
+        // Move to end (most recently used)
+        cacheOrder.removeAll { $0 == key }
+        cacheOrder.append(key)
+        return analysis
+    }
+
+    func setCachedAnalysis(_ key: String, _ analysis: ImageAnalysis) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if cacheMap[key] != nil {
+            cacheOrder.removeAll { $0 == key }
+        } else if cacheOrder.count >= cacheMaxSize {
+            // Evict oldest
+            let oldest = cacheOrder.removeFirst()
+            cacheMap.removeValue(forKey: oldest)
+        }
+        cacheMap[key] = analysis
+        cacheOrder.append(key)
+    }
+
+    /// Reusable URLSession for fetching frame images.
+    /// Eager let since lazy var init is not thread-safe.
+    let urlSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 30
+        // No caching — frames are unique, caching just wastes RAM
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: config)
+    }()
+
+    /// Load an image from a local path or HTTP URL. Returns nil on failure.
+    func loadImage(_ pathStr: String) -> NSImage? {
+        var result: NSImage?
+        autoreleasepool {
+            if pathStr.hasPrefix("http://") || pathStr.hasPrefix("https://") {
+                if let url = URL(string: pathStr) {
+                    let sem = DispatchSemaphore(value: 0)
+                    var fetchedData: Data?
+                    urlSession.dataTask(with: url) { data, _, _ in
+                        fetchedData = data
+                        sem.signal()
+                    }.resume()
+                    let waitResult = sem.wait(timeout: .now() + 10)
+                    if waitResult == .timedOut { return }
+                    if let data = fetchedData, !data.isEmpty {
+                        result = NSImage(data: data)
+                    }
+                }
+            } else {
+                result = NSImage(contentsOfFile: pathStr)
+            }
+        }
+        return result
+    }
+
+    /// Run VisionKit analysis on an image. Returns the analysis or nil.
+    /// Uses a 10-second timeout to prevent indefinite thread blocking
+    /// when GCD thread pool is saturated.
+    func analyzeImage(_ image: NSImage) -> ImageAnalysis? {
+        let analyzer = ensureAnalyzer()
+        let semaphore = DispatchSemaphore(value: 0)
+        let box = AnalysisBox()
+        let config = ImageAnalyzer.Configuration([.text, .machineReadableCode])
+
+        Task.detached { [image] in
+            box.set(try? await analyzer.analyze(image, orientation: .up, configuration: config))
+            semaphore.signal()
+        }
+        let result = semaphore.wait(timeout: .now() + 10)
+        if result == .timedOut { return nil }
+        return box.get()
+    }
+}
+
+/// Live Text state for a single host window.
+///
+/// One instance per window label. The overlay is an NSView living in that
+/// window's contentView, so its analysis, highlight and guard state must not be
+/// reachable from any other window: a process-wide singleton let the `home`
+/// panel and the `main` window evict each other's overlay, drop each other's
+/// pending analysis, and flip each other's coordinates against the wrong
+/// contentView height.
+@available(macOS 13.0, *)
+private class LiveTextInstance {
     // Shared across the worker, tokio, prefetch, and main threads;
     // every access must hold stateLock.
     private let stateLock = NSLock()
-    private var _analyzer: ImageAnalyzer?
     private var _overlayView: ImageAnalysisOverlayView?
     private var _currentAnalysis: ImageAnalysis?
     /// Analysis waiting to be applied — only set on the overlay when
@@ -185,108 +312,51 @@ private class LiveTextManager {
         _pendingFrameId = nil
         _appliedFrameId = nil
     }
+}
 
-    func dropAnalyzer() {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        _analyzer = nil
-    }
+/// Live Text instances keyed by host window label.
+///
+/// Every window-scoped entry point resolves through here, so a call made by one
+/// webview can only ever touch that webview's own overlay.
+@available(macOS 13.0, *)
+private final class LiveTextRegistry: @unchecked Sendable {
+    static let shared = LiveTextRegistry()
 
-    // MARK: - Analysis LRU Cache
-    /// Caches ImageAnalysis objects keyed by image path so revisiting frames
-    /// and prefetched adjacent frames are instant (no re-analysis needed).
-    private let cacheMaxSize = 30
-    private var cacheOrder: [String] = []  // oldest first
-    private var cacheMap: [String: ImageAnalysis] = [:]
-    private let cacheLock = NSLock()
-
-    func getCachedAnalysis(_ key: String) -> ImageAnalysis? {
-        cacheLock.lock()
-        defer { cacheLock.unlock() }
-        guard let analysis = cacheMap[key] else { return nil }
-        // Move to end (most recently used)
-        cacheOrder.removeAll { $0 == key }
-        cacheOrder.append(key)
-        return analysis
-    }
-
-    func setCachedAnalysis(_ key: String, _ analysis: ImageAnalysis) {
-        cacheLock.lock()
-        defer { cacheLock.unlock() }
-        if cacheMap[key] != nil {
-            cacheOrder.removeAll { $0 == key }
-        } else if cacheOrder.count >= cacheMaxSize {
-            // Evict oldest
-            let oldest = cacheOrder.removeFirst()
-            cacheMap.removeValue(forKey: oldest)
-        }
-        cacheMap[key] = analysis
-        cacheOrder.append(key)
-    }
-
-    /// Reusable URLSession for fetching frame images.
-    /// Eager let since lazy var init is not thread-safe.
-    let urlSession: URLSession = {
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 30
-        // No caching — frames are unique, caching just wastes RAM
-        config.urlCache = nil
-        config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return URLSession(configuration: config)
-    }()
+    private let lock = NSLock()
+    private var instances: [String: LiveTextInstance] = [:]
 
     private init() {}
 
-    func ensureAnalyzer() -> ImageAnalyzer {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        if let existing = _analyzer { return existing }
-        let a = ImageAnalyzer()
-        _analyzer = a
-        return a
+    /// Instance for `window`, creating it if this is the first call.
+    func instance(_ window: String) -> LiveTextInstance {
+        lock.lock()
+        defer { lock.unlock() }
+        if let existing = instances[window] { return existing }
+        let created = LiveTextInstance()
+        instances[window] = created
+        return created
     }
 
-    /// Load an image from a local path or HTTP URL. Returns nil on failure.
-    func loadImage(_ pathStr: String) -> NSImage? {
-        var result: NSImage?
-        autoreleasepool {
-            if pathStr.hasPrefix("http://") || pathStr.hasPrefix("https://") {
-                if let url = URL(string: pathStr) {
-                    let sem = DispatchSemaphore(value: 0)
-                    var fetchedData: Data?
-                    urlSession.dataTask(with: url) { data, _, _ in
-                        fetchedData = data
-                        sem.signal()
-                    }.resume()
-                    let waitResult = sem.wait(timeout: .now() + 10)
-                    if waitResult == .timedOut { return }
-                    if let data = fetchedData, !data.isEmpty {
-                        result = NSImage(data: data)
-                    }
-                }
-            } else {
-                result = NSImage(contentsOfFile: pathStr)
-            }
-        }
-        return result
+    /// Instance for `window`, or nil when it was never initialized. Used by the
+    /// entry points that must be a no-op for an unknown window instead of
+    /// silently creating an overlay-less instance.
+    func existing(_ window: String) -> LiveTextInstance? {
+        lock.lock()
+        defer { lock.unlock() }
+        return instances[window]
     }
 
-    /// Run VisionKit analysis on an image. Returns the analysis or nil.
-    /// Uses a 10-second timeout to prevent indefinite thread blocking
-    /// when GCD thread pool is saturated.
-    func analyzeImage(_ image: NSImage) -> ImageAnalysis? {
-        let analyzer = ensureAnalyzer()
-        let semaphore = DispatchSemaphore(value: 0)
-        let box = AnalysisBox()
-        let config = ImageAnalyzer.Configuration([.text, .machineReadableCode])
+    @discardableResult
+    func remove(_ window: String) -> LiveTextInstance? {
+        lock.lock()
+        defer { lock.unlock() }
+        return instances.removeValue(forKey: window)
+    }
 
-        Task.detached { [image] in
-            box.set(try? await analyzer.analyze(image, orientation: .up, configuration: config))
-            semaphore.signal()
-        }
-        let result = semaphore.wait(timeout: .now() + 10)
-        if result == .timedOut { return nil }
-        return box.get()
+    func isEmpty() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return instances.isEmpty
     }
 }
 
@@ -307,7 +377,7 @@ public func ltIsAvailable() -> Int32 {
 // MARK: - Init (attach overlay to NSPanel)
 
 @_cdecl("lt_init")
-public func ltInit(_ windowPtr: UInt64) -> Int32 {
+public func ltInit(_ window: UnsafePointer<CChar>?, _ windowPtr: UInt64) -> Int32 {
     #if canImport(VisionKit)
     if #available(macOS 13.0, *) {
         guard ImageAnalyzer.isSupported else { return -1 }
@@ -315,21 +385,23 @@ public func ltInit(_ windowPtr: UInt64) -> Int32 {
         // windowPtr is the raw NSWindow pointer passed from Rust
         let ptr = UnsafeMutableRawPointer(bitPattern: UInt(windowPtr))
         guard let ptr = ptr else { return -2 }
-        let window = Unmanaged<NSWindow>.fromOpaque(ptr).takeUnretainedValue()
-        guard let contentView = window.contentView else { return -3 }
+        let nsWindow = Unmanaged<NSWindow>.fromOpaque(ptr).takeUnretainedValue()
+        guard let contentView = nsWindow.contentView else { return -3 }
 
-        let mgr = LiveTextManager.shared
+        let key = windowKey(window)
+        let inst = LiveTextRegistry.shared.instance(key)
 
-        // Clean up any existing overlay from a previous init call
-        // (component remounts, HMR, etc. can trigger multiple inits)
+        // Clean up any existing overlay from a previous init call for *this
+        // window only* (component remounts, HMR, etc. can trigger multiple
+        // inits). Other windows keep their overlay and their pending analysis.
         MainActor.assumeIsolated {
-            for (_, view) in mgr.guardViews { view.removeFromSuperview() }
-            mgr.overlayView?.removeFromSuperview()
+            for (_, view) in inst.guardViews { view.removeFromSuperview() }
+            inst.overlayView?.removeFromSuperview()
         }
-        mgr.guardViews.removeAll()
-        mgr.overlayView = nil
-        mgr.clearAnalyses()
-        mgr.hostContentView = contentView
+        inst.guardViews.removeAll()
+        inst.overlayView = nil
+        inst.clearAnalyses()
+        inst.hostContentView = contentView
 
         // Create overlay — caller (lt_init) is invoked from main thread via
         // run_on_main_thread_safe. Use MainActor.assumeIsolated to satisfy
@@ -345,9 +417,9 @@ public func ltInit(_ windowPtr: UInt64) -> Int32 {
             overlay.frame = NSRect.zero
             overlay.autoresizingMask = [] // we manage position manually
             contentView.addSubview(overlay)
-            mgr.overlayView = overlay
+            inst.overlayView = overlay
         }
-        let analyzer = mgr.ensureAnalyzer()
+        let analyzer = LiveTextShared.shared.ensureAnalyzer()
 
         // Warm up VisionKit by running a tiny dummy analysis in the background.
         // The first real analyze() call triggers Apple's ML model loading which
@@ -377,6 +449,7 @@ public func ltInit(_ windowPtr: UInt64) -> Int32 {
 
 @_cdecl("lt_analyze_image")
 public func ltAnalyzeImage(
+    _ window: UnsafePointer<CChar>?,
     _ path: UnsafePointer<CChar>?,
     _ frameId: UnsafePointer<CChar>?,
     _ x: Double,
@@ -396,41 +469,45 @@ public func ltAnalyzeImage(
             return -1
         }
         let pathStr = String(cString: path)
-        let mgr = LiveTextManager.shared
-        guard mgr.overlayView != nil else {
+        guard let inst = LiveTextRegistry.shared.existing(windowKey(window)) else {
             outError.pointee = makeCString("overlay not initialized, call lt_init first")
             return -2
         }
-        guard mgr.hostContentView != nil else {
+        guard inst.overlayView != nil else {
+            outError.pointee = makeCString("overlay not initialized, call lt_init first")
+            return -2
+        }
+        guard inst.hostContentView != nil else {
             outError.pointee = makeCString("no host content view")
             return -3
         }
 
         let frameIdStr = frameId != nil ? String(cString: frameId!) : ""
+        let shared = LiveTextShared.shared
 
         // Check analysis cache first — revisited or prefetched frames are instant
-        if let cached = mgr.getCachedAnalysis(pathStr) {
-            mgr.setPending(cached, frameId: frameIdStr)
+        if let cached = shared.getCachedAnalysis(pathStr) {
+            inst.setPending(cached, frameId: frameIdStr)
             outText.pointee = makeCString(cached.transcript)
             return 0
         }
 
         // Load and analyze
-        guard let image = mgr.loadImage(pathStr),
+        guard let image = shared.loadImage(pathStr),
               image.cgImage(forProposedRect: nil, context: nil, hints: nil) != nil else {
             outError.pointee = makeCString("failed to load image: \(pathStr)")
             return -4
         }
 
-        guard let analysis = mgr.analyzeImage(image) else {
+        guard let analysis = shared.analyzeImage(image) else {
             outError.pointee = makeCString("analysis returned nil")
             return -5
         }
 
-        mgr.setCachedAnalysis(pathStr, analysis)
+        shared.setCachedAnalysis(pathStr, analysis)
         // Don't apply to overlay yet — store as pending. The analysis will be
         // applied in lt_update_position once the correct frame geometry is set.
-        mgr.setPending(analysis, frameId: frameIdStr)
+        inst.setPending(analysis, frameId: frameIdStr)
 
         outText.pointee = makeCString(analysis.transcript)
         return 0
@@ -445,7 +522,8 @@ public func ltAnalyzeImage(
 
 /// Analyze images in the background and cache results. Fire-and-forget.
 /// Skips images that are already cached. Does NOT set pendingAnalysis
-/// or update the overlay — only populates the cache for future instant hits.
+/// or update any overlay — only populates the shared cache for future instant
+/// hits, so it is deliberately window independent.
 @_cdecl("lt_prefetch")
 public func ltPrefetch(_ pathsJson: UnsafePointer<CChar>?) -> Int32 {
     #if canImport(VisionKit)
@@ -456,21 +534,21 @@ public func ltPrefetch(_ pathsJson: UnsafePointer<CChar>?) -> Int32 {
               let paths = try? JSONSerialization.jsonObject(with: data) as? [String],
               !paths.isEmpty else { return -2 }
 
-        let mgr = LiveTextManager.shared
+        let shared = LiveTextShared.shared
 
         // Fire-and-forget on a background queue
         DispatchQueue.global(qos: .utility).async {
             for pathStr in paths {
                 // Skip already cached
-                if mgr.getCachedAnalysis(pathStr) != nil { continue }
+                if shared.getCachedAnalysis(pathStr) != nil { continue }
 
                 autoreleasepool {
-                    guard let image = mgr.loadImage(pathStr),
+                    guard let image = shared.loadImage(pathStr),
                           image.cgImage(forProposedRect: nil, context: nil, hints: nil) != nil else {
                         return  // skip this image
                     }
-                    if let analysis = mgr.analyzeImage(image) {
-                        mgr.setCachedAnalysis(pathStr, analysis)
+                    if let analysis = shared.analyzeImage(image) {
+                        shared.setCachedAnalysis(pathStr, analysis)
                     }
                 }
             }
@@ -484,25 +562,34 @@ public func ltPrefetch(_ pathsJson: UnsafePointer<CChar>?) -> Int32 {
 // MARK: - Update Position
 
 @_cdecl("lt_update_position")
-public func ltUpdatePosition(_ frameId: UnsafePointer<CChar>?, _ x: Double, _ y: Double, _ w: Double, _ h: Double) -> Int32 {
+public func ltUpdatePosition(
+    _ window: UnsafePointer<CChar>?,
+    _ frameId: UnsafePointer<CChar>?,
+    _ x: Double,
+    _ y: Double,
+    _ w: Double,
+    _ h: Double
+) -> Int32 {
     #if canImport(VisionKit)
     if #available(macOS 13.0, *) {
-        let mgr = LiveTextManager.shared
-        guard let overlay = mgr.overlayView, let contentView = mgr.hostContentView else { return -1 }
+        guard let inst = LiveTextRegistry.shared.existing(windowKey(window)) else { return -1 }
+        guard let overlay = inst.overlayView, let contentView = inst.hostContentView else { return -1 }
 
         let frameIdStr = frameId != nil ? String(cString: frameId!) : ""
+        // Height of *this window's* content view. Flipping against another
+        // window's height is what put the overlay in the wrong place.
         let contentHeight = contentView.frame.height
         let appKitY = contentHeight - (y + h)
 
         // Apply pending analysis AFTER setting the frame so VisionKit
         // computes hit regions against the correct geometry — and only when
         // the analysis belongs to the frame being positioned.
-        let pending = mgr.takePending(matching: frameIdStr)
+        let pending = inst.takePending(matching: frameIdStr)
         // Search hits belong to one frame. Re-derive the selection on every
         // apply: the terms for this frame if the search matched here, otherwise
         // an explicit empty selection so the previous frame's highlight cannot
         // linger on top of different pixels.
-        let terms = pending != nil ? mgr.highlightTerms(for: frameIdStr) : []
+        let terms = pending != nil ? inst.highlightTerms(for: frameIdStr) : []
 
         mainThreadPreservingFocus(contentView) {
             MainActor.assumeIsolated {
@@ -555,7 +642,11 @@ private func applyHighlightTerms(_ overlay: ImageAnalysisOverlayView, _ terms: [
 }
 
 @_cdecl("lt_highlight_ranges")
-public func ltHighlightRanges(_ searchTermsJson: UnsafePointer<CChar>?, _ frameId: UnsafePointer<CChar>?) -> Int32 {
+public func ltHighlightRanges(
+    _ window: UnsafePointer<CChar>?,
+    _ searchTermsJson: UnsafePointer<CChar>?,
+    _ frameId: UnsafePointer<CChar>?
+) -> Int32 {
     #if canImport(VisionKit)
     if #available(macOS 14.0, *) {
         guard let searchTermsJson = searchTermsJson else { return -1 }
@@ -565,18 +656,18 @@ public func ltHighlightRanges(_ searchTermsJson: UnsafePointer<CChar>?, _ frameI
               let terms = try? JSONSerialization.jsonObject(with: data) as? [String],
               !terms.isEmpty else { return -2 }
 
-        let mgr = LiveTextManager.shared
-        guard let overlay = mgr.overlayView else { return -3 }
+        guard let inst = LiveTextRegistry.shared.existing(windowKey(window)) else { return -3 }
+        guard let overlay = inst.overlayView else { return -3 }
 
         let frameIdStr = frameId != nil ? String(cString: frameId!) : ""
         // Remember the request: the analysis for this frame may not have landed
         // yet (analysis is async), in which case there is no text to search and
         // the highlight would simply be dropped. lt_update_position re-applies
         // it as soon as the matching analysis is on the overlay.
-        mgr.setHighlightRequest(terms: terms, frameId: frameIdStr)
+        inst.setHighlightRequest(terms: terms, frameId: frameIdStr)
 
         // Only paint now if the overlay is already showing that frame.
-        guard !mgr.highlightTerms(for: mgr.appliedFrameId()).isEmpty else { return 0 }
+        guard !inst.highlightTerms(for: inst.appliedFrameId()).isEmpty else { return 0 }
 
         // main.sync from the main thread deadlocks — callers today are tokio
         // threads, but never rely on that.
@@ -592,13 +683,13 @@ public func ltHighlightRanges(_ searchTermsJson: UnsafePointer<CChar>?, _ frameI
 // MARK: - Clear Highlights
 
 @_cdecl("lt_clear_highlights")
-public func ltClearHighlights() -> Int32 {
+public func ltClearHighlights(_ window: UnsafePointer<CChar>?) -> Int32 {
     #if canImport(VisionKit)
     if #available(macOS 14.0, *) {
-        let mgr = LiveTextManager.shared
-        mgr.clearHighlightRequest()
-        guard let overlay = mgr.overlayView else { return -1 }
-        mainThreadPreservingFocus(mgr.hostContentView) {
+        guard let inst = LiveTextRegistry.shared.existing(windowKey(window)) else { return -1 }
+        inst.clearHighlightRequest()
+        guard let overlay = inst.overlayView else { return -1 }
+        mainThreadPreservingFocus(inst.hostContentView) {
             MainActor.assumeIsolated {
                 overlay.selectedRanges = []
             }
@@ -612,19 +703,19 @@ public func ltClearHighlights() -> Int32 {
 // MARK: - Hide
 
 @_cdecl("lt_hide")
-public func ltHide() -> Int32 {
+public func ltHide(_ window: UnsafePointer<CChar>?) -> Int32 {
     #if canImport(VisionKit)
     if #available(macOS 13.0, *) {
-        let mgr = LiveTextManager.shared
-        guard let overlay = mgr.overlayView else { return -1 }
-        mainThreadPreservingFocus(mgr.hostContentView) {
+        guard let inst = LiveTextRegistry.shared.existing(windowKey(window)) else { return -1 }
+        guard let overlay = inst.overlayView else { return -1 }
+        mainThreadPreservingFocus(inst.hostContentView) {
             MainActor.assumeIsolated {
                 overlay.preferredInteractionTypes = []
                 overlay.isHidden = true
                 overlay.analysis = nil
             }
         }
-        mgr.clearAnalyses()
+        inst.clearAnalyses()
         return 0
     }
     #endif
@@ -634,22 +725,28 @@ public func ltHide() -> Int32 {
 // MARK: - Destroy
 
 @_cdecl("lt_destroy")
-public func ltDestroy() -> Int32 {
+public func ltDestroy(_ window: UnsafePointer<CChar>?) -> Int32 {
     #if canImport(VisionKit)
     if #available(macOS 13.0, *) {
-        let mgr = LiveTextManager.shared
+        let registry = LiveTextRegistry.shared
+        guard let inst = registry.remove(windowKey(window)) else { return -1 }
         // Capture the overlay now; guardViews is main-thread only, so both
         // the removal and the dictionary clear happen inside the block.
-        let overlay = mgr.overlayView
-        mainThreadPreservingFocus(mgr.hostContentView) {
-            for (_, view) in mgr.guardViews { view.removeFromSuperview() }
-            mgr.guardViews.removeAll()
+        let overlay = inst.overlayView
+        mainThreadPreservingFocus(inst.hostContentView) {
+            for (_, view) in inst.guardViews { view.removeFromSuperview() }
+            inst.guardViews.removeAll()
             overlay?.removeFromSuperview()
         }
-        mgr.overlayView = nil
-        mgr.dropAnalyzer()
-        mgr.clearAnalyses()
-        mgr.hostContentView = nil
+        inst.overlayView = nil
+        inst.clearAnalyses()
+        inst.hostContentView = nil
+        // The analyzer is shared, so it may only be dropped once the last
+        // window is gone. Dropping it while another window is live would make
+        // that window pay the ML model load again on its next frame.
+        if registry.isEmpty() {
+            LiveTextShared.shared.dropAnalyzer()
+        }
         return 0
     }
     #endif
@@ -664,13 +761,20 @@ public func ltDestroy() -> Int32 {
 /// The guard returns nil from hitTest, letting clicks pass through to the
 /// WKWebView (which sits below the overlay in the view hierarchy).
 @_cdecl("lt_set_guard_rect")
-public func ltSetGuardRect(_ key: UnsafePointer<CChar>?, _ x: Double, _ y: Double, _ w: Double, _ h: Double) -> Int32 {
+public func ltSetGuardRect(
+    _ window: UnsafePointer<CChar>?,
+    _ key: UnsafePointer<CChar>?,
+    _ x: Double,
+    _ y: Double,
+    _ w: Double,
+    _ h: Double
+) -> Int32 {
     #if canImport(VisionKit)
     if #available(macOS 13.0, *) {
         guard let key = key else { return -2 }
         let keyStr = String(cString: key)
-        let mgr = LiveTextManager.shared
-        guard let overlay = mgr.overlayView, let contentView = mgr.hostContentView else { return -1 }
+        guard let inst = LiveTextRegistry.shared.existing(windowKey(window)) else { return -1 }
+        guard let overlay = inst.overlayView, let contentView = inst.hostContentView else { return -1 }
 
         let contentHeight = contentView.frame.height
         // Convert from top-left web coordinates to bottom-left AppKit coordinates
@@ -678,14 +782,14 @@ public func ltSetGuardRect(_ key: UnsafePointer<CChar>?, _ x: Double, _ y: Doubl
 
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
-                if mgr.guardViews[keyStr] == nil {
+                if inst.guardViews[keyStr] == nil {
                     let guard_ = ClickGuardView()
                     guard_.wantsLayer = true
                     // Sits above the overlay in the view hierarchy
                     contentView.addSubview(guard_, positioned: .above, relativeTo: overlay)
-                    mgr.guardViews[keyStr] = guard_
+                    inst.guardViews[keyStr] = guard_
                 }
-                mgr.guardViews[keyStr]?.frame = NSRect(x: x, y: appKitY, width: w, height: h)
+                inst.guardViews[keyStr]?.frame = NSRect(x: x, y: appKitY, width: w, height: h)
             }
         }
         return 0
@@ -701,10 +805,11 @@ public func ltSetGuardRect(_ key: UnsafePointer<CChar>?, _ x: Double, _ y: Doubl
 /// analysis is never bound to the displayed frame. Caller frees with
 /// lt_free_string.
 @_cdecl("lt_debug_applied_frame_id")
-public func ltDebugAppliedFrameId() -> UnsafeMutablePointer<CChar> {
+public func ltDebugAppliedFrameId(_ window: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar> {
     #if canImport(VisionKit)
     if #available(macOS 13.0, *) {
-        return makeCString(LiveTextManager.shared.appliedFrameId() ?? "")
+        let inst = LiveTextRegistry.shared.existing(windowKey(window))
+        return makeCString(inst?.appliedFrameId() ?? "")
     }
     #endif
     return makeCString("")
@@ -718,10 +823,11 @@ public func ltDebugAppliedFrameId() -> UnsafeMutablePointer<CChar> {
 /// text reports whether a highlight is actually live.
 /// Read-only; used by the livetext regression tests and interactive harness.
 @_cdecl("lt_debug_selected_text")
-public func ltDebugSelectedText() -> UnsafeMutablePointer<CChar> {
+public func ltDebugSelectedText(_ window: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar> {
     #if canImport(VisionKit)
     if #available(macOS 14.0, *) {
-        guard let overlay = LiveTextManager.shared.overlayView else { return makeCString("") }
+        guard let inst = LiveTextRegistry.shared.existing(windowKey(window)),
+              let overlay = inst.overlayView else { return makeCString("") }
         var text = ""
         let read = { MainActor.assumeIsolated { text = overlay.selectedText } }
         if Thread.isMainThread { read() } else { DispatchQueue.main.sync(execute: read) }
@@ -733,19 +839,19 @@ public func ltDebugSelectedText() -> UnsafeMutablePointer<CChar> {
 
 /// Remove a specific named guard, or all guards if key is nil.
 @_cdecl("lt_remove_guard")
-public func ltRemoveGuard(_ key: UnsafePointer<CChar>?) -> Int32 {
+public func ltRemoveGuard(_ window: UnsafePointer<CChar>?, _ key: UnsafePointer<CChar>?) -> Int32 {
     #if canImport(VisionKit)
     if #available(macOS 13.0, *) {
-        let mgr = LiveTextManager.shared
+        guard let inst = LiveTextRegistry.shared.existing(windowKey(window)) else { return -1 }
         let keyStr = key.map { String(cString: $0) }
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 if let keyStr = keyStr {
-                    mgr.guardViews[keyStr]?.removeFromSuperview()
-                    mgr.guardViews.removeValue(forKey: keyStr)
+                    inst.guardViews[keyStr]?.removeFromSuperview()
+                    inst.guardViews.removeValue(forKey: keyStr)
                 } else {
-                    for (_, view) in mgr.guardViews { view.removeFromSuperview() }
-                    mgr.guardViews.removeAll()
+                    for (_, view) in inst.guardViews { view.removeFromSuperview() }
+                    inst.guardViews.removeAll()
                 }
             }
         }

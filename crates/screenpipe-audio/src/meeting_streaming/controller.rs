@@ -26,6 +26,13 @@ use super::{
     selected_engine, MeetingStreamingConfig, MeetingStreamingProvider,
 };
 
+/// Event topic used to re-attach live streaming to a meeting that is still in
+/// progress after a recording restart. Deliberately separate from
+/// `meeting_started`: that topic also drives user pipe triggers, calendar
+/// speaker id, and detection telemetry, none of which should re-fire just
+/// because recording bounced mid-meeting.
+pub const MEETING_STREAMING_REATTACH_EVENT: &str = "meeting_streaming_reattach";
+
 const LIVE_FINAL_PERSIST_ATTEMPTS: usize = 18;
 const LIVE_FINAL_PERSIST_RETRY_DELAY: Duration = Duration::from_secs(5);
 const PROVIDER_STREAM_RESTART_BACKOFF: Duration = Duration::from_secs(5);
@@ -115,6 +122,9 @@ pub fn start_meeting_streaming_loop(
         let mut error_sub = screenpipe_events::subscribe_to_event::<MeetingStreamingError>(
             "meeting_streaming_error",
         );
+        let mut reattach_sub = screenpipe_events::subscribe_to_event::<MeetingLifecycleEvent>(
+            MEETING_STREAMING_REATTACH_EVENT,
+        );
         let mut inactivity_tick = tokio::time::interval(LIVE_INACTIVITY_CHECK_INTERVAL);
         let mut active: Option<ActiveMeetingStream> = None;
 
@@ -164,6 +174,46 @@ pub fn start_meeting_streaming_loop(
                         continue;
                     }
 
+                    let attendee_keyterms = meeting_attendee_keyterms(&db, meeting_id).await;
+                    start_streaming_session(
+                        &config,
+                        &audio_tap,
+                        &transcription_engine,
+                        &mut active,
+                        meeting_id,
+                        event.data.app.clone(),
+                        event.data.display_title().map(str::to_string),
+                        attendee_keyterms,
+                    )
+                    .await;
+                }
+                // A restart that interrupted a live meeting republishes the
+                // meeting here instead of on `meeting_started`, so recovery
+                // cannot re-fire user pipes bound to a real meeting start.
+                // This arm is what makes reattach ordering-independent: the
+                // coordinator's own startup probe (above) races the meeting
+                // watcher, which closes the row on shutdown and again via
+                // `close_orphaned_meetings` on start — so the probe routinely
+                // sees no active meeting and would otherwise idle for the rest
+                // of a meeting that is still in progress.
+                Some(event) = reattach_sub.next() => {
+                    let Some(meeting_id) = event.data.resolved_meeting_id() else {
+                        warn!("meeting streaming: ignoring reattach without meeting_id");
+                        continue;
+                    };
+
+                    if active.as_ref().is_some_and(|s| s.meeting_id == meeting_id) {
+                        debug!(
+                            "meeting streaming: already streaming meeting {} — ignoring reattach",
+                            meeting_id
+                        );
+                        continue;
+                    }
+
+                    info!(
+                        "meeting streaming: reattaching interrupted meeting (meeting_id={})",
+                        meeting_id
+                    );
                     let attendee_keyterms = meeting_attendee_keyterms(&db, meeting_id).await;
                     start_streaming_session(
                         &config,

@@ -17,21 +17,6 @@ pub fn send(title: impl Into<String>, body: impl Into<String>) {
     send_typed_with_priority(title, body, "system", None, NotificationPriority::High);
 }
 
-pub fn send_typed(
-    title: impl Into<String>,
-    body: impl Into<String>,
-    notification_type: &'static str,
-    auto_dismiss_ms: Option<u64>,
-) {
-    send_typed_with_priority(
-        title,
-        body,
-        notification_type,
-        auto_dismiss_ms,
-        NotificationPriority::Normal,
-    );
-}
-
 pub fn send_typed_with_priority(
     title: impl Into<String>,
     body: impl Into<String>,
@@ -46,23 +31,6 @@ pub fn send_typed_with_priority(
         auto_dismiss_ms,
         Vec::new(),
         priority,
-    );
-}
-
-pub fn send_typed_with_actions(
-    title: impl Into<String>,
-    body: impl Into<String>,
-    notification_type: &'static str,
-    auto_dismiss_ms: Option<u64>,
-    actions: Vec<serde_json::Value>,
-) {
-    send_typed_with_actions_and_priority(
-        title,
-        body,
-        notification_type,
-        auto_dismiss_ms,
-        actions,
-        NotificationPriority::Normal,
     );
 }
 

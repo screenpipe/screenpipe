@@ -5,15 +5,16 @@
 //! meeting (flag on — ANY capture mode; the flag takes precedence over
 //! `audio_capture_mode`, so a meeting engages it in continuous capture just as
 //! in meetings-only), capture the meeting app's own audio via a per-process
-//! tap and the mic it actually has open — and fall back to the stable path on
-//! ANY gap: platform unavailable, no pid, tap build failure, tap death,
-//! resolver empty.
+//! tap and one authoritative mic it has open. While the meeting is active,
+//! this is Screenpipe's single capture owner: its normal configured input and
+//! output streams stay suspended even across pid gaps, tap startup/failure,
+//! or an empty resolver. This does not request exclusive OS/device access.
 //!
 //! Two machines, one sweep:
 //!
 //! * **Far end** — pure decider (`decide_piggyback`) for the per-process
-//!   Meeting Tap: start it, suspend the redundant stable output while it
-//!   streams, fall back with strikes + cooldown when it dies. Mirrors
+//!   Meeting Tap: suspend normal output immediately, then start/retry the tap
+//!   with strikes + cooldown when it dies. Mirrors
 //!   `decide_pinned_input_fallback` / `windows_output_follow`.
 //!
 //! * **Near end** — [`MicFollow`], an explicit per-meeting mic-follow state
@@ -51,20 +52,10 @@
 //!     [`MIC_PERSISTENT_WINDOW_MS`]) slows to [`MIC_PERSISTENT_RETRY_MS`]
 //!     retries (warned once), so a truly broken device can't hammer a
 //!     Bluetooth link forever;
-//!   - displacement of the user's other mics is a **latch**: suspended once
-//!     when a followed mic is confirmed delivering, lifted once when the app
-//!     releases its mics, the resolved capture stays dead past
-//!     [`DISPLACEMENT_LIFT_HOLDOFF_MS`], or the meeting ends. A device can
-//!     never be suspended and resumed in alternation by observation flap.
-//!
-//! **"Stable path" = whatever the user's existing settings produce**, not a
-//! specific backend: their enabled/pinned/default-follow devices, with the
-//! System Audio backend chosen by their own configuration at start time (SCK
-//! by default, the CoreAudio global tap when `experimental_coreaudio_system_audio`
-//! is on, or anything added later — see `AudioStream::from_device`). This
-//! sweep suspends and resumes devices by NAME only; the observations carry no
-//! backend information, so backend neutrality is structural — the fallback can
-//! never be coupled to one capture method.
+//!   - displacement of the user's other mics is a **meeting-duration latch**:
+//!     normal streams are suspended immediately and resume only when the
+//!     meeting ends. A resolver or provider gap can therefore never bring a
+//!     second recorder back during a meeting.
 
 use std::collections::HashSet;
 
@@ -121,12 +112,6 @@ pub(crate) const MIC_PERSISTENT_FAILURES: u32 = 10;
 pub(crate) const MIC_PERSISTENT_WINDOW_MS: u64 = 30_000;
 /// Retry cadence once a device is persistently failing (warned once).
 pub(crate) const MIC_PERSISTENT_RETRY_MS: u64 = 5_000;
-/// How long the followed mics must be continuously non-delivering before the
-/// displacement latch lifts and the user's other mics come back. Sized well
-/// above any SCO renegotiation transient (seconds), so a recoverable stall
-/// never bounces the fallback mics.
-pub(crate) const DISPLACEMENT_LIFT_HOLDOFF_MS: u64 = 60_000;
-
 fn is_persistent_failure(failures: u32, first_failure_ms: u64, now_ms: u64) -> bool {
     failures >= MIC_PERSISTENT_FAILURES
         && now_ms.saturating_sub(first_failure_ms) >= MIC_PERSISTENT_WINDOW_MS
@@ -191,6 +176,8 @@ pub(crate) struct MicFollowObservation {
     pub session_devices: HashSet<String>,
     /// Session devices with a live stream handle.
     pub session_streaming: HashSet<String>,
+    /// Devices held closed by Screenpipe's meeting ownership gate.
+    pub suspended: HashSet<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -203,9 +190,6 @@ pub(crate) enum MicFollowAction {
     CloseSessionInput(String),
     /// Displacement latch engaged: suspend this non-resolved running mic.
     SuspendInput(String),
-    /// Displacement latch lifted: unsuspend + restart this mic (the ONE clean
-    /// restart point; fires only at latch-lift and meeting-end edges).
-    ResumeInput(String),
     /// A previously displaced mic became the app's resolved mic (in-app mic
     /// switch onto it): clear its suspension flag WITHOUT restarting it — the
     /// machine now owns its capture through the normal open path.
@@ -223,14 +207,28 @@ pub(crate) struct MicFollow {
     /// or by becoming resolved itself (unsuspend), so suspend/resume
     /// oscillation is structurally impossible.
     displaced: HashSet<String>,
-    /// Last tick any followed mic was confirmed delivering (live stream).
-    last_delivering_ms: u64,
 }
 
 impl MicFollow {
     /// Advance one sweep tick. Returns the device actions to apply, in order.
     pub(crate) fn tick(&mut self, obs: &MicFollowObservation) -> Vec<MicFollowAction> {
         let mut actions = Vec::new();
+
+        // One resolved replacement is a handoff, not an additional mic. Retire
+        // the previous session before opening it so the handoff never feeds
+        // two mic streams.
+        if let [replacement] = obs.resolved_inputs.as_slice() {
+            if !self.entries.contains_key(replacement) {
+                let mut previous: Vec<String> = self.entries.keys().cloned().collect();
+                previous.sort();
+                for old in previous {
+                    self.entries.remove(&old);
+                    if obs.session_devices.contains(&old) {
+                        actions.push(MicFollowAction::CloseSessionInput(old));
+                    }
+                }
+            }
+        }
 
         // 1. Enroll newly resolved mics and decide their phase on this very
         //    pass — there is no confirm delay. The observation naming a
@@ -245,38 +243,37 @@ impl MicFollow {
         //    unsuspend (flag only — no restart) and follow it through the
         //    normal open path below.
         for dev in &obs.resolved_inputs {
-            if self.entries.contains_key(dev) {
-                continue;
-            }
-            if self.displaced.remove(dev) {
-                actions.push(MicFollowAction::UnsuspendInput(dev.clone()));
-            }
-            let phase = if obs.running_inputs.contains(dev) {
-                // The user's enabled stream already carries it.
-                MicPhase::Adopted
-            } else if obs.session_devices.contains(dev) {
-                // Already open (machine rebuilt mid-meeting).
-                MicPhase::Capturing
-            } else {
-                actions.push(MicFollowAction::OpenSessionInput(dev.clone()));
-                // `note_open_result` moves us to Capturing or Backoff;
-                // pre-arm a pessimistic retry so a missed callback can never
-                // turn into a per-pass open hammer (single in-flight open per
-                // device, floored by MIC_RETRY_FLOOR_MS).
-                MicPhase::Backoff {
-                    failures: 0,
-                    first_failure_ms: obs.now_ms,
-                    retry_at_ms: obs.now_ms + MIC_RETRY_FLOOR_MS,
+            if !self.entries.contains_key(dev) {
+                if self.displaced.remove(dev) || obs.suspended.contains(dev) {
+                    actions.push(MicFollowAction::UnsuspendInput(dev.clone()));
                 }
-            };
-            self.entries.insert(
-                dev.clone(),
-                MicEntry {
-                    phase,
-                    missing_since_ms: None,
-                    persistent_warned: false,
-                },
-            );
+                let phase = if obs.running_inputs.contains(dev) {
+                    // The user's enabled stream already carries it.
+                    MicPhase::Adopted
+                } else if obs.session_devices.contains(dev) {
+                    // Already open (machine rebuilt mid-meeting).
+                    MicPhase::Capturing
+                } else {
+                    actions.push(MicFollowAction::OpenSessionInput(dev.clone()));
+                    // `note_open_result` moves us to Capturing or Backoff;
+                    // pre-arm a pessimistic retry so a missed callback can never
+                    // turn into a per-pass open hammer (single in-flight open per
+                    // device, floored by MIC_RETRY_FLOOR_MS).
+                    MicPhase::Backoff {
+                        failures: 0,
+                        first_failure_ms: obs.now_ms,
+                        retry_at_ms: obs.now_ms + MIC_RETRY_FLOOR_MS,
+                    }
+                };
+                self.entries.insert(
+                    dev.clone(),
+                    MicEntry {
+                        phase,
+                        missing_since_ms: None,
+                        persistent_warned: false,
+                    },
+                );
+            }
         }
 
         // 2. Advance every followed mic.
@@ -376,10 +373,6 @@ impl MicFollow {
             MicPhase::Capturing => obs.session_streaming.contains(dev),
             _ => false,
         });
-        if delivering {
-            self.last_delivering_ms = obs.now_ms;
-        }
-
         // 4. Displacement latch.
         if delivering {
             // Latch (and keep latched): suspend running mics the meeting app
@@ -389,23 +382,6 @@ impl MicFollow {
                 if !self.entries.contains_key(dev) && !self.displaced.contains(dev) {
                     actions.push(MicFollowAction::SuspendInput(dev.clone()));
                     self.displaced.insert(dev.clone());
-                }
-            }
-        } else if !self.displaced.is_empty() {
-            // Lift ONLY when the app released its mics entirely, or the
-            // followed capture has been dead for the full holdoff — never on a
-            // transient stall. This is the "never trade a working mic for a
-            // dead resolved one" edge, and it fires once (drain). The latch
-            // can only have engaged after a delivering tick, so
-            // `last_delivering_ms` is always set here.
-            let lift = self.entries.is_empty()
-                || obs.now_ms.saturating_sub(self.last_delivering_ms)
-                    >= DISPLACEMENT_LIFT_HOLDOFF_MS;
-            if lift {
-                let mut lifted: Vec<String> = self.displaced.drain().collect();
-                lifted.sort();
-                for dev in lifted {
-                    actions.push(MicFollowAction::ResumeInput(dev));
                 }
             }
         }
@@ -466,7 +442,6 @@ impl MicFollow {
     pub(crate) fn reset(&mut self) {
         self.entries.clear();
         self.displaced.clear();
-        self.last_delivering_ms = 0;
     }
 }
 
@@ -480,7 +455,7 @@ pub(crate) struct PiggybackObservation {
     pub tap_available: bool,
     /// None = no active meeting. Some(empty) = meeting without any known
     /// process (ui_scan sensor / post-restart reattach, or a manual meeting
-    /// with no mic-holders observed yet) — stable path. Some(pids) = tap
+    /// with no mic-holders observed yet). Some(pids) = tap
     /// these processes: the single sensor-attributed pid for detected
     /// meetings, or every mic-holding process for MANUAL meetings (built by
     /// the sweep, sorted + deduped, damped by persistence-gated adoption).
@@ -491,12 +466,22 @@ pub(crate) struct PiggybackObservation {
     pub session_streaming: HashSet<String>,
     /// Devices currently suspended by this sweep.
     pub suspended: HashSet<String>,
-    /// Stable/global far-end captures to suspend only while the Meeting Tap is
-    /// streaming. macOS has one synthetic System Audio device; Windows may have
-    /// one or more endpoint loopbacks currently running.
+    /// Normal input streams currently running. Every one not resolved from a
+    /// meeting process is suspended for the meeting duration.
+    pub stable_inputs: Vec<String>,
+    pub resolved_inputs: HashSet<String>,
+    /// Stable/global far-end captures to suspend for the meeting duration.
     pub stable_outputs: Vec<String>,
     pub tap_strikes: u32,
     pub tap_cooldown_elapsed: bool,
+    /// Whether a Meeting Tap has started at any point in THIS meeting.
+    ///
+    /// Distinguishes a transient gap under a working piggyback (keep every
+    /// suspension — resuming would re-create the device churn this feature
+    /// exists to prevent) from a piggyback that has never delivered at all
+    /// (holding capture suspended just makes the meeting silent). See
+    /// [`piggyback_may_own_capture`].
+    pub tap_ever_started: bool,
     /// Pids the currently-registered Meeting Tap was built over (sorted).
     /// Empty when no tap is registered. Lets the decider notice the
     /// mic-holder set changing mid-meeting (manual meetings track it live)
@@ -531,38 +516,107 @@ pub(crate) enum PiggybackAction {
 
 /// Pure decision function. Given a snapshot of everything relevant this tick,
 /// returns the actions the sweep must apply. No OS, no manager, no locks —
-/// exhaustively unit-tested against the decision matrix. **Every cell that
-/// isn't "tap healthy" lands on the stable path** — the user's own configured
-/// capture (their devices, their backend flags; see the module doc), which is
-/// exactly today's behavior with the flag off.
+/// exhaustively unit-tested against the decision matrix.
+/// Whether the piggyback is entitled to own (and therefore suspend) the user's
+/// normal capture for this tick.
+///
+/// #6072 made the piggyback the sole capture owner for a confirmed meeting so
+/// two subsystems could never fight over the same devices — the churn behind
+/// the Bluetooth SCO storms that starved Zoom and Meet. It took ownership
+/// unconditionally though, so when the tap could not be built the meeting
+/// recorded *nothing*: measured live on 2.6.1, an 86s manual meeting produced
+/// 3,584 samples (~0.22s) and an empty transcript, where 2.5.x manual meetings
+/// captured millions.
+///
+/// Ownership is kept whenever the piggyback is delivering or has delivered:
+/// `tap_ever_started` means a real tap exists for this meeting, so a pid gap is
+/// transient and resuming normal capture would reintroduce exactly the churn
+/// #6072 removed.
+///
+/// It is released only when the piggyback has never delivered AND cannot
+/// contend for anything right now:
+///   * no meeting pids — nothing is holding the devices, so normal capture
+///     cannot fight anyone, and staying suspended only produces silence;
+///   * no tap support on this OS — the tap never opens, so there is likewise
+///     nothing to contend with.
+///
+/// Deliberately NOT released on exhausted strikes: there the meeting app really
+/// is holding devices, so resuming would put two recorders back on the same
+/// hardware. That case needs device-level validation before it changes.
+pub(crate) fn piggyback_may_own_capture(
+    tap_available: bool,
+    meeting_pid_count: usize,
+    tap_ever_started: bool,
+) -> bool {
+    if tap_ever_started {
+        return true;
+    }
+    tap_available && meeting_pid_count > 0
+}
+
 pub(crate) fn decide_piggyback(obs: &PiggybackObservation) -> Vec<PiggybackAction> {
     let mut actions = Vec::new();
     let engaged = obs.flag_on;
     let meeting_pids: &[i32] = obs.meeting.as_deref().unwrap_or(&[]);
 
-    // Disengaged, meeting over, or meeting without any pid: tear down every
-    // session stream and lift every suspension → exactly today's stable path.
-    let piggybacking = engaged && obs.tap_available && !meeting_pids.is_empty();
-    if !piggybacking {
+    // Normal capture resumes only when the meeting ends or the feature is off.
+    let meeting_active = engaged && obs.meeting.is_some();
+    if !meeting_active {
         // Only the "flag on, tap available, but this tick's pid went empty"
         // case is a surprise — flag-off and no-meeting are the normal quiet
         // paths. This is the OTHER silent teardown site (RetapForPidChange
         // and the "not streaming" branch below both log; this one never
         // did), and it fires on a single empty-pid tick with no persistence
         // gate at all, unlike the manual-meeting holder-set adoption.
-        if engaged && obs.tap_available && !obs.session_devices.is_empty() {
-            tracing::info!(
-                "[MEETING_PIGGYBACK] meeting pid went empty this tick, tearing down session devices {:?}",
-                obs.session_devices
-            );
-        }
         for dev in &obs.session_devices {
             actions.push(PiggybackAction::StopSessionDevice(dev.clone()));
         }
         for dev in &obs.suspended {
             actions.push(PiggybackAction::Resume(dev.clone()));
         }
-        if engaged && !meeting_pids.is_empty() && !obs.tap_available {
+        return actions;
+    }
+
+    // Release capture entirely when the piggyback has never delivered and has
+    // nothing to contend with (see `piggyback_may_own_capture`). Placed BEFORE
+    // the suspend pass so those ticks never suspend-then-resume: the user's
+    // configured capture simply keeps running, and the meeting is recorded by
+    // the normal path instead of being silent.
+    if !piggyback_may_own_capture(obs.tap_available, meeting_pids.len(), obs.tap_ever_started) {
+        for dev in &obs.session_devices {
+            actions.push(PiggybackAction::StopSessionDevice(dev.clone()));
+        }
+        for dev in &obs.suspended {
+            actions.push(PiggybackAction::Resume(dev.clone()));
+        }
+        if !meeting_pids.is_empty() && !obs.tap_available {
+            actions.push(PiggybackAction::WarnUnavailableOnce);
+        }
+        return actions;
+    }
+
+    // The meeting owns capture immediately, before either piggyback stream is
+    // proven healthy. This prevents default-device changes and tap gaps from
+    // creating a second recorder.
+    for stable in &obs.stable_inputs {
+        if !obs.resolved_inputs.contains(stable) && !obs.suspended.contains(stable) {
+            actions.push(PiggybackAction::Suspend(stable.clone()));
+        }
+    }
+    for stable in &obs.stable_outputs {
+        if !obs.suspended.contains(stable) {
+            actions.push(PiggybackAction::Suspend(stable.clone()));
+        }
+    }
+
+    // A pid/tap gap cannot restore normal capture. Tear down stale session
+    // streams, keep every suspension, and wait for the piggyback to recover.
+    let piggybacking = obs.tap_available && !meeting_pids.is_empty();
+    if !piggybacking {
+        for dev in &obs.session_devices {
+            actions.push(PiggybackAction::StopSessionDevice(dev.clone()));
+        }
+        if !meeting_pids.is_empty() && !obs.tap_available {
             actions.push(PiggybackAction::WarnUnavailableOnce);
         }
         return actions;
@@ -583,23 +637,12 @@ pub(crate) fn decide_piggyback(obs: &PiggybackObservation) -> Vec<PiggybackActio
             obs.tap_built_pids
         );
         actions.push(PiggybackAction::StopSessionDevice(tap.clone()));
-        for dev in &obs.suspended {
-            if dev.ends_with("(output)") {
-                actions.push(PiggybackAction::Resume(dev.clone()));
-            }
-        }
         actions.push(PiggybackAction::NoteTapFailure);
     } else if !tap_registered {
         if obs.tap_strikes < MAX_TAP_STRIKES && obs.tap_cooldown_elapsed {
             actions.push(PiggybackAction::StartTap {
                 pids: meeting_pids.to_vec(),
             });
-        }
-        // Stable output stays live (or resumes) while the tap isn't delivering.
-        for dev in &obs.suspended {
-            if dev.ends_with("(output)") {
-                actions.push(PiggybackAction::Resume(dev.clone()));
-            }
         }
     } else if !obs.tap_built_pids.is_empty() && obs.tap_built_pids != obs.retap_target_pids {
         // Tap is healthy but the pid set moved under it (a mic-holding app
@@ -610,14 +653,6 @@ pub(crate) fn decide_piggyback(obs: &PiggybackObservation) -> Vec<PiggybackActio
         actions.push(PiggybackAction::RetapForPidChange {
             pids: obs.retap_target_pids.clone(),
         });
-    } else {
-        // Tap is streaming: the stable global capture is redundant (double
-        // transcription) — suspend it for the meeting's duration.
-        for stable in &obs.stable_outputs {
-            if !obs.suspended.contains(stable) {
-                actions.push(PiggybackAction::Suspend(stable.clone()));
-            }
-        }
     }
 
     // The near end (resolved mic capture + displacement of the user's other
@@ -633,8 +668,8 @@ pub(crate) fn decide_piggyback(obs: &PiggybackObservation) -> Vec<PiggybackActio
 pub(crate) struct PiggybackState {
     /// Consecutive failed tap starts this meeting (build error or observed
     /// death). Reset when the meeting ends. At [`MAX_TAP_STRIKES`] the sweep
-    /// stops retrying the tap for the rest of this meeting and rides the
-    /// stable path.
+    /// stops retrying the tap for the rest of this meeting while normal
+    /// capture remains suspended.
     pub tap_strikes: u32,
     /// When the last tap start was attempted — gates retries by
     /// [`TAP_RETRY_COOLDOWN_SECS`] so a flapping tap doesn't rebuild-storm.
@@ -854,9 +889,27 @@ pub(crate) struct PiggybackMeetingSummary {
     pub meeting_app_bundle_id: Option<String>,
     pub pid_known: bool,
     pub manual: bool,
+    /// True when the piggyback owned capture for a meeting and delivered
+    /// nothing: the tap never streamed AND no meeting mic session ever
+    /// started. Normal capture is suspended for the meeting duration, so this
+    /// is the signal that the meeting recorded no audio at all.
+    ///
+    /// The `outcome` strings cannot carry this. `stable_fallback`,
+    /// `no_pid` and `unavailable` are all reported for meetings that captured
+    /// nothing, and all three read as benign, so a silent meeting is
+    /// indistinguishable from a healthy one in the dashboards without this
+    /// field. Additive on purpose — renaming an outcome would break the
+    /// existing insights.
+    pub captured_no_audio: bool,
     pub platform: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub os_version: Option<String>,
+}
+
+/// Whether the piggyback delivered no audio at all for a meeting it owned.
+/// Pure so the invariant is unit-testable without a sweep.
+pub(crate) fn captured_no_audio(t: &MeetingTelemetry) -> bool {
+    t.meeting_seen && t.tap_streaming_ticks == 0 && !t.mic_session_started
 }
 
 pub(crate) fn classify_outcome(t: &MeetingTelemetry) -> &'static str {
@@ -893,6 +946,7 @@ pub(crate) fn build_meeting_summary(t: &MeetingTelemetry) -> PiggybackMeetingSum
         meeting_app_bundle_id: t.bundle_id.clone(),
         pid_known: t.pid_known,
         manual: t.manual,
+        captured_no_audio: captured_no_audio(t),
         platform: std::env::consts::OS,
         os_version: os_version_string(),
     }
@@ -923,7 +977,7 @@ fn fold_volatile_state(telemetry: &mut MeetingTelemetry, state: &PiggybackState)
 /// True when the CoreAudio Process Tap / Windows per-process loopback API is
 /// available. The `process_tap` module (and thus `is_process_tap_available`)
 /// only exists on macOS and Windows; elsewhere the tap can't be built, so the
-/// observation simply never piggybacks and rides the stable path.
+/// observation simply never piggybacks.
 ///
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn tap_available() -> bool {
@@ -1024,10 +1078,10 @@ pub(crate) async fn run_meeting_piggyback_sweep(
     let detector = audio_manager.meeting_detector().await;
 
     // 2. Meeting identity. Detector `None` (engine-less CLI, detector disabled)
-    //    ⇒ observation `meeting: None` ⇒ decider tears down any leftovers and
-    //    rides the stable path. A meeting with an EMPTY pid set (sensor can't
-    //    know the process: ui_scan / post-restart reattach, or a manual
-    //    meeting with no mic-holder observed) — also stable. MANUAL meetings
+    //    ⇒ observation `meeting: None` ⇒ decider tears down any leftovers. A
+    //    meeting with an EMPTY pid set (sensor can't know the process: ui_scan
+    //    / post-restart reattach, or a manual meeting with no mic-holder
+    //    observed) still owns Screenpipe capture. MANUAL meetings
     //    carry no sensor pid ever, so the sweep derives the set itself: every
     //    process currently holding a microphone (the enumerator filters
     //    screenpipe's own), damped by persistence-gated adoption so a flapping holder
@@ -1150,6 +1204,8 @@ pub(crate) async fn run_meeting_piggyback_sweep(
             now_ms(),
         )
     };
+    let stable_inputs = running_inputs.clone();
+    let resolved_input_set = resolved_inputs.iter().cloned().collect();
     let stable_outputs = stable_output_names(audio_manager, &session_devices);
     // A meeting is "seen" whenever the detector reports one, pid set or not —
     // the telemetry gate and the meeting-end edge below key off this, and
@@ -1162,13 +1218,32 @@ pub(crate) async fn run_meeting_piggyback_sweep(
         meeting,
         session_devices: session_devices.clone(),
         session_streaming: session_streaming.clone(),
-        suspended,
+        suspended: suspended.clone(),
+        stable_inputs,
+        resolved_inputs: resolved_input_set,
         stable_outputs,
         tap_strikes: state.tap_strikes,
         tap_cooldown_elapsed: cooldown_elapsed,
+        tap_ever_started: state.telemetry.tap_started_count > 0,
         tap_built_pids: state.tap_pids.clone(),
         retap_target_pids,
     };
+
+    // Publish ownership for the manager's device-start gate. That gate only
+    // sees the flag and the meeting state; this sweep is the only place that
+    // knows whether a tap exists, so without this handoff the gate suspends
+    // normal capture even when the piggyback cannot deliver, and the meeting
+    // records nothing. Ownership requires an active meeting too — outside one
+    // the gate must never hold capture.
+    audio_manager.set_piggyback_owns_capture(
+        flag_on
+            && obs.meeting.is_some()
+            && piggyback_may_own_capture(
+                obs.tap_available,
+                obs.meeting.as_deref().unwrap_or(&[]).len(),
+                obs.tap_ever_started,
+            ),
+    );
 
     let tap_device_str = format!("{} (output)", MEETING_TAP_DEVICE_NAME);
     let tap_streaming = session_streaming.contains(&tap_device_str);
@@ -1255,18 +1330,6 @@ pub(crate) async fn run_meeting_piggyback_sweep(
                         "[MEETING_PIGGYBACK] failed to rebuild meeting tap over new pid set (strike {}/{}): {}",
                         state.tap_strikes, MAX_TAP_STRIKES, e
                     );
-                    // The stable "(output)" devices were suspended for the
-                    // tap that just died with this failed rebuild — resume
-                    // them NOW rather than waiting for the next tick's
-                    // decider pass, which would leave a ~2s far-end capture
-                    // hole. This is a rare edge (a failed rebuild), not a
-                    // per-tick path.
-                    for name in audio_manager.suspended_devices() {
-                        if !name.ends_with("(output)") {
-                            continue;
-                        }
-                        resume_and_restart(audio_manager, &name).await;
-                    }
                 } else {
                     state.tap_pids = pids;
                     state.telemetry.tap_started_count += 1;
@@ -1284,7 +1347,7 @@ pub(crate) async fn run_meeting_piggyback_sweep(
             }
             PiggybackAction::WarnUnavailableOnce => {
                 if !state.warned_unavailable {
-                    warn!("meeting piggyback enabled but per-process capture is unavailable on this OS (needs macOS 14.4+ / Windows 20348+ for isolation); using the stable capture path");
+                    warn!("meeting piggyback enabled but per-process capture is unavailable on this OS (needs macOS 14.4+ / Windows 20348+ for isolation); normal audio remains suspended until the meeting ends");
                     state.warned_unavailable = true;
                 }
             }
@@ -1322,6 +1385,7 @@ pub(crate) async fn run_meeting_piggyback_sweep(
             running_streaming,
             session_devices: session_devices.clone(),
             session_streaming: session_streaming.clone(),
+            suspended,
         };
         for action in state.mic_follow.tick(&mic_obs) {
             match action {
@@ -1393,13 +1457,6 @@ pub(crate) async fn run_meeting_piggyback_sweep(
                         let _ = audio_manager.stop_device_recording(&device).await;
                     }
                 }
-                MicFollowAction::ResumeInput(name) => {
-                    info!(
-                        "[MEETING_PIGGYBACK] meeting mic gone — resuming displaced mic {}",
-                        name
-                    );
-                    resume_and_restart(audio_manager, &name).await;
-                }
                 MicFollowAction::UnsuspendInput(name) => {
                     // The app switched onto a mic we had displaced: clear the
                     // flag only — the machine's confirm/open path owns capture
@@ -1441,8 +1498,8 @@ pub(crate) async fn run_meeting_piggyback_sweep(
     state.was_piggybacking = piggybacking_now;
 
     // 7. Meeting-end emission (Task 1). Separate edge from the piggybacking
-    //    transition above: a meeting can keep going on the stable path after a
-    //    pid flap, so this only fires when the meeting itself is gone. Folds
+    //    transition above: a meeting can keep going through a pid gap, so this
+    //    only fires when the meeting itself is gone. Folds
     //    once more (idempotent per meeting — see `fold_volatile_state`) to
     //    catch meetings that end while STILL piggybacking, where this edge and
     //    the one above fire on the very same tick.
@@ -1521,13 +1578,57 @@ mod tests {
     }
 
     #[test]
-    fn meeting_without_pid_is_stable_path() {
+    /// With no meeting pids nothing is holding the devices, so there is no
+    /// contention for the piggyback to prevent — suspending here only produced
+    /// a silent meeting. Reproduced on 2.6.1: an 86s manual meeting captured
+    /// 3,584 samples (~0.22s) with an empty transcript.
+    fn meeting_without_pid_leaves_normal_capture_running() {
         let mut obs = base();
         obs.meeting = Some(vec![]);
-        let actions = decide_piggyback(&obs);
-        assert!(
-            actions.is_empty(),
-            "no session streams, nothing suspended: {actions:?}"
+        assert_eq!(decide_piggyback(&obs), vec![]);
+    }
+
+    #[test]
+    fn ownership_matrix() {
+        // delivering, or has delivered -> owns capture
+        assert!(piggyback_may_own_capture(true, 1, false));
+        assert!(piggyback_may_own_capture(true, 1, true));
+        // a gap after a working tap is transient -> still owns
+        assert!(piggyback_may_own_capture(true, 0, true));
+        assert!(piggyback_may_own_capture(false, 0, true));
+        // never delivered and nothing to contend with -> releases
+        assert!(!piggyback_may_own_capture(true, 0, false));
+        assert!(!piggyback_may_own_capture(false, 1, false));
+        assert!(!piggyback_may_own_capture(false, 0, false));
+    }
+
+    /// Devices already suspended when the piggyback turns out to be unable to
+    /// deliver must be released, not merely left alone — otherwise capture
+    /// stays dead for the rest of the meeting.
+    #[test]
+    fn releasing_ownership_resumes_devices_already_suspended() {
+        let mut obs = base();
+        obs.meeting = Some(vec![]);
+        obs.suspended = HashSet::from(["System Audio (output)".to_string()]);
+        assert_eq!(
+            decide_piggyback(&obs),
+            vec![PiggybackAction::Resume("System Audio (output)".to_string())]
+        );
+    }
+
+    /// Once a tap has worked this meeting, a pid gap is transient: keep every
+    /// suspension rather than churning devices back on, which is the behaviour
+    /// #6072 introduced to stop Bluetooth SCO storms.
+    #[test]
+    fn pid_gap_after_a_working_tap_keeps_capture_suspended() {
+        let mut obs = base();
+        obs.meeting = Some(vec![]);
+        obs.tap_ever_started = true;
+        assert_eq!(
+            decide_piggyback(&obs),
+            vec![PiggybackAction::Suspend(
+                "System Audio (output)".to_string()
+            )]
         );
     }
 
@@ -1678,7 +1779,10 @@ mod tests {
     }
 
     #[test]
-    fn platform_unavailable_warns_once_and_stays_stable() {
+    /// On an OS without per-process capture the tap never opens, so there is
+    /// nothing to contend with and nothing to wait for. Holding capture there
+    /// guaranteed a silent meeting on every macOS <14.4 / Windows <20348 host.
+    fn platform_unavailable_warns_and_leaves_normal_capture_running() {
         let mut obs = base();
         obs.tap_available = false;
         assert_eq!(
@@ -1700,6 +1804,8 @@ mod tests {
         let mut obs = base();
         obs.meeting = Some(vec![100, 200]);
         obs.tap_available = false;
+        // Riding the stable path now means literally that: normal capture is
+        // left running. Previously this suspended it and recorded nothing.
         assert_eq!(
             decide_piggyback(&obs),
             vec![PiggybackAction::WarnUnavailableOnce]
@@ -1807,10 +1913,9 @@ mod tests {
         let obs = base();
         let actions = decide_piggyback(&obs);
         assert!(actions.contains(&PiggybackAction::StartTap { pids: vec![4242] }));
-        // Not suspended yet — only a STREAMING tap suspends the stable output.
-        assert!(!actions
-            .iter()
-            .any(|a| matches!(a, PiggybackAction::Suspend(_))));
+        assert!(actions.contains(&PiggybackAction::Suspend(
+            "System Audio (output)".to_string()
+        )));
     }
 
     #[test]
@@ -1841,29 +1946,41 @@ mod tests {
     }
 
     #[test]
-    fn dead_tap_falls_back_stopping_session_and_resuming_stable() {
+    fn meeting_suspends_normal_inputs_not_resolved_from_meeting_processes() {
+        let mut obs = base();
+        let resolved = "MacBook Pro Microphone (input)".to_string();
+        let unrelated = "Ezra's AirPods Max (input)".to_string();
+        obs.stable_inputs = vec![resolved.clone(), unrelated.clone()];
+        obs.resolved_inputs = [resolved.clone()].into();
+        let actions = decide_piggyback(&obs);
+        assert!(actions.contains(&PiggybackAction::Suspend(unrelated)));
+        assert!(!actions.contains(&PiggybackAction::Suspend(resolved)));
+    }
+
+    #[test]
+    fn dead_tap_stops_session_without_resuming_normal_capture() {
         let mut obs = base();
         obs.session_devices = [tap_name()].into(); // registered…
         obs.session_streaming = HashSet::new(); // …but not delivering
         obs.suspended = ["System Audio (output)".to_string()].into();
         let actions = decide_piggyback(&obs);
         assert!(actions.contains(&PiggybackAction::StopSessionDevice(tap_name())));
-        assert!(actions.contains(&PiggybackAction::Resume(
-            "System Audio (output)".to_string()
-        )));
+        assert!(!actions
+            .iter()
+            .any(|a| matches!(a, PiggybackAction::Resume(_))));
         assert!(actions.contains(&PiggybackAction::NoteTapFailure));
     }
 
     #[test]
-    fn tap_retry_gap_resumes_suspended_output() {
+    fn tap_retry_gap_keeps_output_suspended() {
         let mut obs = base();
         obs.tap_strikes = 1;
         obs.tap_cooldown_elapsed = false;
         obs.suspended = ["Speakers (Realtek) (output)".to_string()].into();
         let actions = decide_piggyback(&obs);
-        assert!(actions.contains(&PiggybackAction::Resume(
-            "Speakers (Realtek) (output)".to_string()
-        )));
+        assert!(!actions
+            .iter()
+            .any(|a| matches!(a, PiggybackAction::Resume(_))));
         assert!(!actions
             .iter()
             .any(|a| matches!(a, PiggybackAction::StartTap { .. })));
@@ -2119,9 +2236,7 @@ mod tests {
     }
 
     #[test]
-    fn displacement_lifts_once_after_sustained_death_never_on_transients() {
-        // "Never trade a working mic for a dead resolved one" — but only after
-        // the capture stays dead past the holdoff, and exactly once.
+    fn displacement_never_lifts_during_meeting_even_after_sustained_death() {
         let mut m = MicFollow::default();
         let mic = "Rode NT (input)".to_string();
         let other = "MacBook Pro Microphone (input)".to_string();
@@ -2136,8 +2251,6 @@ mod tests {
             vec![MicFollowAction::SuspendInput(other.clone())]
         );
         obs.running_inputs.clear();
-        let last_delivering = obs.now_ms;
-
         // Capture dies for good.
         obs.now_ms += TICK_MS;
         obs.session_streaming.clear();
@@ -2147,36 +2260,18 @@ mod tests {
         );
         obs.session_devices.clear();
 
-        // Until the holdoff elapses: reopen attempts only (fast retries, then
-        // the persistent slowdown), never a Resume.
-        let lift_at = last_delivering + DISPLACEMENT_LIFT_HOLDOFF_MS;
-        let mut resumed = Vec::new();
-        while obs.now_ms + TICK_MS < lift_at {
+        // Even prolonged failure only retries the meeting mic; normal capture
+        // cannot resume until the meeting-end teardown owns that edge.
+        for _ in 0..40 {
             obs.now_ms += TICK_MS;
             for a in m.tick(&obs) {
                 match a {
                     MicFollowAction::OpenSessionInput(d) => {
                         m.note_open_result(&d, false, obs.now_ms);
                     }
-                    MicFollowAction::ResumeInput(d) => resumed.push(d),
-                    other => panic!("unexpected action before holdoff: {other:?}"),
+                    other => panic!("unexpected action during retry: {other:?}"),
                 }
             }
-        }
-        assert!(resumed.is_empty(), "no resume before the holdoff");
-        obs.now_ms = lift_at;
-        let actions = m.tick(&obs);
-        assert!(
-            actions.contains(&MicFollowAction::ResumeInput(other.clone())),
-            "displaced mic must come back after sustained death: {actions:?}"
-        );
-        // And only once: subsequent dead ticks emit no further resumes.
-        obs.now_ms += TICK_MS;
-        for a in m.tick(&obs) {
-            assert!(
-                !matches!(a, MicFollowAction::ResumeInput(_)),
-                "resume must be a one-shot edge"
-            );
         }
     }
 
@@ -2217,12 +2312,38 @@ mod tests {
     }
 
     #[test]
+    fn verified_handoff_closes_old_session_before_opening_new_one() {
+        let mut m = MicFollow::default();
+        let old = "MacBook Pro Microphone (input)".to_string();
+        let new = "Ezra's AirPods Max (input)".to_string();
+        let mut obs = mf_obs(TICK_MS);
+        obs.resolved_inputs = vec![old.clone()];
+        assert_eq!(
+            m.tick(&obs),
+            vec![MicFollowAction::OpenSessionInput(old.clone())]
+        );
+        assert!(!m.note_open_result(&old, true, obs.now_ms));
+
+        obs.now_ms += TICK_MS;
+        obs.resolved_inputs = vec![new.clone()];
+        obs.session_devices = [old.clone()].into();
+        obs.session_streaming = [old.clone()].into();
+        assert_eq!(
+            m.tick(&obs),
+            vec![
+                MicFollowAction::CloseSessionInput(old),
+                MicFollowAction::OpenSessionInput(new),
+            ]
+        );
+    }
+
+    #[test]
     fn switch_onto_displaced_mic_unsuspends_without_restart() {
         // The app switches TO a mic the latch previously suspended: the
         // machine clears the suspension flag (so recovery guards don't fight)
         // but must NOT restart the enabled stream — our capture follows
         // through its own open on the same pass. Flag-only unsuspend + open,
-        // never a ResumeInput.
+        // never a normal-stream restart.
         let mut m = MicFollow::default();
         let a = "Ezra's AirPods Max (input)".to_string();
         let b = "MacBook Pro Microphone (input)".to_string();
@@ -2246,18 +2367,12 @@ mod tests {
             ],
             "flag-only unsuspend, then capture follows via the open path"
         );
-        assert!(
-            !actions
-                .iter()
-                .any(|a| matches!(a, MicFollowAction::ResumeInput(_))),
-            "never a restart of the suspended enabled stream"
-        );
         assert!(!m.note_open_result(&b, true, obs.now_ms));
         assert!(m.is_capturing(&b));
     }
 
     #[test]
-    fn app_releasing_all_mics_lifts_displacement_immediately() {
+    fn app_releasing_all_mics_keeps_displacement_until_meeting_end() {
         let mut m = MicFollow::default();
         let mic = "Ezra's AirPods Max (input)".to_string();
         let other = "MacBook Pro Microphone (input)".to_string();
@@ -2271,14 +2386,13 @@ mod tests {
         );
         obs.running_inputs = vec![mic.clone()];
 
-        // The app hangs up its mic (meeting still detected): after the release
-        // damping, the displaced mic comes back — no dead air.
+        // The app hangs up its mic while the meeting remains detected. The
+        // displaced normal stream must remain closed.
         obs.now_ms += TICK_MS;
         obs.resolved_inputs.clear();
         assert!(m.tick(&obs).is_empty(), "one missing tick is resolver flap");
         obs.now_ms += TICK_MS;
-        let actions = m.tick(&obs);
-        assert_eq!(actions, vec![MicFollowAction::ResumeInput(other.clone())]);
+        assert!(m.tick(&obs).is_empty());
     }
 
     #[test]
@@ -2352,6 +2466,55 @@ mod tests {
     fn outcome_stable_fallback_when_tap_never_streamed() {
         let t = telem(); // tap_streaming_ticks == 0
         assert_eq!(classify_outcome(&t), "stable_fallback");
+    }
+
+    /// The three outcomes reported for meetings that captured nothing all read
+    /// as benign, so `outcome` alone cannot surface a silent meeting. Observed
+    /// live on 2.6.1: an 86s meeting produced 3,584 samples (~0.22s) and an
+    /// empty transcript while reporting `stable_fallback`.
+    #[test]
+    fn silent_meeting_is_flagged_under_every_benign_outcome() {
+        for (label, mutate) in [
+            (
+                "stable_fallback",
+                (|_: &mut MeetingTelemetry| {}) as fn(&mut MeetingTelemetry),
+            ),
+            ("no_pid", |t: &mut MeetingTelemetry| t.pid_known = false),
+            ("unavailable", |t: &mut MeetingTelemetry| {
+                t.unavailable = true
+            }),
+        ] {
+            let mut t = telem();
+            mutate(&mut t);
+            assert_eq!(classify_outcome(&t), label, "outcome for {label}");
+            assert!(
+                captured_no_audio(&t),
+                "{label} captured nothing but was not flagged"
+            );
+            assert!(build_meeting_summary(&t).captured_no_audio);
+        }
+    }
+
+    #[test]
+    fn a_streaming_tap_is_not_a_silent_meeting() {
+        let mut t = telem();
+        t.tap_streaming_ticks = 1;
+        assert!(!captured_no_audio(&t));
+    }
+
+    /// A resolved meeting mic carries the audio even when the far-end tap never
+    /// streams, so that is a real fallback rather than silence.
+    #[test]
+    fn a_resolved_meeting_mic_is_not_a_silent_meeting() {
+        let mut t = telem();
+        t.mic_session_started = true;
+        assert!(!captured_no_audio(&t));
+    }
+
+    #[test]
+    fn no_meeting_is_never_flagged_silent() {
+        let t = MeetingTelemetry::default(); // meeting_seen == false
+        assert!(!captured_no_audio(&t));
     }
 
     #[test]

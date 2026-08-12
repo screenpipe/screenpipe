@@ -9,6 +9,7 @@ import {
   buildChatMentionSuggestions,
   buildSkillMentionSuggestions,
   buildTagMentionSuggestions,
+  COMPOSER_COMMAND_SUGGESTIONS,
   findComposerMention,
   filterMentionSuggestions,
   mentionSuggestionIdentity,
@@ -383,6 +384,65 @@ describe("global chat mentions", () => {
     ["search #project:atlas", "#", "project:atlas"],
   ])("detects the %s composer command", (input, trigger, filter) => {
     expect(findComposerMention(input)).toEqual({ trigger, filter });
+  });
+
+  it.each([
+    ["/", ""],
+    ["/n", "n"],
+    ["/new", "new"],
+    ["/clear-filters", "clear-filters"],
+  ])("opens the command palette for %s", (input, filter) => {
+    expect(findComposerMention(input)).toEqual({ trigger: "/", filter });
+  });
+
+  // A slash is only a command at position 0. Dates and paths keep typing.
+  it.each([
+    ["03/04/2025"],
+    ["look at src/lib/chat-utils.ts"],
+    ["tell me /new"],
+    ["/new and then"],
+  ])("does not open the command palette for %s", (input) => {
+    const match = findComposerMention(input);
+    expect(match?.trigger).not.toBe("/");
+  });
+
+  it("filters commands by tag and description", () => {
+    const base = {
+      atMentionSuggestions: [],
+      tagMentionSuggestions: [],
+      allTagMentionSuggestions: [],
+      tagSearchSuggestions: [],
+      speakerSuggestions: [],
+    };
+
+    expect(
+      filterMentionSuggestions({ ...base, mentionTrigger: "/", mentionFilter: "" }),
+    ).toEqual(COMPOSER_COMMAND_SUGGESTIONS);
+
+    expect(
+      filterMentionSuggestions({
+        ...base,
+        mentionTrigger: "/",
+        mentionFilter: "new",
+      }).map((suggestion) => suggestion.tag),
+    ).toEqual(["/new"]);
+
+    // matches the description, not just the tag
+    expect(
+      filterMentionSuggestions({
+        ...base,
+        mentionTrigger: "/",
+        mentionFilter: "inspector",
+      }).map((suggestion) => suggestion.tag),
+    ).toEqual(["/inspector"]);
+  });
+
+  it("gives every command an action id so picking one never inserts text", () => {
+    for (const suggestion of COMPOSER_COMMAND_SUGGESTIONS) {
+      expect(suggestion.category).toBe("command");
+      expect(suggestion.commandId).toBeTruthy();
+      expect(suggestion.tag.startsWith("/")).toBe(true);
+    }
   });
 
   it("shows speaker suggestions from the @ composer trigger", () => {

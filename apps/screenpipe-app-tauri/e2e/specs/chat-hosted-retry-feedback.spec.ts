@@ -152,7 +152,7 @@ describe("Hosted AI retry feedback and follow-up queue", function () {
       async () => {
         const text = await assistant.getText();
         return (
-          text.includes("Another hosted AI request is finishing") &&
+          text.includes("Another AI request is finishing") &&
           text.includes("Retrying in")
         );
       },

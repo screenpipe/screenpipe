@@ -126,3 +126,87 @@ describe("useLiveText search highlights", () => {
 		expect(commandsMock.livetextHighlight).not.toHaveBeenCalled();
 	});
 });
+
+const frameAt = (frameId: string) => ({
+	filePath: "/f.png",
+	offsetIndex: 0,
+	fps: 1,
+	frameId,
+});
+
+describe("useLiveText analyze failures", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		vi.useRealTimers();
+		commandsMock.livetextIsAvailable.mockResolvedValue({ status: "ok", data: true });
+		commandsMock.livetextAnalyze.mockResolvedValue({ status: "ok", data: "" });
+	});
+
+	// A pending analysis is only applied by a position update. The analyze
+	// effect starts before layout is measured, so if it read geometry from the
+	// render it was created in, a frame whose geometry arrived late would never
+	// get its analysis applied and nothing on it would be selectable.
+	it("positions using the geometry available when the analysis lands", async () => {
+		let resolveAnalyze: (v: unknown) => void = () => {};
+		commandsMock.livetextAnalyze.mockImplementationOnce(
+			() => new Promise((res) => { resolveAnalyze = res; }),
+		);
+
+		const opts = baseOpts({ renderedImageInfo: null });
+		const view = await renderActive(opts);
+
+		// Geometry arrives while the analysis is still in flight.
+		view.rerender(
+			<Harness
+				opts={baseOpts({
+					renderedImageInfo: { width: 640, height: 480, offsetX: 12, offsetY: 34 },
+				})}
+			/>,
+		);
+		resolveAnalyze({ status: "ok", data: "" });
+
+		await waitFor(() =>
+			expect(commandsMock.livetextUpdatePosition).toHaveBeenCalledWith(
+				"1001",
+				12,
+				34,
+				640,
+				480,
+			),
+		);
+	});
+
+	// Transient analyze failures (frame extraction, fetch or VisionKit
+	// timeouts) used to disable the native overlay for the rest of the session.
+	// The web fallback is suppressed while the overlay is initialized, so that
+	// left no text layer at all until the app restarted.
+	it("re-arms native mode after the failure cooldown", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		commandsMock.livetextAnalyze.mockRejectedValue(new Error("frame extraction timed out"));
+
+		const view = await renderActive(baseOpts({ debouncedFrame: frameAt("1001") }));
+
+		// Analysis runs once per frame, so three failing frames trip the fallback.
+		for (const id of ["1002", "1003", "1004"]) {
+			view.rerender(<Harness opts={baseOpts({ debouncedFrame: frameAt(id) })} />);
+			await vi.advanceTimersByTimeAsync(200);
+		}
+		const callsWhileDisabled = commandsMock.livetextAnalyze.mock.calls.length;
+
+		// Disabled: further frames no longer reach the native overlay.
+		view.rerender(<Harness opts={baseOpts({ debouncedFrame: frameAt("1005") })} />);
+		await vi.advanceTimersByTimeAsync(200);
+		expect(commandsMock.livetextAnalyze.mock.calls.length).toBe(callsWhileDisabled);
+
+		// Recovery: once the cooldown elapses native mode is re-armed and the
+		// current frame is analyzed again.
+		commandsMock.livetextAnalyze.mockResolvedValue({ status: "ok", data: "" });
+		await vi.advanceTimersByTimeAsync(31_000);
+		await vi.advanceTimersByTimeAsync(200);
+
+		expect(commandsMock.livetextAnalyze.mock.calls.length).toBeGreaterThan(
+			callsWhileDisabled,
+		);
+		vi.useRealTimers();
+	});
+});

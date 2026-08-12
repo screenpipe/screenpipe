@@ -55,6 +55,15 @@ export function useLiveText(opts: {
 	const liveTextInitRef = useRef(false);
 
 	const analyzeFailCountRef = useRef(0);
+	const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	// Latest geometry, readable from callbacks that were created before it
+	// arrived. The analyze effect deliberately does not depend on geometry (it
+	// must start as soon as the frame changes), so reading the state variable
+	// inside its `.then` would apply whatever geometry was current when the
+	// effect ran — the previous frame's, or none at all.
+	const renderedImageInfoRef = useRef(opts.renderedImageInfo);
+	renderedImageInfoRef.current = opts.renderedImageInfo;
 
 	// Get absolute position within the window (accounts for sidebar, titlebar, etc.)
 	const getAbsolutePosition = (info: { offsetX: number; offsetY: number; width: number; height: number }) => {
@@ -194,8 +203,12 @@ export function useLiveText(opts: {
 				analyzeFailCountRef.current = 0;
 				// Analysis is stored as pending in Swift — send position update
 				// to apply it with correct geometry for hit-region computation.
-				if (!cancelled && renderedImageInfo) {
-					const pos = getAbsolutePosition(renderedImageInfo);
+				// Read geometry through the ref: it may have arrived while the
+				// analysis was in flight, and without a position update the
+				// pending analysis is never applied to the overlay at all.
+				const info = renderedImageInfoRef.current;
+				if (!cancelled && info) {
+					const pos = getAbsolutePosition(info);
 					commands.livetextUpdatePosition(currentFrameId, pos.x, pos.y, pos.w, pos.h).catch(() => {});
 				}
 			}).catch((e: unknown) => {
@@ -206,11 +219,25 @@ export function useLiveText(opts: {
 					setNativeLiveTextActive(false);
 					return;
 				}
-				// After 3 consecutive failures, fall back to web mode
+				// After 3 consecutive failures, fall back to web mode — but only
+				// for a cooldown. These failures are usually transient (frame
+				// extraction, fetch or VisionKit timeouts while scrolling fast),
+				// and permanently disabling native mode left the session with no
+				// text layer at all: the web fallback is suppressed whenever the
+				// overlay is initialized, so "3 slow frames" cost Live Text until
+				// the app restarted.
 				analyzeFailCountRef.current++;
 				if (analyzeFailCountRef.current >= 3) {
-					console.warn("[livetext] too many failures, falling back to web mode");
+					console.warn("[livetext] too many failures, falling back to web mode for 30s");
 					setNativeLiveTextActive(false);
+					if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+					refreshTimerRef.current = setTimeout(() => {
+						refreshTimerRef.current = null;
+						analyzeFailCountRef.current = 0;
+						// The overlay is still initialized on this window, so
+						// re-arming is just flipping the flag back.
+						if (liveTextInitRef.current) setNativeLiveTextActive(true);
+					}, 30_000);
 					return;
 				}
 				console.warn("live text analyze failed:", e);
@@ -319,6 +346,7 @@ export function useLiveText(opts: {
 	// Hide overlay on unmount
 	useEffect(() => {
 		return () => {
+			if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
 			if (liveTextInitRef.current) {
 				commands.livetextHide().catch(() => {});
 			}

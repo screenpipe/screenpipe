@@ -802,7 +802,7 @@ describe("AppEntitlementGate", () => {
     );
     expect(mocks.setCloudToken).toHaveBeenCalledWith(null);
     expect(mocks.piUpdateConfig).toHaveBeenCalledWith(null, null);
-    expect(mocks.openLoginWindow).toHaveBeenCalledWith(true);
+    expect(mocks.openLoginWindow).toHaveBeenCalledWith(true, null);
   });
 
   it("does not route enterprise members away when they also have a consumer app subscription", () => {

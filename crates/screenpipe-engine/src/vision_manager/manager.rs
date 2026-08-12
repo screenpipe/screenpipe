@@ -98,6 +98,11 @@ pub(crate) struct MonitorLivenessSnapshot {
     pub last_capture_attempt_ts: u64,
     pub last_capture_loop_heartbeat_ts: u64,
     pub last_db_write_ts: u64,
+    /// Stage the loop entered last, and when. Names the freeze point of a
+    /// gone-silent stall instead of leaving the log with only "heartbeat Ns
+    /// ago" (see [`screenpipe_screen::CaptureLoopStage`]).
+    pub loop_stage: screenpipe_screen::CaptureLoopStage,
+    pub loop_stage_entered_ts: u64,
 }
 
 /// Manages vision recording across multiple monitors with dynamic detection
@@ -695,12 +700,10 @@ impl VisionManager {
         let high_fps_controller = self.high_fps_controller.clone();
         let semantic_tx = self.semantic_tx.clone();
 
-        // Spawn the decoupled high-fps HD recorder alongside this monitor's
-        // capture loop. It idles until an HD session is active, then records a
-        // CFR H.264 chunk with NO OCR (the event loop above keeps indexing
-        // sparsely). Shares the same Arc<SafeMonitor> + HighFpsController; runs
-        // on its own task, aborted in `stop_monitor`.
-        {
+        // Spawn the decoupled high-fps HD recorder only when screen pixels are
+        // enabled. Otherwise an active meeting could open its own OS capture
+        // stream despite `disableScreenshots`.
+        if !self.config.disable_screenshots {
             let hd_config = crate::hd_recorder::HdRecorderConfig {
                 ignored_windows: self.config.ignored_windows.clone(),
                 included_windows: self.config.included_windows.clone(),
@@ -854,12 +857,15 @@ impl VisionManager {
             .iter()
             .map(|entry| {
                 let snap = entry.value().snapshot();
+                let (loop_stage, loop_stage_entered_ts) = entry.value().loop_stage();
                 MonitorLivenessSnapshot {
                     monitor_id: *entry.key(),
                     uptime_secs: snap.uptime_secs,
                     last_capture_attempt_ts: snap.last_capture_attempt_ts,
                     last_capture_loop_heartbeat_ts: snap.last_capture_loop_heartbeat_ts,
                     last_db_write_ts: snap.last_db_write_ts,
+                    loop_stage,
+                    loop_stage_entered_ts,
                 }
             })
             .collect()

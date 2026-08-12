@@ -195,6 +195,22 @@ describe('MODEL_GATING_ENABLED master kill-switch', () => {
 });
 
 describe('getUsageStatus.upsell_banner', () => {
+	it('does not read the D1 daily counter for Cloudflare-managed usage', async () => {
+		const prepare = mock(() => {
+			throw new Error('D1 should not be read');
+		});
+		const status = await getUsageStatus(
+			mockEnv({ DB: { prepare } }),
+			'd',
+			'logged_in',
+			undefined,
+			'basic',
+			{ readLegacyDailyCounter: false },
+		);
+		expect(prepare).not.toHaveBeenCalled();
+		expect(status.used_today).toBe(0);
+	});
+
   it('true for non-Business tiers while gating is on', async () => {
     expect((await getUsageStatus(mockEnv(), 'd', 'logged_in')).upsell_banner).toBe(true);
     expect((await getUsageStatus(mockEnv(), 'd', 'anonymous')).upsell_banner).toBe(true);

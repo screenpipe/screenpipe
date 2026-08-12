@@ -502,22 +502,25 @@ export async function getUsageStatus(
   tier: UsageTier,
   userId?: string,
   accountPlan: AccountPlan = defaultAccountPlanForUsageTier(tier),
+  options: { readLegacyDailyCounter?: boolean } = {},
 ): Promise<UsageStatus> {
   const today = getTodayUTC();
   const limits = getTierConfig(env)[tier];
 
   let usedToday = 0;
 
-  try {
-    const existing = await env.DB.prepare(
-      'SELECT daily_count, last_reset FROM usage WHERE device_id = ?'
-    ).bind(deviceId).first<{ daily_count: number; last_reset: string }>();
+  if (options.readLegacyDailyCounter !== false) {
+    try {
+      const existing = await env.DB.prepare(
+        'SELECT daily_count, last_reset FROM usage WHERE device_id = ?'
+      ).bind(deviceId).first<{ daily_count: number; last_reset: string }>();
 
-    if (existing && existing.last_reset >= today) {
-      usedToday = existing.daily_count;
+      if (existing && existing.last_reset >= today) {
+        usedToday = existing.daily_count;
+      }
+    } catch (error) {
+      console.error('Error getting usage status:', error);
     }
-  } catch (error) {
-    console.error('Error getting usage status:', error);
   }
 
   const limitToday = limits.dailyQueries;

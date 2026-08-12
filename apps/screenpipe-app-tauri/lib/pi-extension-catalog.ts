@@ -66,7 +66,7 @@ export const PI_EXTENSION_CATALOG: PiExtensionCatalogItem[] = [
     details: "Useful for review, scouting, parallel audits, and implementation tasks that benefit from separate context windows.",
     modelFit: "cloud-preferred",
     modelFitLabel: "Cloud model recommended",
-    modelFitCopy: "Subagents amplify planning mistakes. Use a strong hosted model first; small local models may over-spawn or lose tool boundaries.",
+    modelFitCopy: "Subagents amplify planning mistakes. Use a strong cloud model first; small local models may over-spawn or lose tool boundaries.",
     risk: "Runs extra Pi sessions locally and can multiply tool calls.",
     npmUrl: "https://www.npmjs.com/package/pi-subagents",
     sourceUrl: "https://github.com/nicobailon/pi-subagents",

@@ -9,9 +9,13 @@ From `apps/screenpipe-app-tauri`:
 **1. Build**
 
 ```bash
-bun tauri build --no-sign --debug --verbose --no-bundle -- --features e2e
+NEXT_PUBLIC_SCREENPIPE_E2E=true bun tauri build --no-sign --debug --verbose --no-bundle -- --features e2e
 ```
 
+- `NEXT_PUBLIC_SCREENPIPE_E2E=true` — compiles in the frontend E2E hooks. CI sets
+  this (see `.github/workflows/e2e-test.yml`); without it the app-entitlement
+  account seed is compiled out, so any spec that needs a signed-in surface
+  (Brain, Chat) silently renders "sign in required" instead
 - `--no-sign` — skip code signing (dev)
 - `--debug` — debug build, faster than release
 - `--verbose` — show build output
@@ -47,6 +51,23 @@ real E2E app with its hosted-AI URL pinned to that loopback Worker. OpenAI is a
 network-closed fake: the harness intercepts the exact chat endpoint and fails
 the run if the Worker attempts any other outbound request. No production
 gateway, customer data, provider credential, or paid model is used.
+
+**Run the first-run AI summary spec**
+
+```bash
+bun run test:e2e:first-run-ai-summary:macos
+```
+
+Same local Worker lane, pointed at the post-setup learning window. It proves the
+real app reaches the model through the real Pi command and the real Worker, that
+the forwarded provider request carries the screen and audio excerpts (not just
+app names), and that the model's text — never the deterministic fallback — is
+what lands in the seeded chat.
+
+`/activity-summary` is stubbed in the webview: resolving needs >= 10 captured
+frames, which a CI machine with no desktop cannot produce and which is not what
+this spec is testing. The real engine's answers are covered against a live
+engine in `first-run-learning-window.spec.ts`.
 
 **Run the macOS HD recording pipeline spec**
 

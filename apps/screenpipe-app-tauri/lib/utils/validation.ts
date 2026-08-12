@@ -54,7 +54,7 @@ export const aiPresetSchema = z.object({
   model: z.string().min(1, "Model is required"),
   defaultPreset: z.boolean(),
   apiKey: z.string().nullable(),
-  maxContextChars: z.number().int().min(1000, "Must be at least 1,000 characters").max(2000000, "Cannot exceed 2,000,000 characters"),
+  maxContextChars: z.number().int().min(1000, "Must be at least 1,000 characters").max(8000000, "Cannot exceed 8,000,000 characters"),
 });
 
 const aecModeSchema = z.enum(["off", "screenpipe", "macos", "windows"]);

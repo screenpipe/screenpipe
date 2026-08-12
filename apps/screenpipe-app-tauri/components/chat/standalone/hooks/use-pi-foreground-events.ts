@@ -24,6 +24,7 @@ import {
   parseRateLimitWaitSeconds,
   PI_MAX_RATE_LIMIT_RETRIES,
 } from "@/lib/chat/quota-errors";
+import { reportChatDailyLimitWall } from "@/lib/card-ask/wall-hit";
 import {
   clearQuotaUpgrade,
   setQuotaUpgradeFromError,
@@ -116,6 +117,14 @@ export function usePiForegroundEvents({
   turnIntentTextValuesMatch,
 }: PiForegroundEventsOptions) {
   const getActivePreset = () => activePresetRef?.current ?? activePreset;
+  // Error classification names the agent rather than saying "the agent", so a
+  // refusal from the agent's own service reads as that agent's answer.
+  const presetWithAgentName = () => {
+    const preset = getActivePreset();
+    if (!preset) return preset;
+    if (preset.provider !== "acp") return preset;
+    return { ...preset, agentName: acpAdapterInfo(preset.acpAgent?.id).name };
+  };
   const dailyLimitMessage = (errorStr: string) => {
     setQuotaUpgradeFromError(errorStr);
     // No-op unless this is the free-plan wall (free_chat_limit_exceeded).
@@ -465,6 +474,7 @@ export function usePiForegroundEvents({
               startedAtMs: Date.now(),
               ...(toolKind ? { kind: toolKind } : {}),
               ...(parentToolCallId ? { parentToolCallId } : {}),
+              ...(data.subagent === true ? { subagent: true } : {}),
             };
             // Add tool block (text before it is already its own block)
             piContentBlocksRef.current.push({ type: "tool", toolCall });
@@ -597,7 +607,7 @@ export function usePiForegroundEvents({
           // Detect rate limit or daily limit from the error
           if (quotaErrorType === "daily" || quotaErrorType === "hosted_busy" || quotaErrorType === "rate") {
             if (quotaErrorType === "daily") {
-              posthog.capture("wall_hit", { reason: "daily_limit", source: "chat" });
+              reportChatDailyLimitWall();
             }
 
             if (piMessageIdRef.current) {
@@ -619,7 +629,7 @@ export function usePiForegroundEvents({
               );
             }
           } else {
-            const providerError = buildProviderErrorPresentation(errorStr, getActivePreset());
+            const providerError = buildProviderErrorPresentation(errorStr, presetWithAgentName());
             if (providerError && piMessageIdRef.current) {
               const msgId = piMessageIdRef.current;
               setMessages((prev) =>
@@ -677,7 +687,7 @@ export function usePiForegroundEvents({
                 prev.map((m) => m.id === msgId ? { ...m, content: "This model requires an upgrade to Screenpipe Business. Switch to Auto to keep going." } : m)
               );
             } else {
-              const providerError = buildProviderErrorPresentation(fullError, getActivePreset());
+              const providerError = buildProviderErrorPresentation(fullError, presetWithAgentName());
               if (providerError) {
                 setMessages((prev) =>
                   prev.map((m) => m.id === msgId
@@ -894,7 +904,7 @@ export function usePiForegroundEvents({
                 prev.map((m) => m.id === msgId ? { ...m, content: buildInvalidatedAuthTokenMessage() } : m)
               );
             } else if (quotaErrorType === "daily") {
-              posthog.capture("wall_hit", { reason: "daily_limit", source: "chat" });
+              reportChatDailyLimitWall();
               setMessages((prev) =>
                 prev.map((m) => m.id === msgId ? { ...m, content: dailyLimitMessage(errMsg) } : m)
               );
@@ -1061,7 +1071,7 @@ export function usePiForegroundEvents({
                 const lastErr = piLastErrorRef.current;
                 const lastErrKind = lastErr ? classifyQuotaError(lastErr) : "none";
                 if (lastErr && lastErrKind === "daily") {
-                  posthog.capture("wall_hit", { reason: "daily_limit", source: "chat" });
+                  reportChatDailyLimitWall();
                   content = dailyLimitMessage(lastErr);
                 } else if (lastErr && lastErrKind === "rate") {
                   content = buildRateLimitMessage(lastErr);
@@ -1215,7 +1225,7 @@ export function usePiForegroundEvents({
                 prev.map((m) => m.id === msgId ? { ...m, content: "This model requires an upgrade to Screenpipe Business. Switch to Auto to keep going." } : m)
               );
             } else {
-              const providerError = buildProviderErrorPresentation(errorStr, getActivePreset());
+              const providerError = buildProviderErrorPresentation(errorStr, presetWithAgentName());
               if (providerError) {
                 setMessages((prev) =>
                   prev.map((m) => m.id === msgId

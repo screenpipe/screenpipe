@@ -20,21 +20,25 @@ pub use cancellable_query::{
 pub use db::{
     find_matching_a11y_positions, parse_all_text_positions, DatabaseManager, DeleteTimeRangeResult,
     ImmediateTx, NewMeetingTranscriptSegment, SemanticActor, SemanticActorAlias,
-    SemanticActorReference, SemanticCleanupResult, SemanticContextQuery, SemanticFrameContext,
-    SemanticProjectionWriteResult, MEETING_END_REASON_AUTO_END, MEETING_END_REASON_EXPLICIT_STOP,
-    MEETING_END_REASON_SHUTDOWN,
+    SemanticActorReference, SemanticAttachResult, SemanticCleanupResult, SemanticContextQuery,
+    SemanticFrameContext, SemanticProjectionWriteResult, MEETING_END_REASON_AUTO_END,
+    MEETING_END_REASON_EXPLICIT_STOP, MEETING_END_REASON_SHUTDOWN,
 };
 pub use recovery::{
-    rebuild_recovered_fts5_indexes, verify_fresh_sqlite_recovery_candidate, RecoveryVerification,
+    probe_quarantined_generation_health, rebuild_recovered_fts5_indexes,
+    verify_fresh_sqlite_recovery_candidate, QuarantineHealthProbe, RecoveryVerification,
 };
 pub use screenpipe_sqlite_coordinator::{
     archive_resolved_sqlite_quarantine, persist_sqlite_quarantine,
-    prepare_sqlite_quarantine_reserve, read_sqlite_quarantine, sqlite_file_identity,
-    sqlite_quarantine_exists, sqlite_quarantine_marker_path, SqliteFileIdentity,
+    prepare_sqlite_quarantine_reserve, read_sqlite_quarantine, resolve_verified_sqlite_quarantine,
+    sqlite_file_identity, sqlite_hard_fault_latched, sqlite_quarantine_exists,
+    sqlite_quarantine_is_self_healable, sqlite_quarantine_marker_path, SqliteFileIdentity,
     SqliteQuarantineMarker,
 };
 pub use text_normalizer::{expand_search_query, sanitize_fts5_query};
 pub use types::*;
 pub use write_queue::{
-    request_write_pause, request_write_resume, PersistentFailureHook, SyncTable, WriteQueueHealth,
+    is_retryable_write_stall, is_write_lock_contention, is_write_pool_starved, request_write_pause,
+    request_write_resume, PersistentFailureHook, SyncTable, WriteQueueHealth,
+    WRITE_LOCK_HELD_MESSAGE, WRITE_POOL_STARVED_MESSAGE,
 };

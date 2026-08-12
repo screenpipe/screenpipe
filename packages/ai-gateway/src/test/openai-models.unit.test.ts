@@ -120,6 +120,15 @@ describe('OpenAI API model catalog', () => {
 		}
 	});
 
+	it('publishes complete limits for every catalog model', async () => {
+		const models = await listedModels();
+		for (const model of models) {
+			expect(model.context_window).toBeGreaterThan(0);
+			expect(model.max_output_tokens).toBeGreaterThan(0);
+			expect(model.max_output_tokens).toBeLessThanOrEqual(model.context_window);
+		}
+	});
+
 	it('does not expose provider-secret gates in /v1/models responses', async () => {
 		const models = await listedModels();
 		const openAiModel = models.find(model => model.id === 'gpt-5.5');

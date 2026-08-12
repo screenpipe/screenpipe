@@ -337,7 +337,7 @@ Screen frames, audio, transcripts, and the search index are stored locally by de
 
 - Product analytics is enabled by default through PostHog. It uses a stable installation identifier and, when you sign in, may associate account details such as your email with app, hostname, operating-system, hardware, and other device or feature metadata.
 - Sentry receives crash and error diagnostics while telemetry is enabled.
-- If you choose cloud transcription, hosted AI, or cloud sync, the audio, prompts and selected context, or synced data needed for that feature is processed remotely by the configured service.
+- If you choose cloud transcription, screenpipe cloud AI, or cloud sync, the audio, prompts and selected context, or synced data needed for that feature is processed remotely by the configured service.
 
 You can disable telemetry in **Settings → Privacy → Analytics**, then apply the settings change. To keep capture and AI processing local, leave cloud sync off and select local transcription and a local AI provider such as Ollama.
 

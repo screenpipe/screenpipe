@@ -953,6 +953,12 @@ pub struct SettingsStore {
     pub lock_vault_shortcut: String,
     #[serde(rename = "showShortcutOverlay", default = "default_true")]
     pub show_shortcut_overlay: bool,
+    /// Unix timestamp until which the user asked to hide the shortcut overlay.
+    #[serde(rename = "shortcutOverlaySnoozedUntil", default)]
+    pub shortcut_overlay_snoozed_until: Option<i64>,
+    /// Version marker for the bounded re-show of the smaller overlay design.
+    #[serde(rename = "shortcutOverlayMinimalReshowVersion", default)]
+    pub shortcut_overlay_minimal_reshow_version: u32,
     /// Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
     #[serde(rename = "shortcutOverlaySize", default = "default_overlay_size")]
     pub shortcut_overlay_size: String,
@@ -1437,6 +1443,7 @@ Rules:
                     "smartRecording": null,
                     "filterMusic": null,
                     "prioritizeInputLatency": null,
+                    "sidebarCustomization": null,
                     "aecMode": null,
                 }),
             ),
@@ -1462,6 +1469,13 @@ Rules:
                             "forceDisabled": false,
                         },
                         "prioritizeInputLatency": {
+                            "defaultEnabled": false,
+                            "forceDisabled": false,
+                        },
+                        // UI-only rollout gate: no engine setting to clamp, so
+                        // its force-off is applied by the frontend registry
+                        // rather than the recording-settings pass below.
+                        "sidebarCustomization": {
                             "defaultEnabled": false,
                             "forceDisabled": false,
                         },
@@ -1536,6 +1550,8 @@ Rules:
             #[cfg(not(target_os = "windows"))]
             lock_vault_shortcut: "Super+Shift+L".to_string(),
             show_shortcut_overlay: true,
+            shortcut_overlay_snoozed_until: None,
+            shortcut_overlay_minimal_reshow_version: 0,
             shortcut_overlay_size: "small".to_string(),
             device_id: uuid::Uuid::new_v4().to_string(),
             auto_update: true,
@@ -1782,11 +1798,9 @@ impl SettingsStore {
         match self.local_plan_policy() {
             LocalPlanPolicy::VerifiedFree => {
                 config.max_non_template_pipes = Some(2);
-                config.enforce_free_plan_retention = true;
             }
             LocalPlanPolicy::Unknown => {
-                // Unknown must never inherit paid/unlimited behavior, but it is
-                // not safe evidence for destructive free-plan retention.
+                // Unknown must never inherit paid/unlimited behavior.
                 config.max_non_template_pipes = Some(2);
             }
             LocalPlanPolicy::VerifiedPaid => {}
@@ -1889,10 +1903,6 @@ impl SettingsStore {
         } else {
             LocalPlanPolicy::Unknown
         }
-    }
-
-    pub(crate) fn has_free_plan_policy(&self) -> bool {
-        self.local_plan_policy() == LocalPlanPolicy::VerifiedFree
     }
 
     pub(crate) fn restricts_paid_local_features(&self) -> bool {
@@ -2420,6 +2430,20 @@ mod tests {
     }
 
     #[test]
+    fn shortcut_overlay_snooze_and_reshow_state_default_cleanly() {
+        let defaults = SettingsStore::default();
+        assert_eq!(defaults.shortcut_overlay_snoozed_until, None);
+        assert_eq!(defaults.shortcut_overlay_minimal_reshow_version, 0);
+
+        let missing: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": []
+        }))
+        .unwrap();
+        assert_eq!(missing.shortcut_overlay_snoozed_until, None);
+        assert_eq!(missing.shortcut_overlay_minimal_reshow_version, 0);
+    }
+
+    #[test]
     fn recording_health_alerts_default_to_disabled() {
         assert!(!SettingsStore::default().show_restart_notifications);
 
@@ -2643,11 +2667,9 @@ mod tests {
             "features": { "app": true, "cloud": false }
         }));
 
-        assert!(store.has_free_plan_policy());
         assert_eq!(store.local_plan_policy(), LocalPlanPolicy::VerifiedFree);
         let config = store.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
         assert_eq!(config.max_non_template_pipes, Some(2));
-        assert!(config.enforce_free_plan_retention);
     }
 
     #[test]
@@ -2659,7 +2681,7 @@ mod tests {
             "plan": "none",
             "checked_at": (chrono::Utc::now() - chrono::Duration::hours(73)).to_rfc3339()
         }));
-        assert!(stale.has_free_plan_policy());
+        assert_eq!(stale.local_plan_policy(), LocalPlanPolicy::VerifiedFree);
 
         let mut lifetime = SettingsStore::default();
         lifetime.user.id = Some("user_paid".to_string());
@@ -2672,15 +2694,13 @@ mod tests {
             "checked_at": chrono::Utc::now().to_rfc3339(),
             "features": { "app": true }
         }));
-        assert!(!lifetime.has_free_plan_policy());
         assert_eq!(lifetime.local_plan_policy(), LocalPlanPolicy::VerifiedPaid);
         let config = lifetime.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
         assert_eq!(config.max_non_template_pipes, None);
-        assert!(!config.enforce_free_plan_retention);
     }
 
     #[test]
-    fn unknown_plan_is_pipe_limited_without_enabling_destructive_retention() {
+    fn unknown_plan_is_pipe_limited() {
         let mut store = SettingsStore::default();
         store.user.id = Some("user_unknown".to_string());
         store.user.subscription_plan = Some("standard".to_string());
@@ -2697,17 +2717,15 @@ mod tests {
         assert!(store.restricts_paid_local_features());
         let config = store.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
         assert_eq!(config.max_non_template_pipes, Some(2));
-        assert!(!config.enforce_free_plan_retention);
     }
 
     #[test]
-    fn missing_identity_is_still_pipe_limited_but_cannot_trigger_retention() {
+    fn missing_identity_is_still_pipe_limited() {
         let store = SettingsStore::default();
         assert_eq!(store.local_plan_policy(), LocalPlanPolicy::Unknown);
         assert!(store.restricts_paid_local_features());
         let config = store.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
         assert_eq!(config.max_non_template_pipes, Some(2));
-        assert!(!config.enforce_free_plan_retention);
     }
 
     #[test]

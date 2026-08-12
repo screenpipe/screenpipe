@@ -50,6 +50,13 @@ mod imp {
 
     const SKIP: i32 = 3;
 
+    /// Single-window harness: every window-scoped call is keyed to this label.
+    static WIN: std::sync::OnceLock<CString> = std::sync::OnceLock::new();
+    fn win() -> *const c_char {
+        WIN.get_or_init(|| CString::new("frame-scope").unwrap())
+            .as_ptr()
+    }
+
     fn skip(reason: &str) -> ! {
         eprintln!("[frame-scope] skipped: {reason}");
         std::process::exit(SKIP);
@@ -60,6 +67,7 @@ mod imp {
         let mut text: *mut c_char = std::ptr::null_mut();
         let mut err: *mut c_char = std::ptr::null_mut();
         let rc = lt_analyze_image(
+            win(),
             path.as_ptr(),
             frame.as_ptr(),
             0.0,
@@ -90,7 +98,7 @@ mod imp {
     }
 
     unsafe fn applied_frame() -> String {
-        let ptr = lt_debug_applied_frame_id();
+        let ptr = lt_debug_applied_frame_id(win());
         if ptr.is_null() {
             return String::new();
         }
@@ -101,7 +109,7 @@ mod imp {
 
     /// Characters currently selected on the overlay.
     unsafe fn selected_len() -> usize {
-        let ptr = lt_debug_selected_text();
+        let ptr = lt_debug_selected_text(win());
         if ptr.is_null() {
             return 0;
         }
@@ -111,7 +119,7 @@ mod imp {
     }
 
     unsafe fn position(frame: &CString) {
-        lt_update_position(frame.as_ptr(), 0.0, 0.0, 800.0, 600.0);
+        lt_update_position(win(), frame.as_ptr(), 0.0, 0.0, 800.0, 600.0);
     }
 
     unsafe fn highlight(terms: &[&str], frame: &CString) -> i32 {
@@ -124,7 +132,7 @@ mod imp {
                 .join(",")
         );
         let json_c = CString::new(json).unwrap();
-        lt_highlight_ranges(json_c.as_ptr(), frame.as_ptr())
+        lt_highlight_ranges(win(), json_c.as_ptr(), frame.as_ptr())
     }
 
     /// Longest purely-alphabetic token in the transcript — a term VisionKit
@@ -158,8 +166,8 @@ mod imp {
             skip("could not render test image");
         }
 
-        let win = unsafe { hs_setup() };
-        if unsafe { lt_init(win) } != 0 {
+        let window_ptr = unsafe { hs_setup() };
+        if unsafe { lt_init(win(), window_ptr) } != 0 {
             skip("lt_init failed (no window server?)");
         }
 
@@ -205,7 +213,7 @@ mod imp {
 
         // ── 1. A pending analysis is never applied to a different frame ──────
         unsafe {
-            lt_hide();
+            lt_hide(win());
             hs_pump(0.3);
             analyze(&img, &frame_a).expect("cached analyze should succeed");
             position(&frame_b); // position update for the *other* frame
@@ -232,8 +240,8 @@ mod imp {
 
         // ── 2. Highlight requested before its analysis lands still paints ────
         unsafe {
-            lt_clear_highlights();
-            lt_hide();
+            lt_clear_highlights(win());
+            lt_hide(win());
             hs_pump(0.3);
 
             // Search navigates first; the analysis is still in flight.

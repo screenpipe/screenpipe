@@ -444,35 +444,14 @@ paths:
         "502": { $ref: "#/components/responses/ServerError" }
 
   /api/enterprise/v1/pipes:
-    get:
-      operationId: listManagedPipes
-      summary: List the organization's currently deployed managed pipes
-      description: >-
-        HOSTED ONLY — returns the current control-plane state so an agent can
-        inspect versions before previewing an edit. The gateway answers
-        `501 {error, code:"not_served_by_gateway"}`.
-      x-scope: write:pipes
-      x-targets: [hosted]
-      responses:
-        "200":
-          description: Current managed Pipe definitions, newest first
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ManagedPipeList" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "501": { $ref: "#/components/responses/NotServedByGateway" }
-        "500": { $ref: "#/components/responses/ServerError" }
     post:
       operationId: pushPipe
-      summary: Preview or deploy a managed pipe for the organization
+      summary: Create or update a managed pipe for the organization's fleet
       description: >-
         HOSTED ONLY — pipe management is a control-plane concern. The gateway
         answers `501 {error, code:"not_served_by_gateway"}` for every method.
-        Send `dry_run:true` to review the exact version, changed fields, and
-        execution scope without writing. Deploy that reviewed state with
-        `dry_run:false` and its `expected_version`; stale edits fail with 409.
-        A `write:pipes` token is ADMIN AUTHORITY over the selected targets.
+        A `write:pipes` token is ADMIN AUTHORITY: every licensed device installs
+        what it pushes with no device-side login.
       x-scope: write:pipes
       x-targets: [hosted]
       requestBody:
@@ -482,12 +461,12 @@ paths:
             schema: { $ref: "#/components/schemas/PipePush" }
       responses:
         "200":
-          description: Preview receipt, unchanged state, or updated deployment request
+          description: An existing pipe was updated and its version bumped
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PipePushResult" }
         "201":
-          description: A new deployment was requested at version 1
+          description: A new pipe was created at version 1
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PipePushResult" }
@@ -497,11 +476,6 @@ paths:
         "400": { $ref: "#/components/responses/InvalidBody" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "409":
-          description: The Pipe changed after the caller inspected or previewed it
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PipeVersionConflict" }
         "501": { $ref: "#/components/responses/NotServedByGateway" }
         "500": { $ref: "#/components/responses/ServerError" }
 
@@ -790,7 +764,10 @@ components:
         query: { type: string }
         device_id: { type: [string, "null"] }
         app_name: { type: [string, "null"] }
-        window_hours: { type: number, minimum: 0 }
+        window_hours:
+          type: number
+          minimum: 0
+          description: Effective response window; use the `since_hours_ago` query parameter to request a relative window.
         records_scanned: { type: integer, minimum: 0 }
         bytes_scanned: { type: integer, minimum: 0, description: Always 0 on the gateway (SEARCH-ALGORITHM) }
         objects_scanned: { type: integer, minimum: 0, description: Always 0 on the gateway (SEARCH-ALGORITHM) }
@@ -815,7 +792,10 @@ components:
       properties:
         device_id: { type: [string, "null"] }
         kind: { type: string, description: Echoed back lower-cased, including an unrecognized one }
-        window_hours: { type: number, minimum: 0 }
+        window_hours:
+          type: number
+          minimum: 0
+          description: Effective response window; use the `since_hours_ago` query parameter to request a relative window.
         bytes_scanned: { type: integer, minimum: 0 }
         objects_scanned: { type: integer, minimum: 0 }
         truncated: { type: boolean }
@@ -843,7 +823,10 @@ components:
       required: [device_id, window_hours, count, files, next_cursor]
       properties:
         device_id: { type: [string, "null"] }
-        window_hours: { type: number, minimum: 0 }
+        window_hours:
+          type: number
+          minimum: 0
+          description: Effective response window; use the `since_hours_ago` query parameter to request a relative window.
         count: { type: integer, minimum: 0 }
         files:
           type: array
@@ -951,85 +934,21 @@ components:
         target_value: { type: array, items: { type: string } }
         ai_preset_id: { type: string }
         enabled: { type: boolean, default: true }
-        dry_run: { type: boolean, default: false }
-        expected_version: { type: integer, minimum: 0 }
-
-    ManagedPipeDesiredState:
-      type: object
-      additionalProperties: false
-      required:
-        [name, display_name, prompt_body, schedule, timeout, target_type,
-         target_value, ai_preset_id, enabled, version]
-      properties:
-        name: { type: string }
-        display_name: { type: string }
-        prompt_body: { type: string }
-        schedule: { type: string }
-        timeout: { type: integer, minimum: 5, maximum: 3600 }
-        target_type: { type: string, enum: [all, member_list, device_list] }
-        target_value: { type: array, items: { type: string } }
-        ai_preset_id: { type: string }
-        enabled: { type: boolean }
-        version: { type: integer, minimum: 1 }
-
-    ManagedPipe:
-      type: object
-      additionalProperties: false
-      required:
-        [id, name, display_name, prompt_body, schedule, timeout, target_type,
-         target_value, ai_preset_id, enabled, version, created_at, updated_at]
-      properties:
-        id: { type: string, format: uuid }
-        name: { type: string }
-        display_name: { type: string }
-        prompt_body: { type: string }
-        schedule: { type: string }
-        timeout: { type: [integer, "null"], minimum: 5, maximum: 3600 }
-        target_type: { type: string, enum: [all, member_list, device_list] }
-        target_value: { type: [array, "null"], items: { type: string } }
-        ai_preset_id: { type: [string, "null"] }
-        enabled: { type: boolean }
-        version: { type: integer, minimum: 1 }
-        created_at: { type: string, format: date-time }
-        updated_at: { type: string, format: date-time }
-
-    ManagedPipeList:
-      type: object
-      additionalProperties: false
-      required: [pipes]
-      properties:
-        pipes:
-          type: array
-          items: { $ref: "#/components/schemas/ManagedPipe" }
 
     PipePushResult:
       type: object
       additionalProperties: false
-      required:
-        [action, current_version, next_version, changed_fields,
-         execution_scope, pipe, note]
+      required: [action, pipe, note]
       properties:
-        action:
-          type: string
-          enum: [would_create, would_update, no_change, created, updated, unchanged]
-        current_version: { type: integer, minimum: 0 }
-        next_version: { type: integer, minimum: 1 }
-        changed_fields:
-          type: array
-          items:
-            type: string
-            enum:
-              [display_name, prompt_body, schedule, timeout, target_type,
-               target_value, ai_preset_id, enabled]
-        execution_scope: { type: string, enum: [cloud, devices, cloud-and-devices] }
+        action: { type: string, enum: [created, updated] }
         note: { type: string }
-        pipe: { $ref: "#/components/schemas/ManagedPipeDesiredState" }
-
-    PipeVersionConflict:
-      type: object
-      additionalProperties: false
-      required: [error, code, current_version]
-      properties:
-        error: { type: string }
-        code: { type: string, const: version_conflict }
-        current_version: { type: integer, minimum: 0 }
+        pipe:
+          type: object
+          additionalProperties: false
+          required: [name, display_name, schedule, enabled, version]
+          properties:
+            name: { type: string }
+            display_name: { type: string }
+            schedule: { type: string }
+            enabled: { type: boolean }
+            version: { type: integer, minimum: 1 }

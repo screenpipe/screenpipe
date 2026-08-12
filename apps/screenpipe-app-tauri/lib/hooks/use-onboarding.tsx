@@ -12,10 +12,16 @@ import {
   setFirstRunGuidePending,
   setFirstRunGuideReplayAfterOnboarding,
 } from "@/lib/first-run-guide";
+import { resetLearningWindow } from "@/lib/first-run/learning-window";
 import type { OnboardingLiveViewFlowProperties } from "@/lib/analytics/onboarding-funnel";
 
 export type OnboardingCompletionContext = {
   method:
+    // Setup finished at its last slide. This is now the ordinary path: setup
+    // no longer builds a dashboard, so completion is not tied to a Live View
+    // outcome. The live_view_* methods remain for installs that resume mid
+    // flow and for the enterprise short-circuit.
+    | "setup_finished"
     | "pipes_installed"
     | "pipe_step_skipped"
     | "live_view_deferred"
@@ -82,6 +88,11 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
 
       if (result.status === "ok") {
         setFirstRunGuideReplayAfterOnboarding(false);
+        // The learning window is NOT started here. Onboarding runs in its own
+        // webview, and webviews do not share a localStorage partition — a
+        // window opened here would be invisible to Home, which is where the
+        // banner renders. Home derives it from `completedAt` instead, which
+        // Rust persists and every window can read.
         // Update local state
         set((state) => ({
           onboardingData: {
@@ -91,28 +102,43 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
           },
           isLoading: false,
         }));
-        posthog.capture("onboarding_completed", {
-          completion_method: context.method,
-          pipe_count: context.pipeCount,
-          customized: context.customized,
-          ...(context.dashboardBlockCount !== undefined
-            ? { dashboard_block_count: context.dashboardBlockCount }
-            : {}),
-          ...(context.goalCategory
-            ? { goal_category: context.goalCategory }
-            : {}),
-          ...(context.live_view_flow_variant
-            ? {
-                live_view_flow_variant: context.live_view_flow_variant,
-                existing_live_view_count_bucket:
-                  context.existing_live_view_count_bucket,
-              }
-            : {}),
-        });
+        // Sent instantly, not batched. Setup runs in its own webview and this
+        // fires immediately before that webview is navigated away and torn
+        // down, so a queued event never gets flushed: `engine_completed` (a
+        // tick earlier, same handler) landed while `onboarding_completed` was
+        // lost for essentially every user.
+        posthog.capture(
+          "onboarding_completed",
+          {
+            completion_method: context.method,
+            pipe_count: context.pipeCount,
+            customized: context.customized,
+            ...(context.dashboardBlockCount !== undefined
+              ? { dashboard_block_count: context.dashboardBlockCount }
+              : {}),
+            ...(context.goalCategory
+              ? { goal_category: context.goalCategory }
+              : {}),
+            ...(context.live_view_flow_variant
+              ? {
+                  live_view_flow_variant: context.live_view_flow_variant,
+                  existing_live_view_count_bucket:
+                    context.existing_live_view_count_bucket,
+                }
+              : {}),
+          },
+          { send_instantly: true },
+        );
+        // Setup no longer builds a dashboard, so Brain would open on an empty
+        // container. Land on Home instead: it always has something to render,
+        // it is where the learning window runs, and it is where the summary
+        // chat appears when the window resolves.
         const destination =
           context.method === "ai_connections_selected"
             ? "connections"
-            : "brain";
+            : context.method === "setup_finished"
+              ? "home"
+              : "brain";
         // Rust routes a newly created Home to Brain. This covers a reused Home
         // and sends the explicit AI-context path to Connections instead.
         try {
@@ -127,6 +153,14 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
       }
     } catch (error) {
       setFirstRunGuidePending(firstRunGuideWasPending);
+      // A completion that never persists also means `completedAt` is never
+      // written, so the first-run window can never open. That used to leave no
+      // trace at all beyond a console line in a webview nobody is watching.
+      posthog.capture(
+        "onboarding_completion_failed",
+        { completion_method: context.method },
+        { send_instantly: true },
+      );
       console.error("Error completing onboarding:", error);
       set({
         error:
@@ -148,6 +182,9 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
         // Reset setup without replaying the separate optional app tour.
         setFirstRunGuidePending(false);
         setFirstRunGuideReplayAfterOnboarding(false);
+        // Clear any half-finished window so a replayed setup opens a fresh one
+        // instead of resuming a countdown against the previous run's cutoff.
+        resetLearningWindow();
         // Update local state
         set((state) => ({
           onboardingData: {

@@ -83,6 +83,21 @@ beforeEach(() => {
 afterEach(() => vi.clearAllTimers());
 
 describe("onboarding login gate", () => {
+  // The permissions step auto-advances on non-mac, so this slide is the only
+  // place Windows and Linux users are ever told where their recordings live.
+  // It must not become mac-specific or platform-gated.
+  it("tells every platform that recordings are stored locally", () => {
+    mocks.settings = { user: {} };
+    render(<OnboardingLogin handleNextSlide={vi.fn()} />);
+    const locality = screen.getByTestId("login-locality");
+    expect(locality).toHaveTextContent(
+      "your recordings are stored on this computer",
+    );
+    // Device-neutral: naming one OS would exclude the platforms that only
+    // ever see this slide.
+    expect(locality.textContent ?? "").not.toMatch(/\bmac\b/i);
+  });
+
   it("advances once when signed in AND entitled", async () => {
     mocks.settings = { user: { token: "t1", email: "maribel@bungalow.com" } };
     mocks.hasAppEntitlement.mockReturnValue(true);
@@ -207,6 +222,31 @@ describe("onboarding login gate", () => {
     expect(screen.getByText(/^get started$/i)).toBeInTheDocument();
   });
 
+  it("makes the consumer get-started action primary and shows a direction icon", () => {
+    mocks.settings = { user: null };
+    mocks.hasAppEntitlement.mockReturnValue(false);
+
+    render(<OnboardingLogin handleNextSlide={vi.fn()} />);
+
+    expect(screen.getByTestId("login-cta")).toHaveClass(
+      "bg-primary",
+      "text-primary-foreground",
+    );
+    expect(screen.getByTestId("login-cta-icon")).toBeInTheDocument();
+  });
+
+  it("opens account creation directly for consumer onboarding", async () => {
+    mocks.settings = { user: null };
+    mocks.openLoginWindow.mockResolvedValue({ status: "ok", data: "" });
+
+    render(<OnboardingLogin handleNextSlide={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("login-cta"));
+
+    await waitFor(() =>
+      expect(mocks.openLoginWindow).toHaveBeenCalledWith(null, "sign-up"),
+    );
+  });
+
   // Everyone reaching this slide on a consumer build is a fresh install with
   // no account. Labelling the only affordance "sign in" tells them the app is
   // for people who already have one, and nothing on the slide offered to
@@ -238,6 +278,18 @@ describe("onboarding login gate", () => {
     expect(screen.queryByText(/create a free account/i)).toBeNull();
   });
 
+  it("opens sign in directly for managed enterprise onboarding", async () => {
+    mocks.settings = { user: null };
+    mocks.openLoginWindow.mockResolvedValue({ status: "ok", data: "" });
+
+    render(<OnboardingLogin handleNextSlide={vi.fn()} suppressAutoAdvance />);
+    fireEvent.click(screen.getByTestId("login-cta"));
+
+    await waitFor(() =>
+      expect(mocks.openLoginWindow).toHaveBeenCalledWith(null, "sign-in"),
+    );
+  });
+
   it("labels sign-in as the enterprise-account option during enterprise onboarding", () => {
     mocks.settings = { user: null };
     mocks.hasAppEntitlement.mockReturnValue(false);
@@ -264,120 +316,100 @@ describe("onboarding login gate", () => {
 
   // ─── system-browser login handoff (Windows/Linux) ──────────────────────
   //
-  // macOS resolves login inside ASWebAuthenticationSession and never emits
-  // these events, so every assertion here is about the platforms that hand
-  // off to the user's real browser.
+  // The app opens the user's real browser at the ordinary login URL and the
+  // website deep-links the token back. Nothing is typed by hand: #5936's
+  // device-code detour is gone, so these assert the handoff state only.
 
-  const emitBrowserEvent = (name: string, payload: unknown) => {
-    const handler = mocks.listeners.get(name);
-    expect(handler, `no listener registered for ${name}`).toBeDefined();
-    act(() => handler!({ payload }));
-  };
-
-  it("shows a waiting state with the confirmation code once the browser is handed the login", async () => {
+  it("shows a waiting state once the browser has been handed the login", async () => {
     mocks.settings = { user: null };
+    mocks.openLoginWindow.mockResolvedValue({ status: "ok", data: "" });
     render(<OnboardingLogin handleNextSlide={vi.fn()} />);
 
-    // Before the handoff the normal login button is the only affordance.
-    // These handoff tests address it by test id, not by label: the label is
-    // owned by the copy tests above and changes with positioning.
     expect(screen.getByTestId("login-cta")).toBeInTheDocument();
     expect(screen.queryByTestId("login-browser-waiting")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("login-cta"));
 
     await waitFor(() =>
-      expect(mocks.listeners.has("login-browser-pending")).toBe(true),
+      expect(screen.getByTestId("login-browser-waiting")).toBeInTheDocument(),
     );
-    emitBrowserEvent("login-browser-pending", { code: "ABCD2345" });
-
-    expect(screen.getByTestId("login-browser-waiting")).toBeInTheDocument();
     expect(screen.getByText(/waiting for your browser/i)).toBeInTheDocument();
-    // The code lets the user verify the browser request is the one this app
-    // started, rather than approving someone else's session.
-    expect(screen.getByTestId("login-browser-code")).toHaveTextContent(
-      "ABCD2345",
-    );
   });
 
-  it("keeps the macOS path untouched — no events means no waiting state", () => {
+  // The regression this replaces: a code the user had to read out of the app
+  // and retype in the browser. There must not be one to read.
+  it("never asks the user for a code", async () => {
     mocks.settings = { user: null };
+    mocks.openLoginWindow.mockResolvedValue({ status: "ok", data: "" });
     render(<OnboardingLogin handleNextSlide={vi.fn()} />);
 
-    expect(screen.queryByTestId("login-browser-waiting")).toBeNull();
-    expect(screen.getByTestId("login-cta")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("login-cta"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("login-browser-waiting")).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId("login-browser-code")).toBeNull();
+    expect(screen.queryByText(/code/i)).toBeNull();
   });
 
   it("offers the in-app window as an escape hatch while waiting", async () => {
     mocks.settings = { user: null };
+    mocks.openLoginWindow.mockResolvedValue({ status: "ok", data: "" });
     render(<OnboardingLogin handleNextSlide={vi.fn()} />);
 
+    fireEvent.click(screen.getByTestId("login-cta"));
     await waitFor(() =>
-      expect(mocks.listeners.has("login-browser-pending")).toBe(true),
+      expect(screen.getByTestId("login-browser-waiting")).toBeInTheDocument(),
     );
-    emitBrowserEvent("login-browser-pending", { code: "ABCD2345" });
 
     fireEvent.click(screen.getByTestId("login-webview-fallback"));
 
     // `true` requests the isolated-profile WebView, the one path that still
     // works when the default browser is unusable.
-    expect(mocks.openLoginWindow).toHaveBeenCalledWith(true);
+    expect(mocks.openLoginWindow).toHaveBeenCalledWith(true, "sign-up");
     expect(mocks.capture).toHaveBeenCalledWith(
       "onboarding_login_webview_fallback_clicked",
     );
-    // Leaving the browser flow must clear the waiting state, or the user is
-    // stuck looking at a stale code.
     expect(screen.queryByTestId("login-browser-waiting")).toBeNull();
   });
 
-  it("returns to the sign-in button with an explanation when the browser flow fails", async () => {
+  it("returns to the sign-in button with an explanation when no browser opens", async () => {
     mocks.settings = { user: null };
+    mocks.openLoginWindow.mockResolvedValue({
+      status: "error",
+      error: "could not open browser",
+    });
     render(<OnboardingLogin handleNextSlide={vi.fn()} />);
 
+    fireEvent.click(screen.getByTestId("login-cta"));
+
     await waitFor(() =>
-      expect(mocks.listeners.has("login-browser-pending")).toBe(true),
+      expect(screen.getByTestId("login-browser-failure")).toBeInTheDocument(),
     );
-    emitBrowserEvent("login-browser-pending", { code: "ABCD2345" });
-    expect(screen.getByTestId("login-browser-waiting")).toBeInTheDocument();
-
-    emitBrowserEvent("login-browser-failed", { reason: "cancelled" });
-
     expect(screen.queryByTestId("login-browser-waiting")).toBeNull();
-    expect(screen.getByTestId("login-browser-failure")).toHaveTextContent(
-      /cancelled in your browser/i,
-    );
     // Retry must be immediately available.
     expect(screen.getByTestId("login-cta")).toBeInTheDocument();
   });
 
-  it("explains an expired link and still allows retry", async () => {
+  it("clears a stale failure when the user retries", async () => {
     mocks.settings = { user: null };
+    mocks.openLoginWindow.mockResolvedValue({
+      status: "error",
+      error: "could not open browser",
+    });
     render(<OnboardingLogin handleNextSlide={vi.fn()} />);
-
-    await waitFor(() =>
-      expect(mocks.listeners.has("login-browser-failed")).toBe(true),
-    );
-    emitBrowserEvent("login-browser-failed", { reason: "timeout" });
-
-    expect(screen.getByTestId("login-browser-failure")).toHaveTextContent(
-      /expired/i,
-    );
 
     fireEvent.click(screen.getByTestId("login-cta"));
-    expect(mocks.openLoginWindow).toHaveBeenCalledWith(null);
-    // Retrying clears the stale failure message.
-    expect(screen.queryByTestId("login-browser-failure")).toBeNull();
-  });
+    await waitFor(() =>
+      expect(screen.getByTestId("login-browser-failure")).toBeInTheDocument(),
+    );
 
-  it("falls back to generic copy for an unrecognised failure reason", async () => {
-    mocks.settings = { user: null };
-    render(<OnboardingLogin handleNextSlide={vi.fn()} />);
+    mocks.openLoginWindow.mockResolvedValue({ status: "ok", data: "" });
+    fireEvent.click(screen.getByTestId("login-cta"));
 
     await waitFor(() =>
-      expect(mocks.listeners.has("login-browser-failed")).toBe(true),
+      expect(screen.queryByTestId("login-browser-failure")).toBeNull(),
     );
-    emitBrowserEvent("login-browser-failed", {});
-
-    expect(screen.getByTestId("login-browser-failure")).toHaveTextContent(
-      /did not finish/i,
-    );
+    expect(mocks.openLoginWindow).toHaveBeenCalledWith(null, "sign-up");
   });
 });
