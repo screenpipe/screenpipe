@@ -1561,7 +1561,7 @@ async fn main() {
 
             // Show the shortcut overlay after onboarding. The command applies
             // saved snoozes/preferences and the bounded re-show of the smaller
-            // native macOS design. Skip when the timeline itself is unavailable.
+            // cross-platform design. Skip when the timeline itself is unavailable.
             if onboarding_store.is_completed
                 && !app_ui_hidden
                 && !headless_startup

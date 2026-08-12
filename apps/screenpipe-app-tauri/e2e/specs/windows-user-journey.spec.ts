@@ -684,6 +684,12 @@ describe("Windows user journey", function () {
       await waitForWindowHandle("shortcut-reminder", t(20_000));
 
       await browser.switchToWindow("shortcut-reminder");
+      const expandShortcutReminder = async () => {
+        const root = await $('[data-testid="shortcut-reminder-root"]');
+        await root.waitForDisplayed({ timeout: t(10_000) });
+        await root.moveTo();
+      };
+      await expandShortcutReminder();
       await browser.waitUntil(
         async () => {
           const state = (await browser.execute(() => ({
@@ -691,13 +697,15 @@ describe("Windows user journey", function () {
             hasTimelineButton: !!document.querySelector('button[title="Open timeline"]'),
             hasChatButton: !!document.querySelector('button[title="Open chat"]'),
             hasSearchButton: !!document.querySelector('button[title="Open search"]'),
-            hasHideButton: !!document.querySelector('button[title="Hide shortcut reminder"]'),
+            hasSettingsButton: !!document.querySelector('button[title="Overlay settings"]'),
+            hasInboxButton: !!document.querySelector('[title="notifications"]'),
           }))) as {
             path: string;
             hasTimelineButton: boolean;
             hasChatButton: boolean;
             hasSearchButton: boolean;
-            hasHideButton: boolean;
+            hasSettingsButton: boolean;
+            hasInboxButton: boolean;
           };
 
           return (
@@ -705,7 +713,8 @@ describe("Windows user journey", function () {
             state.hasTimelineButton &&
             state.hasChatButton &&
             state.hasSearchButton &&
-            state.hasHideButton
+            state.hasSettingsButton &&
+            !state.hasInboxButton
           );
         },
         {
@@ -735,6 +744,7 @@ describe("Windows user journey", function () {
       }
 
       await browser.switchToWindow("shortcut-reminder");
+      await expandShortcutReminder();
       const openChatButton = await $('button[title="Open chat"]');
       await openChatButton.waitForDisplayed({ timeout: t(10_000) });
       await openChatButton.click();
@@ -753,6 +763,7 @@ describe("Windows user journey", function () {
       }
 
       await browser.switchToWindow("shortcut-reminder");
+      await expandShortcutReminder();
       const openTimelineButton = await $('button[title="Open timeline"]');
       await openTimelineButton.waitForDisplayed({ timeout: t(10_000) });
       await openTimelineButton.click();
@@ -770,25 +781,34 @@ describe("Windows user journey", function () {
       }
 
       await browser.switchToWindow("shortcut-reminder");
-      const hideReminderButton = await $('button[title="Hide shortcut reminder"]');
-      await hideReminderButton.waitForDisplayed({ timeout: t(10_000) });
-      await hideReminderButton.click();
+      await expandShortcutReminder();
+      const overlaySettingsButton = await $('button[title="Overlay settings"]');
+      await overlaySettingsButton.waitForDisplayed({ timeout: t(10_000) });
+      await overlaySettingsButton.click();
+      const hideForTodayButton = await $('button[title="Hide for today"]');
+      await hideForTodayButton.waitForDisplayed({ timeout: t(10_000) });
+      await hideForTodayButton.click();
 
       await expectShortcutReminderVisible(false, t(20_000));
       await browser.switchToWindow("home");
       await browser.waitUntil(
-        async () => !(await switchIsChecked(shortcutReminderSelector)),
+        async () => await switchIsChecked(shortcutReminderSelector),
         {
           timeout: t(15_000),
           interval: 250,
-          timeoutMsg: "Display settings did not reflect hiding the shortcut reminder from the overlay",
+          timeoutMsg: "A bounded overlay snooze unexpectedly disabled the Display setting",
         },
       );
     } finally {
       if ((await browser.getWindowHandles()).includes("home")) {
         await browser.switchToWindow("home").catch(() => {});
       }
-      await setSwitchChecked(shortcutReminderSelector, initiallyChecked).catch(() => {});
+      // Toggling off then back on clears any bounded snooze through the
+      // explicit show command, leaving the user's original setting intact.
+      await setSwitchChecked(shortcutReminderSelector, false).catch(() => {});
+      if (initiallyChecked) {
+        await setSwitchChecked(shortcutReminderSelector, true).catch(() => {});
+      }
       if (!initiallyChecked) {
         await expectShortcutReminderVisible(false, t(10_000)).catch(() => {});
       }

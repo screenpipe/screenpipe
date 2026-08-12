@@ -87,10 +87,10 @@ mod tests {
     }
 
     #[test]
-    fn non_native_overlay_respects_existing_setting() {
-        let decision = shortcut_overlay_startup_decision(false, 0, None, 100, false);
-        assert!(!decision.should_show);
-        assert!(!decision.consume_reshow);
+    fn minimal_webview_overlay_gets_the_same_bounded_reshow() {
+        let decision = shortcut_overlay_startup_decision(false, 0, None, 100, true);
+        assert!(decision.should_show);
+        assert!(decision.consume_reshow);
     }
 
     /// The whole point of SCR-300: `gateway_url` is the ONE name the server,
@@ -2885,7 +2885,7 @@ fn shortcut_overlay_startup_decision(
     }
 }
 
-/// Apply the simple startup policy for the minimal native macOS overlay.
+/// Apply the simple startup policy for the minimal overlay on every platform.
 /// Existing dismissals get one bounded re-show; active snoozes always win.
 pub(crate) async fn maybe_show_shortcut_reminder_on_startup(
     app_handle: tauri::AppHandle,
@@ -2896,7 +2896,7 @@ pub(crate) async fn maybe_show_shortcut_reminder_on_startup(
         store.shortcut_overlay_minimal_reshow_version,
         store.shortcut_overlay_snoozed_until,
         chrono::Utc::now().timestamp(),
-        cfg!(target_os = "macos"),
+        true,
     );
 
     let mut store_changed = false;
@@ -3051,15 +3051,15 @@ pub(crate) async fn show_shortcut_reminder_impl(
         }
     }
 
-    // Window dimensions: 2-row grid (3 shortcuts + activity viz)
-    // Scale based on overlay size setting
+    // The webview fallback matches the native overlay's tiny resting icon.
+    // React grows the real window hit area only while the dock is expanded.
     let scale = match shortcut_overlay_size.as_str() {
         "large" => 2.0_f64,
         "medium" => 1.5,
         _ => 1.0,
     };
-    let window_width = 160.0 * scale;
-    let window_height = 40.0 * scale;
+    let window_width = 22.0 * scale;
+    let window_height = 16.0 * scale;
 
     // Position at top center of the screen where the cursor is
     let (x, y) = {
@@ -3243,7 +3243,7 @@ pub(crate) async fn show_shortcut_reminder_impl(
             if let Ok(Some(monitor)) = app_handle_clone.primary_monitor() {
                 let screen_size = monitor.size();
                 let scale_factor = monitor.scale_factor();
-                let new_x = ((screen_size.width as f64 / scale_factor) - 220.0) / 2.0;
+                let new_x = ((screen_size.width as f64 / scale_factor) - window_width) / 2.0;
                 let new_y = 12.0;
 
                 if let Some(window) = app_handle_clone.get_webview_window("shortcut-reminder") {
