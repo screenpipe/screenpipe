@@ -45,6 +45,11 @@ const dashboard = {
   ],
 } as BrainViewDefinition;
 
+const dashboardWithoutPipeTargets = {
+  ...dashboard,
+  slots: [{ id: "note" }],
+} as BrainViewDefinition;
+
 function okResponse() {
   return { ok: true } as Response;
 }
@@ -63,6 +68,7 @@ describe("onboarding Live View follow-up", () => {
     updateOnboardingLiveViewFollowUp("first-dashboard", (followUp) => ({
       ...followUp,
       dueAt: now.toISOString(),
+      firstScheduledAt: now.toISOString(),
     }));
     capture.mockClear();
   });
@@ -153,29 +159,138 @@ describe("onboarding Live View follow-up", () => {
     expect(notificationFetch).toHaveBeenCalledOnce();
   });
 
-  it("retries later instead of notifying when no dashboard Pipe starts", async () => {
-    const engineFetch = vi.fn().mockResolvedValue({ ok: false } as Response);
+  it("fails permanently when the dashboard has no pipe-backed targets", async () => {
+    const engineFetch = vi.fn().mockResolvedValue(okResponse());
     const notificationFetch = vi.fn().mockResolvedValue(okResponse());
 
-    const result = await runDueOnboardingLiveViewFollowUp({
-      now: () => now,
-      listViews: async () => [dashboard],
-      engineFetch,
-      notificationFetch,
+    await expect(
+      runDueOnboardingLiveViewFollowUp({
+        now: () => now,
+        listViews: async () => [dashboardWithoutPipeTargets],
+        engineFetch,
+        notificationFetch,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      viewId: "first-dashboard",
+      reason: "no_pipe_targets",
     });
 
-    expect(result).toEqual({
-      status: "retry_scheduled",
-      viewId: "first-dashboard",
-    });
-    expect(engineFetch).toHaveBeenCalledTimes(2);
+    expect(engineFetch).not.toHaveBeenCalled();
     expect(notificationFetch).not.toHaveBeenCalled();
     expect(
       getOnboardingLiveViewActivation("first-dashboard")?.followUp,
     ).toMatchObject({
-      status: "scheduled",
-      retryAt: "2026-07-30T20:05:00.000Z",
+      status: "failed",
+      retryAt: null,
+      failureReason: "no_pipe_targets",
     });
+    expect(nextOnboardingLiveViewFollowUpAt(now.getTime())).toBeNull();
+    expect(capture.mock.calls.at(-1)).toEqual([
+      "onboarding_h1_follow_up",
+      expect.objectContaining({
+        stage: "delivery_skipped",
+        reason: "no_pipe_targets",
+      }),
+    ]);
+  });
+
+  it("gives up without starting pipes when the follow-up window is stale", async () => {
+    const listViews = vi.fn().mockResolvedValue([dashboard]);
+    const engineFetch = vi.fn().mockResolvedValue(okResponse());
+    const notificationFetch = vi.fn().mockResolvedValue(okResponse());
+
+    updateOnboardingLiveViewFollowUp("first-dashboard", (followUp) => ({
+      ...followUp,
+      firstScheduledAt: "2026-07-30T17:59:59.999Z",
+    }));
+
+    await expect(
+      runDueOnboardingLiveViewFollowUp({
+        now: () => now,
+        listViews,
+        engineFetch,
+        notificationFetch,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      viewId: "first-dashboard",
+      reason: "retry_exhausted",
+    });
+
+    expect(listViews).not.toHaveBeenCalled();
+    expect(engineFetch).not.toHaveBeenCalled();
+    expect(notificationFetch).not.toHaveBeenCalled();
+    expect(
+      getOnboardingLiveViewActivation("first-dashboard")?.followUp,
+    ).toMatchObject({
+      status: "failed",
+      retryAt: null,
+      failureReason: "retry_exhausted",
+    });
+  });
+
+  it("backs off and stops retrying when dashboard Pipes keep failing to start", async () => {
+    const engineFetch = vi.fn().mockResolvedValue({ ok: false } as Response);
+    const notificationFetch = vi.fn().mockResolvedValue(okResponse());
+
+    for (const [index, timestamp, retryAt] of [
+      [1, "2026-07-30T20:00:00.000Z", "2026-07-30T20:05:00.000Z"],
+      [2, "2026-07-30T20:05:00.000Z", "2026-07-30T20:15:00.000Z"],
+      [3, "2026-07-30T20:15:00.000Z", "2026-07-30T20:35:00.000Z"],
+    ] as const) {
+      await expect(
+        runDueOnboardingLiveViewFollowUp({
+          now: () => new Date(timestamp),
+          listViews: async () => [dashboard],
+          engineFetch,
+          notificationFetch,
+        }),
+      ).resolves.toEqual({
+        status: "retry_scheduled",
+        viewId: "first-dashboard",
+      });
+      expect(
+        getOnboardingLiveViewActivation("first-dashboard")?.followUp,
+      ).toMatchObject({
+        status: "scheduled",
+        attempts: index,
+        firstScheduledAt: now.toISOString(),
+        retryAt,
+        failureReason: "no_pipe_started",
+      });
+    }
+
+    await expect(
+      runDueOnboardingLiveViewFollowUp({
+        now: () => new Date("2026-07-30T20:35:00.000Z"),
+        listViews: async () => [dashboard],
+        engineFetch,
+        notificationFetch,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      viewId: "first-dashboard",
+      reason: "retry_exhausted",
+    });
+    expect(engineFetch).toHaveBeenCalledTimes(8);
+    expect(notificationFetch).not.toHaveBeenCalled();
+    expect(
+      getOnboardingLiveViewActivation("first-dashboard")?.followUp,
+    ).toMatchObject({
+      status: "failed",
+      attempts: 4,
+      retryAt: null,
+      failureReason: "retry_exhausted",
+    });
+    expect(nextOnboardingLiveViewFollowUpAt(now.getTime())).toBeNull();
+    expect(capture.mock.calls.at(-1)).toEqual([
+      "onboarding_h1_follow_up",
+      expect.objectContaining({
+        stage: "delivery_skipped",
+        reason: "retry_exhausted",
+      }),
+    ]);
   });
 
   it("retries through the app-server client when notification delivery is rejected", async () => {
@@ -203,7 +318,10 @@ describe("onboarding Live View follow-up", () => {
       getOnboardingLiveViewActivation("first-dashboard")?.followUp,
     ).toMatchObject({
       status: "scheduled",
+      attempts: 1,
+      firstScheduledAt: now.toISOString(),
       retryAt: "2026-07-30T20:05:00.000Z",
+      failureReason: "notification_rejected",
     });
   });
 });

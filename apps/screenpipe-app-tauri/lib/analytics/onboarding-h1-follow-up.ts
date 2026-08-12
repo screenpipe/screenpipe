@@ -14,7 +14,9 @@ type Stage =
 type Reason =
   | "none"
   | "view_missing"
+  | "no_pipe_targets"
   | "no_pipe_started"
+  | "retry_exhausted"
   | "notification_rejected"
   | "unexpected_failure";
 type SafeGoalCategory = OnboardingGoalCategory | "unknown";

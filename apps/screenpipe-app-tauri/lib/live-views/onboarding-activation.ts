@@ -48,10 +48,19 @@ export type OnboardingLiveViewActivation = {
 
 export type OnboardingLiveViewFollowUp = {
   dueAt: string;
-  status: "scheduled" | "running" | "sent";
+  status: "scheduled" | "running" | "sent" | "failed";
   retryAt: string | null;
   startedAt: string | null;
   sentAt: string | null;
+  firstScheduledAt: string | null;
+  attempts: number;
+  failureReason:
+    | "no_pipe_targets"
+    | "no_pipe_started"
+    | "retry_exhausted"
+    | "notification_rejected"
+    | "unexpected_failure"
+    | null;
 };
 
 type ActivationMap = Record<string, OnboardingLiveViewActivation>;
@@ -88,6 +97,7 @@ function normalizeFollowUp(value: unknown): OnboardingLiveViewFollowUp | null {
   const status =
     followUp.status === "running" ||
     followUp.status === "sent" ||
+    followUp.status === "failed" ||
     followUp.status === "scheduled"
       ? followUp.status
       : "scheduled";
@@ -102,6 +112,16 @@ function normalizeFollowUp(value: unknown): OnboardingLiveViewFollowUp | null {
     retryAt: runningIsStale ? null : (followUp.retryAt ?? null),
     startedAt: runningIsStale ? null : (followUp.startedAt ?? null),
     sentAt: followUp.sentAt ?? null,
+    firstScheduledAt:
+      followUp.firstScheduledAt &&
+      !Number.isNaN(Date.parse(followUp.firstScheduledAt))
+        ? followUp.firstScheduledAt
+        : null,
+    attempts:
+      typeof followUp.attempts === "number" && followUp.attempts > 0
+        ? Math.floor(followUp.attempts)
+        : 0,
+    failureReason: followUp.failureReason ?? null,
   };
 }
 
@@ -270,17 +290,21 @@ export function startOnboardingLiveViewActivation(
 export function markOnboardingLiveViewSetupReady(
   viewId: string,
 ): OnboardingLiveViewActivation | null {
+  const scheduledAt = new Date();
   const hadFollowUp = Boolean(readActivations()[viewId]?.followUp);
   const activation = updateActivation(viewId, (current) => ({
     ...current,
     setupStatus: "ready",
     setupError: null,
     followUp: current.followUp ?? {
-      dueAt: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
+      dueAt: new Date(scheduledAt.getTime() + 60 * 60 * 1_000).toISOString(),
       status: "scheduled",
       retryAt: null,
       startedAt: null,
       sentAt: null,
+      firstScheduledAt: scheduledAt.toISOString(),
+      attempts: 0,
+      failureReason: null,
     },
   }));
   if (activation) {

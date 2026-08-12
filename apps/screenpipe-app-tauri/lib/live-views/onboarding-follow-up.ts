@@ -8,12 +8,15 @@ import {
   listOnboardingLiveViewActivations,
   updateOnboardingLiveViewFollowUp,
   type OnboardingLiveViewActivation,
+  type OnboardingLiveViewFollowUp,
 } from "@/lib/live-views/onboarding-activation";
 import { buildLiveViewTimeContext } from "@/lib/live-views/time-range";
 import { appServerFetch } from "@/lib/notifications/app-server";
 import { commands, type BrainViewDefinition } from "@/lib/utils/tauri";
 
 const FOLLOW_UP_RETRY_DELAY_MS = 5 * 60 * 1_000;
+const FOLLOW_UP_MAX_ATTEMPTS = 4;
+const FOLLOW_UP_MAX_AGE_MS = 2 * 60 * 60 * 1_000;
 
 type FollowUpDependencies = {
   now?: () => Date;
@@ -26,6 +29,11 @@ export type OnboardingLiveViewFollowUpResult =
   | { status: "idle" }
   | { status: "notified"; viewId: string; pipeCount: number }
   | { status: "retry_scheduled"; viewId: string }
+  | {
+      status: "failed";
+      viewId: string;
+      reason: "no_pipe_targets" | "retry_exhausted";
+    }
   | { status: "view_missing"; viewId: string };
 
 function dueAt(activation: OnboardingLiveViewActivation): number | null {
@@ -63,12 +71,75 @@ function claimDueFollowUp(now: Date): OnboardingLiveViewActivation | null {
   return claimed?.followUp?.startedAt === startedAt ? claimed : null;
 }
 
-function scheduleRetry(viewId: string, now: Date): void {
+function retryDelayMs(attempts: number): number {
+  return FOLLOW_UP_RETRY_DELAY_MS * Math.min(8, 2 ** Math.max(0, attempts - 1));
+}
+
+function followUpIsExpired(
+  followUp: OnboardingLiveViewFollowUp | null,
+  now: Date,
+): boolean {
+  const startedAt = Date.parse(followUp?.firstScheduledAt ?? followUp?.dueAt ?? "");
+  return (
+    !Number.isNaN(startedAt) &&
+    now.getTime() - startedAt >= FOLLOW_UP_MAX_AGE_MS
+  );
+}
+
+function scheduleRetry(
+  viewId: string,
+  now: Date,
+  failureReason:
+    | "no_pipe_started"
+    | "notification_rejected"
+    | "unexpected_failure",
+): "retry_scheduled" | "retry_exhausted" {
+  let result: "retry_scheduled" | "retry_exhausted" = "retry_scheduled";
+  updateOnboardingLiveViewFollowUp(viewId, (followUp) => {
+    const attempts = followUp.attempts + 1;
+    const firstScheduledAt = followUp.firstScheduledAt ?? followUp.dueAt;
+    const tooManyAttempts = attempts >= FOLLOW_UP_MAX_ATTEMPTS;
+    const tooOld = followUpIsExpired(
+      { ...followUp, firstScheduledAt },
+      now,
+    );
+
+    if (tooManyAttempts || tooOld) {
+      result = "retry_exhausted";
+      return {
+        ...followUp,
+        attempts,
+        firstScheduledAt,
+        status: "failed",
+        retryAt: null,
+        startedAt: null,
+        failureReason: "retry_exhausted",
+      };
+    }
+
+    return {
+      ...followUp,
+      attempts,
+      firstScheduledAt,
+      status: "scheduled",
+      retryAt: new Date(now.getTime() + retryDelayMs(attempts)).toISOString(),
+      startedAt: null,
+      failureReason,
+    };
+  });
+  return result;
+}
+
+function markFollowUpFailed(
+  viewId: string,
+  reason: "no_pipe_targets" | "retry_exhausted",
+): void {
   updateOnboardingLiveViewFollowUp(viewId, (followUp) => ({
     ...followUp,
-    status: "scheduled",
-    retryAt: new Date(now.getTime() + FOLLOW_UP_RETRY_DELAY_MS).toISOString(),
+    status: "failed",
+    retryAt: null,
     startedAt: null,
+    failureReason: reason,
   }));
 }
 
@@ -79,6 +150,7 @@ function markFollowUpSent(viewId: string, now: Date): void {
     retryAt: null,
     startedAt: null,
     sentAt: now.toISOString(),
+    failureReason: null,
   }));
 }
 
@@ -137,10 +209,15 @@ function followUpNotification(
   };
 }
 
+type StartDashboardPipesResult = {
+  attempted: number;
+  started: number;
+};
+
 async function startDashboardPipes(
   view: BrainViewDefinition,
   fetch: typeof localFetch,
-): Promise<number> {
+): Promise<StartDashboardPipesResult> {
   const pipeNames = Array.from(
     new Set(
       view.slots
@@ -149,7 +226,10 @@ async function startDashboardPipes(
     ),
   );
 
-  let started = 0;
+  const result: StartDashboardPipesResult = {
+    attempted: pipeNames.length,
+    started: 0,
+  };
   await Promise.all(
     pipeNames.map(async (pipeName) => {
       const targetIds = view.slots
@@ -174,13 +254,13 @@ async function startDashboardPipes(
             }),
           },
         );
-        if (response.ok) started += 1;
+        if (response.ok) result.started += 1;
       } catch {
         // The retry state below makes a temporary engine outage recoverable.
       }
     }),
   );
-  return started;
+  return result;
 }
 
 /**
@@ -193,6 +273,19 @@ export async function runDueOnboardingLiveViewFollowUp(
   const now = dependencies.now?.() ?? new Date();
   const activation = claimDueFollowUp(now);
   if (!activation) return { status: "idle" };
+  if (followUpIsExpired(activation.followUp, now)) {
+    markFollowUpFailed(activation.viewId, "retry_exhausted");
+    captureOnboardingH1FollowUp(
+      "delivery_skipped",
+      activation.goalCategory,
+      "retry_exhausted",
+    );
+    return {
+      status: "failed",
+      viewId: activation.viewId,
+      reason: "retry_exhausted",
+    };
+  }
   captureOnboardingH1FollowUp(
     "delivery_attempted",
     activation.goalCategory,
@@ -222,15 +315,38 @@ export async function runDueOnboardingLiveViewFollowUp(
       return { status: "view_missing", viewId: activation.viewId };
     }
 
-    const pipeCount = await startDashboardPipes(view, engineFetch);
-    if (pipeCount === 0) {
-      scheduleRetry(activation.viewId, now);
+    const pipeResult = await startDashboardPipes(view, engineFetch);
+    if (pipeResult.attempted === 0) {
+      markFollowUpFailed(activation.viewId, "no_pipe_targets");
       captureOnboardingH1FollowUp(
-        "retry_scheduled",
+        "delivery_skipped",
         activation.goalCategory,
+        "no_pipe_targets",
+      );
+      return {
+        status: "failed",
+        viewId: activation.viewId,
+        reason: "no_pipe_targets",
+      };
+    }
+    if (pipeResult.started === 0) {
+      const retry = scheduleRetry(
+        activation.viewId,
+        now,
         "no_pipe_started",
       );
-      return { status: "retry_scheduled", viewId: activation.viewId };
+      captureOnboardingH1FollowUp(
+        retry === "retry_scheduled" ? "retry_scheduled" : "delivery_skipped",
+        activation.goalCategory,
+        retry === "retry_scheduled" ? "no_pipe_started" : "retry_exhausted",
+      );
+      return retry === "retry_scheduled"
+        ? { status: "retry_scheduled", viewId: activation.viewId }
+        : {
+            status: "failed",
+            viewId: activation.viewId,
+            reason: "retry_exhausted",
+          };
     }
 
     const notification = await notificationFetch("/notify", {
@@ -239,13 +355,25 @@ export async function runDueOnboardingLiveViewFollowUp(
       body: JSON.stringify(followUpNotification(view, activation)),
     });
     if (!notification.ok) {
-      scheduleRetry(activation.viewId, now);
-      captureOnboardingH1FollowUp(
-        "retry_scheduled",
-        activation.goalCategory,
+      const retry = scheduleRetry(
+        activation.viewId,
+        now,
         "notification_rejected",
       );
-      return { status: "retry_scheduled", viewId: activation.viewId };
+      captureOnboardingH1FollowUp(
+        retry === "retry_scheduled" ? "retry_scheduled" : "delivery_skipped",
+        activation.goalCategory,
+        retry === "retry_scheduled"
+          ? "notification_rejected"
+          : "retry_exhausted",
+      );
+      return retry === "retry_scheduled"
+        ? { status: "retry_scheduled", viewId: activation.viewId }
+        : {
+            status: "failed",
+            viewId: activation.viewId,
+            reason: "retry_exhausted",
+          };
     }
 
     markFollowUpSent(activation.viewId, now);
@@ -253,14 +381,28 @@ export async function runDueOnboardingLiveViewFollowUp(
       "notification_accepted",
       activation.goalCategory,
     );
-    return { status: "notified", viewId: activation.viewId, pipeCount };
+    return {
+      status: "notified",
+      viewId: activation.viewId,
+      pipeCount: pipeResult.started,
+    };
   } catch {
-    scheduleRetry(activation.viewId, now);
-    captureOnboardingH1FollowUp(
-      "retry_scheduled",
-      activation.goalCategory,
+    const retry = scheduleRetry(
+      activation.viewId,
+      now,
       "unexpected_failure",
     );
-    return { status: "retry_scheduled", viewId: activation.viewId };
+    captureOnboardingH1FollowUp(
+      retry === "retry_scheduled" ? "retry_scheduled" : "delivery_skipped",
+      activation.goalCategory,
+      retry === "retry_scheduled" ? "unexpected_failure" : "retry_exhausted",
+    );
+    return retry === "retry_scheduled"
+      ? { status: "retry_scheduled", viewId: activation.viewId }
+      : {
+          status: "failed",
+          viewId: activation.viewId,
+          reason: "retry_exhausted",
+        };
   }
 }
