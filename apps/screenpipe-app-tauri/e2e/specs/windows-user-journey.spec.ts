@@ -688,6 +688,16 @@ describe("Windows user journey", function () {
         const root = await $('[data-testid="shortcut-reminder-root"]');
         await root.waitForDisplayed({ timeout: t(10_000) });
         await root.moveTo();
+
+        // WebDriver's pointer move is not consistently delivered by WebView2
+        // when the entire frameless window is only 22x16. Dispatch the same
+        // bubbling browser event as a deterministic fallback so this journey
+        // still validates the expanded dock and its real Tauri actions.
+        await browser.execute(() => {
+          document
+            .querySelector<HTMLElement>('[data-testid="shortcut-reminder-root"]')
+            ?.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+        });
       };
       await expandShortcutReminder();
       await browser.waitUntil(
