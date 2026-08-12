@@ -4,7 +4,8 @@
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import ShortcutReminderPage, { formatShortcut } from "./page";
+import ShortcutReminderPage from "./page";
+import { formatShortcut } from "./format-shortcut";
 
 const mocks = vi.hoisted(() => ({
   getRecordingHealthState: vi.fn(),

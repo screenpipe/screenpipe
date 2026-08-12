@@ -26,6 +26,7 @@ import {
 import { useOverlayData } from "./use-overlay-data";
 import { useMeetingOverlay } from "./use-meeting-overlay";
 import { AudioEqualizer } from "./audio-equalizer";
+import { formatShortcut } from "./format-shortcut";
 
 type ReminderSettings = {
   disabledShortcuts?: string[];
@@ -732,48 +733,4 @@ export default function ShortcutReminderPage() {
       )}
     </div>
   );
-}
-
-/**
- * Format a shortcut string for display.
- * On macOS: replace modifier names with compact symbols (⌘, ⌃, ⌥, ⇧).
- * On Windows/Linux: translate to platform-standard names (Super→Win, Control→Ctrl).
- */
-export function formatShortcut(shortcut: string, isMac: boolean): string {
-  if (!shortcut) return "";
-
-  const parts = shortcut
-    .replaceAll("⌘", "Command+")
-    .replaceAll("⌃", "Control+")
-    .replaceAll("⌥", "Option+")
-    .replaceAll("⇧", "Shift+")
-    .split("+")
-    .map((part) => part.trim().toLowerCase())
-    .filter(Boolean);
-
-  if (isMac) {
-    const macSymbols: Record<string, string> = {
-      super: "⌘", command: "⌘", cmd: "⌘", meta: "⌘",
-      ctrl: "⌃", control: "⌃",
-      alt: "⌥", option: "⌥",
-      shift: "⇧",
-    };
-    const modifierOrder = ["⌘", "⌃", "⌥", "⇧"];
-    const modifiers = new Set(parts.map((part) => macSymbols[part]).filter(Boolean));
-    const keys = parts.filter((part) => !macSymbols[part]).map((part) => part.toUpperCase());
-    return [...modifierOrder.filter((modifier) => modifiers.has(modifier)), ...keys].join("");
-  }
-
-  // Windows/Linux: always render Win, Ctrl, Alt, Shift, then the key. Saved
-  // shortcuts historically used both Super+Control and Control+Super order.
-  const winNames: Record<string, string> = {
-    super: "Win", command: "Win", cmd: "Win", meta: "Win",
-    ctrl: "Ctrl", control: "Ctrl",
-    alt: "Alt", option: "Alt",
-    shift: "Shift",
-  };
-  const modifierOrder = ["Win", "Ctrl", "Alt", "Shift"];
-  const modifiers = new Set(parts.map((part) => winNames[part]).filter(Boolean));
-  const keys = parts.filter((part) => !winNames[part]).map((part) => part.toUpperCase());
-  return [...modifierOrder.filter((modifier) => modifiers.has(modifier)), ...keys].join("+");
 }
