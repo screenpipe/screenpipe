@@ -31,8 +31,8 @@ use super::util::screen_aware_size;
 
 use tauri::Emitter;
 #[cfg(target_os = "macos")]
-#[cfg(target_os = "macos")]
 use super::GatedPanelPlacement;
+#[cfg(target_os = "macos")]
 use tauri_nspanel::ManagerExt;
 #[cfg(target_os = "macos")]
 use tauri_nspanel::WebviewWindowExt;

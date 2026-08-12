@@ -34,6 +34,52 @@ fn parse_flexible_timestamp(s: &str) -> DateTime<Utc> {
     DateTime::UNIX_EPOCH
 }
 
+/// How much of a voice a rename touches.
+///
+/// The transcript UI sends `Auto`, which encodes the distinction users
+/// actually mean: putting a name on a voice that has none is *naming the
+/// person* (every segment the diarizer already grouped under that voice
+/// becomes Leslie), while typing a different name over an already-named
+/// speaker is *correcting one mislabelled segment*.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, OaSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReassignScope {
+    /// Name the whole voice if it is still unnamed, otherwise move only this
+    /// chunk. The default for interactive renames.
+    #[default]
+    Auto,
+    /// Only the transcriptions of this one audio chunk.
+    Chunk,
+    /// Every row belonging to this chunk's current speaker.
+    Speaker,
+}
+
+/// What a reassignment actually changed, and how to put it back.
+///
+/// The two `old_*` lists are the undo payload: they are recorded *before* any
+/// row moves, so replaying them restores the exact prior labelling.
+#[derive(Debug, Clone, Default)]
+pub struct SpeakerReassignment {
+    /// The speaker every affected row now points at.
+    pub speaker_id: i64,
+    /// Transcript rows now carrying `speaker_id`. For an in-place rename no
+    /// row moves, but this many lines change on screen.
+    pub transcriptions_updated: u64,
+    pub embeddings_moved: u64,
+    /// Whether the whole voice was relabelled rather than this chunk alone.
+    /// Resolved here because `Auto` only decides once it can see the current
+    /// label.
+    pub renamed_whole_speaker: bool,
+    /// The name this speaker had before an in-place rename. No rows move on
+    /// that path, so the only way back is to write the old name again — which
+    /// matters most when the diarizer had lumped two people into one voice.
+    pub previous_speaker_name: Option<String>,
+    /// `(audio_transcriptions.id, previous speaker_id)`
+    pub old_assignments: Vec<(i64, i64)>,
+    /// `(meeting_transcript_segments.id, previous speaker_id)`
+    pub old_segment_assignments: Vec<(i64, i64)>,
+}
+
 /// Audio chunk that has no corresponding transcription row.
 /// Used by the reconciliation sweep to detect and retry orphaned chunks.
 #[derive(Debug, Clone, FromRow)]
