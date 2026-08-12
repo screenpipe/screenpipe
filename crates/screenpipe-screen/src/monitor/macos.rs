@@ -695,13 +695,15 @@ fn cached_monitor_list(now: Instant, ttl: Duration) -> Option<Vec<SafeMonitor>> 
     with_fresh_monitor_cache(now, ttl, <[SafeMonitor]>::to_vec)
 }
 
-/// Drop the lookup cache.
+/// Drop the cached enumeration.
 ///
-/// Production has no caller by design: `list_monitors_detailed` overwrites the
-/// cache on every successful enumeration, so the watcher's own polling is the
-/// invalidation path.
-#[cfg(test)]
-fn invalidate_monitor_lookup_cache() {
+/// Call this the moment the display topology is known to have changed, rather
+/// than waiting for a TTL to lapse. `sleep_monitor` already owns the two
+/// authoritative signals — the CoreGraphics display-reconfiguration callback,
+/// and wake/unlock — and both are exactly when a cached list stops describing
+/// reality. Wiring them here means the TTLs are only a backstop for changes
+/// nobody told us about, not the primary correctness mechanism.
+pub fn invalidate_monitor_lookup_cache() {
     *MONITOR_LOOKUP_CACHE
         .write()
         .unwrap_or_else(|e| e.into_inner()) = None;
@@ -1131,6 +1133,26 @@ mod tests {
         .is_none());
 
         invalidate_monitor_lookup_cache();
+    }
+
+    /// A display reconfiguration or wake must drop the cache immediately
+    /// rather than let a stale layout answer until the TTL lapses.
+    /// `sleep_monitor` wires the CoreGraphics reconfiguration callback and the
+    /// wake/unlock transitions to this, so the TTL is only a backstop.
+    #[test]
+    fn topology_reads_miss_after_an_explicit_invalidation() {
+        let _guard = lock_lookup_cache_tests();
+        invalidate_monitor_lookup_cache();
+        store_monitor_lookup_cache(&[cache_test_monitor(1), cache_test_monitor(2)]);
+        assert!(cached_monitor_list(Instant::now(), MONITOR_TOPOLOGY_CACHE_TTL).is_some());
+
+        invalidate_monitor_lookup_cache();
+
+        assert!(
+            cached_monitor_list(Instant::now(), MONITOR_TOPOLOGY_CACHE_TTL).is_none(),
+            "a display change must force the next read to re-enumerate"
+        );
+        assert!(cached_monitor_by_id(1, Instant::now()).is_none());
     }
 
     /// The watcher's fresh enumeration is what keeps the topology cache warm,
