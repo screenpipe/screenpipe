@@ -220,6 +220,26 @@ describe("conversation persistence concurrency", () => {
     expect(third.messages.map((m) => m.id)).toEqual(["u1", "a1"]);
   });
 
+  it("lets an up-to-date writer change scalars (no conflict, no merge)", async () => {
+    // The counterpart to disk-wins-on-conflict: a writer that carries the
+    // current disk rev did NOT lose a race, so its intent must apply verbatim.
+    // Callers that load fresh (the pi router's persistBackgroundSession) pass
+    // their base rev through precisely so they land on this path — otherwise
+    // they would always look stale and silently lose browserState updates.
+    await saveConversationFile(conversation([message("u1", "hi")], { pinned: true }));
+    const current = await readBack();
+
+    await saveConversationFile({
+      ...current,
+      pinned: false,
+      browserState: { url: "https://example.com" } as never,
+    });
+
+    const saved = await readBack();
+    expect(saved.pinned).toBe(false);
+    expect(saved.browserState).toEqual({ url: "https://example.com" });
+  });
+
   it("leaves the queue usable after a failed write", async () => {
     await saveConversationFile(conversation([message("u1", "hi")]));
 

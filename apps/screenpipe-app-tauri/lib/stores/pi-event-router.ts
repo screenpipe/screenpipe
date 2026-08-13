@@ -1103,6 +1103,12 @@ async function persistBackgroundSession(
         ...(browserState ? { browserState } : {}),
         // Keep the live ACP session id (if any) so a reopen can resume it.
         ...(acpSessionId ? { acpSessionId } : existing?.acpSessionId ? { acpSessionId: existing.acpSessionId } : {}),
+        // Carry the base revision we loaded above so the save's compare-and-
+        // swap can tell "nobody else wrote" from "we lost a race". Without it
+        // this writer always reads as rev 0, always takes the conflict path,
+        // and disk-wins-scalars would silently drop the fields this save
+        // legitimately intends to change (browserState in particular).
+        ...(existing?.rev !== undefined ? { rev: existing.rev } : {}),
       };
 
       try {
