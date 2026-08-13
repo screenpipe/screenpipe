@@ -102,9 +102,17 @@ export function formatTokenCount(tokens: number): string {
   return `${(value / 1_000_000).toFixed(1)}M`;
 }
 
-/** "667.4k / 1.0M (67%)" — the whole fraction, so neither half is implied. */
+/**
+ * "~667.4k / 1.0M (67%)" — the whole fraction, so neither half is implied.
+ *
+ * The tilde is load-bearing. The denominator is the model's real window, but
+ * the numerator is counted from the messages this app can see, which is a floor:
+ * the system prompt, skills, tool schemas and tool results all occupy the same
+ * window and none of them pass through here. Rendering it as an exact token
+ * count would promise a precision we do not have.
+ */
 export function formatContextWindowUsage(usage: ContextWindowUsage): string {
-  return `${formatTokenCount(usage.usedTokens)} / ${formatTokenCount(
+  return `~${formatTokenCount(usage.usedTokens)} / ${formatTokenCount(
     usage.totalTokens,
   )} (${Math.round(usage.percent)}%)`;
 }

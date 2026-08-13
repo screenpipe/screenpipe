@@ -88,6 +88,6 @@ describe("formatContextWindowUsage", () => {
         totalTokens: 1_000_000,
         percent: 66.74,
       }),
-    ).toBe("667.4k / 1.0M (67%)");
+    ).toBe("~667.4k / 1.0M (67%)");
   });
 });

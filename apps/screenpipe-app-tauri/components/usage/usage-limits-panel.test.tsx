@@ -39,8 +39,10 @@ describe("UsageLimitsPanel context window", () => {
         percent: 66.74,
       },
     });
+    // Tilde included: the numerator is what this app can see, not what the
+    // provider bills, and the row must not imply otherwise.
     expect(screen.getByTestId("context-window-row")).toHaveTextContent(
-      "667.4k / 1.0M (67%)",
+      "~667.4k / 1.0M (67%)",
     );
   });
 
