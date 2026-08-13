@@ -735,6 +735,27 @@
       "notes": "A local provider returns the gateway's structured daily-limit rejection across the four self-serve upgrade targets; each request crosses the real Pi and foreground-event path, then the UI asserts the phosphor primary CTA, captures a screenshot, and opens the exact billing URL."
     },
     {
+      "spec": "chat-concurrent-save-lost-update.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "window-lifecycle",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "window-lifecycle"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "A second process appends a reply and a pin directly to the conversation file behind the app's back, then a real router turn makes the app persist its now-stale in-memory copy; both writers' work must survive and the revision counter must move forward, proving the compare-and-swap save path never renames a lost update over another window."
+    },
+    {
       "spec": "chat-cross-window-transcript-sync.spec.ts",
       "platforms": [
         "windows",

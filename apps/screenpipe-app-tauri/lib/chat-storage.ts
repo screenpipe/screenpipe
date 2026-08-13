@@ -27,6 +27,7 @@ import {
   conversationDedupKey,
   messagesHaveCompletedReply,
 } from "@/lib/chat-dedup";
+import { mergeConversations } from "@/lib/chat-merge";
 
 // Cap on how many (most-recent) conversation files a content search will open
 // and scan. Title matches are cheap over the full ordered list; only the
@@ -130,18 +131,91 @@ async function notifySaveFailure(e: unknown): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Single-writer discipline for conversation files.
+//
+// A conversation has many independent writers: the chat panel autosave, the pi
+// event router's background save, the sidebar's pin/hide/rename, the browser
+// sidebar's `browserState`, and pipe-run recording. Every one of them did a
+// read-modify-write of the whole file with no concurrency control, so two
+// writers that overlapped produced a LOST UPDATE: `rename()` is atomic, so the
+// file was never torn — the later writer simply replaced the earlier writer's
+// content wholesale. A reply that had already been persisted disappeared on
+// next load while still sitting in the in-memory store, which is what made it
+// look like a rendering bug rather than data loss.
+//
+// Two layers fix it:
+//
+//  1. In-process serialization (`withConversationLock`). Same-window writers —
+//     the common case, and the one behind the observed "persist browserState
+//     failed: rename … .tmp … No such file or directory" log — now queue behind
+//     each other per conversation id instead of interleaving.
+//  2. Compare-and-swap across processes (`persistWithMerge`). Every save bumps
+//     a monotonic `rev`. A writer whose base `rev` is behind what's on disk
+//     lost a race, so its content is merged with the winner's rather than
+//     overwriting it. See `chat-merge.ts` for the field policy.
+//
+// A writer that never tracked `rev` reads as 0 and therefore always merges,
+// which is the safe default for the call sites that hand us a whole object
+// built from in-memory state.
+// ---------------------------------------------------------------------------
+
+const conversationWriteQueues = new Map<string, Promise<unknown>>();
+
+/** Serialize an async write against other writes for the same conversation id.
+ *  Failures are isolated: a rejected task never poisons the queue for the next
+ *  writer, and the map entry is dropped once the chain drains so long-lived
+ *  sessions don't leak one promise per conversation ever touched. */
+function withConversationLock<T>(
+  id: string,
+  task: () => Promise<T>
+): Promise<T> {
+  const previous = conversationWriteQueues.get(id) ?? Promise.resolve();
+  // `then(task, task)` so a failed predecessor still lets us run.
+  const run = previous.then(task, task);
+  const guarded = run.catch(() => undefined);
+  conversationWriteQueues.set(id, guarded);
+  void guarded.then(() => {
+    // Only clear if nobody queued behind us in the meantime.
+    if (conversationWriteQueues.get(id) === guarded) {
+      conversationWriteQueues.delete(id);
+    }
+  });
+  return run;
+}
+
+/** Reset the in-process write queues. Tests only. */
+export function __resetConversationWriteQueuesForTests(): void {
+  conversationWriteQueues.clear();
+}
+
+/** Persist a conversation, merging when the on-disk copy has moved past the
+ *  base this writer loaded. MUST be called while holding the id's lock. */
+async function persistWithMerge(conv: ChatConversation): Promise<void> {
+  const disk = await loadConversationFile(conv.id);
+  const diskRev = disk?.rev ?? 0;
+  const baseRev = conv.rev ?? 0;
+
+  // Conflict: someone else wrote this conversation after we loaded it. Keep
+  // both sides' work instead of letting the last rename win.
+  const resolved =
+    disk && diskRev > baseRev ? mergeConversations(disk, conv) : conv;
+
+  await writeConversationFile({ ...resolved, rev: Math.max(diskRev, baseRev) + 1 });
+}
+
 export async function saveConversationFile(
   conv: ChatConversation
 ): Promise<void> {
   try {
-    await saveConversationFileInner(conv);
+    await withConversationLock(conv.id, () => persistWithMerge(conv));
   } catch (e) {
     await notifySaveFailure(e);
     throw e;
   }
 }
 
-async function saveConversationFileInner(
+async function writeConversationFile(
   conv: ChatConversation
 ): Promise<void> {
   const dir = await ensureChatsDir();
@@ -671,10 +745,22 @@ export async function updateConversationFlags(
   id: string,
   patch: Partial<Pick<ChatConversation, "pinned" | "hidden" | "title" | "titleSource" | "browserState" | "lastViewedAt" | "sidebarGroup">>
 ): Promise<void> {
-  const conv = await loadConversationFile(id);
-  if (!conv) return;
-  const next: ChatConversation = { ...conv, ...patch };
-  await saveConversationFile(next);
+  // The read MUST happen inside the lock. Loading first and saving second was
+  // the original lost-update: the sidebar would load a 4-message conversation,
+  // the panel would persist a 5th message, and this write would then rename a
+  // stale 4-message copy over it — silently deleting the reply. Reading here
+  // means the base is always the newest copy this process knows about, and
+  // `persistWithMerge` covers a writer in another process.
+  try {
+    await withConversationLock(id, async () => {
+      const conv = await loadConversationFile(id);
+      if (!conv) return;
+      await persistWithMerge({ ...conv, ...patch });
+    });
+  } catch (e) {
+    await notifySaveFailure(e);
+    throw e;
+  }
 }
 
 export async function loadAllConversations(

@@ -231,6 +231,12 @@ export interface ChatConversation {
 	 *  "branch in new chat". Exempts the branch from first-user-message
 	 *  dedup — it deliberately shares its parent's opening message. */
 	branchedFrom?: string;
+	/** Monotonic write counter, bumped by `saveConversationFile` on every
+	 *  persist. Drives compare-and-swap: a writer whose `rev` is behind the
+	 *  on-disk copy lost a race, so its save merges instead of overwriting.
+	 *  Absent on files written before CAS landed — treated as 0, which makes
+	 *  legacy writers merge rather than clobber. */
+	rev?: number;
 	/** Last URL the agent navigated the embedded browser sidebar to.
 	 *  Drives the right-side `<BrowserSidebar />` panel: when the user
 	 *  re-opens this conversation the panel restores to this URL.
