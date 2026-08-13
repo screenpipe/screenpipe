@@ -120,7 +120,9 @@ pub fn suppressed(
     false
 }
 
-/// Back-compat alias for the master-only check.
+/// Back-compat alias for the master-only check. Production callers go through
+/// [`suppressed`] / [`suppressed_now`]; only the tests below use this shape.
+#[cfg(test)]
 pub fn suppressed_by_master(master_on: bool, notification_type: Option<&str>) -> bool {
     suppressed(
         &NotificationGuard {
@@ -204,10 +206,9 @@ pub fn parse_hhmm(s: &str) -> Option<u16> {
     Some(h * 60 + m)
 }
 
-pub fn master_enabled(app: &AppHandle) -> bool {
-    load_guard(app).master_on
-}
-
+/// Only the tests below read the master switch in isolation; production reads
+/// the whole guard through [`suppressed_now`].
+#[cfg(test)]
 pub fn master_enabled_from_extra(
     extra: &std::collections::HashMap<String, serde_json::Value>,
 ) -> bool {

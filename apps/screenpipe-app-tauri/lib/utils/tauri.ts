@@ -315,6 +315,21 @@ async copyFrameToClipboard(frameId: number) : Promise<Result<null, string>> {
 }
 },
 /**
+ * Copy rich text to the system clipboard: HTML plus a plain-text alternative
+ * on the same clipboard write. Pasting into Gmail, Notion, Slack, or Docs keeps
+ * headings, bold, and lists; plain-text targets get `text` instead. Used by the
+ * meeting summary share actions so a summary lands formatted, not as raw
+ * markdown.
+ */
+async copyRichTextToClipboard(html: string, text: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("copy_rich_text_to_clipboard", { html, text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Copy arbitrary text to the system clipboard (native API, works in Tauri webview).
  * Use this instead of navigator.clipboard.writeText() which fails after async operations.
  */
@@ -547,8 +562,10 @@ async getCachedSuggestions() : Promise<Result<CachedSuggestions, string>> {
  *
  * One-time migration: for a relocated data dir whose `chats/` is still empty,
  * copy conversations from the legacy `~/.screenpipe/chats` so history isn't
- * orphaned. Skipped under e2e (`SCREENPIPE_E2E_SEED` set) so isolated runs
- * stay empty.
+ * orphaned. Skipped under e2e (`SCREENPIPE_E2E_SEED` set) and under dev
+ * isolation so isolated runs stay empty — otherwise `bun tauri dev` copies the
+ * developer's entire production chat history into `~/.screenpipe-dev`, which
+ * is exactly the state sharing dev isolation exists to prevent.
  */
 async getChatsDir() : Promise<Result<string, string>> {
     try {
@@ -1157,10 +1174,19 @@ async openGoogleCalendarAuthWindow(authUrl: string) : Promise<Result<null, strin
  * `fresh_session` is used by "use different account": macOS asks
  * ASWebAuthenticationSession for an ephemeral browser session instead of
  * reusing Safari cookies, and Windows/Linux use a throwaway webview profile.
+ * Returns the device code when this call started the browser device-code flow,
+ * and an empty string for every path that needs no out-of-band confirmation
+ * (macOS auth session, embedded WebView fallback).
+ *
+ * The code is returned as well as broadcast on `login-browser-pending` so a
+ * caller never has to depend on a global event to render it. #5936 changed
+ * this shared command to require the user read a code out of the app, but only
+ * taught onboarding to show one; every other login surface silently opened a
+ * browser asking for a code nothing displayed.
  */
-async openLoginWindow(freshSession: boolean | null) : Promise<Result<null, string>> {
+async openLoginWindow(freshSession: boolean | null, authMode: LoginMode | null) : Promise<Result<string, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("open_login_window", { freshSession }) };
+    return { status: "ok", data: await TAURI_INVOKE("open_login_window", { freshSession, authMode }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2692,7 +2718,15 @@ config?: { [key in string]: string };
 /**
  * Default session mode id, applied after every session/new.
  */
-modeId?: string | null }
+modeId?: string | null;
+/**
+ * Send the agent's model calls through Screenpipe Cloud instead of the
+ * user's own provider account. Only honoured for agents whose catalog
+ * entry declares `cloudRouting`; a closed agent (Cursor, Copilot) talks to
+ * its own service and ignores this. `None` means the preset predates the
+ * choice, which keeps the agent on its own account.
+ */
+useScreenpipeCloud?: boolean | null }
 /**
  * Whether a built-in agent's CLI is installed on this computer. Binary agents
  * (OpenCode, Cursor, Kimi) require the user to install the CLI; npx agents run
@@ -2881,6 +2915,7 @@ export type JobEvent = { kind: "started"; jobId: string; label: string; message:
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }
 export type LogFile = { name: string; path: string; modified_at: number }
+export type LoginMode = "sign-in" | "sign-up"
 /**
  * Stable low-disk safety values shared with the settings UI.
  *
@@ -3610,7 +3645,9 @@ keepComputerAwake?: boolean;
  */
 useChineseMirror: boolean;
 /**
- * Enable anonymous analytics (PostHog).
+ * Enable product analytics (PostHog). Events carry only a random device
+ * ID when signed out; when signed in they are linked to the account,
+ * including its email. Never includes recordings, audio, or OCR text.
  */
 analyticsEnabled: boolean;
 /**
@@ -3657,11 +3694,26 @@ listenOnLan?: boolean }) &
  * that the Rust struct doesn't know about. Without this, `save()` would
  * serialize only known fields and silently wipe frontend-only data.
  */
-({ [key in string]: null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue } }) & { aiPresets: AIPreset[]; isLoading: boolean; devMode: boolean; ocrEngine: string; dataDir: string; embeddedLLM: EmbeddedLLM; autoStartEnabled: boolean; platform: string; disabledShortcuts: string[]; user: User; showScreenpipeShortcut: string; startRecordingShortcut: string; stopRecordingShortcut: string; startAudioShortcut: string; stopAudioShortcut: string; showChatShortcut: string; searchShortcut: string; lockVaultShortcut?: string; showShortcutOverlay?: boolean;
+({ [key in string]: null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue } }) & { aiPresets: AIPreset[]; isLoading: boolean; devMode: boolean; ocrEngine: string; dataDir: string; embeddedLLM: EmbeddedLLM; autoStartEnabled: boolean; platform: string; disabledShortcuts: string[]; user: User; showScreenpipeShortcut: string; startRecordingShortcut: string; stopRecordingShortcut: string; startAudioShortcut: string; stopAudioShortcut: string; showChatShortcut: string; searchShortcut: string; lockVaultShortcut?: string;
 /**
  * Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
  */
 shortcutOverlaySize?: string;
+/**
+ * The user's choice, honored only while `allow_hiding_shortcut_overlay`
+ * is on. The overlay ships unhideable, so this is inert by default.
+ */
+showShortcutOverlay?: boolean;
+/**
+ * Remote-controlled capability (`overlay-hiding-control`), written by the
+ * desktop remote-control registry. False ships; flipping the flag on gives
+ * the Display toggle back without a release.
+ */
+allowHidingShortcutOverlay?: boolean;
+/**
+ * Where the user dragged the overlay: one of top/bottom x left/center/right.
+ */
+shortcutOverlayAnchor?: string;
 /**
  * Unique device ID for AI usage tracking (generated on first launch)
  */

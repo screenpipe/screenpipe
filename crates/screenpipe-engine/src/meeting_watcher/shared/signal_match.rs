@@ -6,6 +6,8 @@
 //! Their `#[cfg(any(..., test))]` gates are preserved verbatim so the
 //! cross-platform `test` build still sees them.
 
+// Everything here is macOS/test-gated; the glob is unused on other targets.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(unused_imports))]
 use super::*;
 
 /// Which AX attributes the current signal set actually consults.

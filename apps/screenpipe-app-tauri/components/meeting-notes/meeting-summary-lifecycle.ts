@@ -8,14 +8,38 @@ import {
 } from "@/lib/chat/quota-errors";
 import { parsePipeError, type PipeErrorType } from "@/lib/pipe-errors";
 
-export const SUMMARY_DISCOVERY_WINDOW_MS = 90_000;
+/** How often to re-read summary status while a run is in flight. */
+export const SUMMARY_ACTIVE_POLL_MS = 2_000;
+
+/**
+ * How often to re-read summary status when nothing is running.
+ *
+ * The note used to stop polling entirely once it settled, which is why
+ * deleting or disabling the summary Pipe never reached an open note. Keeping a
+ * slow poll makes the surface reflect the Pipe the engine will actually run.
+ */
+export const SUMMARY_IDLE_POLL_MS = 10_000;
 
 export interface MeetingSummaryExecution {
   id: number;
   status: string;
-  started_at?: string | null;
-  trigger_event?: string | null;
-  trigger_key?: string | null;
+  error_type?: string | null;
+  error_message?: string | null;
+}
+
+/**
+ * The engine's authoritative answer, from `GET /meetings/:id/summary-status`.
+ *
+ * `state` already accounts for the Pipe being deleted or disabled, for a run
+ * the scheduler has claimed but not yet queued, and for a transcript replaced
+ * by re-transcription. The client no longer reconstructs any of that.
+ */
+export interface MeetingSummaryStatus {
+  state: "off" | "idle" | "pending" | "running" | "ready" | "failed";
+  pipe?: string;
+  auto_summary_enabled: boolean;
+  execution_id?: number | null;
+  execution_status?: string | null;
   error_type?: string | null;
   error_message?: string | null;
 }
@@ -28,21 +52,56 @@ export type MeetingSummaryLifecycle =
   | { kind: "completed"; execution: MeetingSummaryExecution }
   | { kind: "failed"; execution: MeetingSummaryExecution };
 
-export function findMeetingSummaryExecution(
-  executions: MeetingSummaryExecution[],
-  meetingId: number,
-  options: { notBefore?: string | null } = {},
+function executionFrom(
+  status: MeetingSummaryStatus,
 ): MeetingSummaryExecution | null {
-  const meetingKey = String(meetingId);
-  const notBefore = Date.parse(options.notBefore ?? "");
+  if (typeof status.execution_id !== "number") return null;
+  return {
+    id: status.execution_id,
+    status: status.execution_status ?? status.state,
+    error_type: status.error_type ?? null,
+    error_message: status.error_message ?? null,
+  };
+}
+
+/**
+ * Project the engine's state onto what the note renders.
+ *
+ * `pending` splits on whether a run row exists yet: before it does the note
+ * says "finalizing", after it says "summarizing". Both are working states, so
+ * a run waiting on an event-concurrency permit keeps its spinner instead of
+ * silently reverting to idle the way the old 90s stopwatch did.
+ */
+export function meetingSummaryLifecycleFromStatus(
+  status: MeetingSummaryStatus | null,
+): MeetingSummaryLifecycle {
+  if (!status) return { kind: "idle" };
+  const execution = executionFrom(status);
+
+  switch (status.state) {
+    case "running":
+      return execution ? { kind: "running", execution } : { kind: "finalizing" };
+    case "ready":
+      return execution ? { kind: "completed", execution } : { kind: "idle" };
+    case "failed":
+      // A terminal failure with no row would leave no way to explain or retry,
+      // so fall back to the generic working-then-idle path instead.
+      return execution ? { kind: "failed", execution } : { kind: "idle" };
+    case "pending":
+      return execution ? { kind: "queued", execution } : { kind: "finalizing" };
+    default:
+      return { kind: "idle" };
+  }
+}
+
+/** True while the note should keep the fast poll running. */
+export function summaryLifecycleIsWorking(
+  lifecycle: MeetingSummaryLifecycle,
+): boolean {
   return (
-    executions.find(
-      (execution) =>
-        execution.trigger_event === "meeting_ended" &&
-        execution.trigger_key === meetingKey &&
-        (!Number.isFinite(notBefore) ||
-          Date.parse(execution.started_at ?? "") >= notBefore),
-    ) ?? null
+    lifecycle.kind === "finalizing" ||
+    lifecycle.kind === "queued" ||
+    lifecycle.kind === "running"
   );
 }
 
@@ -59,50 +118,6 @@ export function latestSummaryInputAt(
       )
       .sort((a, b) => b.time - a.time)[0]?.value ?? null
   );
-}
-
-export function meetingSummaryLifecycle(
-  execution: MeetingSummaryExecution | null,
-  options: {
-    meetingEnd: string | null;
-    contentUpdatedAt?: string | null;
-    contentRefreshRequested?: boolean | null;
-    autoSummaryEnabled: boolean | null;
-    now?: number;
-  },
-): MeetingSummaryLifecycle {
-  if (execution) {
-    const status = execution.status.trim().toLowerCase();
-    if (status === "queued") return { kind: "queued", execution };
-    if (status === "running") return { kind: "running", execution };
-    if (status === "completed") return { kind: "completed", execution };
-    return { kind: "failed", execution };
-  }
-
-  if (
-    options.autoSummaryEnabled === false ||
-    options.contentRefreshRequested === false ||
-    !options.meetingEnd
-  ) {
-    return { kind: "idle" };
-  }
-
-  const endedAt = Date.parse(
-    latestSummaryInputAt(
-      options.meetingEnd,
-      options.contentUpdatedAt ?? null,
-    ) ?? "",
-  );
-  const now = options.now ?? Date.now();
-  if (
-    Number.isFinite(endedAt) &&
-    now >= endedAt &&
-    now - endedAt <= SUMMARY_DISCOVERY_WINDOW_MS
-  ) {
-    return { kind: "finalizing" };
-  }
-
-  return { kind: "idle" };
 }
 
 export interface MeetingSummaryFailurePresentation {

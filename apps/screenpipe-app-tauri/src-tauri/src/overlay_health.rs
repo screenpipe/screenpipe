@@ -572,23 +572,19 @@ fn overlay_visible(app: &tauri::AppHandle) -> bool {
         .unwrap_or(false)
 }
 
-/// Briefly reveal the overlay for a confirmed incident even when the user has
-/// it hidden (issue #5127: "if hidden — show whatever visible"). Recovery puts
-/// it back via the `auto_revealed` flag.
+/// Briefly reveal the overlay for a confirmed incident even when it is off
+/// screen (issue #5127: "if hidden — show whatever visible"). Recovery puts it
+/// back via the `auto_revealed` flag.
 async fn reveal_overlay_if_hidden(app: &tauri::AppHandle) {
     if overlay_visible(app) {
         return;
     }
-    // Only take responsibility for re-hiding after recovery when the user's
-    // preference is actually "hidden". If the pref is on and we merely beat
-    // the startup show (incident 1s into boot), the overlay should stay.
-    let user_wants_hidden = crate::store::SettingsStore::get(app)
-        .ok()
-        .flatten()
-        .map(|s| !s.show_shortcut_overlay)
-        .unwrap_or(false);
+    // The overlay can no longer be dismissed, so anything hiding it now is a
+    // system decision (timeline disabled, headless, or the startup show has not
+    // landed yet). Leave it up after recovery rather than re-hiding it: if the
+    // startup show was simply slow, hiding it again would fight that.
     if let Ok(mut inner) = INNER.lock() {
-        inner.auto_revealed = user_wants_hidden;
+        inner.auto_revealed = false;
     }
     info!("overlay health: revealing hidden shortcut overlay for incident");
     // Skip the disable_timeline gate and the wait-for-server handshake — the

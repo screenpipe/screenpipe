@@ -14,7 +14,7 @@ use crate::structured_outputs::{
     replace_consumer_targets, OutputFeedbackSummary, OutputItemActionSummary, OutputTarget,
     OutputTargetInput, StructuredOutputValue,
 };
-use chrono::Utc;
+use chrono::{DateTime, Duration, Local, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -99,6 +99,44 @@ impl LiveViewTimeRange {
             Self::Last7Days => "the rolling 7 days ending now",
             Self::Last30Days => "the rolling 30 days ending now",
         }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Today => "Today",
+            Self::Last24Hours => "Last 24 hours",
+            Self::Last7Days => "Last 7 days",
+            Self::Last30Days => "Last 30 days",
+        }
+    }
+
+    /// Resolve the preset into the exact interval a Pipe should query, matching
+    /// the desktop `buildLiveViewTimeContext` contract: `today` starts at local
+    /// midnight, every other preset is a rolling duration ending at `now`.
+    pub fn window(self, now: DateTime<Local>) -> (DateTime<Local>, DateTime<Local>) {
+        let start = match self {
+            Self::Today => now
+                .date_naive()
+                .and_hms_opt(0, 0, 0)
+                .and_then(|midnight| midnight.and_local_timezone(Local).single())
+                .unwrap_or(now),
+            Self::Last24Hours => now - Duration::hours(24),
+            Self::Last7Days => now - Duration::days(7),
+            Self::Last30Days => now - Duration::days(30),
+        };
+        (start, now)
+    }
+
+    /// The `time_range` object shape shared with the desktop refresh path.
+    pub fn time_context(self, now: DateTime<Local>) -> Value {
+        let (start, end) = self.window(now);
+        json!({
+            "preset": self.schema_name(),
+            "label": self.label(),
+            "start": start.to_rfc3339(),
+            "end": end.to_rfc3339(),
+            "timezone": Local::now().offset().to_string(),
+        })
     }
 }
 
@@ -872,6 +910,86 @@ pub fn live_view_target_id(view_id: &str, block_id: &str) -> String {
     format!("live-view:{view_id}:{block_id}")
 }
 
+/// Build the Live View run context for a *scheduled* run of `pipe_name`.
+///
+/// The desktop refresh button already sends `target_ids` plus an authoritative
+/// `time_range` for the dashboard being viewed. Scheduled runs used to send
+/// nothing, so a Pipe bound to several Live Views could satisfy its prompt by
+/// filling one dashboard and leaving the others stale indefinitely. This gives
+/// the scheduler the same authority, for every Live View the Pipe feeds.
+///
+/// Returns `None` when the Pipe backs no Live View block, which keeps ordinary
+/// scheduled Pipes byte-identical to their previous prompt.
+pub fn scheduled_live_view_run_context(
+    templates: &[LiveViewTemplate],
+    pipe_name: &str,
+    now: DateTime<Local>,
+) -> Option<Value> {
+    let views: Vec<Value> = templates
+        .iter()
+        .filter_map(|template| {
+            let target_ids: Vec<String> = template
+                .blocks
+                .iter()
+                .filter(|block| {
+                    block
+                        .source
+                        .as_ref()
+                        .is_some_and(|source| source.pipe_name() == pipe_name)
+                })
+                .map(|block| live_view_target_id(&template.id, &block.id))
+                .collect();
+            if target_ids.is_empty() {
+                return None;
+            }
+            Some(json!({
+                "live_view_id": template.id,
+                "title": template.title,
+                "time_range": template.time_range.time_context(now),
+                "target_ids": target_ids,
+            }))
+        })
+        .collect();
+
+    if views.is_empty() {
+        return None;
+    }
+
+    let total_targets: usize = views
+        .iter()
+        .filter_map(|view| view.get("target_ids").and_then(Value::as_array))
+        .map(Vec::len)
+        .sum();
+
+    const SCHEDULED_REFRESH_RULES: &str = concat!(
+        "Call structured_output get_targets first. For every entry in live_views, query only ",
+        "source-backed Screenpipe APIs inside that dashboard's exact time_range and submit an ",
+        "evidence-backed value for each of its target_ids before completing. A dashboard's ",
+        "time_range is authoritative and overrides generic lookback wording in the Pipe body. ",
+        "Do not skip a dashboard because another one already looks current.",
+    );
+
+    Some(json!({
+        "source": "live-view",
+        "trigger": "scheduled",
+        "live_views": views,
+        "instruction": format!(
+            "This scheduled run owns {total_targets} Live View target(s) across {} dashboard(s). {SCHEDULED_REFRESH_RULES}",
+            views.len()
+        ),
+    }))
+}
+
+/// Convenience wrapper that reads the on-disk Live View store first.
+pub fn scheduled_live_view_run_context_for_dir(
+    screenpipe_dir: &Path,
+    pipe_name: &str,
+    now: DateTime<Local>,
+) -> Option<Value> {
+    let templates = list_live_view_templates(screenpipe_dir).ok()?;
+    scheduled_live_view_run_context(&templates, pipe_name, now)
+}
+
 pub fn compile_live_view_targets(templates: &[LiveViewTemplate]) -> Vec<OutputTargetInput> {
     templates
         .iter()
@@ -1123,6 +1241,7 @@ pub fn live_view_kit_json_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{NaiveTime, TimeZone};
 
     fn block(pipe_name: Option<&str>) -> LiveViewTemplateBlock {
         LiveViewTemplateBlock {
@@ -1134,6 +1253,121 @@ mod tests {
             intent: Some("Calculate focused work time".to_string()),
             source: pipe_name.map(LiveViewSource::pipe),
         }
+    }
+
+    fn template(id: &str, range: LiveViewTimeRange, blocks: &[(&str, &str)]) -> LiveViewTemplate {
+        LiveViewTemplate {
+            schema: LIVE_VIEW_TEMPLATE_SCHEMA.to_string(),
+            id: id.to_string(),
+            title: id.to_string(),
+            revision: 1,
+            time_range: range,
+            period_policy: LiveViewPeriodPolicy::default(),
+            blocks: blocks
+                .iter()
+                .enumerate()
+                .map(|(order, (block_id, pipe_name))| LiveViewTemplateBlock {
+                    id: (*block_id).to_string(),
+                    title: (*block_id).to_string(),
+                    kind: LiveViewBlockKind::MetricV1,
+                    width: 6,
+                    order: order as u16,
+                    intent: None,
+                    source: Some(LiveViewSource::pipe(*pipe_name)),
+                })
+                .collect(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    /// The regression this whole path exists for: one Pipe feeding two
+    /// dashboards used to receive no scheduled context at all, so it could
+    /// satisfy its prompt by filling one and leaving the other stale.
+    #[test]
+    fn scheduled_context_covers_every_dashboard_the_pipe_feeds() {
+        let templates = vec![
+            template(
+                "my-dashboard",
+                LiveViewTimeRange::Today,
+                &[("trend", "activity-enrichment")],
+            ),
+            template(
+                "decisions",
+                LiveViewTimeRange::Last7Days,
+                &[
+                    ("open", "activity-enrichment"),
+                    ("aging", "activity-enrichment"),
+                    ("unrelated", "team-data-sync"),
+                ],
+            ),
+        ];
+        let now = Local::now();
+
+        let context =
+            scheduled_live_view_run_context(&templates, "activity-enrichment", now).unwrap();
+
+        assert_eq!(context["source"], "live-view");
+        assert_eq!(context["trigger"], "scheduled");
+        let views = context["live_views"].as_array().unwrap();
+        assert_eq!(views.len(), 2);
+        assert_eq!(views[0]["live_view_id"], "my-dashboard");
+        assert_eq!(views[0]["target_ids"][0], "live-view:my-dashboard:trend");
+        assert_eq!(views[0]["time_range"]["preset"], "today");
+        assert_eq!(views[1]["live_view_id"], "decisions");
+        assert_eq!(views[1]["time_range"]["preset"], "7d");
+        // Only this Pipe's blocks, never the co-located block owned by another.
+        assert_eq!(
+            views[1]["target_ids"].as_array().unwrap(),
+            &vec![
+                Value::from("live-view:decisions:open"),
+                Value::from("live-view:decisions:aging"),
+            ]
+        );
+        let instruction = context["instruction"].as_str().unwrap();
+        assert!(instruction.contains("3 Live View target(s) across 2 dashboard(s)"));
+        assert!(instruction.contains("Do not skip a dashboard"));
+    }
+
+    #[test]
+    fn scheduled_context_is_absent_for_pipes_without_live_view_blocks() {
+        let templates = vec![template(
+            "my-dashboard",
+            LiveViewTimeRange::Today,
+            &[("trend", "activity-enrichment")],
+        )];
+        assert!(
+            scheduled_live_view_run_context(&templates, "deutsch-papers", Local::now()).is_none(),
+            "an ordinary scheduled Pipe must keep its prompt byte-identical"
+        );
+        assert!(
+            scheduled_live_view_run_context(&[], "activity-enrichment", Local::now()).is_none()
+        );
+    }
+
+    #[test]
+    fn today_starts_at_local_midnight_and_rolling_presets_end_now() {
+        let now = Local
+            .with_ymd_and_hms(2026, 8, 7, 14, 30, 0)
+            .single()
+            .unwrap();
+
+        let (start, end) = LiveViewTimeRange::Today.window(now);
+        assert_eq!(end, now);
+        assert_eq!(start.time(), NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+        assert_eq!(start.date_naive(), now.date_naive());
+
+        let (start, end) = LiveViewTimeRange::Last24Hours.window(now);
+        assert_eq!(end, now);
+        assert_eq!(end - start, Duration::hours(24));
+
+        let (start, _) = LiveViewTimeRange::Last30Days.window(now);
+        assert_eq!(now - start, Duration::days(30));
+
+        let context = LiveViewTimeRange::Last7Days.time_context(now);
+        assert_eq!(context["preset"], "7d");
+        assert_eq!(context["label"], "Last 7 days");
+        assert!(context["start"].as_str().unwrap() < context["end"].as_str().unwrap());
     }
 
     #[test]

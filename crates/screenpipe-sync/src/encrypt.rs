@@ -239,13 +239,13 @@ impl BodyEncryptor for ChaCha20Poly1305Encryptor {
 
 fn generate_key() -> Zeroizing<[u8; KEY_SIZE]> {
     let mut k = Zeroizing::new([0u8; KEY_SIZE]);
-    rand::thread_rng().fill_bytes(k.as_mut());
+    rand::rng().fill_bytes(k.as_mut());
     k
 }
 
 fn generate_nonce() -> [u8; NONCE_SIZE] {
     let mut n = [0u8; NONCE_SIZE];
-    rand::thread_rng().fill_bytes(&mut n);
+    rand::rng().fill_bytes(&mut n);
     n
 }
 

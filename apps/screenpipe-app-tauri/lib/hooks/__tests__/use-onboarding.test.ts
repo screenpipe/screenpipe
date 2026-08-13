@@ -73,11 +73,17 @@ describe("useOnboarding measurement", () => {
       customized: false,
     });
 
-    expect(mocks.capture).toHaveBeenCalledWith("onboarding_completed", {
-      completion_method: "pipes_installed",
-      pipe_count: 2,
-      customized: false,
-    });
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "onboarding_completed",
+      {
+        completion_method: "pipes_installed",
+        pipe_count: 2,
+        customized: false,
+      },
+      // Unbatched: setup's webview is torn down immediately after this, so a
+      // queued event never flushes.
+      { send_instantly: true },
+    );
     expect(useOnboarding.getState().onboardingData.isCompleted).toBe(true);
     expect(
       localStorage.getItem("screenpipe:first-run-guide-pending"),
@@ -101,7 +107,19 @@ describe("useOnboarding measurement", () => {
         .completeOnboarding({ method: "pipe_step_skipped" }),
     ).rejects.toThrow("store unavailable");
 
-    expect(mocks.capture).not.toHaveBeenCalled();
+    // Never claim completion, but do report the failure: a completion that
+    // does not persist also means `completedAt` is never written, so the
+    // first-run window can never open — previously with no trace at all.
+    expect(mocks.capture).not.toHaveBeenCalledWith(
+      "onboarding_completed",
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "onboarding_completion_failed",
+      { completion_method: "pipe_step_skipped" },
+      { send_instantly: true },
+    );
     expect(useOnboarding.getState().onboardingData.isCompleted).toBe(false);
     expect(
       localStorage.getItem("screenpipe:first-run-guide-pending"),
@@ -132,15 +150,19 @@ describe("useOnboarding measurement", () => {
       url: "screenpipe://home?section=brain",
     });
     expect(mocks.emit).not.toHaveBeenCalledWith("first-run-guide-pending");
-    expect(mocks.capture).toHaveBeenCalledWith("onboarding_completed", {
-      completion_method: "live_view_created",
-      pipe_count: 2,
-      customized: undefined,
-      dashboard_block_count: 5,
-      goal_category: "work_memory",
-      live_view_flow_variant: "existing_live_views",
-      existing_live_view_count_bucket: "multiple",
-    });
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "onboarding_completed",
+      {
+        completion_method: "live_view_created",
+        pipe_count: 2,
+        customized: undefined,
+        dashboard_block_count: 5,
+        goal_category: "work_memory",
+        live_view_flow_variant: "existing_live_views",
+        existing_live_view_count_bucket: "multiple",
+      },
+      { send_instantly: true },
+    );
   });
 
   it("opens Connections for the explicit AI-context path", async () => {
@@ -156,14 +178,18 @@ describe("useOnboarding measurement", () => {
     expect(mocks.emit).toHaveBeenCalledWith("navigate", {
       url: "screenpipe://home?section=connections",
     });
-    expect(mocks.capture).toHaveBeenCalledWith("onboarding_completed", {
-      completion_method: "ai_connections_selected",
-      pipe_count: undefined,
-      customized: undefined,
-      goal_category: "ai_context",
-      live_view_flow_variant: "first_live_view",
-      existing_live_view_count_bucket: "none",
-    });
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "onboarding_completed",
+      {
+        completion_method: "ai_connections_selected",
+        pipe_count: undefined,
+        customized: undefined,
+        goal_category: "ai_context",
+        live_view_flow_variant: "first_live_view",
+        existing_live_view_count_bucket: "none",
+      },
+      { send_instantly: true },
+    );
   });
 
   it("keeps setup reset separate from the optional app tour", async () => {

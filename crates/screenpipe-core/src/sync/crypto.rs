@@ -42,21 +42,21 @@ const ARGON2_PARALLELISM: u32 = 4;
 /// Generate a cryptographically secure random salt
 pub fn generate_salt() -> [u8; SALT_SIZE] {
     let mut salt = [0u8; SALT_SIZE];
-    rand::thread_rng().fill_bytes(&mut salt);
+    rand::rng().fill_bytes(&mut salt);
     salt
 }
 
 /// Generate a cryptographically secure random nonce
 pub fn generate_nonce() -> [u8; NONCE_SIZE] {
     let mut nonce = [0u8; NONCE_SIZE];
-    rand::thread_rng().fill_bytes(&mut nonce);
+    rand::rng().fill_bytes(&mut nonce);
     nonce
 }
 
 /// Generate a cryptographically secure random key
 pub fn generate_key() -> Zeroizing<[u8; KEY_SIZE]> {
     let mut key = Zeroizing::new([0u8; KEY_SIZE]);
-    rand::thread_rng().fill_bytes(key.as_mut());
+    rand::rng().fill_bytes(key.as_mut());
     key
 }
 

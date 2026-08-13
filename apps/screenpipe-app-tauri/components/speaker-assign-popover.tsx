@@ -90,14 +90,20 @@ export function SpeakerAssignPopover({
 			const trimmedName = name.trim();
 
 			try {
-				// Phase 1: Assign just this chunk (instant, no propagation)
+				// One call, `scope: auto` — the backend reads the intent from the
+				// current label: naming a voice the diarizer never named relabels
+				// that whole voice, while renaming an already-named speaker moves
+				// only this line. Sending it twice (once without propagation, once
+				// with) used to record the undo payload *after* the first call had
+				// already moved the rows, so undo silently restored nothing.
 				const response = await localFetch("/speakers/reassign", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
 						audio_chunk_id: audioChunkId,
 						new_speaker_name: trimmedName,
-						propagate_similar: false,
+						propagate_similar: true,
+						scope: "auto",
 					}),
 				});
 
@@ -113,69 +119,80 @@ export function SpeakerAssignPopover({
 				setSearchTerm("");
 				setIsAssigning(false);
 
-				toast({
-					title: `assigned to "${trimmedName}"`,
-					description: "propagating to similar voices...",
-				});
+				const oldAssignments: Array<{
+					transcription_id: number;
+					old_speaker_id: number;
+				}> = result.old_assignments || [];
+				const oldSegmentAssignments: Array<{
+					transcription_id: number;
+					old_speaker_id: number;
+				}> = result.old_segment_assignments || [];
+				const lines: number = result.transcriptions_updated || 0;
+				// An in-place rename moves no rows, so restoring assignments would
+				// undo nothing — the way back is to write the old name again. That
+				// matters most when the recorder had merged two people into one
+				// voice and this rename just labelled both of them.
+				const previousName: string | null =
+					result.previous_speaker_name ?? null;
+				const undoable =
+					previousName !== null ||
+					oldAssignments.length > 0 ||
+					oldSegmentAssignments.length > 0;
 
-				// Phase 2: Propagate in background (non-blocking)
-				try {
-					const propagateResponse = await localFetch("/speakers/reassign", {
+				const undo = async () => {
+					if (previousName !== null) {
+						const resp = await localFetch("/speakers/update", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({
+								id: result.new_speaker_id,
+								name: previousName,
+							}),
+						});
+						if (!resp.ok) throw new Error("rename undo failed");
+						toast({
+							title: "undone",
+							description: "the voice is unnamed again",
+						});
+						return;
+					}
+					const undoResp = await localFetch("/speakers/undo-reassign", {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({
-							audio_chunk_id: audioChunkId,
-							new_speaker_name: trimmedName,
-							propagate_similar: true,
+							old_assignments: oldAssignments,
+							old_segment_assignments: oldSegmentAssignments,
 						}),
 					});
+					if (!undoResp.ok) throw new Error("undo failed");
+					const undoResult = await undoResp.json();
+					toast({
+						title: "undone",
+						description: `restored ${undoResult.restored} transcriptions`,
+					});
+				};
 
-					if (propagateResponse.ok) {
-						const propagateResult = await propagateResponse.json();
-						const oldAssignments: Array<{transcription_id: number, old_speaker_id: number}> = propagateResult.old_assignments || [];
-						const extraMoved = propagateResult.embeddings_moved || 0;
-
-						if (extraMoved > 0) {
-							toast({
-								title: `found ${extraMoved} similar voices`,
-								description: "click undo if incorrect",
-								action: (
-									<ToastAction
-										altText="Undo speaker assignment"
-										onClick={async () => {
-											try {
-												const undoResp = await localFetch("/speakers/undo-reassign", {
-													method: "POST",
-													headers: { "Content-Type": "application/json" },
-													body: JSON.stringify({ old_assignments: oldAssignments }),
-												});
-												if (undoResp.ok) {
-													const undoResult = await undoResp.json();
-													toast({
-														title: "undone",
-														description: `restored ${undoResult.restored} transcriptions`,
-													});
-												}
-											} catch {
-												toast({ title: "undo failed", variant: "destructive" });
-											}
-										}}
-									>
-										undo
-									</ToastAction>
-								),
-							});
-						} else {
-							toast({
-								title: `assigned to "${trimmedName}"`,
-								description: "no additional similar voices found",
-							});
-						}
-					}
-				} catch (propagateError) {
-					console.error("Background propagation failed:", propagateError);
-					// Non-fatal — the initial assignment succeeded
-				}
+				toast({
+					title: `assigned to "${trimmedName}"`,
+					description: result.renamed_whole_speaker
+						? `every line from this voice${lines > 1 ? ` (${lines})` : ""} is now ${trimmedName}`
+						: "this line only — the rest of the voice is unchanged",
+					action: undoable ? (
+						<ToastAction
+							altText="Undo speaker assignment"
+							onClick={async () => {
+								try {
+									await undo();
+									onAssigned?.(result.new_speaker_id, result.new_speaker_name);
+								} catch {
+									toast({ title: "undo failed", variant: "destructive" });
+								}
+							}}
+						>
+							undo
+						</ToastAction>
+					) : undefined,
+				});
 			} catch (error) {
 				console.error("Error assigning speaker:", error);
 				toast({

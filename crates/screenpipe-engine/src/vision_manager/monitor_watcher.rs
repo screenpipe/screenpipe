@@ -80,6 +80,34 @@ const WEDGE_RESTART_COOLDOWN: Duration = Duration::from_secs(300);
 /// lean on active capture work to confirm the rest of the pipeline is alive,
 /// so we want extra confirmation before the disruptive restart.
 const SILENT_DB_STALE_SECS: u64 = 240;
+/// Same gone-silent fault, but confirmed while the user is demonstrably at the
+/// machine — shortened so recovery beats the desktop's own incident alert
+/// instead of trailing it.
+///
+/// The app raises "screen capture may be stalled" after `frame_status` goes
+/// stale (60s) plus 90 attended one-second checks, i.e. 150s. Recovery at
+/// `SILENT_DB_STALE_SECS` (240s) therefore always landed ~100s *after* the
+/// alert: on every wedge the user was shown a scary pill offering a restart
+/// that the watchdog was already going to perform, and the observed cost was
+/// ~250s of lost screen history per event (six events, ~21 minutes, in one
+/// day on one machine).
+///
+/// Effective recovery is `max(attempt_fresh_secs, this)`: `loop_stopped`
+/// already requires `attempt_fresh_secs` (60s) of *complete* loop silence, so
+/// this only has to clear that floor. 65s keeps a small confirmation margin on
+/// the db-stale clock while landing far below the 150s alert — a loop that
+/// normally beats 4/s and has emitted nothing for a minute while input flows is
+/// not a parked display, it is lost recording.
+///
+/// The idle path keeps the conservative 240s window: an idle machine's wedge
+/// self-heals and a restart there would be pure churn.
+const SILENT_DB_STALE_SECS_ATTENDED: u64 = 65;
+/// How recently user input must have landed for the attended path to apply.
+/// Deliberately mirrors the desktop's `USER_ACTIVITY_FRESH_WINDOW` (120s)
+/// rather than `recording_coverage`'s broader 300s active window: the point of
+/// the attended path is to recover before the alert fires, so it must cover
+/// exactly the population that gets alerted and no more.
+const ATTENDED_INPUT_FRESH_SECS: u64 = 120;
 /// Up this long with the loop having attempted at least once but never
 /// reaching a single terminal outcome → started-but-never-produced. Generous so
 /// a slow first model load / device probe is never mistaken for a stall.
@@ -92,7 +120,11 @@ struct VisionWatchdogConfig {
     min_uptime_secs: f64,
     restart_cooldown: Duration,
     silent_db_stale_secs: u64,
+    silent_db_stale_secs_attended: u64,
     silent_never_produced_uptime_secs: f64,
+    /// Only the macOS display-reconfig wait reads this; other targets poll on a
+    /// fixed interval.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     monitor_backstop: Duration,
 }
 
@@ -102,6 +134,7 @@ const PRODUCTION_VISION_WATCHDOG: VisionWatchdogConfig = VisionWatchdogConfig {
     min_uptime_secs: WEDGE_MIN_UPTIME_SECS,
     restart_cooldown: WEDGE_RESTART_COOLDOWN,
     silent_db_stale_secs: SILENT_DB_STALE_SECS,
+    silent_db_stale_secs_attended: SILENT_DB_STALE_SECS_ATTENDED,
     silent_never_produced_uptime_secs: SILENT_NEVER_PRODUCED_UPTIME_SECS,
     monitor_backstop: Duration::from_secs(60),
 };
@@ -119,6 +152,7 @@ fn vision_watchdog_config() -> VisionWatchdogConfig {
             min_uptime_secs: 2.0,
             restart_cooldown: Duration::from_secs(30),
             silent_db_stale_secs: 8,
+            silent_db_stale_secs_attended: 2,
             silent_never_produced_uptime_secs: 8.0,
             monitor_backstop: Duration::from_secs(1),
         };
@@ -187,6 +221,8 @@ fn vision_capture_silent(
     last_db_write_ts: u64,
     now_ts: u64,
 ) -> bool {
+    // No presence signal → idle tier, the conservative window. Attended
+    // behavior is asserted explicitly in its own tests.
     vision_capture_silent_with(
         &PRODUCTION_VISION_WATCHDOG,
         uptime_secs,
@@ -194,7 +230,32 @@ fn vision_capture_silent(
         last_capture_loop_heartbeat_ts,
         last_db_write_ts,
         now_ts,
+        None,
     )
+}
+
+/// Seconds since the last recorded user input, or `None` when unknown.
+///
+/// Reuses the UI recorder's event clock — the same source
+/// `recording_coverage` classifies active/idle from — so the watchdog needs no
+/// new platform code. Unknown fails toward *idle*, keeping the conservative
+/// 240s window: a missing presence signal must never shorten a restart.
+fn secs_since_last_user_input(now_ts: u64) -> Option<u64> {
+    let status = crate::ui_recorder::ui_recorder_status_snapshot();
+    status
+        .last_event_at
+        .map(|ts| now_ts.saturating_sub(ts.timestamp().max(0) as u64))
+}
+
+/// Gone-silent confirmation window for this tick: shortened while the user is
+/// present, conservative otherwise.
+fn silent_stale_window(config: &VisionWatchdogConfig, secs_since_input: Option<u64>) -> u64 {
+    match secs_since_input {
+        Some(idle) if idle <= ATTENDED_INPUT_FRESH_SECS => config
+            .silent_db_stale_secs_attended
+            .min(config.silent_db_stale_secs),
+        _ => config.silent_db_stale_secs,
+    }
 }
 
 fn vision_capture_silent_with(
@@ -204,6 +265,7 @@ fn vision_capture_silent_with(
     last_capture_loop_heartbeat_ts: u64,
     last_db_write_ts: u64,
     now_ts: u64,
+    secs_since_input: Option<u64>,
 ) -> bool {
     if uptime_secs <= config.min_uptime_secs {
         return false;
@@ -223,10 +285,15 @@ fn vision_capture_silent_with(
     let loop_stopped =
         now_ts.saturating_sub(last_capture_loop_heartbeat_ts) >= config.attempt_fresh_secs;
 
+    let stale_window = silent_stale_window(config, secs_since_input);
+
     let went_silent = last_db_write_ts > 0
-        && now_ts.saturating_sub(last_db_write_ts) > config.silent_db_stale_secs
+        && now_ts.saturating_sub(last_db_write_ts) > stale_window
         && loop_stopped;
 
+    // Never-produced keeps the full warm-up window regardless of presence: a
+    // slow first model load looks identical to a wedge, and restarting a
+    // still-starting pipeline is how restart loops begin.
     let never_produced = last_db_write_ts == 0
         && uptime_secs > config.silent_never_produced_uptime_secs
         && loop_stopped;
@@ -248,8 +315,14 @@ struct DetectedVisionStall {
     last_capture_attempt_ts: u64,
     last_capture_loop_heartbeat_ts: u64,
     last_db_write_ts: u64,
+    loop_stage: screenpipe_screen::CaptureLoopStage,
+    loop_stage_entered_ts: u64,
 }
 
+// Individual clocks rather than a snapshot struct: the unit tests drive this
+// with hand-built timestamp combinations, which is the whole point of keeping
+// the decision clock- and FFI-free.
+#[allow(clippy::too_many_arguments)]
 fn classify_vision_stall(
     config: &VisionWatchdogConfig,
     capture_expected: bool,
@@ -258,6 +331,7 @@ fn classify_vision_stall(
     last_capture_loop_heartbeat_ts: u64,
     last_db_write_ts: u64,
     now_ts: u64,
+    secs_since_input: Option<u64>,
 ) -> Option<VisionStallKind> {
     if !capture_expected {
         return None;
@@ -277,6 +351,7 @@ fn classify_vision_stall(
         last_capture_loop_heartbeat_ts,
         last_db_write_ts,
         now_ts,
+        secs_since_input,
     ) {
         Some(VisionStallKind::GoneSilent)
     } else {
@@ -292,6 +367,7 @@ fn first_monitor_stall(
     capture_expected: bool,
     snapshots: &[MonitorLivenessSnapshot],
     now_ts: u64,
+    secs_since_input: Option<u64>,
 ) -> Option<DetectedVisionStall> {
     if !capture_expected {
         return None;
@@ -305,6 +381,7 @@ fn first_monitor_stall(
             snap.last_capture_loop_heartbeat_ts,
             snap.last_db_write_ts,
             now_ts,
+            secs_since_input,
         )
         .map(|kind| DetectedVisionStall {
             monitor_id: snap.monitor_id,
@@ -313,6 +390,8 @@ fn first_monitor_stall(
             last_capture_attempt_ts: snap.last_capture_attempt_ts,
             last_capture_loop_heartbeat_ts: snap.last_capture_loop_heartbeat_ts,
             last_db_write_ts: snap.last_db_write_ts,
+            loop_stage: snap.loop_stage,
+            loop_stage_entered_ts: snap.loop_stage_entered_ts,
         })
     })
 }
@@ -878,8 +957,13 @@ pub async fn start_monitor_watcher(
                 // terminal capture baseline.
                 let watchdog = vision_watchdog_config();
                 let now_ts = now_epoch_secs();
-                let stall =
-                    first_monitor_stall(&watchdog, capture_expected, &monitor_snaps, now_ts);
+                let stall = first_monitor_stall(
+                    &watchdog,
+                    capture_expected,
+                    &monitor_snaps,
+                    now_ts,
+                    secs_since_last_user_input(now_ts),
+                );
                 let cooldown_ok =
                     restart_cooldown_elapsed(&watchdog, last_vision_restart.map(|t| t.elapsed()));
                 if let Some(stall) = stall.filter(|_| cooldown_ok) {
@@ -895,10 +979,25 @@ pub async fn start_monitor_watcher(
                         VisionStallKind::StillAttempting => "still-attempting wedge",
                         VisionStallKind::GoneSilent => "gone-silent stall",
                     };
+                    // Name the stage the loop froze in. Without it a
+                    // gone-silent stall reports only "heartbeat Ns ago",
+                    // which cannot distinguish a wedged SCK probe from a
+                    // blocked trigger wait or a stuck stream release.
+                    let stage_age = if stall.loop_stage_entered_ts == 0 {
+                        None
+                    } else {
+                        Some(now_ts.saturating_sub(stall.loop_stage_entered_ts))
+                    };
+                    let stage_detail = match stage_age {
+                        Some(age) => {
+                            format!("frozen in {} for {}s", stall.loop_stage.as_str(), age)
+                        }
+                        None => format!("stage {} (never entered)", stall.loop_stage.as_str()),
+                    };
                     warn!(
-                        "vision capture stalled on monitor {} ({}): status=Running, loop heartbeat {}s ago, \
+                        "vision capture stalled on monitor {} ({}): status=Running, {}, loop heartbeat {}s ago, \
                          last attempt {}s ago, no terminal capture outcome for {}s — restarting VisionManager (#3939)",
-                        stall.monitor_id, reason, loop_heartbeat_age, attempt_age, db_stale
+                        stall.monitor_id, reason, stage_detail, loop_heartbeat_age, attempt_age, db_stale
                     );
                     let _ = screenpipe_events::send_event(
                         "vision_capture_wedge_restart",
@@ -909,6 +1008,8 @@ pub async fn start_monitor_watcher(
                             "attempt_age_secs": attempt_age,
                             "loop_heartbeat_age_secs": loop_heartbeat_age,
                             "uptime_secs": stall.uptime_secs,
+                            "loop_stage": stall.loop_stage.as_str(),
+                            "loop_stage_age_secs": stage_age,
                         }),
                     );
                     crate::event_driven_capture::e2e_complete_capture_loop_silent_fault();
@@ -1296,6 +1397,144 @@ mod tests {
         assert!(!vision_capture_silent(600.0, 0, NOW - 1, 0, NOW));
     }
 
+    /// The bug this PR targets: recovery must beat the desktop's own alert.
+    ///
+    /// The app raises "screen capture may be stalled" at 150s (60s to
+    /// `frame_status="stale"` + 90 attended one-second checks). Before this
+    /// change the watchdog waited 240s, so every wedge showed the user a pill
+    /// ~100s before anything acted on it.
+    #[test]
+    fn attended_gone_silent_recovers_before_the_desktop_alert() {
+        const DESKTOP_ALERT_SECS: u64 = 150;
+        assert!(
+            SILENT_DB_STALE_SECS_ATTENDED < DESKTOP_ALERT_SECS,
+            "attended recovery must confirm before the desktop raises its incident"
+        );
+
+        // Frozen 70s with input 10s ago: past both the 60s liveness floor and
+        // the 65s attended window, and still 80s before the desktop alerts.
+        assert!(
+            vision_capture_silent_with(
+                &PRODUCTION_VISION_WATCHDOG,
+                600.0,
+                NOW - 70,
+                NOW - 70,
+                NOW - 70,
+                NOW,
+                Some(10),
+            ),
+            "a loop frozen past the attended window with fresh input is lost recording"
+        );
+
+        // Same freeze, same instant, but the user is away: hold the
+        // conservative window so an idle self-healing wedge is not churned.
+        assert!(
+            !vision_capture_silent_with(
+                &PRODUCTION_VISION_WATCHDOG,
+                600.0,
+                NOW - 70,
+                NOW - 70,
+                NOW - 70,
+                NOW,
+                Some(600),
+            ),
+            "idle machines keep the conservative 240s window"
+        );
+
+        // Unknown presence must fail toward idle: a missing signal can never
+        // shorten a disruptive restart.
+        assert!(!vision_capture_silent_with(
+            &PRODUCTION_VISION_WATCHDOG,
+            600.0,
+            NOW - 70,
+            NOW - 70,
+            NOW - 70,
+            NOW,
+            None,
+        ));
+    }
+
+    /// Attended only shortens the *gone-silent* window. A pipeline that has
+    /// never produced a frame is still warming up, and restarting it is how
+    /// restart loops start.
+    #[test]
+    fn attended_presence_never_shortens_the_never_produced_window() {
+        assert!(
+            !vision_capture_silent_with(
+                &PRODUCTION_VISION_WATCHDOG,
+                60.0,
+                NOW - 30,
+                NOW - 30,
+                0,
+                NOW,
+                Some(1),
+            ),
+            "never-produced keeps the full warm-up window even with the user present"
+        );
+    }
+
+    /// A still-running loop is never a stall, however present the user is.
+    #[test]
+    fn attended_presence_does_not_flag_a_live_loop() {
+        assert!(!vision_capture_silent_with(
+            &PRODUCTION_VISION_WATCHDOG,
+            600.0,
+            NOW - 1,
+            NOW - 1,
+            NOW - 1,
+            NOW,
+            Some(1),
+        ));
+    }
+
+    /// Guard the ordering the shortened window depends on.
+    #[test]
+    fn attended_window_stays_below_the_idle_window() {
+        assert!(
+            SILENT_DB_STALE_SECS_ATTENDED < SILENT_DB_STALE_SECS,
+            "attended confirmation must be faster than idle, never slower"
+        );
+        assert_eq!(
+            silent_stale_window(&PRODUCTION_VISION_WATCHDOG, Some(0)),
+            SILENT_DB_STALE_SECS_ATTENDED
+        );
+        assert_eq!(
+            silent_stale_window(
+                &PRODUCTION_VISION_WATCHDOG,
+                Some(ATTENDED_INPUT_FRESH_SECS + 1)
+            ),
+            SILENT_DB_STALE_SECS
+        );
+        assert_eq!(
+            silent_stale_window(&PRODUCTION_VISION_WATCHDOG, None),
+            SILENT_DB_STALE_SECS
+        );
+    }
+
+    /// The stage marker is what turns "heartbeat 248s ago" into a locatable
+    /// freeze, so the detected stall must carry it through to the log.
+    #[test]
+    fn detected_stall_reports_the_stage_the_loop_froze_in() {
+        let snapshots = [MonitorLivenessSnapshot {
+            monitor_id: 4,
+            uptime_secs: 600.0,
+            last_capture_attempt_ts: NOW - 300,
+            last_capture_loop_heartbeat_ts: NOW - 300,
+            last_db_write_ts: NOW - 300,
+            loop_stage: screenpipe_screen::CaptureLoopStage::VisualProbe,
+            loop_stage_entered_ts: NOW - 300,
+        }];
+
+        let detected =
+            first_monitor_stall(&PRODUCTION_VISION_WATCHDOG, true, &snapshots, NOW, None)
+                .expect("silent monitor must be detected");
+        assert_eq!(
+            detected.loop_stage,
+            screenpipe_screen::CaptureLoopStage::VisualProbe
+        );
+        assert_eq!(detected.loop_stage_entered_ts, NOW - 300);
+    }
+
     #[test]
     fn intentional_pause_states_never_classify_as_stalls() {
         // The same stale metrics are a real gone-silent fault while capture is
@@ -1310,6 +1549,7 @@ mod tests {
                 NOW - 300,
                 NOW - 300,
                 NOW,
+                None,
             ),
             Some(VisionStallKind::GoneSilent)
         );
@@ -1322,6 +1562,7 @@ mod tests {
                 NOW - 300,
                 NOW - 300,
                 NOW,
+                None,
             ),
             None
         );
@@ -1336,6 +1577,8 @@ mod tests {
                 last_capture_attempt_ts: NOW - 1,
                 last_capture_loop_heartbeat_ts: NOW - 1,
                 last_db_write_ts: NOW - 1,
+                loop_stage: screenpipe_screen::CaptureLoopStage::TriggerWait,
+                loop_stage_entered_ts: NOW - 1,
             },
             MonitorLivenessSnapshot {
                 monitor_id: 2,
@@ -1343,16 +1586,20 @@ mod tests {
                 last_capture_attempt_ts: NOW - 300,
                 last_capture_loop_heartbeat_ts: NOW - 300,
                 last_db_write_ts: NOW - 300,
+                loop_stage: screenpipe_screen::CaptureLoopStage::VisualProbe,
+                loop_stage_entered_ts: NOW - 300,
             },
         ];
 
-        let detected = first_monitor_stall(&PRODUCTION_VISION_WATCHDOG, true, &snapshots, NOW)
-            .expect("silent second monitor must be detected independently");
+        let detected =
+            first_monitor_stall(&PRODUCTION_VISION_WATCHDOG, true, &snapshots, NOW, None)
+                .expect("silent second monitor must be detected independently");
         assert_eq!(detected.monitor_id, 2);
         assert_eq!(detected.kind, VisionStallKind::GoneSilent);
 
         assert!(
-            first_monitor_stall(&PRODUCTION_VISION_WATCHDOG, false, &snapshots, NOW,).is_none(),
+            first_monitor_stall(&PRODUCTION_VISION_WATCHDOG, false, &snapshots, NOW, None)
+                .is_none(),
             "intentional idle suppresses every monitor restart"
         );
     }
@@ -1388,16 +1635,17 @@ mod tests {
             min_uptime_secs: 2.0,
             restart_cooldown: Duration::from_secs(30),
             silent_db_stale_secs: 8,
+            silent_db_stale_secs_attended: 2,
             silent_never_produced_uptime_secs: 8.0,
             monitor_backstop: Duration::from_secs(1),
         };
         assert_eq!(
-            classify_vision_stall(&config, true, 20.0, NOW - 3, NOW - 3, NOW - 7, NOW),
+            classify_vision_stall(&config, true, 20.0, NOW - 3, NOW - 3, NOW - 7, NOW, None),
             None,
             "gone-silent confirmation must remain slower than still-attempting detection"
         );
         assert_eq!(
-            classify_vision_stall(&config, true, 20.0, NOW - 9, NOW - 9, NOW - 9, NOW),
+            classify_vision_stall(&config, true, 20.0, NOW - 9, NOW - 9, NOW - 9, NOW, None),
             Some(VisionStallKind::GoneSilent)
         );
     }

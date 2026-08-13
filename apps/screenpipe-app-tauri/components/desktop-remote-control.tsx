@@ -124,6 +124,11 @@ export function DesktopRemoteControl({ enabled }: { enabled: boolean }) {
               ),
               effective_aec_mode: effective.aecMode ?? "off",
               effective_auto_update: Boolean(effective.autoUpdate),
+              // No matching `preference_` field: this control's preference is
+              // pinned null, so it would report "unset" on every event.
+              effective_overlay_hiding: Boolean(
+                effective.allowHidingShortcutOverlay,
+              ),
               preference_semantic_context:
                 preferences.semanticContext === null
                   ? "unset"

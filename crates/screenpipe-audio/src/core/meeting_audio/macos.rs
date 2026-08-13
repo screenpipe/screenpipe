@@ -63,7 +63,8 @@ pub fn resolve_meeting_inputs(pid: i32) -> Vec<AudioDevice> {
         )
         .unwrap_or_default();
 
-    let resolved = input_capable_meeting_devices(&input_devices, pid);
+    let candidates = input_capable_meeting_devices(&input_devices, pid);
+    let resolved = select_running_meeting_inputs(candidates, pid);
     if !resolved.is_empty() {
         debug!(
             "meeting_audio: pid {pid} recording from {:?}",
@@ -71,6 +72,53 @@ pub fn resolve_meeting_inputs(pid: i32) -> Vec<AudioDevice> {
         );
     }
     resolved
+}
+
+fn select_running_meeting_inputs(
+    candidates: Vec<(ca::Device, AudioDevice)>,
+    pid: i32,
+) -> Vec<AudioDevice> {
+    let states = candidates.into_iter().map(|(device, candidate)| {
+        let address =
+            |selector: ca::PropSelector| selector.addr(ca::PropScope::INPUT, ca::PropElement::MAIN);
+        let local_running: u32 = device
+            .prop(&address(ca::PropSelector::DEVICE_IS_RUNNING))
+            .unwrap_or(0);
+        let running_somewhere: u32 = device
+            .prop(&address(ca::PropSelector::DEVICE_IS_RUNNING_SOMEWHERE))
+            .unwrap_or(0);
+        (candidate, local_running != 0, running_somewhere != 0)
+    });
+    let selected = select_running_states(states);
+    debug!(
+        "meeting_audio: pid {pid} running input candidates {:?}",
+        selected.iter().map(|d| &d.name).collect::<Vec<_>>()
+    );
+    selected
+}
+
+fn select_running_states(
+    states: impl IntoIterator<Item = (AudioDevice, bool, bool)>,
+) -> Vec<AudioDevice> {
+    let mut externally_proven = Vec::new();
+    let mut local_continuity = Vec::new();
+    for (candidate, local_running, running_somewhere) in states {
+        if running_somewhere && !local_running {
+            // Screenpipe is not running this device, so "running somewhere"
+            // proves that another process is.
+            externally_proven.push(candidate);
+        } else if local_running {
+            // Ambiguous by definition: Screenpipe is running it, and another
+            // process may be too. This is continuity only, never evidence that
+            // Screenpipe is the sole user.
+            local_continuity.push(candidate);
+        }
+    }
+    if externally_proven.is_empty() {
+        local_continuity
+    } else {
+        externally_proven
+    }
 }
 
 /// True if the device exposes at least one input stream. An output-only
@@ -87,8 +135,11 @@ fn device_has_input_streams(device: &ca::Device) -> bool {
 
 /// Convert the raw process-device list into adoptable input devices:
 /// named, deduped (order-preserving), and verified input-capable.
-fn input_capable_meeting_devices(devices: &[ca::Device], pid: i32) -> Vec<AudioDevice> {
-    let mut resolved: Vec<AudioDevice> = Vec::new();
+fn input_capable_meeting_devices(
+    devices: &[ca::Device],
+    pid: i32,
+) -> Vec<(ca::Device, AudioDevice)> {
+    let mut resolved: Vec<(ca::Device, AudioDevice)> = Vec::new();
     for device in devices {
         let Ok(name) = device.name() else { continue };
         let name = name.to_string();
@@ -104,8 +155,8 @@ fn input_capable_meeting_devices(devices: &[ca::Device], pid: i32) -> Vec<AudioD
         }
         let dev = AudioDevice::new(name, DeviceType::Input);
         // Guard against CoreAudio listing the same device twice; preserve order.
-        if !resolved.contains(&dev) {
-            resolved.push(dev);
+        if !resolved.iter().any(|(_, candidate)| candidate == &dev) {
+            resolved.push((*device, dev));
         }
     }
     resolved
@@ -114,6 +165,34 @@ fn input_capable_meeting_devices(devices: &[ca::Device], pid: i32) -> Vec<AudioD
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn input(name: &str) -> AudioDevice {
+        AudioDevice::new(name.to_string(), DeviceType::Input)
+    }
+
+    #[test]
+    fn external_running_candidate_displaces_screenpipe_local_candidate() {
+        let selected = select_running_states([
+            (input("MacBook"), true, true),
+            (input("AirPods"), false, true),
+        ]);
+        assert_eq!(selected, vec![input("AirPods")]);
+
+        let selected = select_running_states([
+            (input("MacBook"), false, true),
+            (input("AirPods"), true, true),
+        ]);
+        assert_eq!(selected, vec![input("MacBook")]);
+    }
+
+    #[test]
+    fn locally_running_candidate_is_continuity_when_no_external_candidate_appears() {
+        let selected = select_running_states([
+            (input("MacBook"), false, false),
+            (input("AirPods"), true, true),
+        ]);
+        assert_eq!(selected, vec![input("AirPods")]);
+    }
 
     // Opens a default-input cpal stream inside this test process so our own PID
     // genuinely has a live input stream, then asserts we resolve the input
@@ -236,11 +315,11 @@ mod tests {
         let resolved = input_capable_meeting_devices(&[output, input], 0);
 
         assert!(
-            resolved.iter().all(|d| d.name != output_name),
+            resolved.iter().all(|(_, d)| d.name != output_name),
             "output-only device '{output_name}' must not resolve as a meeting input"
         );
         assert!(
-            resolved.iter().any(|d| d.name == input_name),
+            resolved.iter().any(|(_, d)| d.name == input_name),
             "real input device '{input_name}' must survive the filter"
         );
     }

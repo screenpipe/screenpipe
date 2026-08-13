@@ -315,4 +315,23 @@ describe("TimelineChoice", () => {
     });
     expect(handleNextSlide).toHaveBeenCalledTimes(1);
   });
+
+  // This is the one slide where the user actually decides about screen
+  // capture, and it used to list only costs (screenshots, memory, cpu, disk).
+  // Without the bounds it reads as all-or-nothing, even though both controls
+  // already ship in Settings → Privacy.
+  it("states the capture bounds next to the capture cost", () => {
+    render(<TimelineChoice handleNextSlide={vi.fn()} />);
+
+    const bounds = screen.getByText(/skips incognito windows/i);
+    expect(bounds).toBeInTheDocument();
+    expect(bounds).toHaveTextContent("you can exclude any app in settings");
+  });
+
+  it("keeps the bounds visible on the low-tier path where off is recommended", () => {
+    mocks.settings.deviceTier = "low";
+    render(<TimelineChoice handleNextSlide={vi.fn()} />);
+
+    expect(screen.getByText(/skips incognito windows/i)).toBeInTheDocument();
+  });
 });

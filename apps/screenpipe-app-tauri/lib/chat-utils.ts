@@ -933,10 +933,21 @@ export function parseMentions(input: string, options?: ParseMentionsOptions): Pa
 export interface MentionSuggestion {
   tag: string;
   description: string;
-  category: "chat" | "skill" | "range" | "time" | "content" | "app" | "speaker" | "tag";
+  category:
+    | "command"
+    | "chat"
+    | "skill"
+    | "range"
+    | "time"
+    | "content"
+    | "app"
+    | "speaker"
+    | "tag";
   label?: string;
   appName?: string;
   conversationId?: string;
+  /** Present only on `/` entries. Picking one runs an action instead of inserting text. */
+  commandId?: ComposerCommandId;
 }
 
 export function mentionSuggestionIdentity(suggestion: MentionSuggestion): string {
@@ -1093,11 +1104,56 @@ function formatTagAutocompleteDescription(item: AppAutocompleteItem) {
   return pluralize(item.count, "use");
 }
 
-export type MentionTrigger = "@" | "#" | "$" | "~";
+export type ComposerCommandId = "new-chat" | "stop" | "inspector" | "pipes";
+
+/**
+ * `/` entries run an action rather than inserting a token. Ordered the way they
+ * are offered, so the first row is the one a bare `/` most likely wants.
+ */
+export const COMPOSER_COMMAND_SUGGESTIONS: MentionSuggestion[] = [
+  {
+    tag: "/new",
+    label: "/new",
+    description: "start a new chat",
+    category: "command",
+    commandId: "new-chat",
+  },
+  {
+    tag: "/stop",
+    label: "/stop",
+    description: "stop the current response",
+    category: "command",
+    commandId: "stop",
+  },
+  {
+    tag: "/inspector",
+    label: "/inspector",
+    description: "toggle the inspector panel",
+    category: "command",
+    commandId: "inspector",
+  },
+  {
+    tag: "/pipes",
+    label: "/pipes",
+    description: "open scheduled tasks",
+    category: "command",
+    commandId: "pipes",
+  },
+];
+
+export type MentionTrigger = "@" | "#" | "$" | "~" | "/";
 
 export function findComposerMention(
   textBeforeCursor: string,
 ): { trigger: MentionTrigger; filter: string } | null {
+  // Anchored to position 0 on purpose: a slash only opens the palette when the
+  // message starts with it. Otherwise `03/04` and `src/lib` would open a menu
+  // mid-sentence.
+  const commandMatch = textBeforeCursor.match(/^\/([\w-]*)$/);
+  if (commandMatch) {
+    return { trigger: "/", filter: commandMatch[1] };
+  }
+
   const match =
     textBeforeCursor.match(/([@#$])([\w:.-]*)$/) ??
     textBeforeCursor.match(/(~)([^~@#$]*)$/);
@@ -1140,6 +1196,10 @@ export function filterMentionSuggestions({
     suggestion.tag.toLowerCase().includes(filter) ||
     suggestion.label?.toLowerCase().includes(filter) ||
     suggestion.description.toLowerCase().includes(filter);
+
+  if (mentionTrigger === "/") {
+    return COMPOSER_COMMAND_SUGGESTIONS.filter(matchesFilter);
+  }
 
   if (mentionTrigger === "#") {
     if (!filter) return tagMentionSuggestions;

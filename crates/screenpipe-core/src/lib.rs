@@ -10,6 +10,10 @@ pub mod display_topology;
 pub use screenpipe_cpu_features as cpu_features;
 pub mod ffmpeg;
 pub mod memories;
+// Single source of truth for CREATE_NO_WINDOW. Spawning a console program from
+// the GUI-subsystem app flashes a terminal on Windows unless every call site
+// remembers the flag; route them through here instead.
+pub mod no_window;
 pub mod paths;
 pub mod permissions;
 pub mod pipes;
@@ -22,6 +26,9 @@ pub mod window_pattern;
 // engine dep tree (db, connect, a11y, etc.).
 pub mod video;
 pub use ffmpeg::{ffmpeg_cmd, ffmpeg_cmd_async, find_ffmpeg_path};
+pub use no_window::{
+    apply_no_window, apply_no_window_async, no_window_command, no_window_command_async,
+};
 
 mod language;
 #[cfg(feature = "security")]

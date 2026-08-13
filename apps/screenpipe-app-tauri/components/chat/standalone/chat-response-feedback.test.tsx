@@ -188,6 +188,9 @@ describe("ChatResponseFeedback", () => {
 
   it("allowlists card values and keeps copy telemetry content-free", () => {
     expect(normalizeChatEntryCard("Alice's private custom title")).toBe("none");
+    expect(normalizeChatEntryCard("contextual_suggestion")).toBe(
+      "contextual_suggestion",
+    );
 
     const payload = chatResponseValueActionProperties(
       privateMessage,

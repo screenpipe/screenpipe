@@ -457,13 +457,19 @@ function RunningToolStatus({ toolCall }: { toolCall: ToolCall }) {
 function ToolCallRailItem({
   toolCall,
   isLast,
+  childToolCalls,
   onAskUserReply,
 }: {
   toolCall: ToolCall;
   isLast: boolean;
+  // Nested tool calls (a subagent's own tools). Rendered inside this row's
+  // expand so clicking the container toggles its whole subtree, rather than
+  // leaving the children as always-on siblings that clutter the rail.
+  childToolCalls?: ToolCall[];
   onAskUserReply?: (reply: string, displayLabel: string) => void | Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const hasChildren = (childToolCalls?.length ?? 0) > 0;
   const presentation = presentToolActivity(toolCall);
   const label = toolCall.isRunning ? presentation.runningLabel : presentation.completedLabel;
   const appName = extractAppFromToolCall(toolCall);
@@ -524,6 +530,11 @@ function ToolCallRailItem({
             <span className="truncate flex-1 text-xs text-foreground/70 group-hover:text-foreground transition-colors duration-150">
               {label}
             </span>
+            {hasChildren && !expanded && (
+              <span className="flex-shrink-0 text-[11px] text-foreground/30">
+                {childToolCalls!.length} {childToolCalls!.length === 1 ? "step" : "steps"}
+              </span>
+            )}
             {expanded ? (
               <ChevronDown className="h-3 w-3 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
             ) : (
@@ -546,14 +557,19 @@ function ToolCallRailItem({
                 {/* Streamed output: live while running, and kept after the tool
                     finishes so what streamed doesn't vanish. Only for bash once
                     done, since other tools already show their full result below. */}
-                {toolCall.progress && (toolCall.isRunning || toolCall.toolName === "bash") && (
+                {toolCall.progress && (toolCall.isRunning || toolCall.toolName === "bash" || toolCall.subagent) && (
                   <div className="mt-1 pt-1 border-t border-border/50">
                     <pre className="whitespace-pre-wrap break-words max-h-[200px] overflow-y-auto overflow-x-hidden max-w-full text-xs font-mono text-foreground/50">
                       {toolCall.progress}
                     </pre>
                   </div>
                 )}
-                {toolCall.result !== undefined && toolCall.toolName !== "bash" && (
+                {/* A subagent launch's raw result is Claude's internal
+                    orchestration metadata ("Async agent launched ... never quote
+                    ... agentId ... output_file ..."), meant for the model, not the
+                    user. Its real content is the nested transcript above, so
+                    suppress the launch boilerplate. */}
+                {toolCall.result !== undefined && toolCall.toolName !== "bash" && !toolCall.subagent && (
                   <div className="mt-1 pt-1 border-t border-border/50">
                     <pre className={cn(
                       "whitespace-pre-wrap break-words max-h-[300px] overflow-y-auto overflow-x-hidden max-w-full text-xs font-mono",
@@ -561,6 +577,21 @@ function ToolCallRailItem({
                     )}>
                       {toolCall.result}
                     </pre>
+                  </div>
+                )}
+                {/* A subagent's own tools nest inside its expand, so clicking
+                    the subagent row reveals or hides its whole subtree instead
+                    of leaving the children always on. */}
+                {hasChildren && (
+                  <div className="mt-1">
+                    {childToolCalls!.map((child, j) => (
+                      <ToolCallRailItem
+                        key={toolCallRenderKey(child, j)}
+                        toolCall={child}
+                        isLast={j === childToolCalls!.length - 1}
+                        onAskUserReply={onAskUserReply}
+                      />
+                    ))}
                   </div>
                 )}
               </div>
@@ -1353,11 +1384,25 @@ function ToolCallGroup({
       setRunningSummary(runningLabel);
       return;
     }
+    // No tool is running right now, but the turn is still marked working (the
+    // model is streaming its final text, or a late agent_end hasn't cleared
+    // isGenerating). The tool WORK is done, so freeze the duration at the last
+    // tool's end instead of letting the wall clock run away past turn end —
+    // that is the "2 min 26 sec · 7/7 done" bug. The spinner/label stay, so
+    // there is no flicker between sequential tool calls; the number just stops.
+    if (!hasRunningTool) {
+      const settledMs = toolWorkEndedAt(toolCalls);
+      const frozenMs = settledMs ? Math.max(1, settledMs - startedAtMs) : undefined;
+      setRunningSummary(
+        frozenMs ? `${runningLabel} · ${formatDurationParts(frozenMs)}` : runningLabel,
+      );
+      return;
+    }
     const updateSummary = () => setRunningSummary(formatRunningWorkDuration(runningLabel, startedAtMs));
     updateSummary();
     const id = window.setInterval(updateSummary, 1000);
     return () => window.clearInterval(id);
-  }, [isWorking, runningLabel, startedAtMs]);
+  }, [isWorking, runningLabel, startedAtMs, hasRunningTool, toolCalls]);
 
   useEffect(() => {
     if (isWorking) {
@@ -1483,21 +1528,10 @@ function ToolCallGroup({
                     >
                       <ToolCallRailItem
                         toolCall={tc}
-                        isLast={isLastTop && children.length === 0}
+                        isLast={isLastTop}
+                        childToolCalls={children}
                         onAskUserReply={onAskUserReply}
                       />
-                      {children.length > 0 && (
-                        <div className="ml-5">
-                          {children.map((child, j) => (
-                            <ToolCallRailItem
-                              key={toolCallRenderKey(child, j)}
-                              toolCall={child}
-                              isLast={isLastTop && j === children.length - 1}
-                              onAskUserReply={onAskUserReply}
-                            />
-                          ))}
-                        </div>
-                      )}
                     </motion.div>
                   );
                 });

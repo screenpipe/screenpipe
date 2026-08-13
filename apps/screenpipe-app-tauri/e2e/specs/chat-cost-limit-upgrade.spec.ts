@@ -5,12 +5,11 @@
 /**
  * Real-app regression for the hosted-AI usage-limit recovery path.
  *
- * A local OpenAI-compatible provider returns the exact structured 429 contract
- * used by the gateway for a Business account. The request travels through Pi and the real
- * foreground event bus, proving desktop renders a concise failure message and
- * an inline recovery banner that opens the server-reviewed Business Max billing URL
- * without waiting for `remaining` to hit zero or for the proactive PostHog
- * upsell gate.
+ * A local OpenAI-compatible provider returns the exact structured 429 contracts
+ * used by the gateway across the self-serve plan ladder. Each request travels
+ * through Pi and the real foreground event bus, proving desktop renders a
+ * concise failure message and a phosphor primary recovery action without
+ * waiting for `remaining` to hit zero or for the proactive PostHog upsell gate.
  */
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -25,6 +24,38 @@ const CHATS_DIR = join(E2E_DATA_DIR, "chats");
 const CHAT_FILE = join(CHATS_DIR, `${CHAT_ID}.json`);
 const PROMPT = "E2E trigger structured hosted AI usage rejection";
 const piConversation = new PiConversationHarness(CHAT_ID);
+const UPGRADE_CASES = [
+  {
+    currentPlan: "free",
+    requiredPlan: "basic",
+    planLabel: "Basic",
+    upgradeUrl: "https://screenpi.pe/account/billing",
+    screenshot: "chat-cost-limit-basic-upgrade",
+  },
+  {
+    currentPlan: "basic",
+    requiredPlan: "business",
+    planLabel: "Business",
+    upgradeUrl: "https://screenpi.pe/account/billing",
+    screenshot: "chat-cost-limit-business-upgrade",
+  },
+  {
+    currentPlan: "business",
+    requiredPlan: "business_max",
+    planLabel: "Business Max",
+    upgradeUrl:
+      "https://screenpipe.com/account/billing?target_plan=pro_max&interval=month",
+    screenshot: "chat-cost-limit-business-max-upgrade",
+  },
+  {
+    currentPlan: "business_max",
+    requiredPlan: "business_ultra",
+    planLabel: "Business Ultra",
+    upgradeUrl:
+      "https://screenpipe.com/account/billing?target_plan=pro_ultra&interval=month",
+    screenshot: "chat-cost-limit-business-ultra-upgrade",
+  },
+] as const;
 
 function writeActiveConversation(): number {
   const now = Date.now();
@@ -123,8 +154,8 @@ async function submitComposer(text: string): Promise<void> {
   });
 }
 
-describe("Hosted AI usage-limit Business Max recovery", function () {
-  this.timeout(120_000);
+describe("Hosted AI usage-limit upgrade recovery", function () {
+  this.timeout(t(240_000));
 
   before(async function () {
     if (process.platform !== "darwin") this.skip();
@@ -157,54 +188,7 @@ describe("Hosted AI usage-limit Business Max recovery", function () {
     rmSync(CHAT_FILE, { force: true });
   });
 
-  it("shows the server-backed Business Max action while query allowance can remain positive", async () => {
-    piConversation.setGatewayErrorResponse({
-      error: JSON.stringify({
-        error: "daily_limit_exceeded",
-        message:
-          "You've used your daily hosted AI allowance. Background scheduled tasks share this allowance.",
-        resets_at: "2026-08-02T00:00:00.000Z",
-        plan: "business",
-        required_plan: "business_max",
-        upgrade_url:
-          "https://screenpipe.com/account/billing?target_plan=pro_max&interval=month",
-        can_buy_credits: false,
-        byok_supported: true,
-      }),
-    });
-
-    await submitComposer(PROMPT);
-
-    const assistant = await $('[data-testid="chat-message-assistant"]');
-    await browser.waitUntil(
-      async () => (await assistant.getText()).includes("recovery option below"),
-      {
-        timeout: t(30_000),
-        interval: 100,
-        timeoutMsg: "structured usage-limit recovery copy did not render",
-      },
-    );
-    expect(await assistant.getText()).toContain("plan's usage limit");
-    expect(await assistant.getText()).not.toContain("Background scheduled tasks");
-
-    const banner = await $('[data-testid="cost-limit-upgrade-banner"]');
-    await banner.waitForDisplayed({ timeout: t(10_000) });
-    expect(await banner.getText()).toContain("Hosted AI usage limit reached");
-    expect(await banner.getText()).toContain("Resets");
-
-    // The recovery action lives inline on the banner — no blocking dialog.
-    const modal = await $('[data-testid="ai-usage-limit-modal"]');
-    expect(await modal.isExisting()).toBe(false);
-    const upgrade = await banner.$("button=Upgrade to Business Max");
-    await upgrade.waitForDisplayed({
-      timeout: t(10_000),
-    });
-
-    const screenshot = await saveScreenshot(
-      "chat-cost-limit-business-max-upgrade",
-    );
-    expect(existsSync(screenshot)).toBe(true);
-
+  it("shows a phosphor primary action for every server-backed upgrade plan", async () => {
     await browser.execute(() => {
       const target = window as Window & {
         __SCREENPIPE_E2E_OPEN_URLS?: string[];
@@ -213,23 +197,88 @@ describe("Hosted AI usage-limit Business Max recovery", function () {
       target.__SCREENPIPE_E2E_OPEN_URLS = [];
       target.__SCREENPIPE_E2E_INTERCEPT_OPEN_URLS = true;
     });
-    await upgrade.click();
-    await browser.waitUntil(
-      async () => {
-        const urls = await browser.execute(
-          () =>
-            (window as Window & { __SCREENPIPE_E2E_OPEN_URLS?: string[] })
-              .__SCREENPIPE_E2E_OPEN_URLS ?? [],
+
+    for (const [index, upgradeCase] of UPGRADE_CASES.entries()) {
+      piConversation.setGatewayErrorResponse({
+        error: JSON.stringify({
+          error: "daily_limit_exceeded",
+          message:
+            "You've used your daily AI allowance. Background scheduled tasks share this allowance.",
+          resets_at: "2026-08-02T00:00:00.000Z",
+          plan: upgradeCase.currentPlan,
+          required_plan: upgradeCase.requiredPlan,
+          upgrade_url: upgradeCase.upgradeUrl,
+          can_buy_credits: false,
+          byok_supported: true,
+        }),
+      });
+
+      await submitComposer(`${PROMPT}: ${upgradeCase.currentPlan}`);
+      await piConversation.waitForRequestCount(
+        index + 1,
+        `${upgradeCase.currentPlan} usage-limit request`,
+      );
+
+      const banner = await $('[data-testid="cost-limit-upgrade-banner"]');
+      await banner.waitForDisplayed({ timeout: t(10_000) });
+      expect(await banner.getText()).toContain("AI usage limit reached");
+      expect(await banner.getText()).toContain("Resets");
+
+      // The recovery action lives inline on the banner — no blocking dialog.
+      const modal = await $('[data-testid="ai-usage-limit-modal"]');
+      expect(await modal.isExisting()).toBe(false);
+      const ctaLabel = `Upgrade to ${upgradeCase.planLabel}`;
+      const upgrade = await banner.$(`button=${ctaLabel}`);
+      await upgrade.waitForDisplayed({ timeout: t(30_000) });
+
+      const style = await browser.execute((label: string) => {
+        const button = Array.from(document.querySelectorAll("button")).find(
+          (candidate) => candidate.textContent?.trim() === label,
         );
-        return urls.includes(
-          "https://screenpipe.com/account/billing?target_plan=pro_max&interval=month",
-        );
-      },
-      {
-        timeout: t(10_000),
-        interval: 100,
-        timeoutMsg: "Usage-limit upgrade did not open the billing URL",
-      },
-    );
+        if (!button) return null;
+        const computed = getComputedStyle(button);
+        return {
+          backgroundColor: computed.backgroundColor,
+          borderColor: computed.borderTopColor,
+          color: computed.color,
+        };
+      }, ctaLabel);
+      expect(style).toEqual({
+        backgroundColor: "rgb(199, 255, 62)",
+        borderColor: "rgb(74, 107, 0)",
+        color: "rgb(0, 0, 0)",
+      });
+
+      const screenshot = await saveScreenshot(upgradeCase.screenshot);
+      expect(existsSync(screenshot)).toBe(true);
+
+      await browser.execute(() => {
+        const target = window as Window & {
+          __SCREENPIPE_E2E_OPEN_URLS?: string[];
+        };
+        target.__SCREENPIPE_E2E_OPEN_URLS = [];
+      });
+      await upgrade.click();
+      await browser.waitUntil(
+        async () => {
+          const urls = await browser.execute(
+            () =>
+              (window as Window & { __SCREENPIPE_E2E_OPEN_URLS?: string[] })
+                .__SCREENPIPE_E2E_OPEN_URLS ?? [],
+          );
+          return urls.includes(upgradeCase.upgradeUrl);
+        },
+        {
+          timeout: t(10_000),
+          interval: 100,
+          timeoutMsg: `${ctaLabel} did not open its billing URL`,
+        },
+      );
+    }
+
+    const assistant = await $('[data-testid="chat-message-assistant"]');
+    expect(await assistant.getText()).toContain("recovery option below");
+    expect(await assistant.getText()).toContain("plan's usage limit");
+    expect(await assistant.getText()).not.toContain("Background scheduled tasks");
   });
 });

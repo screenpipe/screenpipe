@@ -13,6 +13,7 @@ import { isAcpAuthenticationCancelledError, isAcpExternalAuthError } from "@/lib
 import { commands, type AIPreset, type PiInfo, type PiProviderConfig } from "@/lib/utils/tauri";
 import type { ActivityAppItem, ConnectedIntegration, ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
+import { applyResolvedModelLimits } from "@/lib/model-metadata";
 
 type PiRunningConfig = {
   backend?: "acp" | null;
@@ -183,8 +184,9 @@ export function usePiSessionLifecycle({
   })();
 
   const buildProviderConfig = useCallback((preset?: AIPreset | null): ResolvedPiProviderConfig | null => {
-    const p = preset || activePreset;
-    if (!p) return null;
+    const selectedPreset = preset || activePreset;
+    if (!selectedPreset) return null;
+    const p = applyResolvedModelLimits(selectedPreset);
     const presetPrompt = p.prompt || "";
     const isAcp = p.provider === "acp";
     const connectionsCtx = buildConnectionsContext(connections);

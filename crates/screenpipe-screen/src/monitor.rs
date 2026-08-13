@@ -29,9 +29,19 @@ pub use linux::{
 #[cfg(target_os = "macos")]
 pub use macos::{
     e2e_arm_sck_lookup_hang_fault, get_capture_backend, get_default_monitor, get_monitor_by_id,
-    is_screen_capture_supported, list_monitors, list_monitors_detailed, macos_version,
-    set_sck_capture_max_width, HdCapture,
+    invalidate_monitor_lookup_cache, is_screen_capture_supported, list_monitors,
+    list_monitors_cached, list_monitors_detailed, macos_version,
+    secs_since_capture_backend_fallback, set_sck_capture_max_width, HdCapture,
 };
+
+/// Seconds since capture last fell back off its primary backend, if ever.
+///
+/// Only macOS has a degraded fallback path (ScreenCaptureKit to CoreGraphics);
+/// everywhere else there is nothing to fall back from.
+#[cfg(not(target_os = "macos"))]
+pub fn secs_since_capture_backend_fallback() -> Option<u64> {
+    None
+}
 #[cfg(target_os = "windows")]
 pub use windows::{
     get_capture_backend, get_default_monitor, get_monitor_by_id, is_screen_capture_supported,

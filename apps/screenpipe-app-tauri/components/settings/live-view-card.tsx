@@ -15,6 +15,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { getLiveViewTimeRangeOption } from "@/lib/live-views/time-range";
+import { liveViewTimeAgo as timeAgo } from "@/lib/live-views/freshness";
+import type { LiveViewSourceStatus } from "@/lib/live-views/source-status";
 import { Input } from "@/components/ui/input";
 import {
   Popover,
@@ -43,6 +45,22 @@ export type {
   LiveViewListItem,
 } from "@/lib/live-views/item-actions";
 
+const SOURCE_STATUS_LABELS: Record<LiveViewSourceStatus, string | null> = {
+  auto: null,
+  manual: "manual only",
+  paused: "paused",
+  unknown: null,
+};
+
+const SOURCE_STATUS_TITLES: Record<LiveViewSourceStatus, string | null> = {
+  auto: null,
+  manual:
+    "This task has no schedule, so this block only changes when you press refresh.",
+  paused:
+    "This task is turned off, so this block only changes when you press refresh.",
+  unknown: null,
+};
+
 const COMPONENT_LABELS: Record<BrainViewComponent, string> = {
   "metric.v1": "Metric",
   "list.v1": "List",
@@ -52,16 +70,6 @@ const COMPONENT_LABELS: Record<BrainViewComponent, string> = {
   "timeline.v1": "Timeline",
   "markdown.v1": "Text",
 };
-
-function timeAgo(iso: string): string {
-  const elapsed = Date.now() - new Date(iso).getTime();
-  if (!Number.isFinite(elapsed) || elapsed < 60_000) return "just now";
-  const minutes = Math.floor(elapsed / 60_000);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
 
 function slotClass(width: number): string {
   if (width === 3) return "col-span-12 md:col-span-6 xl:col-span-3";
@@ -370,6 +378,7 @@ function LiveViewCardBody({
 export function LiveViewCard({
   slot,
   timeRange = "today",
+  sourceStatus = "unknown",
   preview = false,
   refreshing = false,
   feedback = null,
@@ -383,6 +392,12 @@ export function LiveViewCard({
 }: {
   slot: BrainViewSlot;
   timeRange?: BrainViewTimeRange;
+  /**
+   * Whether this Block's scheduled task refreshes it on its own. A paused or
+   * manual-only task leaves the value frozen at the last refresh click, which
+   * is otherwise indistinguishable from fresh data.
+   */
+  sourceStatus?: LiveViewSourceStatus;
   preview?: boolean;
   refreshing?: boolean;
   feedback?: "up" | "down" | null;
@@ -643,6 +658,15 @@ export function LiveViewCard({
             ? `Scheduled task: ${slot.binding.pipeName}`
             : "No scheduled task connected"}
         </span>
+        {slot.binding && SOURCE_STATUS_LABELS[sourceStatus] && (
+          <span
+            data-testid={`overview-card-source-status-${slot.id}`}
+            className="shrink-0 border border-border px-1 py-px uppercase tracking-wide"
+            title={SOURCE_STATUS_TITLES[sourceStatus] ?? undefined}
+          >
+            {SOURCE_STATUS_LABELS[sourceStatus]}
+          </span>
+        )}
         {slot.value && (
           <span
             data-testid={`overview-card-updated-${slot.id}`}

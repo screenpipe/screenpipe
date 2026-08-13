@@ -59,7 +59,7 @@ export function parsePipeError(stderr: string): ParsedPipeError {
   if (hasSafetyRefusalToken(normalized)) {
     return {
       type: "safety_refusal",
-      message: "AI provider declined this Pipe under its safety policy",
+      message: "AI provider declined this scheduled task under its safety policy",
     };
   }
   if (
@@ -140,7 +140,7 @@ function classifyStructuredPipeError(value: unknown): ParsedPipeError | null {
   if (hasSafetyRefusalToken(combined)) {
     return {
       type: "safety_refusal",
-      message: message || "AI provider declined this Pipe under its safety policy",
+      message: message || "AI provider declined this scheduled task under its safety policy",
     };
   }
   if (combined.includes("daily_limit_exceeded")) {

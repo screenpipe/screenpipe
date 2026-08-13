@@ -946,10 +946,16 @@ pub async fn start_ui_recording(
                         .await;
                         last_flush = std::time::Instant::now();
 
-                        // Exponential backoff on consecutive failures
+                        // Exponential backoff on consecutive failures. The shift
+                        // is capped at 6 so the documented 30s ceiling is
+                        // actually reachable: `.min(5)` topped out at 16s and
+                        // made the `.min(30_000)` clamp dead code, so a long
+                        // write stall was re-attacked twice as often as
+                        // intended.
                         if consecutive_failures > 0 {
                             let backoff = Duration::from_millis(
-                                (500 * (1u64 << consecutive_failures.min(5))).min(30_000),
+                                (500u64.saturating_mul(1u64 << consecutive_failures.min(6)))
+                                    .min(30_000),
                             );
                             debug!(
                                 "UI recorder: backing off {}ms after {} failures",
@@ -1134,7 +1140,25 @@ async fn flush_batch(
         }
         Err(e) => {
             *consecutive_failures += 1;
-            if *consecutive_failures <= 3 {
+            // A write that lost a race for the SQLite write path is an expected
+            // stall, not a fault: the batch is retained above and the next flush
+            // retries it, and `compact()`/checkpoint hold that same process-wide
+            // lock by design. Raising it at error! sent every VACUUM to Sentry
+            // as SCREENPIPE-CLI-SQ. A genuinely stuck coordinator is escalated
+            // by the write queue itself, not by counting log lines here.
+            if screenpipe_db::is_retryable_write_stall(&e) {
+                if *consecutive_failures <= 3 {
+                    warn!(
+                        "UI events batch stalled behind the SQLite write path, retrying: {}",
+                        e
+                    );
+                } else {
+                    debug!(
+                        "UI events batch still stalled (attempt #{}): {}",
+                        consecutive_failures, e
+                    );
+                }
+            } else if *consecutive_failures <= 3 {
                 error!("Failed to insert UI events batch: {}", e);
             } else {
                 // Reduce log spam during contention storms
@@ -1652,6 +1676,36 @@ mod event_batch_tests {
             vec![Some(1), Some(2), None],
             "retained events stay aligned with their correlation ids"
         );
+    }
+
+    /// SCREENPIPE-CLI-SQ: a batch that lost a race for the SQLite write path
+    /// is an expected stall — `compact()` and the RESTART checkpoint hold that
+    /// same process-wide lock by design — so it must not be reported as a
+    /// fault. What it *must* still do is retain the events for retry.
+    ///
+    /// This asserts the classification the log level is derived from, which is
+    /// the part that decides whether a routine VACUUM raises a Sentry issue.
+    #[test]
+    fn write_path_contention_is_classified_as_a_retryable_stall() {
+        let contention = sqlx::Error::Protocol(screenpipe_db::WRITE_LOCK_HELD_MESSAGE.to_string());
+        let starvation =
+            sqlx::Error::Protocol(screenpipe_db::WRITE_POOL_STARVED_MESSAGE.to_string());
+        assert!(screenpipe_db::is_retryable_write_stall(&contention));
+        assert!(screenpipe_db::is_retryable_write_stall(&starvation));
+
+        // A genuine fault must keep its error path. `DROP TABLE ui_events`
+        // (the scenario in the test above) produces exactly this shape, and it
+        // must never be silently downgraded to a stall.
+        let real_fault = sqlx::Error::Protocol(
+            "error returned from database: (code: 1) no such table: ui_events".to_string(),
+        );
+        assert!(
+            !screenpipe_db::is_retryable_write_stall(&real_fault),
+            "a real schema/IO fault must not be treated as contention"
+        );
+        assert!(!screenpipe_db::is_retryable_write_stall(
+            &sqlx::Error::RowNotFound
+        ));
     }
 
     /// The flip side: a successful flush clears the batch and resets the

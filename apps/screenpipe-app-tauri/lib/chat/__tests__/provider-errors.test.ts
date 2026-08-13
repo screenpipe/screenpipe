@@ -113,7 +113,7 @@ describe("provider error copy", () => {
       '{"error":"free_chat_limit_exceeded","limit":2}',
       { provider: "screenpipe-cloud", model: "auto" },
     );
-    expect(msg).toContain("2 free hosted AI messages");
+    expect(msg).toContain("2 free AI messages");
     expect(msg).toContain("tomorrow");
     expect(msg).toContain("upgrade");
     expect(msg).toContain("Ollama");

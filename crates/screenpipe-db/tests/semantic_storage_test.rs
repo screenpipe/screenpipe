@@ -666,3 +666,78 @@ async fn normalized_storage_growth_tracks_unique_semantics_not_raw_frame_count()
     assert!(repeated_per_frame < 4_096.0);
     assert!(changing_per_frame < 16_384.0);
 }
+
+#[tokio::test]
+async fn batched_attach_points_frames_at_an_existing_run() {
+    let db = database().await;
+    let now = Utc::now();
+    let stored_frame = insert_frame(&db, now - ChronoDuration::minutes(2)).await;
+    let repeated_frames = vec![
+        insert_frame(&db, now - ChronoDuration::minutes(1)).await,
+        insert_frame(&db, now).await,
+    ];
+
+    let write = db
+        .store_semantic_projection(
+            stored_frame,
+            &manifest(),
+            &app(),
+            7,
+            Duration::from_micros(800),
+            &projection("notarization is blocking the release"),
+        )
+        .await
+        .expect("store first projection");
+
+    let attachments: Vec<(i64, i64)> = repeated_frames
+        .iter()
+        .map(|frame_id| (*frame_id, write.run_id))
+        .collect();
+    let result = db
+        .attach_semantic_runs_to_frames(&attachments)
+        .await
+        .expect("attach cached run");
+
+    assert_eq!(result.frames_attached, 2);
+    assert!(result.missing_run_ids.is_empty());
+    for frame_id in repeated_frames {
+        let context = db
+            .get_frame_semantic_context(frame_id)
+            .await
+            .expect("read frame context")
+            .expect("frame resolves to the reused run");
+        assert_eq!(context.run_id, write.run_id);
+    }
+}
+
+#[tokio::test]
+async fn batched_attach_skips_runs_deleted_since_they_were_observed() {
+    let db = database().await;
+    let now = Utc::now();
+    let frame = insert_frame(&db, now).await;
+    let missing_run_id = 987_654;
+
+    let result = db
+        .attach_semantic_runs_to_frames(&[(frame, missing_run_id)])
+        .await
+        .expect("attach tolerates a deleted run");
+
+    assert_eq!(result.frames_attached, 0);
+    assert_eq!(result.missing_run_ids, vec![missing_run_id]);
+    assert!(db
+        .get_frame_semantic_context(frame)
+        .await
+        .expect("read frame context")
+        .is_none());
+}
+
+#[tokio::test]
+async fn batched_attach_without_work_takes_no_write_transaction() {
+    let db = database().await;
+    let result = db
+        .attach_semantic_runs_to_frames(&[])
+        .await
+        .expect("empty attach succeeds");
+    assert_eq!(result.frames_attached, 0);
+    assert!(result.missing_run_ids.is_empty());
+}

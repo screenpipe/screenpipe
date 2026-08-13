@@ -11,6 +11,9 @@ use screenpipe_db::{DatabaseManager, NewDiarizationSegment, Speaker};
 use tracing::{debug, error, warn};
 
 use crate::core::engine::AudioTranscriptionEngine;
+use crate::speaker::identify_gate::{
+    segment_duration_secs, speaker_identify_decision, SpeakerIdentifyDecision,
+};
 
 use super::{
     text_utils::longest_common_word_substring, AudioInput, TranscriptionDiarizationSegment,
@@ -59,6 +62,11 @@ impl TranscriptionResult {
     }
 }
 
+/// Attempts to land the chunk+transcription row before falling back to a
+/// durable recovery marker. One more than the historical 3, because a
+/// collateral batch abort costs an attempt without ever trying the write.
+const CHUNK_TRANSCRIPTION_INSERT_ATTEMPTS: u32 = 4;
+
 /// Result of a successful audio transcription DB insert.
 #[derive(Debug, Clone)]
 pub struct AudioInsertResult {
@@ -74,10 +82,17 @@ pub async fn process_transcription_result(
     previous_transcript: Option<String>,
     previous_transcript_id: Option<i64>,
     use_pii_removal: bool,
-    // Configured data dir; when set, a chunk+transcription insert that exhausts
-    // its retries persists an orphaned-chunk marker for the reconciliation sweep
-    // to recover instead of silently dropping the audio (SCREENPIPE-CLI-RC).
-    data_dir: Option<&Path>,
+    // Configured data dir. A chunk+transcription insert that exhausts its
+    // retries persists an orphaned-chunk marker here for the reconciliation
+    // sweep to recover, instead of silently dropping the audio.
+    //
+    // Not an Option. It used to be, and the None arm skipped the marker
+    // entirely — audio on disk, no row, nothing queued, gone. Production never
+    // reached it (AudioManagerBuilder::validate rejects a missing output path,
+    // so the one live call site always passes Some), but the arm existed and
+    // its log line is the one SCREENPIPE-CLI-SN reports. Requiring the path
+    // deletes the arm rather than trusting a caller not to find it.
+    data_dir: &Path,
 ) -> Result<Option<AudioInsertResult>, anyhow::Error> {
     if result.error.is_some() || result.transcription.is_none() {
         error!(
@@ -91,9 +106,20 @@ pub async fn process_transcription_result(
         debug!("empty speaker embedding; storing transcript without speaker");
         None
     } else {
-        let speaker = get_or_create_speaker_from_embedding(db, &result.speaker_embedding).await?;
-        debug!("detected speaker id={}", speaker.id);
-        Some(speaker.id)
+        let duration = segment_duration_secs(result.start_time, result.end_time);
+        match get_or_create_speaker_from_embedding(db, &result.speaker_embedding, duration).await? {
+            Some(speaker) => {
+                debug!("detected speaker id={}", speaker.id);
+                Some(speaker.id)
+            }
+            None => {
+                debug!(
+                    "storing transcript without speaker: {:.3}s below identity gate",
+                    duration
+                );
+                None
+            }
+        }
     };
 
     let raw_transcription = result.transcription.clone().unwrap();
@@ -136,7 +162,7 @@ pub async fn process_transcription_result(
 
     // Retry DB insertion with backoff to survive transient pool saturation.
     // Without this, transcribed audio is silently dropped from the timeline.
-    for retry in 0..3u32 {
+    for retry in 0..CHUNK_TRANSCRIPTION_INSERT_ATTEMPTS {
         match db
             .insert_audio_chunk_and_transcription(
                 &result.path,
@@ -192,13 +218,31 @@ pub async fn process_transcription_result(
                 break;
             }
             Err(e) => {
-                if retry < 2 {
-                    warn!(
-                        "Failed to insert audio chunk+transcription for device {} (attempt {}/3): {}, retrying...",
-                        result.input.device, retry + 1, e
-                    );
-                    tokio::time::sleep(std::time::Duration::from_millis(500 * (retry as u64 + 1)))
-                        .await;
+                // A collateral abort means the queue rolled this batch back
+                // because a *sibling* operation failed — this write was never
+                // attempted. Worth saying so: the raw sqlx text is "attempted
+                // to communicate with a crashed background worker", which is
+                // what SCREENPIPE-CLI-SN reports and what makes it look like a
+                // worker died. Nothing died.
+                let collateral = crate::audio_manager::write_retry::is_collateral_batch_abort(&e);
+                if retry + 1 < CHUNK_TRANSCRIPTION_INSERT_ATTEMPTS {
+                    if collateral {
+                        warn!(
+                            "audio chunk+transcription for device {} was rolled back with its batch (attempt {}/{}), retrying...",
+                            result.input.device,
+                            retry + 1,
+                            CHUNK_TRANSCRIPTION_INSERT_ATTEMPTS
+                        );
+                    } else {
+                        warn!(
+                            "Failed to insert audio chunk+transcription for device {} (attempt {}/{}): {}, retrying...",
+                            result.input.device,
+                            retry + 1,
+                            CHUNK_TRANSCRIPTION_INSERT_ATTEMPTS,
+                            e
+                        );
+                    }
+                    tokio::time::sleep(crate::audio_manager::write_retry::backoff(retry)).await;
                 } else {
                     // Durable recovery: the audio file is on disk but the
                     // chunk+transcription insert was dropped under write-pool
@@ -216,40 +260,33 @@ pub async fn process_transcription_result(
                     // saturated badly, which we still want visible in Sentry —
                     // recovery shouldn't silence the degradation signal (and would
                     // mask a true loss if the sweep is disabled or the cap is hit).
-                    if let Some(dir) = data_dir {
-                        let payload =
-                            crate::audio_manager::reconciliation::PendingChunkTranscription {
-                                text: transcription.clone(),
-                                engine: transcription_engine.clone(),
-                                device_name: result.input.device.name.clone(),
-                                is_input: matches!(
-                                    result.input.device.device_type,
-                                    crate::core::device::DeviceType::Input
-                                ),
-                                speaker_id,
-                                start_time: Some(result.start_time),
-                                end_time: Some(result.end_time),
-                            };
-                        crate::audio_manager::reconciliation::persist_transcribed_chunk(
-                            dir,
-                            result.path.clone(),
-                            capture_ts,
-                            payload,
-                        )
-                        .await;
-                        error!(
-                            device = %result.input.device,
-                            error = %e,
-                            recovered = true,
-                            "audio chunk+transcription insert failed after 3 retries; persisted for reconciliation recovery"
-                        );
-                    } else {
-                        error!(
-                            device = %result.input.device,
-                            error = %e,
-                            "Failed to insert audio chunk+transcription after 3 retries"
-                        );
-                    }
+                    let payload = crate::audio_manager::reconciliation::PendingChunkTranscription {
+                        text: transcription.clone(),
+                        engine: transcription_engine.clone(),
+                        device_name: result.input.device.name.clone(),
+                        is_input: matches!(
+                            result.input.device.device_type,
+                            crate::core::device::DeviceType::Input
+                        ),
+                        speaker_id,
+                        start_time: Some(result.start_time),
+                        end_time: Some(result.end_time),
+                    };
+                    crate::audio_manager::reconciliation::persist_transcribed_chunk(
+                        data_dir,
+                        result.path.clone(),
+                        capture_ts,
+                        payload,
+                    )
+                    .await;
+                    error!(
+                        device = %result.input.device,
+                        error = %e,
+                        recovered = true,
+                        collateral_batch_abort = collateral,
+                        "audio chunk+transcription insert failed after {} attempts; persisted for reconciliation recovery",
+                        CHUNK_TRANSCRIPTION_INSERT_ATTEMPTS
+                    );
                 }
             }
         }
@@ -304,33 +341,61 @@ fn diarization_segments_for_insert(
     }]
 }
 
+/// Resolve a speaker for `embedding`, gated on how much real speech produced it.
+///
+/// `speech_duration_secs` is the segment's own duration, not the padded sample
+/// count handed to the embedding model. Segments below
+/// [`MIN_SPEAKER_IDENTIFY_SECS`](crate::speaker::identify_gate::MIN_SPEAKER_IDENTIFY_SECS)
+/// abstain entirely and return `Ok(None)`; segments below
+/// [`MIN_SPEAKER_PROFILE_UPDATE_SECS`](crate::speaker::identify_gate::MIN_SPEAKER_PROFILE_UPDATE_SECS)
+/// may match an existing speaker but never create one or write back into a
+/// stored profile.
 pub async fn get_or_create_speaker_from_embedding(
     db: &DatabaseManager,
     embedding: &[f32],
-) -> Result<Speaker, anyhow::Error> {
+    speech_duration_secs: f64,
+) -> Result<Option<Speaker>, anyhow::Error> {
+    let decision = speaker_identify_decision(speech_duration_secs);
+    if decision == SpeakerIdentifyDecision::Skip {
+        debug!(
+            "speaker identification skipped: {:.3}s below identify gate",
+            speech_duration_secs
+        );
+        return Ok(None);
+    }
+
     let speaker = db.get_speaker_from_embedding(embedding).await?;
     if let Some(speaker) = speaker {
         debug!(
-            "matched speaker id={} name={:?}",
+            "matched speaker id={} name={:?} decision={}",
             speaker.id,
             if speaker.name.is_empty() {
                 "unnamed"
             } else {
                 &speaker.name
-            }
+            },
+            decision.as_str()
         );
-        // Improve cluster over time: update centroid and store diverse embeddings
-        if let Err(e) = db.update_speaker_centroid(speaker.id, embedding).await {
-            debug!("failed to update speaker centroid: {}", e);
+        if decision.may_learn() {
+            // Improve cluster over time: update centroid and store diverse embeddings
+            if let Err(e) = db.update_speaker_centroid(speaker.id, embedding).await {
+                debug!("failed to update speaker centroid: {}", e);
+            }
+            if let Err(e) = db.add_embedding_to_speaker(speaker.id, embedding, 10).await {
+                debug!("failed to add embedding to speaker: {}", e);
+            }
         }
-        if let Err(e) = db.add_embedding_to_speaker(speaker.id, embedding, 10).await {
-            debug!("failed to add embedding to speaker: {}", e);
-        }
-        Ok(speaker)
-    } else {
+        Ok(Some(speaker))
+    } else if decision.may_create() {
         // insert_speaker logs the creation at info level
         let speaker = db.insert_speaker(embedding).await?;
-        Ok(speaker)
+        Ok(Some(speaker))
+    } else {
+        debug!(
+            "no speaker match and {:.3}s below profile-update gate; not creating",
+            speech_duration_secs
+        );
+        Ok(None)
     }
 }
 
@@ -509,6 +574,7 @@ mod tests {
             diarization_segments: Vec::new(),
         };
 
+        let data_dir = tempfile::tempdir().unwrap();
         let insert_result = process_transcription_result(
             &db,
             result,
@@ -517,7 +583,7 @@ mod tests {
             None,
             None,
             false,
-            None,
+            data_dir.path(),
         )
         .await
         .unwrap()

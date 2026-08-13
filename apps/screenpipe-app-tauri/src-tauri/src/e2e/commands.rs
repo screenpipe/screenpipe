@@ -39,6 +39,28 @@ fn main_overlay_visible(app_handle: tauri::AppHandle) -> bool {
     }
 }
 
+/// E2E helper: backdate the recorded setup completion.
+///
+/// The first-run window keys off how long ago setup finished, and the two
+/// branches that matter (a fresh finish vs. someone who closed the app and came
+/// back) are minutes and hours apart. `complete_onboarding` can only stamp
+/// "now", so without this the late-return branch is untestable in the real app
+/// short of making a spec sleep for the ceiling.
+#[command]
+fn set_onboarding_completed_ago(
+    app_handle: tauri::AppHandle,
+    seconds: i64,
+) -> Result<String, String> {
+    let stamp = (chrono::Utc::now() - chrono::Duration::seconds(seconds)).to_rfc3339();
+    let persisted = stamp.clone();
+    crate::store::OnboardingStore::update(&app_handle, move |onboarding| {
+        onboarding.is_completed = true;
+        onboarding.completed_at = Some(persisted.clone());
+    })
+    .map_err(|error| error.to_string())?;
+    Ok(stamp)
+}
+
 /// E2E helper: model an active capture intent without requiring physical
 /// screen/audio devices on the CI runner.
 #[command]
@@ -177,6 +199,51 @@ fn shortcut_reminder_visible(app_handle: tauri::AppHandle) -> bool {
         .unwrap_or(false)
 }
 
+/// E2E helper: open an auto-detected meeting the way the audio-process
+/// watcher would.
+///
+/// `POST /meetings/start` hardcodes `detection_source = "manual"`, and manual
+/// meetings are exactly the ones a recording restart does *not* strand: the
+/// audio-process watcher never owns them, so its shutdown hook leaves them
+/// open, and `close_orphaned_meetings` spares them for 12h. Reproducing the
+/// stranded-live-transcription bug therefore needs a genuine auto meeting —
+/// which normally only the detector creates, and the detector needs a real
+/// meeting app plus audio no CI runner has.
+#[command]
+async fn open_auto_meeting(
+    state: State<'_, RecordingState>,
+    app_name: String,
+    title: Option<String>,
+) -> Result<i64, String> {
+    let server_guard = state.server.lock().await;
+    let server = server_guard
+        .as_ref()
+        .ok_or_else(|| "server not running".to_string())?;
+    server
+        .db
+        .insert_meeting(&app_name, "audio_process", title.as_deref(), None)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// E2E helper: report the currently open meeting, if any.
+///
+/// Mirrors the "is a meeting still in progress?" question the streaming
+/// coordinator asks (`meeting_end IS NULL`), so a spec can assert a restart
+/// did not silently close the meeting out from under live transcription.
+#[command]
+async fn active_meeting_id(state: State<'_, RecordingState>) -> Result<Option<i64>, String> {
+    let server_guard = state.server.lock().await;
+    let Some(server) = server_guard.as_ref() else {
+        return Ok(None);
+    };
+    server
+        .db
+        .get_most_recent_active_meeting_id()
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// E2E helper: publish the production live-transcript event shape without
 /// depending on microphone hardware or an external transcription provider.
 #[command]
@@ -185,6 +252,8 @@ fn emit_meeting_overlay_transcript(
     item_id: String,
     text: String,
     is_final: bool,
+    device_name: Option<String>,
+    device_type: Option<String>,
 ) -> Result<(), String> {
     let event_name = if is_final {
         "meeting_transcript_final"
@@ -194,8 +263,8 @@ fn emit_meeting_overlay_transcript(
     let mut data = serde_json::json!({
         "meeting_id": meeting_id,
         "item_id": item_id,
-        "device_name": "e2e-output",
-        "device_type": "output",
+        "device_name": device_name.unwrap_or_else(|| "e2e-output".to_string()),
+        "device_type": device_type.unwrap_or_else(|| "output".to_string()),
         "provider": "e2e",
         "model": "deterministic",
         "captured_at": chrono::Utc::now().to_rfc3339(),
@@ -583,6 +652,20 @@ async fn capture_pi_start_error(
     }
 }
 
+/// E2E helper: allow (or re-suppress) real macOS window activation.
+///
+/// The suite runs on a developer's desktop, so e2e builds are non-activating by
+/// default — otherwise every window show swaps them out of their fullscreen
+/// Space. The specs that assert activation itself turn it on for their own
+/// duration and hand it back.
+#[command]
+fn e2e_set_activation_allowed(allowed: bool) {
+    #[cfg(target_os = "macos")]
+    crate::window::set_window_activation_allowed(allowed);
+    #[cfg(not(target_os = "macos"))]
+    let _ = allowed;
+}
+
 pub(super) fn plugin() -> TauriPlugin<Wry> {
     Builder::<Wry>::new("e2e")
         // build.rs verifies this inventory matches the feature-only plugin ACL.
@@ -601,6 +684,8 @@ pub(super) fn plugin() -> TauriPlugin<Wry> {
             set_tray_recording_status,
             installed_tray_recording_status,
             shortcut_reminder_visible,
+            open_auto_meeting,
+            active_meeting_id,
             emit_meeting_overlay_transcript,
             emit_agent_stream,
             emit_settled_agent_follow_up,
@@ -617,6 +702,8 @@ pub(super) fn plugin() -> TauriPlugin<Wry> {
             db_hard_fault_state,
             seed_flags,
             capture_pi_start_error,
+            set_onboarding_completed_ago,
+            e2e_set_activation_allowed,
         ])
         .build()
 }

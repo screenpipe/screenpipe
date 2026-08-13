@@ -102,7 +102,7 @@ export function ReferralCard() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => commands.openLoginWindow(null)}
+          onClick={() => commands.openLoginWindow(null, null)}
         >
           sign in
         </Button>

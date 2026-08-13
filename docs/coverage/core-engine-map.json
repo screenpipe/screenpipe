@@ -1,106 +1,204 @@
 {
   "version": 1,
-  "platforms": ["windows", "macos", "linux"],
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ],
   "enforceMappedIntegrationTests": true,
   "enforceMappedSourceTests": true,
   "trackedCrates": [
     {
       "crate": "screenpipe-engine",
-      "testRoots": ["tests"],
-      "sourceRoots": ["src"]
+      "testRoots": [
+        "tests"
+      ],
+      "sourceRoots": [
+        "src"
+      ]
     },
     {
       "crate": "screenpipe-db",
-      "testRoots": ["tests"],
-      "sourceRoots": ["src"]
+      "testRoots": [
+        "tests"
+      ],
+      "sourceRoots": [
+        "src"
+      ]
     },
     {
       "crate": "screenpipe-sqlite-coordinator",
-      "testRoots": ["tests"],
-      "sourceRoots": ["src"]
+      "testRoots": [
+        "tests"
+      ],
+      "sourceRoots": [
+        "src"
+      ]
     },
     {
       "crate": "screenpipe-audio",
-      "testRoots": ["tests"],
-      "sourceRoots": ["src"]
+      "testRoots": [
+        "tests"
+      ],
+      "sourceRoots": [
+        "src"
+      ]
     },
     {
       "crate": "screenpipe-screen",
-      "testRoots": ["tests"],
-      "sourceRoots": ["src"]
+      "testRoots": [
+        "tests"
+      ],
+      "sourceRoots": [
+        "src"
+      ]
     },
     {
       "crate": "screenpipe-a11y",
-      "testRoots": ["tests"],
-      "sourceRoots": ["src"]
+      "testRoots": [
+        "tests"
+      ],
+      "sourceRoots": [
+        "src"
+      ]
     }
   ],
   "criticalFlows": [
     {
       "id": "settings-to-engine-config",
       "label": "Settings to engine recording config",
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["configuration"]
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "configuration"
+      ]
     },
     {
       "id": "engine-health-lifecycle",
       "label": "Engine health, sleep, and lifecycle",
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["engine-lifecycle"]
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "engine-lifecycle"
+      ]
     },
     {
       "id": "capture-ocr-pipeline",
       "label": "Capture, OCR, and frame persistence",
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["vision-capture", "ocr"]
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "vision-capture",
+        "ocr"
+      ]
     },
     {
       "id": "timeline-streaming",
       "label": "Timeline frame and stream delivery",
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["timeline"]
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "timeline"
+      ]
     },
     {
       "id": "local-api-search",
       "label": "Local API search and indexing",
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["local-api", "db-search"]
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api",
+        "db-search"
+      ]
     },
     {
       "id": "audio-record-transcribe",
       "label": "Audio record, transcribe, and reconcile",
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["audio", "transcription"]
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "audio",
+        "transcription"
+      ]
     },
     {
       "id": "audio-device-health",
       "label": "Audio device and stream health",
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["audio-device"]
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "audio-device"
+      ]
     },
     {
       "id": "meeting-live-notes",
       "label": "Meeting detection and live transcript merge",
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["meeting"]
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "meeting"
+      ]
     },
     {
       "id": "privacy-and-redaction",
       "label": "Privacy filters, DRM guards, and redaction",
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["privacy"]
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "privacy"
+      ]
     },
     {
       "id": "accessibility-ui-events",
       "label": "Accessibility tree and UI event capture",
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["accessibility", "ui-events"]
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "accessibility",
+        "ui-events"
+      ]
     },
     {
       "id": "performance-liveness",
       "label": "Performance, backpressure, and liveness",
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["performance"]
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "performance"
+      ]
     }
   ],
   "suites": [
@@ -121,9 +219,21 @@
         "tests/consumer_sleep_test.rs",
         "tests/health_debounce_test.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["configuration", "engine-lifecycle", "performance"],
-      "flows": ["settings-to-engine-config", "engine-health-lifecycle", "performance-liveness"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "configuration",
+        "engine-lifecycle",
+        "performance"
+      ],
+      "flows": [
+        "settings-to-engine-config",
+        "engine-health-lifecycle",
+        "performance-liveness"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "kind": "mixed",
@@ -158,9 +268,22 @@
         "tests/video_cache_test.rs",
         "tests/video_utils_test.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["vision-capture", "timeline", "storage", "performance"],
-      "flows": ["capture-ocr-pipeline", "timeline-streaming", "performance-liveness"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "vision-capture",
+        "timeline",
+        "storage",
+        "performance"
+      ],
+      "flows": [
+        "capture-ocr-pipeline",
+        "timeline-streaming",
+        "performance-liveness"
+      ],
       "criticality": "high",
       "confidence": "partial",
       "kind": "mixed",
@@ -183,6 +306,7 @@
         "src/routes/frames.rs",
         "src/routes/health.rs",
         "src/routes/live_views.rs",
+        "src/routes/meeting_summary_status.rs",
         "src/routes/meetings.rs",
         "src/routes/memories.rs",
         "src/routes/request_origin.rs",
@@ -202,9 +326,23 @@
         "tests/transcribe_test.rs",
         "tests/websockets_test.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["local-api", "timeline", "meeting", "transcription"],
-      "flows": ["local-api-search", "timeline-streaming", "meeting-live-notes", "audio-record-transcribe"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api",
+        "timeline",
+        "meeting",
+        "transcription"
+      ],
+      "flows": [
+        "local-api-search",
+        "timeline-streaming",
+        "meeting-live-notes",
+        "audio-record-transcribe"
+      ],
       "criticality": "high",
       "confidence": "partial",
       "kind": "mixed",
@@ -217,9 +355,18 @@
       "files": [
         "tests/endpoint_test.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["local-api", "db-search"],
-      "flows": ["local-api-search"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api",
+        "db-search"
+      ],
+      "flows": [
+        "local-api-search"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "kind": "integration",
@@ -232,9 +379,19 @@
       "files": [
         "src/cli/db.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["database", "engine-lifecycle"],
-      "flows": ["engine-health-lifecycle", "performance-liveness"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "database",
+        "engine-lifecycle"
+      ],
+      "flows": [
+        "engine-health-lifecycle",
+        "performance-liveness"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "kind": "unit",
@@ -249,9 +406,18 @@
         "src/focus_tracker/windows.rs",
         "src/process_priority.rs"
       ],
-      "platforms": ["windows", "macos"],
-      "layers": ["engine-lifecycle", "os-integration"],
-      "flows": ["engine-health-lifecycle", "performance-liveness"],
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "layers": [
+        "engine-lifecycle",
+        "os-integration"
+      ],
+      "flows": [
+        "engine-health-lifecycle",
+        "performance-liveness"
+      ],
       "criticality": "medium",
       "confidence": "conditional",
       "kind": "unit",
@@ -293,9 +459,24 @@
         "src/ui_recorder.rs",
         "src/workflow_classifier.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["meeting", "privacy", "ui-events", "pipes", "sync"],
-      "flows": ["meeting-live-notes", "privacy-and-redaction", "accessibility-ui-events", "performance-liveness"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "meeting",
+        "privacy",
+        "ui-events",
+        "pipes",
+        "sync"
+      ],
+      "flows": [
+        "meeting-live-notes",
+        "privacy-and-redaction",
+        "accessibility-ui-events",
+        "performance-liveness"
+      ],
       "criticality": "medium",
       "confidence": "strong",
       "kind": "unit",
@@ -316,9 +497,16 @@
         "src/meeting_watcher/ui_scan/windows.rs",
         "tests/meeting_detection_eval.rs"
       ],
-      "platforms": ["windows", "macos"],
-      "layers": ["meeting"],
-      "flows": ["meeting-live-notes"],
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "layers": [
+        "meeting"
+      ],
+      "flows": [
+        "meeting-live-notes"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "kind": "mixed",
@@ -335,9 +523,20 @@
         "src/retention.rs",
         "tests/retention_lean_test.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["storage", "engine-lifecycle", "performance"],
-      "flows": ["engine-health-lifecycle", "performance-liveness"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "storage",
+        "engine-lifecycle",
+        "performance"
+      ],
+      "flows": [
+        "engine-health-lifecycle",
+        "performance-liveness"
+      ],
       "criticality": "medium",
       "confidence": "strong",
       "kind": "mixed",
@@ -355,9 +554,19 @@
         "src/resource_monitor.rs",
         "src/telemetry_context.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["engine-lifecycle", "performance"],
-      "flows": ["engine-health-lifecycle", "performance-liveness"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "engine-lifecycle",
+        "performance"
+      ],
+      "flows": [
+        "engine-health-lifecycle",
+        "performance-liveness"
+      ],
       "criticality": "medium",
       "confidence": "strong",
       "kind": "unit",
@@ -371,9 +580,19 @@
         "src/lib.rs",
         "src/quarantine.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["database", "engine-lifecycle"],
-      "flows": ["engine-health-lifecycle", "performance-liveness"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "database",
+        "engine-lifecycle"
+      ],
+      "flows": [
+        "engine-health-lifecycle",
+        "performance-liveness"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "kind": "unit",
@@ -398,9 +617,23 @@
         "tests/tag_autocomplete_query_test.rs",
         "tests/tag_filter_bench.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["db-search", "ocr", "accessibility", "performance"],
-      "flows": ["local-api-search", "capture-ocr-pipeline", "accessibility-ui-events", "performance-liveness"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "db-search",
+        "ocr",
+        "accessibility",
+        "performance"
+      ],
+      "flows": [
+        "local-api-search",
+        "capture-ocr-pipeline",
+        "accessibility-ui-events",
+        "performance-liveness"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "kind": "mixed",
@@ -424,14 +657,27 @@
         "tests/live_coverage_marker_test.rs",
         "tests/orphan_chunk_null_poisoning_test.rs",
         "tests/outputs_saf_test.rs",
+        "tests/range_export_frame_sources_test.rs",
         "tests/semantic_storage_test.rs",
         "tests/suggestions_frames_table_test.rs",
         "tests/timeline_frameless_audio_test.rs",
         "tests/timeline_performance_test.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["database", "timeline", "storage", "performance"],
-      "flows": ["timeline-streaming", "performance-liveness"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "database",
+        "timeline",
+        "storage",
+        "performance"
+      ],
+      "flows": [
+        "timeline-streaming",
+        "performance-liveness"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "kind": "mixed",
@@ -451,17 +697,27 @@
         "tests/close_severs_connections_test.rs",
         "tests/memory_pressure_test.rs",
         "tests/multi_pool_wal_parity_test.rs",
+        "tests/quarantine_self_heal_test.rs",
         "tests/sqlite_architecture_invariants_test.rs",
         "tests/sqlite_runtime_version.rs",
         "tests/wal_chaos_e2e_test.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["database", "performance"],
-      "flows": ["performance-liveness"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "database",
+        "performance"
+      ],
+      "flows": [
+        "performance-liveness"
+      ],
       "criticality": "high",
       "confidence": "partial",
       "kind": "mixed",
-      "notes": "SQLite hard-fault classification, failpoint VFS injection, fresh-identity recovery verification with integrity/FK/write canaries, query cancellation, close-severs-connections regressions, multi-pool WAL parity, runtime version pinning, and WAL chaos plus memory-pressure probes."
+      "notes": "SQLite hard-fault classification, failpoint VFS injection, fresh-identity recovery verification with integrity/FK/write canaries, query cancellation, close-severs-connections regressions, multi-pool WAL parity, runtime version pinning, and WAL chaos plus memory-pressure probes, plus read-only quarantine self-heal verification for transient IOERR faults."
     },
     {
       "id": "db-audio-meetings-speakers",
@@ -484,9 +740,22 @@
         "tests/timeline_live_meeting_test.rs",
         "tests/untranscribed_chunks_test.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["database", "audio", "meeting", "speaker"],
-      "flows": ["audio-record-transcribe", "audio-device-health", "meeting-live-notes"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "database",
+        "audio",
+        "meeting",
+        "speaker"
+      ],
+      "flows": [
+        "audio-record-transcribe",
+        "audio-device-health",
+        "meeting-live-notes"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "kind": "integration",
@@ -505,9 +774,23 @@
         "tests/on_screen_filter_test.rs",
         "tests/ui_events_batch_test.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["database", "configuration", "accessibility", "ui-events", "performance"],
-      "flows": ["settings-to-engine-config", "accessibility-ui-events", "performance-liveness"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "database",
+        "configuration",
+        "accessibility",
+        "ui-events",
+        "performance"
+      ],
+      "flows": [
+        "settings-to-engine-config",
+        "accessibility-ui-events",
+        "performance-liveness"
+      ],
       "criticality": "medium",
       "confidence": "partial",
       "kind": "integration",
@@ -533,9 +816,21 @@
         "tests/batch_deferral_test.rs",
         "tests/core_tests.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["audio", "transcription", "performance"],
-      "flows": ["audio-record-transcribe", "meeting-live-notes", "performance-liveness"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "audio",
+        "transcription",
+        "performance"
+      ],
+      "flows": [
+        "audio-record-transcribe",
+        "meeting-live-notes",
+        "performance-liveness"
+      ],
       "criticality": "high",
       "confidence": "partial",
       "kind": "mixed",
@@ -561,9 +856,21 @@
         "tests/bluetooth_gap_hallucination_test.rs",
         "tests/channel_lag_test.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["audio-device", "audio", "performance"],
-      "flows": ["audio-device-health", "audio-record-transcribe", "performance-liveness"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "audio-device",
+        "audio",
+        "performance"
+      ],
+      "flows": [
+        "audio-device-health",
+        "audio-record-transcribe",
+        "performance-liveness"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "kind": "mixed",
@@ -582,9 +889,20 @@
         "src/core/sck_output_watchdog.rs",
         "src/device/vpio_health.rs"
       ],
-      "platforms": ["windows", "macos"],
-      "layers": ["audio-device", "audio", "meeting"],
-      "flows": ["audio-device-health", "audio-record-transcribe", "meeting-live-notes"],
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "layers": [
+        "audio-device",
+        "audio",
+        "meeting"
+      ],
+      "flows": [
+        "audio-device-health",
+        "audio-record-transcribe",
+        "meeting-live-notes"
+      ],
       "criticality": "high",
       "confidence": "partial",
       "kind": "unit",
@@ -598,6 +916,7 @@
         "src/audio_manager/meeting_piggyback.rs",
         "src/audio_manager/piggyback_listeners.rs",
         "src/audio_manager/reconciliation.rs",
+        "src/audio_manager/write_retry.rs",
         "src/meeting_detector.rs",
         "src/meeting_processes.rs",
         "src/meeting_streaming/config.rs",
@@ -607,6 +926,7 @@
         "src/segmentation/segmentation_manager.rs",
         "src/speaker/embedding.rs",
         "src/speaker/embedding_manager.rs",
+        "src/speaker/identify_gate.rs",
         "src/speaker/mod.rs",
         "src/speaker/models.rs",
         "src/speaker/segment.rs",
@@ -616,11 +936,26 @@
         "tests/dedup_benchmark/scenarios.rs",
         "tests/dedup_benchmark/simulation.rs",
         "tests/overlap_dedup_test.rs",
-        "tests/speaker_identification.rs"
+        "tests/speaker_identification.rs",
+        "tests/speaker_identity_gate_real_audio_test.rs",
+        "tests/speaker_identity_gate_test.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["audio", "meeting", "speaker", "transcription"],
-      "flows": ["audio-record-transcribe", "meeting-live-notes", "performance-liveness"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "audio",
+        "meeting",
+        "speaker",
+        "transcription"
+      ],
+      "flows": [
+        "audio-record-transcribe",
+        "meeting-live-notes",
+        "performance-liveness"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "kind": "mixed",
@@ -640,9 +975,21 @@
         "tests/audio_pipeline_benchmark/smart_mode_benchmark.rs",
         "tests/audio_pipeline_benchmark/vad_benchmark.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["audio", "transcription", "performance"],
-      "flows": ["audio-record-transcribe", "meeting-live-notes", "performance-liveness"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "audio",
+        "transcription",
+        "performance"
+      ],
+      "flows": [
+        "audio-record-transcribe",
+        "meeting-live-notes",
+        "performance-liveness"
+      ],
       "criticality": "medium",
       "confidence": "partial",
       "kind": "benchmark",
@@ -660,9 +1007,20 @@
         "tests/music_detection_real.rs",
         "tests/onnx_model_test.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["audio", "transcription", "privacy"],
-      "flows": ["audio-record-transcribe", "privacy-and-redaction"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "audio",
+        "transcription",
+        "privacy"
+      ],
+      "flows": [
+        "audio-record-transcribe",
+        "privacy-and-redaction"
+      ],
       "criticality": "medium",
       "confidence": "partial",
       "kind": "mixed",
@@ -688,9 +1046,23 @@
         "tests/monitor_cache_test.rs",
         "tests/url_timing_test.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["vision-capture", "timeline", "performance", "privacy"],
-      "flows": ["capture-ocr-pipeline", "timeline-streaming", "privacy-and-redaction", "performance-liveness"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "vision-capture",
+        "timeline",
+        "performance",
+        "privacy"
+      ],
+      "flows": [
+        "capture-ocr-pipeline",
+        "timeline-streaming",
+        "privacy-and-redaction",
+        "performance-liveness"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "kind": "mixed",
@@ -705,9 +1077,18 @@
         "src/tesseract.rs",
         "src/text_regions.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["vision-capture", "ocr"],
-      "flows": ["capture-ocr-pipeline"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "vision-capture",
+        "ocr"
+      ],
+      "flows": [
+        "capture-ocr-pipeline"
+      ],
       "criticality": "high",
       "confidence": "partial",
       "kind": "unit",
@@ -724,9 +1105,17 @@
         "src/monitor/windows.rs",
         "src/wgc_capture.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["vision-capture"],
-      "flows": ["capture-ocr-pipeline"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "vision-capture"
+      ],
+      "flows": [
+        "capture-ocr-pipeline"
+      ],
       "criticality": "medium",
       "confidence": "partial",
       "kind": "unit",
@@ -740,9 +1129,16 @@
         "src/apple.rs",
         "tests/apple_vision_test.rs"
       ],
-      "platforms": ["macos"],
-      "layers": ["ocr", "vision-capture"],
-      "flows": ["capture-ocr-pipeline"],
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "ocr",
+        "vision-capture"
+      ],
+      "flows": [
+        "capture-ocr-pipeline"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "kind": "mixed",
@@ -756,9 +1152,16 @@
         "src/microsoft.rs",
         "tests/windows_vision_test.rs"
       ],
-      "platforms": ["windows"],
-      "layers": ["ocr", "vision-capture"],
-      "flows": ["capture-ocr-pipeline"],
+      "platforms": [
+        "windows"
+      ],
+      "layers": [
+        "ocr",
+        "vision-capture"
+      ],
+      "flows": [
+        "capture-ocr-pipeline"
+      ],
       "criticality": "high",
       "confidence": "partial",
       "kind": "integration",
@@ -771,9 +1174,17 @@
       "files": [
         "tests/custom_ocr_test.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["ocr"],
-      "flows": ["capture-ocr-pipeline"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "ocr"
+      ],
+      "flows": [
+        "capture-ocr-pipeline"
+      ],
       "criticality": "medium",
       "confidence": "conditional",
       "kind": "manual",
@@ -799,9 +1210,22 @@
         "src/tree/mod.rs",
         "src/url_filter.rs"
       ],
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["accessibility", "ui-events", "privacy", "performance"],
-      "flows": ["accessibility-ui-events", "privacy-and-redaction", "performance-liveness"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "accessibility",
+        "ui-events",
+        "privacy",
+        "performance"
+      ],
+      "flows": [
+        "accessibility-ui-events",
+        "privacy-and-redaction",
+        "performance-liveness"
+      ],
       "criticality": "high",
       "confidence": "strong",
       "kind": "unit",
@@ -817,9 +1241,17 @@
         "src/tree/linux.rs",
         "src/tree/linux_lines.rs"
       ],
-      "platforms": ["linux"],
-      "layers": ["accessibility", "privacy"],
-      "flows": ["accessibility-ui-events", "privacy-and-redaction"],
+      "platforms": [
+        "linux"
+      ],
+      "layers": [
+        "accessibility",
+        "privacy"
+      ],
+      "flows": [
+        "accessibility-ui-events",
+        "privacy-and-redaction"
+      ],
       "criticality": "medium",
       "confidence": "partial",
       "kind": "unit",
@@ -837,9 +1269,20 @@
         "tests/e2e_obsidian.rs",
         "tests/e2e_tree_walker.rs"
       ],
-      "platforms": ["macos"],
-      "layers": ["accessibility", "privacy", "real-app", "performance"],
-      "flows": ["accessibility-ui-events", "privacy-and-redaction", "performance-liveness"],
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "accessibility",
+        "privacy",
+        "real-app",
+        "performance"
+      ],
+      "flows": [
+        "accessibility-ui-events",
+        "privacy-and-redaction",
+        "performance-liveness"
+      ],
       "criticality": "high",
       "confidence": "conditional",
       "kind": "mixed",
@@ -857,9 +1300,18 @@
         "src/tree/windows.rs",
         "src/tree/windows_lines.rs"
       ],
-      "platforms": ["windows"],
-      "layers": ["accessibility", "privacy", "ui-events"],
-      "flows": ["accessibility-ui-events", "privacy-and-redaction"],
+      "platforms": [
+        "windows"
+      ],
+      "layers": [
+        "accessibility",
+        "privacy",
+        "ui-events"
+      ],
+      "flows": [
+        "accessibility-ui-events",
+        "privacy-and-redaction"
+      ],
       "criticality": "high",
       "confidence": "partial",
       "kind": "unit",

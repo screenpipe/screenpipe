@@ -16,6 +16,21 @@ use tauri::Manager;
 
 use tracing::info;
 
+#[cfg(target_os = "macos")]
+use tracing::warn;
+
+/// Live Text state is keyed by host window label: one overlay per window, so a
+/// call made by one webview can never evict another window's overlay or bind
+/// its coordinates to another window's contentView height.
+///
+/// The label is taken from the invoking `WebviewWindow` rather than passed from
+/// JS, which makes cross-window interference structurally impossible instead of
+/// merely conventional.
+#[cfg(target_os = "macos")]
+fn window_key(window: &tauri::WebviewWindow) -> Result<CString, String> {
+    CString::new(window.label()).map_err(|e| format!("invalid window label: {}", e))
+}
+
 // ---------- helpers (macOS only) ----------
 
 #[cfg(target_os = "macos")]
@@ -44,6 +59,7 @@ static ANALYZE_WORKER: std::sync::OnceLock<std::sync::mpsc::SyncSender<AnalyzeRe
 
 #[cfg(target_os = "macos")]
 struct AnalyzeRequest {
+    window: String,
     image_path: String,
     frame_id: String,
     x: f64,
@@ -87,6 +103,8 @@ fn get_analyze_worker() -> &'static std::sync::mpsc::SyncSender<AnalyzeRequest> 
 
                     let result =
                         crate::window::with_autorelease_pool(|| -> Result<String, String> {
+                            let window_c = CString::new(latest.window.clone())
+                                .map_err(|e| format!("invalid window label: {}", e))?;
                             let path_c = CString::new(latest.image_path.clone())
                                 .map_err(|e| format!("invalid path: {}", e))?;
                             let frame_id_c = CString::new(latest.frame_id.clone())
@@ -97,6 +115,7 @@ fn get_analyze_worker() -> &'static std::sync::mpsc::SyncSender<AnalyzeRequest> 
 
                             let status = unsafe {
                                 livetext_ffi::lt_analyze_image(
+                                    window_c.as_ptr(),
                                     path_c.as_ptr(),
                                     frame_id_c.as_ptr(),
                                     latest.x,
@@ -151,12 +170,30 @@ pub async fn livetext_is_available() -> Result<bool, String> {
 
 #[specta::specta]
 #[tauri::command]
-pub async fn livetext_init(app: tauri::AppHandle, window_label: String) -> Result<(), String> {
+pub async fn livetext_init(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    window_label: String,
+) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         use std::sync::mpsc;
         let (tx, rx) = mpsc::channel();
         let app_clone = app.clone();
+
+        // The overlay is keyed by the *invoking* webview, so the window it is
+        // attached to must be that same window. They agree for every caller
+        // today; warn loudly rather than silently attaching an overlay that the
+        // subsequent position updates would then drive with foreign geometry.
+        if window_label != window.label() {
+            warn!(
+                "livetext_init: requested window '{}' but invoked from '{}' — attaching to the invoking window",
+                window_label,
+                window.label()
+            );
+        }
+        let window_label = window.label().to_string();
+        let key = window_key(&window)?;
 
         info!("livetext_init called for window '{}'", window_label);
         crate::window::run_on_main_thread_safe(&app, move || {
@@ -174,7 +211,7 @@ pub async fn livetext_init(app: tauri::AppHandle, window_label: String) -> Resul
                         return Err(format!("no panel or window found for '{}'", window_label));
                     };
 
-                let status = unsafe { livetext_ffi::lt_init(ns_window_ptr) };
+                let status = unsafe { livetext_ffi::lt_init(key.as_ptr(), ns_window_ptr) };
                 if status != 0 {
                     return Err(format!("lt_init returned error code: {}", status));
                 }
@@ -193,7 +230,7 @@ pub async fn livetext_init(app: tauri::AppHandle, window_label: String) -> Resul
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (app, window_label);
+        let _ = (app, window, window_label);
         Err("live text is only available on macOS".to_string())
     }
 }
@@ -201,6 +238,7 @@ pub async fn livetext_init(app: tauri::AppHandle, window_label: String) -> Resul
 #[specta::specta]
 #[tauri::command]
 pub async fn livetext_analyze(
+    window: tauri::WebviewWindow,
     image_path: String,
     frame_id: String,
     x: f64,
@@ -210,6 +248,7 @@ pub async fn livetext_analyze(
 ) -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
+        let window_label = window.label().to_string();
         // Bump generation — the worker checks this before doing expensive work.
         let gen = ANALYZE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
 
@@ -223,6 +262,7 @@ pub async fn livetext_analyze(
         // request is still in the queue. That's fine — the worker drains
         // stale requests before processing.
         let _ = worker.try_send(AnalyzeRequest {
+            window: window_label,
             image_path,
             frame_id,
             x,
@@ -239,7 +279,7 @@ pub async fn livetext_analyze(
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (image_path, frame_id, x, y, w, h);
+        let _ = (window, image_path, frame_id, x, y, w, h);
         Err("live text is only available on macOS".to_string())
     }
 }
@@ -270,6 +310,7 @@ pub async fn livetext_prefetch(paths: Vec<String>) -> Result<(), String> {
 #[specta::specta]
 #[tauri::command]
 pub async fn livetext_update_position(
+    window: tauri::WebviewWindow,
     frame_id: String,
     x: f64,
     y: f64,
@@ -278,9 +319,10 @@ pub async fn livetext_update_position(
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
+        let key = window_key(&window)?;
         let frame_id_c = CString::new(frame_id).map_err(|e| format!("invalid frame_id: {}", e))?;
         let status = crate::window::with_autorelease_pool(|| unsafe {
-            livetext_ffi::lt_update_position(frame_id_c.as_ptr(), x, y, w, h)
+            livetext_ffi::lt_update_position(key.as_ptr(), frame_id_c.as_ptr(), x, y, w, h)
         });
         if status != 0 {
             return Err(format!("lt_update_position error: {}", status));
@@ -289,7 +331,7 @@ pub async fn livetext_update_position(
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (frame_id, x, y, w, h);
+        let _ = (window, frame_id, x, y, w, h);
         Err("live text is only available on macOS".to_string())
     }
 }
@@ -300,46 +342,61 @@ pub async fn livetext_update_position(
 /// request: the bridge only paints when that frame's analysis is on the overlay,
 /// and re-paints automatically once it lands (analysis is asynchronous, so the
 /// highlight request usually arrives first).
-pub async fn livetext_highlight(terms: Vec<String>, frame_id: String) -> Result<i32, String> {
+pub async fn livetext_highlight(
+    window: tauri::WebviewWindow,
+    terms: Vec<String>,
+    frame_id: String,
+) -> Result<i32, String> {
     #[cfg(target_os = "macos")]
     {
+        let key = window_key(&window)?;
         let json = serde_json::to_string(&terms).map_err(|e| format!("json error: {}", e))?;
         let json_c = CString::new(json).map_err(|e| format!("invalid json: {}", e))?;
         let frame_id_c = CString::new(frame_id).map_err(|e| format!("invalid frame_id: {}", e))?;
         let count = crate::window::with_autorelease_pool(|| unsafe {
-            livetext_ffi::lt_highlight_ranges(json_c.as_ptr(), frame_id_c.as_ptr())
+            livetext_ffi::lt_highlight_ranges(key.as_ptr(), json_c.as_ptr(), frame_id_c.as_ptr())
         });
         return Ok(count);
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (terms, frame_id);
+        let _ = (window, terms, frame_id);
         Ok(-1)
     }
 }
 
 #[specta::specta]
 #[tauri::command]
-pub async fn livetext_clear_highlights() -> Result<(), String> {
+pub async fn livetext_clear_highlights(window: tauri::WebviewWindow) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        crate::window::with_autorelease_pool(|| unsafe { livetext_ffi::lt_clear_highlights() });
+        let key = window_key(&window)?;
+        crate::window::with_autorelease_pool(|| unsafe {
+            livetext_ffi::lt_clear_highlights(key.as_ptr())
+        });
         return Ok(());
     }
     #[cfg(not(target_os = "macos"))]
-    Ok(())
+    {
+        let _ = window;
+        Ok(())
+    }
 }
 
 #[specta::specta]
 #[tauri::command]
-pub async fn livetext_hide() -> Result<(), String> {
+pub async fn livetext_hide(window: tauri::WebviewWindow) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        crate::window::with_autorelease_pool(|| unsafe { livetext_ffi::lt_hide() });
+        let key = window_key(&window)?;
+        crate::window::with_autorelease_pool(|| unsafe { livetext_ffi::lt_hide(key.as_ptr()) });
         return Ok(());
     }
     #[cfg(not(target_os = "macos"))]
-    Ok(())
+    {
+        let _ = window;
+        Ok(())
+    }
 }
 
 /// Place a transparent click guard above the Live Text overlay in the given
@@ -349,6 +406,7 @@ pub async fn livetext_hide() -> Result<(), String> {
 #[specta::specta]
 #[tauri::command]
 pub async fn livetext_set_guard_rect(
+    window: tauri::WebviewWindow,
     key: String,
     x: f64,
     y: f64,
@@ -357,9 +415,10 @@ pub async fn livetext_set_guard_rect(
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
+        let window_c = window_key(&window)?;
         let key_c = CString::new(key).map_err(|e| format!("invalid key: {}", e))?;
         let status = crate::window::with_autorelease_pool(|| unsafe {
-            livetext_ffi::lt_set_guard_rect(key_c.as_ptr(), x, y, w, h)
+            livetext_ffi::lt_set_guard_rect(window_c.as_ptr(), key_c.as_ptr(), x, y, w, h)
         });
         if status != 0 {
             return Err(format!("lt_set_guard_rect error: {}", status));
@@ -368,7 +427,7 @@ pub async fn livetext_set_guard_rect(
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (key, x, y, w, h);
+        let _ = (window, key, x, y, w, h);
         Ok(())
     }
 }

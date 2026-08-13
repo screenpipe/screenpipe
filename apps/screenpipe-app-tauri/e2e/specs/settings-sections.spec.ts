@@ -122,7 +122,7 @@ describe('Settings sections', () => {
     await section.waitForExist({ timeout: 8_000 });
     const sectionText = (await section.getText()).toLowerCase();
     expect(sectionText).toContain('screen context capture');
-    expect(sectionText).toContain('screenshot images');
+    expect(sectionText).toContain('screen recording');
     expect(sectionText).not.toContain('audio recording');
     expect(sectionText).not.toContain('live meeting notes');
 

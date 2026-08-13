@@ -201,7 +201,7 @@ export function PipeInstallDialog() {
                 ? registryRisk === "high"
                   ? "Unverified publisher. Can access all your screen data."
                   : "Review the requested access before installing."
-                : "a scheduled task from an external link wants to install. scheduled tasks are AI agents that run on your screen data — review the prompt below before installing."}
+                : "an external link wants to install a scheduled task. these are AI agents that run on your screen data — review the prompt below before installing."}
             </AlertDialogDescription>
           </AlertDialogHeader>
 

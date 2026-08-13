@@ -22,12 +22,14 @@ export interface LocalGatewayHarnessOptions {
 	port?: number;
 	privateCostControls?: Partial<Record<PrivateControlName, string | undefined>>;
 	providerReply?: string;
+	cloudflareSpendRules?: boolean;
 }
 
 export interface LocalGatewayOutboundRequest {
 	url: string;
 	method: string;
 	body: unknown;
+	headers: Record<string, string>;
 	expected: boolean;
 }
 
@@ -171,6 +173,10 @@ export class LocalGatewayHarness {
 			const script = bundleWorker(tempDirectory);
 			let harness: LocalGatewayHarness;
 			const providerReply = options.providerReply ?? 'local gateway ok';
+			const cloudflareSpendRules = options.cloudflareSpendRules === true;
+			const cloudflareAccountId = '00000000000000000000000000000000';
+			const cloudflareGatewayId = 'screenpipe-local-e2e';
+			const cloudflareGatewayRoot = `https://gateway.ai.cloudflare.com/v1/${cloudflareAccountId}/${cloudflareGatewayId}`;
 			runtime = new Miniflare({
 				modules: true,
 				script,
@@ -185,6 +191,14 @@ export class LocalGatewayHarness {
 					MODEL_GATING_ENABLED: 'true',
 					PIPE_FRONTIER_POLICY: 'reject',
 					ROUTER_MODE: 'off',
+					...(cloudflareSpendRules ? {
+						HOSTED_CHAT_GATEWAY_MODE: 'cloudflare',
+						CLOUDFLARE_ACCOUNT_ID: cloudflareAccountId,
+						CLOUDFLARE_AI_GATEWAY_ID: cloudflareGatewayId,
+						CLOUDFLARE_AI_GATEWAY_BASE_URL: `${cloudflareGatewayRoot}/compat/chat/completions`,
+						CLOUDFLARE_AI_GATEWAY_TOKEN: 'screenpipe-local-e2e-gateway-token',
+						CLOUDFLARE_API_TOKEN: 'screenpipe-local-e2e-read-token',
+					} : {}),
 				},
 				d1Databases: { DB: `screenpipe-ai-gateway-e2e-${crypto.randomUUID()}` },
 				durableObjects: { RATE_LIMITER: 'RateLimiter' },
@@ -198,15 +212,82 @@ export class LocalGatewayHarness {
 							.text()
 							.catch(() => null);
 					}
-					const expected = request.method === 'POST' && request.url === 'https://api.openai.com/v1/chat/completions';
+					const directProvider = request.method === 'POST' && request.url === 'https://api.openai.com/v1/chat/completions';
+					const gatewayProvider = cloudflareSpendRules &&
+						request.method === 'POST' &&
+						request.url === `${cloudflareGatewayRoot}/openai/chat/completions`;
+					const gatewaySettings = cloudflareSpendRules &&
+						request.method === 'GET' &&
+						request.url === `https://api.cloudflare.com/client/v4/accounts/${cloudflareAccountId}/ai-gateway/gateways/${cloudflareGatewayId}`;
+					const gatewayAnalytics = cloudflareSpendRules &&
+						request.method === 'POST' &&
+						request.url === 'https://api.cloudflare.com/client/v4/graphql';
+					const expected = directProvider || gatewayProvider || gatewaySettings || gatewayAnalytics;
 					harness.outboundRequests.push({
 						url: request.url,
 						method: request.method,
 						body,
+						headers: Object.fromEntries(request.headers),
 						expected,
 					});
 					if (!expected) {
 						return new Response('unexpected local E2E outbound request', { status: 599 });
+					}
+					if (gatewaySettings) {
+						const baseRule = {
+							enabled: true,
+							limitType: 'cost',
+							window: 604_800,
+							technique: 'fixed',
+							metadata: {
+								user_id: { mode: 'partition' },
+								plan: { mode: 'filter', values: ['internal'] },
+							},
+						};
+						return Response.json({
+							success: true,
+							result: {
+								spend_limits: {
+									enabled: true,
+									rules: [
+										{ ...baseRule, id: 'local-business-total', limit: 10 },
+										{
+											...baseRule,
+											id: 'local-business-frontier',
+											limit: 5,
+											metadata: {
+												...baseRule.metadata,
+												lane: { mode: 'filter', values: ['frontier'] },
+											},
+										},
+									],
+								},
+							},
+						});
+					}
+					if (gatewayAnalytics) {
+						const analyticsBody = body as { variables?: { metadata?: string } };
+						const userId = analyticsBody.variables?.metadata?.replaceAll('%', '') ?? '';
+						return Response.json({
+							data: {
+								viewer: {
+									accounts: [{
+										window0: [{
+											dimensions: {
+												metadataRaw: JSON.stringify({
+													user_id: userId,
+													plan: 'internal',
+													lane: 'frontier',
+													workload: 'interactive',
+													trial: false,
+												}),
+											},
+											sum: { cost: 5 },
+										}],
+									}],
+								},
+							},
+						});
 					}
 					const stream = typeof body === 'object' && body !== null && (body as { stream?: unknown }).stream === true;
 					return providerResponse(providerReply, stream);

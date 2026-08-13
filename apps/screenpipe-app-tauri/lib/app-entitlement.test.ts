@@ -368,6 +368,51 @@ describe("app entitlement", () => {
     expect(hasCloudEntitlement(normalized)).toBe(true);
   });
 
+  it("normalizes an authenticated legacy cloud denial as verified free", () => {
+    const normalized = normalizeAppUser(
+      {
+        id: "user_legacy_free",
+        cloud_subscribed: false,
+      },
+      "token",
+    );
+
+    expect(getLocalPlanPolicy(normalized)).toBe("verified-free");
+    expect(isAuthenticatedFreeUser(normalized)).toBe(true);
+    expect(hasVerifiedPaidPlan(normalized)).toBe(false);
+    expect(hasAppEntitlement(normalized)).toBe(false);
+  });
+
+  it("keeps a partial newer entitlement unknown instead of synthesizing verified free", () => {
+    const normalized = normalizeAppUser(
+      {
+        id: "user_partial_entitlement",
+        cloud_subscribed: false,
+        entitlement: { plan: "none" },
+      },
+      "token",
+    );
+
+    expect(getLocalPlanPolicy(normalized)).toBe("unknown");
+  });
+
+  it("requires explicit feature evidence before accepting newer free evidence", () => {
+    const normalized = normalizeAppUser(
+      {
+        id: "user_incomplete_free",
+        cloud_subscribed: false,
+        entitlement: {
+          active: false,
+          plan: "none",
+          source: "none",
+        },
+      },
+      "token",
+    );
+
+    expect(getLocalPlanPolicy(normalized)).toBe("unknown");
+  });
+
   // The server computes `subscription_plan` per request and may omit it while
   // still returning a complete entitlement. Falling back to an invented label
   // ("pro"/"standard") then contradicted the entitlement's own plan, and
@@ -576,10 +621,17 @@ describe("isAuthenticatedFreeUser", () => {
             plan: "none",
             source: "none",
             checked_at: "2026-06-01T11:59:59.000Z",
+            features: { app: true },
           },
         }),
       ),
     ).toBe(true);
+  });
+
+  it("rejects a whitespace-only authentication token", () => {
+    expect(isAuthenticatedFreeUser(explicitFree({ token: "   " }))).toBe(
+      false,
+    );
   });
 
   it("fails safe on missing or conflicting plan fields", () => {

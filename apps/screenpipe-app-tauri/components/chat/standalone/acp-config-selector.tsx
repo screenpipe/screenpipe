@@ -6,15 +6,21 @@
 import { useState } from "react";
 import { Loader2, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
+import {
+  ComposerSettingsPopover,
+  ComposerSettingsSelect,
+} from "@/components/chat/standalone/composer-settings-popover";
+import {
+  ComposerEffortSlider,
+  isEffortOption,
+} from "@/components/chat/standalone/composer-effort-slider";
 import { commands, type AIPreset } from "@/lib/utils/tauri";
-import { dedupedModes, useAcpSessionConfig } from "@/lib/stores/acp-session-config";
+import {
+  dedupedModes,
+  useAcpSessionConfig,
+  type AcpConfigOption,
+} from "@/lib/stores/acp-session-config";
 import { cn } from "@/lib/utils";
 
 // A live-session command fails this way before the first prompt spawns the ACP
@@ -36,11 +42,19 @@ export type AcpConfigDefaultChange =
   | { optionId: string; value: string }
   | { modeId: string };
 
-const FIELD_LABEL = "block text-[10px] font-medium uppercase tracking-wide text-muted-foreground";
-
-const FIELD_SELECT =
-  "mt-1 h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground " +
-  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
+/** The select an adapter uses for its model choice. Adapters name it "model"
+ *  (Claude, Codex) or categorise it as one. Deliberately no "first select"
+ *  fallback: labelling the trigger "high" off a reasoning-effort control reads
+ *  as a model and is worse than the generic label. */
+function pickModelOption(selects: AcpConfigOption[]): AcpConfigOption | null {
+  return (
+    selects.find(
+      (option) => option.id === "model" || option.category === "model",
+    ) ??
+    selects.find((option) => option.name.toLowerCase().includes("model")) ??
+    null
+  );
+}
 
 /** One collapsed "config" control for everything the ACP adapter advertised for
  *  the active session — its modes (e.g. permission modes), select options
@@ -98,6 +112,27 @@ export function AcpConfigSelector({
   // them as toggles rather than dropping them.
   const toggles = (config?.options ?? []).filter((option) => option.type === "boolean");
   const modes = dedupedModes(config);
+  // Live session wins once it exists; before that the saved preset default is
+  // the chosen value. Shared by the trigger label and the selects so the button
+  // can never name a different model than the dropdown has selected.
+  const selectedValue = (option: AcpConfigOption) =>
+    liveHasChoices
+      ? String(option.currentValue ?? "")
+      : (presetConfig[option.id] ?? String(option.currentValue ?? ""));
+  const selectedModeId = liveHasChoices
+    ? modes?.currentModeId
+    : (presetModeId ?? modes?.currentModeId);
+  // Name the active model on the trigger — a bare "config" hides the one thing
+  // people check before sending. Falls back to the mode when an adapter
+  // advertises no selects at all.
+  const modelOption = pickModelOption(selects);
+  const modelValue = modelOption ? selectedValue(modelOption) : "";
+  const triggerLabel =
+    (modelOption &&
+      (modelOption.values.find((value) => value.value === modelValue)?.name ||
+        modelValue)) ||
+    modes?.availableModes.find((mode) => mode.value === selectedModeId)?.name ||
+    "config";
   // Re-authenticate is offered for every ACP agent (as Zed does): it re-runs the
   // agent's own auth flow, which re-shows whatever sign-in methods it has.
   const canReauth = !!onReauthenticate;
@@ -141,84 +176,65 @@ export function AcpConfigSelector({
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-          title="Agent configuration"
-          aria-label="Agent configuration"
-          data-testid="acp-config-trigger"
-        >
-          <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
-          <span className="font-medium">config</span>
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="end"
-        side="top"
-        sideOffset={6}
-        className="w-64 space-y-3 p-3"
-        data-testid="acp-config-popover"
-      >
-        {modes && (
-          <label className="block">
-            <span className={FIELD_LABEL}>mode</span>
-            <select
-              value={liveHasChoices ? modes.currentModeId : (presetModeId ?? modes.currentModeId)}
-              disabled={pendingId === "__mode"}
-              aria-label="Agent mode"
-              onChange={(event) => {
-                const modeId = event.target.value;
-                applyChange(
-                  "__mode",
-                  { modeId },
-                  () => commands.piAcpSetMode(sessionId, modeId),
-                  "mode",
-                );
-              }}
-              className={cn(FIELD_SELECT, pendingId === "__mode" && "opacity-50")}
-            >
-              {modes.availableModes.map((mode) => (
-                <option key={mode.value} value={mode.value} title={mode.description ?? undefined}>
-                  {mode.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        {selects.map((option) => (
-          <label key={option.id} className="block">
-            <span className={FIELD_LABEL}>{option.name}</span>
-            <select
-              value={
-                liveHasChoices
-                  ? String(option.currentValue ?? "")
-                  : (presetConfig[option.id] ?? String(option.currentValue ?? ""))
-              }
-              disabled={pendingId === option.id}
-              title={option.description || option.name}
-              aria-label={option.name}
-              onChange={(event) => {
-                const value = event.target.value;
-                applyChange(
-                  option.id,
-                  { optionId: option.id, value },
-                  () => commands.piAcpSetConfigOption(sessionId, option.id, value, null),
-                  option.name,
-                );
-              }}
-              className={cn(FIELD_SELECT, pendingId === option.id && "opacity-50")}
-            >
-              {option.values.map((value) => (
-                <option key={value.value} value={value.value} title={value.description ?? undefined}>
-                  {value.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        ))}
+    <ComposerSettingsPopover
+      icon={SlidersHorizontal}
+      label={triggerLabel}
+      title={`Agent configuration${triggerLabel === "config" ? "" : `: ${triggerLabel}`}`}
+      ariaLabel="Agent configuration"
+      triggerTestId="acp-config-trigger"
+      contentTestId="acp-config-popover"
+      open={open}
+      onOpenChange={setOpen}
+    >
+      {modes && (
+        <ComposerSettingsSelect
+          label="mode"
+          value={selectedModeId ?? modes.currentModeId}
+          disabled={pendingId === "__mode"}
+          options={modes.availableModes}
+          onValueChange={(modeId) =>
+            applyChange(
+              "__mode",
+              { modeId },
+              () => commands.piAcpSetMode(sessionId, modeId),
+              "mode",
+            )
+          }
+        />
+      )}
+      {selects.map((option) => {
+        const apply = (value: string) =>
+          applyChange(
+            option.id,
+            { optionId: option.id, value },
+            () => commands.piAcpSetConfigOption(sessionId, option.id, value, null),
+            option.name,
+          );
+        // An adapter's reasoning effort is the same axis as Pi's thinking
+        // level, so it gets the same dial rather than a second look for the
+        // same decision. Everything else stays a list, because it is one.
+        return isEffortOption(option) ? (
+          <ComposerEffortSlider
+            key={option.id}
+            label={option.name}
+            testId="acp-effort-slider"
+            value={selectedValue(option)}
+            disabled={pendingId === option.id}
+            steps={option.values}
+            onValueChange={apply}
+          />
+        ) : (
+          <ComposerSettingsSelect
+            key={option.id}
+            label={option.name}
+            value={selectedValue(option)}
+            disabled={pendingId === option.id}
+            title={option.description || option.name}
+            options={option.values}
+            onValueChange={apply}
+          />
+        );
+      })}
         {toggles.map((option) => (
           <div
             key={option.id}
@@ -279,7 +295,6 @@ export function AcpConfigSelector({
             {reauthPending ? "signing out…" : "re-authenticate"}
           </button>
         )}
-      </PopoverContent>
-    </Popover>
+    </ComposerSettingsPopover>
   );
 }

@@ -41,6 +41,12 @@ mod imp {
 
     const SKIP: i32 = 3;
 
+    /// Single-window harness: every window-scoped call is keyed to this label.
+    static WIN: std::sync::OnceLock<CString> = std::sync::OnceLock::new();
+    fn win() -> *const c_char {
+        WIN.get_or_init(|| CString::new("stress").unwrap()).as_ptr()
+    }
+
     fn skip(reason: &str) -> ! {
         eprintln!("[livetext-stress] skipped: {reason}");
         std::process::exit(SKIP);
@@ -50,6 +56,7 @@ mod imp {
         let mut text: *mut c_char = std::ptr::null_mut();
         let mut err: *mut c_char = std::ptr::null_mut();
         let rc = lt_analyze_image(
+            win(),
             path.as_ptr(),
             frame.as_ptr(),
             0.0,
@@ -91,8 +98,8 @@ mod imp {
             skip("could not render test image");
         }
 
-        let win = unsafe { hs_setup() };
-        if unsafe { lt_init(win) } != 0 {
+        let window_ptr = unsafe { hs_setup() };
+        if unsafe { lt_init(win(), window_ptr) } != 0 {
             skip("lt_init failed (no window server?)");
         }
 
@@ -110,7 +117,7 @@ mod imp {
                 // exceed the bridge's internal 10s timeout on a cold machine
                 for _ in 0..3 {
                     if unsafe { analyze(&img, &frame) } == 0 {
-                        unsafe { lt_hide() };
+                        unsafe { lt_hide(win()) };
                         warmed.store(true, Ordering::Relaxed);
                         return;
                     }
@@ -163,7 +170,7 @@ mod imp {
                     .spawn(move || {
                         let mut k = 0u64;
                         while !stop.load(Ordering::Relaxed) {
-                            unsafe { lt_hide() };
+                            unsafe { lt_hide(win()) };
                             ops.fetch_add(1, Ordering::Relaxed);
                             k += 1;
                             if k.is_multiple_of(256) {
@@ -184,7 +191,7 @@ mod imp {
                     .name("tokio-pos".into())
                     .spawn(move || {
                         while !stop.load(Ordering::Relaxed) {
-                            unsafe { lt_update_position(frame.as_ptr(), 0.0, 0.0, 800.0, 600.0) };
+                            unsafe { lt_update_position(win(), frame.as_ptr(), 0.0, 0.0, 800.0, 600.0) };
                             ops.fetch_add(1, Ordering::Relaxed);
                             std::thread::sleep(std::time::Duration::from_micros(500));
                         }

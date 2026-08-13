@@ -2179,6 +2179,14 @@ pub type OnPipeRunComplete =
 /// Synchronous scheduler launch guard. Returning `Some(reason)` skips the run.
 pub type SchedulerRunGuard = Arc<dyn Fn() -> Option<String> + Send + Sync>;
 
+/// Per-pipe run context resolved at scheduler launch time.
+///
+/// Set by the engine layer, which owns the Live View store. Returning
+/// `Some(block)` appends an already-rendered context block to that one run's
+/// prompt; returning `None` leaves the prompt untouched. Kept synchronous and
+/// infallible so a slow or failing lookup can never delay or skip a run.
+pub type ScheduledRunContext = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
 /// Callback fired for each lifecycle event and stdout line from a running pipe.
 /// Args: (pipe_name, execution_id, continues_chat, line)
 pub type OnPipeOutputLine = Arc<dyn Fn(&str, i64, bool, &str) + Send + Sync>;
@@ -2272,7 +2280,7 @@ async fn setup_pipe_permissions(
     if perms.has_any_restrictions() || force_write {
         // Generate a unique pipe token for server-side enforcement
         use rand::Rng;
-        let suffix: u64 = rand::thread_rng().gen();
+        let suffix: u64 = rand::rng().random();
         let t = format!("sp_pipe_{:016x}", suffix);
         perms.pipe_token = Some(t.clone());
 
@@ -2344,6 +2352,10 @@ pub struct PipeManager {
     /// Optional synchronous guard checked immediately before a scheduler run.
     /// Returning a reason consumes the due occurrence without launching it.
     scheduler_run_guard: Option<SchedulerRunGuard>,
+    /// Optional per-pipe context resolved immediately before a scheduler run.
+    /// Lets the engine give a scheduled run the same Live View target authority
+    /// the foreground refresh path already sends.
+    scheduled_run_context: Option<ScheduledRunContext>,
     /// Generation counter — incremented on every start_scheduler, checked
     /// in the scheduler loop. If the loop's generation doesn't match, it
     /// exits immediately. Defense-in-depth against orphaned scheduler tasks.
@@ -2407,6 +2419,7 @@ impl PipeManager {
             shutdown_tx: None,
             scheduler_handle: None,
             scheduler_run_guard: None,
+            scheduled_run_context: None,
             scheduler_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             on_run_complete: None,
             on_output_line: None,
@@ -5013,6 +5026,15 @@ impl PipeManager {
         self.scheduler_run_guard = Some(guard);
     }
 
+    /// Resolve extra per-run context for scheduled and event runs.
+    ///
+    /// Used by the engine to hand a run the Live View targets it owns, so a
+    /// Pipe feeding several dashboards refreshes all of them instead of
+    /// satisfying its prompt with whichever one it happens to pick.
+    pub fn set_scheduled_run_context(&mut self, resolver: ScheduledRunContext) {
+        self.scheduled_run_context = Some(resolver);
+    }
+
     /// Start the background scheduler.  Spawns a tokio task that checks
     /// pipe schedules and runs them when due.
     pub async fn start_scheduler(&mut self) -> Result<()> {
@@ -5046,6 +5068,7 @@ impl PipeManager {
         let token_registry = self.token_registry.clone();
         let mcp_session_access = self.mcp_session_access.clone();
         let extra_context = self.extra_context.clone();
+        let scheduled_run_context = self.scheduled_run_context.clone();
         let connections_context = self.connections_context.clone();
         let local_api_key = self.local_api_key.clone();
         // Live count + process-lifetime peak of concurrent event-triggered
@@ -5779,12 +5802,25 @@ impl PipeManager {
                         local_api_key.as_deref(),
                         config.agent == "pi" && pi_package_enabled("pi-subagents"),
                     );
+                    // Resolve this run's own context (Live View targets it owns)
+                    // and append it to the shared context, exactly as the
+                    // foreground `/pipes/:id/run` path does.
+                    let run_scoped_context = scheduled_run_context
+                        .as_ref()
+                        .and_then(|resolve| resolve(name));
+                    let combined_context =
+                        match (extra_context.as_deref(), run_scoped_context.as_deref()) {
+                            (Some(shared), Some(scoped)) => Some(format!("{shared}\n{scoped}")),
+                            (Some(shared), None) => Some(shared.to_string()),
+                            (None, Some(scoped)) => Some(scoped.to_string()),
+                            (None, None) => None,
+                        };
                     let prompt = render_prompt_with_port(
                         config,
                         body,
                         api_port,
                         preset_prompt.as_deref(),
-                        extra_context.as_deref(),
+                        combined_context.as_deref(),
                     );
                     let pipe_name = name.clone();
                     let is_event_triggered = triggered_by_event;
@@ -8778,7 +8814,7 @@ mod tests {
             .expect("meeting-summary is bundled");
         assert!(migrate_builtin_pipe_text("meeting-summary", bundled).is_none());
         let (config, body) = parse_frontmatter(bundled).expect("bundled prompt should parse");
-        assert_eq!(config.timeout, Some(300));
+        assert_eq!(config.timeout, Some(600));
         assert!(!body.contains("buildMeetingSummarizeInstructions"));
         assert!(body.contains("screenpipe API search is required"));
         assert!(body.contains("never run recursive `find` or `grep`"));

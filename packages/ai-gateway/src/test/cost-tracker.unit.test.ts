@@ -295,9 +295,9 @@ describe('getModelCost — cache-aware pricing', () => {
 	});
 
 	it('isFrontierModel flags the premium tier (blocked on pipes), not mid/cheap', () => {
-		for (const m of ['claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-6', 'claude-fable-5', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.5-pro', 'gpt-5.4-pro'])
+		for (const m of ['claude-opus-5', 'claude-opus-5-20260801', 'claude-opus-4-8', 'claude-opus-4-6', 'claude-fable-5', 'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.5-pro', 'gpt-5.4-pro'])
 			expect(isFrontierModel(m)).toBe(true);
-		for (const m of ['claude-sonnet-4-5', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.4', 'gpt-5.4-mini', 'claude-haiku-4-5', 'glm-5', 'gemini-3.5-flash', 'gpt-5-nano'])
+		for (const m of ['claude-sonnet-4-5', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.4', 'gpt-5.4-mini', 'claude-haiku-4-5', 'glm-5', 'gemini-3.5-flash', 'gpt-5-nano', 'totally-unknown-model'])
 			expect(isFrontierModel(m)).toBe(false);
 	});
 });

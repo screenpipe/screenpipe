@@ -34,6 +34,8 @@ mod segmentation;
 /// Production is unaffected: the engine resolves the MEETING APP's pid, and
 /// meeting apps don't hold our taps.
 #[cfg(test)]
+// Every caller is a macOS CoreAudio test, so the module is dead elsewhere.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) mod test_support {
     use tokio::sync::{Mutex, MutexGuard};
 

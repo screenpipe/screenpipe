@@ -705,7 +705,7 @@ describe('reserveFreeChatTurn', () => {
 		expect(results.filter((result) => !result.allowed)).toHaveLength(1);
 	});
 
-	it('fails closed for free hosted chat when D1 is unavailable', async () => {
+	it('fails closed for free AI chat when D1 is unavailable', async () => {
 		const db = new FakeD1();
 		db.fail = true;
 

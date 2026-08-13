@@ -374,6 +374,8 @@ const E2E_COMMANDS: &[&str] = &[
     "set_tray_recording_status",
     "installed_tray_recording_status",
     "shortcut_reminder_visible",
+    "open_auto_meeting",
+    "active_meeting_id",
     "emit_meeting_overlay_transcript",
     "emit_agent_stream",
     "emit_settled_agent_follow_up",
@@ -390,6 +392,8 @@ const E2E_COMMANDS: &[&str] = &[
     "db_hard_fault_state",
     "seed_flags",
     "capture_pi_start_error",
+    "set_onboarding_completed_ago",
+    "e2e_set_activation_allowed",
 ];
 
 fn validate_e2e_command_inventory() {
@@ -725,7 +729,6 @@ int shortcut_hide(void) { return -2; }
 int shortcut_is_available(void) { return 0; }
 void shortcut_set_meeting_active(int active) { (void)active; }
 void shortcut_set_meeting_stop_result(int succeeded) { (void)succeeded; }
-void shortcut_set_inbox_unread(int count) { (void)count; }
 int shortcut_set_health_state(const char* state) { (void)state; return -2; }
 int shortcut_get_frame(double* x, double* y, double* w, double* h) {
     (void)x; (void)y; (void)w; (void)h; return -2;
@@ -944,8 +947,6 @@ fn sign_macos_sidecar_if_needed(path: &std::path::Path) {
 
 #[cfg(target_os = "macos")]
 fn download_homebrew_onnxruntime_dylib(dst: &std::path::Path) -> Result<u64, String> {
-    use std::path::PathBuf;
-
     let tmp = std::env::temp_dir().join(format!("ort-app-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
     let tarball = tmp.join("bottle.tar.gz");

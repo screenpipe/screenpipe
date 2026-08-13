@@ -20,6 +20,9 @@ pub enum OSPermission {
     Calendar,
 }
 
+/// Screen Recording TCC state. Only macOS reads TCC; the unit tests below
+/// exercise the pure mapping helpers on every platform.
+#[cfg(any(target_os = "macos", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScreenRecordingPermissionState {
     Denied,
@@ -35,6 +38,7 @@ static E2E_SCREEN_RECORDING_RESTART_REQUIRED: std::sync::atomic::AtomicBool =
 static E2E_SCREEN_RECORDING_RESTART_REQUESTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+#[cfg(any(target_os = "macos", test))]
 fn screen_recording_permission_state_from_checks(
     cached_preflight: bool,
     live_preflight: bool,
@@ -47,6 +51,7 @@ fn screen_recording_permission_state_from_checks(
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn should_request_screen_recording(state: ScreenRecordingPermissionState) -> bool {
     matches!(
         state,

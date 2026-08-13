@@ -462,6 +462,11 @@ export interface PresentableToolCall {
   kind?: string;
   isRunning?: boolean;
   isError?: boolean;
+  // Set when this call is a subagent launch (Claude's Task/Agent tool). It is a
+  // container for the nested transcript, so it is labeled as a subagent run
+  // rather than by its `think` kind, which reads as "Thought it through".
+  subagent?: boolean;
+  subagentType?: string;
 }
 
 export interface ToolActivityPresentation {
@@ -765,6 +770,23 @@ export function presentToolActivity(toolCall: PresentableToolCall): ToolActivity
   const toolName = rawName.toLowerCase();
   const args = toolCall.args ?? {};
   const kind = toolCall.kind?.toLowerCase();
+
+  // A subagent launch is a container for its nested transcript, not a step. The
+  // adapter puts the task description in the title (surfaced here as toolName),
+  // so use that as the real label instead of the generic "Thought it through"
+  // its `think` kind would otherwise produce. Fall back to the subagent type,
+  // then a plain "subagent", when there is no description.
+  if (toolCall.subagent) {
+    const type = toolCall.subagentType?.trim();
+    const desc = toolCall.toolName?.trim();
+    const title =
+      desc && desc.toLowerCase() !== "task"
+        ? desc
+        : type
+          ? `${type} subagent`
+          : "subagent";
+    return activity(title, title);
+  }
 
   // screenpipe MCP tools mirror the local REST endpoints — reuse the curl path.
   const mcpCommand = mcpScreenpipeCommand(rawName, args);

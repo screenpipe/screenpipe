@@ -17,7 +17,6 @@ mod ffi {
         pub fn notif_set_action_callback(cb: Option<extern "C" fn(*const c_char)>);
         pub fn inbox_toggle(json: *const c_char) -> c_int;
         pub fn inbox_update(json: *const c_char);
-        pub fn inbox_hide();
     }
 
     /// Returns true if the native SwiftUI panel is compiled in and the OS supports it.
@@ -62,10 +61,6 @@ mod ffi {
             unsafe { inbox_update(c.as_ptr()) }
         }
     }
-
-    pub fn hide_inbox() {
-        unsafe { inbox_hide() }
-    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -85,7 +80,6 @@ mod ffi {
         false
     }
     pub fn update_inbox(_json: &str) {}
-    pub fn hide_inbox() {}
 }
 
 pub use ffi::*;

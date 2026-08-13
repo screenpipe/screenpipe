@@ -269,7 +269,7 @@ impl RuntimeConfig {
 /// core screenpipe search server, and points at the seeded `.pi/skills` guides
 /// that third-party agents otherwise only find by chance.
 const SCREENPIPE_TOOLS_HINT: &str = "\
-You are running inside screenpipe. Prefer its MCP tools over shell/curl (this is your usage guide):
+You are running inside screenpipe. Prefer its MCP tools over shell/curl (this is your usage guide). Tool names below are written with hyphens; some agents expose the same tools with underscores (activity_summary, search_content) or a query_recordings tool for read-only SQL — use whatever your own tool list shows, and never fall back to curl or /raw_sql just because a name here doesn't match exactly:
 - the `screenpipe` server searches and summarizes the user's screen, audio, and UI history.
   - `activity-summary` for broad questions (\"what was I doing?\", \"which apps?\", \"how long on X?\"): it pre-summarizes apps, windows, and transcripts and owns the time math — pass natural-language times (\"today\", \"2h ago\") and never sum minutes yourself.
   - `search-content` for specific lookups; filter by content_type, app_name, window_name, and a time range.
@@ -346,6 +346,29 @@ enum AgentLaunch {
     },
 }
 
+/// How an agent can be pointed at Screenpipe Cloud instead of the user's own
+/// provider account, from the catalog (agents.json).
+///
+/// Only agents whose CLI honours a provider base URL can do this. Claude Code
+/// reads `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`; closed agents like Cursor
+/// and Copilot talk to their own service and simply declare nothing here.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CloudRouting {
+    /// Env var carrying the provider base URL, e.g. `ANTHROPIC_BASE_URL`.
+    pub base_url_env: String,
+    /// Env var carrying the bearer token, e.g. `ANTHROPIC_AUTH_TOKEN`.
+    pub token_env: String,
+    /// Appended to the gateway origin to reach that provider's dialect, e.g.
+    /// `/anthropic` for the gateway's Anthropic Messages route.
+    #[serde(default)]
+    pub path_prefix: String,
+    /// Env the agent must not also see, or it would prefer its own account.
+    /// Claude picks an ambient `ANTHROPIC_API_KEY` over the base URL token.
+    #[serde(default)]
+    pub clear_env: Vec<String>,
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CatalogAgent {
@@ -360,6 +383,66 @@ struct CatalogAgent {
     /// key is `httpMcp`.
     #[serde(default)]
     http_mcp: bool,
+    /// Present only for agents that can be pointed at Screenpipe Cloud.
+    /// JSON key is `cloudRouting`.
+    #[serde(default)]
+    cloud_routing: Option<CloudRouting>,
+}
+
+/// The catalog's cloud-routing declaration for an agent, if it has one.
+pub(crate) fn agent_cloud_routing(agent_id: &str) -> Option<CloudRouting> {
+    agent_catalog()
+        .into_iter()
+        .find(|agent| agent.id == agent_id)
+        .and_then(|agent| agent.cloud_routing)
+}
+
+/// The provider base URL to hand an agent so its model calls go through
+/// Screenpipe Cloud.
+///
+/// Agents append their own `/v1/...` path (Claude Code requests
+/// `<base>/v1/messages`), so the gateway's own `/v1` suffix is stripped first
+/// and the provider dialect prefix appended. Returns None for a URL that is not
+/// usable, so a malformed override can never silently point an agent somewhere
+/// unintended — the caller then leaves the agent on its own account.
+pub(crate) fn cloud_provider_base_url(gateway_url: &str, path_prefix: &str) -> Option<String> {
+    let trimmed = gateway_url.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+    let origin = trimmed.strip_suffix("/v1").unwrap_or(trimmed);
+    if !origin.starts_with("http://") && !origin.starts_with("https://") {
+        return None;
+    }
+    let prefix = path_prefix.trim();
+    if prefix.is_empty() {
+        return Some(origin.to_owned());
+    }
+    Some(format!("{}/{}", origin, prefix.trim_matches('/')))
+}
+
+/// The env that routes an agent through Screenpipe Cloud, plus the names to
+/// remove. Empty when anything required is missing, which leaves the agent on
+/// its own account rather than half-configured.
+pub(crate) fn cloud_routing_env(
+    routing: &CloudRouting,
+    gateway_url: &str,
+    token: &str,
+) -> (Vec<(String, String)>, Vec<String>) {
+    let token = token.trim();
+    if token.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let Some(base_url) = cloud_provider_base_url(gateway_url, &routing.path_prefix) else {
+        return (Vec::new(), Vec::new());
+    };
+    (
+        vec![
+            (routing.base_url_env.clone(), base_url),
+            (routing.token_env.clone(), token.to_owned()),
+        ],
+        routing.clear_env.clone(),
+    )
 }
 
 /// Run a `terminal`-type ACP auth method's login: the agent's own launch
@@ -384,7 +467,10 @@ async fn run_terminal_login(
     };
     args.extend(method_args.iter().cloned());
 
-    let mut child = tokio::process::Command::new(program)
+    // No-window: the agent CLI is a console program, and sign-in already has
+    // the user's attention in the app — a terminal blinking beside it for up to
+    // five minutes reads as a crash.
+    let mut child = screenpipe_core::no_window_command_async(program)
         .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -597,7 +683,11 @@ fn supervised_command(program: &str, args: &[String]) -> Result<Command, String>
 #[cfg(windows)]
 fn windows_target_command(program: &str, args: &[String]) -> Result<Command, String> {
     let resolved = resolve_windows_program(program);
-    let mut command = Command::new(resolved);
+    // The guard that spawns this was itself created with CREATE_NO_WINDOW, so
+    // it holds no console — which is precisely why Windows would allocate a
+    // fresh one for a console-subsystem agent here. The flag does not disturb
+    // the inherited stdio the guard relays.
+    let mut command = screenpipe_core::no_window_command(resolved);
     command.args(args);
     Ok(command)
 }
@@ -655,17 +745,42 @@ fn resolve_windows_program_in(
 }
 
 #[derive(Clone)]
-struct ParentOutput(Arc<Mutex<std::io::Stdout>>);
+enum ParentOutput {
+    Stdout(Arc<Mutex<std::io::Stdout>>),
+    // A capturing sink so tests can assert the exact events handle_update /
+    // close_turn_ex emit, which otherwise go straight to the parent's stdout.
+    #[cfg(test)]
+    Buffer(Arc<Mutex<Vec<Value>>>),
+}
 
 impl ParentOutput {
     fn new() -> Self {
-        Self(Arc::new(Mutex::new(std::io::stdout())))
+        Self::Stdout(Arc::new(Mutex::new(std::io::stdout())))
+    }
+
+    #[cfg(test)]
+    fn buffer() -> Self {
+        Self::Buffer(Arc::new(Mutex::new(Vec::new())))
+    }
+
+    #[cfg(test)]
+    fn drain(&self) -> Vec<Value> {
+        match self {
+            Self::Buffer(events) => std::mem::take(&mut events.lock().unwrap()),
+            Self::Stdout(_) => Vec::new(),
+        }
     }
 
     fn send(&self, value: Value) {
-        if let Ok(mut stdout) = self.0.lock() {
-            let _ = writeln!(stdout, "{value}");
-            let _ = stdout.flush();
+        match self {
+            Self::Stdout(stdout) => {
+                if let Ok(mut stdout) = stdout.lock() {
+                    let _ = writeln!(stdout, "{value}");
+                    let _ = stdout.flush();
+                }
+            }
+            #[cfg(test)]
+            Self::Buffer(events) => events.lock().unwrap().push(value),
         }
     }
 }
@@ -1064,12 +1179,22 @@ impl RuntimeState {
         };
         self.close_thought_locked(&mut turn);
         for (tool_call_id, tool) in turn.active_tools.drain() {
+            // A tool still open when the turn ends is usually one the agent left
+            // running on purpose: Claude ends its turn while a background command
+            // or a subagent Task keeps going. That is not a failure, so only a
+            // cancel or a real error renders red; a normal end leaves a neutral
+            // note instead of a false "the tool failed" card.
+            let (result, is_error) = match stop_reason {
+                "cancelled" => ("Cancelled", true),
+                "error" => ("ACP turn ended before the tool reported completion", true),
+                _ => ("Still running when the turn ended", false),
+            };
             self.output.send(json!({
                 "type": "tool_execution_end",
                 "toolCallId": tool_call_id,
                 "toolName": tool_name(&tool),
-                "result": if stop_reason == "cancelled" { "Cancelled" } else { "ACP turn ended before the tool reported completion" },
-                "isError": true
+                "result": result,
+                "isError": is_error
             }));
         }
         if turn.message_open {
@@ -1102,29 +1227,56 @@ impl RuntimeState {
             .unwrap_or_default();
         match kind {
             "agent_message_chunk" => {
-                self.close_thought_locked(&mut turn);
-                self.ensure_turn_locked(&mut turn);
-                if let Some(delta) = content_text(update.get("content")) {
-                    self.output.send(json!({
-                        "type": "message_update",
-                        "assistantMessageEvent": { "type": "text_delta", "delta": delta }
-                    }));
+                // Subagent text rides on its launching Task via parentToolUseId;
+                // attach it to that tool row as streamed output instead of
+                // letting it pollute the assistant's own message.
+                if let Some(parent) = parent_tool_call_id(&update) {
+                    if let Some(delta) = content_text(update.get("content")) {
+                        self.output.send(json!({
+                            "type": "tool_execution_progress",
+                            "toolCallId": parent,
+                            "outputDelta": delta,
+                            "subagentTranscript": true
+                        }));
+                    }
+                } else {
+                    self.close_thought_locked(&mut turn);
+                    self.ensure_turn_locked(&mut turn);
+                    if let Some(delta) = content_text(update.get("content")) {
+                        self.output.send(json!({
+                            "type": "message_update",
+                            "assistantMessageEvent": { "type": "text_delta", "delta": delta }
+                        }));
+                    }
                 }
             }
             "agent_thought_chunk" => {
-                self.ensure_turn_locked(&mut turn);
-                if !turn.thought_open {
-                    turn.thought_open = true;
-                    self.output.send(json!({
-                        "type": "message_update",
-                        "assistantMessageEvent": { "type": "thinking_start" }
-                    }));
-                }
-                if let Some(delta) = content_text(update.get("content")) {
-                    self.output.send(json!({
-                        "type": "message_update",
-                        "assistantMessageEvent": { "type": "thinking_delta", "delta": delta }
-                    }));
+                // Subagent thinking likewise nests under its Task row.
+                if let Some(parent) = parent_tool_call_id(&update) {
+                    if let Some(delta) = content_text(update.get("content")) {
+                        self.output.send(json!({
+                            "type": "tool_execution_progress",
+                            "toolCallId": parent,
+                            "outputDelta": delta,
+                            "subagentTranscript": true,
+                            "thinking": true
+                        }));
+                    }
+                } else {
+                    self.ensure_turn_locked(&mut turn);
+                    if !turn.thought_open {
+                        turn.thought_open = true;
+                        self.output.send(json!({
+                            "type": "message_update",
+                            "assistantMessageEvent": { "type": "thinking_start" }
+                        }));
+                    }
+                    if let Some(delta) = content_text(update.get("content")) {
+                        self.output.send(json!({
+                            "type": "message_update",
+                            "assistantMessageEvent": { "type": "thinking_delta", "delta": delta }
+                        }));
+                    }
                 }
             }
             "plan" => {
@@ -1154,11 +1306,7 @@ impl RuntimeState {
             "tool_call" => {
                 self.close_thought_locked(&mut turn);
                 self.ensure_turn_locked(&mut turn);
-                let id = update
-                    .get("toolCallId")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let id = tool_call_id(&update).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                 turn.active_tools.insert(id.clone(), update.clone());
                 let mut start = json!({
                     "type": "tool_execution_start",
@@ -1175,6 +1323,10 @@ impl RuntimeState {
                 if let Some(parent) = parent_tool_call_id(&update) {
                     start["parentToolCallId"] = json!(parent);
                 }
+                // The Task/Agent call itself is the subagent container.
+                if is_subagent_call(&update) {
+                    start["subagent"] = json!(true);
+                }
                 self.output.send(start);
                 if update_status_finished(&update) {
                     finish_tool(&self.output, &id, &update);
@@ -1183,13 +1335,37 @@ impl RuntimeState {
             }
             "tool_call_update" => {
                 self.ensure_turn_locked(&mut turn);
-                let id = update
-                    .get("toolCallId")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
+                let id = tool_call_id(&update).unwrap_or_default();
+                // A subagent child's first surfaced event is often a
+                // tool_call_update, not a tool_call — Claude Code stamps
+                // parentToolUseId on the subagent's updates. Without a start the
+                // chat has no row to render or group, so synthesize one from the
+                // merged view and carry the parent linkage the tool_call arm
+                // would have sent.
+                let first_sighting = !id.is_empty() && !turn.active_tools.contains_key(&id);
                 let merged = merge_json(turn.active_tools.get(&id), &update);
                 turn.active_tools.insert(id.clone(), merged.clone());
+                // Synthesize a start ONLY for a subagent child: it carries
+                // parentToolUseId and its opening tool_call is never sent, so
+                // without this it would not render. Every other agent (Cursor,
+                // Copilot, Codex, ...) keeps the original pass-through — a
+                // first-seen update with no start flows to the normal
+                // finish/progress paths — so we never fabricate a nameless row
+                // for a non-subagent tool that just streamed an update.
+                if first_sighting && parent_tool_call_id(&merged).is_some() {
+                    let mut start = json!({
+                        "type": "tool_execution_start",
+                        "toolCallId": id,
+                        "toolName": tool_name(&merged),
+                        "kind": tool_kind(&merged),
+                        "args": tool_args(&merged),
+                        "parentToolCallId": parent_tool_call_id(&merged)
+                    });
+                    if is_subagent_call(&merged) {
+                        start["subagent"] = json!(true);
+                    }
+                    self.output.send(start);
+                }
                 if update_status_finished(&merged) {
                     finish_tool(&self.output, &id, &merged);
                     turn.active_tools.remove(&id);
@@ -1198,6 +1374,11 @@ impl RuntimeState {
                         "type": "tool_execution_progress",
                         "toolCallId": id,
                     });
+                    // Carry the parent so a subagent heartbeat nests under its
+                    // Task row even when linkage only appears on updates.
+                    if let Some(parent) = parent_tool_call_id(&merged) {
+                        event["parentToolCallId"] = json!(parent);
+                    }
                     if let (Some(event_map), Value::Object(fields)) =
                         (event.as_object_mut(), progress)
                     {
@@ -1404,6 +1585,49 @@ fn tool_content_item_text(item: &Value) -> Option<String> {
     }
 }
 
+/// The client `_meta` that opts into nested subagent transcripts. Advertised on
+/// `clientCapabilities._meta`; agents that don't know the key ignore it and keep
+/// the flattened fallback.
+fn subagent_transcript_capability() -> serde_json::Map<String, Value> {
+    let mut meta = serde_json::Map::new();
+    meta.insert("subagent-transcript".to_owned(), Value::Bool(true));
+    meta
+}
+
+/// True when a tool call is the launch of a subagent, so the chat can mark it
+/// as a container for the nested transcript beneath it. ACP has no standard
+/// subagent flag and claude-agent-acp does not stamp `_meta.claudeCode.subagent`
+/// on the wire (only `{toolName, parentToolUseId}`), so identify it by the tool
+/// name: the Agent/Task tool (which the adapter maps to kind "think"). The real
+/// name is in `_meta.claudeCode.toolName`, since the top-level title is the task
+/// description, not the tool name. The `subagent` flag check stays for adapters
+/// that start sending it.
+fn is_subagent_call(update: &Value) -> bool {
+    if let Some(name) = meta_tool_name(update) {
+        if name.eq_ignore_ascii_case("agent") || name.eq_ignore_ascii_case("task") {
+            return true;
+        }
+    }
+    update
+        .get("_meta")
+        .and_then(|meta| meta.get("claudeCode"))
+        .and_then(|claude| claude.get("subagent"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// The tool call id, with control characters stripped. Cursor emits an id with
+/// an embedded newline (`call-<uuid>-0\nfc_<...>`), and a raw control char in an
+/// identifier silently breaks id-keyed matching and rendering downstream (the
+/// tool start and its end no longer line up, so the row never resolves).
+/// Normalizing here, at the single point every id is read, keeps start, update,
+/// finish, and turn-close all agreeing on the same key.
+fn tool_call_id(update: &Value) -> Option<String> {
+    let raw = update.get("toolCallId").and_then(Value::as_str)?;
+    let clean: String = raw.chars().filter(|c| !c.is_control()).collect();
+    (!clean.is_empty()).then_some(clean)
+}
+
 /// Parent Task linkage for subagent child tool calls. Claude Code stamps
 /// `_meta.claudeCode.parentToolUseId` on every update a subagent produces.
 fn parent_tool_call_id(update: &Value) -> Option<&str> {
@@ -1473,9 +1697,25 @@ fn tool_name(update: &Value) -> String {
         .get("title")
         .and_then(Value::as_str)
         .filter(|title| !title.trim().is_empty())
+        // A title-less tool_call_update (a subagent or result-first tool whose
+        // starting tool_call we never saw) still carries the real name here —
+        // recover it before falling back to the bare kind, which the chat
+        // renders as a generic "background step" with no name.
+        .or_else(|| meta_tool_name(update))
         .or_else(|| update.get("kind").and_then(Value::as_str))
         .unwrap_or("tool")
         .to_owned()
+}
+
+/// The tool name Claude Code always stamps at `_meta.claudeCode.toolName`, even
+/// on updates that omit the top-level `title`.
+fn meta_tool_name(update: &Value) -> Option<&str> {
+    update
+        .get("_meta")?
+        .get("claudeCode")?
+        .get("toolName")?
+        .as_str()
+        .filter(|name| !name.trim().is_empty())
 }
 
 // The ACP tool-call `kind` category, forwarded so the desktop can label native
@@ -2146,12 +2386,24 @@ fn is_screenpipe_read_tool(tool_title: &str) -> bool {
         return true;
     }
     // Specific read-only tools from the bundled screenpipe-tools server.
-    // `query_recordings` is server-side-validated SELECT-only. The write/bridge
-    // tools (save_artifact, sp_mcp_call, screenpipe_connect_app, live_view,
-    // sp_web_search) are deliberately NOT auto-approved.
+    // `query_recordings` is server-side-validated SELECT-only. The trailing
+    // block are the core read/query tools this server mirrors over HTTP for
+    // http-only agents (Cursor, Copilot) — all plain GETs of the user's own
+    // recordings, so auto-approved exactly like their mcp__screenpipe__*
+    // equivalents on stdio. The write/bridge tools (save_artifact, sp_mcp_call,
+    // screenpipe_connect_app, live_view, sp_web_search) stay NOT auto-approved.
     matches!(
         tool_title,
-        "mcp__screenpipe-tools__query_recordings" | "mcp__screenpipe-tools__list_connections"
+        "mcp__screenpipe-tools__query_recordings"
+            | "mcp__screenpipe-tools__list_connections"
+            | "mcp__screenpipe-tools__activity_summary"
+            | "mcp__screenpipe-tools__keyword_search"
+            | "mcp__screenpipe-tools__search_elements"
+            | "mcp__screenpipe-tools__frame_context"
+            | "mcp__screenpipe-tools__get_frame_elements"
+            | "mcp__screenpipe-tools__list_meetings"
+            | "mcp__screenpipe-tools__get_meeting"
+            | "mcp__screenpipe-tools__health_check"
     )
 }
 
@@ -2233,10 +2485,31 @@ fn terminal_auth_args(method: &Value) -> Option<Vec<String>> {
     Some(args.iter().filter_map(Value::as_str).map(str::to_owned).collect())
 }
 
+/// Consumer Claude subscription sign-in, which Screenpipe must never offer.
+///
+/// Anthropic's guidance to third-party developers is that a product embedding
+/// Claude Code uses an API key (Anthropic Console) or a supported cloud, and
+/// does not put users through Claude.ai login or route Free/Pro/Max credentials
+/// on their behalf. The adapter is launched with `--hide-claude-auth`
+/// (agents.json), which drops exactly these methods and keeps the Console
+/// method. This is the second layer: an adapter upgrade that renames the flag,
+/// ignores it, or advertises the method anyway must not silently put the
+/// subscription option back in front of a user.
+fn is_claude_subscription_auth(id: &str, name: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    let name = name.to_ascii_lowercase();
+    // Codex's ChatGPT method is deliberately not matched: OpenAI supports
+    // signing into Codex with a ChatGPT plan, so it is not the same boundary.
+    id == "claude-ai-login" || id == "claude-login" || name.contains("claude subscription")
+}
+
 fn available_auth_methods(
     init: &InitializeResponse,
 ) -> Vec<&agent_client_protocol::schema::v1::AuthMethod> {
-    init.auth_methods.iter().collect()
+    init.auth_methods
+        .iter()
+        .filter(|method| !is_claude_subscription_auth(&method.id().to_string(), method.name()))
+        .collect()
 }
 
 async fn authenticate(
@@ -2783,7 +3056,16 @@ async fn run_protocol(
                                         SessionConfigOptionsCapabilities::new()
                                             .boolean(BooleanConfigOptionCapabilities::new()),
                                     ),
-                                ),
+                                )
+                                // Opt into nested subagent transcripts. ACP 1.2
+                                // has no standard for this, so it rides on _meta:
+                                // Claude Code then forwards a subagent's text,
+                                // thinking, and tool calls related to the
+                                // launching Task via
+                                // _meta.claudeCode.parentToolUseId, instead of
+                                // flattening (and dropping the subagent's text)
+                                // into the main turn.
+                                .meta(subagent_transcript_capability()),
                         )
                         .client_info(
                             Implementation::new("screenpipe", env!("CARGO_PKG_VERSION"))
@@ -3660,6 +3942,131 @@ mod tests {
         assert_eq!(default_option_value(&session, "gone", "a"), None);
     }
 
+    /// Anthropic's guidance is that an embedding product uses an API key or a
+    /// supported cloud, not Claude.ai login on the user's behalf. Both layers
+    /// are pinned: the launch flag that makes the adapter withhold the method,
+    /// and the filter that drops it if an adapter advertises it anyway.
+    /// Routing an agent at Screenpipe Cloud is what lets someone use a coding
+    /// agent without their own provider account, so the failure that matters is
+    /// a half-configured launch: a base URL with no token, or a token pointed
+    /// somewhere unintended. Both must fall back to the agent's own account.
+    #[test]
+    fn cloud_base_url_strips_the_gateway_v1_and_adds_the_dialect() {
+        // Agents append their own /v1/..., so the gateway's /v1 must go.
+        assert_eq!(
+            cloud_provider_base_url("https://ai.example.com/v1", "/anthropic").as_deref(),
+            Some("https://ai.example.com/anthropic")
+        );
+        assert_eq!(
+            cloud_provider_base_url("https://ai.example.com/v1/", "anthropic").as_deref(),
+            Some("https://ai.example.com/anthropic")
+        );
+        assert_eq!(
+            cloud_provider_base_url("https://ai.example.com", "").as_deref(),
+            Some("https://ai.example.com")
+        );
+        // Loopback is legitimate: the e2e gateway override is http on localhost.
+        assert_eq!(
+            cloud_provider_base_url("http://127.0.0.1:8787/v1", "/anthropic").as_deref(),
+            Some("http://127.0.0.1:8787/anthropic")
+        );
+        // Anything not a usable http(s) URL routes nowhere.
+        assert_eq!(cloud_provider_base_url("", "/anthropic"), None);
+        assert_eq!(cloud_provider_base_url("   ", "/anthropic"), None);
+        assert_eq!(cloud_provider_base_url("ai.example.com/v1", "/anthropic"), None);
+    }
+
+    #[test]
+    fn cloud_routing_env_is_all_or_nothing() {
+        let routing = CloudRouting {
+            base_url_env: "ANTHROPIC_BASE_URL".into(),
+            token_env: "ANTHROPIC_AUTH_TOKEN".into(),
+            path_prefix: "/anthropic".into(),
+            clear_env: vec!["ANTHROPIC_API_KEY".into()],
+        };
+
+        let (set, clear) = cloud_routing_env(&routing, "https://ai.example.com/v1", "tok");
+        assert_eq!(
+            set,
+            vec![
+                ("ANTHROPIC_BASE_URL".to_string(), "https://ai.example.com/anthropic".to_string()),
+                ("ANTHROPIC_AUTH_TOKEN".to_string(), "tok".to_string()),
+            ]
+        );
+        // The agent prefers an ambient API key over the base-URL token, so the
+        // key has to be cleared or cloud routing silently does nothing.
+        assert_eq!(clear, vec!["ANTHROPIC_API_KEY".to_string()]);
+
+        // Signed out, or a gateway URL we cannot trust: emit nothing, so the
+        // caller leaves the agent on its own account instead of starting it
+        // with a base URL and no credential.
+        assert!(cloud_routing_env(&routing, "https://ai.example.com/v1", "").0.is_empty());
+        assert!(cloud_routing_env(&routing, "https://ai.example.com/v1", "  ").0.is_empty());
+        assert!(cloud_routing_env(&routing, "", "tok").0.is_empty());
+    }
+
+    #[test]
+    fn only_agents_that_honour_a_base_url_declare_cloud_routing() {
+        let claude = agent_cloud_routing("claude-acp").expect("claude routes to cloud");
+        assert_eq!(claude.base_url_env, "ANTHROPIC_BASE_URL");
+        assert_eq!(claude.token_env, "ANTHROPIC_AUTH_TOKEN");
+        assert!(claude.clear_env.iter().any(|name| name == "ANTHROPIC_API_KEY"));
+
+        // Closed services: sign-in and billing are their own account, and there
+        // is no base URL to point anywhere. Claiming otherwise would sell a
+        // capability that cannot work.
+        assert!(agent_cloud_routing("cursor").is_none());
+        assert!(agent_cloud_routing("github-copilot-cli").is_none());
+        assert!(agent_cloud_routing("custom").is_none());
+    }
+
+    #[test]
+    fn claude_adapter_launches_with_subscription_auth_hidden() {
+        let claude = agent_catalog()
+            .into_iter()
+            .find(|agent| agent.id == "claude-acp")
+            .expect("claude-acp in catalog");
+
+        match claude.launch {
+            AgentLaunch::Npx { ref args, .. } => {
+                assert!(
+                    args.iter().any(|arg| arg == "--hide-claude-auth"),
+                    "claude-acp must launch with --hide-claude-auth, got {args:?}"
+                );
+            }
+            AgentLaunch::Binary { .. } => panic!("claude-acp should launch via npx"),
+        }
+    }
+
+    #[test]
+    fn claude_subscription_auth_methods_are_never_offered() {
+        // The adapter's own ids/labels for consumer sign-in.
+        assert!(is_claude_subscription_auth(
+            "claude-ai-login",
+            "Claude Subscription"
+        ));
+        assert!(is_claude_subscription_auth(
+            "claude-login",
+            "Log in with Claude"
+        ));
+        // Matched by label too, so a renamed id still cannot slip through.
+        assert!(is_claude_subscription_auth(
+            "something-new",
+            "Claude subscription "
+        ));
+
+        // The API-key path must survive: hiding every method would leave the
+        // agent unusable rather than compliant.
+        assert!(!is_claude_subscription_auth(
+            "console-login",
+            "Anthropic Console"
+        ));
+        // Codex signs in with a ChatGPT plan, which OpenAI supports. Not the
+        // same boundary, and filtering it would break Codex sign-in.
+        assert!(!is_claude_subscription_auth("chatgpt", "ChatGPT"));
+        assert!(!is_claude_subscription_auth("cursor-login", "Cursor Login"));
+    }
+
     #[test]
     fn bundled_tools_mcp_server_is_registered_alongside_screenpipe() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -3790,14 +4197,258 @@ mod tests {
         assert_eq!(tool_progress(&json!({ "status": "in_progress" })), None);
     }
 
+    fn test_state(output: &ParentOutput) -> RuntimeState {
+        RuntimeState {
+            output: output.clone(),
+            project_dir: PathBuf::from("/tmp"),
+            turn: Mutex::new(TurnState {
+                prompt_in_flight: true,
+                ..Default::default()
+            }),
+            ui_waiters: Mutex::new(HashMap::new()),
+            terminals: Mutex::new(HashMap::new()),
+            system_context: Mutex::new(None),
+        }
+    }
+
+    fn events_of_type<'a>(events: &'a [Value], ty: &str) -> Vec<&'a Value> {
+        events.iter().filter(|e| e["type"] == json!(ty)).collect()
+    }
+
+    #[test]
+    fn turn_end_leaves_background_tools_running_not_failed() {
+        // A tool still open at a normal end_turn is a background command or a
+        // subagent the agent left running — not a failure. Only cancel/error
+        // render red.
+        let output = ParentOutput::buffer();
+        let state = test_state(&output);
+        {
+            let mut turn = state.turn.lock().unwrap();
+            turn.turn_open = true;
+            turn.active_tools.insert(
+                "bg1".into(),
+                json!({ "toolCallId": "bg1", "title": "Bash", "status": "in_progress" }),
+            );
+        }
+        state.close_turn_ex("end_turn", false);
+        let ends = output.drain();
+        let end = events_of_type(&ends, "tool_execution_end");
+        assert_eq!(end.len(), 1);
+        assert_eq!(end[0]["isError"], json!(false));
+        assert_eq!(end[0]["result"], json!("Still running when the turn ended"));
+
+        // Cancel still renders as an error card.
+        let state = test_state(&output);
+        {
+            let mut turn = state.turn.lock().unwrap();
+            turn.turn_open = true;
+            turn.active_tools
+                .insert("bg2".into(), json!({ "toolCallId": "bg2", "title": "Bash" }));
+        }
+        state.close_turn_ex("cancelled", false);
+        let ends = output.drain();
+        let end = events_of_type(&ends, "tool_execution_end");
+        assert_eq!(end[0]["isError"], json!(true));
+        assert_eq!(end[0]["result"], json!("Cancelled"));
+    }
+
+    #[test]
+    fn subagent_update_without_a_start_synthesizes_a_linked_row() {
+        // Claude Code surfaces subagent child activity as tool_call_updates that
+        // carry parentToolUseId, often with no preceding tool_call. The runtime
+        // must synthesize a start (with parent linkage) so the chat has a row to
+        // group under the Task, and carry the parent on the progress heartbeat.
+        let output = ParentOutput::buffer();
+        let state = test_state(&output);
+        state.handle_update(json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "child1",
+            "title": "Grep",
+            "kind": "search",
+            "status": "in_progress",
+            "_meta": { "claudeCode": {
+                "parentToolUseId": "task_parent",
+                "toolResponse": { "elapsedTimeSeconds": 3.0, "subagentType": "researcher" }
+            } }
+        }));
+        let events = output.drain();
+
+        let starts = events_of_type(&events, "tool_execution_start");
+        assert_eq!(starts.len(), 1, "a start should be synthesized for the unseen child");
+        assert_eq!(starts[0]["toolCallId"], json!("child1"));
+        assert_eq!(starts[0]["parentToolCallId"], json!("task_parent"));
+
+        let progress = events_of_type(&events, "tool_execution_progress");
+        assert_eq!(progress.len(), 1);
+        assert_eq!(progress[0]["parentToolCallId"], json!("task_parent"));
+        assert_eq!(progress[0]["subagentType"], json!("researcher"));
+
+        // A second update for the same child must NOT synthesize another start.
+        state.handle_update(json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "child1",
+            "status": "in_progress",
+            "_meta": { "claudeCode": { "parentToolUseId": "task_parent",
+                "toolResponse": { "elapsedTimeSeconds": 6.0 } } }
+        }));
+        let events = output.drain();
+        assert!(events_of_type(&events, "tool_execution_start").is_empty());
+    }
+
+    #[test]
+    fn non_subagent_first_seen_update_does_not_synthesize_a_row() {
+        // A first-seen tool_call_update WITHOUT a subagent parent (Cursor,
+        // Copilot, Codex streaming an update for a tool whose start we did not
+        // get) must NOT fabricate a nameless start — that path is subagent-only,
+        // so these agents keep their original behavior.
+        let output = ParentOutput::buffer();
+        let state = test_state(&output);
+        state.handle_update(json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "cursor_tool_1",
+            "title": "shell",
+            "_meta": { "terminal_output_delta": { "data": "building...\n" } }
+        }));
+        let events = output.drain();
+        assert!(
+            events_of_type(&events, "tool_execution_start").is_empty(),
+            "no start should be synthesized for a non-subagent update"
+        );
+        let progress = events_of_type(&events, "tool_execution_progress");
+        assert_eq!(progress.len(), 1);
+        assert_eq!(progress[0]["outputDelta"], json!("building...\n"));
+
+        // A completed non-subagent first-seen update still finishes with its
+        // result, exactly as before, and still synthesizes no start.
+        state.handle_update(json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "cursor_tool_2",
+            "status": "completed",
+            "content": [{ "type": "text", "text": "done" }]
+        }));
+        let events = output.drain();
+        assert!(events_of_type(&events, "tool_execution_start").is_empty());
+        assert_eq!(events_of_type(&events, "tool_execution_end").len(), 1);
+    }
+
+    #[test]
+    fn advertises_and_detects_the_subagent_transcript_capability() {
+        let meta = subagent_transcript_capability();
+        assert_eq!(meta.get("subagent-transcript"), Some(&json!(true)));
+        // The shipped adapter identifies the launch by tool name (Agent/Task),
+        // not a subagent flag, so that is the primary detection.
+        assert!(is_subagent_call(
+            &json!({ "_meta": { "claudeCode": { "toolName": "Task" } } })
+        ));
+        assert!(is_subagent_call(
+            &json!({ "_meta": { "claudeCode": { "toolName": "Agent" } } })
+        ));
+        assert!(!is_subagent_call(
+            &json!({ "_meta": { "claudeCode": { "toolName": "Grep" } } })
+        ));
+        // The explicit flag still counts, for adapters that add it later.
+        assert!(is_subagent_call(
+            &json!({ "_meta": { "claudeCode": { "subagent": true } } })
+        ));
+        assert!(!is_subagent_call(&json!({ "_meta": { "claudeCode": {} } })));
+        assert!(!is_subagent_call(&json!({})));
+    }
+
+    #[test]
+    fn subagent_text_nests_under_its_task_not_the_main_message() {
+        let output = ParentOutput::buffer();
+        let state = test_state(&output);
+        // Subagent text carries parentToolUseId → attach to the Task row.
+        state.handle_update(json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": { "type": "text", "text": "searching the codebase" },
+            "_meta": { "claudeCode": { "parentToolUseId": "task_1" } }
+        }));
+        let events = output.drain();
+        let progress = events_of_type(&events, "tool_execution_progress");
+        assert_eq!(progress.len(), 1);
+        assert_eq!(progress[0]["toolCallId"], json!("task_1"));
+        assert_eq!(progress[0]["outputDelta"], json!("searching the codebase"));
+        assert_eq!(progress[0]["subagentTranscript"], json!(true));
+        assert!(
+            events_of_type(&events, "message_update").is_empty(),
+            "subagent text must not land in the main assistant message"
+        );
+
+        // Top-level assistant text (no parent) still streams to the main message.
+        state.handle_update(json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": { "type": "text", "text": "here is the summary" }
+        }));
+        let events = output.drain();
+        assert!(events_of_type(&events, "message_update").iter().any(|e| {
+            e["assistantMessageEvent"]["type"] == json!("text_delta")
+                && e["assistantMessageEvent"]["delta"] == json!("here is the summary")
+        }));
+        assert!(events_of_type(&events, "tool_execution_progress").is_empty());
+    }
+
+    #[test]
+    fn subagent_task_call_is_marked_as_a_container() {
+        let output = ParentOutput::buffer();
+        let state = test_state(&output);
+        state.handle_update(json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "task_1",
+            "title": "Task",
+            "kind": "other",
+            "status": "in_progress",
+            "_meta": { "claudeCode": { "subagent": true } }
+        }));
+        let events = output.drain();
+        let starts = events_of_type(&events, "tool_execution_start");
+        assert_eq!(starts.len(), 1);
+        assert_eq!(starts[0]["subagent"], json!(true));
+    }
+
     #[test]
     fn tool_name_prefers_human_title_over_kind_category() {
         assert_eq!(
             tool_name(&json!({ "kind": "search", "title": "Grep" })),
             "Grep"
         );
+        // A title-less update recovers the real name from _meta.claudeCode
+        // rather than collapsing to the kind category (a generic "background
+        // step" in the chat).
+        assert_eq!(
+            tool_name(&json!({
+                "kind": "search",
+                "_meta": { "claudeCode": { "toolName": "Grep" } }
+            })),
+            "Grep"
+        );
+        // Title still wins over the meta name when present (it is friendlier).
+        assert_eq!(
+            tool_name(&json!({
+                "title": "Grep 'foo'",
+                "_meta": { "claudeCode": { "toolName": "Grep" } }
+            })),
+            "Grep 'foo'"
+        );
         assert_eq!(tool_name(&json!({ "kind": "execute", "title": "" })), "execute");
         assert_eq!(tool_name(&json!({})), "tool");
+    }
+
+    #[test]
+    fn tool_call_id_strips_embedded_control_chars() {
+        // Cursor emits ids with an embedded newline (call-<uuid>-0\nfc_<...>); a
+        // raw control char breaks start/end matching, so it must be stripped and
+        // the two halves kept so the id stays unique.
+        assert_eq!(
+            tool_call_id(&json!({ "toolCallId": "call-abc-0\nfc_xyz" })).as_deref(),
+            Some("call-abc-0fc_xyz")
+        );
+        assert_eq!(
+            tool_call_id(&json!({ "toolCallId": "clean-123" })).as_deref(),
+            Some("clean-123")
+        );
+        assert_eq!(tool_call_id(&json!({ "toolCallId": "\n\t" })), None);
+        assert_eq!(tool_call_id(&json!({})), None);
     }
 
     #[test]
@@ -3838,6 +4489,11 @@ mod tests {
         assert!(is_screenpipe_read_tool("mcp__screenpipe__search-content"));
         assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__query_recordings"));
         assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__list_connections"));
+        // Core read tools mirrored on screenpipe-tools for http-only agents.
+        assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__activity_summary"));
+        assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__keyword_search"));
+        assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__get_meeting"));
+        assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__health_check"));
         assert!(!is_screenpipe_read_tool("mcp__screenpipe-tools__sp_mcp_call"));
         assert!(!is_screenpipe_read_tool("mcp__screenpipe-tools__save_artifact"));
         assert!(!is_screenpipe_read_tool("bash"));

@@ -13,6 +13,7 @@ use axum::{
 };
 use oasgen::OaSchema;
 
+use screenpipe_audio::core::device::DeviceType;
 use screenpipe_events::{send_event, subscribe_to_all_events, Event as ScreenpipeEvent};
 
 use futures::{SinkExt, StreamExt};
@@ -43,6 +44,7 @@ const MEETING_OVERLAY_SNAPSHOT_LIMIT: usize = 50;
 struct MeetingOverlayTranscriptItem {
     meeting_id: i64,
     item_id: String,
+    device_name: String,
     device_type: String,
     speaker_name: Option<String>,
     text: String,
@@ -76,6 +78,14 @@ fn meeting_overlay_item_from_event(
     Some(MeetingOverlayTranscriptItem {
         meeting_id: value.get("meeting_id")?.as_i64()?,
         item_id: value.get("item_id")?.as_str()?.to_string(),
+        // Providers namespace `item_id` per connection, not per device, so the
+        // mic and system-audio streams can mint the same id. Clients must key
+        // on device + item_id or one stream silently overwrites the other.
+        device_name: value
+            .get("device_name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
         device_type: value
             .get("device_type")
             .and_then(serde_json::Value::as_str)
@@ -476,6 +486,7 @@ async fn send_meeting_overlay_snapshot(
         .map(|segment| MeetingOverlayTranscriptItem {
             meeting_id,
             item_id: segment.item_id,
+            device_name: segment.device_name,
             device_type: segment.device_type,
             speaker_name: segment.speaker_name,
             text: segment.transcript,
@@ -659,9 +670,14 @@ async fn handle_metrics_socket(
             _ = interval.tick() => {
                 let audio = state.audio_metrics.snapshot();
                 let per_device_levels = state.audio_metrics.per_device_rms_snapshot();
+                let mic_capture_active = state.audio_manager.current_devices().iter().any(|device| {
+                    device.device_type == DeviceType::Input
+                        && state.audio_manager.is_device_actively_streaming(device)
+                });
                 let vision = state.vision_metrics.snapshot();
                 let payload = serde_json::json!({
                     "audio": {
+                        "mic_capture_active": mic_capture_active,
                         "vad_passed": audio.vad_passed,
                         "vad_rejected": audio.vad_rejected,
                         "chunks_sent": audio.chunks_sent,
@@ -705,6 +721,7 @@ mod tests {
         let delta = serde_json::json!({
             "meeting_id": 42,
             "item_id": "segment-1",
+            "device_name": "system audio",
             "device_type": "output",
             "delta": " still speaking ",
             "captured_at": "2026-08-06T18:00:00Z",
@@ -712,12 +729,14 @@ mod tests {
         let item = meeting_overlay_item_from_event(&delta, false).unwrap();
         assert_eq!(item.meeting_id, 42);
         assert_eq!(item.item_id, "segment-1");
+        assert_eq!(item.device_name, "system audio");
         assert_eq!(item.text, "still speaking");
         assert!(!item.is_final);
 
         let final_event = serde_json::json!({
             "meeting_id": 42,
             "item_id": "segment-1",
+            "device_name": "macbook pro microphone",
             "device_type": "input",
             "speaker_name": "Louis",
             "transcript": "final words",
@@ -725,8 +744,35 @@ mod tests {
         });
         let item = meeting_overlay_item_from_event(&final_event, true).unwrap();
         assert_eq!(item.speaker_name.as_deref(), Some("Louis"));
+        assert_eq!(item.device_name, "macbook pro microphone");
         assert_eq!(item.text, "final words");
         assert!(item.is_final);
+    }
+
+    /// Providers key `item_id` per connection, so the mic and system-audio
+    /// streams collide. The overlay item must carry the device so clients can
+    /// keep both copies distinct instead of overwriting one with the other.
+    #[test]
+    fn meeting_overlay_keeps_same_item_id_across_devices_distinguishable() {
+        let base = |device_name: &str, device_type: &str, transcript: &str| {
+            serde_json::json!({
+                "meeting_id": 42,
+                "item_id": "deepgram:0:1500",
+                "device_name": device_name,
+                "device_type": device_type,
+                "transcript": transcript,
+                "captured_at": "2026-08-06T18:00:00Z",
+            })
+        };
+        let mic = meeting_overlay_item_from_event(&base("mic", "input", "hello"), true).unwrap();
+        let speaker =
+            meeting_overlay_item_from_event(&base("system audio", "output", "hello"), true)
+                .unwrap();
+        assert_eq!(mic.item_id, speaker.item_id);
+        assert_ne!(
+            (mic.device_name, mic.device_type),
+            (speaker.device_name, speaker.device_type)
+        );
     }
 
     #[test]

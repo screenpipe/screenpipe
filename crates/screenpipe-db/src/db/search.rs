@@ -1575,6 +1575,7 @@ impl DatabaseManager {
             LEFT JOIN video_chunks ON frames.video_chunk_id = video_chunks.id
             WHERE frames.timestamp >= ?1 AND frames.timestamp <= ?2
               AND COALESCE(frames.snapshot_path, video_chunks.file_path) IS NOT NULL
+              AND COALESCE(frames.snapshot_path, video_chunks.file_path) NOT LIKE 'cloud://%'
             ORDER BY frames.timestamp ASC
             "#,
         )

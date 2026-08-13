@@ -1128,6 +1128,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let live = dir.path().join("live.sqlite");
         let snapshot = dir.path().join("snapshot.sqlite");
+        // Only the macOS branch below swaps in the unix-excl VFS.
+        #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
         let mut live_options = SqliteConnectOptions::new()
             .filename(&live)
             .create_if_missing(true);

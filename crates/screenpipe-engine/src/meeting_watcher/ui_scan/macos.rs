@@ -581,6 +581,8 @@ pub(crate) fn resolve_browser_pid(app: &str) -> i32 {
 #[cfg(test)]
 mod live_tests {
     use super::*;
+    // `use super::*` already re-exports the shared helpers this test needs.
+    #[allow(unused_imports)]
     use crate::meeting_watcher::shared::*;
 
     /// Run with: cargo test -p screenpipe-engine --lib -- live_tests::test_live_meeting_detection --nocapture --ignored
@@ -673,6 +675,8 @@ mod live_tests {
 #[cfg(test)]
 mod live_tests2 {
     use super::*;
+    // `use super::*` already re-exports the shared helpers this test needs.
+    #[allow(unused_imports)]
     use crate::meeting_watcher::shared::*;
 
     /// Run with: cargo test -p screenpipe-engine --lib -- live_tests2::test_arc_deep_window_check --nocapture --ignored

@@ -16,10 +16,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
-pub const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.83.0";
-pub const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.83.0";
+pub const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.84.1";
+pub const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.84.1";
 pub const PI_NAMESPACE_DIR: &str = "@earendil-works";
 pub const SCREENPIPE_API_URL: &str = "https://api.screenpipe.com/v1";
+const PI_INSTALL_ARGS: [&str; 5] = [
+    "add",
+    "--ignore-scripts",
+    PI_PACKAGE,
+    PI_AI_PACKAGE,
+    "@anthropic-ai/sdk",
+];
 const CUSTOM_PROVIDER_USER_AGENT: &str = "screenpipe";
 const DEFAULT_CLOUD_MAX_OUTPUT_TOKENS: u64 = 32_000;
 
@@ -2246,20 +2253,21 @@ impl AgentExecutor for PiExecutor {
         // Log the exact command + bun version up front so a failed install is
         // reproducible from the log alone (and a bun that can't even run —
         // e.g. SIGILL on an unsupported CPU — is exposed before the install).
-        let args = ["add", PI_PACKAGE, PI_AI_PACKAGE, "@anthropic-ai/sdk"];
         info!(
             "installing pi into {} via bun at {} (version: {}); command: bun {}",
             install_dir.display(),
             bun,
             bun_version_string(&bun),
-            args.join(" "),
+            PI_INSTALL_ARGS.join(" "),
         );
 
         // Seed package.json with overrides to fix lru-cache resolution on Windows
         seed_pi_package_json(&install_dir);
 
         let mut cmd = tokio_bun_command(&bun);
-        cmd.current_dir(&install_dir).args(args);
+        // CREATE_NO_WINDOW only covers this Bun process. Lifecycle scripts can
+        // launch new consoles, so disable them for this pinned managed install.
+        cmd.current_dir(&install_dir).args(PI_INSTALL_ARGS);
 
         #[cfg(windows)]
         {
@@ -2924,6 +2932,8 @@ pub fn pi_child_path(existing_path: &OsStr) -> Option<OsString> {
     std::env::join_paths(paths).ok()
 }
 
+// Windows builds its own PATH inline in the .cmd-shim branch below.
+#[cfg(not(windows))]
 fn apply_pi_child_path(cmd: &mut tokio::process::Command) {
     let current_path = std::env::var_os("PATH").unwrap_or_default();
     if let Some(path) = pi_child_path(&current_path) {
@@ -3173,7 +3183,7 @@ fn build_async_command(path: &str) -> tokio::process::Command {
                 debug!("bypassing cmd.exe, running pi via bun: {} {}", bun, js_path);
                 c
             } else {
-                let mut c = tokio::process::Command::new("node");
+                let mut c = crate::no_window::no_window_command_async("node");
                 c.arg(js_path);
                 debug!("bypassing cmd.exe, running pi via node: {}", js_path);
                 c
@@ -3184,7 +3194,7 @@ fn build_async_command(path: &str) -> tokio::process::Command {
                 "could not resolve JS entry from {}, falling back to cmd.exe /C",
                 path
             );
-            let mut c = tokio::process::Command::new("cmd.exe");
+            let mut c = crate::no_window::no_window_command_async("cmd.exe");
             c.args(["/C", path]);
             c
         } else if path.ends_with(".js") {
@@ -3195,7 +3205,7 @@ fn build_async_command(path: &str) -> tokio::process::Command {
                 debug!("running pi JS entrypoint via bun: {} {}", bun, path);
                 c
             } else {
-                let mut c = tokio::process::Command::new("node");
+                let mut c = crate::no_window::no_window_command_async("node");
                 c.arg(path);
                 c
             }
@@ -3851,6 +3861,11 @@ pub fn ensure_bash_available() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_pi_install_disables_dependency_lifecycle_scripts() {
+        assert!(PI_INSTALL_ARGS.contains(&"--ignore-scripts"));
+    }
 
     #[test]
     fn tool_use_without_an_executable_call_is_a_protocol_error() {
@@ -4594,7 +4609,7 @@ mod tests {
         assert_eq!(parse_rate_limit_reset_secs("model not found"), None);
 
         // hosted_ai_capacity_reserved uses "retry_after_seconds", not "reset_in".
-        let capacity_reserved = r#"429 {"error":"hosted_ai_capacity_reserved","message":"Other hosted AI chats are still running. Wait for one to finish, then retry.","retry_after_seconds":5}"#;
+        let capacity_reserved = r#"429 {"error":"hosted_ai_capacity_reserved","message":"Other AI chats are still running. Wait for one to finish, then retry.","retry_after_seconds":5}"#;
         assert_eq!(parse_rate_limit_reset_secs(capacity_reserved), Some(5));
     }
 
@@ -4838,7 +4853,7 @@ mod tests {
     #[test]
     fn test_next_rate_limit_retry_capacity_reserved_outlasts_fixed_retry_cap() {
         // Real gateway payload for contention on the shared hosted-AI slot.
-        let stderr = r#"429 {"error":"hosted_ai_capacity_reserved","message":"Other hosted AI chats are still running. Wait for one to finish, then retry.","retry_after_seconds":5}"#;
+        let stderr = r#"429 {"error":"hosted_ai_capacity_reserved","message":"Other AI chats are still running. Wait for one to finish, then retry.","retry_after_seconds":5}"#;
 
         // Simulate holding capacity for 35s (7 retries at 5s each) — longer
         // than the fixed MAX_RATE_LIMIT_RETRIES=3 a generic rate limit gets.
@@ -4949,7 +4964,7 @@ mod tests {
     ) {
         // Simulate the shared hosted-AI slot staying busy for 4 attempts —
         // one more than MAX_RATE_LIMIT_RETRIES=3 — before it frees up.
-        let capacity_stderr = r#"429 {"error":"hosted_ai_capacity_reserved","message":"Other hosted AI chats are still running. Wait for one to finish, then retry.","retry_after_seconds":5}"#;
+        let capacity_stderr = r#"429 {"error":"hosted_ai_capacity_reserved","message":"Other AI chats are still running. Wait for one to finish, then retry.","retry_after_seconds":5}"#;
         let calls = std::cell::RefCell::new(0u32);
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 

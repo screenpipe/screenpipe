@@ -232,7 +232,11 @@ fn run_trigger_type(body: Option<&RunPipeBody>) -> &'static str {
     }
 }
 
-fn format_run_context(context: &Value) -> String {
+/// Render a request-scoped context block for a Pipe prompt.
+///
+/// Shared with the scheduler so a scheduled Live View refresh reaches the model
+/// in exactly the same framing as the foreground refresh button.
+pub fn format_run_context(context: &Value) -> String {
     let serialized = serde_json::to_string_pretty(context).unwrap_or_default();
     if context.get("source").and_then(Value::as_str) == Some("live-view") {
         format!(

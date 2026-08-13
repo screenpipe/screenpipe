@@ -159,13 +159,11 @@ pub struct CaptureContext<'a> {
     /// meeting apps/URLs get no special OCR treatment at all.
     pub in_meeting: bool,
     /// Whether the captured monitor is the one hosting the focused window.
-    /// App/window metadata comes from the globally focused window, so on a
-    /// multi-monitor setup a second monitor's frames inherit the meeting
-    /// app's name while showing unrelated pixels — the meeting OCR gate
-    /// must not fingerprint-gate those (#5054 review). Callers without
-    /// per-monitor focus knowledge should pass `true` (single-monitor and
-    /// unknown-focus cases behave like the focused monitor, matching the
-    /// focus controller's own all-Active fallback).
+    /// This is a capture-source boundary: only that monitor may pair its
+    /// screenshot with the globally focused accessibility tree and focused
+    /// app/window identity. Other monitors use screenshot OCR with unknown
+    /// metadata. Callers without per-monitor focus knowledge should pass
+    /// `true` only when capturing a single monitor.
     pub monitor_hosts_focus: bool,
     /// Screen bounds of the focused window in this frame's pixel space, when
     /// the platform exposes them (macOS AX frame, Windows GetWindowRect).
@@ -239,9 +237,25 @@ pub async fn paired_capture(
 ) -> Result<PairedCaptureResult> {
     let start = Instant::now();
 
+    // AX and focused-window identity describe one global focused window, not
+    // every monitor captured alongside it. Keep them inseparable from focus
+    // ownership so callers cannot attach the focused app's tree or identity
+    // to unrelated pixels from another monitor.
+    let tree_snapshot = tree_snapshot.filter(|_| ctx.monitor_hosts_focus);
+    let (app_name, window_name, browser_url, document_path) = if ctx.monitor_hosts_focus {
+        (
+            ctx.app_name,
+            ctx.window_name,
+            ctx.browser_url,
+            ctx.document_path,
+        )
+    } else {
+        (None, None, None, None)
+    };
+
     // Write JPEG snapshot to disk — skipped when screenshot_disabled (AudioPaused / FullPause).
-    // The accessibility tree walk still runs so metadata rows keep timestamp,
-    // app_name, window_name, and full_text for search/timeline queries.
+    // On the focused monitor the accessibility tree can still supply text;
+    // other monitors remain screenshot-only by the boundary above.
     let snapshot_path_str = if ctx.screenshot_disabled {
         debug!(
             "paired_capture: screenshot skipped (screenshot_disabled, trigger={})",
@@ -271,7 +285,7 @@ pub async fn paired_capture(
     // without visual formatting). For these apps we always run OCR to get
     // proper bounding-box text positions for the selectable overlay.
     let app_prefers_ocr = !ctx.screenshot_disabled
-        && ctx.app_name.is_some_and(|name| {
+        && app_name.is_some_and(|name| {
             let n = name.to_lowercase();
             // Terminal emulators whose AX text is raw buffer and not useful
             // for bounding-box overlay. OCR produces better results.
@@ -297,15 +311,15 @@ pub async fn paired_capture(
     // their forced OCR is gated on an actual detected meeting below (#5054).
     let a11y_is_thin_generic = has_accessibility_text
         && tree_snapshot
-            .map(|s| a11y_content_is_thin(s, ctx.window_name, ctx.browser_url))
+            .map(|s| a11y_content_is_thin(s, window_name, browser_url))
             .unwrap_or(false);
 
     // What would trigger OCR at all (the pre-gate rules, unchanged):
     // terminals that always prefer OCR, meeting apps during a detected call
     // (screen-share pixels have no a11y tree even when chrome a11y is
     // rich), and the generic no/thin-a11y fallback (canvas apps, games).
-    let meeting_matched = ctx.app_name.map(is_meeting_app).unwrap_or(false)
-        || ctx.browser_url.map(is_meeting_url).unwrap_or(false);
+    let meeting_matched = app_name.map(is_meeting_app).unwrap_or(false)
+        || browser_url.map(is_meeting_url).unwrap_or(false);
     let meeting_trigger = ctx.in_meeting && meeting_matched && ctx.monitor_hosts_focus;
     let wants_ocr = !ctx.screenshot_disabled
         && (app_prefers_ocr || meeting_trigger || !has_accessibility_text || a11y_is_thin_generic);
@@ -326,12 +340,14 @@ pub async fn paired_capture(
     // monitor-frame behavior.
     let (frame_w, frame_h) = ctx.image.dimensions();
     let window_crop = ctx
-        .focused_window_bounds
+        .monitor_hosts_focus
+        .then_some(ctx.focused_window_bounds)
+        .flatten()
         .and_then(|b| clamp_window_crop(b, frame_w, frame_h));
     if wants_ocr {
         match ocr_gate.as_deref_mut() {
             Some(gate) => {
-                let app_key = ctx.app_name.unwrap_or("unknown").to_lowercase();
+                let app_key = app_name.unwrap_or("unknown").to_lowercase();
                 // The gated OCR pipeline (#5060) — applies to EVERY OCR
                 // trigger, not just meetings: screenshot → crop to the app
                 // window → detect text → crop to the padded union of the
@@ -658,11 +674,11 @@ pub async fn paired_capture(
             ctx.device_name,
             ctx.captured_at,
             &snapshot_path_str,
-            ctx.app_name,
-            ctx.window_name,
-            ctx.browser_url,
-            ctx.document_path,
-            ctx.focused,
+            app_name,
+            window_name,
+            browser_url,
+            document_path,
+            ctx.focused && ctx.monitor_hosts_focus,
             Some(ctx.capture_trigger),
             sanitized_text.as_deref(),
             text_source,
@@ -670,7 +686,9 @@ pub async fn paired_capture(
             content_hash,
             simhash,
             ocr_data,
-            ctx.elements_ref_frame_id,
+            ctx.monitor_hosts_focus
+                .then_some(ctx.elements_ref_frame_id)
+                .flatten(),
         )
         .await?;
 
@@ -689,7 +707,7 @@ pub async fn paired_capture(
             (ocr_gate.as_deref_mut(), ocr_cache_payload.as_ref())
         {
             gate.ocr_indexed(
-                &ctx.app_name.unwrap_or("unknown").to_lowercase(),
+                &app_name.unwrap_or("unknown").to_lowercase(),
                 cache_text,
                 cache_json,
             );
@@ -714,9 +732,9 @@ pub async fn paired_capture(
         ocr_was_empty,
         ocr_gate_decision,
         ocr_gate_detect_duration,
-        app_name: ctx.app_name.map(String::from),
-        window_name: ctx.window_name.map(String::from),
-        browser_url: ctx.browser_url.map(String::from),
+        app_name: app_name.map(String::from),
+        window_name: window_name.map(String::from),
+        browser_url: browser_url.map(String::from),
         content_hash,
     })
 }
@@ -1764,13 +1782,10 @@ mod tests {
 
     #[tokio::test]
     async fn non_focused_monitor_gets_gated_ocr_on_its_own_pixels() {
-        // Multi-monitor: a second monitor's frames inherit the focused
-        // meeting app's NAME while showing unrelated pixels. Since the gate
-        // moved to pixel-exact skipping (#5060), gating them is safe — a
-        // changing dashboard changes the signature and OCRs; only truly
-        // static content skips. This replaced the earlier rule that
-        // exempted non-focused monitors (which existed to protect changing
-        // content from fingerprint-stability starvation).
+        // Multi-monitor: a second monitor receives the globally focused
+        // window's AX result, but its pixels show unrelated content. The
+        // capture boundary must discard both that tree and its identity,
+        // then OCR the second monitor's own screenshot.
         let tmp = TempDir::new().unwrap();
         let snapshot_writer = SnapshotWriter::new(tmp.path(), 80, 1920);
         let db = DatabaseManager::new("sqlite::memory:", Default::default())
@@ -1815,6 +1830,11 @@ mod tests {
             result.ocr_duration_ms.is_some(),
             "new text on a non-focused monitor must be OCR'd"
         );
+        assert!(result.app_name.is_none());
+        assert!(result.window_name.is_none());
+        assert!(result.browser_url.is_none());
+        assert_ne!(result.accessibility_text.as_deref(), Some("Leave meeting"));
+        assert_ne!(result.content_hash, Some(snap.content_hash as i64));
         // Content changes (a second text line appears): the union crop's
         // pixels differ → OCR again. This is the coverage the old
         // fingerprint gate starved. (Note: purely MOVED text is skipped by

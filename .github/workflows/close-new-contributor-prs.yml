@@ -10,9 +10,6 @@ permissions:
 
 jobs:
   close:
-    if: >-
-      github.event.pull_request.author_association == 'FIRST_TIMER' ||
-      github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
     runs-on: ubuntu-latest
 
     steps:
@@ -20,7 +17,10 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const pullRequest = context.payload.pull_request;
+            const { data: pullRequest } = await github.rest.pulls.get({
+              ...context.repo,
+              pull_number: context.payload.pull_request.number,
+            });
             const newContributorAssociations = new Set([
               "FIRST_TIMER",
               "FIRST_TIME_CONTRIBUTOR",

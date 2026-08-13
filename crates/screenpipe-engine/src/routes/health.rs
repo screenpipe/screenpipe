@@ -138,18 +138,41 @@ pub(crate) enum VisionStallCause {
     DbWritesNotLanding,
 }
 
+/// A fallback older than this is history, not an explanation for the stall in
+/// progress.
+const CAPTURE_BACKEND_FALLBACK_RECENT_SECS: u64 = 300;
+
 impl VisionStallCause {
-    pub(crate) fn detail(self, stalled_secs: u64, silent_loss: u64) -> String {
+    /// `backend_fallback_secs` is how long ago capture last dropped off its
+    /// primary backend, from
+    /// [`screenpipe_screen::monitor::secs_since_capture_backend_fallback`].
+    /// When that is recent, `CapturePaused` can name the wedged backend instead
+    /// of leaving the reader to guess between TCC, display sleep and a hung
+    /// daemon.
+    pub(crate) fn detail(
+        self,
+        stalled_secs: u64,
+        silent_loss: u64,
+        backend_fallback_secs: Option<u64>,
+    ) -> String {
         match self {
             Self::SilentLoss => format!(
                 "no vision frame written for {stalled_secs}s — capture is attempting but frames \
                  are not reaching the writer ({silent_loss} attempts unaccounted); the database \
                  is idle"
             ),
-            Self::CapturePaused => format!(
-                "no vision frame written for {stalled_secs}s — the capture backend has stopped \
-                 delivering frames; the database is idle"
-            ),
+            Self::CapturePaused => match backend_fallback_secs {
+                Some(ago) if ago <= CAPTURE_BACKEND_FALLBACK_RECENT_SECS => format!(
+                    "no vision frame written for {stalled_secs}s — the capture backend has \
+                     stopped delivering frames; ScreenCaptureKit last failed over to the \
+                     CoreGraphics fallback {ago}s ago, so the primary backend is wedged rather \
+                     than the screen being idle; the database is idle"
+                ),
+                _ => format!(
+                    "no vision frame written for {stalled_secs}s — the capture backend has \
+                     stopped delivering frames; the database is idle"
+                ),
+            },
             Self::DbWritesNotLanding => format!(
                 "vision DB writes stalled for {stalled_secs}s — capture running but DB writes not \
                  landing"
@@ -439,6 +462,12 @@ pub struct HealthCheckResponse {
     pub last_frame_timestamp: Option<chrono::DateTime<Utc>>,
     pub last_audio_timestamp: Option<chrono::DateTime<Utc>>,
     pub frame_status: String,
+    /// Capture-loop stage last entered, and how long ago. A frozen loop is the
+    /// only thing that can make `frame_status` stale (it is a max of the DB
+    /// write, capture attempt and loop heartbeat clocks), so these two fields
+    /// are what turn "stale" into a locatable freeze point.
+    pub loop_stage: String,
+    pub loop_stage_age_secs: Option<u64>,
     pub audio_status: String,
     pub message: String,
     pub verbose_instructions: Option<String>,
@@ -746,6 +775,8 @@ fn degraded_response() -> HealthCheckResponse {
         last_frame_timestamp: None,
         last_audio_timestamp: None,
         frame_status: "unknown".to_string(),
+        loop_stage: "unknown".to_string(),
+        loop_stage_age_secs: None,
         audio_status: "unknown".to_string(),
         message: "health check timed out before producing a snapshot".to_string(),
         verbose_instructions: None,
@@ -927,6 +958,13 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     // basic "is alive" check. Focus-aware capture can intentionally park a
     // non-focused display without attempts for minutes; its loop heartbeat
     // distinguishes that healthy state from a blocked or exited task.
+    // Stage marker for the aggregate loop. Only meaningful alongside a stale
+    // frame_status: a healthy loop overwrites it several times a second.
+    let (vision_loop_stage, vision_loop_stage_entered_ts) = {
+        let (stage, ts) = state.vision_metrics.loop_stage();
+        (stage, (ts > 0).then_some(ts))
+    };
+
     let last_frame_ts = vision_snap
         .last_db_write_ts
         .max(vision_snap.last_capture_attempt_ts)
@@ -1466,6 +1504,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
                         .detail(
                             now_ts.saturating_sub(vision_snap.last_db_write_ts),
                             vision_snap.silent_loss,
+                            screenpipe_screen::monitor::secs_since_capture_backend_fallback(),
                         ),
                 );
             }
@@ -1586,6 +1625,9 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
             None
         },
         frame_status: frame_status.to_string(),
+        loop_stage: vision_loop_stage.as_str().to_string(),
+        loop_stage_age_secs: vision_loop_stage_entered_ts
+            .and_then(|ts| (ts > 0).then(|| now_ts.saturating_sub(ts))),
         audio_status,
         message,
         verbose_instructions,
@@ -1828,7 +1870,7 @@ mod vision_stall_classification_tests {
     fn attempts_climbing_with_an_idle_writer_is_silent_loss_not_a_db_stall() {
         let cause = classify_vision_stall(45, 0, 119.0, 3);
         assert_eq!(cause, VisionStallCause::SilentLoss);
-        let detail = cause.detail(307, 43);
+        let detail = cause.detail(307, 43, None);
         assert!(
             detail.contains("not reaching the writer") && detail.contains("database is idle"),
             "must not blame the database: {detail}"
@@ -1847,7 +1889,53 @@ mod vision_stall_classification_tests {
     fn no_capture_attempts_means_the_backend_stopped_not_the_writer() {
         let cause = classify_vision_stall(0, 0, 119.0, 3);
         assert_eq!(cause, VisionStallCause::CapturePaused);
-        assert!(cause.detail(300, 0).contains("capture backend has stopped"));
+        assert!(cause
+            .detail(300, 0, None)
+            .contains("capture backend has stopped"));
+    }
+
+    /// A wedged ScreenCaptureKit daemon keeps serving frames through the
+    /// CoreGraphics fallback, so `/health` used to describe a stall without
+    /// ever naming the backend that had actually failed. Support then had to
+    /// ask for logs to distinguish it from TCC revoke or display sleep.
+    #[test]
+    fn a_recent_backend_failover_is_named_as_the_stall_cause() {
+        let detail = VisionStallCause::CapturePaused.detail(300, 0, Some(12));
+        assert!(
+            detail.contains("CoreGraphics fallback")
+                && detail.contains("primary backend is wedged"),
+            "must name the wedged backend: {detail}"
+        );
+        assert!(
+            !detail.contains("screen being idle") || detail.contains("rather than"),
+            "must not leave an idle screen as the reading: {detail}"
+        );
+    }
+
+    /// An old failover is history. Attributing an unrelated stall to it would
+    /// be the same guessing this classifier exists to remove.
+    #[test]
+    fn a_stale_backend_failover_is_not_blamed_for_a_later_stall() {
+        let stale = CAPTURE_BACKEND_FALLBACK_RECENT_SECS + 1;
+        let detail = VisionStallCause::CapturePaused.detail(300, 0, Some(stale));
+        assert!(!detail.contains("CoreGraphics fallback"), "{detail}");
+        assert_eq!(detail, VisionStallCause::CapturePaused.detail(300, 0, None));
+    }
+
+    /// The failover only explains a paused backend; it must not rewrite the
+    /// silent-loss or writer verdicts.
+    #[test]
+    fn a_failover_does_not_change_the_other_stall_causes() {
+        for cause in [
+            VisionStallCause::SilentLoss,
+            VisionStallCause::DbWritesNotLanding,
+        ] {
+            assert_eq!(
+                cause.detail(300, 7, Some(5)),
+                cause.detail(300, 7, None),
+                "{cause:?} must ignore the backend failover"
+            );
+        }
     }
 
     #[test]
@@ -1868,7 +1956,7 @@ mod vision_stall_classification_tests {
             VisionStallCause::DbWritesNotLanding
         );
         assert!(classify_vision_stall(10, 4, 119.0, 3)
-            .detail(120, 0)
+            .detail(120, 0, None)
             .contains("DB writes stalled"));
     }
 
@@ -1954,6 +2042,8 @@ mod tests {
             last_frame_timestamp: None,
             last_audio_timestamp: None,
             frame_status: "ok".to_string(),
+            loop_stage: "unknown".to_string(),
+            loop_stage_age_secs: None,
             audio_status: "ok".to_string(),
             message: "test".to_string(),
             verbose_instructions: None,

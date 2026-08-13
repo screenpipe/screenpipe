@@ -37,6 +37,19 @@ type LivePiSessionCheck =
   // Callers must not hard-abort a send on an indeterminate result.
   | { running: false; error: string; indeterminate: boolean };
 
+export function hasAuthoritativeActivePiTurn({
+  isStreaming,
+  assistantMessageId,
+}: {
+  // `isLoading` is intentionally accepted but ignored: send preflight uses it
+  // for immediate UI feedback before any backend turn exists.
+  isLoading: boolean;
+  isStreaming: boolean;
+  assistantMessageId: string | null;
+}): boolean {
+  return isStreaming || assistantMessageId !== null;
+}
+
 export async function awaitPendingPiPresetSwitch(
   promiseRef: { current: Promise<void> | null },
 ): Promise<void> {
@@ -184,7 +197,11 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
   }
 
   async function interruptActivePiTurn() {
-    const hasActiveTurn = isLoading || isStreaming || !!piMessageIdRef.current;
+    const hasActiveTurn = hasAuthoritativeActivePiTurn({
+      isLoading,
+      isStreaming,
+      assistantMessageId: piMessageIdRef.current,
+    });
     if (!hasActiveTurn) return;
 
     let aborted = false;
@@ -599,7 +616,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       has_images: outgoingImages.length > 0 || !!prefillFrameId,
       has_context: !!prefillContext,
       message_index: messageIndex,
-      ...chatSendTelemetryContext(sendOptions, messageIndex),
+      ...chatSendTelemetryContext(sendOptions, messageIndex, messages),
     });
 
     // No timeout — Pi can run for minutes on long tasks (e.g. 30-day analysis
@@ -784,7 +801,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
           provider: getActivePreset()?.provider,
           model: getActivePreset()?.model,
           error_type: isPiPromptStartTimeout(rawError) ? "start_timeout" : "prompt_dispatch",
-          ...chatSendTelemetryContext(sendOptions, messageIndex),
+          ...chatSendTelemetryContext(sendOptions, messageIndex, messages),
         });
         forceQueueModeRef.current = false;
         setIsLoading(false);

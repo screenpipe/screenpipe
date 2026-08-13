@@ -302,6 +302,18 @@
       "layers": [
         "real-ui-e2e"
       ]
+    },
+    {
+      "id": "speaker-rename-scope",
+      "label": "Speaker rename scope and reference integrity",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api"
+      ]
     }
   ],
   "specs": [
@@ -1047,7 +1059,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "A local provider returns the gateway's structured daily-limit rejection for a Business account; the request crosses the real Pi and foreground-event path, then the UI shows usage-limit copy and a targeted Business Max billing action."
+      "notes": "A local provider returns the gateway's structured daily-limit rejection across the four self-serve upgrade targets; each request crosses the real Pi and foreground-event path, then the UI asserts the phosphor primary CTA, captures a screenshot, and opens the exact billing URL."
     },
     {
       "spec": "chat-local-ai-gateway.spec.ts",
@@ -1347,6 +1359,25 @@
       "notes": "Seeds a meeting with notes and summary, switches persistent tabs, resizes to 640x560, checks footer separation and horizontal overflow, then captures a review screenshot."
     },
     {
+      "spec": "meeting-restart-live-transcription.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "local-api"
+      ],
+      "features": [
+        "meeting-notes"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "command",
+      "notes": "Opens an auto-detected meeting, runs the full stop_screenpipe/spawn_screenpipe restart the health overlay's RESTART button uses, and asserts the meeting is still open afterwards so live transcription has something to reattach to."
+    },
+    {
       "spec": "meeting-summary-recovery.spec.ts",
       "platforms": [
         "windows",
@@ -1407,6 +1438,25 @@
       "notes": "Opt-in real-audio lifecycle lane: configured devices stay closed outside meetings and open only across a manual meeting edge."
     },
     {
+      "spec": "capture-restart-device-recovery.spec.ts",
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "layers": [
+        "audio-device",
+        "local-api",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "audio-device-health"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "Opt-in real-audio continuous lane for #6089: a capture-session restart must bring back the same running device set, and the device monitor must survive to recover a device stopped afterwards."
+    },
+    {
       "spec": "notification-viewer-link.spec.ts",
       "platforms": [
         "windows",
@@ -1447,6 +1497,72 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "notes": "Isolated agent-home CI lane verifies private native config writes, the resolved local API credential, a real authenticated MCP tool call, skills setup, and removal of the connection slide."
+    },
+    {
+      "spec": "onboarding-first-run.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "onboarding",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "onboarding",
+        "first-run-learning",
+        "settings-persistence"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "tests": 7,
+      "notes": "Fresh-install setup walk: the acquisition slide is reachable in the shipped slide order and counted by the progress bar, offers no free-text field, one tap persists through to store.bin via the real settings command, skip records nothing, and the engine slide is the last one with no goal picker after it."
+    },
+    {
+      "spec": "first-run-learning-window.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "onboarding",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "onboarding",
+        "first-run-learning"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "tests": 6,
+      "notes": "Post-setup learning window on Home under the authenticated seed: opens from a real complete_onboarding with nothing seeded (guards the cross-window webview localStorage handoff), live countdown, settles to the real engine-reported reason when nothing was captured, stays dismissed across a reload, offers a ready summary and clears after use, and never renders in idle or done."
+    },
+    {
+      "spec": "first-run-ai-summary.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "onboarding",
+        "chat-ai",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "onboarding",
+        "first-run-learning",
+        "chat"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "tests": 1,
+      "notes": "Opt-in hosted-AI lane for the post-setup summary: the real app starts its own Pi session through the Rust command and the production Worker under Miniflare, and the forwarded provider request is asserted to carry the screen and audio excerpts plus the browser URL, not just app names. Guards the regression where the summary was AI-written but built from containers only, so it read templated. The seeded chat must hold the model's text and never the deterministic opener."
     },
     {
       "spec": "onboarding-h1-follow-up.spec.ts",
@@ -1491,6 +1607,29 @@
       "confidence": "conditional",
       "ux": "real-user-flow",
       "notes": "Opt-in no-onboarding seed verifies onboarding redirect."
+    },
+    {
+      "spec": "onboarding-trust-affordances.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "onboarding",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "onboarding",
+        "settings-privacy-api-auth",
+        "storage-retention"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "tests": 4,
+      "notes": "Pre-grant reassurance in setup: the login slide carries the storage-locality line and the pause affordance on one line (the only slide every platform sees, since permissions auto-advances on non-mac); the mac permissions slide keeps that promise collapsed to a single line below the permission wheel and on expand renders the data dir the running app actually resolved rather than a reconstructed ~/.screenpipe, with an open action pointed at that path; collapsed and expanded states are both asserted to fit inside the fixed-size onboarding window; and the timeline slide states the capture bounds (incognito skipped, per-app exclusions) where the capture decision is made. The mac assertions share one visit because the slide auto-advances 600ms after all grants land."
     },
     {
       "spec": "screen-recording-restart.spec.ts",
@@ -1589,6 +1728,25 @@
       "confidence": "conditional",
       "ux": "api",
       "notes": "Opt-in macOS fault injection wedges a visual-change probe; asserts the bounded probe keeps the capture loop and its /health heartbeat live (no false stale/incident)."
+    },
+    {
+      "spec": "capture-stall-stage-marker.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "capture-ocr",
+        "local-api",
+        "os-integration"
+      ],
+      "features": [
+        "app-launch",
+        "capture-ocr"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "api",
+      "notes": "Opt-in macOS fault injection parks the capture loop; asserts /health names the frozen CaptureLoopStage with an advancing age while frame_status is stale, and that the stage age collapses once the watchdog recovers capture."
     },
     {
       "spec": "capture-stall-recovery.spec.ts",
@@ -2374,6 +2532,26 @@
       "confidence": "strong",
       "ux": "mixed",
       "notes": "Opt-in packaged-desktop regression: causes real SQLITE_CORRUPT in the isolated E2E database, then proves the engine API and database owners stop while the desktop stays alive and does not respawn across the watchdog window."
+    },
+    {
+      "spec": "speaker-rename-scope.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api"
+      ],
+      "features": [
+        "meeting-notes",
+        "speaker-rename-scope"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "tests": 3,
+      "notes": "Seeds one unnamed voice across three chunks through the public API, renames a single line with scope=auto, and verifies the whole voice is relabelled while a correction on a named speaker stays on its line. Also asserts the orphaned-speaker repair migration is recorded applied after a real app boot and leaves no row pointing at a deleted speaker."
     }
   ]
 }

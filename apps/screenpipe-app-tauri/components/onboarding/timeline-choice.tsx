@@ -6,7 +6,7 @@
 
 import React, { useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Camera, Check, HardDrive, Loader } from "lucide-react";
+import { Camera, Check, EyeOff, HardDrive, Loader } from "lucide-react";
 import posthog from "posthog-js";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
@@ -134,6 +134,16 @@ const COSTS = [
   {
     icon: HardDrive,
     text: "uses memory, cpu and disk",
+  },
+  // The bounds, stated where the user is actually deciding. Both controls
+  // already ship in Settings → Privacy — `ignoreIncognitoWindows` defaults to
+  // true, and `ignoredWindows` is the per-app exclusion list — but onboarding
+  // never mentioned either, so screen capture read as all-or-nothing at the
+  // one moment the user is choosing whether to allow it.
+  {
+    icon: EyeOff,
+    text: "skips incognito windows. you can exclude any app in settings.",
+    testId: "timeline-capture-bounds",
   },
 ];
 
@@ -297,8 +307,8 @@ export default function TimelineChoice({
         animate={{ opacity: 1 }}
         transition={{ delay: 0.25 }}
       >
-        {COSTS.map(({ icon: Icon, text }, i) => (
-          <div key={i} className="flex items-start gap-2">
+        {COSTS.map(({ icon: Icon, text, testId }, i) => (
+          <div key={i} data-testid={testId} className="flex items-start gap-2">
             <Icon
               className="w-3 h-3 mt-0.5 shrink-0 text-muted-foreground/60"
               strokeWidth={1.5}

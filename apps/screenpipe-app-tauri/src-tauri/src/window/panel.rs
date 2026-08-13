@@ -41,13 +41,13 @@ pub(crate) unsafe fn show_panel_visible(
 
         let _: () = msg_send![&*panel, setAlphaValue: 1.0f64];
 
-        if activate_app {
+        if activate_app && crate::window::window_activation_allowed() {
             let ns_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
             let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
         }
 
         panel.order_front_regardless();
-        panel.make_key_window();
+        crate::window::make_panel_key_if_allowed(&panel);
         make_webview_first_responder(panel);
 
         MAIN_PANEL_SHOWN.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -92,6 +92,12 @@ pub fn main_label_for_mode(mode: &str) -> &'static str {
 /// for causing crashes; setting the policy once on a real event is safe.
 #[cfg(target_os = "macos")]
 pub fn reset_to_regular_and_refresh_tray(app: &AppHandle) {
+    if !super::window_activation_allowed() {
+        info!("Setting activation policy to Accessory (e2e — non-activating test run)");
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+        return;
+    }
+
     if crate::enterprise_policy::is_app_ui_hidden() {
         info!("Setting activation policy to Accessory (enterprise hidden UI mode)");
         let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);

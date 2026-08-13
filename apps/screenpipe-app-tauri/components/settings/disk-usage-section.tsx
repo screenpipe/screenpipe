@@ -312,7 +312,7 @@ export function DiskUsageSection() {
                 </p>
               )}
               <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground">Scheduled</span>
+                <span className="text-muted-foreground">Scheduled tasks</span>
                 <span className="font-medium">
                   {diskUsage?.other?.pipes_size || "0 KB"}
                 </span>

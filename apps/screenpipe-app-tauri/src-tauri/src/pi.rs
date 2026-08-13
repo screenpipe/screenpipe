@@ -55,6 +55,8 @@ const TITLE_SESSION_PREFIX: &str = "__title:";
 const REQUIRED_PI_EXTENSION_PACKAGE: &str = "npm:pi-subagents";
 const CONVERSATION_HISTORY_OPEN: &str = "<conversation_history>";
 const CONVERSATION_HISTORY_CLOSE: &str = "</conversation_history>";
+const PI_INSTALL_ARGS: [&str; 2] = ["install", "--ignore-scripts"];
+const NPM_INSTALL_ARGS: [&str; 4] = ["install", "--ignore-scripts", "--no-audit", "--no-fund"];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PiConversationSyncState {
@@ -246,7 +248,11 @@ fn truncate_stderr(stderr: &str) -> String {
 #[cfg(windows)]
 fn build_command_for_path(path: &str) -> Command {
     if path.ends_with(".cmd") || path.ends_with(".bat") {
-        let mut cmd = Command::new("cmd.exe");
+        // No-window here rather than relying on the caller: both of today's
+        // callers do set the flag, but only after ~2500 lines of indirection,
+        // and a third caller that forgets would flash a terminal. Setting it
+        // twice is harmless.
+        let mut cmd = screenpipe_core::no_window_command("cmd.exe");
         cmd.args(["/C", path]);
         cmd
     } else if path.ends_with(".exe") {
@@ -1190,6 +1196,16 @@ fn local_pi_install_integrity_error(install_dir: &Path) -> Option<String> {
     if !cli_js.exists() {
         return Some(format!("missing Pi entrypoint at {}", cli_js.display()));
     }
+    let agent_session_runtime = pi_dir
+        .join("dist")
+        .join("core")
+        .join("agent-session-runtime.js");
+    if !agent_session_runtime.is_file() {
+        return Some(format!(
+            "missing Pi runtime artifact at {}",
+            agent_session_runtime.display()
+        ));
+    }
 
     if !is_local_pi_version_current(install_dir) {
         return Some(format!("Pi package version is not {}", PI_PACKAGE));
@@ -1216,13 +1232,10 @@ fn clear_pi_install_artifacts(install_dir: &Path) {
     let _ = std::fs::remove_file(install_dir.join("package-lock.json"));
 }
 
-fn apply_no_window(_cmd: &mut Command) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        _cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+/// Local alias so the many call sites below stay unchanged while there is only
+/// one implementation of the flag, in `screenpipe_core::no_window`.
+fn apply_no_window(cmd: &mut Command) {
+    screenpipe_core::apply_no_window(cmd);
 }
 
 fn bun_command(bun: &str) -> Command {
@@ -1262,18 +1275,33 @@ fn format_install_failure(tool: &str, output: &Output) -> String {
 
 fn should_retry_install_with_npm(stderr: &str) -> bool {
     let lower = stderr.to_lowercase();
-    lower.contains("eperm")
-        && (lower.contains("ntsetinformationfile")
-            || lower.contains("cache dir")
-            || lower.contains("extracting tarball")
-            || lower.contains("moving"))
+    let locked_file_context = lower.contains("ntsetinformationfile")
+        || lower.contains("cache dir")
+        || lower.contains("extracting tarball")
+        || lower.contains("moving")
+        || lower.contains("copying files from cache");
+    // EPERM and EBUSY are the same class of Windows failure: another handle
+    // (Defender, Search indexer, a previous bun) holds a file bun is copying
+    // out of its cache. Only EPERM was matched before, so an EBUSY install
+    // failed hard and left node_modules half-populated.
+    let locked_file_failure =
+        (lower.contains("eperm") || lower.contains("ebusy")) && locked_file_context;
+    let crash_failure = lower.contains("segmentation fault")
+        || lower.contains("bun has crashed")
+        || lower.contains("panic")
+        || lower.contains("avx support");
+    locked_file_failure || crash_failure
 }
 
 fn npm_install_command(install_dir: &Path) -> Command {
     #[cfg(windows)]
     {
-        let mut cmd = Command::new("cmd.exe");
-        cmd.args(["/C", "npm", "install", "--no-audit", "--no-fund"])
+        // Guarded at construction, not left to `run_command_output`: an npm
+        // fallback install can run for minutes, so a missed flag here is a
+        // terminal sitting on the user's desktop, not a blink.
+        let mut cmd = screenpipe_core::no_window_command("cmd.exe");
+        cmd.args(["/C", "npm"])
+            .args(NPM_INSTALL_ARGS)
             .current_dir(install_dir);
         cmd
     }
@@ -1281,8 +1309,7 @@ fn npm_install_command(install_dir: &Path) -> Command {
     #[cfg(not(windows))]
     {
         let mut cmd = Command::new("npm");
-        cmd.args(["install", "--no-audit", "--no-fund"])
-            .current_dir(install_dir);
+        cmd.args(NPM_INSTALL_ARGS).current_dir(install_dir);
         cmd
     }
 }
@@ -1305,10 +1332,31 @@ fn verify_pi_package_install(install_dir: &Path) -> Result<(), String> {
 /// permanent until node_modules is cleared. Never ask the user to delete
 /// directories: retry once with node_modules+lockfiles cleared, then once
 /// more with the bun cache wiped too, before reporting failure.
+/// Whether a failed install left a tree that only clearing node_modules can fix.
+///
+/// A verification failure says so explicitly. But a Windows file-lock abort
+/// (EPERM/EBUSY, typically Defender or the Search indexer holding a file bun is
+/// copying out of its cache) fails the install *before* verification runs, and
+/// leaves node_modules half-populated. The next `bun install` then trusts
+/// bun.lock ("no changes") and never re-copies the missing files, so Pi fails at
+/// runtime with `Cannot find package '<dep>'` until node_modules is cleared.
+/// Both cases need the same self-heal, so treat them the same.
+fn install_failure_is_self_healable(install_dir: &Path, error: &str) -> bool {
+    if error.contains("dependency verification failed") {
+        return true;
+    }
+    let lower = error.to_lowercase();
+    let locked_file_failure = lower.contains("eperm")
+        || lower.contains("ebusy")
+        || lower.contains("enotempty")
+        || lower.contains("copying files from cache");
+    locked_file_failure && local_pi_install_integrity_error(install_dir).is_some()
+}
+
 fn run_pi_package_install(install_dir: &Path, bun: &str) -> Result<(), String> {
     let first = run_pi_package_install_once(install_dir, bun);
     let Err(e) = first else { return Ok(()) };
-    if !e.contains("dependency verification failed") {
+    if !install_failure_is_self_healable(install_dir, &e) {
         return Err(e);
     }
 
@@ -1323,7 +1371,7 @@ fn run_pi_package_install(install_dir: &Path, bun: &str) -> Result<(), String> {
         info!("Pi install self-heal succeeded after clearing node_modules");
         return Ok(());
     };
-    if !e.contains("dependency verification failed") {
+    if !install_failure_is_self_healable(install_dir, &e) {
         return Err(e);
     }
 
@@ -1351,8 +1399,9 @@ fn run_pi_package_install_once(install_dir: &Path, bun: &str) -> Result<(), Stri
     // from the log alone; a bun that can't even execute (e.g. SIGILL on an
     // unsupported CPU) shows up right here as the version probe failing.
     info!(
-        "Running Pi dependency install: {} install (cwd: {}, bun version: {})",
+        "Running Pi dependency install: {} {} (cwd: {}, bun version: {})",
         bun,
+        PI_INSTALL_ARGS.join(" "),
         install_dir.display(),
         screenpipe_core::agents::pi::bun_version_string(bun),
     );
@@ -1361,7 +1410,10 @@ fn run_pi_package_install_once(install_dir: &Path, bun: &str) -> Result<(), Stri
     bun_cmd
         .current_dir(install_dir)
         .env("BUN_INSTALL_CACHE_DIR", &cache_dir)
-        .args(["install"]);
+        // CREATE_NO_WINDOW only applies to this Bun process. Lifecycle scripts
+        // can launch fresh console processes, so disable them for ScreenPipe's
+        // app-managed dependency set as well.
+        .args(PI_INSTALL_ARGS);
 
     match run_command_output(bun_cmd) {
         Ok(output) if output.status.success() => verify_pi_package_install(install_dir),
@@ -1372,7 +1424,7 @@ fn run_pi_package_install_once(install_dir: &Path, bun: &str) -> Result<(), Stri
             let bun_failure = format_install_failure("bun", &output);
             if should_retry_install_with_npm(&combined_output) {
                 warn!(
-                    "Pi bun install hit cache/EPERM failure; retrying with npm: {}",
+                    "Pi bun install hit EPERM or crash/hardware-incompatibility failure; retrying with npm: {}",
                     bun_failure
                 );
                 match run_command_output(npm_install_command(install_dir)) {
@@ -1704,6 +1756,13 @@ pub struct AcpAgentConfig {
     /// Default session mode id, applied after every session/new.
     #[serde(default)]
     pub mode_id: Option<String>,
+    /// Send the agent's model calls through Screenpipe Cloud instead of the
+    /// user's own provider account. Only honoured for agents whose catalog
+    /// entry declares `cloudRouting`; a closed agent (Cursor, Copilot) talks to
+    /// its own service and ignores this. `None` means the preset predates the
+    /// choice, which keeps the agent on its own account.
+    #[serde(default)]
+    pub use_screenpipe_cloud: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -2756,12 +2815,50 @@ pub async fn pi_start_inner(
                 .entry("DISABLE_MCP_CONFIG_FILTERING".to_string())
                 .or_insert_with(|| "true".to_string());
         }
-        // Claude: force ANTHROPIC_API_KEY empty so the Claude Agent SDK ignores
-        // any ambient API key and resolves the subscription/OAuth login it wrote
+        // Route the agent's model calls through Screenpipe Cloud when the
+        // preset asks for it and the catalog says this agent can be pointed at
+        // a provider base URL. The agent still owns its own sign-in; this only
+        // changes which endpoint answers its model calls, so the user does not
+        // need a separate provider account to use a coding agent at all.
+        //
+        // The bearer is the signed-in user's cloud token. It reaches the
+        // adapter as the provider token for that base URL only, and nothing
+        // else here forwards it (the ACP runtime scrubs `SCREENPIPE_API_KEY`
+        // from the child env precisely so it cannot leak as a general
+        // credential).
+        let routing = acp
+            .use_screenpipe_cloud
+            .unwrap_or(false)
+            .then(|| crate::acp_runtime::agent_cloud_routing(agent_id))
+            .flatten();
+        let mut routed_to_cloud = false;
+        if let Some(routing) = routing {
+            let gateway = crate::config::screenpipe_ai_gateway_url().unwrap_or_default();
+            let (set, clear) = crate::acp_runtime::cloud_routing_env(
+                &routing,
+                &gateway,
+                user_token.as_deref().unwrap_or_default(),
+            );
+            // Empty means something required was missing (signed out, bad
+            // gateway URL). Fall through to the agent's own account rather than
+            // starting it half-configured.
+            if !set.is_empty() {
+                for name in clear {
+                    resolved_env.remove(&name);
+                }
+                for (name, value) in set {
+                    resolved_env.insert(name, value);
+                }
+                routed_to_cloud = true;
+            }
+        }
+        // Claude on its own account: force ANTHROPIC_API_KEY empty so the Claude
+        // Agent SDK ignores any ambient API key and resolves the login it wrote
         // itself. We never read or parse Claude Code's credential store — the
         // agent owns its credentials (this is the Zed approach), so nothing here
-        // can break when that store's format changes.
-        if agent_id == "claude-acp" {
+        // can break when that store's format changes. Skipped when routed to
+        // cloud, where an empty key would fight the base-URL token.
+        if agent_id == "claude-acp" && !routed_to_cloud {
             resolved_env.insert("ANTHROPIC_API_KEY".to_string(), String::new());
         }
         cmd.env("SCREENPIPE_ACP_ID", agent_id)
@@ -4198,6 +4295,8 @@ pub async fn pi_acp_probe_agent(agent: AcpAgentConfig) -> Result<String, String>
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let project_dir = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
 
+    // `process_group` below is the only mutation, and it is unix-only.
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut std_cmd = std::process::Command::new(exe);
     // Own process group so cleanup group-kills can never target the app.
     #[cfg(unix)]
@@ -5348,6 +5447,12 @@ mod tests {
         "<conversation_history>\nuser: hello\nassistant: hi\n</conversation_history>\n\nwhat next?";
 
     #[test]
+    fn managed_pi_installs_disable_dependency_lifecycle_scripts() {
+        assert!(super::PI_INSTALL_ARGS.contains(&"--ignore-scripts"));
+        assert!(super::NPM_INSTALL_ARGS.contains(&"--ignore-scripts"));
+    }
+
+    #[test]
     fn prepares_prompt_for_pi_conversation_state() {
         use super::PiConversationSyncState::{NeedsRecovery, Synced};
 
@@ -5971,8 +6076,13 @@ printf '%s\n' '{"type":"agent_end"}'
             super::PI_PACKAGE.rsplit('@').next().unwrap_or(""),
         );
         let dist = pi_dir.join("dist");
-        std::fs::create_dir_all(&dist).expect("create dist");
+        std::fs::create_dir_all(dist.join("core")).expect("create dist");
         std::fs::write(dist.join("cli.js"), "console.log('pi')").expect("write cli");
+        std::fs::write(
+            dist.join("core").join("agent-session-runtime.js"),
+            "export class AgentSessionRuntime {}",
+        )
+        .expect("write agent session runtime");
     }
 
     /// Regression guard for the empty "Pi background install failed: " log
@@ -6096,6 +6206,44 @@ printf '%s\n' '{"type":"agent_end"}'
     }
 
     #[test]
+    fn local_pi_integrity_detects_missing_agent_session_runtime() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let install_dir = dir.path();
+        let pi_dir = super::pi_package_dir(install_dir);
+        write_pi_package(install_dir);
+        write_package_json(
+            &super::node_module_package_dir(install_dir, "@earendil-works/pi-ai"),
+            "@earendil-works/pi-ai",
+            super::PI_AI_PACKAGE.rsplit('@').next().unwrap_or(""),
+        );
+        write_package_json(
+            &super::node_module_package_dir(install_dir, "@anthropic-ai/sdk"),
+            "@anthropic-ai/sdk",
+            "0.91.1",
+        );
+        write_package_json(
+            &super::node_module_package_dir(install_dir, "cross-spawn"),
+            "cross-spawn",
+            "7.0.6",
+        );
+        std::fs::remove_file(
+            pi_dir
+                .join("dist")
+                .join("core")
+                .join("agent-session-runtime.js"),
+        )
+        .expect("remove agent session runtime");
+
+        let error = super::local_pi_install_integrity_error(install_dir)
+            .expect("missing agent session runtime should make install unhealthy");
+        assert!(
+            error.contains("agent-session-runtime.js"),
+            "unexpected integrity error: {}",
+            error
+        );
+    }
+
+    #[test]
     fn local_pi_integrity_accepts_nested_transitive_dependency() {
         let dir = tempfile::tempdir().expect("tempdir");
         let install_dir = dir.path();
@@ -6129,6 +6277,41 @@ error: InstallFailed extracting tarball"#;
         assert!(super::should_retry_install_with_npm(stderr));
         assert!(!super::should_retry_install_with_npm(
             "error: package not found @earendil-works/nope"
+        ));
+    }
+
+    /// The exact stderr from the Windows E2E runner. EBUSY was not matched, so
+    /// the install failed hard with no npm fallback and no self-heal.
+    #[test]
+    fn detects_bun_windows_ebusy_cache_copy_failures() {
+        let stderr =
+            "EBUSY: failed copying files from cache to destination for package @aws-sdk/nested-clients";
+
+        assert!(super::should_retry_install_with_npm(stderr));
+    }
+
+    #[test]
+    fn self_heals_a_failed_install_that_left_a_broken_dependency_tree() {
+        let temp = tempfile::tempdir().unwrap();
+        let install_dir = temp.path();
+
+        // A verification failure is self-healable regardless of tree state.
+        assert!(super::install_failure_is_self_healable(
+            install_dir,
+            "Pi install completed but dependency verification failed: missing Pi entrypoint"
+        ));
+
+        // An EBUSY abort fails before verification runs, but leaves the tree
+        // unusable — same corruption, so it must take the same self-heal path.
+        assert!(super::install_failure_is_self_healable(
+            install_dir,
+            "bun install failed (exit code 1). output: EBUSY: failed copying files from cache to destination for package @aws-sdk/nested-clients"
+        ));
+
+        // A genuine resolution failure must NOT burn three install attempts.
+        assert!(!super::install_failure_is_self_healable(
+            install_dir,
+            "bun install failed (exit code 1). output: error: package not found @earendil-works/nope"
         ));
     }
 

@@ -128,6 +128,9 @@ impl DiskPressureNotificationState {
         self.inner.lock().await.in_flight_data_dir = None;
     }
 
+    /// Only the E2E control surface (`e2e/commands.rs`) and the unit tests
+    /// below rewind the latch — production code clears it through `recover`.
+    #[cfg(any(test, feature = "e2e"))]
     async fn clear(&self) -> Result<(), String> {
         let mut latch = self.inner.lock().await;
         match std::fs::remove_file(&self.path) {
@@ -165,10 +168,12 @@ impl DiskPressureNotificationState {
         Ok(true)
     }
 
+    #[cfg(any(test, feature = "e2e"))]
     pub(crate) async fn reset(&self) -> Result<(), String> {
         self.clear().await
     }
 
+    #[cfg(any(test, feature = "e2e"))]
     pub(crate) async fn notification_armed(&self) -> bool {
         let latch = self.inner.lock().await;
         latch.notified_data_dir.is_none() && latch.in_flight_data_dir.is_none()

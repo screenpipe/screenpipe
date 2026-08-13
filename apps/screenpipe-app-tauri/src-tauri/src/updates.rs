@@ -9,6 +9,7 @@ use crate::RecordingState;
 use anyhow::Error;
 use dark_light::Mode;
 use log::{debug, error, info, warn};
+use semver::Version;
 use serde_json;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -373,6 +374,66 @@ fn failed_version_in_cooldown(
     matches!(last_failed, Some((v, elapsed)) if v == version && elapsed < cooldown)
 }
 
+/// Whether `candidate` is a strictly higher semantic version than `current`.
+/// On parse failure of either string this returns `false` (falls back to the
+/// exact-string semantics of `failed_version_in_cooldown`), so a malformed
+/// candidate can never claim to be newer.
+fn version_is_newer(current: &str, candidate: &str) -> bool {
+    match (Version::parse(current), Version::parse(candidate)) {
+        (Ok(mut current), Ok(mut candidate)) => {
+            // SemVer 2.0.0 section 10: build metadata is NOT part of precedence,
+            // but `semver::Version`'s `Ord` compares it anyway. Left in, re-publishing
+            // the same release with fresh build metadata (2.6.11+ci.1 -> 2.6.11+ci.2)
+            // reads as strictly newer, and the unconditional 5-minute re-poll below
+            // would re-adopt, re-download, re-stage and re-notify the identical
+            // bundle forever. The cooldown gate cannot catch that: it only arms on a
+            // version that FAILED to install.
+            current.build = semver::BuildMetadata::EMPTY;
+            candidate.build = semver::BuildMetadata::EMPTY;
+            candidate > current
+        }
+        _ => false,
+    }
+}
+
+/// How a freshly-observed update should be treated relative to the currently
+/// pending version and the last version whose download/install failed.
+///
+/// The periodic updater now re-polls every tick (the old `update_available` latch
+/// suppressed re-polls and pinned the app to the first version it saw — #5784).
+/// These outcomes keep each re-poll cheap and correct:
+enum PromoteDecision {
+    /// No pending update, or `found` is strictly newer than the pending one —
+    /// adopt `found`.
+    Adopt,
+    /// The pending version is already as new or newer than `found` — nothing to
+    /// do this tick.
+    Noop,
+    /// `found` equals the version that previously failed to install — route it
+    /// through the cooldown/retry gate so a post-cooldown or forced retry can run.
+    RetryCandidate,
+}
+
+fn classify_update(
+    pending: Option<&str>,
+    last_failed: Option<&str>,
+    found: &str,
+) -> PromoteDecision {
+    match pending {
+        None => PromoteDecision::Adopt,
+        Some(pending) if version_is_newer(pending, found) => PromoteDecision::Adopt,
+        Some(pending) if pending == found => {
+            if last_failed == Some(found) {
+                PromoteDecision::RetryCandidate
+            } else {
+                PromoteDecision::Noop
+            }
+        }
+        // Pending is already newer than `found`; keep the pending version.
+        Some(_) => PromoteDecision::Noop,
+    }
+}
+
 fn auto_update_enabled_from_settings(settings: Result<Option<SettingsStore>, String>) -> bool {
     settings
         .ok()
@@ -655,6 +716,33 @@ impl UpdatesManager {
             }
         }
         if let Ok(Some(update)) = check_result {
+            // Promote/skip decision for the periodic re-poll (#5784). Without this
+            // the app pinned to the first version it saw and never promoted when a
+            // newer one shipped (offered v165 forever once v166 was out).
+            {
+                let pending = self.pending_update.lock().await.clone();
+                let last_failed = self
+                    .last_failed_update
+                    .lock()
+                    .await
+                    .as_ref()
+                    .map(|(v, _)| v.clone());
+                match classify_update(
+                    pending.as_ref().map(|p| p.version.as_str()),
+                    last_failed.as_deref(),
+                    &update.version,
+                ) {
+                    PromoteDecision::Noop => {
+                        info!(
+                            "update already pending at v{}, skipping re-handling",
+                            update.version
+                        );
+                        return Result::Ok(false);
+                    }
+                    PromoteDecision::Adopt | PromoteDecision::RetryCandidate => {}
+                }
+            }
+
             // Cooldown gate: if this exact version recently failed to
             // download/install, don't auto-re-download it every 5 min. A
             // user-initiated check (`force`) always bypasses this so "click to
@@ -1154,12 +1242,13 @@ impl UpdatesManager {
 
         loop {
             interval.tick().await;
-            if !*self.update_available.lock().await {
-                // Don't show dialog for periodic checks - only for manual checks
-                if let Err(e) = self.check_for_updates(false, false).await {
-                    // warn, not error — see updater check() note above.
-                    warn!("Failed to check for updates: {}", e);
-                }
+            // Always re-check. The old `update_available` latch stopped re-polling
+            // the moment any update was pending, pinning the app to the first
+            // version it saw even after a newer one shipped (#5784). `check_for_updates`
+            // now dedupes the same version and promotes to a strictly newer one, so an
+            // unconditional re-poll is safe and required to surface vN+1.
+            if let Err(e) = self.check_for_updates(false, false).await {
+                warn!("Failed to check for updates: {}", e);
             }
         }
     }
@@ -1428,6 +1517,79 @@ mod tests {
     }
 
     #[test]
+    fn version_newer_rejects_equal() {
+        assert!(!version_is_newer("2.5.165", "2.5.165"));
+    }
+
+    #[test]
+    fn version_newer_rejects_older_candidate() {
+        assert!(!version_is_newer("2.5.166", "2.5.165"));
+    }
+
+    #[test]
+    fn version_newer_accepts_strictly_newer_candidate() {
+        // The core of #5784: when 166 is observed while 165 is pending, it's newer.
+        assert!(version_is_newer("2.5.165", "2.5.166"));
+    }
+
+    #[test]
+    fn version_newer_mayor_bump_counts_as_newer() {
+        assert!(version_is_newer("2.5.165", "3.0.0"));
+    }
+
+    #[test]
+    fn version_newer_fails_closed_on_malformed_input() {
+        assert!(!version_is_newer("2.5.165", "not-a-version"));
+        assert!(!version_is_newer("not-a-version", "2.5.166"));
+    }
+
+    #[test]
+    fn classify_adopts_when_nothing_pending() {
+        assert!(matches!(
+            classify_update(None, None, "2.5.165"),
+            PromoteDecision::Adopt
+        ));
+    }
+
+    #[test]
+    fn classify_adopts_a_strictly_newer_version() {
+        // 166 shipped while 165 was pending → must supersede it (#5784).
+        assert!(matches!(
+            classify_update(Some("2.5.165"), Some("2.5.165"), "2.5.166"),
+            PromoteDecision::Adopt
+        ));
+    }
+
+    #[test]
+    fn classify_noop_on_same_healthy_version() {
+        // Re-poll sees the same pending version with no prior failure → skip, so we
+        // don't re-notify/re-download every 5-min tick.
+        assert!(matches!(
+            classify_update(Some("2.5.165"), None, "2.5.165"),
+            PromoteDecision::Noop
+        ));
+    }
+
+    #[test]
+    fn classify_noop_when_pending_is_newer() {
+        // Server regressed (found older than pending) — keep pending.
+        assert!(matches!(
+            classify_update(Some("2.5.166"), None, "2.5.165"),
+            PromoteDecision::Noop
+        ));
+    }
+
+    #[test]
+    fn classify_retry_candidate_for_previously_failed_version() {
+        // Same version that previously failed must reach the cooldown gate so a
+        // post-cooldown / forced retry can still run.
+        assert!(matches!(
+            classify_update(Some("2.5.165"), Some("2.5.165"), "2.5.165"),
+            PromoteDecision::RetryCandidate
+        ));
+    }
+
+    #[test]
     fn auto_update_setting_respects_false() {
         let mut settings = SettingsStore::default();
         settings.auto_update = false;
@@ -1550,5 +1712,86 @@ mod tests {
         assert_eq!(RestartGate::Proceed.as_str(), "proceed");
         assert_eq!(RestartGate::Errored.as_str(), "errored");
         assert_eq!(RestartGate::DeferPending.as_str(), "pending");
+    }
+
+    #[test]
+    fn version_newer_rejects_a_v_prefixed_manifest_string() {
+        // The live stable manifest returns a bare semver ("2.6.11"). A manifest that
+        // ever shipped "v2.6.11" must fail closed rather than promote on a parse error.
+        assert!(!version_is_newer("2.5.165", "v2.5.166"));
+        assert!(!version_is_newer("v2.5.165", "2.5.166"));
+    }
+
+    #[test]
+    fn version_newer_rejects_two_component_and_empty_versions() {
+        assert!(!version_is_newer("2.5.165", "2.6"));
+        assert!(!version_is_newer("2.5.165", ""));
+        assert!(!version_is_newer("", "2.5.166"));
+    }
+
+    #[test]
+    fn version_newer_lets_a_release_supersede_its_own_prerelease() {
+        assert!(version_is_newer("2.5.166-beta.1", "2.5.166"));
+        assert!(version_is_newer("2.5.166-beta.1", "2.5.166-beta.2"));
+        // ...and never walks a final release back to a prerelease.
+        assert!(!version_is_newer("2.5.166", "2.5.166-beta.2"));
+    }
+
+    #[test]
+    fn version_newer_ignores_build_metadata() {
+        // Regression: `semver::Version`'s `Ord` compares build metadata even though
+        // SemVer excludes it from precedence. Without the explicit strip in
+        // `version_is_newer`, both of these are `true` and the periodic poll
+        // re-downloads the same bundle every tick.
+        assert!(!version_is_newer("2.5.166", "2.5.166+build.2"));
+        assert!(!version_is_newer("2.5.166+build.1", "2.5.166+build.2"));
+    }
+
+    #[test]
+    fn version_newer_accepts_a_large_forward_jump() {
+        assert!(version_is_newer("2.5.165", "10.0.0"));
+        assert!(matches!(
+            classify_update(Some("2.5.165"), None, "10.0.0"),
+            PromoteDecision::Adopt
+        ));
+    }
+
+    #[test]
+    fn classify_noop_when_an_older_unrelated_version_failed() {
+        // last_failed is OLDER than what is pending: re-polling the pending version
+        // stays a Noop instead of being routed to the retry/cooldown gate.
+        assert!(matches!(
+            classify_update(Some("2.5.165"), Some("2.5.164"), "2.5.165"),
+            PromoteDecision::Noop
+        ));
+    }
+
+    #[test]
+    fn classify_defers_to_the_cooldown_gate_once_pending_was_cleared() {
+        // The failure path sets pending = None, so the next poll classifies Adopt and
+        // the *cooldown* gate is what must stop the re-download. Pin that split.
+        assert!(matches!(
+            classify_update(None, Some("2.5.165"), "2.5.165"),
+            PromoteDecision::Adopt
+        ));
+        assert!(failed_version_in_cooldown(
+            Some(("2.5.165", Duration::from_secs(60))),
+            "2.5.165",
+            UPDATE_FAILURE_COOLDOWN,
+        ));
+    }
+
+    #[test]
+    fn classify_never_promotes_past_a_malformed_pending_version() {
+        // A corrupt pending snapshot must degrade to exact-string comparison, not let
+        // an unrelated version through as "newer".
+        assert!(matches!(
+            classify_update(Some("garbage"), None, "2.5.166"),
+            PromoteDecision::Noop
+        ));
+        assert!(matches!(
+            classify_update(Some("garbage"), None, "garbage"),
+            PromoteDecision::Noop
+        ));
     }
 }

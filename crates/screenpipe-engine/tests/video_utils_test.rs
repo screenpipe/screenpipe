@@ -8,6 +8,7 @@ use dirs::home_dir;
 use image::{Rgb, RgbImage};
 use screenpipe_core::find_ffmpeg_path;
 use screenpipe_core::paths;
+#[cfg(target_os = "macos")]
 use screenpipe_core::Language;
 use screenpipe_engine::video_utils::{extract_frame, extract_frames_from_video};
 use screenpipe_screen::capture_screenshot_by_window::CapturedWindow;
@@ -162,6 +163,8 @@ async fn test_extract_frames_and_ocr() -> Result<()> {
     let first_frame = &frames[0];
 
     // create a mock captured window for ocr
+    // Only the macOS Apple-OCR assertion below consumes this.
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     let captured_window = CapturedWindow {
         image: first_frame.clone(),
         window_name: "test_window".to_string(),

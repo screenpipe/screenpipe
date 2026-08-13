@@ -129,6 +129,22 @@ pub(crate) fn apply_settings(app: &AppHandle, store: &mut SettingsStore) {
         store.recording.experimental_meeting_piggyback = false;
         info!("E2E seed: meetings-only audio device lifecycle");
     }
+    if e2e_flags.iter().any(|f| f == "capture-restart-devices") {
+        // Real audio lane for the capture-restart regression (#6089). Same
+        // shape as `meetings-only-audio` — real OS devices, no OCR/STT models
+        // — but CONTINUOUS capture, so devices are open at rest and a restart
+        // must bring the same set back. Meetings-only would close them at idle
+        // and hide exactly the failure under test.
+        store.recording.disable_audio = false;
+        store.recording.disable_vision = true;
+        store.recording.audio_capture_mode = "always".to_string();
+        store.recording.audio_transcription_engine = "disabled".to_string();
+        store.recording.audio_chunk_duration = 5;
+        // The gate must not be able to suppress device starts here; this lane
+        // tests restart recovery, not meeting ownership.
+        store.recording.experimental_meeting_piggyback = false;
+        info!("E2E seed: capture restart device recovery");
+    }
 
     // The frontend reads settings from the Tauri store rather than the
     // managed Rust copy below. Persist E2E mutations so both sides see
@@ -409,11 +425,7 @@ async fn seed_search_fixture(db: &DatabaseManager) {
             None,
             None,
             None,
-            Some((
-                missing_thumbnail_query,
-                missing_thumbnail_json,
-                "e2e",
-            )),
+            Some((missing_thumbnail_query, missing_thumbnail_json, "e2e")),
             None,
         )
         .await

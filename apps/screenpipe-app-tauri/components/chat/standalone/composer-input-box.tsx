@@ -69,7 +69,10 @@ export function ComposerInputBox({
               ? input.disabledReason
               : input.isLoading || input.isStreaming
                 ? "Message will be queued..."
-                : "Ask about your screen... (@ chats, $ skills, ~ time, # tags)"
+                : // Kept to the same rendered width as the previous legend so it
+                  // still fits the 600px minimum chat window on one line. `~`
+                  // and `#` stay live and are taught by the palette itself.
+                  "Ask about your screen... (/ for commands, @ chats, $ skills)"
           }
           disabled={!input.canChat}
           spellCheck={false}

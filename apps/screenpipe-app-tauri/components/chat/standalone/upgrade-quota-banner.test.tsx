@@ -32,7 +32,6 @@ vi.mock("@/lib/hooks/use-usage-status", () => ({
   useUsageStatus: () => mocks.usageState,
   formatResetTime: () => "5:00 PM",
   formatAllowanceReset: () => "Aug 17, 5:00 PM",
-  formatAllowanceWindow: () => "30-day",
   formatUsagePercent: (percent: number) => `${percent}%`,
 }));
 
@@ -58,6 +57,17 @@ vi.mock("@/lib/utils/tauri", () => ({
 vi.mock("@/lib/upgrade-flow", () => ({
   openBusinessUpgradeSurface: mocks.openBusinessUpgradeSurface,
 }));
+
+function expectPhosphorPrimary(button: HTMLElement) {
+  expect(button).toHaveClass(
+    "border-[#4A6B00]",
+    "bg-[#C7FF3E]",
+    "text-black",
+    "hover:border-black",
+    "hover:bg-black",
+    "hover:text-[#C7FF3E]",
+  );
+}
 
 describe("UpgradeQuotaBanner", () => {
   beforeEach(() => {
@@ -107,7 +117,9 @@ describe("UpgradeQuotaBanner", () => {
     mocks.gateState = true;
     render(<UpgradeQuotaBanner />);
 
-    fireEvent.click(screen.getByRole("button", { name: "View Business" }));
+    const upgrade = screen.getByRole("button", { name: "View Business" });
+    expectPhosphorPrimary(upgrade);
+    fireEvent.click(upgrade);
     await waitFor(() =>
       expect(mocks.openBusinessUpgradeSurface).toHaveBeenCalledWith(
         "ai-quota-banner",
@@ -115,20 +127,28 @@ describe("UpgradeQuotaBanner", () => {
     );
   });
 
-  it("reports Cloudflare allowance utilization without sensitive amounts when upsell UI is off", () => {
+  it("presents a combined seven-day allowance as a weekly limit", () => {
     mocks.usageState = {
       ...mocks.usageState,
+      tier: "business_max",
       remaining: 999_999,
       upsell_banner: false,
       hosted_ai: {
+        plan: "business_max",
         allowance_managed_by: "cloudflare",
         usage_as_of: "2026-08-04T16:30:00.000Z",
+        upgrade: {
+          requiredPlan: "business_ultra",
+          upgradeUrl:
+            "https://screenpipe.com/account/billing?target_plan=pro_ultra&interval=month",
+          resetsAt: null,
+        },
         allowances: [
           {
-            lane: "auto",
+            lane: "combined",
             used_percent: 100,
             remaining_percent: 0,
-            window_seconds: 2_592_000,
+            window_seconds: 604_800,
             technique: "fixed",
             resets_at: "2026-08-17T00:00:00.000Z",
           },
@@ -140,10 +160,90 @@ describe("UpgradeQuotaBanner", () => {
     render(<UpgradeQuotaBanner />);
 
     expect(screen.getByTestId("hosted-ai-allowance-banner")).toBeTruthy();
-    expect(screen.getByText(/100% used/i)).toBeTruthy();
-    expect(screen.getByText(/30-day fixed period/i)).toBeTruthy();
+    expect(screen.getByText("Weekly AI limit reached")).toBeTruthy();
+    expect(screen.getByText(/100% used this week/i)).toBeTruthy();
     expect(screen.getByText(/resets Aug 17, 5:00 PM/i)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "View Business" })).toBeNull();
+    expect(screen.getByText(/Switch to Auto or upgrade/i)).toBeTruthy();
+    expect(screen.queryByText(/explicit model/i)).toBeNull();
+    expect(screen.queryByText(/fixed period/i)).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Upgrade to Business Ultra" }),
+    ).toBeTruthy();
+  });
+
+  it("presents frontier exhaustion without claiming the total weekly limit is spent", () => {
+    mocks.usageState = {
+      ...mocks.usageState,
+      tier: "business_max",
+      remaining: 999_999,
+      cost_limit_reached: false,
+      hosted_ai: {
+        plan: "business_max",
+        allowance_managed_by: "cloudflare",
+        usage_as_of: "2026-08-04T16:30:00.000Z",
+        upgrade: {
+          requiredPlan: "business_ultra",
+          upgradeUrl:
+            "https://screenpipe.com/account/billing?target_plan=pro_ultra&interval=month",
+          resetsAt: null,
+        },
+        allowances: [
+          {
+            lane: "combined",
+            used_percent: 50,
+            remaining_percent: 50,
+            window_seconds: 604_800,
+            technique: "fixed",
+            resets_at: "2026-08-17T00:00:00.000Z",
+          },
+          {
+            lane: "frontier",
+            used_percent: 100,
+            remaining_percent: 0,
+            window_seconds: 604_800,
+            technique: "fixed",
+            resets_at: "2026-08-17T00:00:00.000Z",
+          },
+        ],
+      },
+    };
+
+    render(<UpgradeQuotaBanner />);
+
+    expect(screen.getByText("Frontier model limit reached")).toBeTruthy();
+    expect(screen.queryByText("Weekly AI limit reached")).toBeNull();
+    expect(screen.getByText(/Switch to Auto or upgrade/i)).toBeTruthy();
+  });
+
+  it("does not promise an upgrade when the server offers no next plan", () => {
+    mocks.usageState = {
+      ...mocks.usageState,
+      tier: "business_ultra",
+      remaining: 999_999,
+      upsell_banner: false,
+      hosted_ai: {
+        plan: "business_ultra",
+        allowance_managed_by: "cloudflare",
+        usage_as_of: "2026-08-04T16:30:00.000Z",
+        upgrade: null,
+        allowances: [
+          {
+            lane: "combined",
+            used_percent: 100,
+            remaining_percent: 0,
+            window_seconds: 604_800,
+            technique: "fixed",
+            resets_at: "2026-08-17T00:00:00.000Z",
+          },
+        ],
+      },
+    };
+
+    render(<UpgradeQuotaBanner />);
+
+    expect(screen.getByText(/Switch to Auto\./i)).toBeTruthy();
+    expect(screen.queryByText(/Switch to Auto or upgrade/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /upgrade/i })).toBeNull();
   });
 
   it.each([
@@ -215,9 +315,11 @@ describe("UpgradeQuotaBanner", () => {
 
       expect(mocks.seenEligibility).toBe(true);
       expect(screen.getByTestId("hosted-ai-allowance-banner")).toBeTruthy();
-      fireEvent.click(
-        screen.getByRole("button", { name: `Upgrade to ${planLabel}` }),
-      );
+      const polledUpgrade = screen.getByRole("button", {
+        name: `Upgrade to ${planLabel}`,
+      });
+      expectPhosphorPrimary(polledUpgrade);
+      fireEvent.click(polledUpgrade);
       await waitFor(() =>
         expect(mocks.openExternalUrl).toHaveBeenCalledWith(upgradeUrl),
       );
@@ -232,9 +334,11 @@ describe("UpgradeQuotaBanner", () => {
       };
 
       render(<UpgradeQuotaBanner />);
-      fireEvent.click(
-        screen.getByRole("button", { name: `Upgrade to ${planLabel}` }),
-      );
+      const immediateUpgrade = screen.getByRole("button", {
+        name: `Upgrade to ${planLabel}`,
+      });
+      expectPhosphorPrimary(immediateUpgrade);
+      fireEvent.click(immediateUpgrade);
       await waitFor(() =>
         expect(mocks.openExternalUrl).toHaveBeenCalledWith(upgradeUrl),
       );
@@ -259,7 +363,7 @@ describe("UpgradeQuotaBanner", () => {
 
     render(<UpgradeQuotaBanner />);
     expect(screen.getByTestId("cost-limit-upgrade-banner")).toBeTruthy();
-    expect(screen.getByText(/hosted AI usage limit reached/i)).toBeTruthy();
+    expect(screen.getByText(/AI usage limit reached/i)).toBeTruthy();
     expect(
       screen.getByText(/resets 5:00 PM/i),
     ).toBeTruthy();
@@ -357,6 +461,29 @@ describe("UpgradeQuotaBanner", () => {
       );
     },
   );
+
+  it("stays generic for a required plan this build predates", async () => {
+    // The gateway can name a plan shipped after this build. Printing the raw
+    // id ("Upgrade to business_titan") invents a plan name, so both the CTA
+    // and the sentence fall back rather than guess.
+    mocks.blockedUpgrade = {
+      requiredPlan: "business_titan" as never,
+      upgradeUrl: "https://screenpipe.com/account/billing",
+      resetsAt: null,
+    };
+
+    render(<UpgradeQuotaBanner />);
+
+    expect(screen.queryByText(/business_titan/i)).toBeNull();
+    expect(screen.getByText(/upgrade to a higher plan/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "See plans" }));
+
+    await waitFor(() =>
+      expect(mocks.openExternalUrl).toHaveBeenCalledWith(
+        "https://screenpipe.com/account/billing",
+      ),
+    );
+  });
 
   it("dismisses the blocked action without suppressing future server rejections", () => {
     mocks.blockedUpgrade = {

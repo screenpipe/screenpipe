@@ -4,13 +4,19 @@
 
 use std::os::raw::c_char;
 
+// Every window-scoped entry point takes the host window label as its first
+// argument. The bridge keeps one overlay per label, so a call made on behalf of
+// one webview can never touch another window's overlay, pending analysis or
+// guard views. `lt_prefetch` only fills the shared, path-keyed analysis cache,
+// so it is deliberately window independent.
 #[allow(dead_code)]
 extern "C" {
     pub fn lt_is_available() -> i32;
 
-    pub fn lt_init(window_ptr: u64) -> i32;
+    pub fn lt_init(window: *const c_char, window_ptr: u64) -> i32;
 
     pub fn lt_analyze_image(
+        window: *const c_char,
         path: *const c_char,
         frame_id: *const c_char,
         x: f64,
@@ -23,27 +29,45 @@ extern "C" {
 
     pub fn lt_prefetch(paths_json: *const c_char) -> i32;
 
-    pub fn lt_update_position(frame_id: *const c_char, x: f64, y: f64, w: f64, h: f64) -> i32;
+    pub fn lt_update_position(
+        window: *const c_char,
+        frame_id: *const c_char,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    ) -> i32;
 
-    pub fn lt_highlight_ranges(search_terms_json: *const c_char, frame_id: *const c_char) -> i32;
+    pub fn lt_highlight_ranges(
+        window: *const c_char,
+        search_terms_json: *const c_char,
+        frame_id: *const c_char,
+    ) -> i32;
 
-    pub fn lt_clear_highlights() -> i32;
+    pub fn lt_clear_highlights(window: *const c_char) -> i32;
 
     /// Test-only introspection: frame id whose analysis is on the overlay.
     /// Returned string must be freed with `lt_free_string`.
-    pub fn lt_debug_applied_frame_id() -> *mut c_char;
+    pub fn lt_debug_applied_frame_id(window: *const c_char) -> *mut c_char;
 
     /// Test-only introspection: text actually selected on the overlay.
     /// Returned string must be freed with `lt_free_string`.
-    pub fn lt_debug_selected_text() -> *mut c_char;
+    pub fn lt_debug_selected_text(window: *const c_char) -> *mut c_char;
 
-    pub fn lt_hide() -> i32;
+    pub fn lt_hide(window: *const c_char) -> i32;
 
-    pub fn lt_destroy() -> i32;
+    pub fn lt_destroy(window: *const c_char) -> i32;
 
-    pub fn lt_set_guard_rect(key: *const c_char, x: f64, y: f64, w: f64, h: f64) -> i32;
+    pub fn lt_set_guard_rect(
+        window: *const c_char,
+        key: *const c_char,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    ) -> i32;
 
-    pub fn lt_remove_guard(key: *const c_char) -> i32;
+    pub fn lt_remove_guard(window: *const c_char, key: *const c_char) -> i32;
 
     pub fn lt_free_string(ptr: *mut c_char);
 }

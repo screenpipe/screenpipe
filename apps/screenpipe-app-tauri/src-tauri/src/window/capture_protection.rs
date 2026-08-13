@@ -46,6 +46,10 @@ pub(crate) fn overlay_is_capturable(settings: &SettingsStore) -> bool {
     !should_protect_window(settings, "main", crate::config::is_e2e_mode())
 }
 
+/// Read only by the macOS NSPanel setup in `commands.rs`, which mirrors the
+/// preference onto `NSWindowSharingType`. Other platforms apply the same
+/// preference through `set_content_protected` in `apply_to_window_with_settings`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn app_windows_are_capturable(app: &AppHandle) -> bool {
     let settings = SettingsStore::get(app)
         .ok()

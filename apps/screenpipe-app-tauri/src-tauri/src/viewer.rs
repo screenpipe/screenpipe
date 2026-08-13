@@ -17,6 +17,8 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::io::AsyncReadExt;
 use tracing::{error, info};
 
+use crate::window::GatedWindowPlacement;
+
 const VIEWER_LABEL_PREFIX: &str = "viewer-";
 const MAX_VIEWER_FILE_BYTES: u64 = 10 * 1024 * 1024;
 
@@ -149,7 +151,7 @@ pub async fn open_viewer_window(app: AppHandle, path: String) -> Result<(), Stri
 
     if let Some(window) = app.get_webview_window(&label) {
         let _ = window.show();
-        let _ = window.set_focus();
+        crate::window::focus_window(&window);
         return Ok(());
     }
 
@@ -161,7 +163,7 @@ pub async fn open_viewer_window(app: AppHandle, path: String) -> Result<(), Stri
         .min_inner_size(400.0, 300.0)
         .accept_first_mouse(true)
         .resizable(true)
-        .focused(true);
+        .focused_gated(true);
 
     #[cfg(target_os = "macos")]
     let builder = builder.hidden_title(true);
@@ -303,7 +305,7 @@ pub async fn read_viewer_file(path: String) -> Result<ViewerContent, String> {
     let cap = total_bytes.min(MAX_VIEWER_FILE_BYTES) as usize;
     let truncated = total_bytes > MAX_VIEWER_FILE_BYTES;
 
-    let mut file = tokio::fs::File::open(p).await.map_err(|e| e.to_string())?;
+    let file = tokio::fs::File::open(p).await.map_err(|e| e.to_string())?;
     let mut raw = Vec::with_capacity(cap);
     file.take(cap as u64)
         .read_to_end(&mut raw)

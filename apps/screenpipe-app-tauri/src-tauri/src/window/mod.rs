@@ -22,6 +22,281 @@ pub use panel::main_label_for_mode;
 pub use show::{RewindWindowId, ShowRewindWindow};
 pub use util::with_autorelease_pool;
 
+/// One app process serves the whole suite, so activation is a runtime switch
+/// rather than a launch-time read.
+#[cfg(feature = "e2e")]
+static E2E_ACTIVATION_ALLOWED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the app may pull macOS focus to itself when it shows a window.
+///
+/// `--features e2e` builds run on a developer's own desktop while an agent
+/// drives the suite. Activating an app whose window lives on another Space
+/// makes the WindowServer swap the developer out of their fullscreen app, and
+/// the suite shows windows dozens of times per run. So e2e builds stay
+/// non-activating: no dock icon, no launch activation, no focus steal. Specs
+/// that assert real activation opt back in for their own duration via the
+/// `e2e_set_activation_allowed` command, or a whole run can opt in with
+/// `SCREENPIPE_E2E_ALLOW_ACTIVATION=1`.
+///
+/// CI is exempt: there is no developer to interrupt on a runner, and the suite
+/// there should exercise the same window placement users get.
+///
+/// Always true in shipping builds — this never changes what users see.
+#[cfg(feature = "e2e")]
+pub fn window_activation_allowed() -> bool {
+    use std::sync::atomic::Ordering;
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let opted_in = matches!(
+            std::env::var("SCREENPIPE_E2E_ALLOW_ACTIVATION").as_deref(),
+            Ok("1") | Ok("true")
+        );
+        let on_ci = std::env::var("CI").is_ok_and(|v| !v.is_empty() && v != "0" && v != "false");
+        E2E_ACTIVATION_ALLOWED.store(opted_in || on_ci, Ordering::SeqCst);
+    });
+    E2E_ACTIVATION_ALLOWED.load(Ordering::SeqCst)
+}
+
+/// Let a spec re-enable real activation for the assertions that need it.
+#[cfg(feature = "e2e")]
+pub fn set_window_activation_allowed(allowed: bool) {
+    // Run the env seed first so it cannot clobber this later.
+    let _ = window_activation_allowed();
+    E2E_ACTIVATION_ALLOWED.store(allowed, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(not(feature = "e2e"))]
+pub const fn window_activation_allowed() -> bool {
+    true
+}
+
+/// `set_focus()`, unless an e2e run has activation suppressed.
+///
+/// On macOS `set_focus` is what drags the developer's Space along with it, so
+/// every show path routes through here rather than calling it directly.
+pub fn focus_window(window: &tauri::WebviewWindow) {
+    if !window_activation_allowed() {
+        return;
+    }
+    let _ = window.set_focus();
+}
+
+/// Panel window level and Space behavior, gated for non-intrusive e2e runs.
+///
+/// Overlay panels ship at level 1001 with `FullScreenAuxiliary` and
+/// `CanJoinAllSpaces`/`MoveToActiveSpace` — that combination is exactly what
+/// lets screenpipe draw on top of whatever you are doing, including another
+/// app's fullscreen Space. Correct for the product, wrong for a test run on the
+/// developer's own desktop, so a non-intrusive e2e run clamps the level to the
+/// normal layer and drops the cross-Space bits. The panel then physically
+/// cannot appear over a fullscreen app.
+#[cfg(target_os = "macos")]
+pub(crate) trait GatedPanelPlacement {
+    fn set_level_gated(&self, level: i32);
+    fn set_collection_behaviour_gated(
+        &self,
+        behaviour: tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior,
+    );
+}
+
+#[cfg(target_os = "macos")]
+impl GatedPanelPlacement for tauri_nspanel::raw_nspanel::RawNSPanel {
+    fn set_level_gated(&self, level: i32) {
+        self.set_level(if window_activation_allowed() {
+            level
+        } else {
+            0
+        });
+    }
+
+    fn set_collection_behaviour_gated(
+        &self,
+        behaviour: tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior,
+    ) {
+        use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior as Behavior;
+        let intrusive = Behavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+            | Behavior::NSWindowCollectionBehaviorMoveToActiveSpace
+            | Behavior::NSWindowCollectionBehaviorFullScreenAuxiliary;
+        self.set_collection_behaviour(if window_activation_allowed() {
+            behaviour
+        } else {
+            behaviour & !intrusive
+        });
+    }
+}
+
+/// macOS panel key-window step, skipped when an e2e run is non-activating.
+///
+/// `makeKeyWindow` is what actually pulls screenpipe to the foreground (and, for
+/// a regular window, drags the developer's Space with it), so it is gated at the
+/// same switch as `activateIgnoringOtherApps`.
+#[cfg(target_os = "macos")]
+pub(crate) fn make_panel_key_if_allowed(panel: &tauri_nspanel::raw_nspanel::RawNSPanel) {
+    if window_activation_allowed() {
+        panel.make_key_window();
+    }
+}
+
+/// `[NSApp activateIgnoringOtherApps:YES]`, unless an e2e run is non-activating.
+///
+/// This is the single call that yanks a developer out of their fullscreen Space,
+/// so it exists once instead of at each of its callsites.
+#[cfg(target_os = "macos")]
+pub(crate) fn activate_app_if_allowed() {
+    if !window_activation_allowed() {
+        return;
+    }
+    use objc::{msg_send, sel, sel_impl};
+    use tauri_nspanel::cocoa::base::id;
+    unsafe {
+        let ns_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
+        let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
+    }
+}
+
+/// Give the foreground back the instant anything makes the app active.
+///
+/// The per-callsite gates above stop screenpipe *asking* for the foreground, but
+/// they cannot cover everything: tao calls `activateIgnoringOtherApps` itself
+/// from `applicationDidFinishLaunching`, which runs after Tauri's setup hook, and
+/// AppKit activates an app for reasons of its own. One observer on
+/// `NSApplicationDidBecomeActiveNotification` is the backstop — whatever wins the
+/// race, the developer gets their app back on the next runloop pass.
+///
+/// `deactivate` is deferred rather than called inline because AppKit ignores it
+/// while it is still delivering the activation it would undo.
+#[cfg(all(target_os = "macos", feature = "e2e"))]
+pub fn install_non_activating_guard() {
+    use objc::{class, msg_send, sel, sel_impl};
+    use std::sync::Once;
+    use tauri_nspanel::cocoa::base::{id, nil};
+    use tauri_nspanel::cocoa::foundation::NSString;
+
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let registered = std::panic::catch_unwind(|| unsafe {
+            let center: id = msg_send![class!(NSNotificationCenter), defaultCenter];
+            let name = NSString::alloc(nil).init_str("NSApplicationDidBecomeActiveNotification");
+
+            let block = block::ConcreteBlock::new(move |_notification: id| {
+                // A spec that asserts activation opts in for its own duration.
+                if window_activation_allowed() {
+                    return;
+                }
+                let ns_app: id = msg_send![class!(NSApplication), sharedApplication];
+                let _: () = msg_send![
+                    ns_app,
+                    performSelectorOnMainThread: sel!(deactivate)
+                    withObject: nil
+                    waitUntilDone: false
+                ];
+            });
+            let block = block.copy();
+
+            let _: id = msg_send![
+                center,
+                addObserverForName: name
+                object: nil
+                queue: nil
+                usingBlock: &*block
+            ];
+        });
+
+        // No success log: this runs before the tracing subscriber is attached
+        // later in the same setup hook, so anything emitted here is dropped.
+        // eprintln survives, and only the failure is worth the noise.
+        if registered.is_err() {
+            eprintln!("e2e: failed to install the non-activating guard");
+        }
+    });
+}
+
+/// Placement gates for windows we drive as a raw `NSWindow` rather than through
+/// `RawNSPanel` (the Search overlay, the Rewind panel, the permission window).
+/// Same contract as [`GatedPanelPlacement`]: normal level and no cross-Space
+/// bits when an e2e run is non-intrusive.
+#[cfg(target_os = "macos")]
+pub(crate) mod ns {
+    use super::window_activation_allowed;
+    use objc::{msg_send, sel, sel_impl};
+    use tauri_nspanel::cocoa::base::id;
+
+    /// CanJoinAllSpaces | MoveToActiveSpace | FullScreenAuxiliary.
+    const INTRUSIVE_BEHAVIOR: u64 = (1 << 0) | (1 << 1) | (1 << 8);
+
+    /// # Safety
+    /// `ns_win` must be a live `NSWindow` and the caller must be on the main thread.
+    pub(crate) unsafe fn set_level_gated(ns_win: id, level: i64) {
+        let level = if window_activation_allowed() { level } else { 0 };
+        let _: () = msg_send![ns_win, setLevel: level];
+    }
+
+    /// # Safety
+    /// `ns_win` must be a live `NSWindow` and the caller must be on the main thread.
+    pub(crate) unsafe fn set_collection_behavior_gated(ns_win: id, behavior: u64) {
+        let behavior = if window_activation_allowed() {
+            behavior
+        } else {
+            behavior & !INTRUSIVE_BEHAVIOR
+        };
+        let _: () = msg_send![ns_win, setCollectionBehavior: behavior];
+    }
+
+    /// # Safety
+    /// `ns_win` must be a live `NSWindow` and the caller must be on the main thread.
+    pub(crate) unsafe fn make_key_if_allowed(ns_win: id) {
+        if window_activation_allowed() {
+            let _: () = msg_send![ns_win, makeKeyWindow];
+        }
+    }
+
+    /// Order the window in either way; only take key focus when allowed.
+    ///
+    /// # Safety
+    /// `ns_win` must be a live `NSWindow` and the caller must be on the main thread.
+    pub(crate) unsafe fn make_key_and_order_front_if_allowed(ns_win: id) {
+        if window_activation_allowed() {
+            let _: () = msg_send![ns_win, makeKeyAndOrderFront: std::ptr::null::<
+                objc::runtime::Object,
+            >()];
+        } else {
+            let _: () =
+                msg_send![ns_win, orderFront: std::ptr::null::<objc::runtime::Object>()];
+        }
+    }
+}
+
+/// Builder-time placement flags, gated by the same switch.
+///
+/// `.focused(true)`, `.always_on_top(true)` and
+/// `.visible_on_all_workspaces(true)` are applied by the window server at
+/// creation, before any of the runtime gates above can run — so a non-intrusive
+/// e2e run has to clamp them here or a freshly built window still lands on top
+/// of whatever the developer is doing.
+pub(crate) trait GatedWindowPlacement {
+    fn focused_gated(self, focused: bool) -> Self;
+    fn always_on_top_gated(self, on_top: bool) -> Self;
+    fn visible_on_all_workspaces_gated(self, visible: bool) -> Self;
+}
+
+impl<R: tauri::Runtime, M: tauri::Manager<R>> GatedWindowPlacement
+    for tauri::webview::WebviewWindowBuilder<'_, R, M>
+{
+    fn focused_gated(self, focused: bool) -> Self {
+        self.focused(focused && window_activation_allowed())
+    }
+
+    fn always_on_top_gated(self, on_top: bool) -> Self {
+        self.always_on_top(on_top && window_activation_allowed())
+    }
+
+    fn visible_on_all_workspaces_gated(self, visible: bool) -> Self {
+        self.visible_on_all_workspaces(visible && window_activation_allowed())
+    }
+}
+
 /// Finalize a newly created webview window with cross-cutting resilience hooks.
 /// Keep this as the single post-build entrypoint for window creation callsites.
 pub fn finalize_webview_window(window: tauri::WebviewWindow) -> tauri::WebviewWindow {

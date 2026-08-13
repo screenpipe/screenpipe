@@ -344,6 +344,12 @@ export function useChatComposerShellActions({
       event.preventDefault();
       mentionActions.insert(mentions.suggestions[mentions.selectedIndex].tag);
     } else if (event.key === "Escape") {
+      // Every other branch here consumes the key. Escape did not, so dismissing
+      // the palette also let the same press reach ancestor Escape handlers (the
+      // title menu, inline history, the utility menu, the recent-chat
+      // switcher) — one keypress, two effects.
+      event.preventDefault();
+      event.stopPropagation();
       mentionActions.close();
     } else if (event.key === "Tab" && mentions.suggestions.length > 0) {
       event.preventDefault();

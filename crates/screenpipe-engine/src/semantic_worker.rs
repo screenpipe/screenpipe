@@ -20,13 +20,26 @@ use screenpipe_semantic::{
     TreeBudget, ValidatedParseOutcome,
 };
 use serde_json::{json, Value};
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::runtime::Handle;
 use tokio::sync::watch;
+use tokio::time::Instant as DeadlineInstant;
 use tracing::{debug, info, warn};
 
 const SEMANTIC_TELEMETRY_SAMPLE_DENOMINATOR: i64 = 100;
+
+/// Remembered parse runs for screens this process already stored. Bounded so a
+/// long session cannot grow the worker's memory with stale app states.
+const SEMANTIC_RUN_CACHE_CAPACITY: usize = 256;
+
+/// Frame attachments buffered before taking the process-wide write lock.
+const SEMANTIC_ATTACH_BATCH: usize = 32;
+
+/// Longest a buffered attachment waits before it is flushed anyway. Retrieval
+/// reads `frames.semantic_run_id`, so a short delay is invisible to callers.
+const SEMANTIC_ATTACH_MAX_DELAY: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 pub(crate) struct SemanticProjectionSender {
@@ -97,6 +110,126 @@ const fn semantic_mode_label(mode: SemanticContextMode) -> &'static str {
     }
 }
 
+/// Identifies one stored parse run without holding any captured content.
+///
+/// These are exactly the fields the persisted run fingerprint is derived from,
+/// so an equal key provably resolves to the same `semantic_runs` row.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct SemanticRunCacheKey {
+    platform: u8,
+    app_id: Option<String>,
+    executable: Option<String>,
+    app_version: Option<String>,
+    browser_url: Option<String>,
+    content_hash: u64,
+}
+
+impl SemanticRunCacheKey {
+    fn new(app: &AppIdentity, content_hash: u64) -> Self {
+        Self {
+            platform: app.platform as u8,
+            app_id: app.app_id.clone(),
+            executable: app.executable.clone(),
+            app_version: app.version.clone(),
+            browser_url: app.browser_url.clone(),
+            content_hash,
+        }
+    }
+}
+
+/// Bounded insertion-ordered cache of screens this process already stored.
+#[derive(Default)]
+struct SemanticRunCache {
+    runs: HashMap<SemanticRunCacheKey, i64>,
+    order: VecDeque<SemanticRunCacheKey>,
+}
+
+impl SemanticRunCache {
+    fn get(&self, key: &SemanticRunCacheKey) -> Option<i64> {
+        self.runs.get(key).copied()
+    }
+
+    fn insert(&mut self, key: SemanticRunCacheKey, run_id: i64) {
+        if self.runs.insert(key.clone(), run_id).is_none() {
+            self.order.push_back(key);
+        }
+        while self.order.len() > SEMANTIC_RUN_CACHE_CAPACITY {
+            if let Some(evicted) = self.order.pop_front() {
+                self.runs.remove(&evicted);
+            }
+        }
+    }
+
+    /// Drops every screen pointing at a run that no longer exists, so a run
+    /// removed by cleanup can never be reattached from memory.
+    fn forget_runs(&mut self, run_ids: &[i64]) {
+        if run_ids.is_empty() {
+            return;
+        }
+        self.runs.retain(|_, run_id| !run_ids.contains(run_id));
+        self.order.retain(|key| self.runs.contains_key(key));
+    }
+}
+
+/// Worker-local state: what this process has already stored, and which frame
+/// attachments are waiting for the next batched write.
+#[derive(Default)]
+struct SemanticProjectionState {
+    cache: SemanticRunCache,
+    pending_attachments: Vec<(i64, i64)>,
+    flush_deadline: Option<DeadlineInstant>,
+}
+
+impl SemanticProjectionState {
+    fn queue_attachment(&mut self, frame_id: i64, run_id: i64) {
+        self.pending_attachments.push((frame_id, run_id));
+        self.flush_deadline
+            .get_or_insert_with(|| DeadlineInstant::now() + SEMANTIC_ATTACH_MAX_DELAY);
+    }
+
+    fn should_flush(&self) -> bool {
+        self.pending_attachments.len() >= SEMANTIC_ATTACH_BATCH
+    }
+}
+
+/// Writes buffered attachments in one transaction. Failures are logged and the
+/// buffer is cleared: the affected frames keep generic capture, and the next
+/// capture of the same screen re-stores the projection.
+async fn flush_pending_attachments(db: &DatabaseManager, state: &mut SemanticProjectionState) {
+    state.flush_deadline = None;
+    if state.pending_attachments.is_empty() {
+        return;
+    }
+    let attachments = std::mem::take(&mut state.pending_attachments);
+    match db.attach_semantic_runs_to_frames(&attachments).await {
+        Ok(result) => {
+            state.cache.forget_runs(&result.missing_run_ids);
+            debug!(
+                attachments = attachments.len(),
+                frames_attached = result.frames_attached,
+                missing_runs = result.missing_run_ids.len(),
+                "semantic run attachments flushed"
+            );
+        }
+        Err(error) => {
+            // A failed batch must not strand cached runs that may be gone.
+            state.cache = SemanticRunCache::default();
+            warn!(
+                attachments = attachments.len(),
+                %error,
+                "semantic run attachment flush failed; generic capture remains available"
+            );
+        }
+    }
+}
+
+async fn wait_for_flush_deadline(deadline: Option<DeadlineInstant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
 fn semantic_projection_channel() -> (
     SemanticProjectionSender,
     watch::Receiver<Option<Arc<SemanticProjectionJob>>>,
@@ -119,7 +252,22 @@ async fn run_semantic_projection_worker(
         }
     };
 
-    while rx.changed().await.is_ok() {
+    let mut state = SemanticProjectionState::default();
+    loop {
+        tokio::select! {
+            // Buffered attachments must not wait for the next capture, which
+            // may never come if the user stops working.
+            _ = wait_for_flush_deadline(state.flush_deadline) => {
+                flush_pending_attachments(&db, &mut state).await;
+                continue;
+            }
+            changed = rx.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+            }
+        }
+
         let Some(job) = rx.borrow_and_update().clone() else {
             continue;
         };
@@ -137,14 +285,20 @@ async fn run_semantic_projection_worker(
                 false
             }
         });
-        if let Err(error) = process_semantic_job(&db, &registry, &job, mode_label).await {
+        if let Err(error) = process_semantic_job(&db, &registry, &job, mode_label, &mut state).await
+        {
             warn!(
                 frame_id = job.frame_id,
                 %error,
                 "semantic projection failed; generic capture remains available"
             );
         }
+        if state.should_flush() {
+            flush_pending_attachments(&db, &mut state).await;
+        }
     }
+
+    flush_pending_attachments(&db, &mut state).await;
 }
 
 async fn process_semantic_job(
@@ -152,6 +306,7 @@ async fn process_semantic_job(
     registry: &ParserRegistry,
     job: &SemanticProjectionJob,
     mode_label: &'static str,
+    state: &mut SemanticProjectionState,
 ) -> anyhow::Result<()> {
     let app = AppIdentity {
         platform: current_platform(),
@@ -199,6 +354,23 @@ async fn process_semantic_job(
     }
 
     let input_content_hash = adapted.tree.structural_fingerprint();
+    // An unchanged screen resolves to the run this process already stored.
+    // Parsing it again is deterministic and the write would only reattach the
+    // same run, so buffer the attachment and skip both.
+    let cache_key = SemanticRunCacheKey::new(&app, input_content_hash);
+    if let Some(run_id) = state.cache.get(&cache_key) {
+        state.queue_attachment(job.frame_id, run_id);
+        emit_sampled_semantic_telemetry(
+            job.frame_id,
+            &candidate_parser_ids,
+            None,
+            "handled_cached",
+            0,
+            mode_label,
+        );
+        return Ok(());
+    }
+
     let context = ParseContext {
         frame_id: job.frame_id,
         captured_at_unix_ms: job.captured_at.timestamp_millis(),
@@ -241,6 +413,7 @@ async fn process_semantic_job(
                 adapted.stats.suppressed_offscreen_content_nodes;
             let suppressed_offscreen_content_bytes =
                 adapted.stats.suppressed_offscreen_content_bytes;
+            let store_started = Instant::now();
             let write = db
                 .store_semantic_projection(
                     job.frame_id,
@@ -251,13 +424,19 @@ async fn process_semantic_job(
                     &projection,
                 )
                 .await?;
-            emit_sampled_semantic_telemetry(
+            let store_duration_us = store_started.elapsed().as_micros() as u64;
+            state.cache.insert(cache_key, write.run_id);
+            emit_sampled_semantic_telemetry_with_write(
                 job.frame_id,
                 &candidate_parser_ids,
                 Some(parser_id),
                 "handled",
                 parse_duration_us,
                 mode_label,
+                Some(SemanticWriteSample {
+                    store_duration_us,
+                    reused_run: write.reused_run,
+                }),
             );
             debug!(
                 frame_id = job.frame_id,
@@ -304,6 +483,34 @@ fn emit_sampled_semantic_telemetry(
     parse_duration_us: u64,
     mode_label: &'static str,
 ) {
+    emit_sampled_semantic_telemetry_with_write(
+        frame_id,
+        candidate_parser_ids,
+        selected_parser_id,
+        outcome,
+        parse_duration_us,
+        mode_label,
+        None,
+    );
+}
+
+/// Content-free cost of one persisted projection. Without this the write path
+/// is invisible in production and a storage regression cannot be measured.
+#[derive(Debug, Clone, Copy)]
+struct SemanticWriteSample {
+    store_duration_us: u64,
+    reused_run: bool,
+}
+
+fn emit_sampled_semantic_telemetry_with_write(
+    frame_id: i64,
+    candidate_parser_ids: &[String],
+    selected_parser_id: Option<&str>,
+    outcome: &'static str,
+    parse_duration_us: u64,
+    mode_label: &'static str,
+    write: Option<SemanticWriteSample>,
+) {
     if !should_sample_semantic_telemetry(frame_id) {
         return;
     }
@@ -316,6 +523,7 @@ fn emit_sampled_semantic_telemetry(
             outcome,
             parse_duration_us,
             mode_label,
+            write,
         ),
     );
 }
@@ -330,6 +538,7 @@ fn semantic_telemetry_properties(
     outcome: &'static str,
     parse_duration_us: u64,
     mode_label: &'static str,
+    write: Option<SemanticWriteSample>,
 ) -> Value {
     json!({
         "semantic_candidate_parser_ids": candidate_parser_ids,
@@ -338,6 +547,8 @@ fn semantic_telemetry_properties(
         "semantic_parse_duration_us": parse_duration_us,
         "semantic_platform": platform_label(current_platform()),
         "semantic_mode": mode_label,
+        "semantic_store_duration_us": write.map(|write| write.store_duration_us),
+        "semantic_reused_run": write.map(|write| write.reused_run),
     })
 }
 
@@ -528,6 +739,86 @@ mod tests {
         )
     }
 
+    fn cache_key(app_id: &str, content_hash: u64) -> SemanticRunCacheKey {
+        SemanticRunCacheKey::new(
+            &AppIdentity {
+                platform: current_platform(),
+                app_id: Some(app_id.into()),
+                executable: None,
+                display_name: "Slack".into(),
+                version: Some("4.39.95".into()),
+                browser_url: None,
+            },
+            content_hash,
+        )
+    }
+
+    #[test]
+    fn unchanged_screen_resolves_to_the_stored_run() {
+        let mut cache = SemanticRunCache::default();
+        cache.insert(cache_key("com.tinyspeck.slackmacgap", 11), 7);
+
+        assert_eq!(
+            cache.get(&cache_key("com.tinyspeck.slackmacgap", 11)),
+            Some(7)
+        );
+        // A changed screen and a different app must both miss, or a frame
+        // would be attached to a run that never described it.
+        assert_eq!(cache.get(&cache_key("com.tinyspeck.slackmacgap", 12)), None);
+        assert_eq!(cache.get(&cache_key("com.other.app", 11)), None);
+    }
+
+    #[test]
+    fn cache_stays_bounded_for_a_long_session() {
+        let mut cache = SemanticRunCache::default();
+        for index in 0..(SEMANTIC_RUN_CACHE_CAPACITY as u64 + 10) {
+            cache.insert(cache_key("com.tinyspeck.slackmacgap", index), index as i64);
+        }
+
+        assert_eq!(cache.runs.len(), SEMANTIC_RUN_CACHE_CAPACITY);
+        assert_eq!(cache.order.len(), SEMANTIC_RUN_CACHE_CAPACITY);
+        assert_eq!(cache.get(&cache_key("com.tinyspeck.slackmacgap", 0)), None);
+        let newest = SEMANTIC_RUN_CACHE_CAPACITY as u64 + 9;
+        assert_eq!(
+            cache.get(&cache_key("com.tinyspeck.slackmacgap", newest)),
+            Some(newest as i64)
+        );
+    }
+
+    #[test]
+    fn deleted_runs_are_never_reattached_from_memory() {
+        let mut cache = SemanticRunCache::default();
+        cache.insert(cache_key("com.tinyspeck.slackmacgap", 1), 41);
+        cache.insert(cache_key("com.tinyspeck.slackmacgap", 2), 42);
+
+        cache.forget_runs(&[41]);
+
+        assert_eq!(cache.get(&cache_key("com.tinyspeck.slackmacgap", 1)), None);
+        assert_eq!(
+            cache.get(&cache_key("com.tinyspeck.slackmacgap", 2)),
+            Some(42)
+        );
+        assert_eq!(cache.order.len(), 1);
+    }
+
+    #[test]
+    fn attachments_batch_before_taking_the_write_lock() {
+        let mut state = SemanticProjectionState::default();
+        assert!(state.flush_deadline.is_none());
+
+        for frame_id in 0..(SEMANTIC_ATTACH_BATCH as i64 - 1) {
+            state.queue_attachment(frame_id, 7);
+            assert!(!state.should_flush());
+        }
+        // A partial batch still has a deadline so it cannot wait forever for a
+        // capture that may never arrive.
+        assert!(state.flush_deadline.is_some());
+
+        state.queue_attachment(SEMANTIC_ATTACH_BATCH as i64, 7);
+        assert!(state.should_flush());
+        assert_eq!(state.pending_attachments.len(), SEMANTIC_ATTACH_BATCH);
+    }
+
     #[tokio::test]
     async fn pending_slot_keeps_only_latest_frame() {
         let (sender, mut receiver) = semantic_projection_channel();
@@ -589,6 +880,10 @@ mod tests {
             "handled",
             73,
             "memory",
+            Some(SemanticWriteSample {
+                store_duration_us: 1_200,
+                reused_run: true,
+            }),
         );
 
         assert_eq!(properties["semantic_outcome"], "handled");
@@ -598,7 +893,9 @@ mod tests {
             platform_label(current_platform())
         );
         assert_eq!(properties["semantic_mode"], "memory");
-        assert_eq!(properties.as_object().map(|object| object.len()), Some(6));
+        assert_eq!(properties["semantic_store_duration_us"], 1_200);
+        assert_eq!(properties["semantic_reused_run"], true);
+        assert_eq!(properties.as_object().map(|object| object.len()), Some(8));
         let serialized = properties.to_string();
         assert!(!serialized.contains("app_identifier"));
         assert!(!serialized.contains("display_name"));
@@ -607,6 +904,80 @@ mod tests {
         assert!(!serialized.contains("window_name"));
         assert!(!serialized.contains("frame_id"));
         assert!(!serialized.contains("text_content"));
+    }
+
+    #[tokio::test]
+    async fn unchanged_screen_stores_once_and_batches_later_frames() {
+        let db = DatabaseManager::new("sqlite::memory:", Default::default())
+            .await
+            .expect("in-memory database");
+        let registry = builtin_parser_registry().expect("built-in registry");
+        let mut state = SemanticProjectionState::default();
+
+        let mut frame_ids = Vec::new();
+        for index in 0..3 {
+            let captured_at = Utc::now();
+            let frame_id = db
+                .insert_snapshot_frame(
+                    "test-device",
+                    captured_at,
+                    &format!("/tmp/semantic-worker-{index}.jpg"),
+                    Some("Slack"),
+                    Some("#release - Slack"),
+                    None,
+                    true,
+                    Some("test"),
+                    Some("release"),
+                    Some("accessibility"),
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .expect("insert frame");
+            frame_ids.push(frame_id);
+
+            let job = SemanticProjectionJob::from_capture(
+                frame_id,
+                captured_at,
+                Some("Slack".into()),
+                None,
+                // The identical screen, captured repeatedly.
+                slack_snapshot("notarization is blocking the release"),
+                false,
+            );
+            process_semantic_job(&db, &registry, &job, "memory", &mut state)
+                .await
+                .expect("process semantic projection");
+        }
+
+        // Only the first capture paid for a store transaction. The other two
+        // resolved from memory and are waiting for one batched write.
+        assert_eq!(state.cache.runs.len(), 1);
+        assert_eq!(state.pending_attachments.len(), 2);
+        assert_eq!(
+            db.get_frame_semantic_context(frame_ids[1])
+                .await
+                .expect("read frame context")
+                .map(|context| context.run_id),
+            None
+        );
+
+        flush_pending_attachments(&db, &mut state).await;
+        assert!(state.pending_attachments.is_empty());
+        assert!(state.flush_deadline.is_none());
+
+        let mut run_ids = Vec::new();
+        for frame_id in frame_ids {
+            let context = db
+                .get_frame_semantic_context(frame_id)
+                .await
+                .expect("read frame context")
+                .expect("every repeated frame resolves to the stored run");
+            run_ids.push(context.run_id);
+        }
+        assert_eq!(run_ids[0], run_ids[1]);
+        assert_eq!(run_ids[1], run_ids[2]);
     }
 
     #[tokio::test]
@@ -643,7 +1014,8 @@ mod tests {
             true,
         );
 
-        process_semantic_job(&db, &registry, &projection_job, "memory")
+        let mut state = SemanticProjectionState::default();
+        process_semantic_job(&db, &registry, &projection_job, "memory", &mut state)
             .await
             .expect("process semantic projection");
 

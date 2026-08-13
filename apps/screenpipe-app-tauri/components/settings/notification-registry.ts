@@ -70,7 +70,7 @@ export const NOTIFICATION_GROUPS: NotificationGroup[] = [
   },
   {
     id: "automation",
-    label: "scheduled & automation",
+    label: "scheduled tasks & automation",
     description: "ideas and alerts from your automations",
   },
   {
@@ -138,7 +138,7 @@ export const NOTIFICATION_CATEGORIES: NotificationCategory[] = [
   },
   {
     id: "pipeNotifications",
-    label: "Scheduled notifications",
+    label: "Scheduled task alerts",
     description: "Alerts from installed scheduled tasks",
     group: "automation",
     default: true,

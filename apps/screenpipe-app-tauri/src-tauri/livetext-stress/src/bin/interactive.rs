@@ -53,6 +53,13 @@ mod imp {
         ) -> i32;
     }
 
+    /// Single-window harness: every window-scoped call is keyed to this label.
+    static WIN: std::sync::OnceLock<CString> = std::sync::OnceLock::new();
+    fn win() -> *const c_char {
+        WIN.get_or_init(|| CString::new("interactive").unwrap())
+            .as_ptr()
+    }
+
     const W: f64 = 900.0;
     const H: f64 = 600.0;
     // Where each frame's text band is drawn (AppKit coords, origin bottom-left).
@@ -63,6 +70,7 @@ mod imp {
         let mut text: *mut c_char = std::ptr::null_mut();
         let mut err: *mut c_char = std::ptr::null_mut();
         let rc = lt_analyze_image(
+            win(),
             path.as_ptr(),
             frame.as_ptr(),
             0.0,
@@ -110,7 +118,7 @@ mod imp {
     }
 
     unsafe fn selected_text() -> String {
-        let ptr = lt_debug_selected_text();
+        let ptr = lt_debug_selected_text(win());
         if ptr.is_null() {
             return String::new();
         }
@@ -120,7 +128,7 @@ mod imp {
     }
 
     unsafe fn applied_frame() -> String {
-        let ptr = lt_debug_applied_frame_id();
+        let ptr = lt_debug_applied_frame_id(win());
         if ptr.is_null() {
             return String::new();
         }
@@ -138,7 +146,7 @@ mod imp {
         let frame = CString::new(id).unwrap();
         match analyze_pumping(path, &frame) {
             Ok(_) => {
-                lt_update_position(frame.as_ptr(), 0.0, 0.0, W, H);
+                lt_update_position(win(), frame.as_ptr(), 0.0, 0.0, W, H);
                 hs_pump(0.4);
                 println!("  overlay now bound to frame {:?}", applied_frame());
             }
@@ -187,12 +195,12 @@ mod imp {
         let img_a = CString::new(path_a.clone()).unwrap();
         let img_b = CString::new(path_b.clone()).unwrap();
 
-        let win = unsafe { hs_open_visible_window(W, H) };
-        if win == 0 {
+        let window_ptr = unsafe { hs_open_visible_window(W, H) };
+        if window_ptr == 0 {
             eprintln!("[interactive] could not open window");
             std::process::exit(3);
         }
-        if unsafe { lt_init(win) } != 0 {
+        if unsafe { lt_init(win(), window_ptr) } != 0 {
             eprintln!("[interactive] lt_init failed");
             std::process::exit(3);
         }

@@ -476,7 +476,7 @@ export default function FirstRunGuide({
               </span>
             </div>
             <p className="font-sans text-sm text-foreground/90 leading-snug">
-              want to see how screenpipe works? one prompt, one automation —
+              want to see how screenpipe works? one prompt, one automation,
               about 30 seconds.
             </p>
             <button

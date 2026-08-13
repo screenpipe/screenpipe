@@ -210,7 +210,7 @@ const ShortcutRow = ({
           }
 
           // Keep the visible reminder in sync when one of its displayed shortcuts changes.
-          if (settings.showShortcutOverlay && reminderShortcutKeys.has(shortcut)) {
+          if (reminderShortcutKeys.has(shortcut)) {
             try {
               await commands.showShortcutReminder(updatedShortcuts.showScreenpipeShortcut);
             } catch (e) {
@@ -262,7 +262,7 @@ const ShortcutRow = ({
       }
     }
 
-    if (settings.showShortcutOverlay && reminderShortcutKeys.has(shortcut)) {
+    if (reminderShortcutKeys.has(shortcut)) {
       try {
         await commands.showShortcutReminder(settings.showScreenpipeShortcut);
       } catch (e) {

@@ -471,7 +471,7 @@ describe("Windows user journey", function () {
         const sectionText = (await screenSection.getText()).toLowerCase();
         return (
           sectionText.includes("screen context capture") &&
-          sectionText.includes("screenshot images") &&
+          sectionText.includes("screen recording") &&
           !sectionText.includes("audio recording")
         );
       },
@@ -501,21 +501,24 @@ describe("Windows user journey", function () {
     expect(existsSync(audioScreenshot)).toBe(true);
   });
 
-  it("starts and stops a manual meeting note from the Meetings toolbar button", async function () {
+  it("starts and stops a manual meeting note from the Meetings nav entry", async function () {
     if (!isWindows) this.skip();
 
     await openHomeWindow();
 
     const meetingsNav = await $('[data-testid="nav-meetings"]');
     await meetingsNav.waitForDisplayed({ timeout: t(15_000) });
-    expect(await meetingsNav.getAttribute("aria-label")).toContain("meetings");
+    // Meetings ships as a sidebar row (visible text), but a customized layout
+    // renders the compact toolbar icon (aria-label) instead — accept either.
+    const navName = `${(await meetingsNav.getAttribute("aria-label")) ?? ""} ${await meetingsNav.getText()}`;
+    expect(navName.toLowerCase()).toContain("meetings");
     await meetingsNav.click();
     await browser.waitUntil(
       async () => (await meetingsNav.getAttribute("aria-current")) === "page",
       {
         timeout: t(10_000),
         interval: 250,
-        timeoutMsg: "Meetings toolbar button did not become the current page",
+        timeoutMsg: "Meetings nav entry did not become the current page",
       },
     );
 
@@ -644,7 +647,7 @@ describe("Windows user journey", function () {
     expect(existsSync(shortcutsScreenshot)).toBe(true);
   });
 
-  it("shows and hides the shortcut reminder overlay from Display settings", async function () {
+  it("keeps the shortcut reminder overlay on screen and drives its dock actions", async function () {
     if (!isWindows) this.skip();
 
     await openHomeWindow();
@@ -657,30 +660,40 @@ describe("Windows user journey", function () {
     await displayNav.waitForDisplayed({ timeout: t(15_000) });
     await displayNav.click();
 
+    // The overlay carries recording health, live meeting state and meeting
+    // alerts, so it ships unhideable and Display offers only a size. The
+    // `overlay-hiding-control` remote flag can restore the switch, but it is
+    // off by default and E2E never initializes PostHog.
     await waitForBodyText(
       (bodyText) =>
         bodyText.includes("theme, windows, and overlay appearance") &&
-        bodyText.includes("show shortcut reminder") &&
-        bodyText.includes("overlay showing the screenpipe shortcut"),
+        bodyText.includes("shortcut reminder") &&
+        bodyText.includes("overlay size"),
       "Display settings did not show the shortcut reminder controls",
     );
-
-    const shortcutReminderSelector = "#shortcut-overlay";
-    const initiallyChecked = await switchIsChecked(shortcutReminderSelector);
+    expect(await $("#shortcut-overlay").isExisting()).toBe(false);
 
     try {
-      await setSwitchChecked(shortcutReminderSelector, false);
-      await expectShortcutReminderVisible(false, t(20_000));
-      await waitForBodyText(
-        (bodyText) => !bodyText.includes("overlay size"),
-        "Shortcut reminder size controls stayed visible after disabling the reminder",
-      );
-
-      await setSwitchChecked(shortcutReminderSelector, true);
       await expectShortcutReminderVisible(true, t(20_000));
       await waitForWindowHandle("shortcut-reminder", t(20_000));
 
       await browser.switchToWindow("shortcut-reminder");
+      const expandShortcutReminder = async () => {
+        const root = await $('[data-testid="shortcut-reminder-root"]');
+        await root.waitForDisplayed({ timeout: t(10_000) });
+        await root.moveTo();
+
+        // WebDriver's pointer move is not consistently delivered by WebView2
+        // when the entire frameless window is only 22x16. Dispatch the same
+        // bubbling browser event as a deterministic fallback so this journey
+        // still validates the expanded dock and its real Tauri actions.
+        await browser.execute(() => {
+          document
+            .querySelector<HTMLElement>('[data-testid="shortcut-reminder-root"]')
+            ?.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+        });
+      };
+      await expandShortcutReminder();
       await browser.waitUntil(
         async () => {
           const state = (await browser.execute(() => ({
@@ -688,13 +701,15 @@ describe("Windows user journey", function () {
             hasTimelineButton: !!document.querySelector('button[title="Open timeline"]'),
             hasChatButton: !!document.querySelector('button[title="Open chat"]'),
             hasSearchButton: !!document.querySelector('button[title="Open search"]'),
-            hasHideButton: !!document.querySelector('button[title="Hide shortcut reminder"]'),
+            hasSettingsButton: !!document.querySelector('button[title="Overlay settings"]'),
+            hasInboxButton: !!document.querySelector('[title="notifications"]'),
           }))) as {
             path: string;
             hasTimelineButton: boolean;
             hasChatButton: boolean;
             hasSearchButton: boolean;
-            hasHideButton: boolean;
+            hasSettingsButton: boolean;
+            hasInboxButton: boolean;
           };
 
           return (
@@ -702,7 +717,8 @@ describe("Windows user journey", function () {
             state.hasTimelineButton &&
             state.hasChatButton &&
             state.hasSearchButton &&
-            state.hasHideButton
+            state.hasSettingsButton &&
+            !state.hasInboxButton
           );
         },
         {
@@ -732,6 +748,7 @@ describe("Windows user journey", function () {
       }
 
       await browser.switchToWindow("shortcut-reminder");
+      await expandShortcutReminder();
       const openChatButton = await $('button[title="Open chat"]');
       await openChatButton.waitForDisplayed({ timeout: t(10_000) });
       await openChatButton.click();
@@ -750,6 +767,7 @@ describe("Windows user journey", function () {
       }
 
       await browser.switchToWindow("shortcut-reminder");
+      await expandShortcutReminder();
       const openTimelineButton = await $('button[title="Open timeline"]');
       await openTimelineButton.waitForDisplayed({ timeout: t(10_000) });
       await openTimelineButton.click();
@@ -767,27 +785,19 @@ describe("Windows user journey", function () {
       }
 
       await browser.switchToWindow("shortcut-reminder");
-      const hideReminderButton = await $('button[title="Hide shortcut reminder"]');
-      await hideReminderButton.waitForDisplayed({ timeout: t(10_000) });
-      await hideReminderButton.click();
+      await expandShortcutReminder();
+      const overlaySettingsButton = await $('button[title="Overlay settings"]');
+      await overlaySettingsButton.waitForDisplayed({ timeout: t(10_000) });
+      await overlaySettingsButton.click();
 
-      await expectShortcutReminderVisible(false, t(20_000));
-      await browser.switchToWindow("home");
-      await browser.waitUntil(
-        async () => !(await switchIsChecked(shortcutReminderSelector)),
-        {
-          timeout: t(15_000),
-          interval: 250,
-          timeoutMsg: "Display settings did not reflect hiding the shortcut reminder from the overlay",
-        },
-      );
+      // The gear opens Display settings; it must not offer to hide the pill,
+      // and the pill must still be on screen afterwards.
+      expect(await $('button[title="Hide for today"]').isExisting()).toBe(false);
+      expect(await $('button[title="Hide for a week"]').isExisting()).toBe(false);
+      await expectShortcutReminderVisible(true, t(20_000));
     } finally {
       if ((await browser.getWindowHandles()).includes("home")) {
         await browser.switchToWindow("home").catch(() => {});
-      }
-      await setSwitchChecked(shortcutReminderSelector, initiallyChecked).catch(() => {});
-      if (!initiallyChecked) {
-        await expectShortcutReminderVisible(false, t(10_000)).catch(() => {});
       }
     }
   });

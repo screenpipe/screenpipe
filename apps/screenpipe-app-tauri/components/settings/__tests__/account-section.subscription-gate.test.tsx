@@ -170,13 +170,18 @@ describe("AccountSection subscription/login gating", () => {
     const card = screen.getByTestId(ACTIVE_CARD);
     expect(card).toBeInTheDocument();
     expect(within(card).getByText("active")).toBeInTheDocument();
-    expect(within(card).getByText("400 AI credits / month")).toBeInTheDocument();
+    // Scoped to the entitled-features list: the plan grid rendered below it
+    // repeats some of these lines on the Business option.
+    const features = within(card).getByTestId("account-active-plan-features");
+    expect(within(features).getByText("400 AI credits / month")).toBeInTheDocument();
     expect(
-      within(card).getByText(
+      within(features).getByText(
         "frontier Claude + GPT models: Fable, Opus, Sonnet, latest GPT",
       ),
     ).toBeInTheDocument();
-    expect(within(card).getByText("cloud sync across your devices")).toBeInTheDocument();
+    expect(
+      within(features).getByText("cloud sync across your devices"),
+    ).toBeInTheDocument();
     expect(within(card).queryByText(/cloud transcription/i)).not.toBeInTheDocument();
     expect(within(card).queryByText(/100x more AI queries/i)).not.toBeInTheDocument();
 

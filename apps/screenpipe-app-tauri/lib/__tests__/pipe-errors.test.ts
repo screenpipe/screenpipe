@@ -71,7 +71,7 @@ describe("parsePipeError", () => {
   it("classifies Pi's content-filter finish reason as a safety refusal", () => {
     const r = parsePipeError("Error: Provider finish_reason: content_filter");
     expect(r.type).toBe("safety_refusal");
-    expect(r.message).toBe("AI provider declined this Pipe under its safety policy");
+    expect(r.message).toBe("AI provider declined this scheduled task under its safety policy");
   });
 
   it("classifies a structured provider safety refusal", () => {
