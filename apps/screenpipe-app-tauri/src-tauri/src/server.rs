@@ -680,7 +680,14 @@ async fn e2e_updates_state(State(state): State<ServerState>) -> impl IntoRespons
         }
         None => (String::new(), false, false),
     };
+    // `staged_update` is macOS-only (install is deferred to app exit there to
+    // avoid TCC orphaning). Windows and Linux install in place, so there is
+    // never a staged snapshot to report — but the response shape stays the
+    // same so the spec can assert against one contract on every platform.
+    #[cfg(target_os = "macos")]
     let staged = crate::staged_update::staged_snapshot();
+    #[cfg(not(target_os = "macos"))]
+    let staged: Option<(String, bool)> = None;
     Json(serde_json::json!({
         "menu_text": menu_text,
         "menu_enabled": menu_enabled,
