@@ -14,9 +14,6 @@ import {
 } from "@/components/ui/popover";
 import { UsageLimitsPanel } from "@/components/usage/usage-limits-panel";
 import { quotaPlanLabel } from "@/lib/chat/quota-errors";
-import { useContextWindowUsage } from "@/lib/hooks/use-context-window-usage";
-import { usePiModels } from "@/lib/hooks/use-pi-models";
-import type { AIPreset } from "@/lib/utils/tauri";
 import {
   formatUsagePercent,
   formatUsageUpdatedAt,
@@ -26,22 +23,10 @@ import {
 } from "@/lib/hooks/use-usage-status";
 import { cn } from "@/lib/utils";
 
-export interface UsagePopoverProps {
-  /** Active chat, so the panel can show how full its context window is. */
-  sessionId?: string | null;
-  /** Preset driving that chat; supplies the window half of the fraction. */
-  activePreset?: AIPreset | null;
-}
-
-export function UsagePopover({ sessionId, activePreset }: UsagePopoverProps = {}) {
+export function UsagePopover() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const query = useUsageStatusQuery();
-  // The gateway catalog is the only place the hosted models' real context
-  // windows exist; without it the window falls back to a preset default that
-  // has nothing to do with the model actually answering.
-  const { piModels } = usePiModels();
-  const contextWindow = useContextWindowUsage(sessionId, activePreset, piModels);
   const { usage } = query;
   const hosted = usage?.hosted_ai;
   const allowances = hosted?.allowances ?? [];
@@ -94,7 +79,6 @@ export function UsagePopover({ sessionId, activePreset }: UsagePopoverProps = {}
         <UsageLimitsPanel
           planLabel={plan}
           allowances={allowances}
-          contextWindow={contextWindow}
           updatedLabel={formatUsageUpdatedAt(hosted.usage_as_of)}
           unavailableMessage={unavailableMessage}
           isRefreshing={query.isRefreshing}

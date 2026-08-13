@@ -30,50 +30,15 @@ function renderPanel(props: Partial<Parameters<typeof UsageLimitsPanel>[0]> = {}
   );
 }
 
+// The panel shows plan allowances only. The context-window row was removed:
+// its numerator could not see the system prompt, skills, tool schemas or tool
+// results, so it under-reported a window whose size it was also frequently
+// guessing. Nothing should reintroduce a token count until pi reports one.
 describe("UsageLimitsPanel context window", () => {
-  it("shows the whole fraction, not just a percentage", () => {
-    renderPanel({
-      contextWindow: {
-        usedTokens: 667_400,
-        totalTokens: 1_000_000,
-        percent: 66.74,
-      },
-    });
-    // Tilde included: the numerator is what this app can see, not what the
-    // provider bills, and the row must not imply otherwise.
-    expect(screen.getByTestId("context-window-row")).toHaveTextContent(
-      "~667.4k / 1.0M (67%)",
-    );
-  });
-
-  // A window we cannot state honestly is worse than no row: it is the
-  // "sits still then jumps" behaviour this panel exists to remove.
-  it("omits the row entirely when the window is unknown", () => {
-    renderPanel({ contextWindow: null });
+  it("does not render a context-window row", () => {
+    renderPanel();
     expect(screen.queryByTestId("context-window-row")).toBeNull();
-  });
-
-  it("escalates state with the same thresholds as the allowance rows", () => {
-    const { rerender } = renderPanel({
-      contextWindow: { usedTokens: 10, totalTokens: 100, percent: 10 },
-    });
-    expect(screen.getByTestId("context-window-row")).toHaveAttribute(
-      "data-state",
-      "ok",
-    );
-
-    rerender(
-      <UsageLimitsPanel
-        planLabel="Business Max"
-        allowances={[allowance()]}
-        onOpenSettings={vi.fn()}
-        contextWindow={{ usedTokens: 85, totalTokens: 100, percent: 85 }}
-      />,
-    );
-    expect(screen.getByTestId("context-window-row")).toHaveAttribute(
-      "data-state",
-      "approaching",
-    );
+    expect(screen.queryByText(/context window/i)).toBeNull();
   });
 });
 

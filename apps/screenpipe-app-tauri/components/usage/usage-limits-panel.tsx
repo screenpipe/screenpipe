@@ -4,21 +4,16 @@
 
 import { ArrowRight, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ContextWindowRow } from "@/components/usage/context-window-row";
 import { UsageLimitRow } from "@/components/usage/usage-limit-row";
-import type { ContextWindowUsage } from "@/lib/chat/context-window-usage";
 import {
   sortHostedAiAllowances,
   type HostedAiAllowance,
 } from "@/lib/hooks/use-usage-status";
-import { cn } from "@/lib/utils";
 
 export interface UsageLimitsPanelProps {
   /** Display name of the plan the allowances belong to, e.g. "Business Max". */
   planLabel: string | null;
   allowances: HostedAiAllowance[];
-  /** Current chat's context window. Omitted when we cannot state it honestly. */
-  contextWindow?: ContextWindowUsage | null;
   /** Freshness hint from `formatUsageUpdatedAt`. Empty hides the hint. */
   updatedLabel?: string;
   /** Shown instead of the rows when the gateway could not resolve allowances. */
@@ -36,7 +31,6 @@ export interface UsageLimitsPanelProps {
 export function UsageLimitsPanel({
   planLabel,
   allowances,
-  contextWindow,
   updatedLabel,
   unavailableMessage,
   isRefreshing = false,
@@ -45,23 +39,12 @@ export function UsageLimitsPanel({
 }: UsageLimitsPanelProps) {
   return (
     <div data-testid="usage-limits-panel">
-      {/* Context sits above the plan limits because it is the one that bites
-          mid-conversation: the plan resets on a clock, the window does not. */}
-      {contextWindow && (
-        <div className="border-b border-border pb-3.5">
-          <ContextWindowRow usage={contextWindow} />
-        </div>
-      )}
-
       {/* The header doubles as the way into full usage settings — the same
           affordance the arrow promises, rather than a separate footer link. */}
       <button
         type="button"
         onClick={onOpenSettings}
-        className={cn(
-          "group flex w-full items-center justify-between gap-3 border-b border-border pb-2.5 text-left transition-colors duration-150",
-          contextWindow && "pt-3.5",
-        )}
+        className="group flex w-full items-center justify-between gap-3 border-b border-border pb-2.5 text-left transition-colors duration-150"
       >
         <span className="flex min-w-0 items-baseline gap-1.5 text-xs">
           <span className="shrink-0 font-medium lowercase text-foreground">

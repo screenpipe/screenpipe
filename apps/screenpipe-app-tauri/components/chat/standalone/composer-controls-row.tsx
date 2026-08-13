@@ -158,10 +158,7 @@ export function ComposerControlsRow({
           sessionId={modelControls.currentQueueSessionId}
         />
       )}
-      <UsagePopover
-        sessionId={modelControls.currentQueueSessionId}
-        activePreset={modelControls.activePreset}
-      />
+      <UsagePopover />
       <Button
         type={sendButton.isStopMode ? "button" : "submit"}
         size="icon"

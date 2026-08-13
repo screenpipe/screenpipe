@@ -54,10 +54,6 @@ vi.mock("@/lib/hooks/use-usage-status", async (importOriginal) => ({
   useUsageStatusQuery: () => mocks.query,
 }));
 
-vi.mock("@/lib/hooks/use-pi-models", () => ({
-  usePiModels: () => ({ piModels: [], isLoading: false, upgradeEligible: null }),
-}));
-
 describe("UsagePopover", () => {
   const originalAllowances = mocks.query.usage.hosted_ai.allowances;
 
