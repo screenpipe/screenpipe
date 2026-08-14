@@ -449,9 +449,32 @@ export const GLOBAL_HOURLY_COST_KEY = 'hosted-ai-cost:global-hour:v1';
  * Deepgram is ~96% of provider spend, so folding it into the text breaker would
  * make every text threshold effectively unreachable and hide a transcription
  * runaway behind a budget that never trips.
+ *
+ * Unlike the text breaker there is only ONE global row per hour, and the daily
+ * total is summed from today's hours rather than kept in a second row. At ~1.2M
+ * transcription requests a day, a separate global-day counter would have added a
+ * second write to every request on the hottest path in the gateway for a number
+ * we can already derive. Hour rows are bounded (24/day) and the existing usage
+ * pruner clears them.
  */
-export const GLOBAL_DAILY_TRANSCRIPTION_COST_KEY = 'hosted-transcription-cost:global-day:v1';
-export const GLOBAL_HOURLY_TRANSCRIPTION_COST_KEY = 'hosted-transcription-cost:global-hour:v1';
+const GLOBAL_TRANSCRIPTION_HOUR_PREFIX = 'hosted-transcription-cost:global-hour:v1:';
+
+export function globalTranscriptionHourKey(hour: string): string {
+  return `${GLOBAL_TRANSCRIPTION_HOUR_PREFIX}${hour}`;
+}
+
+/**
+ * Half-open key range covering every hour row of one UTC day.
+ *
+ * Hours are `YYYY-MM-DDTHH`, so bounding on 'T'..'U' selects exactly that day's
+ * rows as a primary-key range scan. A LIKE prefix would not use the index.
+ */
+export function globalTranscriptionDayRange(day: string): { from: string; to: string } {
+  return {
+    from: `${GLOBAL_TRANSCRIPTION_HOUR_PREFIX}${day}T`,
+    to: `${GLOBAL_TRANSCRIPTION_HOUR_PREFIX}${day}U`,
+  };
+}
 
 /**
  * Maintain the O(1) per-device daily-cost accumulator on the usage table
@@ -537,13 +560,12 @@ async function bumpTranscriptionCostAccumulator(
   ).bind(key, period, cost);
   try {
     // Same transactional guarantee as the text accumulators: a transcription
-    // request is either visible in the account window and both global windows,
-    // or in none of them. A partial write would let the global breaker drift
-    // below real spend and silently stop protecting anything.
+    // request is either visible in the account window and the global window, or
+    // in neither. A partial write would let the global breaker drift below real
+    // spend and silently stop protecting anything.
     const statements = [
       statement(transcriptionCostKey(deviceId), today),
-      statement(GLOBAL_DAILY_TRANSCRIPTION_COST_KEY, today),
-      statement(GLOBAL_HOURLY_TRANSCRIPTION_COST_KEY, hour),
+      statement(globalTranscriptionHourKey(hour), hour),
     ];
     if (typeof env.DB.batch === 'function') {
       await env.DB.batch(statements);
@@ -578,12 +600,24 @@ export function getTranscriptionDailyCostOrThrow(env: Env, deviceId: string): Pr
   return getCostAccumulatorOrThrow(env, transcriptionCostKey(deviceId), utcToday());
 }
 
-export function getGlobalTranscriptionDailyCostOrThrow(env: Env): Promise<number> {
-  return getCostAccumulatorOrThrow(env, GLOBAL_DAILY_TRANSCRIPTION_COST_KEY, utcToday());
+/** Sum today's hour rows. Bounded to 24 rows and read as a primary-key range. */
+export async function getGlobalTranscriptionDailyCostOrThrow(env: Env): Promise<number> {
+  const { from, to } = globalTranscriptionDayRange(utcToday());
+  try {
+    const row = await env.DB.prepare(
+      `SELECT COALESCE(SUM(daily_cost_usd), 0) AS cost
+       FROM usage WHERE device_id >= ?1 AND device_id < ?2`
+    ).bind(from, to).first<{ cost: number }>();
+    return Number(row?.cost ?? 0);
+  } catch (error) {
+    console.error('global transcription daily cost read failed:', error);
+    throw new Error('hosted AI cost accounting unavailable');
+  }
 }
 
 export function getGlobalTranscriptionHourlyCostOrThrow(env: Env): Promise<number> {
-  return getCostAccumulatorOrThrow(env, GLOBAL_HOURLY_TRANSCRIPTION_COST_KEY, utcHour());
+  const hour = utcHour();
+  return getCostAccumulatorOrThrow(env, globalTranscriptionHourKey(hour), hour);
 }
 
 function nonNegativeNumber(value: number | null | undefined): number {

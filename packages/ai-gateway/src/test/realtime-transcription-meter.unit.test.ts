@@ -7,9 +7,12 @@ import type { AuthResult, Env } from '../types';
 import { meterRealtimeSession } from '../handlers/realtime-transcription';
 import { privateCostControls } from './fixtures/private-cost-controls';
 import {
-	GLOBAL_DAILY_TRANSCRIPTION_COST_KEY,
+	globalTranscriptionHourKey,
 	transcriptionCostKey,
+	utcHour,
 } from '../services/cost-tracker';
+
+const CURRENT_GLOBAL_HOUR_KEY = globalTranscriptionHourKey(utcHour());
 
 type AccumulatorWrite = { key: string; cost: number };
 
@@ -17,7 +20,10 @@ type AccumulatorWrite = { key: string; cost: number };
  * D1 stand-in that answers budget reads and records accumulator writes, so the
  * meter is exercised through the real logCost path instead of a stubbed logger.
  */
-function recordingDb(costs: Record<string, number>, opts: { readFails?: boolean } = {}) {
+function recordingDb(
+	costs: Record<string, number>,
+	opts: { readFails?: boolean; dayTotal?: number } = {},
+) {
 	const writes: AccumulatorWrite[] = [];
 	const env = {
 		...privateCostControls(),
@@ -29,8 +35,10 @@ function recordingDb(costs: Record<string, number>, opts: { readFails?: boolean 
 						return {
 							async first() {
 								if (opts.readFails) throw new Error('d1 unavailable');
-								const key = String(args[1]);
-								return { cost: costs[key] ?? 0 };
+								if (sql.includes('SUM(daily_cost_usd)')) {
+									return { cost: opts.dayTotal ?? costs[CURRENT_GLOBAL_HOUR_KEY] ?? 0 };
+								}
+								return { cost: costs[String(args[1])] ?? 0 };
 							},
 							async run() {
 								if (sql.includes('INSERT INTO usage')) {
@@ -121,7 +129,7 @@ describe('realtime transcription metering', () => {
 		for (const write of accountWrites) expect(write.cost).toBeGreaterThan(0);
 	});
 
-	it('writes the account and both global windows together', async () => {
+	it('writes the account and global hour rows together', async () => {
 		const { env, writes } = recordingDb({});
 		const h = harness(env);
 		h.stopAfter(1);
@@ -129,8 +137,9 @@ describe('realtime transcription metering', () => {
 
 		const keys = new Set(writes.map((w) => w.key));
 		expect(keys.has(transcriptionCostKey('user_live'))).toBe(true);
-		expect(keys.has(GLOBAL_DAILY_TRANSCRIPTION_COST_KEY)).toBe(true);
-		expect(keys.has('hosted-transcription-cost:global-hour:v1')).toBe(true);
+		expect(keys.has(CURRENT_GLOBAL_HOUR_KEY)).toBe(true);
+		// One global row per request, not two: the daily total is summed from hours.
+		expect(keys.size).toBe(2);
 	});
 
 	it('closes a session that runs out of account allowance mid-stream', async () => {
@@ -142,7 +151,7 @@ describe('realtime transcription metering', () => {
 	});
 
 	it('closes every open session when the global breaker trips', async () => {
-		const { env } = recordingDb({ [GLOBAL_DAILY_TRANSCRIPTION_COST_KEY]: 502 });
+		const { env } = recordingDb({}, { dayTotal: 502 });
 		const h = harness(env);
 		await meterRealtimeSession(h.options);
 		expect(h.closeCalls[0]).toMatchObject({ reason: 'transcription allowance exhausted' });

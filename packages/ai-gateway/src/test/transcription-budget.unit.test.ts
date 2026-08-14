@@ -12,23 +12,40 @@ import {
 } from '../services/transcription-budget';
 import { privateCostControls } from './fixtures/private-cost-controls';
 import {
-	GLOBAL_DAILY_TRANSCRIPTION_COST_KEY,
-	GLOBAL_HOURLY_TRANSCRIPTION_COST_KEY,
+	globalTranscriptionHourKey,
 	transcriptionCostKey,
+	utcHour,
 } from '../services/cost-tracker';
 
-/** Minimal D1 stand-in: the gate only ever reads single accumulator rows. */
-function dbWithCosts(costs: Record<string, number>, opts: { fail?: boolean } = {}): Env {
+/** The current hour's global row, which is what the breaker reads. */
+const CURRENT_GLOBAL_HOUR_KEY = globalTranscriptionHourKey(utcHour());
+
+/**
+ * D1 stand-in covering both read shapes the gate uses: a single-row lookup
+ * bound as (period, key), and the day range sum bound as (from, to).
+ */
+function dbWithCosts(
+	costs: Record<string, number>,
+	opts: { fail?: boolean; dayTotal?: number } = {},
+): Env {
 	return {
 		...privateCostControls(),
 		DB: {
-			prepare(_sql: string) {
+			prepare(sql: string) {
+				const isRangeSum = sql.includes('SUM(daily_cost_usd)');
 				return {
-					bind(_period: string, key: string) {
+					bind(...args: unknown[]) {
 						return {
 							async first() {
 								if (opts.fail) throw new Error('d1 unavailable');
-								return { cost: costs[key] ?? 0 };
+								if (isRangeSum) {
+									// Default the day total to the current hour so a test that
+									// only sets an hour value still sums consistently.
+									return {
+										cost: opts.dayTotal ?? costs[CURRENT_GLOBAL_HOUR_KEY] ?? 0,
+									};
+								}
+								return { cost: costs[String(args[1])] ?? 0 };
 							},
 						};
 					},
@@ -111,7 +128,7 @@ describe('transcription budget', () => {
 	});
 
 	it('stops every account once the global daily breaker trips', async () => {
-		const env = dbWithCosts({ [GLOBAL_DAILY_TRANSCRIPTION_COST_KEY]: 502 });
+		const env = dbWithCosts({}, { dayTotal: 502 });
 		await expect(checkTranscriptionBudget(env, 'user_under_cap', 'business')).resolves.toEqual({
 			allowed: false,
 			scope: 'global',
@@ -119,7 +136,7 @@ describe('transcription budget', () => {
 	});
 
 	it('stops every account once the global hourly breaker trips', async () => {
-		const env = dbWithCosts({ [GLOBAL_HOURLY_TRANSCRIPTION_COST_KEY]: 501 });
+		const env = dbWithCosts({ [CURRENT_GLOBAL_HOUR_KEY]: 501 }, { dayTotal: 501 });
 		await expect(checkTranscriptionBudget(env, 'user_under_cap', 'business')).resolves.toEqual({
 			allowed: false,
 			scope: 'global',
@@ -157,7 +174,7 @@ describe('transcription gate response', () => {
 		expect(await errorPayload(accountGate!)).toMatchObject({ error: 'daily_cost_limit_exceeded' });
 
 		const globalGate = await transcriptionGateResponse(
-			dbWithCosts({ [GLOBAL_DAILY_TRANSCRIPTION_COST_KEY]: 502 }),
+			dbWithCosts({}, { dayTotal: 502 }),
 			requestWithIp('203.0.113.7'),
 			auth(),
 			'user_a',
@@ -170,7 +187,7 @@ describe('transcription gate response', () => {
 
 	it('keeps private thresholds and spend out of the client response', async () => {
 		const gate = await transcriptionGateResponse(
-			dbWithCosts({ [GLOBAL_DAILY_TRANSCRIPTION_COST_KEY]: 502 }),
+			dbWithCosts({}, { dayTotal: 502 }),
 			requestWithIp('203.0.113.7'),
 			auth(),
 			'user_a',
