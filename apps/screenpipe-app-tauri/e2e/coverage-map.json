@@ -795,6 +795,26 @@
       "notes": "A local provider returns priced_request_in_flight twice; Pi retries while the UI remains active, a real composer follow-up enters the Rust queue, and both turns recover without the misleading mid-response error."
     },
     {
+      "spec": "chat-inline-charts.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "markdown",
+        "charts"
+      ],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Seeds an assistant message containing ```chart fences and asserts the charts render inline between the surrounding paragraphs, bar widths are proportional to the data, hover shows a tooltip and recolours the mark, a malformed fence degrades to a readable code block, every chart exposes a screen-reader table, and no chart uses a rounded corner (DESIGN.md)."
+    },
+    {
       "spec": "chat-local-ai-gateway.spec.ts",
       "platforms": [
         "macos"

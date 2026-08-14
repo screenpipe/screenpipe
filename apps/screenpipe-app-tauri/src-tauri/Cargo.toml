@@ -368,6 +368,19 @@ lto = true
 opt-level = "s"
 strip = true
 
+# This crate is excluded from the root workspace, so it does not inherit the
+# root profile. The per-package overrides have to be repeated here or the
+# shipped desktop app gets none of the capture-path speedup. Keep in sync with
+# the root Cargo.toml; see there for the benchmark numbers.
+[profile.release.package.screenpipe-screen]
+opt-level = 3
+
+# screenpipe-screen resolves `image` to 0.25.x; this graph also carries a 0.24.9
+# copy pulled in transitively. The unversioned spec covers both, which is
+# intentional — it survives dependency bumps, and the extra crate is small.
+[profile.release.package.image]
+opt-level = 3
+
 # Fast local release builds: cargo build --profile release-dev
 [profile.release-dev]
 inherits = "release"

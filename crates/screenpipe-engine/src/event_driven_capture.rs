@@ -1627,6 +1627,21 @@ pub(crate) async fn event_driven_capture_loop(
                 }
             }
 
+            // The bounded wait above returned, so anything past this point is
+            // synchronous gate work, not the timer. Re-marking here keeps the
+            // watchdog's "frozen in <stage>" message honest: `trigger-wait`
+            // now accuses only the 250ms-bounded await (a freeze there means
+            // the task was never resumed), while `trigger-drain` accuses the
+            // synchronous gates below (a freeze there means a lock is held by
+            // another thread). Previously both shared one marker, so a
+            // multi-minute #3939 freeze reported `trigger-wait` even though a
+            // 250ms timeout cannot account for it.
+            record_loop_stage(
+                &vision_metrics,
+                &monitor_liveness,
+                screenpipe_screen::CaptureLoopStage::TriggerDrain,
+            );
+
             // Drain any remaining triggers that piled up while we were
             // waiting on the first one.
             if !closed_now {

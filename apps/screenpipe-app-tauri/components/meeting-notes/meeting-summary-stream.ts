@@ -7,6 +7,8 @@ import type { AgentInnerEvent } from "@/lib/events/types";
 export interface MeetingSummaryStreamState {
   rawAssistantText: string;
   currentMessageText: string;
+  /** Text blocks of the in-flight assistant message, keyed by `contentIndex`. */
+  blocks: Record<number, string>;
   markdown: string;
   sealed: boolean;
 }
@@ -15,9 +17,21 @@ export function emptyMeetingSummaryStream(): MeetingSummaryStreamState {
   return {
     rawAssistantText: "",
     currentMessageText: "",
+    blocks: {},
     markdown: "",
     sealed: false,
   };
+}
+
+/** One assistant message can carry several text blocks; keep them in index
+ *  order so a later block never overtakes an earlier one. */
+function joinBlocks(blocks: Record<number, string>): string {
+  return Object.keys(blocks)
+    .map(Number)
+    .sort((a, b) => a - b)
+    .map((index) => blocks[index])
+    .filter(Boolean)
+    .join("\n");
 }
 
 function summaryDraftFromAssistantText(text: string): string | null {
@@ -91,7 +105,7 @@ export function advanceMeetingSummaryStream(
   }
 
   if (type === "message_start" && event.message?.role === "assistant") {
-    return { ...state, currentMessageText: "" };
+    return { ...state, currentMessageText: "", blocks: {} };
   }
 
   const isTextDelta =
@@ -100,26 +114,38 @@ export function advanceMeetingSummaryStream(
     typeof (event.delta ?? assistantEvent?.delta) === "string";
   if (isTextDelta) {
     const delta = (event.delta ?? assistantEvent?.delta) as string;
-    const separator =
-      !state.currentMessageText &&
-      state.rawAssistantText &&
-      !state.rawAssistantText.endsWith("\n")
-        ? "\n\n"
-        : "";
-    const currentMessageText = state.currentMessageText + delta;
-    const rawAssistantText = state.rawAssistantText + separator + delta;
-    return {
-      ...state,
-      rawAssistantText,
-      currentMessageText,
-      markdown:
-        summaryDraftFromAssistantText(rawAssistantText) ?? state.markdown,
+    const index = assistantEvent?.contentIndex ?? 0;
+    const blocks = {
+      ...state.blocks,
+      [index]: (state.blocks[index] ?? "") + delta,
     };
+    return replaceCurrentMessage({ ...state, blocks }, joinBlocks(blocks));
+  }
+
+  // Not every provider streams token-by-token. The screenpipe cloud route the
+  // summary Pipe actually runs on closes each block with `text_end` carrying
+  // the whole string and emits no `text_delta` at all, so a delta-only reader
+  // saw the summary as silence and the tab sat on its skeleton for the entire
+  // run. `text_end` is authoritative for its block: assigning rather than
+  // appending also keeps providers that send both from doubling the text.
+  if (
+    type === "message_update" &&
+    assistantEvent?.type === "text_end" &&
+    typeof assistantEvent.content === "string"
+  ) {
+    const index = assistantEvent.contentIndex ?? 0;
+    const blocks = { ...state.blocks, [index]: assistantEvent.content };
+    return replaceCurrentMessage({ ...state, blocks }, joinBlocks(blocks));
   }
 
   if (type === "message_end") {
     const messageText = assistantMessageText(event.message);
-    if (messageText) return replaceCurrentMessage(state, messageText);
+    if (messageText) {
+      return replaceCurrentMessage(
+        { ...state, blocks: { 0: messageText } },
+        messageText,
+      );
+    }
   }
 
   return state;

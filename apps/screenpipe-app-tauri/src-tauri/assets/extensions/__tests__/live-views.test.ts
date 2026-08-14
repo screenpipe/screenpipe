@@ -7,6 +7,7 @@ import registerLiveViews from "../live-views";
 
 type ToolDef = {
   name: string;
+  parameters: any;
   promptGuidelines?: string[];
   execute: (
     toolCallId: string,
@@ -465,6 +466,15 @@ describe("live view retrieval the model drives", () => {
 
 describe("screenpipe_live_view_propose", () => {
   const signal = () => new AbortController().signal;
+
+  it("registers a provider-compatible integer width schema", () => {
+    const width = getProposeTool().parameters.properties.blocks.items.properties
+      .width;
+
+    expect(width.type).toBe("integer");
+    expect(width.enum).toBeUndefined();
+    expect(width.description).toContain("3, 6, or 12");
+  });
 
   it("accepts a valid targeted edit without writing anything", async () => {
     const result = await getProposeTool().execute(

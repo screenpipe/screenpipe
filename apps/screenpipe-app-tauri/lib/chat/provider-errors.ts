@@ -311,6 +311,10 @@ function buildGenericProviderErrorMessage(
     }
   }
 
+  if (normalized.includes("codex error: the usage limit has been reached")) {
+    return "The AI provider usage limit has been reached. Wait for it to reset, or switch your AI preset or provider.";
+  }
+
   if (
     provider === "custom" &&
     (normalized.includes("401") ||

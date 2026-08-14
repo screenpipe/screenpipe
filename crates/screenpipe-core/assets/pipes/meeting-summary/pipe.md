@@ -64,9 +64,11 @@ step 2d — name the speakers from the screen (do this every run, don't ask firs
 
 only rename when the on-screen evidence is unambiguous — never guess from voice alone. note which speakers you renamed (and which you left as-is) in your final message.
 
-step 3 — before saving, write the proposed summary in your response starting on a line with exactly `## Summary`. put only summary content after that heading and use that same markdown in `<YOUR_SUMMARY>`. the meeting UI streams this section while you write it, so do not put planning, tool narration, or save confirmations after the heading.
+step 3 — write the summary out as your own message, before you save it. this message must contain no tool call; end the turn after it. start a line with exactly `## Summary` and put the finished summary markdown after that heading. the meeting UI streams this section live while you write it — it is the only way the user sees anything before the run ends — and it is the same markdown you pass as `<YOUR_SUMMARY>` in step 3b.
 
-if your summary is worth saving, append it to the meeting note (and refresh the title in the same call) via:
+this step is not optional and it is not the closing report. "meeting 112 was summarized and saved to its record" is a report; it does not satisfy this step. saving a summary you never printed means the user watched a placeholder for the entire run and then got nothing to read, so treat that as a failed run. keep planning, tool narration, and save confirmations out of the section after the heading — those belong in your closing message in step 4.
+
+step 3b — now save it. if your summary is worth saving, append it to the meeting note (and refresh the title in the same call) via:
 
   curl -s -X PUT "http://localhost:3030/meetings/<MEETING_ID>" \
     -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \

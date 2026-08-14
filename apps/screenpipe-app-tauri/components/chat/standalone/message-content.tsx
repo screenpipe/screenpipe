@@ -39,6 +39,7 @@ import {
 import {
   sourceCitationsFromMessage,
 } from "@/lib/source-citations";
+import { renderChartFence } from "@/components/chat/charts/chat-chart";
 
 const MermaidDiagram = React.lazy(() =>
   import("@/components/rewind/mermaid-diagram").then((mod) => ({
@@ -1744,7 +1745,7 @@ export function MessageContent({
                   if (language === "app-stats") {
                     return <AppStatsBlock content={content} />;
                   }
-                  return null;
+                  return renderChartFence(language, content);
                 }}
               />
             );
@@ -1863,7 +1864,7 @@ export function MessageContent({
             if (language === "app-stats") {
               return <AppStatsBlock content={content} />;
             }
-            return null;
+            return renderChartFence(language, content);
           }}
         />
       ) : null}

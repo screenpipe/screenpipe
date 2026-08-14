@@ -11,6 +11,7 @@
     "test:automation-pipe-evals": "bun x vitest run lib/automation-pipe-evals.test.ts components/chat/summary-cards.test.tsx",
     "test:daily-summary-prompt-evals": "bun x vitest run lib/daily-summary-prompt-evals.test.ts lib/daily-summary-pi.test.ts components/rewind/timeline/daily-summary.test.tsx",
     "eval:daily-summary-agent": "bun scripts/eval-daily-summary-prompt.ts",
+    "eval:chart-fence": "bun scripts/eval-chart-fence.ts",
     "eval:daily-summary-prompt": "bun run eval:daily-summary-agent",
     "test:bun": "bun scripts/run-bun-tests.ts",
     "test:shortcut-overlay": "./scripts/test-shortcut-overlay.sh",
