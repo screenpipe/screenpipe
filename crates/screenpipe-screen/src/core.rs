@@ -5,7 +5,7 @@
 #[cfg(target_os = "macos")]
 use crate::apple::perform_ocr_apple;
 use crate::capture_screenshot_by_window::{
-    get_excluded_sck_window_ids, CapturedWindow, WindowFilters,
+    get_excluded_sck_window_ids, CapturedWindow, ExclusionSources, WindowFilters,
 };
 use crate::custom_ocr::perform_ocr_custom;
 use crate::frame_comparison::{FrameComparer, FrameComparisonConfig};
@@ -209,8 +209,14 @@ pub async fn continuous_capture(
             let mut captured = None;
 
             for attempt in 0..=MAX_CAPTURE_RETRIES {
-                match capture_monitor_image(&monitor, &get_excluded_sck_window_ids(&window_filters))
-                    .await
+                // Pattern filters only: this legacy loop carries no incognito
+                // config. The production path is `event_driven_capture`, which
+                // resolves privacy sources via `exclusion_sources`.
+                match capture_monitor_image(
+                    &monitor,
+                    &get_excluded_sck_window_ids(&window_filters, ExclusionSources::default()),
+                )
+                .await
                 {
                     Ok(result) => {
                         if attempt > 0 {

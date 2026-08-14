@@ -935,29 +935,76 @@ fn get_all_windows() -> Result<Vec<WindowData>, Box<dyn Error>> {
         .collect())
 }
 
-/// Resolve ignored/included window filters to SCK window IDs (macOS only).
+/// Privacy sources that contribute windows to the SCK exclusion set, beyond
+/// the user's own ignore/include patterns.
 ///
-/// Enumerates all on-screen windows, checks each against `WindowFilters::is_valid()`,
-/// and returns the SCK window IDs of windows that should be excluded from capture.
-/// These IDs can be passed to `capture_image_excluding()` so ScreenCaptureKit
-/// never renders those windows into the capture buffer.
+/// Incognito lives here rather than inside [`WindowFilters`] because it is not
+/// a pattern: deciding it needs the browser-native detector, which may run
+/// AppleScript and is therefore only safe on the bounded, single-flight
+/// exclusion-refresh path.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ExclusionSources {
+    /// Exclude browser private/incognito windows anywhere on screen, not just
+    /// the focused one.
+    pub ignore_incognito_windows: bool,
+    /// Let the incognito detector use browser-native APIs (macOS Automation).
+    /// Without this, Chromium private windows are undetectable on macOS — their
+    /// window name is the bare page title (see [`get_excluded_sck_window_ids`]).
+    pub enhanced_incognito_detection: bool,
+}
+
+impl ExclusionSources {
+    /// True when no source here can contribute a window, so a WindowServer
+    /// enumeration is only worth doing if the user configured patterns.
+    pub fn is_empty(&self) -> bool {
+        !self.ignore_incognito_windows
+    }
+}
+
+/// Resolve ignored/included window filters and privacy sources to SCK window
+/// IDs (macOS only).
 ///
-/// Returns an empty vec if no windows match the filters or on error.
+/// Enumerates all on-screen windows, checks each against
+/// `WindowFilters::is_valid()` and the incognito detector, and returns the SCK
+/// window IDs of windows that should be excluded from capture. These IDs can be
+/// passed to `capture_image_excluding()` so ScreenCaptureKit never renders
+/// those windows into the capture buffer.
+///
+/// Why incognito is resolved here rather than at the focused-window gate: the
+/// screenshot is monitor-wide, so a *visible but unfocused* private window is
+/// in the frame even though the focus-scoped a11y gates never see it. Removing
+/// it from the SCK composite means those pixels are never rendered at all,
+/// rather than captured and then discarded (screenpipe/screenpipe#6198).
+///
+/// Detection caveat: on macOS a Chromium private window's CGWindow name is the
+/// bare page title, with no marker to match — verified against Chrome 141, both
+/// `kCGWindowName` and AppleScript `name of window` return e.g. `Example
+/// Domain`. Title matching alone therefore cannot catch it, and
+/// `enhanced_incognito_detection` (which asks the browser directly) is required
+/// for Chromium. Firefox and Safari do carry the marker in the title and work
+/// in either mode.
+///
+/// Returns an empty vec if no windows match or on error.
 #[cfg(target_os = "macos")]
-pub fn get_excluded_sck_window_ids(window_filters: &WindowFilters) -> Vec<u32> {
-    if window_filters.ignore_patterns.is_empty()
-        && window_filters.include_patterns.is_empty()
-        && window_filters.ignored_urls.is_empty()
-    {
+pub fn get_excluded_sck_window_ids(
+    window_filters: &WindowFilters,
+    sources: ExclusionSources,
+) -> Vec<u32> {
+    if window_filters.is_empty() && sources.is_empty() {
         return Vec::new();
     }
 
+    let detector = sources
+        .ignore_incognito_windows
+        .then(|| screenpipe_a11y::incognito::create_detector(sources.enhanced_incognito_detection));
+
     let (cg_windows, _) = get_cg_window_list();
-    let excluded = excluded_sck_window_ids_from_cg_windows(&cg_windows, window_filters);
+    let excluded =
+        excluded_sck_window_ids_from_cg_windows(&cg_windows, window_filters, detector.as_deref());
 
     if !excluded.is_empty() {
         debug!(
-            "resolved {} ignored window(s) to SCK IDs: {:?}",
+            "resolved {} excluded window(s) to SCK IDs: {:?}",
             excluded.len(),
             excluded
         );
@@ -974,18 +1021,37 @@ pub fn get_excluded_sck_window_ids(window_filters: &WindowFilters) -> Vec<u32> {
 fn excluded_sck_window_ids_from_cg_windows(
     cg_windows: &[CGWindowInfo],
     window_filters: &WindowFilters,
+    incognito_detector: Option<&dyn screenpipe_a11y::incognito::IncognitoDetector>,
 ) -> Vec<u32> {
     cg_windows
         .iter()
         .filter(|window| window.window_id != 0 && !window.owner_name.is_empty())
-        .filter(|window| !window_filters.is_valid(&window.owner_name, &window.window_name))
+        .filter(|window| {
+            if !window_filters.is_valid(&window.owner_name, &window.window_name) {
+                return true;
+            }
+            // Layer 0 is a normal application window. Menubar extras, overlays
+            // and system chrome sit above it and never host browsing content,
+            // so asking the detector about them only costs AppleScript calls.
+            window.layer == 0
+                && incognito_detector.is_some_and(|detector| {
+                    detector.is_incognito(&window.owner_name, window.pid, &window.window_name)
+                })
+        })
         .map(|window| window.window_id)
         .collect()
 }
 
 /// Non-macOS stub — SCK exclusion is not available.
+///
+/// Windows and Linux have no way to drop another process's window from a
+/// monitor capture, so the unfocused-private-window exposure remains there and
+/// needs a different remedy.
 #[cfg(not(target_os = "macos"))]
-pub fn get_excluded_sck_window_ids(_window_filters: &WindowFilters) -> Vec<u32> {
+pub fn get_excluded_sck_window_ids(
+    _window_filters: &WindowFilters,
+    _sources: ExclusionSources,
+) -> Vec<u32> {
     Vec::new()
 }
 
@@ -1785,6 +1851,27 @@ mod tests {
             );
         }
 
+        /// Stands in for the real detector so these tests stay hermetic: the
+        /// macOS detector shells out to AppleScript and its answer depends on
+        /// which browsers happen to be running on the machine.
+        struct FakeIncognitoDetector {
+            private_titles: Vec<String>,
+        }
+
+        impl screenpipe_a11y::incognito::IncognitoDetector for FakeIncognitoDetector {
+            fn is_incognito(&self, _app: &str, _pid: i32, window_title: &str) -> bool {
+                self.private_titles.iter().any(|t| t == window_title)
+            }
+        }
+
+        fn detector(
+            private_titles: &[&str],
+        ) -> Box<dyn screenpipe_a11y::incognito::IncognitoDetector> {
+            Box::new(FakeIncognitoDetector {
+                private_titles: private_titles.iter().map(|t| t.to_string()).collect(),
+            })
+        }
+
         #[test]
         fn test_excluded_sck_ids_respect_ignore_patterns() {
             let windows = vec![
@@ -1794,7 +1881,7 @@ mod tests {
             let filters = WindowFilters::new(&["password".to_string()], &[], &[]);
 
             assert_eq!(
-                excluded_sck_window_ids_from_cg_windows(&windows, &filters),
+                excluded_sck_window_ids_from_cg_windows(&windows, &filters, None),
                 vec![111]
             );
         }
@@ -1808,7 +1895,7 @@ mod tests {
             let filters = WindowFilters::new(&[], &["terminal".to_string()], &[]);
 
             assert_eq!(
-                excluded_sck_window_ids_from_cg_windows(&windows, &filters),
+                excluded_sck_window_ids_from_cg_windows(&windows, &filters, None),
                 vec![222]
             );
         }
@@ -1822,9 +1909,96 @@ mod tests {
 
             assert!(excluded_sck_window_ids_from_cg_windows(
                 &[missing_owner, missing_id],
-                &filters
+                &filters,
+                None
             )
             .is_empty());
+        }
+
+        /// The bug in screenpipe/screenpipe#6198: the private window is visible
+        /// but not focused, so every focus-scoped gate misses it. It must still
+        /// leave the SCK composite.
+        #[test]
+        fn test_excluded_sck_ids_exclude_unfocused_incognito_window() {
+            let windows = vec![
+                make_window(111, 0, 0, 0, 800, 600, "Google Chrome", "Example Domain"),
+                make_window(222, 0, 0, 0, 800, 600, "Google Chrome", "New Tab"),
+            ];
+            let filters = WindowFilters::new(&[], &[], &[]);
+
+            assert_eq!(
+                excluded_sck_window_ids_from_cg_windows(
+                    &windows,
+                    &filters,
+                    Some(detector(&["Example Domain"]).as_ref())
+                ),
+                vec![111]
+            );
+        }
+
+        /// Incognito exclusion is opt-in: with the setting off, a private
+        /// window is treated like any other window.
+        #[test]
+        fn test_excluded_sck_ids_keep_incognito_when_detector_absent() {
+            let windows = vec![make_window(
+                111,
+                0,
+                0,
+                0,
+                800,
+                600,
+                "Google Chrome",
+                "Example Domain",
+            )];
+            let filters = WindowFilters::new(&[], &[], &[]);
+
+            assert!(excluded_sck_window_ids_from_cg_windows(&windows, &filters, None).is_empty());
+        }
+
+        /// Menubar extras and overlays sit above layer 0 and never host
+        /// browsing content; asking the detector about them would only spend
+        /// AppleScript calls (and risk excluding unrelated system chrome).
+        #[test]
+        fn test_excluded_sck_ids_ignore_incognito_above_layer_zero() {
+            let windows = vec![make_window(
+                111,
+                25,
+                0,
+                0,
+                300,
+                40,
+                "Google Chrome",
+                "Example Domain",
+            )];
+            let filters = WindowFilters::new(&[], &[], &[]);
+
+            assert!(excluded_sck_window_ids_from_cg_windows(
+                &windows,
+                &filters,
+                Some(detector(&["Example Domain"]).as_ref())
+            )
+            .is_empty());
+        }
+
+        /// A pattern-excluded window and a private window must both drop out
+        /// in the same pass — the two sources are independent.
+        #[test]
+        fn test_excluded_sck_ids_combine_patterns_and_incognito() {
+            let windows = vec![
+                make_window(111, 0, 0, 0, 800, 600, "Password Manager", "Vault"),
+                make_window(222, 0, 0, 0, 800, 600, "Google Chrome", "Example Domain"),
+                make_window(333, 0, 0, 0, 800, 600, "Notes", "Daily note"),
+            ];
+            let filters = WindowFilters::new(&["password".to_string()], &[], &[]);
+
+            assert_eq!(
+                excluded_sck_window_ids_from_cg_windows(
+                    &windows,
+                    &filters,
+                    Some(detector(&["Example Domain"]).as_ref())
+                ),
+                vec![111, 222]
+            );
         }
 
         #[test]

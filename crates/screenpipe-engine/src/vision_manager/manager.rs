@@ -721,6 +721,8 @@ impl VisionManager {
                 ignored_windows: self.config.ignored_windows.clone(),
                 included_windows: self.config.included_windows.clone(),
                 ignored_urls: self.config.ignored_urls.clone(),
+                ignore_incognito_windows: self.config.ignore_incognito_windows,
+                enhanced_incognito_detection: self.config.enhanced_incognito_detection,
             };
             let hd_handle = self
                 .vision_handle

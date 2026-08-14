@@ -64,6 +64,12 @@ pub struct HdRecorderConfig {
     /// Ignored-URL patterns — windows showing a blocked URL are excluded from
     /// HD capture too (URL privacy parity with the event-driven capture loop).
     pub ignored_urls: Vec<String>,
+    /// Exclude browser private/incognito windows from HD capture. Without this
+    /// the HD stream keeps recording a private window that the event-driven
+    /// loop excludes, since HD frames bypass the a11y gates entirely.
+    pub ignore_incognito_windows: bool,
+    /// Let the incognito detector use browser-native APIs (macOS Automation).
+    pub enhanced_incognito_detection: bool,
 }
 
 /// Per-monitor HD recorder loop. Idles until an HD session is active, then
@@ -344,7 +350,7 @@ mod macos {
         stop_signal: &Arc<AtomicBool>,
     ) -> Result<()> {
         use screenpipe_screen::capture_screenshot_by_window::{
-            get_excluded_sck_window_ids, WindowFilters,
+            get_excluded_sck_window_ids, ExclusionSources, WindowFilters,
         };
 
         // Read the HD rate live from the controller so tray changes (10↔30fps)
@@ -358,7 +364,13 @@ mod macos {
             &config.included_windows,
             &config.ignored_urls,
         );
-        let mut excluded = get_excluded_sck_window_ids(&filters);
+        let mut excluded = get_excluded_sck_window_ids(
+            &filters,
+            ExclusionSources {
+                ignore_incognito_windows: config.ignore_incognito_windows,
+                enhanced_incognito_detection: config.enhanced_incognito_detection,
+            },
+        );
         excluded.sort_unstable();
         excluded.dedup();
 

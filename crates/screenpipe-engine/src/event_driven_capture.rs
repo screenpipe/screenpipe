@@ -8,7 +8,9 @@
 //! Captures happen only on meaningful user events: app switch, window focus,
 //! click, typing pause, scroll stop, clipboard, and periodic idle fallback.
 
-use crate::capture_exclusions::{probe_excluded_sck_window_ids, storage_excluded_sck_window_ids};
+use crate::capture_exclusions::{
+    exclusion_sources, probe_excluded_sck_window_ids, storage_excluded_sck_window_ids,
+};
 use crate::hot_frame_cache::{HotFrame, HotFrameCache};
 use crate::power::PowerProfile;
 use crate::semantic_worker::{SemanticCaptureGap, SemanticProjectionJob, SemanticProjectionSender};
@@ -1794,7 +1796,11 @@ pub(crate) async fn event_driven_capture_loop(
                 &monitor_liveness,
                 screenpipe_screen::CaptureLoopStage::ExclusionProbe,
             );
-            let fresh_ids = probe_excluded_sck_window_ids(&capture_params.window_filters).await;
+            let fresh_ids = probe_excluded_sck_window_ids(
+                &capture_params.window_filters,
+                exclusion_sources(capture_params.tree_walker_config),
+            )
+            .await;
             if fresh_ids != cached_excluded_ids {
                 cached_excluded_ids = fresh_ids;
             }
@@ -2821,7 +2827,11 @@ async fn do_capture(
     let storage_exclusions = if screenshot_disabled {
         Some(Vec::new())
     } else {
-        storage_excluded_sck_window_ids(&params.window_filters).await
+        storage_excluded_sck_window_ids(
+            &params.window_filters,
+            exclusion_sources(params.tree_walker_config),
+        )
+        .await
     };
     let skip_pixels_for_unknown_exclusions = storage_exclusions.is_none();
     if skip_pixels_for_unknown_exclusions {

@@ -19,7 +19,10 @@
 //!   configured — the caller must skip the frame's pixels rather than risk
 //!   storing a window the user asked to hide.
 
-use screenpipe_screen::capture_screenshot_by_window::{get_excluded_sck_window_ids, WindowFilters};
+use screenpipe_a11y::tree::TreeWalkerConfig;
+use screenpipe_screen::capture_screenshot_by_window::{
+    get_excluded_sck_window_ids, ExclusionSources, WindowFilters,
+};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -66,7 +69,10 @@ fn exclusion_cache() -> &'static Mutex<ExclusionCache> {
 /// (in flight elsewhere, timed out, or task failure). The blocking closure
 /// always writes the cache and clears the in-flight flag on completion, even
 /// after its awaiting caller gave up.
-async fn refresh_excluded_sck_window_ids(window_filters: &WindowFilters) -> Option<Vec<u32>> {
+async fn refresh_excluded_sck_window_ids(
+    window_filters: &WindowFilters,
+    sources: ExclusionSources,
+) -> Option<Vec<u32>> {
     if EXCLUSION_REFRESH_IN_FLIGHT.swap(true, Ordering::AcqRel) {
         // A refresh (possibly stuck in CGWindowListCopyWindowInfo) is already
         // running; don't pile another blocked thread behind it.
@@ -75,7 +81,7 @@ async fn refresh_excluded_sck_window_ids(window_filters: &WindowFilters) -> Opti
 
     let filters = window_filters.clone();
     let handle = tokio::task::spawn_blocking(move || {
-        let mut ids = get_excluded_sck_window_ids(&filters);
+        let mut ids = get_excluded_sck_window_ids(&filters, sources);
         ids.sort_unstable();
         ids.dedup();
         {
@@ -116,15 +122,30 @@ async fn refresh_excluded_sck_window_ids(window_filters: &WindowFilters) -> Opti
     }
 }
 
+/// Privacy sources implied by the current tree-walker config.
+///
+/// The a11y gates apply these only to the focus-owning window; the exclusion
+/// resolver applies them to every on-screen window, which is what keeps an
+/// unfocused private window out of a monitor-wide frame.
+pub(crate) fn exclusion_sources(config: &TreeWalkerConfig) -> ExclusionSources {
+    ExclusionSources {
+        ignore_incognito_windows: config.ignore_incognito_windows,
+        enhanced_incognito_detection: config.enhanced_incognito_detection,
+    }
+}
+
 /// Exclusion ids for the visual-change PROBE (frame diffing only — nothing is
 /// stored). Best effort: fresh ids when available, cached ids of any age
 /// otherwise. Over-inclusive probe pixels merely risk a spurious
 /// visual-change trigger; the storage capture applies its own stricter rule.
-pub(crate) async fn probe_excluded_sck_window_ids(window_filters: &WindowFilters) -> Vec<u32> {
-    if window_filters.is_empty() {
+pub(crate) async fn probe_excluded_sck_window_ids(
+    window_filters: &WindowFilters,
+    sources: ExclusionSources,
+) -> Vec<u32> {
+    if window_filters.is_empty() && sources.is_empty() {
         return Vec::new();
     }
-    if let Some(ids) = refresh_excluded_sck_window_ids(window_filters).await {
+    if let Some(ids) = refresh_excluded_sck_window_ids(window_filters, sources).await {
         return ids;
     }
     exclusion_cache()
@@ -143,11 +164,12 @@ pub(crate) async fn probe_excluded_sck_window_ids(window_filters: &WindowFilters
 /// privacy property without freezing the loop.
 pub(crate) async fn storage_excluded_sck_window_ids(
     window_filters: &WindowFilters,
+    sources: ExclusionSources,
 ) -> Option<Vec<u32>> {
-    if window_filters.is_empty() {
+    if window_filters.is_empty() && sources.is_empty() {
         return Some(Vec::new());
     }
-    if let Some(ids) = refresh_excluded_sck_window_ids(window_filters).await {
+    if let Some(ids) = refresh_excluded_sck_window_ids(window_filters, sources).await {
         return Some(ids);
     }
     let cache = exclusion_cache().lock().unwrap_or_else(|e| e.into_inner());
@@ -272,7 +294,9 @@ mod tests {
         // of spawning another blocking task behind it.
         assert!(!EXCLUSION_REFRESH_IN_FLIGHT.swap(true, Ordering::AcqRel));
         let started = Instant::now();
-        let result = refresh_excluded_sck_window_ids(&excluding_filters()).await;
+        let result =
+            refresh_excluded_sck_window_ids(&excluding_filters(), ExclusionSources::default())
+                .await;
         assert_eq!(result, None);
         // Must return via the fast path, never the 5s timeout path.
         assert!(started.elapsed() < EXCLUSION_REFRESH_TIMEOUT / 2);
@@ -294,7 +318,7 @@ mod tests {
         }
         let filters = excluding_filters();
         assert_eq!(
-            storage_excluded_sck_window_ids(&filters).await,
+            storage_excluded_sck_window_ids(&filters, ExclusionSources::default()).await,
             Some(vec![42])
         );
 
@@ -305,8 +329,14 @@ mod tests {
             let mut cache = exclusion_cache().lock().unwrap_or_else(|e| e.into_inner());
             cache.refreshed_at = instant_secs_ago(600);
         }
-        assert_eq!(storage_excluded_sck_window_ids(&filters).await, None);
-        assert_eq!(probe_excluded_sck_window_ids(&filters).await, vec![42]);
+        assert_eq!(
+            storage_excluded_sck_window_ids(&filters, ExclusionSources::default()).await,
+            None
+        );
+        assert_eq!(
+            probe_excluded_sck_window_ids(&filters, ExclusionSources::default()).await,
+            vec![42]
+        );
         EXCLUSION_REFRESH_IN_FLIGHT.store(false, Ordering::Release);
     }
 
@@ -315,12 +345,63 @@ mod tests {
         let filters = WindowFilters::new(&[], &[], &[]);
         assert!(filters.is_empty());
         assert_eq!(
-            storage_excluded_sck_window_ids(&filters).await,
+            storage_excluded_sck_window_ids(&filters, ExclusionSources::default()).await,
             Some(Vec::new())
         );
         assert_eq!(
-            probe_excluded_sck_window_ids(&filters).await,
+            probe_excluded_sck_window_ids(&filters, ExclusionSources::default()).await,
             Vec::<u32>::new()
         );
+    }
+
+    /// Most users configure no ignore patterns but keep incognito on (it is
+    /// the default). If the empty-filters short circuit still applied, the
+    /// resolver would never run and screenpipe/screenpipe#6198 would persist
+    /// for exactly the default configuration.
+    #[tokio::test]
+    async fn incognito_alone_defeats_the_empty_filters_short_circuit() {
+        let _guard = SHARED_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let filters = WindowFilters::new(&[], &[], &[]);
+        let sources = ExclusionSources {
+            ignore_incognito_windows: true,
+            enhanced_incognito_detection: false,
+        };
+        assert!(filters.is_empty());
+        assert!(!sources.is_empty());
+
+        // Hold the in-flight flag so no real WindowServer call happens: the
+        // point is that resolution is ATTEMPTED rather than short circuited,
+        // which here means falling through to the fail-closed cache rule
+        // instead of returning `Some(vec![])`.
+        assert!(!EXCLUSION_REFRESH_IN_FLIGHT.swap(true, Ordering::AcqRel));
+        {
+            let mut cache = exclusion_cache().lock().unwrap_or_else(|e| e.into_inner());
+            cache.ids = Vec::new();
+            cache.refreshed_at = None;
+        }
+        assert_eq!(
+            storage_excluded_sck_window_ids(&filters, sources).await,
+            None
+        );
+        EXCLUSION_REFRESH_IN_FLIGHT.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn exclusion_sources_mirror_the_tree_walker_config() {
+        let mut config = TreeWalkerConfig::default();
+        config.ignore_incognito_windows = true;
+        config.enhanced_incognito_detection = true;
+        assert_eq!(
+            exclusion_sources(&config),
+            ExclusionSources {
+                ignore_incognito_windows: true,
+                enhanced_incognito_detection: true,
+            }
+        );
+
+        config.ignore_incognito_windows = false;
+        assert!(exclusion_sources(&config).is_empty());
     }
 }
