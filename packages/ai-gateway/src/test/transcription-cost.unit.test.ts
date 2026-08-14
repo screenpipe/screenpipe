@@ -66,6 +66,8 @@ describe('private transcription cost controls', () => {
     MAX_DAILY_FREE_TRANSCRIPTION_COST: '101',
     MAX_DAILY_BASIC_TRANSCRIPTION_COST: '102',
     MAX_DAILY_BUSINESS_TRANSCRIPTION_COST: '103',
+    MAX_GLOBAL_HOURLY_TRANSCRIPTION_COST: '501',
+    MAX_GLOBAL_DAILY_TRANSCRIPTION_COST: '502',
   } as unknown as Env;
 
   it('loads each plan ceiling from private bindings', () => {

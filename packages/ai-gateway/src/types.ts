@@ -267,6 +267,10 @@ export interface Env {
 	MAX_DAILY_FREE_TRANSCRIPTION_COST?: string;
 	MAX_DAILY_BASIC_TRANSCRIPTION_COST?: string;
 	MAX_DAILY_BUSINESS_TRANSCRIPTION_COST?: string;
+	MAX_GLOBAL_HOURLY_TRANSCRIPTION_COST?: string;
+	MAX_GLOBAL_DAILY_TRANSCRIPTION_COST?: string;
+	/** Hard ceiling on a single realtime transcription session, in seconds. */
+	MAX_REALTIME_SESSION_SECONDS?: string;
 	FREE_CHAT_COST_RESERVATION_MICRO_USD?: string;
 	FREE_CHAT_DAILY_BUDGET_MICRO_USD?: string;
 	// Per-minute RPM for free (weight-0) models — a separate, much higher bucket

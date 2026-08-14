@@ -7,6 +7,8 @@ import type { AccountPlan } from '../types';
 import {
 	accountPlanFromTier,
 	getPlanDailyCostCap,
+	getTranscriptionDailyCostCap,
+	getTranscriptionGlobalCostCaps,
 	loadHostedAiTextCostControls,
 	loadHostedTranscriptionCostControls,
 	resolveHostedAiTextCostLimits,
@@ -62,6 +64,29 @@ describe('private hosted AI cost controls', () => {
 		expect(() => loadHostedTranscriptionCostControls(privateCostControls({
 			MAX_DAILY_FREE_TRANSCRIPTION_COST: '104',
 		}))).toThrow('misordered private hosted AI cost control: transcription plan ceilings');
+	});
+
+	it('requires the global transcription breaker, like the text one', () => {
+		expect(() => loadHostedTranscriptionCostControls(privateCostControls({
+			MAX_GLOBAL_DAILY_TRANSCRIPTION_COST: undefined,
+		}))).toThrow('MAX_GLOBAL_DAILY_TRANSCRIPTION_COST');
+		expect(() => loadHostedTranscriptionCostControls(privateCostControls({
+			MAX_GLOBAL_HOURLY_TRANSCRIPTION_COST: undefined,
+		}))).toThrow('MAX_GLOBAL_HOURLY_TRANSCRIPTION_COST');
+	});
+
+	it('rejects a transcription hourly ceiling above its daily ceiling', () => {
+		expect(() => loadHostedTranscriptionCostControls(privateCostControls({
+			MAX_GLOBAL_HOURLY_TRANSCRIPTION_COST: '503',
+		}))).toThrow('inconsistent private hosted AI cost control: global transcription windows');
+	});
+
+	it('exposes plan and global transcription ceilings separately', () => {
+		expect(getTranscriptionDailyCostCap('basic', privateCostControls())).toBe(102);
+		expect(getTranscriptionGlobalCostCaps(privateCostControls())).toEqual({
+			hourly: 501,
+			daily: 502,
+		});
 	});
 
 	it('keeps permissive private controls inside the public credit allowance', () => {

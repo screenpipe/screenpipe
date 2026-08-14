@@ -445,6 +445,15 @@ export const GLOBAL_DAILY_COST_KEY = 'hosted-ai-cost:global-day:v1';
 export const GLOBAL_HOURLY_COST_KEY = 'hosted-ai-cost:global-hour:v1';
 
 /**
+ * Transcription keeps its own global windows rather than sharing the text ones:
+ * Deepgram is ~96% of provider spend, so folding it into the text breaker would
+ * make every text threshold effectively unreachable and hide a transcription
+ * runaway behind a budget that never trips.
+ */
+export const GLOBAL_DAILY_TRANSCRIPTION_COST_KEY = 'hosted-transcription-cost:global-day:v1';
+export const GLOBAL_HOURLY_TRANSCRIPTION_COST_KEY = 'hosted-transcription-cost:global-hour:v1';
+
+/**
  * Maintain the O(1) per-device daily-cost accumulator on the usage table
  * (migration 0006). Replaces the per-request SUM over cost_log that tipped
  * D1 over its CPU limit at 16M+ rows (SCREENPIPE-AI-PROXY-1T/-1X/-1E) —
@@ -515,16 +524,32 @@ async function bumpTranscriptionCostAccumulator(
   deviceId: string,
   cost: number,
 ): Promise<boolean> {
+  const now = new Date();
   const today = utcToday();
+  const hour = utcHour(now);
+  const statement = (key: string, period: string) => env.DB.prepare(
+    `INSERT INTO usage (device_id, last_reset, cost_day, daily_cost_usd)
+     VALUES (?1, ?2, ?2, ?3)
+     ON CONFLICT(device_id) DO UPDATE SET
+       daily_cost_usd = CASE WHEN usage.cost_day = ?2 THEN usage.daily_cost_usd + ?3 ELSE ?3 END,
+       cost_day = ?2,
+       updated_at = CURRENT_TIMESTAMP`
+  ).bind(key, period, cost);
   try {
-    await env.DB.prepare(
-      `INSERT INTO usage (device_id, last_reset, cost_day, daily_cost_usd)
-       VALUES (?1, ?2, ?2, ?3)
-       ON CONFLICT(device_id) DO UPDATE SET
-         daily_cost_usd = CASE WHEN usage.cost_day = ?2 THEN usage.daily_cost_usd + ?3 ELSE ?3 END,
-         cost_day = ?2,
-         updated_at = CURRENT_TIMESTAMP`
-    ).bind(transcriptionCostKey(deviceId), today, cost).run();
+    // Same transactional guarantee as the text accumulators: a transcription
+    // request is either visible in the account window and both global windows,
+    // or in none of them. A partial write would let the global breaker drift
+    // below real spend and silently stop protecting anything.
+    const statements = [
+      statement(transcriptionCostKey(deviceId), today),
+      statement(GLOBAL_DAILY_TRANSCRIPTION_COST_KEY, today),
+      statement(GLOBAL_HOURLY_TRANSCRIPTION_COST_KEY, hour),
+    ];
+    if (typeof env.DB.batch === 'function') {
+      await env.DB.batch(statements);
+    } else {
+      for (const item of statements) await item.run();
+    }
     return true;
   } catch (error) {
     console.warn('hosted transcription cost accumulator update failed:', error);
@@ -551,6 +576,14 @@ export async function getCostAccumulatorOrThrow(
 
 export function getTranscriptionDailyCostOrThrow(env: Env, deviceId: string): Promise<number> {
   return getCostAccumulatorOrThrow(env, transcriptionCostKey(deviceId), utcToday());
+}
+
+export function getGlobalTranscriptionDailyCostOrThrow(env: Env): Promise<number> {
+  return getCostAccumulatorOrThrow(env, GLOBAL_DAILY_TRANSCRIPTION_COST_KEY, utcToday());
+}
+
+export function getGlobalTranscriptionHourlyCostOrThrow(env: Env): Promise<number> {
+  return getCostAccumulatorOrThrow(env, GLOBAL_HOURLY_TRANSCRIPTION_COST_KEY, utcHour());
 }
 
 function nonNegativeNumber(value: number | null | undefined): number {

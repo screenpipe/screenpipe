@@ -26,7 +26,6 @@ import { handleTinfoilAttestation, handleTinfoilProxy, parseTinfoilUsageMetrics 
 import {
 	getCostAccumulatorOrThrow,
 	getDailyUserCost,
-	getTranscriptionDailyCostOrThrow,
 	getNonStreamSettlementCost,
 	getStreamSettlementCost,
 	getSpendSummary,
@@ -40,9 +39,14 @@ import {
 	type CostReservationShape,
 } from './services/cost-tracker';
 import {
-	getTranscriptionDailyCostCap,
 	resolveHostedAiTextCostLimits,
 } from './services/hosted-ai-cost-controls';
+import {
+	DEEPGRAM_FILE_COST_PER_HOUR,
+	readTranscribedSeconds,
+	transcriptionCostIdentity,
+	transcriptionGateResponse,
+} from './services/transcription-budget';
 import { trackResponseUsage } from './utils/stream-usage-tracker';
 import { pruneRuntimeState } from './services/runtime-state-maintenance';
 import { resolveLatencyClass, isBackgroundRequest } from './utils/latency';
@@ -1013,44 +1017,31 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 		}
 
 		if (path === '/v1/listen' && request.method === 'POST') {
-			let dailyCost: number;
-			let maxCost: number;
-			try {
-				dailyCost = await getTranscriptionDailyCostOrThrow(env, authResult.deviceId);
-				maxCost = getTranscriptionDailyCostCap(authResult.accountPlan, env);
-			} catch (error) {
-				console.error('transcription cost control unavailable', error);
-				return addCorsHeaders(createErrorResponse(503, JSON.stringify({
-					error: 'cost_control_unavailable',
-					message: 'Cloud transcription controls are temporarily unavailable. Local transcription still works.',
-				})));
-			}
-			if (dailyCost >= maxCost) {
-				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
-					error: 'daily_cost_limit_exceeded',
-					message: "You've reached today's cloud transcription allowance. Audio will be transcribed locally until tomorrow.",
-				})));
-			}
+			const costIdentity = transcriptionCostIdentity(request, authResult);
+			const gate = await transcriptionGateResponse(env, request, authResult, costIdentity);
+			if (gate) return gate;
 
-			// Estimate cost from audio size: ~30s chunks at $0.26/hr = $0.0022/chunk
-			// More precise: estimate duration from Content-Length (MP3 at 64kbps = 8KB/s)
+			// Content-Length is a fallback, not the bill. It is absent on chunked
+			// uploads (which previously billed a flat 30s no matter how long the
+			// audio was) and it describes compressed bytes, not duration. Deepgram
+			// reports the real duration in metadata, so prefer that below.
 			const contentLength = parseInt(request.headers.get('content-length') || '0');
-			const estimatedSeconds = contentLength > 0 ? contentLength / 8000 : 30;
-			const estimatedCost = (estimatedSeconds / 3600) * 0.26;
+			const fallbackSeconds = contentLength > 0 ? contentLength / 8000 : 30;
 
 			const response = await handleFileTranscription(request, env, ctx, authResult.deviceId);
 
 			// Log cost after successful transcription
 			if (response.ok) {
+				const billedSeconds = await readTranscribedSeconds(response, fallbackSeconds);
 				ctx.waitUntil(logCost(env, {
-					device_id: authResult.deviceId,
+					device_id: costIdentity,
 					user_id: authResult.userId,
 					tier: authResult.tier,
 					provider: 'deepgram',
 					model: 'nova-3',
-					input_tokens: Math.round(estimatedSeconds),
+					input_tokens: Math.round(billedSeconds),
 					output_tokens: null,
-					estimated_cost_usd: estimatedCost,
+					estimated_cost_usd: (billedSeconds / 3600) * DEEPGRAM_FILE_COST_PER_HOUR,
 					endpoint: '/v1/listen',
 					stream: false,
 					budgeted: false,
@@ -1062,25 +1053,10 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 		}
 
 		if (path === '/v1/realtime' && request.method === 'GET') {
-			try {
-				const [dailyCost, maxCost] = await Promise.all([
-					getTranscriptionDailyCostOrThrow(env, authResult.deviceId),
-					Promise.resolve(getTranscriptionDailyCostCap(authResult.accountPlan, env)),
-				]);
-				if (dailyCost >= maxCost) {
-					return addCorsHeaders(createErrorResponse(429, JSON.stringify({
-						error: 'daily_cost_limit_exceeded',
-						message: "You've reached today's cloud transcription allowance. Use local transcription or try again tomorrow.",
-					})));
-				}
-			} catch (error) {
-				console.error('realtime transcription cost control unavailable', error);
-				return addCorsHeaders(createErrorResponse(503, JSON.stringify({
-					error: 'cost_control_unavailable',
-					message: 'Cloud transcription controls are temporarily unavailable. Local transcription still works.',
-				})));
-			}
-			return await handleRealtimeTranscriptionUpgrade(request, env, ctx, authResult);
+			const costIdentity = transcriptionCostIdentity(request, authResult);
+			const gate = await transcriptionGateResponse(env, request, authResult, costIdentity);
+			if (gate) return gate;
+			return await handleRealtimeTranscriptionUpgrade(request, env, ctx, authResult, costIdentity);
 		}
 
 		if (path === '/v1/models' && request.method === 'GET') {
@@ -1115,7 +1091,34 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 		}
 
 		if (path === '/v1/voice/transcribe' && request.method === 'POST') {
-			return await handleVoiceTranscription(request, env);
+			// This route reached Deepgram with no cap check and no cost log, so its
+			// spend was both unbounded and invisible in the cost tables. It shares
+			// the transcription budget with /v1/listen.
+			const costIdentity = transcriptionCostIdentity(request, authResult);
+			const gate = await transcriptionGateResponse(env, request, authResult, costIdentity);
+			if (gate) return gate;
+
+			const contentLength = parseInt(request.headers.get('content-length') || '0');
+			const fallbackSeconds = contentLength > 0 ? contentLength / 8000 : 30;
+			const response = await handleVoiceTranscription(request, env);
+			if (response.ok) {
+				const billedSeconds = await readTranscribedSeconds(response, fallbackSeconds);
+				ctx.waitUntil(logCost(env, {
+					device_id: costIdentity,
+					user_id: authResult.userId,
+					tier: authResult.tier,
+					provider: 'deepgram',
+					model: 'nova-3',
+					input_tokens: Math.round(billedSeconds),
+					output_tokens: null,
+					estimated_cost_usd: (billedSeconds / 3600) * DEEPGRAM_FILE_COST_PER_HOUR,
+					endpoint: '/v1/voice/transcribe',
+					stream: false,
+					budgeted: false,
+					transcription_budgeted: true,
+				}));
+			}
+			return response;
 		}
 
 		if (path === '/v1/voice/query' && request.method === 'POST') {
