@@ -12,8 +12,15 @@ const DEFAULT_DEEPGRAM_MODEL = 'nova-3';
 const DEFAULT_DEEPGRAM_LIVE_COST_PER_HOUR = 0.26;
 /** How often an open session settles the audio it has consumed so far. */
 export const REALTIME_METER_INTERVAL_MS = 60_000;
-/** Ceiling on a single session, so an abandoned socket cannot bill forever. */
-export const DEFAULT_MAX_REALTIME_SESSION_SECONDS = 4 * 60 * 60;
+/**
+ * Ceiling on a single session, so an abandoned socket cannot bill forever.
+ *
+ * This is a runaway guard, not a product limit: the real protection is the
+ * budget re-check on every tick. Observed sessions average ~20 minutes, so 12h
+ * sits far outside anything a person streams in one continuous connection and
+ * will not interrupt a long recording.
+ */
+export const DEFAULT_MAX_REALTIME_SESSION_SECONDS = 12 * 60 * 60;
 /** Close code used when the session is stopped for spend, not for an error. */
 const REALTIME_BUDGET_CLOSE_CODE = 1013;
 const LEGACY_OPENAI_SAMPLE_RATE = '24000';
