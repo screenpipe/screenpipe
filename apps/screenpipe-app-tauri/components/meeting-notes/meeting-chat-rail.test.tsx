@@ -414,6 +414,10 @@ describe("thread", () => {
     const region = scroll.parentElement as HTMLElement;
     expect(region.className).toContain("flex-col");
     expect(region.style.height).not.toBe("");
+    // The region is sized directly. Transitioning `height` between 0 and a
+    // pixel value left it with an inline 152px and a computed 0px in the
+    // packaged WebKit shell, so the content spilled out of a zero-height box.
+    expect(region.className).not.toMatch(/transition-\[height\]/);
   });
 
   it("case 98: the resize handle is keyboard operable", () => {

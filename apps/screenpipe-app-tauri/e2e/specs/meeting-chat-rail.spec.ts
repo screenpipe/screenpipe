@@ -233,9 +233,98 @@ describe("meeting chat rail", function () {
       { timeout: t(8_000), timeoutMsg: "peek did not offer three suggestions" },
     );
     const peekBox = await box('[data-testid="meeting-chat-rail"]');
-    expect(peekBox!.height).toBeGreaterThan(restBox!.height);
     // Peek still leaves the document visible.
     expect(peekBox!.top).toBeGreaterThan(tabsBox!.bottom);
+
+    // Assert what a person would actually see, not something adjacent to it.
+    // `height > rest` was satisfied by the scope line alone, and both
+    // waitForExist and waitForDisplayed passed while the suggestions occupied
+    // no pixels — this feature has already shipped invisible twice.
+    const seen = (await browser.execute(() => {
+      const list = document.querySelector(
+        '[data-testid="meeting-chat-suggestions"]',
+      ) as HTMLElement | null;
+      if (!list) return { rows: 0 };
+      const rows = Array.from(list.querySelectorAll("button")).map((row) => {
+        const r = row.getBoundingClientRect();
+        const style = window.getComputedStyle(row);
+        return {
+          text: (row.textContent ?? "").trim(),
+          width: Math.round(r.width),
+          height: Math.round(r.height),
+          opacity: Number(style.opacity),
+          visibility: style.visibility,
+          inViewport: r.top >= 0 && r.bottom <= window.innerHeight,
+        };
+      });
+      const lr = list.getBoundingClientRect();
+      return { rows: rows.length, listHeight: Math.round(lr.height), items: rows };
+    })) as {
+      rows: number;
+      listHeight?: number;
+      items?: Array<{
+        text: string;
+        width: number;
+        height: number;
+        opacity: number;
+        visibility: string;
+        inViewport: boolean;
+      }>;
+    };
+
+    const frame = (await browser.execute(() => {
+      const q = (sel: string) => {
+        const el = document.querySelector(sel) as HTMLElement | null;
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { top: Math.round(r.top), bottom: Math.round(r.bottom), height: Math.round(r.height) };
+      };
+      return {
+        innerHeight: window.innerHeight,
+        main: q("main"),
+        footer: q("footer"),
+        rail: q('[data-testid="meeting-chat-rail"]'),
+        scroll: q('[data-testid="meeting-chat-scroll"]'),
+        list: q('[data-testid="meeting-chat-suggestions"]'),
+        open: (() => {
+          // The open region has no testid; reach it through the scroll child.
+          const sc = document.querySelector(
+            '[data-testid="meeting-chat-scroll"]',
+          ) as HTMLElement | null;
+          const el = sc?.parentElement as HTMLElement | null;
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          const cs = window.getComputedStyle(el);
+          return {
+            height: Math.round(r.height),
+            styleHeight: el.style.height,
+            computedHeight: cs.height,
+            display: cs.display,
+            flexDirection: cs.flexDirection,
+            overflow: cs.overflow,
+            className: el.className,
+          };
+        })(),
+      };
+    })) as Record<string, unknown>;
+    console.log("[rail geometry]", JSON.stringify(frame));
+
+    if (seen.rows !== 3 || !seen.items) {
+      throw new Error(`peek rendered ${seen.rows} suggestion rows: ${JSON.stringify(seen)}`);
+    }
+    for (const item of seen.items) {
+      if (
+        item.height <= 0 ||
+        item.width <= 0 ||
+        item.opacity < 0.9 ||
+        item.visibility !== "visible" ||
+        !item.inViewport
+      ) {
+        throw new Error(
+          `suggestion not actually visible: ${JSON.stringify(item)} — frame ${JSON.stringify(frame)}`,
+        );
+      }
+    }
     await shot("02-peek");
 
     // ── typing hides the proposals ──────────────────────────────────────

@@ -75,8 +75,15 @@ export interface MeetingChatRailProps {
   onThreadHeightChange: (height: number) => void;
 }
 
-const HEIGHT_TRANSITION =
-  "transition-[height] duration-150 ease-out motion-reduce:transition-none";
+// The open region used to transition `height` between 0 and a pixel value.
+// In the packaged WebKit shell that left the element with an inline
+// `height: 152px` and a computed height of `0px` — the suggestions rendered at
+// full opacity and spilled out of a zero-height parent, past the bottom of the
+// window. Animating an intrinsic box between 0 and a fixed height is the
+// fragile part, so the region is now sized directly and the disclosure reads
+// as an instant reveal. Same trade as the suggestion fade: a flourish that can
+// silently zero out the content it decorates does not earn its place.
+const OPEN_REGION_CLASS = "flex flex-col overflow-hidden";
 
 export function MeetingChatRail({
   conditions,
@@ -260,10 +267,7 @@ export function MeetingChatRail({
           column so the resize handle takes its 12px out of the animated
           height rather than pushing the scroll region past the bottom. */}
       <div
-        className={cn(
-          "flex flex-col overflow-hidden",
-          !dragHeight && HEIGHT_TRANSITION,
-        )}
+        className={OPEN_REGION_CLASS}
         style={{ height: phase === "rest" ? 0 : openHeight }}
         aria-hidden={phase === "rest"}
       >
