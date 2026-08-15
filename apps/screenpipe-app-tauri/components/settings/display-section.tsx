@@ -60,6 +60,9 @@ export function DisplaySection() {
       updateSettings(newSettings);
     }
   };
+  const shouldShowShortcutReminder =
+    !settings?.allowHidingShortcutOverlay ||
+    settings.showShortcutOverlay !== false;
 
   const themeOptions = [
     { value: "system" as const, label: "System", icon: Monitor },
@@ -190,7 +193,7 @@ export function DisplaySection() {
                     try {
                       if (disabled) {
                         await commands.hideShortcutReminder();
-                      } else {
+                      } else if (shouldShowShortcutReminder) {
                         await commands.showShortcutReminder(settings.showScreenpipeShortcut);
                       }
                     } catch {}
@@ -581,7 +584,7 @@ export function DisplaySection() {
                   id="shortcut-overlay"
                   checked={settings?.showShortcutOverlay ?? true}
                   onCheckedChange={async (checked) => {
-                    handleSettingsChange({ showShortcutOverlay: checked });
+                    await updateSettings({ showShortcutOverlay: checked });
                     try {
                       if (checked) {
                         await commands.showShortcutReminder(settings.showScreenpipeShortcut);
@@ -617,9 +620,10 @@ export function DisplaySection() {
                     <button
                       key={option.value}
                       onClick={async () => {
-                        handleSettingsChange({ shortcutOverlaySize: option.value });
+                        await updateSettings({ shortcutOverlaySize: option.value });
                         try {
                           await commands.hideShortcutReminder();
+                          if (!shouldShowShortcutReminder) return;
                           // Wait for store.bin to flush to disk before re-showing
                           await new Promise(r => setTimeout(r, 500));
                           await commands.showShortcutReminder(settings.showScreenpipeShortcut);
