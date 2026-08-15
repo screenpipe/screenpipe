@@ -209,3 +209,29 @@ Deliberately cut, with reasons:
 - **Attachments and `@`-mentions.** The scope is the meeting; that is the point.
 - **"Insert into note".** Neither reference app shipped it. A later PR gives the agent one write tool plus a receipt and an undo.
 - **Rounded pills and shadows.** The meeting view is `rounded-none` and flat.
+
+---
+
+## Measured footprint
+
+Taken from the E2E geometry probe in a 860px-tall window, so these are real
+numbers rather than the intended ones:
+
+| state | footer height | share of window |
+| --- | --- | --- |
+| rest | 125px | 14.5% |
+| peek | 297px | 34.5% |
+
+Rest is the cost of the feature and it is defensible: one status row, one ask
+line. Peek is not obviously defensible. Focusing the composer takes 172px away
+from the document to show three lines of text, and the resting chip already
+answers "what can i ask?" in 0px of extra height.
+
+Peek buys one thing rest does not: it says "this is a conversation, not a search
+box" before anything is sent. That is a real job, but three stacked suggestions
+is an expensive way to do it. The cheaper shape is Granola's: suggestions as
+chips *on* the resting line, sized to the width available, so the ladder is rest
+→ thread with no middle rung.
+
+This is recorded rather than acted on because cutting a rung changes what the
+feature is, not how it is built.
