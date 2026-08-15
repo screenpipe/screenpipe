@@ -191,6 +191,8 @@ describe("meeting chat panel", function () {
     // stopped is finalizing and says so. What matters is that chat neither
     // adds one nor removes one, so parity is the assertion, not absence.
     const footerBefore = await $("footer").isExisting();
+    const tabsBefore = await box('[role="tablist"]');
+    expect(tabsBefore).not.toBeNull();
 
     // ── open ────────────────────────────────────────────────────────────
     await toggle.click();
@@ -214,31 +216,32 @@ describe("meeting chat panel", function () {
     await frame(3);
     await shot("02-open");
 
-    // 1280 is a dock, so the panel takes a column rather than covering one.
-    expect(await panel.getAttribute("data-presentation")).toBe("dock");
-
     const after = await box("main");
     const panelBox = await box('[data-testid="meeting-chat-panel"]');
     expect(after).not.toBeNull();
     expect(panelBox).not.toBeNull();
 
-    // The claim, measured. The rail cost the document 172px of height on this
-    // exact window; the panel costs it none.
+    // The claim, measured, and the whole reason this is a panel: opening chat
+    // moves nothing. The rail took 172px of height on this exact window; the
+    // docked version that replaced it took width and slid the centred reading
+    // column leftward. Every edge of the document is unchanged.
     expect(Math.abs(after!.height - before!.height)).toBeLessThan(2);
-    expect(after!.top).toBe(before!.top);
+    expect(Math.abs(after!.width - before!.width)).toBeLessThan(2);
+    expect(Math.abs(after!.top - before!.top)).toBeLessThan(2);
+    expect(Math.abs(after!.left - before!.left)).toBeLessThan(2);
+    expect(Math.abs(after!.right - before!.right)).toBeLessThan(2);
+
+    // The reading column itself, not just its container.
+    const columnAfter = await box('[role="tablist"]');
+    expect(columnAfter).not.toBeNull();
+    expect(Math.abs(columnAfter!.left - tabsBefore!.left)).toBeLessThan(2);
 
     // Chat did not invent a footer, and did not take the meeting's away.
     expect(await $("footer").isExisting()).toBe(footerBefore);
 
-    // And it really is beside, not above: the panel starts where the document
-    // column ends.
-    expect(panelBox!.left).toBeGreaterThanOrEqual(after!.right - 2);
+    // It floats above the right margin rather than claiming a column.
+    expect(panelBox!.right).toBeGreaterThan(after!.right - 2);
     expect(panelBox!.width).toBeGreaterThan(280);
-
-    // The tab rule is still fully visible; a docked panel must not clip it.
-    const tabs = await box('[role="tablist"]');
-    expect(tabs).not.toBeNull();
-    expect(tabs!.bottom).toBeLessThanOrEqual(panelBox!.top + 1);
 
     // ── suggestions are painted, not merely present ─────────────────────
     // Three earlier assertions passed against suggestions nobody could see:
@@ -325,7 +328,7 @@ describe("meeting chat panel", function () {
     expect(await $("footer").isExisting()).toBe(footerBefore);
   });
 
-  it("overlays instead of squeezing a narrow window", async () => {
+  it("keeps the reading column still in a narrow window too", async () => {
     const ratio = (await browser.execute(
       () => window.devicePixelRatio || 1,
     )) as number;
@@ -335,21 +338,21 @@ describe("meeting chat panel", function () {
     );
     await browser.pause(400);
 
+    const tabsBefore = await box('[role="tablist"]');
     const toggle = await waitForTestId("meeting-chat-toggle", 15_000);
     await toggle.click();
-    const panel = await waitForTestId("meeting-chat-panel", 15_000);
+    await waitForTestId("meeting-chat-panel", 15_000);
     await browser.pause(400);
     await frame(3);
     await shot("05-narrow-overlay");
 
-    expect(await panel.getAttribute("data-presentation")).toBe("overlay");
-
-    // Overlaying is the point: the reading column keeps its width and the
-    // panel sits on top of it rather than crushing it below readability.
+    // A narrow window is where a docked panel would have hurt most, squeezing
+    // the column below readability. Floating leaves it exactly where it was.
     const panelBox = await box('[data-testid="meeting-chat-panel"]');
     const mainBox = await box("main");
+    const tabsAfter = await box('[role="tablist"]');
     expect(panelBox!.width).toBeGreaterThanOrEqual(300);
-    expect(panelBox!.right).toBeLessThanOrEqual(mainBox!.right + 2);
+    expect(Math.abs(tabsAfter!.left - tabsBefore!.left)).toBeLessThan(2);
     expect(panelBox!.left).toBeLessThan(mainBox!.right);
 
     await $('[data-testid="meeting-chat-close"]').click();

@@ -10,20 +10,20 @@
  * between meeting states — not rendering. See docs/MEETING_CHAT_RAIL_SPEC.md;
  * the numbered comments below map to the edge cases in that file.
  *
- * The panel is on the right and sized by width, not height. An earlier draft
- * docked a rail along the bottom and spent the axis the document needs: at rest
- * it took 14.5% of the window and 34.5% once focused, on notes and summary,
- * which have no footer at all today. The reading column is width-capped, so the
- * horizontal axis has slack the vertical one does not. Granola reaches the same
- * conclusion: its in-note chat is a right `aside`, 320px overlaying a narrow
- * window and 384px docked in a wide one, never touching the note's height.
+ * The panel is on the right, sized by width, and always floats above the
+ * document rather than displacing it. Two earlier drafts got this wrong in
+ * different directions. The first docked a rail along the bottom and spent the
+ * axis the document needs. The second docked this panel in a column, which
+ * shrank the shell and slid the centred reading column leftward every time
+ * chat opened — a jump of the thing you are reading, caused by opening
+ * something else.
+ *
+ * Floating costs the right edge of a long line at narrow widths. Moving the
+ * document costs every line, every time. The panel covers; it never pushes.
  */
 
 import type { MeetingSummaryLifecycle } from "./meeting-summary-lifecycle";
 import { meetingSummaryFailure } from "./meeting-summary-lifecycle";
-
-/** Whether the panel takes layout space or floats above the document. */
-export type MeetingChatPresentation = "overlay" | "dock";
 
 /** Narrower than this the panel cannot hold a readable answer. */
 export const PANEL_MIN_WIDTH = 300;
@@ -31,10 +31,8 @@ export const PANEL_MIN_WIDTH = 300;
 export const PANEL_DEFAULT_WIDTH = 380;
 /** Wider than this the panel stops being a margin and starts being the page. */
 export const PANEL_MAX_WIDTH = 560;
-/** Always leave at least this much document beside a docked panel (case 49). */
+/** Always leave at least this much document uncovered (case 49). */
 export const PANEL_SHELL_RESERVE = 420;
-/** Below this viewport width the panel overlays instead of docking. */
-export const PANEL_DOCK_MIN_VIEWPORT = 1024;
 /** Below this a drag is a close gesture, not a resize (case 53). */
 export const PANEL_CLOSE_WIDTH = 220;
 /** A suggestion too long to read is not a suggestion (case 46). */
@@ -229,17 +227,6 @@ export function clampPanelWidth(
     return Math.min(PANEL_MIN_WIDTH, ceiling);
   }
   return Math.min(Math.max(desired, PANEL_MIN_WIDTH), ceiling);
-}
-
-/**
- * Case 49: a narrow window has no room to give the panel its own column, so it
- * overlays the document instead of pushing it. This is the one place the panel
- * covers content, and it is the alternative to being unusable.
- */
-export function panelPresentation(
-  viewportWidth: number,
-): MeetingChatPresentation {
-  return viewportWidth >= PANEL_DOCK_MIN_VIEWPORT ? "dock" : "overlay";
 }
 
 /** Case 53: dragging past the minimum is a close gesture. */

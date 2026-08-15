@@ -6,17 +6,20 @@
 /**
  * The meeting chat panel.
  *
- * A right-hand `aside` beside the note, transcript or summary — never a strip
- * beneath them. It is not a fourth tab, because chat is a lens over the other
- * three rather than a peer of them, and a tab would hide the thing being asked
- * about.
+ * A right-hand `aside` floating over the note, transcript or summary — never a
+ * strip beneath them, and never a column that pushes them aside. It is not a
+ * fourth tab either, because chat is a lens over the other three rather than a
+ * peer of them, and a tab would hide the thing being asked about.
  *
- * It replaced a bottom rail. The rail was wrong about which axis it could
- * afford: the meeting view is a width-capped reading column with slack in the
- * margins and none in its height, and the rail spent height — 14.5% of the
- * window at rest, 34.5% once focused, on all three tabs including the two that
- * have no footer at all today. The panel spends margin instead, and renders
- * nothing until it is opened.
+ * Two earlier shapes were wrong in opposite directions. A bottom rail spent
+ * height, which is the axis a width-capped reading column has none of: 14.5% of
+ * the window at rest and 34.5% focused, on all three tabs including the two
+ * with no footer at all. A docked column then spent layout, which slid the
+ * centred document leftward every time chat opened — the thing you are reading
+ * jumping sideways because you asked about it.
+ *
+ * So it floats. That costs the right edge of a long line; moving the document
+ * costs every line, every time. It also renders nothing until it is opened.
  *
  * Behaviour is specified in docs/MEETING_CHAT_RAIL_SPEC.md; the numbered
  * comments here point at cases in that file. Everything decidable without React
@@ -38,7 +41,6 @@ import { splitCitations, type CitationWindow } from "./meeting-chat-citations";
 import {
   canSubmitTurn,
   clampPanelWidth,
-  panelPresentation,
   resolveMeetingChatAvailability,
   resolveMeetingChatSuggestions,
   shouldCloseOnDrag,
@@ -70,7 +72,7 @@ export interface MeetingChatPanelProps {
   /** Meeting window, for resolving clock citations. */
   citationWindow: CitationWindow | null;
   onCitationClick: (atMs: number) => void;
-  /** Width of the meeting shell, for clamping and overlay/dock. */
+  /** Width of the meeting shell, for clamping. */
   viewportWidth: number;
   /** Persisted width, if the user has resized before. */
   storedWidth: number | null;
@@ -99,7 +101,6 @@ export function MeetingChatPanel({
 
   const hasThread = turns.length > 0;
   const availability = resolveMeetingChatAvailability(conditions);
-  const presentation = panelPresentation(viewportWidth);
   const width = clampPanelWidth(dragWidth ?? storedWidth ?? 380, viewportWidth);
 
   const suggestions = useMemo(
@@ -197,18 +198,15 @@ export function MeetingChatPanel({
   return (
     <aside
       data-testid="meeting-chat-panel"
-      data-presentation={presentation}
       aria-label="ask about this meeting"
       style={{ width }}
-      className={cn(
-        "z-30 flex min-h-0 flex-col border-l border-border bg-background",
-        // Case 49: a narrow window has no column to spare, so the panel covers
-        // the document rather than squeezing it into unreadability. This is
-        // the only state where it hides anything.
-        presentation === "overlay"
-          ? "absolute inset-y-0 right-0"
-          : "relative shrink-0",
-      )}
+      // Absolute, always. Docking this in a column shrank the shell and slid
+      // the centred reading column leftward on open, so the transcript jumped
+      // sideways because you asked a question about it. The panel is an
+      // elevated surface over the document, which is what earns the shadow the
+      // rest of the meeting view does without (DESIGN.md: flat by default,
+      // subtle lift for floating surfaces, corners stay sharp).
+      className="absolute inset-y-0 right-0 z-30 flex min-h-0 flex-col border-l border-border bg-background shadow-lg shadow-black/5"
     >
       <div
         role="separator"

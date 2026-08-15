@@ -6,11 +6,9 @@ import { describe, expect, it } from "vitest";
 import {
   canSubmitTurn,
   clampPanelWidth,
-  panelPresentation,
   resolveMeetingChatAvailability,
   resolveMeetingChatSuggestions,
   shouldCloseOnDrag,
-  PANEL_DOCK_MIN_VIEWPORT,
   PANEL_MAX_WIDTH,
   PANEL_MIN_WIDTH,
   PANEL_SHELL_RESERVE,
@@ -271,11 +269,6 @@ describe("geometry", () => {
     expect(clampPanelWidth(Number.POSITIVE_INFINITY, 1600)).toBe(
       PANEL_MIN_WIDTH,
     );
-  });
-
-  it("case 49: a narrow window overlays rather than squeezing the document", () => {
-    expect(panelPresentation(PANEL_DOCK_MIN_VIEWPORT - 1)).toBe("overlay");
-    expect(panelPresentation(PANEL_DOCK_MIN_VIEWPORT)).toBe("dock");
   });
 
   it("case 53: dragging past the minimum is a close gesture", () => {

@@ -5,10 +5,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MeetingChatPanel, type MeetingChatTurn } from "./meeting-chat-panel";
-import {
-  PANEL_DOCK_MIN_VIEWPORT,
-  type MeetingChatConditions,
-} from "./meeting-chat-state";
+import { type MeetingChatConditions } from "./meeting-chat-state";
 import type { MeetingSummaryExecution } from "./meeting-summary-lifecycle";
 
 const execution: MeetingSummaryExecution = { id: 1, status: "running" };
@@ -71,18 +68,14 @@ describe("meeting chat panel", () => {
     expect(panel.style.width).not.toBe("");
   });
 
-  it("case 49: docks in a wide shell and overlays a narrow one", () => {
-    const wide = setup({ viewportWidth: PANEL_DOCK_MIN_VIEWPORT });
-    expect(screen.getByTestId("meeting-chat-panel")).toHaveAttribute(
-      "data-presentation",
-      "dock",
-    );
-    wide.unmount();
-    setup({ viewportWidth: PANEL_DOCK_MIN_VIEWPORT - 1 });
-    expect(screen.getByTestId("meeting-chat-panel")).toHaveAttribute(
-      "data-presentation",
-      "overlay",
-    );
+  it("floats at every width, so the document never moves under it", () => {
+    for (const viewportWidth of [760, 1024, 1280, 1920]) {
+      const view = setup({ viewportWidth });
+      const panel = screen.getByTestId("meeting-chat-panel");
+      expect(panel.className).toContain("absolute");
+      expect(panel.className).not.toContain("relative");
+      view.unmount();
+    }
   });
 
   it("case 30: opening puts the cursor in the composer", () => {
