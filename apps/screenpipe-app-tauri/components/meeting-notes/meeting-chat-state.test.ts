@@ -69,11 +69,19 @@ describe("availability precedence", () => {
     }
   });
 
-  it("case 2: blocks while finalizing", () => {
-    const a = resolveMeetingChatAvailability(
-      base({ summaryLifecycle: { kind: "finalizing" } }),
-    );
-    expect(a.reason).toBe("finalizing");
+  it("cases 2/20: a transcript that is still arriving does not block", () => {
+    // Finalizing and stopping append the tail; they do not replace what is
+    // already there. Blocking on them also flickered in the real app as the
+    // summary status polled in and out of finalizing.
+    expect(
+      resolveMeetingChatAvailability(
+        base({ summaryLifecycle: { kind: "finalizing" } }),
+      ).enabled,
+    ).toBe(true);
+    expect(
+      resolveMeetingChatAvailability(base({ isStopping: true, isLive: true }))
+        .enabled,
+    ).toBe(true);
   });
 
   it("case 9: retranscription refresh outranks everything", () => {
@@ -86,13 +94,6 @@ describe("availability precedence", () => {
       }),
     );
     expect(a.reason).toBe("refreshing");
-  });
-
-  it("case 20: blocks while stopping", () => {
-    expect(
-      resolveMeetingChatAvailability(base({ isStopping: true, isLive: true }))
-        .reason,
-    ).toBe("stopping");
   });
 
   it("case 11: blocks only when there is no evidence at all", () => {
@@ -158,6 +159,26 @@ describe("availability precedence", () => {
       }),
     );
     expect(a.reason).toBe("refreshing");
+  });
+
+  it("only a replaced transcript disables the composer", () => {
+    // The guard against re-introducing flicker: every state that merely means
+    // "more transcript is coming" must stay askable.
+    const stillArriving: Array<Partial<MeetingChatConditions>> = [
+      { isLive: true },
+      { isStopping: true },
+      { summaryLifecycle: { kind: "finalizing" } },
+      { summaryLifecycle: { kind: "queued", execution } },
+      { summaryLifecycle: { kind: "running", execution } },
+    ];
+    for (const state of stillArriving) {
+      expect(resolveMeetingChatAvailability(base(state)).enabled).toBe(true);
+    }
+    expect(
+      resolveMeetingChatAvailability(
+        base({ refreshingAfterRetranscription: true }),
+      ).enabled,
+    ).toBe(false);
   });
 });
 

@@ -12,7 +12,7 @@
  * - focus peeks open with suggestions, and Escape returns to rest
  * - the chip and suggestions are gone once the user types
  * - the rail never covers the tab rule or overflows the shell
- * - a summarizing meeting disables the composer (status outranks ask)
+ * - the composer names why it is unavailable rather than going quiet
  *
  * Captures a screenshot per state for the PR body.
  *
@@ -62,6 +62,11 @@ async function request<T>(
 }
 
 async function shot(name: string) {
+  // The rail animates height over 150ms and fades suggestions in after a
+  // deliberate 240ms delay. Capturing immediately after a state change catches
+  // a frame where the region exists but is still transparent, which makes the
+  // screenshot a misleading record of the state it claims to show.
+  await browser.pause(600);
   await browser.saveScreenshot(`${SHOTS}/${name}.png`).catch(() => undefined);
 }
 
@@ -100,8 +105,11 @@ describe("meeting chat rail", function () {
       body: JSON.stringify({ app: "manual", title: TITLE }),
     });
     meetingId = meeting.id;
-    // Stop it so the meeting settles: the rail's resting ask line is the
-    // settled state, and a live meeting keeps the status row up.
+    // Settle the meeting before touching the UI. A live manual meeting ends on
+    // its own once no audio arrives, and that live -> ended -> finalizing flip
+    // landed in the middle of the ladder assertions: the composer correctly
+    // disables while finalizing, which empties the suggestions, so every later
+    // step raced the meeting's own lifecycle rather than testing the rail.
     await request(config, "/meetings/stop", {
       method: "POST",
       body: JSON.stringify({ id: meetingId }),
@@ -149,8 +157,20 @@ describe("meeting chat rail", function () {
 
     const input = await $('[data-testid="meeting-chat-input"]');
     await input.waitForExist({ timeout: t(10_000) });
-    expect(await input.getAttribute("placeholder")).toBe(
-      "ask about this meeting",
+    // A live meeting keeps its status row and stays askable: status reports,
+    // ask asks. The seeded note is the evidence that makes it askable even
+    // before any audio is captured.
+    // Finalizing legitimately blocks, so wait it out rather than asserting
+    // through it. The seeded note is what makes the settled meeting askable
+    // even though this isolated run captures no audio.
+    await browser.waitUntil(
+      async () =>
+        (await input.getAttribute("placeholder")) === "ask about this meeting",
+      {
+        timeout: t(90_000),
+        interval: 1_000,
+        timeoutMsg: `composer never became askable (placeholder: ${await input.getAttribute("placeholder")})`,
+      },
     );
     // Rest carries no send button — the chip is the only affordance.
     expect(await $('[data-testid="meeting-chat-send"]').isExisting()).toBe(
@@ -166,20 +186,52 @@ describe("meeting chat rail", function () {
     expect(tabsBox).not.toBeNull();
     expect(restBox!.top).toBeGreaterThan(tabsBox!.bottom);
 
-    // Same reading column as the note: the rail is part of the document.
-    const notesPanel = await box("#meeting-panel-notes");
-    if (notesPanel) {
-      expect(Math.abs(restBox!.left - notesPanel.left)).toBeLessThan(40);
-    }
+    // Same reading column as the rest of the meeting: the rail is part of the
+    // document, not chrome bolted underneath it. Compared against the tab rule
+    // because it shares MEETING_SHELL_CLASS and is always visible — the notes
+    // panel is `hidden` on other tabs and reports a zero rect.
+    expect(tabsBox!.left).toBeGreaterThan(0);
+    expect(Math.abs(restBox!.left - tabsBox!.left)).toBeLessThan(40);
 
     // ── peek ────────────────────────────────────────────────────────────
     await input.click();
     await browser.waitUntil(
       async () => (await railEl.getAttribute("data-phase")) === "peek",
-      { timeout: t(8_000), timeoutMsg: "rail did not peek on focus" },
+      {
+        timeout: t(8_000),
+        timeoutMsg: await (async () => {
+          // Report what the rail actually looked like rather than just that it
+          // was not peek: phase, whether the composer was still enabled, and
+          // where focus ended up.
+          const state = (await browser.execute(() => {
+            const rail = document.querySelector(
+              '[data-testid="meeting-chat-rail"]',
+            ) as HTMLElement | null;
+            const box = document.querySelector(
+              '[data-testid="meeting-chat-input"]',
+            ) as HTMLTextAreaElement | null;
+            const active = document.activeElement as HTMLElement | null;
+            return {
+              phase: rail?.dataset.phase ?? "none",
+              disabled: box?.disabled ?? null,
+              placeholder: box?.placeholder ?? null,
+              activeTag: active?.tagName ?? "none",
+              activeTestId: active?.getAttribute("data-testid") ?? "none",
+            };
+          })) as Record<string, unknown>;
+          return `rail did not peek on focus — ${JSON.stringify(state)}`;
+        })(),
+      },
     );
     const suggestions = await $('[data-testid="meeting-chat-suggestions"]');
     await suggestions.waitForExist({ timeout: t(8_000) });
+    // Presence is not disclosure: the row is in the DOM before its delayed
+    // fade begins, so assert it actually became visible.
+    await suggestions.waitForDisplayed({ timeout: t(8_000) });
+    await browser.waitUntil(
+      async () => (await suggestions.getProperty("childElementCount")) === 3,
+      { timeout: t(8_000), timeoutMsg: "peek did not offer three suggestions" },
+    );
     const peekBox = await box('[data-testid="meeting-chat-rail"]');
     expect(peekBox!.height).toBeGreaterThan(restBox!.height);
     // Peek still leaves the document visible.
@@ -207,12 +259,15 @@ describe("meeting chat rail", function () {
     await shot("04-collapsed-draft-kept");
   });
 
-  it("suppresses the ask line while a summary is running", async () => {
-    // Drive the real lifecycle: a queued summary run must disable the composer.
-    await request(config, `/meetings/${meetingId}`, {
-      method: "PUT",
-      body: JSON.stringify({ title: TITLE }),
-    });
+  it("names why it is unavailable rather than going quiet", async () => {
+    // Stopping drives the real lifecycle into `finalizing`, which is one of the
+    // two states that legitimately block: the transcript is still being
+    // written. A summary *run* no longer blocks — it reads the transcript and
+    // writes the note, so the evidence a turn would use is stable.
+    await request(config, "/meetings/stop", {
+      method: "POST",
+      body: JSON.stringify({ id: meetingId }),
+    }).catch(() => undefined);
     const input = await $('[data-testid="meeting-chat-input"]');
     await input.waitForExist({ timeout: t(10_000) });
 
@@ -222,7 +277,6 @@ describe("meeting chat rail", function () {
     expect(
       [
         "ask about this meeting",
-        "finalizing…",
         "refreshing…",
         "nothing recorded yet",
         "ai limit reached",

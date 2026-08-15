@@ -30,6 +30,7 @@ const context = {
   transcript: "Dana: our claims team is nine people.",
   note: "",
   transcriptTruncated: false,
+  transcriptSettling: false,
 };
 
 const turn = (role: "user" | "assistant", text: string): Turn => ({
@@ -50,6 +51,18 @@ describe("buildMeetingChatPrompt", () => {
 
   it("asks for clock citations so answers can link into the transcript", () => {
     expect(buildMeetingChatPrompt(context, "q", [])).toContain("3:34");
+  });
+
+  it("cases 2/16/20: discloses a transcript that is still arriving", () => {
+    const settling = buildMeetingChatPrompt(
+      { ...context, transcriptSettling: true },
+      "what did i commit to?",
+      [],
+    );
+    expect(settling).toContain("last moments may not be in the transcript yet");
+    expect(buildMeetingChatPrompt(context, "q", [])).not.toContain(
+      "last moments may not be",
+    );
   });
 
   it("case 76: discloses a truncated transcript window", () => {

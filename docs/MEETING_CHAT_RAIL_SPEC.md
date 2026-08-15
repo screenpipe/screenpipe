@@ -56,11 +56,13 @@ reading column as the note. Square corners, one `border-t`, no shadow, no ring.
 | `rest` | 44px ask line | default | — |
 | `peek` | +152px | composer focused, thread empty | **no** |
 | `thread` | +`clamp(152, 0.4·pane, pane−96)` | a turn exists | yes, per user |
-| `working` | status row + disabled ask line | `footerHasNews` | — |
+| `working` | status row above the ask line | `footerHasNews` | — |
 
 `working` and `rest`/`peek`/`thread` are orthogonal: the status row and the ask
-line stack. Status never removes the ask line except when the composer must be
-disabled (summary running, meeting stopping).
+line stack. Status never removes the ask line. The composer disables only when
+the transcript is being **replaced** (retranscription), when there is no
+evidence at all, or when the model is out of reach — never merely because the
+meeting is busy.
 
 ---
 
@@ -71,7 +73,7 @@ Each is `case → decided behavior`. Numbers are stable; tests reference them.
 ## A · Lifecycle and precedence (1–14)
 
 1. Summary is `running` and the user focuses the composer → **the composer stays usable.** The summary pipe reads the transcript and writes the note; it never rewrites the transcript, so the evidence a chat turn would use is stable. The status row reports the run while the ask line keeps asking. *(Revised after the real-app E2E: the original rule blocked here, which — with case 3's 90s grace plus the run itself — left the composer dead for minutes immediately after a meeting ended, the moment "what did i commit to?" is most worth asking. It was also inconsistent with case 15, which keeps a live meeting askable while its transcript is actively growing.)*
-2. Summary is `finalizing` → composer disabled, placeholder `finalizing…`. This is the one summary state that blocks, because the transcript is still being written.
+2. Summary is `finalizing` → **askable.** *(Revised again after the real-app E2E.)* Finalizing appends the tail of the transcript; it does not replace it, which is the same thing a live meeting does continuously and case 15 already allows. Blocking here also flickered in practice: the summary status poll moves in and out of finalizing, so the composer enabled and disabled under the cursor — a control that dies mid-keystroke is worse than an answer that might miss the last few seconds. The answer carries the caveat instead, via `transcriptSettling` in the prompt.
 3. Summary `queued` but scheduler has not dispatched (90s grace) → same as 1, askable. The grace window is scheduler latency, not transcript instability.
 4. Summary transitions `running → completed` while the thread is open → composer re-enables, thread is preserved, no scroll jump, no toast.
 5. Summary transitions `running → failed` → composer re-enables. The chip becomes `why did this fail?`.
@@ -83,7 +85,7 @@ Each is `case → decided behavior`. Numbers are stable; tests reference them.
 11. Meeting has zero transcript turns → composer disabled, placeholder `nothing recorded yet`. Matches Granola's `Transcribe a meeting to start asking questions`.
 12. Meeting has a transcript but no note and no summary → fully askable. Transcript alone is enough.
 13. Meeting is deleted while the rail is open → the whole view unmounts; the in-flight Pi session is stopped in cleanup.
-14. Two lifecycle states race (save completes as summary starts) → precedence is fixed and total. For *what blocks the composer*: refreshing > finalizing > stopping > no-transcript > no-preset > quota; nothing else blocks. For *what the status row reports*: live > stopping > finalizing > running/queued > failed > saving > rest. The two orders are deliberately different — the status row narrates everything happening, the composer only stops for things that make an answer wrong.
+14. Two lifecycle states race (save completes as summary starts) → precedence is fixed and total. For *what blocks the composer*: refreshing > no-transcript > no-preset > quota; nothing else blocks. Only retranscription blocks on transcript grounds, because it is the only state that *replaces* evidence rather than adding to it. For *what the status row reports*: live > stopping > finalizing > running/queued > failed > saving > rest. The two orders are deliberately different — the status row narrates everything happening, the composer only stops for things that make an answer wrong.
 
 ## B · Live meeting (15–24)
 
@@ -92,7 +94,7 @@ Each is `case → decided behavior`. Numbers are stable; tests reference them.
 17. New transcript turns arrive while an answer streams → they do not invalidate the answer. No re-run, no banner.
 18. Live capture is degraded (`isLiveCaptureDegraded`) → the capture banner stays above; the ask line remains enabled but the chip switches to nothing. A degraded capture means an incomplete transcript, so do not propose questions about it.
 19. Audio device paused mid-meeting → same as 18.
-20. The user presses stop while a chat turn is streaming → the turn is aborted, `piStop` runs, and the thread shows `stopped — meeting ended`.
+20. The user presses stop while a chat turn is streaming → the turn is aborted, `piStop` runs, and the thread shows `stopped — meeting ended`. Stopping itself does **not** disable the composer, for the same reason as case 2.
 21. Meeting stops normally with an open thread → thread persists into the settled view. It is keyed by meeting id, not by session.
 22. Live meeting with the inactivity prompt showing → prompt renders above, rail unaffected.
 23. Join-meeting suggestion showing → same.

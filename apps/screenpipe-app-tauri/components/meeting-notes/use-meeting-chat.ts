@@ -48,6 +48,12 @@ export interface MeetingChatContext {
   note: string;
   /** True when the transcript passed to us was truncated (case 76). */
   transcriptTruncated: boolean;
+  /**
+   * The transcript is still arriving — the meeting is live, stopping, or
+   * finalizing. The rail stays askable in those states, so the answer has to
+   * carry the caveat instead (cases 2, 16, 20).
+   */
+  transcriptSettling: boolean;
 }
 
 function providerConfig(preset: AIPreset): PiProviderConfig {
@@ -111,6 +117,10 @@ Rules:
 - Do not restate the question or open with a preamble.${
     context.transcriptTruncated
       ? "\n- The transcript below is a partial window. Say so if the answer may lie outside it."
+      : ""
+  }${
+    context.transcriptSettling
+      ? "\n- This meeting is still being recorded or finished seconds ago, so the last moments may not be in the transcript yet. Say so if the answer depends on the end of the meeting."
       : ""
   }
 

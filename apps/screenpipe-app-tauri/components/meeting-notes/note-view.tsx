@@ -1780,6 +1780,11 @@ export function NoteView({
       transcript: chatTranscript.text,
       note,
       transcriptTruncated: chatTranscript.truncated,
+      transcriptSettling:
+        isLive ||
+        stopping ||
+        savingBeforeStop ||
+        summaryLifecycle.kind === "finalizing",
     },
     preset: chatPreset,
     userToken: settings.user?.token ?? null,

@@ -63,8 +63,6 @@ export interface MeetingChatConditions {
 
 export type MeetingChatDisabledReason =
   | "refreshing"
-  | "finalizing"
-  | "stopping"
   | "no-transcript"
   | "no-preset"
   | "quota";
@@ -99,10 +97,15 @@ const MODEL_ACCESS_FAILURES = new Set([
 export function resolveMeetingChatAvailability(
   c: MeetingChatConditions,
 ): MeetingChatAvailability {
-  // Cases 9 and 2: the only states that block are the ones where the
-  // transcript itself is being written or replaced. Everything else — a live
-  // meeting, a summary run — leaves the evidence stable, so the rail keeps
-  // asking while the status row reports.
+  // Cases 2, 9 and 20: the only state that blocks is the one that *replaces*
+  // existing evidence. A transcript that is still arriving — live, finalizing,
+  // stopping — is incomplete, not wrong, and the answer says so via
+  // `transcriptSettling` in the prompt.
+  //
+  // Blocking on finalizing also flickered in practice: the summary status poll
+  // moves in and out of that state, so the composer enabled and disabled under
+  // the cursor. A control that dies mid-keystroke is worse than an answer that
+  // might miss the last few seconds and admits it.
   //
   // Summary generation deliberately does NOT block (cases 1 and 3). The
   // summary pipe reads the transcript and writes the note; it never rewrites
@@ -113,13 +116,6 @@ export function resolveMeetingChatAvailability(
   // stayed askable.
   if (c.refreshingAfterRetranscription) {
     return { enabled: false, placeholder: "refreshing…", reason: "refreshing" };
-  }
-  if (c.summaryLifecycle.kind === "finalizing") {
-    return { enabled: false, placeholder: "finalizing…", reason: "finalizing" };
-  }
-  // Case 20: stopping is a transition into finalizing.
-  if (c.isStopping) {
-    return { enabled: false, placeholder: "stopping…", reason: "stopping" };
   }
   // Case 11: nothing to ask about at all. Mirrors Granola's empty-transcript
   // copy, but only when there is no written context either.

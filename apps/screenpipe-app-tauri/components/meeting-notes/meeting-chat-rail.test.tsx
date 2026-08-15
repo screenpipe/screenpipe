@@ -202,14 +202,13 @@ describe("chip", () => {
 });
 
 describe("disabled states", () => {
-  it("case 2: finalizing disables the composer", () => {
-    // The transcript is still being written, so an answer built on it would be
-    // built on something about to change.
+  it("case 9: a retranscription refresh disables the composer", () => {
+    // The one state that replaces existing evidence.
     renderRail({
-      conditions: conditions({ summaryLifecycle: { kind: "finalizing" } }),
+      conditions: conditions({ refreshingAfterRetranscription: true }),
     });
     expect(input()).toBeDisabled();
-    expect(input()).toHaveAttribute("placeholder", "finalizing…");
+    expect(input()).toHaveAttribute("placeholder", "refreshing…");
     expect(screen.queryByTestId("meeting-chat-chip")).toBeNull();
   });
 
