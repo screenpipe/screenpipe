@@ -1130,7 +1130,13 @@ export const SpeakerParagraph = React.memo(function SpeakerParagraph({
   const isSelf = block.speakerName.trim().toLowerCase() === "me";
   return (
     <li
-      className={cn("group", continuation ? "pt-0.5" : "pt-3")}
+      className={cn(
+        "group",
+        continuation ? "pt-0.5" : "pt-3",
+        // A chat citation lands here. A brief outline, not a persistent
+        // selection: the point is to show where an answer came from.
+        "transition-shadow data-[cited=true]:shadow-[inset_2px_0_0_0_hsl(var(--foreground))]",
+      )}
       style={{ contain: "layout paint" }}
       data-testid="transcript-row"
       data-final={block.final ? "true" : "false"}

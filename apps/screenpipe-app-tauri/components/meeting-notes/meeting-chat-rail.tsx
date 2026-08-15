@@ -236,9 +236,14 @@ export function MeetingChatRail({
 
   return (
     <div ref={rootRef} data-testid="meeting-chat-rail" data-phase={phase}>
-      {/* Thread and peek share one scroll region that grows upward. */}
+      {/* Thread and peek share one scroll region that grows upward. Flex
+          column so the resize handle takes its 12px out of the animated
+          height rather than pushing the scroll region past the bottom. */}
       <div
-        className={cn("overflow-hidden", !dragHeight && HEIGHT_TRANSITION)}
+        className={cn(
+          "flex flex-col overflow-hidden",
+          !dragHeight && HEIGHT_TRANSITION,
+        )}
         style={{ height: phase === "rest" ? 0 : openHeight }}
         aria-hidden={phase === "rest"}
       >
@@ -262,7 +267,7 @@ export function MeetingChatRail({
                 );
               }
             }}
-            className="group mx-auto flex h-3 w-40 cursor-ns-resize items-center justify-center focus-visible:outline-none"
+            className="group mx-auto flex h-3 w-40 shrink-0 cursor-ns-resize items-center justify-center focus-visible:outline-none"
           >
             <span className="h-px w-full bg-border transition-colors group-hover:bg-foreground/40 group-focus-visible:bg-foreground" />
           </div>
@@ -272,7 +277,7 @@ export function MeetingChatRail({
           ref={scrollRef}
           onScroll={handleScroll}
           data-testid="meeting-chat-scroll"
-          className="h-full overflow-y-auto [scrollbar-gutter:stable]"
+          className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
         >
           {phase === "peek" && suggestions.length > 0 && (
             <ul

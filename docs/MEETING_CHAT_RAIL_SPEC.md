@@ -20,7 +20,21 @@ Decompiling Granola 7.452.1 and Wispr Flow 1.6.531 showed both converged
 independently on: persistent bottom composer, overlay never reflow, not a tab,
 one resting line plus one suggestion, no "insert into note" button. Wispr adds
 one idea neither we nor Granola had: **peek on focus to a small height, and do
-not persist that height**. This spec adopts all six.
+not persist that height**.
+
+We adopt five of those six and **deliberately reject "overlay never reflow"**.
+Both references overlay because their composer is a foreign object floating over
+the document. Ours is not: it is the strip that already lives in this slot, and
+that strip is a flex sibling of `<main>` which already reflows the document when
+a banner appears. Making chat overlay would mean the rail behaves differently
+from the thing it replaces, inside the same 44px — which is the opposite of
+"one rail". Consistency inside the app beats consistency with a competitor here.
+
+The cost is real and worth naming: opening a thread pushes the document up. It
+is bounded by two things — peek is small, and `thread` only appears after an
+explicit send — but a reader whose eye is near the bottom of a long transcript
+will feel it. If that turns out to hurt, the fix is a scrim and absolute
+positioning, not a second bar.
 
 ## Layout
 
@@ -122,8 +136,8 @@ Each is `case → decided behavior`. Numbers are stable; tests reference them.
 52. User drags the thread taller than the pane → clamped. The drag does not scroll the document behind.
 53. User drags the thread below 152px → snaps closed to rest, and the persisted height is left at its last valid value.
 54. Peek height is never written to preferences, so a peek-then-escape leaves the user's chosen thread height intact.
-55. Rail must never cover the last line of the note. The note panel gets bottom padding equal to the rail's rest height, not its open height. Open states overlay by design.
-56. The transcript tab is scrolled to the bottom and the rail opens → no auto-scroll. The overlay is expected to cover content.
+55. Rail must never cover the last line of the note. Because the rail reflows rather than overlays, this is structural: `<main>` is `flex-1` and the footer is `shrink-0`, so the document is always sized against the rail's current height.
+56. The transcript tab is scrolled to the bottom and the rail opens → the pane shrinks, and the tab's own scroll container keeps its offset. The rail does not force a scroll.
 57. Rail opens while the summary is streaming into the summary tab → the streaming surface keeps its own scroll; the rail does not steal it.
 58. Very long single-word input (a URL) → wraps with `overflow-wrap: anywhere`, does not widen the rail.
 59. A code block in an answer → scrolls horizontally inside its own container. The rail never scrolls sideways.

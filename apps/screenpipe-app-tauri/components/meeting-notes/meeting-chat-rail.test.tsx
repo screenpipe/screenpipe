@@ -351,6 +351,20 @@ describe("thread", () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the scroll region inside the animated height", () => {
+    // The open region has a fixed pixel height and holds the resize handle
+    // plus the scroll area. If the scroll area were h-full instead of a
+    // shrinkable flex child, the handle's 12px would push the bottom of the
+    // thread out of view — silently, and only once a thread exists.
+    renderRail({ turns });
+    const scroll = screen.getByTestId("meeting-chat-scroll");
+    expect(scroll.className).toContain("flex-1");
+    expect(scroll.className).toContain("min-h-0");
+    const region = scroll.parentElement as HTMLElement;
+    expect(region.className).toContain("flex-col");
+    expect(region.style.height).not.toBe("");
+  });
+
   it("case 98: the resize handle is keyboard operable", () => {
     const { onThreadHeightChange } = renderRail({ turns });
     const handle = screen.getByRole("separator", {
