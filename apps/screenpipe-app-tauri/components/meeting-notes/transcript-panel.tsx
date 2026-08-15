@@ -1134,6 +1134,10 @@ export const SpeakerParagraph = React.memo(function SpeakerParagraph({
       style={{ contain: "layout paint" }}
       data-testid="transcript-row"
       data-final={block.final ? "true" : "false"}
+      // Landing target for a chat citation: the rail resolves a clock time to
+      // an absolute ms and scrolls the nearest turn into view.
+      data-start-ms={block.startMs}
+      data-end-ms={block.endMs}
     >
       {!continuation && (
         <div className="mb-1.5 flex items-baseline gap-2 px-1">

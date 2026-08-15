@@ -87,7 +87,9 @@ import type {
 } from "@/lib/utils/live-capture-state";
 import { isLiveCaptureDegraded } from "@/lib/utils/live-capture-state";
 import {
+  fetchMeetingAudio,
   fetchMeetingContext,
+  renderMeetingTranscript,
   type MeetingContext,
 } from "@/lib/utils/meeting-context";
 import {
@@ -181,8 +183,30 @@ import {
   startMeetingSummaryRun,
   updateMeetingSummaryPrimaryPreset,
 } from "./meeting-summary-run";
+import { MeetingChatRail } from "./meeting-chat-rail";
+import { useMeetingChat } from "./use-meeting-chat";
+import type { MeetingChatConditions } from "./meeting-chat-state";
+import {
+  readStoredChatHeight,
+  writeStoredChatHeight,
+} from "./meeting-chat-height";
+import {
+  findTranscriptRowForTime,
+  readTranscriptRowBounds,
+} from "./transcript-focus";
+import {
+  readActiveAiPresetId,
+  resolveActiveAiPreset,
+} from "@/lib/active-ai-preset";
+import {
+  hostedAiAllowanceForModel,
+  useUsageStatus,
+} from "@/lib/hooks/use-usage-status";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
+// Transcript window handed to a chat turn. Long meetings are windowed to the
+// most recent span rather than silently truncated mid-prompt (case 76).
+const CHAT_TRANSCRIPT_MAX_CHARS = 24_000;
 // How long a successful save stays on screen before the footer goes quiet.
 const SAVE_RECEIPT_DWELL_MS = 4000;
 
@@ -325,9 +349,27 @@ export function NoteView({
   const { settings, updateSettings } = useSettings();
   const { isManagedDeployment, policy: enterprisePolicy } =
     useManagedPolicy();
+  const chatUsage = useUsageStatus();
   const noteEditorRef = useRef<NoteEditorHandle>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
   const [isDraggingImage, setIsDraggingImage] = useState(false);
+  // Chat rail state. The transcript itself lives in TranscriptPanel; the rail
+  // only needs a count to know whether there is anything to ask about, and a
+  // rendered window when a turn is actually sent.
+  const [chatDraft, setChatDraft] = useState("");
+  const [chatTranscript, setChatTranscript] = useState<{
+    text: string;
+    turnCount: number;
+    truncated: boolean;
+  }>({ text: "", turnCount: 0, truncated: false });
+  const [paneHeight, setPaneHeight] = useState(0);
+  const [storedThreadHeight, setStoredThreadHeight] = useState<number | null>(
+    () => readStoredChatHeight(),
+  );
+  const [pendingCitationMs, setPendingCitationMs] = useState<number | null>(
+    null,
+  );
   const canSummarizeMeeting =
     !isLive &&
     !resuming &&
@@ -1705,6 +1747,152 @@ export function NoteView({
     : visibleSummaryLifecycle.kind === "failed"
       ? "attention"
       : null;
+
+  // ── chat rail ──────────────────────────────────────────────────────────
+  // The rail asks once the meeting settles and reports while it is working.
+  // Everything decidable without React lives in meeting-chat-state.ts.
+  const chatPreset = useMemo(
+    () =>
+      resolveActiveAiPreset(
+        (settings.aiPresets ?? []) as AIPreset[],
+        readActiveAiPresetId(),
+      ),
+    [settings.aiPresets],
+  );
+  const chatCloudflareAllowance = hostedAiAllowanceForModel(
+    chatUsage,
+    chatPreset?.model,
+  );
+  const chatQuotaExhausted = Boolean(
+    chatPreset?.provider === "screenpipe-cloud" &&
+      chatUsage &&
+      (chatUsage.hosted_ai?.allowance_managed_by === "cloudflare"
+        ? chatCloudflareAllowance?.remaining_percent === 0
+        : chatUsage.remaining <= 0),
+  );
+
+  const meetingChat = useMeetingChat({
+    context: {
+      meetingId: meeting.id,
+      title,
+      startIso: meeting.meeting_start,
+      endIso: meeting.meeting_end,
+      transcript: chatTranscript.text,
+      note,
+      transcriptTruncated: chatTranscript.truncated,
+    },
+    preset: chatPreset,
+    userToken: settings.user?.token ?? null,
+  });
+
+  const chatConditions: MeetingChatConditions = {
+    isLive,
+    isStopping: stopping || savingBeforeStop,
+    captureDegraded: Boolean(captureState && isLiveCaptureDegraded(captureState)),
+    summaryLifecycle,
+    refreshingAfterRetranscription: retranscriptionSummaryRefreshWorking,
+    transcriptTurnCount: chatTranscript.turnCount,
+    hasPreset: Boolean(chatPreset),
+    quotaExhausted: chatQuotaExhausted,
+    turnInFlight: meetingChat.inFlight,
+  };
+
+  // The transcript panel owns its own copy for rendering; the rail needs a
+  // plain-text window for the prompt and a count to know whether the meeting is
+  // askable at all (case 11). Refetched when a retranscribe replaces it.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const chunks = await fetchMeetingAudio(
+          meeting.meeting_start,
+          meeting.meeting_end ?? new Date().toISOString(),
+          1_000,
+          typeof meeting.id === "number" ? meeting.id : undefined,
+        );
+        if (cancelled) return;
+        const rendered = renderMeetingTranscript(chunks);
+        // Case 76: window rather than silently truncate, and say which.
+        const truncated = rendered.length > CHAT_TRANSCRIPT_MAX_CHARS;
+        setChatTranscript({
+          text: truncated
+            ? rendered.slice(rendered.length - CHAT_TRANSCRIPT_MAX_CHARS)
+            : rendered,
+          turnCount: chunks?.length ?? 0,
+          truncated,
+        });
+      } catch {
+        // A transcript we cannot read means "nothing to ask about", which the
+        // rail already renders as a disabled composer.
+        if (!cancelled) {
+          setChatTranscript({ text: "", turnCount: 0, truncated: false });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [meeting, transcriptRefreshKey]);
+
+  // Case 50/51: heights re-clamp against the live pane, not a stored guess.
+  useEffect(() => {
+    const node = mainRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    setPaneHeight(node.clientHeight);
+    const observer = new ResizeObserver((entries) => {
+      const height = entries[0]?.contentRect.height;
+      if (typeof height === "number") setPaneHeight(height);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  // Case 81/82: a citation switches tabs, then scrolls once the rows exist.
+  useEffect(() => {
+    if (pendingCitationMs === null) return;
+    if (activeTab !== "transcript") return;
+    let frame = 0;
+    let attempts = 0;
+    const tryScroll = () => {
+      const container = mainRef.current;
+      if (!container) return;
+      const rows = readTranscriptRowBounds(container);
+      if (rows.length === 0) {
+        // Case 82: the transcript may not have loaded yet. Keep the intent.
+        if (attempts++ < 40) {
+          frame = requestAnimationFrame(tryScroll);
+          return;
+        }
+        setPendingCitationMs(null);
+        return;
+      }
+      const hit = findTranscriptRowForTime(rows, pendingCitationMs);
+      setPendingCitationMs(null);
+      if (!hit) return;
+      const target = rows[hit.index].element;
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
+      // A brief ring rather than a persistent selection: the point is to show
+      // where the answer came from, not to leave the row selected.
+      target.setAttribute("data-cited", "true");
+      window.setTimeout(() => target.removeAttribute("data-cited"), 2_000);
+    };
+    frame = requestAnimationFrame(tryScroll);
+    return () => cancelAnimationFrame(frame);
+  }, [pendingCitationMs, activeTab]);
+
+  const handleCitationClick = useCallback((atMs: number) => {
+    setActiveTab("transcript");
+    setPendingCitationMs(atMs);
+  }, []);
+
+  const citationWindow = useMemo(() => {
+    const startMs = new Date(meeting.meeting_start).getTime();
+    if (!Number.isFinite(startMs)) return null;
+    const endMs = meeting.meeting_end
+      ? new Date(meeting.meeting_end).getTime()
+      : Date.now();
+    return { startMs, endMs: Number.isFinite(endMs) ? endMs : Date.now() };
+  }, [meeting.meeting_start, meeting.meeting_end]);
   const summarySurfaceState = summaryWorking
     ? "working"
     : visibleSummaryLifecycle.kind === "completed"
@@ -1994,7 +2182,10 @@ export function NoteView({
       {/* Each tab owns exactly one scroll viewport. The notes editor remains
           mounted while hidden so switching tabs never drops draft/selection
           state. The footer is a flex sibling, so no tab can render beneath it. */}
-      <main className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
+      <main
+        ref={mainRef}
+        className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
+      >
         <section
           id="meeting-panel-notes"
           role="tabpanel"
@@ -2094,7 +2285,9 @@ export function NoteView({
         )}
       </main>
 
-      {footerVisible && (
+      {/* One rail, two lifetimes: while the meeting is working it reports, and
+          once it settles it asks. The status row and the ask line stack rather
+          than replacing each other, so a live meeting stays askable. */}
       <footer className="z-30 min-w-0 shrink-0 border-t border-border bg-background">
         <div className={cn(MEETING_SHELL_CLASS, "py-3")}>
           {!isLive && inactivityPrompt && (
@@ -2124,6 +2317,10 @@ export function NoteView({
               onResumeInput={() => void handleResumeInputCapture()}
             />
           )}
+          {/* The status row only exists when the meeting has something to
+              report. Its old resting caption ("meeting saved") was pure
+              reassurance, and the ask line now owns that space instead. */}
+          {footerVisible && (
           <div
             className={cn(
               "flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between",
@@ -2256,6 +2453,26 @@ export function NoteView({
               </TooltipProvider>
             )}
           </div>
+          )}
+
+          <MeetingChatRail
+            conditions={chatConditions}
+            turns={meetingChat.turns}
+            draft={chatDraft}
+            onDraftChange={setChatDraft}
+            onSubmit={meetingChat.send}
+            onStop={meetingChat.stop}
+            onRetry={meetingChat.retry}
+            onRunSummary={handleSummaryAction}
+            citationWindow={citationWindow}
+            onCitationClick={handleCitationClick}
+            paneHeight={paneHeight}
+            storedThreadHeight={storedThreadHeight}
+            onThreadHeightChange={(height) => {
+              setStoredThreadHeight(height);
+              writeStoredChatHeight(height);
+            }}
+          />
         </div>
         {isLive && (
           <div className="px-4 pb-1 text-center text-[10px] leading-none text-muted-foreground/60">
@@ -2263,7 +2480,6 @@ export function NoteView({
           </div>
         )}
       </footer>
-      )}
     </div>
   );
 }

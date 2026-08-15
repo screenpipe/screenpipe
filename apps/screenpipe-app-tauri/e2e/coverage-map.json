@@ -966,7 +966,7 @@
       "criticality": "medium",
       "confidence": "partial",
       "ux": "synthetic",
-      "notes": "QUARANTINED (#4610): cross-window prefill duplicate regression. The autoSend persist precondition is racy in CI — times out with 0 conversations (not the duplicate=2 it guards) ~100% Linux + ~33% macOS. Re-enable once it seeds the persisted conversation deterministically."
+      "notes": "QUARANTINED (#4610): cross-window prefill duplicate regression. The autoSend persist precondition is racy in CI \u2014 times out with 0 conversations (not the duplicate=2 it guards) ~100% Linux + ~33% macOS. Re-enable once it seeds the persisted conversation deterministically."
     },
     {
       "spec": "chat-queue-burst-pending.spec.ts",
@@ -1156,7 +1156,7 @@
       "criticality": "high",
       "confidence": "partial",
       "ux": "synthetic",
-      "notes": "A turn that ends while the panel does not own the session on the agent-event bus must still release the composer dispatch guards and must not duplicate the user message; regression for the stuck 'analyzing…' chat whose later messages all piled into QUEUED."
+      "notes": "A turn that ends while the panel does not own the session on the agent-event bus must still release the composer dispatch guards and must not duplicate the user message; regression for the stuck 'analyzing\u2026' chat whose later messages all piled into QUEUED."
     },
     {
       "spec": "chat-subagent-async-completion.spec.ts",
@@ -1793,6 +1793,23 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "notes": "Seeds a meeting with notes and summary, switches persistent tabs, resizes to 640x560, checks footer separation and horizontal overflow, then captures a review screenshot."
+    },
+    {
+      "spec": "meeting-chat-rail.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "local-api"
+      ],
+      "features": [
+        "meeting-notes"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Seeds a settled meeting and walks the chat rail disclosure ladder in the real app: rest shows one line plus one chip and no send button, focus peeks open with suggestions, typing hides the chip and reveals send, Escape collapses while keeping the draft, status precedence names why the composer is disabled, and a 720x620 window produces no horizontal overflow. Captures a screenshot per state."
     },
     {
       "spec": "meetings-only-audio-lifecycle.spec.ts",
