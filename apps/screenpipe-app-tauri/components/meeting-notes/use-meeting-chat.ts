@@ -187,15 +187,18 @@ export function useMeetingChat(options: {
   }, [cleanup]);
 
   const run = useCallback(
-    async (question: string) => {
+    async (question: string, historyOverride?: MeetingChatTurn[]) => {
       const { context, preset, userToken } = optionsRef.current;
       if (!context || !preset) return;
 
       lastQuestionRef.current = question;
       streamRef.current = emptyStreamState();
       // Snapshot the conversation before this turn is appended, so the prompt
-      // never races the state update that adds the question itself.
-      const history = turnsRef.current;
+      // never races the state update that adds the question itself. A retry
+      // passes its own history because the failed pair it drops is still in
+      // `turnsRef` when React has not flushed the removal yet — without this
+      // the retried prompt carries the same question twice.
+      const history = historyOverride ?? turnsRef.current;
 
       const answerId = `a-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       answerIdRef.current = answerId;
@@ -284,9 +287,12 @@ export function useMeetingChat(options: {
   const retry = useCallback(() => {
     const question = lastQuestionRef.current;
     if (!question || inFlight) return;
-    // Drop the failed pair so a retry does not stack duplicates.
-    setTurns((prev) => prev.slice(0, -2));
-    void run(question);
+    // Drop the failed pair so a retry does not stack duplicates, and hand the
+    // trimmed history to the run rather than letting it read the not-yet
+    // flushed state.
+    const trimmed = turnsRef.current.slice(0, -2);
+    setTurns(trimmed);
+    void run(question, trimmed);
   }, [inFlight, run]);
 
   const reset = useCallback(() => {
