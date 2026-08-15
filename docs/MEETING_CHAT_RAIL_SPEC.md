@@ -235,3 +235,36 @@ chips *on* the resting line, sized to the width available, so the ladder is rest
 
 This is recorded rather than acted on because cutting a rung changes what the
 feature is, not how it is built.
+
+### Resolved: the rail was the wrong shape
+
+Acted on. The objection that settled it was simpler than the footprint numbers:
+notes and summary have **no footer at all** today, so a docked rail was new
+permanent chrome on two surfaces that were clean, and it appeared whether or not
+anyone ever asked anything.
+
+The deeper error was which axis it spent. The meeting view is a width-capped
+reading column: the horizontal axis has slack sitting unused in the margins, the
+vertical axis has none, and the rail took the one the document needs.
+
+Granola was also read wrong here. Its in-note chat is not a bottom line. It is
+`<aside id="multi-chat-sidebar">`, `w-80` overlaying a narrow window and
+`@5xl/view:w-96` docked in a wide one, resizable from its left edge. The
+bottom-anchored `floating-chat-panel` found in the same bundle belongs to the
+full-screen chat view, not the note. An earlier draft of this document
+generalised from that panel without checking which surface it mounted on.
+
+What the panel changes:
+
+| | rail | panel |
+| --- | --- | --- |
+| axis | height | width |
+| resting cost | 125px on every tab | nothing rendered |
+| open cost | 297px of document | 0px of document height |
+| narrow window | shrinks the document further | overlays it |
+| entry | always present | one control on the tab rule |
+
+The rungs `rest` and `peek` are gone with it. Peek's entire content was three
+suggestions, which the panel shows in space the document was never using, so the
+ladder is now closed → open. Case numbers below still hold; where they say
+"height" read "width", and where they say "rail" read "panel".

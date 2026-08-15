@@ -1795,7 +1795,7 @@
       "notes": "Seeds a meeting with notes and summary, switches persistent tabs, resizes to 640x560, checks footer separation and horizontal overflow, then captures a review screenshot."
     },
     {
-      "spec": "meeting-chat-rail.spec.ts",
+      "spec": "meeting-chat-panel.spec.ts",
       "platforms": [
         "macos"
       ],
