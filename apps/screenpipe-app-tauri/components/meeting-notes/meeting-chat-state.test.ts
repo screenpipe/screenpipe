@@ -5,19 +5,17 @@
 import { describe, expect, it } from "vitest";
 import {
   canSubmitTurn,
-  chipRunsSummary,
-  clampThreadHeight,
-  nextPhaseOnEscape,
-  peekHeightForPane,
-  railHeightForPhase,
+  clampPanelWidth,
+  panelPresentation,
   resolveMeetingChatAvailability,
-  resolveMeetingChatChip,
   resolveMeetingChatSuggestions,
-  resolvePhase,
   shouldCloseOnDrag,
-  RAIL_MIN_THREAD_HEIGHT,
-  RAIL_PANE_RESERVE,
-  RAIL_REST_HEIGHT,
+  PANEL_DOCK_MIN_VIEWPORT,
+  PANEL_MAX_WIDTH,
+  PANEL_MIN_WIDTH,
+  PANEL_SHELL_RESERVE,
+  RAIL_MAX_CHIP_LENGTH,
+  SUMMARY_SUGGESTION,
   type MeetingChatConditions,
 } from "./meeting-chat-state";
 import type { MeetingSummaryExecution } from "./meeting-summary-lifecycle";
@@ -182,163 +180,107 @@ describe("availability precedence", () => {
   });
 });
 
-describe("chip", () => {
-  it("case 8: settled with a summary asks about commitments", () => {
-    expect(resolveMeetingChatChip(base())).toBe("what did i commit to?");
+describe("suggestions", () => {
+  it("case 41: an empty thread offers a way in", () => {
+    expect(resolveMeetingChatSuggestions(base(), false)).toEqual([
+      "what did i commit to?",
+      "draft the follow-up email",
+      "what was left unanswered?",
+    ]);
   });
 
-  it("case 7: idle with no summary offers to summarize", () => {
-    const c = base({ summaryLifecycle: { kind: "idle" } });
-    expect(resolveMeetingChatChip(c)).toBe("summarize this");
-    expect(chipRunsSummary(c)).toBe(true);
+  it("case 44: a started conversation stops proposing", () => {
+    expect(resolveMeetingChatSuggestions(base(), true)).toEqual([]);
   });
 
-  it("case 15/24: live asks what was missed", () => {
-    expect(resolveMeetingChatChip(base({ isLive: true }))).toBe(
+  it("case 15/24: a live meeting asks about the meeting so far", () => {
+    expect(resolveMeetingChatSuggestions(base({ isLive: true }), false)).toContain(
       "what did i miss?",
     );
   });
 
+  it("case 7: with no summary yet the summary shortcut leads", () => {
+    const suggestions = resolveMeetingChatSuggestions(
+      base({ summaryLifecycle: { kind: "idle" } }),
+      false,
+    );
+    expect(suggestions[0]).toBe(SUMMARY_SUGGESTION);
+  });
+
   it("case 5: a generic failure offers to explain itself", () => {
-    expect(
-      resolveMeetingChatChip(
-        base({ summaryLifecycle: { kind: "failed", execution: genericFailure } }),
-      ),
-    ).toBe("why did this fail?");
+    const suggestions = resolveMeetingChatSuggestions(
+      base({ summaryLifecycle: { kind: "failed", execution: genericFailure } }),
+      false,
+    );
+    expect(suggestions[0]).toBe("why did this fail?");
   });
 
-  it("case 6: a quota failure suppresses the chip", () => {
+  it("case 6: a model-access failure offers nothing, because a turn hits the same wall", () => {
     expect(
-      resolveMeetingChatChip(
+      resolveMeetingChatSuggestions(
         base({ summaryLifecycle: { kind: "failed", execution: quotaExecution } }),
+        false,
       ),
-    ).toBeNull();
+    ).toEqual([]);
   });
 
-  it("case 18/19: degraded capture suppresses the chip", () => {
+  it("case 18/19: degraded capture stops advertising an incomplete transcript", () => {
     expect(
-      resolveMeetingChatChip(base({ isLive: true, captureDegraded: true })),
-    ).toBeNull();
+      resolveMeetingChatSuggestions(base({ captureDegraded: true }), false),
+    ).toEqual([]);
   });
 
-  it("case 47: narrow windows suppress the chip", () => {
-    expect(resolveMeetingChatChip(base(), 400)).toBeNull();
-    expect(resolveMeetingChatChip(base(), 900)).toBe("what did i commit to?");
+  it("offers nothing when the composer is disabled", () => {
+    expect(
+      resolveMeetingChatSuggestions(base({ hasPreset: false }), false),
+    ).toEqual([]);
   });
 
-  it("no chip when the composer is disabled", () => {
-    expect(resolveMeetingChatChip(base({ transcriptTurnCount: 0 }))).toBeNull();
-  });
-
-  it("case 46: every chip fits the length gate", () => {
-    const variants: MeetingChatConditions[] = [
+  it("case 46: every suggestion fits the length gate", () => {
+    for (const conditions of [
       base(),
       base({ isLive: true }),
       base({ summaryLifecycle: { kind: "idle" } }),
       base({ summaryLifecycle: { kind: "failed", execution: genericFailure } }),
-    ];
-    for (const v of variants) {
-      const chip = resolveMeetingChatChip(v);
-      if (chip) expect(chip.length).toBeLessThanOrEqual(28);
+    ]) {
+      for (const label of resolveMeetingChatSuggestions(conditions, false)) {
+        expect(label.length).toBeLessThanOrEqual(RAIL_MAX_CHIP_LENGTH);
+      }
     }
   });
 });
 
-describe("suggestions", () => {
-  it("case 41: only with an empty thread", () => {
-    expect(resolveMeetingChatSuggestions(base(), false)).toHaveLength(3);
-    expect(resolveMeetingChatSuggestions(base(), true)).toHaveLength(0);
-  });
-
-  it("case 44: the set follows meeting state", () => {
-    expect(resolveMeetingChatSuggestions(base({ isLive: true }), false)[0]).toBe(
-      "what did i miss?",
-    );
-    expect(resolveMeetingChatSuggestions(base(), false)[0]).toBe(
-      "what did i commit to?",
-    );
-    expect(
-      resolveMeetingChatSuggestions(
-        base({ summaryLifecycle: { kind: "failed", execution: genericFailure } }),
-        false,
-      )[0],
-    ).toBe("why did this fail?");
-  });
-
-  it("case 47: narrow windows get two", () => {
-    expect(resolveMeetingChatSuggestions(base(), false, 400)).toHaveLength(2);
-  });
-
-  it("none when disabled", () => {
-    expect(
-      resolveMeetingChatSuggestions(base({ quotaExhausted: true }), false),
-    ).toHaveLength(0);
-  });
-});
-
 describe("geometry", () => {
-  it("case 50/52: clamps to the pane", () => {
-    expect(clampThreadHeight(9999, 600)).toBe(600 - RAIL_PANE_RESERVE);
+  it("case 50: a stored width is clamped so the document keeps a column", () => {
+    // The reserve binds before the cap once the shell is small enough.
+    expect(clampPanelWidth(900, 800)).toBe(800 - PANEL_SHELL_RESERVE);
   });
 
-  it("case 53: never returns below the minimum", () => {
-    expect(clampThreadHeight(10, 900)).toBe(RAIL_MIN_THREAD_HEIGHT);
+  it("caps the panel before it becomes the page", () => {
+    expect(clampPanelWidth(5000, 4000)).toBe(PANEL_MAX_WIDTH);
+  });
+
+  it("case 51: a narrow shell still yields a readable panel", () => {
+    expect(clampPanelWidth(380, 500)).toBe(PANEL_MIN_WIDTH);
+  });
+
+  it("case 92: corrupt widths resolve to the narrowest panel, never the widest", () => {
+    // Infinity is the interesting one: read naively it would resolve to the
+    // ceiling and cover the document it is supposed to sit beside.
+    expect(clampPanelWidth(Number.NaN, 1600)).toBe(PANEL_MIN_WIDTH);
+    expect(clampPanelWidth(Number.POSITIVE_INFINITY, 1600)).toBe(
+      PANEL_MIN_WIDTH,
+    );
+  });
+
+  it("case 49: a narrow window overlays rather than squeezing the document", () => {
+    expect(panelPresentation(PANEL_DOCK_MIN_VIEWPORT - 1)).toBe("overlay");
+    expect(panelPresentation(PANEL_DOCK_MIN_VIEWPORT)).toBe("dock");
+  });
+
+  it("case 53: dragging past the minimum is a close gesture", () => {
     expect(shouldCloseOnDrag(120)).toBe(true);
-    expect(shouldCloseOnDrag(200)).toBe(false);
-  });
-
-  it("case 49: a tiny pane still yields a usable height", () => {
-    const h = clampThreadHeight(400, 180);
-    expect(h).toBe(RAIL_MIN_THREAD_HEIGHT);
-    expect(h).toBeGreaterThan(0);
-  });
-
-  it("case 92: corrupt persisted heights fall back to the minimum, never the ceiling", () => {
-    // Non-finite input is corrupt, and corrupt data must not resolve to a rail
-    // that covers the document.
-    expect(clampThreadHeight(Number.NaN, 800)).toBe(RAIL_MIN_THREAD_HEIGHT);
-    expect(clampThreadHeight(Number.POSITIVE_INFINITY, 800)).toBe(
-      RAIL_MIN_THREAD_HEIGHT,
-    );
-    expect(clampThreadHeight(Number.NEGATIVE_INFINITY, 800)).toBe(
-      RAIL_MIN_THREAD_HEIGHT,
-    );
-    expect(clampThreadHeight(-500, 800)).toBe(RAIL_MIN_THREAD_HEIGHT);
-  });
-
-  it("case 49: short panes collapse peek into the clamped thread height", () => {
-    expect(peekHeightForPane(250)).toBe(RAIL_MIN_THREAD_HEIGHT);
-    expect(peekHeightForPane(900)).toBe(152);
-  });
-
-  it("case 61: rest is the tab-rule height", () => {
-    expect(railHeightForPhase("rest", 800, 400)).toBe(RAIL_REST_HEIGHT);
-  });
-
-  it("case 51: heights re-derive from the current pane", () => {
-    const tall = railHeightForPhase("thread", 900, 600);
-    const short = railHeightForPhase("thread", 400, 600);
-    expect(tall).toBeGreaterThan(short);
-    expect(short).toBe(RAIL_REST_HEIGHT + (400 - RAIL_PANE_RESERVE));
-  });
-});
-
-describe("phase", () => {
-  it("thread outranks peek", () => {
-    expect(resolvePhase(true, true, false)).toBe("thread");
-    expect(resolvePhase(false, true, false)).toBe("peek");
-    expect(resolvePhase(false, false, false)).toBe("rest");
-  });
-
-  it("case 32: collapse wins over both", () => {
-    expect(resolvePhase(true, true, true)).toBe("rest");
-  });
-
-  it("case 32: escape blurs first, then collapses", () => {
-    expect(nextPhaseOnEscape("peek", true)).toBe("peek");
-    expect(nextPhaseOnEscape("peek", false)).toBe("rest");
-    expect(nextPhaseOnEscape("thread", false)).toBe("rest");
-    expect(nextPhaseOnEscape("rest", false)).toBe("rest");
+    expect(shouldCloseOnDrag(PANEL_MIN_WIDTH)).toBe(false);
   });
 });
 

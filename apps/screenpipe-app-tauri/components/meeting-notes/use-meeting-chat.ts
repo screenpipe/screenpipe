@@ -22,7 +22,7 @@ import type { AgentEventEnvelope } from "@/lib/events/types";
 import { INTERNAL_TITLE_PREFIX } from "@/lib/utils/internal-session";
 import { applyResolvedModelLimits } from "@/lib/model-metadata";
 import type { PiProviderConfig } from "@/lib/utils/tauri";
-import type { MeetingChatTurn } from "./meeting-chat-rail";
+import type { MeetingChatTurn } from "./meeting-chat-panel";
 import {
   advanceMeetingChatStream,
   emptyStreamState,

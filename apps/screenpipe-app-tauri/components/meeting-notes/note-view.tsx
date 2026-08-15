@@ -24,6 +24,7 @@ import {
   Info,
   Languages,
   Loader2,
+  MessageSquareText,
   Mic2,
   Play,
   RefreshCw,
@@ -183,13 +184,13 @@ import {
   startMeetingSummaryRun,
   updateMeetingSummaryPrimaryPreset,
 } from "./meeting-summary-run";
-import { MeetingChatRail } from "./meeting-chat-rail";
+import { MeetingChatPanel } from "./meeting-chat-panel";
 import { useMeetingChat } from "./use-meeting-chat";
 import type { MeetingChatConditions } from "./meeting-chat-state";
 import {
-  readStoredChatHeight,
-  writeStoredChatHeight,
-} from "./meeting-chat-height";
+  readStoredChatWidth,
+  writeStoredChatWidth,
+} from "./meeting-chat-width";
 import {
   findTranscriptRowForTime,
   readTranscriptRowBounds,
@@ -352,7 +353,7 @@ export function NoteView({
   const chatUsage = useUsageStatus();
   const noteEditorRef = useRef<NoteEditorHandle>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  const mainRef = useRef<HTMLElement>(null);
+  const mainRef = useRef<HTMLDivElement>(null);
   const [isDraggingImage, setIsDraggingImage] = useState(false);
   // Chat rail state. The transcript itself lives in TranscriptPanel; the rail
   // only needs a count to know whether there is anything to ask about, and a
@@ -363,9 +364,10 @@ export function NoteView({
     turnCount: number;
     truncated: boolean;
   }>({ text: "", turnCount: 0, truncated: false });
-  const [paneHeight, setPaneHeight] = useState(0);
-  const [storedThreadHeight, setStoredThreadHeight] = useState<number | null>(
-    () => readStoredChatHeight(),
+  const [chatOpen, setChatOpen] = useState(false);
+  const [paneWidth, setPaneWidth] = useState(0);
+  const [storedPanelWidth, setStoredPanelWidth] = useState<number | null>(
+    () => readStoredChatWidth(),
   );
   const [pendingCitationMs, setPendingCitationMs] = useState<number | null>(
     null,
@@ -1848,14 +1850,15 @@ export function NoteView({
     transcriptRefreshKey,
   ]);
 
-  // Case 50/51: heights re-clamp against the live pane, not a stored guess.
+  // Case 50/51: widths re-clamp against the live shell, not a stored guess,
+  // and the same measurement decides overlay versus dock.
   useEffect(() => {
     const node = mainRef.current;
     if (!node || typeof ResizeObserver === "undefined") return;
-    setPaneHeight(node.clientHeight);
+    setPaneWidth(node.clientWidth);
     const observer = new ResizeObserver((entries) => {
-      const height = entries[0]?.contentRect.height;
-      if (typeof height === "number") setPaneHeight(height);
+      const width = entries[0]?.contentRect.width;
+      if (typeof width === "number") setPaneWidth(width);
     });
     observer.observe(node);
     return () => observer.disconnect();
@@ -2152,6 +2155,36 @@ export function NoteView({
             // and one menu holding everything else — destinations and meeting
             // lifecycle both, which is what let the second dropdown go away.
             trailing={
+              <>
+              {/* The one entry point. Chat is a lens over whichever tab is
+                  open, so it belongs on the rule that spans all of them,
+                  beside the other whole-meeting actions. Nothing is rendered
+                  until this is pressed. */}
+              <button
+                type="button"
+                data-testid="meeting-chat-toggle"
+                aria-label="ask about this meeting"
+                aria-pressed={chatOpen}
+                title="ask about this meeting"
+                onClick={() => {
+                  setChatOpen((open) => {
+                    if (!open) {
+                      posthog.capture("meeting_chat_opened", {
+                        tab: activeTab,
+                        has_summary: canShareSummary,
+                      });
+                    }
+                    return !open;
+                  });
+                }}
+                className={cn(
+                  MEETING_RULE_ACTION_CLASS,
+                  "px-4",
+                  chatOpen && "bg-foreground text-background",
+                )}
+              >
+                <MessageSquareText className="h-3.5 w-3.5" />
+              </button>
               <MeetingShareMenu
                 canShareSummary={canShareSummary}
                 canSend={shareArtifact.sections.length > 0}
@@ -2190,6 +2223,7 @@ export function NoteView({
                   else void handleCopy();
                 }}
               />
+              </>
             }
           />
         </div>
@@ -2198,8 +2232,8 @@ export function NoteView({
       {/* Each tab owns exactly one scroll viewport. The notes editor remains
           mounted while hidden so switching tabs never drops draft/selection
           state. The footer is a flex sibling, so no tab can render beneath it. */}
+      <div ref={mainRef} className="relative flex min-h-0 min-w-0 flex-1">
       <main
-        ref={mainRef}
         className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
       >
         <section
@@ -2301,9 +2335,33 @@ export function NoteView({
         )}
       </main>
 
-      {/* One rail, two lifetimes: while the meeting is working it reports, and
-          once it settles it asks. The status row and the ask line stack rather
-          than replacing each other, so a live meeting stays askable. */}
+      {/* Beside the document, not beneath it. Nothing renders until the ask
+          control is used, so notes and summary keep the footer-free shell they
+          have today. */}
+      {chatOpen && (
+        <MeetingChatPanel
+          conditions={chatConditions}
+          turns={meetingChat.turns}
+          draft={chatDraft}
+          onDraftChange={setChatDraft}
+          onSubmit={meetingChat.send}
+          onStop={meetingChat.stop}
+          onRetry={meetingChat.retry}
+          onClose={() => setChatOpen(false)}
+          onRunSummary={handleSummaryAction}
+          citationWindow={citationWindow}
+          onCitationClick={handleCitationClick}
+          viewportWidth={paneWidth}
+          storedWidth={storedPanelWidth}
+          onWidthChange={(next) => {
+            setStoredPanelWidth(next);
+            writeStoredChatWidth(next);
+          }}
+        />
+      )}
+      </div>
+
+      {footerVisible && (
       <footer className="z-30 min-w-0 shrink-0 border-t border-border bg-background">
         <div className={cn(MEETING_SHELL_CLASS, "py-3")}>
           {!isLive && inactivityPrompt && (
@@ -2333,10 +2391,6 @@ export function NoteView({
               onResumeInput={() => void handleResumeInputCapture()}
             />
           )}
-          {/* The status row only exists when the meeting has something to
-              report. Its old resting caption ("meeting saved") was pure
-              reassurance, and the ask line now owns that space instead. */}
-          {footerVisible && (
           <div
             className={cn(
               "flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between",
@@ -2469,26 +2523,6 @@ export function NoteView({
               </TooltipProvider>
             )}
           </div>
-          )}
-
-          <MeetingChatRail
-            conditions={chatConditions}
-            turns={meetingChat.turns}
-            draft={chatDraft}
-            onDraftChange={setChatDraft}
-            onSubmit={meetingChat.send}
-            onStop={meetingChat.stop}
-            onRetry={meetingChat.retry}
-            onRunSummary={handleSummaryAction}
-            citationWindow={citationWindow}
-            onCitationClick={handleCitationClick}
-            paneHeight={paneHeight}
-            storedThreadHeight={storedThreadHeight}
-            onThreadHeightChange={(height) => {
-              setStoredThreadHeight(height);
-              writeStoredChatHeight(height);
-            }}
-          />
         </div>
         {isLive && (
           <div className="px-4 pb-1 text-center text-[10px] leading-none text-muted-foreground/60">
@@ -2496,6 +2530,7 @@ export function NoteView({
           </div>
         )}
       </footer>
+      )}
     </div>
   );
 }
