@@ -45,6 +45,14 @@ export interface MeetingChatConditions {
   refreshingAfterRetranscription: boolean;
   /** Number of transcript turns available to the agent. */
   transcriptTurnCount: number;
+  /**
+   * The meeting has a note or a saved summary.
+   *
+   * A meeting with no transcript but written notes is still worth asking
+   * about — the note travels in the prompt either way — so evidence is
+   * "transcript or note", not "transcript".
+   */
+  hasWrittenContext: boolean;
   /** An AI preset is configured and usable. */
   hasPreset: boolean;
   /** Hosted allowance is spent for the selected preset. */
@@ -54,7 +62,6 @@ export interface MeetingChatConditions {
 }
 
 export type MeetingChatDisabledReason =
-  | "summarizing"
   | "refreshing"
   | "finalizing"
   | "stopping"
@@ -92,29 +99,31 @@ const MODEL_ACCESS_FAILURES = new Set([
 export function resolveMeetingChatAvailability(
   c: MeetingChatConditions,
 ): MeetingChatAvailability {
-  // Cases 9, 1, 2, 3: the transcript is unstable or being rewritten.
+  // Cases 9 and 2: the only states that block are the ones where the
+  // transcript itself is being written or replaced. Everything else — a live
+  // meeting, a summary run — leaves the evidence stable, so the rail keeps
+  // asking while the status row reports.
+  //
+  // Summary generation deliberately does NOT block (cases 1 and 3). The
+  // summary pipe reads the transcript and writes the note; it never rewrites
+  // the transcript. Blocking through a 90s scheduler grace plus the run itself
+  // left the composer dead for minutes right after a meeting ended, which is
+  // exactly when "what did i commit to?" is worth asking. It was also
+  // inconsistent: a live meeting, where the transcript is actively growing,
+  // stayed askable.
   if (c.refreshingAfterRetranscription) {
     return { enabled: false, placeholder: "refreshing…", reason: "refreshing" };
   }
   if (c.summaryLifecycle.kind === "finalizing") {
     return { enabled: false, placeholder: "finalizing…", reason: "finalizing" };
   }
-  if (
-    c.summaryLifecycle.kind === "running" ||
-    c.summaryLifecycle.kind === "queued"
-  ) {
-    return {
-      enabled: false,
-      placeholder: "summarizing…",
-      reason: "summarizing",
-    };
-  }
   // Case 20: stopping is a transition into finalizing.
   if (c.isStopping) {
     return { enabled: false, placeholder: "stopping…", reason: "stopping" };
   }
-  // Case 11: nothing to ask about. Mirrors Granola's empty-transcript copy.
-  if (c.transcriptTurnCount === 0) {
+  // Case 11: nothing to ask about at all. Mirrors Granola's empty-transcript
+  // copy, but only when there is no written context either.
+  if (c.transcriptTurnCount === 0 && !c.hasWrittenContext) {
     return {
       enabled: false,
       placeholder: "nothing recorded yet",

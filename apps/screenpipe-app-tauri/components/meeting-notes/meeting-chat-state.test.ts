@@ -47,6 +47,7 @@ const base = (
   summaryLifecycle: { kind: "completed", execution },
   refreshingAfterRetranscription: false,
   transcriptTurnCount: 12,
+  hasWrittenContext: false,
   hasPreset: true,
   quotaExhausted: false,
   turnInFlight: false,
@@ -54,14 +55,17 @@ const base = (
 });
 
 describe("availability precedence", () => {
-  it("case 1/3: blocks while summarizing or queued", () => {
+  it("case 1/3: stays askable while a summary generates", () => {
+    // The summary pipe reads the transcript and writes the note; it never
+    // rewrites the transcript. Blocking here left the composer dead for
+    // minutes right after a meeting ended — the highest-intent moment.
     for (const kind of ["running", "queued"] as const) {
       const a = resolveMeetingChatAvailability(
         base({ summaryLifecycle: { kind, execution } }),
       );
-      expect(a.enabled).toBe(false);
-      expect(a.reason).toBe("summarizing");
-      expect(a.placeholder).toBe("summarizing…");
+      expect(a.enabled).toBe(true);
+      expect(a.reason).toBeNull();
+      expect(a.placeholder).toBe("ask about this meeting");
     }
   });
 
@@ -91,10 +95,20 @@ describe("availability precedence", () => {
     ).toBe("stopping");
   });
 
-  it("case 11: blocks with an empty transcript", () => {
+  it("case 11: blocks only when there is no evidence at all", () => {
     const a = resolveMeetingChatAvailability(base({ transcriptTurnCount: 0 }));
     expect(a.reason).toBe("no-transcript");
     expect(a.placeholder).toBe("nothing recorded yet");
+  });
+
+  it("case 11: a written note is enough to ask about", () => {
+    // The note travels in the prompt either way, so a meeting someone typed
+    // into is askable even when nothing was captured.
+    expect(
+      resolveMeetingChatAvailability(
+        base({ transcriptTurnCount: 0, hasWrittenContext: true }),
+      ).enabled,
+    ).toBe(true);
   });
 
   it("case 12: a transcript with no note or summary is askable", () => {

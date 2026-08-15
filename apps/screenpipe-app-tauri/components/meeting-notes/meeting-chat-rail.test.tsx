@@ -35,6 +35,7 @@ const conditions = (
   summaryLifecycle: { kind: "completed", execution },
   refreshingAfterRetranscription: false,
   transcriptTurnCount: 8,
+  hasWrittenContext: false,
   hasPreset: true,
   quotaExhausted: false,
   turnInFlight: false,
@@ -201,15 +202,26 @@ describe("chip", () => {
 });
 
 describe("disabled states", () => {
-  it("case 1: summarizing disables the composer", () => {
+  it("case 2: finalizing disables the composer", () => {
+    // The transcript is still being written, so an answer built on it would be
+    // built on something about to change.
+    renderRail({
+      conditions: conditions({ summaryLifecycle: { kind: "finalizing" } }),
+    });
+    expect(input()).toBeDisabled();
+    expect(input()).toHaveAttribute("placeholder", "finalizing…");
+    expect(screen.queryByTestId("meeting-chat-chip")).toBeNull();
+  });
+
+  it("case 1: a running summary leaves the composer usable", () => {
+    // Status reports, ask asks. The summary run does not touch the transcript.
     renderRail({
       conditions: conditions({
         summaryLifecycle: { kind: "running", execution },
       }),
     });
-    expect(input()).toBeDisabled();
-    expect(input()).toHaveAttribute("placeholder", "summarizing…");
-    expect(screen.queryByTestId("meeting-chat-chip")).toBeNull();
+    expect(input()).not.toBeDisabled();
+    expect(input()).toHaveAttribute("placeholder", "ask about this meeting");
   });
 
   it("case 11: an empty transcript disables the composer", () => {

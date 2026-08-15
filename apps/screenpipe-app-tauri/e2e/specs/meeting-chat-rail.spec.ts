@@ -222,7 +222,6 @@ describe("meeting chat rail", function () {
     expect(
       [
         "ask about this meeting",
-        "summarizing…",
         "finalizing…",
         "refreshing…",
         "nothing recorded yet",

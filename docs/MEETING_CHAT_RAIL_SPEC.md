@@ -70,9 +70,9 @@ Each is `case → decided behavior`. Numbers are stable; tests reference them.
 
 ## A · Lifecycle and precedence (1–14)
 
-1. Summary is `running` and the user focuses the composer → composer is disabled, placeholder `summarizing…`, peek does not open. Status outranks ask.
-2. Summary is `finalizing` → same as 1. The transcript is not yet stable, so answers would be wrong.
-3. Summary `queued` but scheduler has not dispatched (90s grace) → treated as working. Do not let the user ask against a transcript about to change.
+1. Summary is `running` and the user focuses the composer → **the composer stays usable.** The summary pipe reads the transcript and writes the note; it never rewrites the transcript, so the evidence a chat turn would use is stable. The status row reports the run while the ask line keeps asking. *(Revised after the real-app E2E: the original rule blocked here, which — with case 3's 90s grace plus the run itself — left the composer dead for minutes immediately after a meeting ended, the moment "what did i commit to?" is most worth asking. It was also inconsistent with case 15, which keeps a live meeting askable while its transcript is actively growing.)*
+2. Summary is `finalizing` → composer disabled, placeholder `finalizing…`. This is the one summary state that blocks, because the transcript is still being written.
+3. Summary `queued` but scheduler has not dispatched (90s grace) → same as 1, askable. The grace window is scheduler latency, not transcript instability.
 4. Summary transitions `running → completed` while the thread is open → composer re-enables, thread is preserved, no scroll jump, no toast.
 5. Summary transitions `running → failed` → composer re-enables. The chip becomes `why did this fail?`.
 6. Summary `failed` with a quota error → chip is suppressed entirely; the existing upgrade link owns that moment. Asking the model about a quota failure would itself consume quota.
@@ -83,7 +83,7 @@ Each is `case → decided behavior`. Numbers are stable; tests reference them.
 11. Meeting has zero transcript turns → composer disabled, placeholder `nothing recorded yet`. Matches Granola's `Transcribe a meeting to start asking questions`.
 12. Meeting has a transcript but no note and no summary → fully askable. Transcript alone is enough.
 13. Meeting is deleted while the rail is open → the whole view unmounts; the in-flight Pi session is stopped in cleanup.
-14. Two lifecycle states race (save completes as summary starts) → precedence is fixed: live > stopping > finalizing > running/queued > failed > saving > rest.
+14. Two lifecycle states race (save completes as summary starts) → precedence is fixed and total. For *what blocks the composer*: refreshing > finalizing > stopping > no-transcript > no-preset > quota; nothing else blocks. For *what the status row reports*: live > stopping > finalizing > running/queued > failed > saving > rest. The two orders are deliberately different — the status row narrates everything happening, the composer only stops for things that make an answer wrong.
 
 ## B · Live meeting (15–24)
 
