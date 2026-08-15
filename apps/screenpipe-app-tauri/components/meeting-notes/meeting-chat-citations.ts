@@ -28,9 +28,21 @@ const CLOCK = /\b(\d{1,2}):([0-5]\d)(?::([0-5]\d))?(?:\s*([AaPp])\.?[Mm]\.?)?\b/
 /** Fenced and inline code is transcript-shaped noise, not a claim (case 86). */
 const CODE_SPAN = /```[\s\S]*?```|`[^`\n]*`/g;
 
-interface Window {
+export interface CitationWindow {
   startMs: number;
-  endMs: number;
+  /**
+   * End of the meeting, or `null` while it is still recording.
+   *
+   * A live meeting has no fixed end, and freezing one at render time means a
+   * citation to something said five minutes later falls outside the window and
+   * silently stops being a link. Null is resolved to the current time at parse
+   * time instead, so a streaming answer always has a window that reaches now.
+   */
+  endMs: number | null;
+}
+
+function windowEnd(window: CitationWindow): number {
+  return window.endMs ?? Date.now();
 }
 
 function maskCode(text: string): string {
@@ -53,9 +65,10 @@ export function resolveCitationTime(
   minutes: number,
   seconds: number,
   meridiem: "a" | "p" | null,
-  window: Window,
+  window: CitationWindow,
 ): number | null {
   if (hours > 23 || minutes > 59 || seconds > 59) return null;
+  const endMs = windowEnd(window);
 
   const start = new Date(window.startMs);
   const candidates: number[] = [];
@@ -81,9 +94,7 @@ export function resolveCitationTime(
   }
 
   // Case 80: a time outside the meeting is not a citation.
-  const inside = candidates.filter(
-    (t) => t >= window.startMs && t <= window.endMs,
-  );
+  const inside = candidates.filter((t) => t >= window.startMs && t <= endMs);
   if (inside.length === 0) return null;
   // Earliest valid reading — a meeting rarely spans both readings of a clock.
   return Math.min(...inside);
@@ -98,14 +109,14 @@ export function resolveCitationTime(
  */
 export function splitCitations(
   text: string,
-  window: Window | null,
+  window: CitationWindow | null,
 ): CitationRun[] {
   if (!text) return [];
   if (!window || !Number.isFinite(window.startMs)) {
     return [{ text, at: null }];
   }
   // Case 83: a zero-length or inverted window can never contain a citation.
-  if (window.endMs < window.startMs) return [{ text, at: null }];
+  if (windowEnd(window) < window.startMs) return [{ text, at: null }];
 
   const masked = maskCode(text);
   const runs: CitationRun[] = [];

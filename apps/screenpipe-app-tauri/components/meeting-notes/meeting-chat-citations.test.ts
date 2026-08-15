@@ -150,6 +150,34 @@ describe("splitCitations", () => {
     expect(cited("after 3:41")).toHaveLength(0);
   });
 
+  it("case 16: a live meeting resolves times up to the present", () => {
+    // endMs null means "still recording". Freezing an end at render time made
+    // anything said after that render stop being a link, and got worse the
+    // longer the meeting ran.
+    const now = new Date();
+    const liveStart = new Date(now.getTime() - 30 * 60_000);
+    const live = { startMs: liveStart.getTime(), endMs: null };
+
+    const spokenAt = new Date(now.getTime() - 60_000);
+    const hh = spokenAt.getHours() % 12 === 0 ? 12 : spokenAt.getHours() % 12;
+    const text = `you said it at ${hh}:${String(spokenAt.getMinutes()).padStart(2, "0")}`;
+
+    const runs = splitCitations(text, live).filter((r) => r.at !== null);
+    expect(runs).toHaveLength(1);
+  });
+
+  it("case 16: an open-ended window still rejects times before the start", () => {
+    const now = new Date();
+    const liveStart = new Date(now.getTime() - 10 * 60_000);
+    const live = { startMs: liveStart.getTime(), endMs: null };
+    const before = new Date(liveStart.getTime() - 3 * 60 * 60_000);
+    const hh = before.getHours() % 12 === 0 ? 12 : before.getHours() % 12;
+    const text = `earlier at ${hh}:${String(before.getMinutes()).padStart(2, "0")}`;
+    expect(splitCitations(text, live).filter((r) => r.at !== null)).toHaveLength(
+      0,
+    );
+  });
+
   it("hasCitations reports whether anything resolved", () => {
     expect(hasCitations(splitCitations("at 3:34", WINDOW))).toBe(true);
     expect(hasCitations(splitCitations("nothing", WINDOW))).toBe(false);

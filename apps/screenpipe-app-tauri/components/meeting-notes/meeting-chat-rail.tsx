@@ -28,7 +28,10 @@ import { ArrowUp, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { splitCitations } from "./meeting-chat-citations";
+import {
+  splitCitations,
+  type CitationWindow,
+} from "./meeting-chat-citations";
 import {
   canSubmitTurn,
   clampThreadHeight,
@@ -63,7 +66,7 @@ export interface MeetingChatRailProps {
   /** `summarize this` runs the existing summary path, not a chat turn. */
   onRunSummary: () => void;
   /** Meeting window, for resolving clock citations. */
-  citationWindow: { startMs: number; endMs: number } | null;
+  citationWindow: CitationWindow | null;
   onCitationClick: (atMs: number) => void;
   /** Height of the scrollable document above the rail, for clamping. */
   paneHeight: number;
@@ -456,7 +459,7 @@ function AnswerBody({
   onCitationClick,
 }: {
   text: string;
-  window: { startMs: number; endMs: number } | null;
+  window: CitationWindow | null;
   onCitationClick: (atMs: number) => void;
 }) {
   const runs = useMemo(

@@ -1832,7 +1832,15 @@ export function NoteView({
     return () => {
       cancelled = true;
     };
-  }, [meeting, transcriptRefreshKey]);
+    // Keyed on the fields the fetch actually uses. Depending on the whole
+    // `meeting` object refetched the entire transcript every time an autosave
+    // returned a new record with the same transcript.
+  }, [
+    meeting.id,
+    meeting.meeting_start,
+    meeting.meeting_end,
+    transcriptRefreshKey,
+  ]);
 
   // Case 50/51: heights re-clamp against the live pane, not a stored guess.
   useEffect(() => {
@@ -1888,10 +1896,12 @@ export function NoteView({
   const citationWindow = useMemo(() => {
     const startMs = new Date(meeting.meeting_start).getTime();
     if (!Number.isFinite(startMs)) return null;
-    const endMs = meeting.meeting_end
-      ? new Date(meeting.meeting_end).getTime()
-      : Date.now();
-    return { startMs, endMs: Number.isFinite(endMs) ? endMs : Date.now() };
+    // A live meeting stays open-ended: the citation parser resolves "now" when
+    // it runs, so an answer streaming during the call can still cite a moment
+    // that happened after this memo was computed.
+    if (!meeting.meeting_end) return { startMs, endMs: null };
+    const endMs = new Date(meeting.meeting_end).getTime();
+    return { startMs, endMs: Number.isFinite(endMs) ? endMs : null };
   }, [meeting.meeting_start, meeting.meeting_end]);
   const summarySurfaceState = summaryWorking
     ? "working"
