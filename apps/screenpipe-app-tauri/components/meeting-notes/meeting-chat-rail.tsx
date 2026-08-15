@@ -302,11 +302,19 @@ export function MeetingChatRail({
           {phase === "peek" && suggestions.length > 0 && (
             <ul
               data-testid="meeting-chat-suggestions"
-              // Case 42: in with a delay, out immediately. Content that
-              // returns hesitates; content that leaves goes at once.
-              // Explicit animation-delay rather than `delay-[240ms]`, which
-              // Tailwind flags as ambiguous between transition and animation.
-              className="animate-in fade-in slide-in-from-bottom-1 pt-2 duration-200 fill-mode-both [animation-delay:240ms] motion-reduce:animate-none"
+              // Case 42 originally borrowed Wispr's asymmetric entrance: fade
+              // in after a 240ms delay, leave immediately. It shipped as an
+              // invisible feature. `fill-mode-both` holds the element at the
+              // keyframe's opacity 0 through the delay, and when the `enter`
+              // animation does not actually run the backwards fill pins it
+              // there — the suggestions were in the DOM and permanently
+              // transparent in the packaged app, which is why an existence
+              // assertion passed while nobody could ever see them.
+              //
+              // The rail's disclosure is carried by the height transition,
+              // which is real and visible. A flourish that can silently hide
+              // the content it decorates is not worth keeping.
+              className="pt-2"
             >
               {suggestions.map((suggestion) => (
                 <li key={suggestion}>

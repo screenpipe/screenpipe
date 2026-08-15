@@ -122,7 +122,7 @@ Each is `case → decided behavior`. Numbers are stable; tests reference them.
 ## D · Suggestions and the chip (41–48)
 
 41. Peek opens with an empty thread → 3 suggestion rows. Non-empty thread → none.
-42. Suggestions animate in at 240ms delay and out at 0ms. Content that returns hesitates; content that leaves goes immediately (Wispr's asymmetry).
+42. Suggestions appear with the rail, carrying **no opacity animation of their own.** *(Revised after the real-app E2E.)* This originally borrowed Wispr's asymmetric entrance — fade in after 240ms, leave at 0ms — and shipped as an invisible feature: `fill-mode-both` holds the element at the keyframe's opacity 0 through the delay, and when the `enter` animation does not actually run, the backwards fill pins it there permanently. The suggestions were present in the DOM and transparent in the packaged app, which is exactly why an existence assertion passed while nobody could see them. The disclosure is carried by the rail's height transition, which is real and visible. A flourish that can silently hide the content it decorates is not worth keeping.
 43. Clicking a suggestion fills the input and sends in one action. It does not just prefill — a two-step suggestion is a worse button.
 44. Suggestion set is chosen by meeting state, matching the chip table. Live gets `what did i miss? / who has spoken most? / what was just decided?`.
 45. A suggestion is clicked while a turn is streaming → ignored, same as 38.

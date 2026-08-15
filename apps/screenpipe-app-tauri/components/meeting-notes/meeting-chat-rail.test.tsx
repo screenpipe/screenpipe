@@ -113,6 +113,19 @@ describe("peek", () => {
     ).toHaveLength(3);
   });
 
+  it("case 42: suggestions carry no opacity animation that can hide them", () => {
+    // They shipped invisible once: `fill-mode-both` plus an animation delay
+    // held them at the keyframe's opacity 0, and an existence assertion could
+    // not tell the difference. jsdom computes no animations, so the guard is
+    // on the class contract rather than the rendered opacity.
+    renderRail();
+    fireEvent.focus(input());
+    const list = screen.getByTestId("meeting-chat-suggestions");
+    expect(list.className).not.toMatch(/fill-mode/);
+    expect(list.className).not.toMatch(/animate-in/);
+    expect(list.className).not.toMatch(/animation-delay/);
+  });
+
   it("case 43: a suggestion sends in one action", () => {
     const { onSubmit } = renderRail();
     fireEvent.focus(input());
