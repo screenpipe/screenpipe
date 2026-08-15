@@ -235,7 +235,24 @@ export function MeetingChatRail({
   const showSend = phase !== "rest" || draft.length > 0;
 
   return (
-    <div ref={rootRef} data-testid="meeting-chat-rail" data-phase={phase}>
+    <div
+      ref={rootRef}
+      data-testid="meeting-chat-rail"
+      data-phase={phase}
+      // Focus is tracked on the whole rail, not on the textarea. Pressing a
+      // suggestion blurs the input before the click resolves, so an input-level
+      // onBlur would collapse peek and unmount the button being clicked. Same
+      // relatedTarget guard the Live View composer uses for its portalled menu.
+      onFocusCapture={() => {
+        setFocused(true);
+        setCollapsed(false);
+      }}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setFocused(false);
+        }
+      }}
+    >
       {/* Thread and peek share one scroll region that grows upward. Flex
           column so the resize handle takes its 12px out of the animated
           height rather than pushing the scroll region past the bottom. */}
@@ -284,7 +301,9 @@ export function MeetingChatRail({
               data-testid="meeting-chat-suggestions"
               // Case 42: in with a delay, out immediately. Content that
               // returns hesitates; content that leaves goes at once.
-              className="animate-in fade-in slide-in-from-bottom-1 pt-2 delay-[240ms] duration-200 fill-mode-both motion-reduce:animate-none"
+              // Explicit animation-delay rather than `delay-[240ms]`, which
+              // Tailwind flags as ambiguous between transition and animation.
+              className="animate-in fade-in slide-in-from-bottom-1 pt-2 duration-200 fill-mode-both [animation-delay:240ms] motion-reduce:animate-none"
             >
               {suggestions.map((suggestion) => (
                 <li key={suggestion}>
@@ -372,11 +391,6 @@ export function MeetingChatRail({
           disabled={!availability.enabled}
           aria-label="ask about this meeting"
           placeholder={availability.placeholder}
-          onFocus={() => {
-            setFocused(true);
-            setCollapsed(false);
-          }}
-          onBlur={() => setFocused(false)}
           onChange={(event) => {
             if (event.target.value.length > 0) setChipDismissed(true);
             onDraftChange(event.target.value);

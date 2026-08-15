@@ -119,6 +119,33 @@ describe("peek", () => {
     expect(onSubmit).toHaveBeenCalledWith("draft the follow-up email");
   });
 
+  it("survives the blur that pressing a suggestion causes", () => {
+    // Real pointers blur the textarea before the click resolves. Collapsing
+    // peek on that blur unmounts the button mid-press, so the suggestion can
+    // never be clicked in the actual app even though a focus-then-click test
+    // passes.
+    const { onSubmit } = renderRail();
+    fireEvent.focus(input());
+    const suggestion = screen.getByText("draft the follow-up email");
+
+    // Focus moves to the suggestion button, which is inside the rail.
+    fireEvent.blur(input(), { relatedTarget: suggestion });
+    expect(rail()).toHaveAttribute("data-phase", "peek");
+    expect(screen.getByText("draft the follow-up email")).toBeTruthy();
+
+    fireEvent.click(suggestion);
+    expect(onSubmit).toHaveBeenCalledWith("draft the follow-up email");
+  });
+
+  it("collapses when focus leaves the rail entirely", () => {
+    renderRail();
+    fireEvent.focus(input());
+    expect(rail()).toHaveAttribute("data-phase", "peek");
+    // relatedTarget outside the rail — a click on the document, say.
+    fireEvent.blur(input(), { relatedTarget: document.body });
+    expect(rail()).toHaveAttribute("data-phase", "rest");
+  });
+
   it("shows the scope line only when open", () => {
     renderRail();
     expect(screen.queryByText(/reading transcript/)).toBeNull();
