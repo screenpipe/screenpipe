@@ -8,7 +8,8 @@
 //! to browse, search, publish, install, and review pipes from a central registry.
 
 use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
@@ -80,8 +81,11 @@ pub struct StoreReviewRequest {
 /// GET /pipes/store?q=...&category=...&sort=...&limit=...&offset=...
 ///
 /// Browse and search pipes from the registry.
-pub async fn pipe_store_search(Query(query): Query<StoreSearchQuery>) -> Json<Value> {
-    let base = api_base_url();
+pub async fn pipe_store_search(Query(query): Query<StoreSearchQuery>) -> Response {
+    pipe_store_search_with_base(query, api_base_url()).await
+}
+
+async fn pipe_store_search_with_base(query: StoreSearchQuery, base: String) -> Response {
     let client = &*REGISTRY_CLIENT;
 
     let mut params: Vec<(&str, String)> = Vec::new();
@@ -103,11 +107,23 @@ pub async fn pipe_store_search(Query(query): Query<StoreSearchQuery>) -> Json<Va
 
     let url = format!("{}/api/pipes/store", base);
     match client.get(&url).query(&params).send().await {
-        Ok(resp) => match resp.json::<Value>().await {
-            Ok(body) => Json(body),
-            Err(e) => Json(json!({ "error": format!("failed to parse registry response: {}", e) })),
-        },
-        Err(e) => Json(json!({ "error": format!("failed to reach registry: {}", e) })),
+        Ok(resp) => {
+            let status =
+                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            match resp.json::<Value>().await {
+                Ok(body) => (status, Json(body)).into_response(),
+                Err(e) => (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({ "error": format!("failed to parse registry response: {}", e) })),
+                )
+                    .into_response(),
+            }
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": format!("failed to reach registry: {}", e) })),
+        )
+            .into_response(),
     }
 }
 
@@ -524,5 +540,46 @@ pub async fn pipe_store_review(
             Err(e) => Json(json!({ "error": format!("failed to parse registry response: {}", e) })),
         },
         Err(e) => Json(json!({ "error": format!("failed to reach registry: {}", e) })),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn search_preserves_registry_error_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/pipes/store"))
+            .and(query_param("sort", "popular"))
+            .respond_with(
+                ResponseTemplate::new(503)
+                    .set_body_json(json!({ "error": "registry unavailable" })),
+            )
+            .mount(&server)
+            .await;
+
+        let response = pipe_store_search_with_base(
+            StoreSearchQuery {
+                q: None,
+                category: None,
+                sort: Some("popular".to_string()),
+                limit: None,
+                offset: None,
+            },
+            server.uri(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({ "error": "registry unavailable" })
+        );
     }
 }
