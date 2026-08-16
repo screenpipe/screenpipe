@@ -12,17 +12,27 @@ export type ExternalAgentWithSkills =
   | "cursor"
   | "gemini"
   | "openclaw"
+  | "opencode"
   | "hermes";
 
-// Paths mirror the CLI's layout() in crates/screenpipe-engine/src/cli/agent.rs.
-function skillsDirectoryName(target: ExternalAgentWithSkills): string {
+// Path segments relative to $HOME, mirroring the CLI's layout_in() in
+// crates/screenpipe-engine/src/cli/agent.rs. Most agents are a single dot-dir
+// directly under home; OpenCode's skills live two segments down
+// (~/.config/opencode/skills), hence an array rather than one string — kept
+// as separate join() arguments rather than a single "a/b" string to match
+// how every other multi-segment path in this codebase is built (see
+// ai-tools-mcp.ts's getWindsurfMcpConfigPath, ~/.codeium/windsurf/...).
+function skillsDirectorySegments(target: ExternalAgentWithSkills): string[] {
   switch (target) {
-    case "claude": return ".claude";
-    case "codex": return ".codex";
-    case "cursor": return ".cursor";
-    case "gemini": return ".gemini";
-    case "openclaw": return ".openclaw";
-    case "hermes": return ".hermes";
+    case "claude": return [".claude"];
+    case "codex": return [".codex"];
+    case "cursor": return [".cursor"];
+    case "gemini": return [".gemini"];
+    case "openclaw": return [".openclaw"];
+    case "hermes": return [".hermes"];
+    // Does not account for a custom $XDG_CONFIG_HOME — same simplification
+    // every other entry here already makes (no per-tool env overrides).
+    case "opencode": return [".config", "opencode"];
   }
 }
 
@@ -46,7 +56,7 @@ export async function areExternalAgentSkillsInstalled(
   target: ExternalAgentWithSkills,
 ): Promise<boolean> {
   const home = await homeDir();
-  const skillsRoot = await join(home, skillsDirectoryName(target), "skills");
+  const skillsRoot = await join(home, ...skillsDirectorySegments(target), "skills");
 
   try {
     await Promise.all([

@@ -43,6 +43,7 @@ const CONNECT_ALL_TOOL_IDS = [
   "hermes",
   "runner",
   "windsurf",
+  "opencode",
 ] as const;
 export type ConnectAllToolId = (typeof CONNECT_ALL_TOOL_IDS)[number];
 
@@ -59,13 +60,14 @@ export const CONNECT_ALL_TOOL_NAMES: Record<ConnectAllToolId, string> = {
   // config stayed at ~/.codeium/windsurf — show both names so users on either
   // side of the OTA update recognize it.
   windsurf: "Windsurf (Devin Desktop)",
+  opencode: "OpenCode",
 };
 
 // Skills support per tool lives in the disconnect-all component's
-// SKILLS_TARGET map: claude/codex/cursor/gemini/openclaw/hermes read
-// SKILL.md skills; runner and windsurf are MCP-only. Grok is intentionally
-// not in this matrix: it isn't part of connect-all and its settings panel has
-// its own disconnect.
+// SKILLS_TARGET map: claude/codex/cursor/gemini/openclaw/hermes/opencode read
+// SKILL.md skills, windsurf and runner areMCP-only. Grok is intentionally not
+// in this matrix: it isn't part of connect-all and its settings panel has its
+// own disconnect.
 
 export async function detectAiTools(): Promise<ConnectAllToolId[]> {
   const home = await homeDir();
@@ -88,6 +90,9 @@ export async function detectAiTools(): Promise<ConnectAllToolId[]> {
     ["hermes", async () => exists(await join(home, ".hermes"))],
     ["runner", async () => exists(await join(home, ".runner"))],
     ["windsurf", async () => exists(await join(home, ".codeium", "windsurf"))],
+    // Does not account for a custom $XDG_CONFIG_HOME — same simplification
+    // every other check here already makes (no per-tool env overrides).
+    ["opencode", async () => exists(await join(home, ".config", "opencode"))],
   ];
 
   const detected: ConnectAllToolId[] = [];
@@ -587,6 +592,46 @@ export async function installRunnerMcp(): Promise<McpCommand> {
   await writeJsonConfig(configPath, config);
   return mcp;
 }
+  
+// ─── OpenCode ────────────────────────────────────────────────────────────────
+// Skills at ~/.config/opencode/skills (also falls back to ~/.claude/skills
+// for Claude Code compatibility — see https://opencode.ai/docs/skills/).
+// MCP servers use a schema that doesn't match every other JSON-format tool
+// above: a top-level `mcp` key (not `mcpServers`), `command` as an array (not
+// split command+args), an explicit `enabled` flag, and `environment` instead
+// of `env` — see https://opencode.ai/docs/mcp-servers/#local-server. Mirrors
+// crates/screenpipe-engine/src/cli/agent.rs's merge_mcp_opencode_json /
+// remove_mcp_opencode_json, which needed the same bespoke treatment.
+// Does not account for a custom $XDG_CONFIG_HOME — same simplification every
+// other path in this file already makes (no per-tool env overrides).
+
+export async function getOpencodeConfigPath(): Promise<string> {
+  const home = await homeDir();
+  return join(home, ".config", "opencode", "opencode.json");
+}
+
+export async function isOpencodeMcpInstalled(): Promise<boolean> {
+  try {
+    const content = await readTextFile(await getOpencodeConfigPath());
+    const entry = JSON.parse(content)?.mcp?.screenpipe;
+    return !!entry && entry !== null;
+  } catch { return false; }
+}
+
+export async function installOpencodeMcp(): Promise<McpCommand> {
+  const configPath = await getOpencodeConfigPath();
+  const config = await readJsonConfigStrict(configPath);
+  const mcp = await buildMcpConfig();
+  if (!config.mcp || typeof config.mcp !== "object") config.mcp = {};
+  (config.mcp as Record<string, unknown>).screenpipe = {
+    type: "local",
+    command: [mcp.command, ...mcp.args],
+    enabled: true,
+    ...(mcp.env ? { environment: mcp.env } : {}),
+  };
+  await writeJsonConfig(configPath, config);
+  return mcp;
+}
 
 export async function uninstallRunnerMcp(): Promise<void> {
   await removeScreenpipeFromJsonConfig(await getRunnerMcpConfigPath());
@@ -621,6 +666,15 @@ export async function uninstallGeminiMcp(): Promise<void> {
   await removeScreenpipeFromJsonConfig(await getGeminiMcpConfigPath());
 }
 
+export async function uninstallOpencodeMcp(): Promise<void> {
+  const configPath = await getOpencodeConfigPath();
+  const config = await readJsonConfigStrict(configPath);
+  const servers = config.mcp as Record<string, unknown> | undefined;
+  if (!servers?.screenpipe) return;
+  delete servers.screenpipe;
+  await writeJsonConfig(configPath, config);
+}
+
 // ─── Transactional Settings connect / disconnect orchestrators (#5291) ──────
 
 // Tools whose agent reads global SKILL.md skills. Runner has no global skills
@@ -636,6 +690,7 @@ export const SKILLS_TARGET: Partial<Record<ConnectAllToolId, ExternalAgentWithSk
   gemini: "gemini",
   openclaw: "openclaw",
   hermes: "hermes",
+  opencode: "opencode",
 };
 
 const INSTALL_MCP: Record<ConnectAllToolId, () => Promise<McpCommand>> = {
@@ -648,6 +703,7 @@ const INSTALL_MCP: Record<ConnectAllToolId, () => Promise<McpCommand>> = {
   hermes: installHermesMcp,
   runner: installRunnerMcp,
   windsurf: installWindsurfMcp,
+  opencode: installOpencodeMcp,
 };
 
 const UNINSTALL_MCP: Record<ConnectAllToolId, () => Promise<void>> = {
@@ -660,6 +716,7 @@ const UNINSTALL_MCP: Record<ConnectAllToolId, () => Promise<void>> = {
   hermes: uninstallHermesMcp,
   runner: uninstallRunnerMcp,
   windsurf: uninstallWindsurfMcp,
+  opencode: uninstallOpencodeMcp,
 };
 
 async function setAutoConnectOptOut(id: ConnectAllToolId, optOut: boolean): Promise<void> {
@@ -874,6 +931,9 @@ export async function isToolConfigHealthy(id: ConnectAllToolId): Promise<boolean
         // Our one refusal: a hand-authored mcp_servers block without screenpipe.
         return hermesHasScreenpipe(text) || !HERMES_MCP_BLOCK.test(text);
       }
+      case "opencode":
+        await readJsonConfigStrict(await getOpencodeConfigPath());
+        return true;
     }
   } catch {
     return false;
