@@ -50,6 +50,7 @@ pub mod obsidian;
 pub mod obsidian_memories;
 pub mod odoo;
 pub mod openclaw;
+pub mod opencode;
 pub mod otter;
 pub mod outlook_email;
 pub mod perplexity;
@@ -435,6 +436,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(zoom::Zoom),
         Box::new(claude_code::ClaudeCode),
         Box::new(codex::Codex),
+        Box::new(opencode::OpenCode),
         Box::new(workflowy::Workflowy),
         Box::new(openclaw::OpenClaw),
         Box::new(hermes::Hermes),

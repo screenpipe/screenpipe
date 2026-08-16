@@ -4,7 +4,8 @@
 
 //! Background scheduler that syncs the local `memories` table out to
 //! the user's other AI assistants — Claude Code (`~/.claude/CLAUDE.md`),
-//! the Codex CLI (`~/.codex/AGENTS.md`), and an Obsidian vault
+//! the Codex CLI (`~/.codex/AGENTS.md`), OpenCode
+//! (`~/.config/opencode/AGENTS.md`), and an Obsidian vault
 //! (`<vault>/<folder>/screenpipe-memories.md`).
 //!
 //! ## Layering
@@ -12,11 +13,11 @@
 //! - The *rendering* + *file write* layer lives in
 //!   `screenpipe-core::memories::external_sync`. Pure, no DB, easy to
 //!   unit-test.
-//! - The two *destination definitions* (Claude Code, Codex) live in
-//!   `screenpipe-connect::connections::{claude_code, codex}`. They're
-//!   regular Integrations, so the existing connections UI shows them,
-//!   the existing credential store persists their `home_path`, and the
-//!   user toggles them on/off from the same surface as Notion/Slack/etc.
+//! - The *destination definitions* (Claude Code, Codex, OpenCode) live in
+//!   `screenpipe-connect::connections::{claude_code, codex, opencode}`.
+//!   They're regular Integrations, so the existing connections UI shows
+//!   them, the existing credential store persists their `home_path`, and
+//!   the user toggles them on/off from the same surface as Notion/Slack/etc.
 //! - This module is the *orchestrator*: every [`SCAN_INTERVAL`] it pulls
 //!   memories from the DB, asks `connections::load_connection` what's
 //!   enabled, and hands the rendered digest off to the writer.
@@ -245,6 +246,10 @@ pub async fn run_once(
                     destination_id: Destination::OBSIDIAN.id,
                     outcome: Err(anyhow::anyhow!("load memories: {}", e)),
                 },
+                ExternalSyncResult {
+                    destination_id: Destination::OPENCODE.id,
+                    outcome: Err(anyhow::anyhow!("load memories: {}", e)),
+                },
             ];
         }
     };
@@ -272,6 +277,14 @@ pub async fn run_once(
             secret_store,
             screenpipe_dir,
             resolve_obsidian_path,
+        )
+        .await,
+        sync_destination(
+            &Destination::OPENCODE,
+            &entries,
+            secret_store,
+            screenpipe_dir,
+            resolve_opencode_path,
         )
         .await,
     ]
@@ -419,6 +432,10 @@ fn resolve_claude_code_path(creds: &serde_json::Map<String, Value>) -> Result<Pa
 
 fn resolve_codex_path(creds: &serde_json::Map<String, Value>) -> Result<PathBuf> {
     screenpipe_connect::connections::codex::resolve_home_path(creds)
+}
+
+fn resolve_opencode_path(creds: &serde_json::Map<String, Value>) -> Result<PathBuf> {
+    screenpipe_connect::connections::opencode::resolve_home_path(creds)
 }
 
 /// Resolve `<vault>/<memories_folder>` for the Obsidian destination. The
@@ -687,6 +704,19 @@ mod tests {
         assert!(results
             .iter()
             .any(|r| r.destination_id == Destination::OBSIDIAN.id));
+    }
+
+    #[tokio::test]
+    async fn run_once_covers_opencode_destination() {
+        // Same as above, for OpenCode's global AGENTS.md.
+        let dir = tempfile::tempdir().unwrap();
+        let db = screenpipe_db::DatabaseManager::new("sqlite::memory:", Default::default())
+            .await
+            .unwrap();
+        let results = run_once(&db, None, dir.path()).await;
+        assert!(results
+            .iter()
+            .any(|r| r.destination_id == Destination::OPENCODE.id));
     }
 
     #[test]

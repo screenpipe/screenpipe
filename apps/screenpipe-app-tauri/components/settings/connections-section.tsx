@@ -506,6 +506,7 @@ const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
     codex: <img src="/images/codex.svg" alt="Codex" className="w-5 h-5 rounded" />,
     grok: <GrokLogo className="w-5 h-5 rounded" />,
     "claude-code": <Terminal className="h-5 w-5" />,
+    opencode: <img src="/images/opencode.svg" alt="OpenCode" className="w-5 h-5 rounded dark:invert" />,
     warp: <img src="/images/warp.png" alt="Warp" className="w-5 h-5 rounded" />,
     chatgpt: <img src="/images/openai.png" alt="ChatGPT" className="w-5 h-5 rounded" />,
     telegram: (
