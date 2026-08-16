@@ -4,6 +4,7 @@
 // app/providers.tsx
 "use client";
 import { MotionConfig } from "framer-motion";
+import { getVersion } from "@tauri-apps/api/app";
 import posthog from "posthog-js";
 import { PostHogProvider } from "posthog-js/react";
 import { useEffect, useState, Suspense } from "react";
@@ -18,6 +19,7 @@ import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { useUpdateListener } from "@/components/update-banner";
 import { AppEntitlementGate } from "@/components/app-entitlement-gate";
 import { DeeplinkHandler } from "@/components/deeplink-handler";
+import { registerAppVersionProperty } from "@/lib/analytics/app-version-property";
 import { LiveViewOnboardingFollowUp } from "@/components/live-view-onboarding-follow-up";
 import { usePathname } from "next/navigation";
 import { readCachedAnalyticsId, readCachedAnalyticsEnabled } from "@/lib/analytics-id";
@@ -97,6 +99,9 @@ export const Providers = forwardRef<
           ? { bootstrap: { distinctID: cachedAnalyticsId, isIdentifiedID: true } }
           : {}),
       });
+      // Webview events carried no app version at all, so no webview funnel
+      // could be split by the release that changed it. See the module comment.
+      void registerAppVersionProperty(posthog, getVersion);
       // sync opt-in/out with cached preference on every boot
       if (cachedEnabled === false) {
         posthog.opt_out_capturing();
