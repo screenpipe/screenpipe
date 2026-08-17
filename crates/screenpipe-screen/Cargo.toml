@@ -122,4 +122,4 @@ libc = { workspace = true }
 atspi = { version = "0.25.0", features = ["tokio","proxies-tokio","zbus"] }
 zbus = { workspace = true, default-features = false }
 atspi-common     = { version = "0.9.0", default-features = false }
-atspi-proxies    = { version = "0.9.0", default-features = false }
+atspi-proxies    = { version = "0.14.0", default-features = false }
