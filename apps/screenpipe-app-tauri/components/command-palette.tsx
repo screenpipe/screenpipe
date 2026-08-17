@@ -6,9 +6,9 @@
 import React, { useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
-  Brain,
   CalendarClock,
   Keyboard,
+  LayoutDashboard,
   MessageSquare,
   MonitorPlay,
   PanelLeft,
@@ -113,7 +113,7 @@ const SECTION_ACTION_IDS: Record<SidebarNavId, CommandPaletteActionId> = {
 
 const SECTION_ICONS: Record<SidebarNavId, LucideIcon> = {
   home: MessageSquare,
-  brain: Brain,
+  brain: LayoutDashboard,
   meetings: CalendarClock,
   pipes: TimerReset,
   timeline: MonitorPlay,

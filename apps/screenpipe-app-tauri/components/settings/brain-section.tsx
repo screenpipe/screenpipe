@@ -253,6 +253,21 @@ export function resetBrainViewStateForTests() {
   brainViewState.scrollTopByType.overview = 0;
 }
 
+// The Home sidebar's "Live Views" item is a direct destination, not just a
+// rename of the old "Brain" entry — it must always land on this tab, never
+// on whichever tab (Memories/Artifacts) was last active (#5622). Setting the
+// module var alone covers a not-yet-mounted BrainSection (the next mount
+// reads it); the event covers an already-mounted one, since flipping the var
+// alone wouldn't trigger a re-render.
+export const LIVE_VIEWS_SIDEBAR_OPEN_EVENT = "screenpipe:live-views-sidebar-open";
+
+export function openLiveViewsOverview(): void {
+  brainViewState.typeFilter = "overview";
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(LIVE_VIEWS_SIDEBAR_OPEN_EVENT));
+  }
+}
+
 function timeAgo(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
   if (!Number.isFinite(ms) || ms < 0) return "just now";
@@ -645,6 +660,13 @@ export function BrainSection() {
     window.addEventListener(ONBOARDING_BRAIN_HANDOFF_EVENT, openOverview);
     return () =>
       window.removeEventListener(ONBOARDING_BRAIN_HANDOFF_EVENT, openOverview);
+  }, [switchTypeFilter]);
+
+  useEffect(() => {
+    const openOverview = () => switchTypeFilter("overview");
+    window.addEventListener(LIVE_VIEWS_SIDEBAR_OPEN_EVENT, openOverview);
+    return () =>
+      window.removeEventListener(LIVE_VIEWS_SIDEBAR_OPEN_EVENT, openOverview);
   }, [switchTypeFilter]);
 
   // debounce search

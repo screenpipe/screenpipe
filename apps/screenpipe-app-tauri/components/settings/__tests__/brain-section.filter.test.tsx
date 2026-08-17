@@ -148,7 +148,11 @@ vi.mock("@/components/ui/use-toast", () => ({
   useToast: () => ({ toast: vi.fn() }),
 }));
 
-import { BrainSection, resetBrainViewStateForTests } from "../brain-section";
+import {
+  BrainSection,
+  openLiveViewsOverview,
+  resetBrainViewStateForTests,
+} from "../brain-section";
 import { localFetch } from "@/lib/api";
 import { emit } from "@tauri-apps/api/event";
 import { useChatStore } from "@/lib/stores/chat-store";
@@ -655,6 +659,54 @@ describe("BrainSection type filter", () => {
     await waitFor(() =>
       expect(screen.getByTestId("brain-scroll-container").scrollTop).toBe(320),
     );
+  });
+
+  // #5622: the Home sidebar's "Live Views" item is a direct destination, so
+  // it must always land on the overview tab — never on whichever tab
+  // (Memories/Artifacts) Brain was last showing.
+  it("always opens on the Live Views overview when opened via the sidebar, even after Memories/Artifacts was last active", async () => {
+    const firstRender = render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    selectBrainView("artifacts");
+    await waitFor(() => expect(artifactRows().length).toBe(5));
+
+    // Simulate leaving Brain for another sidebar section: the component
+    // unmounts, and module-level view state is all that survives.
+    firstRender.unmount();
+
+    // The sidebar's onSelect handler calls this before the section (re)mounts.
+    openLiveViewsOverview();
+
+    render(<BrainSection />);
+    await waitFor(() =>
+      expect(screen.getByTestId("brain-view-switcher")).toHaveAttribute(
+        "aria-label",
+        "switch Brain view, current: Live Views",
+      ),
+    );
+    expect(memoryRows().length).toBe(0);
+    expect(artifactRows().length).toBe(0);
+  });
+
+  it("re-syncs an already-mounted Brain section back to Live Views on repeat sidebar clicks", async () => {
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    selectBrainView("memories");
+    await waitFor(() => expect(memoryRows().length).toBe(8));
+
+    // BrainSection is still mounted (the user never left it) — clicking the
+    // sidebar item again must still force the overview tab, not no-op.
+    openLiveViewsOverview();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("brain-view-switcher")).toHaveAttribute(
+        "aria-label",
+        "switch Brain view, current: Live Views",
+      ),
+    );
+    expect(memoryRows().length).toBe(0);
   });
 
   it("edits memory tags from the edit dialog", async () => {

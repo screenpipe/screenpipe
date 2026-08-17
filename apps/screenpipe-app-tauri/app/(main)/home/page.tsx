@@ -8,7 +8,7 @@ import {
   Settings as SettingsIcon,
   TimerReset,
   Plus,
-  Brain,
+  LayoutDashboard,
   MonitorPlay,
   HelpCircle,
   PanelLeftClose,
@@ -55,7 +55,7 @@ import { usePlatform } from "@/lib/hooks/use-platform";
 import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 import { FeedbackSection } from "@/components/settings/feedback-section";
 import { PipeStoreView } from "@/components/pipe-store";
-import { BrainSection } from "@/components/settings/brain-section";
+import { BrainSection, openLiveViewsOverview } from "@/components/settings/brain-section";
 import { ConnectionsSection } from "@/components/settings/connections-section";
 import { MeetingNotesSection } from "@/components/meeting-notes";
 import { StandaloneChat } from "@/components/standalone-chat";
@@ -997,7 +997,7 @@ function HomeContent() {
     // Each click allocates a new session id (empty rows are not reused — that
     // felt like opening an old recent).
     home: { label: "Chat", icon: <Plus className="h-3.5 w-3.5" /> },
-    brain: { label: "Brain", icon: <Brain className="h-3.5 w-3.5" /> },
+    brain: { label: "Live Views", icon: <LayoutDashboard className="h-3.5 w-3.5" /> },
     meetings: { label: "Meetings", icon: <CalendarClock className="h-3.5 w-3.5" /> },
     pipes: { label: "Scheduled", icon: <TimerReset className="h-3.5 w-3.5" /> },
     timeline: { label: "Timeline", icon: <MonitorPlay className="h-3.5 w-3.5" /> },
@@ -1140,6 +1140,7 @@ function HomeContent() {
           },
           goToSection: (id) => {
             void setActiveSection(id);
+            if (id === "brain") openLiveViewsOverview();
           },
           toggleSidebar,
           openSettings,
@@ -1306,6 +1307,10 @@ function HomeContent() {
                   // The "home" slot is the New Chat affordance — clicking it
                   // (from any view) always spawns a new chat session.
                   if (id === "home") startNewChat();
+                  // "Live Views" is a direct destination (#5622): always land
+                  // on the overview tab, never on whichever Brain tab
+                  // (Memories/Artifacts) was last active.
+                  if (id === "brain") openLiveViewsOverview();
                 }}
                 onMove={(id, toIndex) =>
                   persistSidebarLayout(

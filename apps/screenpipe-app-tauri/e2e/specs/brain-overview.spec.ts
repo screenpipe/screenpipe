@@ -142,6 +142,15 @@ async function selectDashboard(viewId: string) {
   );
 }
 
+/** Switch the Brain tab via its dropdown switcher (Live Views / Memories / Artifacts). */
+async function selectBrainView(view: "overview" | "memories" | "artifacts") {
+  const switcher = await waitForTestId("brain-view-switcher", 10_000);
+  await switcher.click();
+  const option = await $(`[data-testid="brain-filter-${view}"]`);
+  await option.waitForDisplayed({ timeout: t(5_000) });
+  await option.click();
+}
+
 async function openDashboardMenu() {
   await browser.waitUntil(
     async () => {
@@ -2462,5 +2471,91 @@ Refresh the assigned Live View output targets from source-backed activity.
     expect(deletedCanvas).toBeNull();
     await invokeOrThrow("delete_brain_view", { id: SELECTABLE_VIEW_ID });
     await invokeOrThrow("delete_brain_view", { id: FIXED_VIEW_ID });
+  });
+
+  // #5622: the Home sidebar exposes "Live Views" as a direct destination —
+  // clicking it must always open the Live Views overview (not whichever tab
+  // Brain was last showing), while the selected dashboard keeps surviving
+  // navigation away and back, exactly as it already does today.
+  it("sidebar Live Views always opens the overview and keeps the selected dashboard across navigation", async () => {
+    await waitForAppReady();
+    await openHomeWithDiagnostics();
+
+    const viewIdA = "sidebar-nav-e2e-a";
+    const viewIdB = "sidebar-nav-e2e-b";
+    const viewRequest = (id: string, title: string) => ({
+      id,
+      title,
+      expectedRevision: null,
+      timeRange: "7d",
+      periodPolicy: { type: "selectable.v1" as const, values: ["7d", "30d"] },
+      slots: [],
+    });
+
+    // A WDIO retry reuses the same app process — start from a known
+    // dashboard set so the assertions below don't depend on state a
+    // previous attempt (or an earlier test) left behind.
+    const existingViews = await invokeOrThrow<BrainView[]>("list_brain_views");
+    for (const view of existingViews) {
+      await invokeOrThrow("delete_brain_view", { id: view.id });
+    }
+    await invokeOrThrow("save_brain_view", {
+      request: viewRequest(viewIdA, "Sidebar nav e2e A"),
+    });
+    await invokeOrThrow("save_brain_view", {
+      request: viewRequest(viewIdB, "Sidebar nav e2e B"),
+    });
+
+    try {
+      const brainNav = await waitForTestId("nav-brain", 10_000);
+      expect(await brainNav.getText()).toContain("Live Views");
+      await brainNav.click();
+      await waitForTestId("section-brain", 15_000);
+
+      // Opens directly on the Live Views overview, not Memories/Artifacts.
+      await waitForTestId("overview-dashboard-selector", 15_000);
+
+      // Switch dashboard — the state that must survive the round trip below.
+      await selectDashboard(viewIdB);
+
+      // Switch to Memories, the tab a user would "discover" per the issue.
+      await selectBrainView("memories");
+      await browser.waitUntil(
+        async () =>
+          (await $("[data-testid='brain-view-switcher']").getAttribute(
+            "aria-label",
+          )) === "switch Brain view, current: Memories",
+        { timeout: t(5_000), timeoutMsg: "did not switch to Memories tab" },
+      );
+
+      // Navigate away and back via the sidebar, exactly like a real user.
+      const pipesNav = await waitForTestId("nav-pipes", 10_000);
+      await pipesNav.click();
+      await waitForTestId("section-pipes", 15_000);
+
+      const brainNavAgain = await waitForTestId("nav-brain", 10_000);
+      await brainNavAgain.click();
+      await waitForTestId("section-brain", 15_000);
+
+      // Regression guard for #5622: even though Memories was the last active
+      // tab, the sidebar's "Live Views" entry must land back on the
+      // overview — not silently reopen Memories.
+      const selector = await waitForTestId("overview-dashboard-selector", 15_000);
+      await browser.waitUntil(
+        async () =>
+          (await $("[data-testid='brain-view-switcher']").getAttribute(
+            "aria-label",
+          )) === "switch Brain view, current: Live Views",
+        { timeout: t(5_000), timeoutMsg: "did not return to the Live Views tab" },
+      );
+
+      // The previously selected dashboard remains selected and switchable.
+      expect(await selector.getValue()).toBe(viewIdB);
+      await selectDashboard(viewIdA);
+      expect(await selector.getValue()).toBe(viewIdA);
+    } finally {
+      await invokeOrThrow("delete_brain_view", { id: viewIdA }).catch(() => {});
+      await invokeOrThrow("delete_brain_view", { id: viewIdB }).catch(() => {});
+    }
   });
 });
