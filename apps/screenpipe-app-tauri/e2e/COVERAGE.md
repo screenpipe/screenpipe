@@ -7,8 +7,8 @@ and layer declared in the manifest, weighted by confidence and criticality.
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
 - Mapped specs: 117
-- Declared test blocks: 334
-- Weighted coverage points: 261.3
+- Declared test blocks: 335
+- Weighted coverage points: 262.3
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 89 | 288 | 235.3 | 15 | 93 | 92% |
-| macos | 113 | 297 | 232.1 | 17 | 99 | 90% |
-| linux | 79 | 248 | 206.0 | 14 | 89 | 88% |
+| windows | 89 | 289 | 236.3 | 15 | 93 | 92% |
+| macos | 113 | 298 | 233.1 | 17 | 99 | 90% |
+| linux | 79 | 249 | 207.0 | 14 | 89 | 88% |
 
 ## Runtime Results
 
@@ -39,13 +39,13 @@ pass/fail/skip counts.
 | capture-ocr | 2 specs / 16 tests / 6.4 pts | 8 specs / 12 tests / 4.8 pts | 1 specs / 3 tests / 1.2 pts |
 | chat-ai | 25 specs / 51 tests / 37.6 pts | 37 specs / 73 tests / 51.7 pts | 24 specs / 50 tests / 37.1 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
-| local-api | 25 specs / 114 tests / 95.0 pts | 32 specs / 101 tests / 84.5 pts | 20 specs / 82 tests / 73.2 pts |
+| local-api | 25 specs / 115 tests / 96.0 pts | 32 specs / 102 tests / 85.5 pts | 20 specs / 83 tests / 74.2 pts |
 | notifications | 4 specs / 25 tests / 16.3 pts | 3 specs / 5 tests / 3.4 pts | 2 specs / 4 tests / 3.1 pts |
 | onboarding | 9 specs / 37 tests / 32.8 pts | 11 specs / 39 tests / 34.2 pts | 9 specs / 37 tests / 32.8 pts |
 | os-integration | 7 specs / 30 tests / 25.5 pts | 14 specs / 27 tests / 16.0 pts | 2 specs / 13 tests / 9.4 pts |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
-| pipes | 6 specs / 19 tests / 19.0 pts | 8 specs / 25 tests / 25.0 pts | 6 specs / 19 tests / 19.0 pts |
-| real-ui-e2e | 63 specs / 189 tests / 156.0 pts | 76 specs / 194 tests / 159.2 pts | 59 specs / 167 tests / 143.3 pts |
+| pipes | 6 specs / 20 tests / 20.0 pts | 8 specs / 26 tests / 26.0 pts | 6 specs / 20 tests / 20.0 pts |
+| real-ui-e2e | 63 specs / 190 tests / 157.0 pts | 76 specs / 195 tests / 160.2 pts | 59 specs / 168 tests / 144.3 pts |
 | settings | 14 specs / 38 tests / 35.0 pts | 16 specs / 33 tests / 28.7 pts | 13 specs / 30 tests / 27.0 pts |
 | storage-privacy | 9 specs / 40 tests / 31.3 pts | 9 specs / 26 tests / 25.1 pts | 6 specs / 19 tests / 18.1 pts |
 | tauri-command | 18 specs / 50 tests / 39.1 pts | 26 specs / 61 tests / 46.6 pts | 18 specs / 52 tests / 40.2 pts |
@@ -108,7 +108,7 @@ pass/fail/skip counts.
 | app-lifecycle.spec.ts | windows, macos, linux | real-ui-e2e, window-lifecycle | app-launch, home-navigation, webview-stability, route-churn, browser-storage | high | strong | mixed | 14 | Home webview, routing, reload, focus, resize, and storage stability. |
 | artifacts-api.spec.ts | windows, macos, linux | local-api | local-api-auth, artifacts | medium | strong | api | 7 | CRUD coverage for artifact registration, validation, unified listing, upsert, and delete. |
 | audio-fallback.spec.ts | macos | audio-device, settings, notifications | audio-device-health, settings-recording, notifications | medium | conditional | real-user-flow | 1 | Opt-in macOS cloud audio fallback seed. |
-| brain-overview.spec.ts | windows, macos, linux | real-ui-e2e, local-api, pipes | brain, brain-overview, brain-canvas, artifacts, pipes | high | strong | real-user-flow | 5 | Deletes the last dashboard at 800x600, scrolls to the final starter template, verifies the real local builder keeps its generated dashboard on review through save, requires four AI-proposed Blocks to be visible on an empty Canvas before acceptance, and samples the native Canvas viewport across an AI-added Block focus to prove eased intermediate movement instead of a teleport. Also renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080. |
+| brain-overview.spec.ts | windows, macos, linux | real-ui-e2e, local-api, pipes | brain, brain-overview, brain-canvas, artifacts, pipes | high | strong | real-user-flow | 6 | Deletes the last dashboard at 800x600, scrolls to the final starter template, verifies the real local builder keeps its generated dashboard on review through save, requires four AI-proposed Blocks to be visible on an empty Canvas before acceptance, and samples the native Canvas viewport across an AI-added Block focus to prove eased intermediate movement instead of a teleport. Also renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080. |
 | brain-section.spec.ts | windows, macos, linux | real-ui-e2e | brain, artifacts, memories, viewer-deeplink | medium | strong | real-user-flow | 10 | Brain coverage for filters, search, delete flows, selection pruning, add memory, and inline artifact markdown preview. |
 | capture-frequency-floor.spec.ts | macos | capture-ocr, settings, real-ui-e2e | capture-ocr, settings-recording, restart-flow | high | conditional | real-user-flow | 1 | macOS fixed screenshot cadence regression: persists the 1s setting before immediate Apply & Restart, then verifies real capture attempts and frame writes. |
 | capture-loop-liveness.spec.ts | macos | capture-ocr, local-api, os-integration | app-launch, capture-ocr | high | conditional | api | 1 | Opt-in macOS fault injection wedges a visual-change probe; asserts the bounded probe keeps the capture loop and its /health heartbeat live (no false stale/incident). |
