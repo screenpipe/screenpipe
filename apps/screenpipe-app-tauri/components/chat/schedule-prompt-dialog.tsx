@@ -34,7 +34,7 @@ export function SchedulePromptDialog({
   originalPrompt,
 }: SchedulePromptDialogProps) {
   const [pipeName, setPipeName] = useState("");
-  const [selectedSchedule, setSelectedSchedule] = useState(DEFAULT_PIPE_SCHEDULE);
+  const [selectedSchedule, setSelectedSchedule] = useState<string>(DEFAULT_PIPE_SCHEDULE);
   const [customCron, setCustomCron] = useState("");
   const [showCustom, setShowCustom] = useState(false);
 

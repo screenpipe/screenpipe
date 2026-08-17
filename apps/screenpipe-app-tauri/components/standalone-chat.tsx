@@ -1213,7 +1213,7 @@ export function StandaloneChat({
       if (scheduleDecision.kind === "open-schedule-as-pipe") {
         setScheduleThisPrompt(scheduleDecision.originalPrompt);
         setInput("");
-        return;
+        return Promise.resolve();
       }
       if (scheduleDecision.kind === "create-pipe" || scheduleDecision.kind === "reuse-pipe") {
         piMessageIdRef.current = null;

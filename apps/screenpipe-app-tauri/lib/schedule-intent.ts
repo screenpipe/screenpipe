@@ -507,6 +507,12 @@ export function resolveChatScheduleIntent(
   };
 }
 
+function scheduledTaskPrompt(
+  decision: Exclude<ChatScheduleDecision, { kind: "none" } | { kind: "pi-scheduler" }>,
+): string {
+  return decision.kind === "reuse-pipe" ? decision.stagedPipe.prompt : decision.originalPrompt;
+}
+
 export function evaluateScheduleConversation(input: {
   messages: ScheduleChatMessage[];
   latestUserText: string;
@@ -546,7 +552,7 @@ export function evaluateScheduleConversation(input: {
     return failures;
   }
 
-  if (!decision.originalPrompt || !visible.toLowerCase().includes(taskNeedle(decision.originalPrompt))) {
+  if (!scheduledTaskPrompt(decision) || !visible.toLowerCase().includes(taskNeedle(scheduledTaskPrompt(decision)))) {
     const restated = /what (do you want|should i schedule)|paste (the )?prompt|tell me (the )?task/i.test(
       visible,
     );
