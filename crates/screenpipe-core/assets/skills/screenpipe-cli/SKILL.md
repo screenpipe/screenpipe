@@ -1,6 +1,6 @@
 ---
 name: screenpipe-cli
-description: Manage screenpipe pipes (scheduled AI automations) and connections (Telegram, Slack, Discord, etc.) via the CLI. Use when the user asks to create, list, enable, disable, run, or debug pipes, or manage service connections from the command line.
+description: Manage screenpipe pipes (scheduled AI automations) and connections (Telegram, Slack, Discord, etc.) via the CLI. Use when the user asks to create, list, enable, disable, run, debug, or schedule pipes, says "schedule this" (including typos) after a recap/report/monitor, or wants a recurring Screenpipe automation. Recurring Screenpipe work uses Pipes, not Pi scheduled subagents.
 ---
 
 # Screenpipe CLI
@@ -28,6 +28,16 @@ Works on macOS, Linux, and Windows: the CLI always runs under bash, and `mktemp`
 > **Note:** the bash tool truncates output around ~50 KB. Long listings (`connection list`, `pipe list`, etc.) are sorted with connected/enabled rows first, but if you need a specific row, pipe through `grep` or `head` rather than scanning the full output — e.g. `cd "$(mktemp -d)" && ${SCREENPIPE_CLI:-bun x screenpipe@latest} connection list | grep -E 'browser|connected'`.
 
 ---
+
+## Scheduling precedence
+
+Recurring Screenpipe work — recaps, reports, monitors, digests, and any "schedule this" / "run this daily" follow-up — is a **Pipe**. Create, install, and enable it with the commands below. `this` is the preceding user task or generated workflow; do not ask the user to restate it. If only the run time is missing, ask for that one detail.
+
+Use Pi `subagent.schedule` / scheduled subagents **only** when the user explicitly asks for a Pi subagent or the Pi scheduler.
+
+If a generic scheduler is unavailable or returns "Scheduled subagent runs are disabled", automatically create a compatible Pipe instead. Recurring Screenpipe work uses Pipes by default. Never tell the user to edit `~/.pi/agent/extensions/subagent/config.json`, enable `scheduledRuns`, or reload Pi unless they explicitly requested scheduled Pi subagents.
+
+Before confirming success, read the installed Pipe back (`pipe list` or the API) and tell the user its **name**, **schedule**, and **enabled** state. If a Pipe for this same task was already staged or installed in this turn, reuse it — do not create a duplicate.
 
 ## Pipe Management
 

@@ -1458,6 +1458,7 @@ impl Default for SettingsStore {
             id: "screenpipe-cloud".to_string(),
             prompt: r#"IMPORTANT: At the start of every conversation, read the files in .pi/skills/ directory (e.g. .pi/skills/screenpipe-api/SKILL.md and .pi/skills/screenpipe-cli/SKILL.md) before responding.
 Rules:
+- Recurring Screenpipe automations (recaps, reports, monitors, "schedule this") use Pipes by default. Use Pi scheduled subagents only when the user explicitly asks for them. If a generic scheduler is unavailable, create a Pipe instead — never ask the user to edit ~/.pi/.../config.json, scheduledRuns, or reload Pi unless they explicitly requested scheduled Pi subagents. "schedule this" is the preceding task; ask only for missing timing. Confirm the Pipe name, schedule, and enabled state; do not create duplicates.
 - Media: use standard markdown with angle-bracket local paths, like ![description](</path/to/file.mp4>) for videos and ![description](</path/to/image.jpg>) for images
 - Always wrap local file paths in angle brackets because screenpipe paths often contain spaces or parentheses
 - Always answer my question/intent, do not make up things

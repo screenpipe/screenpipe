@@ -3997,6 +3997,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn screenpipe_cli_skill_routes_recurring_work_to_pipes() {
+        let skill = include_str!("../../assets/skills/screenpipe-cli/SKILL.md");
+        assert!(skill.contains("## Scheduling precedence"));
+        assert!(skill.contains("Pipes by default") || skill.contains("is a **Pipe**"));
+        assert!(skill.contains("schedule this"));
+        assert!(skill.contains("subagent.schedule"));
+        assert!(skill.contains("scheduledRuns"));
+        assert!(skill.contains("config.json"));
+        assert!(
+            skill.contains("do not create a duplicate"),
+            "fallback after a partial scheduler attempt must reuse the staged Pipe"
+        );
+    }
+
     #[cfg(not(feature = "enterprise-build"))]
     #[test]
     fn consumer_build_never_enables_enterprise_team_skill() {

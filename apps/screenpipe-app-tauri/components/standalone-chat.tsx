@@ -52,6 +52,7 @@ import {
   type Suggestion,
 } from "@/lib/hooks/use-auto-suggestions";
 import { postChatSuggestionSendOptions } from "@/lib/chat/suggestion-telemetry";
+import { resolveChatScheduleIntent } from "@/lib/schedule-intent";
 import {
   buildInvalidatedAuthTokenMessage,
 } from "@/lib/chat/auth-errors";
@@ -253,6 +254,7 @@ export function StandaloneChat({
   // question". The second is the outcome the experiment is actually testing —
   // a click alone proves neither. Cleared once the composer is emptied.
   const pendingContextualHomeSuggestionRef = useRef<string | null>(null);
+  const [scheduleThisPrompt, setScheduleThisPrompt] = useState<string | null>(null);
   const fillContextualHomeSuggestion = useCallback(
     (text: string) => {
       pendingContextualHomeSuggestionRef.current = text;
@@ -1198,6 +1200,28 @@ export function StandaloneChat({
 
   const sendComposerMessage = useCallback(
     (message: string, displayLabel?: string) => {
+      const scheduleDecision = resolveChatScheduleIntent({
+        messages: messages.map((item) => ({ role: item.role, content: item.content })),
+        latestUserText: message,
+        existingPipes: pipes.map((pipe) => ({
+          name: pipe.config.name,
+          schedule: pipe.config.schedule,
+          enabled: pipe.config.enabled,
+          prompt: pipe.prompt_body,
+        })),
+      });
+      if (scheduleDecision.kind === "open-schedule-as-pipe") {
+        setScheduleThisPrompt(scheduleDecision.originalPrompt);
+        setInput("");
+        return;
+      }
+      if (scheduleDecision.kind === "create-pipe" || scheduleDecision.kind === "reuse-pipe") {
+        piMessageIdRef.current = null;
+        return sendMessage(scheduleDecision.message, scheduleDecision.displayLabel, undefined, {
+          composerAuthorship: "user_authored",
+        });
+      }
+
       const filledSuggestion = pendingContextualHomeSuggestionRef.current;
       pendingContextualHomeSuggestionRef.current = null;
       if (filledSuggestion === null) {
@@ -1214,7 +1238,7 @@ export function StandaloneChat({
             : "template_edited",
       });
     },
-    [sendMessage],
+    [messages, pipes, sendMessage, setInput],
   );
 
   const sendPostChatSuggestion = useCallback(
@@ -1819,6 +1843,19 @@ export function StandaloneChat({
       sendMessage(message, displayLabel);
     },
   });
+  const composerScheduleDialogProps = scheduleThisPrompt
+    ? {
+        open: true,
+        onClose: () => setScheduleThisPrompt(null),
+        onSchedule: (message: string, displayLabel: string) => {
+          setScheduleThisPrompt(null);
+          piMessageIdRef.current = null;
+          sendMessage(message, displayLabel);
+        },
+        originalPrompt: scheduleThisPrompt,
+      }
+    : null;
+  const activeScheduleDialogProps = composerScheduleDialogProps ?? scheduleDialogProps;
   const { handleChatContextMenu } = useChatExportMenu({
     messages,
     citationPlan,
@@ -2297,8 +2334,8 @@ export function StandaloneChat({
       </div> {/* End of horizontal chat+browser split */}
 
 
-      {scheduleDialogProps && (
-        <SchedulePromptDialog {...scheduleDialogProps} />
+      {activeScheduleDialogProps && (
+        <SchedulePromptDialog {...activeScheduleDialogProps} />
       )}
       <ImageViewerDialog {...imageViewerProps} />
 

@@ -20,6 +20,7 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("# Voice and length");
     expect(prompt).toContain("# Flip to technical mode");
     expect(prompt).toContain("# Activity recaps");
+    expect(prompt).toContain("# Scheduling");
     expect(prompt).toContain("# Connection write policy");
     expect(prompt).toContain("# Tool selection");
     expect(prompt).toContain("shared across agent harnesses in .pi/skills");
