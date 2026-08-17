@@ -17,6 +17,7 @@ use crate::{
     analytics,
     hot_frame_cache::HotFrameCache,
     routes::{
+        activity_ledger::get_activity_ledger,
         activity_summary::get_activity_summary,
         artifacts::{
             delete_artifact_handler, list_artifacts_handler, register_artifact_handler,
@@ -960,6 +961,7 @@ impl SCServer {
             .get("/elements", search_elements)
             .get("/frames/:frame_id/elements", get_frame_elements)
             .get("/activity-summary", get_activity_summary)
+            .get("/activity-ledger", get_activity_ledger)
             // Vault routes
             .get("/vault/status", crate::routes::vault::vault_status)
             .post("/vault/lock", crate::routes::vault::vault_lock)

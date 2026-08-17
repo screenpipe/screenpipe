@@ -445,6 +445,7 @@ async fn flush_ax_bulk(
 }
 
 mod accessibility;
+mod activity_ledger;
 mod audio;
 mod display_layout;
 mod elements;
@@ -462,6 +463,10 @@ mod tags;
 mod text_positions;
 mod write_ops;
 
+pub use self::activity_ledger::{
+    ActivityActionDraft, ActivityActionRecord, ActivityEvidenceDraft, ActivityEvidenceRecord,
+    ActivityIntervalDraft, ActivityIntervalRecord, ActivityLedgerObservation, ActivityTaskDraft,
+};
 pub use self::semantic::{
     SemanticActor, SemanticActorAlias, SemanticActorReference, SemanticAttachResult,
     SemanticCleanupResult, SemanticContextQuery, SemanticFrameContext,
