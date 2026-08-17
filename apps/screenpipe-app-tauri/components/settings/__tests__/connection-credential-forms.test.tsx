@@ -4,7 +4,7 @@
 
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ApiIntegrationPanel } from "@/components/settings/connections-section";
 import { ConnectSection } from "@/components/settings/agent-card";
 
@@ -46,6 +46,28 @@ vi.mock("@/components/ui/use-toast", () => ({
 
 const jsonResponse = (data: unknown) =>
   Promise.resolve({ ok: true, json: async () => data } as Response);
+
+/// Shape shared by Claude Code, Codex and OpenCode: exactly one field, marked
+/// optional, meant to fall back to a default when left blank.
+const optionalOnlyIntegration = {
+  id: "opencode",
+  name: "OpenCode",
+  icon: "opencode",
+  category: "productivity",
+  description: "test",
+  fields: [
+    {
+      key: "home_path",
+      label: "OpenCode config directory (optional)",
+      secret: false,
+      placeholder: "~/.config/opencode",
+      help_url: "",
+    },
+  ],
+  connected: false,
+  is_oauth: false,
+  supports_oauth_instances: false,
+};
 
 beforeEach(() => {
   mocks.localFetch.mockReset();
@@ -137,5 +159,89 @@ describe("connection credential forms", () => {
     expect((screen.getByPlaceholderText("stored securely") as HTMLInputElement).value).toBe("");
     expect(screen.queryByDisplayValue("secret-sentinel")).toBeNull();
     expect(screen.queryByDisplayValue("unknown-sentinel")).toBeNull();
+  });
+
+  /// An integration whose only field is optional must still be connectable
+  /// with that field left blank. Claude Code, Codex and OpenCode each expose a
+  /// single `home_path (optional)` that is meant to fall back to a default, so
+  /// gating "connect" on "some field is non-empty" left them permanently
+  /// unconnectable unless the user typed a path they did not need to supply.
+  it("keeps connect enabled when every field is optional", async () => {
+    mocks.localFetch.mockImplementation((url: string) => {
+      if (url.endsWith("/instances")) return jsonResponse({ instances: [] });
+      return jsonResponse({ connected: false, credentials: {} });
+    });
+
+    render(
+      <ApiIntegrationPanel
+        integration={optionalOnlyIntegration}
+        onRefresh={vi.fn()}
+      />
+    );
+
+    const connect = await screen.findByRole("button", { name: /^connect$/i });
+    expect((connect as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  /// The blank optional field must still be *sent*. The backend treats an
+  /// empty credentials map as not-connected (`enabled && !credentials
+  /// .is_empty()` in ConnectionManager::list), so omitting never-typed-into
+  /// keys would save `{}` and read back as disconnected — the button would
+  /// unlock but connecting still would not stick.
+  it("sends blank optional fields so the saved credentials map is non-empty", async () => {
+    mocks.localFetch.mockImplementation((url: string) => {
+      if (url.endsWith("/instances")) return jsonResponse({ instances: [] });
+      return jsonResponse({ connected: false, credentials: {} });
+    });
+
+    render(
+      <ApiIntegrationPanel
+        integration={optionalOnlyIntegration}
+        onRefresh={vi.fn()}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /^connect$/i }));
+
+    await waitFor(() => {
+      const put = mocks.localFetch.mock.calls.find(
+        ([, init]) => (init as RequestInit | undefined)?.method === "PUT"
+      );
+      expect(put).toBeTruthy();
+      expect(JSON.parse((put![1] as RequestInit).body as string)).toEqual({
+        credentials: { home_path: "" },
+      });
+    });
+  });
+
+  /// The guard must not swing the other way: a field with no "(optional)"
+  /// marker is required, and blank required fields still block connect.
+  it("keeps connect disabled while a required field is blank", async () => {
+    mocks.localFetch.mockImplementation((url: string) => {
+      if (url.endsWith("/instances")) return jsonResponse({ instances: [] });
+      return jsonResponse({ connected: false, credentials: {} });
+    });
+
+    render(
+      <ApiIntegrationPanel
+        integration={{
+          ...optionalOnlyIntegration,
+          id: "needs-a-key",
+          fields: [
+            {
+              key: "api_key",
+              label: "API Key",
+              secret: true,
+              placeholder: "sk-...",
+              help_url: "",
+            },
+          ],
+        }}
+        onRefresh={vi.fn()}
+      />
+    );
+
+    const connect = await screen.findByRole("button", { name: /^connect$/i });
+    expect((connect as HTMLButtonElement).disabled).toBe(true);
   });
 });
