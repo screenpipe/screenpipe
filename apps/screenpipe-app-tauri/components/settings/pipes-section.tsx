@@ -2696,7 +2696,7 @@ export function PipesSection() {
             <div className="flex items-center justify-between rounded-md border border-border bg-muted/30 px-4 py-2">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <AlertCircle className="h-4 w-4" />
-                <span>scheduled tasks refresh timed out</span>
+                <span>{loadError}</span>
               </div>
               <Button variant="outline" size="sm" onClick={() => void fetchPipes()} className="h-7 text-xs">
                 retry

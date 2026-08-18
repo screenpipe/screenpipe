@@ -1457,4 +1457,33 @@ mod tests {
         assert_eq!(full[0].stdout, "large stdout");
         assert_eq!(full[0].stderr, "large stderr");
     }
+
+    #[tokio::test]
+    async fn test_large_database_execution_counts_performance() {
+        let (store, _tmp) = setup_test_store().await;
+        // We use the coordinated write semaphore to avoid 'database is locked' flakes in CI.
+        let mut tx = store.db.begin_immediate_with_retry().await.unwrap();
+        
+        sqlx::query(
+            "WITH RECURSIVE cnt(x) AS (
+                 SELECT 1
+                 UNION ALL
+                 SELECT x+1 FROM cnt
+                 LIMIT 10000
+             )
+             INSERT INTO pipe_executions (pipe_name, status, trigger_type, started_at)
+             SELECT 'perf-pipe-' || (x % 5), 'completed', 'manual', '2026-01-01T00:00:00Z'
+             FROM cnt;"
+        ).execute(&mut **tx.conn()).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let start = std::time::Instant::now();
+        let counts = store.get_all_execution_counts().await.unwrap();
+        let elapsed = start.elapsed();
+        
+        assert!(counts.len() >= 5);
+        // The latency budget is heavily optimized by `idx_pipe_executions_pipe_name`.
+        // It should complete well under 1 second.
+        assert!(elapsed.as_millis() < 1000, "latency exceeded budget: {:?}", elapsed);
+    }
 }
