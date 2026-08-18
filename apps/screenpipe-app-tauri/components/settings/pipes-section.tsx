@@ -1148,6 +1148,7 @@ export function PipesSection() {
   const currentApiBase = useRef("");
   const pipesRequests = useRef(new ApiRequestSequence());
   const pipesPolls = useRef(new ApiPollCoalescer<boolean>());
+  const fetchAbortController = useRef<AbortController | null>(null);
   const polledExecutionsRequests = useRef(new ApiRequestSequence());
   const executionsRequests = useRef(new ApiRequestSequence());
   const olderExecutionsRequests = useRef(new ApiRequestSequence());
@@ -1344,8 +1345,12 @@ export function PipesSection() {
       // index-seek query with stdout/stderr stripped (~30ms for 100 pipes), so
       // it's cheap enough for the 10s poll. Full output for the expanded RUNS
       // tab still loads lazily via /pipes/:name/executions.
+      if (fetchAbortController.current) {
+        fetchAbortController.current.abort();
+      }
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5_000);
+      fetchAbortController.current = controller;
+      const timeout = setTimeout(() => controller.abort(), 15_000);
       const pipesEndpoint = isRemote
         ? `${apiBase}/pipes?include_executions=true&execution_limit=1&include_execution_counts=true`
         : "/pipes?include_executions=true&execution_limit=1&include_execution_counts=true";
@@ -2598,7 +2603,7 @@ export function PipesSection() {
             </Card>
           ))}
         </div>
-      ) : shouldShowPipesLoadError(loadError, apiBase, lastSuccessfulPipesApiBase.current) ? (
+      ) : shouldShowPipesLoadError(loadError, apiBase, lastSuccessfulPipesApiBase.current) && displayedPipes.length === 0 ? (
         <Card>
           <CardContent className="py-8 text-center">
             <div className="mx-auto max-w-md space-y-4 text-muted-foreground">
@@ -2686,9 +2691,21 @@ export function PipesSection() {
           </CardContent>
         </Card>
       ) : (
-        <div className="flex min-h-[28rem] items-stretch border border-border">
-          {(() => {
-            // Master-detail. The left column stays scannable — name plus one
+        <div className="space-y-4">
+          {loadError && displayedPipes.length > 0 && (
+            <div className="flex items-center justify-between rounded-md border border-border bg-muted/30 px-4 py-2">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <AlertCircle className="h-4 w-4" />
+                <span>scheduled tasks refresh timed out</span>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => void fetchPipes()} className="h-7 text-xs">
+                retry
+              </Button>
+            </div>
+          )}
+          <div className="flex min-h-[28rem] items-stretch border border-border">
+            {(() => {
+              // Master-detail. The left column stays scannable — name plus one
             // line of schedule and last run — and everything heavier (badges,
             // actions, config, runs, logs) opens in the detail pane. Rows and
             // the detail are built in a single pass so the per-pipe derived
@@ -4159,6 +4176,7 @@ export function PipesSection() {
               </>
             );
           })()}
+        </div>
         </div>
       )}
 

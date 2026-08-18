@@ -79,18 +79,24 @@ pub async fn list_pipes(
     State(pm): State<SharedPipeManager>,
     Query(query): Query<ListPipesQuery>,
 ) -> Json<Value> {
+    use tracing::Instrument;
     let mgr = pm.lock().await;
     if let Err(e) = mgr.reload_pipes().await {
         tracing::warn!("failed to reload pipes from disk: {}", e);
     }
     let execution_counts = if query.include_execution_counts.unwrap_or(false) {
-        mgr.get_all_execution_counts().await
+        mgr.get_all_execution_counts()
+            .instrument(tracing::info_span!("get_all_execution_counts"))
+            .await
     } else {
         HashMap::new()
     };
     if query.include_executions.unwrap_or(false) {
         let execution_limit = query.execution_limit.unwrap_or(5).clamp(1, 100);
-        let pipes_with_execs = mgr.list_pipes_with_executions(execution_limit).await;
+        let pipes_with_execs = mgr
+            .list_pipes_with_executions(execution_limit)
+            .instrument(tracing::info_span!("list_pipes_with_executions"))
+            .await;
         let total = pipes_with_execs.len();
         let data: Vec<Value> = pipes_with_execs
             .into_iter()
@@ -113,7 +119,10 @@ pub async fn list_pipes(
             .collect();
         Json(json!({ "data": data, "total": total }))
     } else {
-        let pipes = mgr.list_pipes().await;
+        let pipes = mgr
+            .list_pipes()
+            .instrument(tracing::info_span!("list_pipes_metadata"))
+            .await;
         let total = pipes.len();
         if query.include_execution_counts.unwrap_or(false) {
             let data: Vec<Value> = pipes
