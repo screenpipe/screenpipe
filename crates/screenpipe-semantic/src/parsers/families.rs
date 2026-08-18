@@ -1079,7 +1079,7 @@ fn is_simple_slash_date(token: &str) -> bool {
 
 fn tree_any(tree: &SemanticTree, predicate: impl Fn(NodeId) -> bool) -> bool {
     tree.roots()
-        .any(|root| tree.descendants(root).any(|node| predicate(node)))
+        .any(|root| tree.descendants(root).any(&predicate))
 }
 
 /// `collect_text` starting below `root`. A Fluent message container is itself a
