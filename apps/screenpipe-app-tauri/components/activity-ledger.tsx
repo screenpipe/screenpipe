@@ -43,11 +43,9 @@ import {
   type ActivityReviewMeeting,
 } from "@/lib/activity-review-prompt";
 import {
-  ACTIVITY_HISTORY_RECONCILE_OVERLAP_MS,
   loadPersistedActivityHistory,
   mergeActivityHistoryCoverage,
   mergeActivityHistoryDocuments,
-  nextActivityHistoryRange,
   reconcilePersistedActivityHistory,
   type ActivityHistoryCoverage,
 } from "@/lib/activity-history-persistence";
@@ -97,7 +95,6 @@ type ActivityArtifact = ActivityHistoryEvidence & {
 };
 
 const MAX_VISIBLE_ARTIFACTS = 6;
-const ACTIVITY_HISTORY_REFRESH_INTERVAL_MS = 10 * 60_000;
 const ACTIVITY_RANGE_STORAGE_KEY = "screenpipe:activity-history:range";
 const ACTIVITY_CUSTOM_START_STORAGE_KEY =
   "screenpipe:activity-history:custom-start";
@@ -262,22 +259,6 @@ export function minimumHistoryEntryCount(
   }
   const activeDays = Math.max(1, Math.ceil(wallHours / 24));
   return Math.min(activeDays * 18, Math.max(1, Math.ceil(activeMinutes / 60)));
-}
-
-export function canAddRecentActivity(
-  range: TimeRange,
-  coverage: ActivityHistoryCoverage[],
-): boolean {
-  const pending = nextActivityHistoryRange(range, coverage);
-  if (!pending) return false;
-  const overlap =
-    pending.start.getTime() > range.start.getTime()
-      ? ACTIVITY_HISTORY_RECONCILE_OVERLAP_MS
-      : 0;
-  return (
-    pending.end.getTime() - pending.start.getTime() - overlap >
-    ACTIVITY_HISTORY_REFRESH_INTERVAL_MS
-  );
 }
 
 function formatEntryTime(entry: ActivityHistoryEntry): string {
@@ -602,7 +583,6 @@ export function ActivityLedger({
   );
   const initialNow = useMemo(() => new Date(), []);
   const anchor = initialNow;
-  const [currentTimeMs, setCurrentTimeMs] = useState(initialNow.getTime());
   const [preset, setPreset] = useState<RangePreset>(readStoredRangePreset);
   const initialPresetRef = useRef(preset);
   const [customStart, setCustomStart] = useState(() =>
@@ -668,32 +648,6 @@ export function ActivityLedger({
       selectableReviewPresets[0],
     [selectableReviewPresets, selectedReviewPresetId],
   );
-  const pendingHistoryRange = useMemo(
-    () => (range ? nextActivityHistoryRange(range, historyCoverage) : null),
-    [historyCoverage, range],
-  );
-  const recentRange = useMemo(
-    () =>
-      rangeForPreset(
-        preset,
-        new Date(currentTimeMs),
-        customStart,
-        customEnd,
-      ),
-    [currentTimeMs, customEnd, customStart, preset],
-  );
-  const recentActivityAvailable = Boolean(
-    recentRange && canAddRecentActivity(recentRange, historyCoverage),
-  );
-
-  useEffect(() => {
-    const interval = window.setInterval(
-      () => setCurrentTimeMs(Date.now()),
-      30_000,
-    );
-    return () => window.clearInterval(interval);
-  }, []);
-
   useEffect(() => {
     posthog.capture("activity_viewed", { range: initialPresetRef.current });
   }, []);
@@ -869,26 +823,28 @@ export function ActivityLedger({
     setHistoryLoading(true);
     setHistoryError("");
     try {
-      const generationMeetings = meetings.filter(
-        (meeting) =>
-          new Date(meeting.end_at).getTime() >
-            generationRange.start.getTime() &&
-          new Date(meeting.start_at).getTime() < generationRange.end.getTime(),
-      );
-      let generationSummary = summary;
-      if (
-        generationRange.start.getTime() !== range.start.getTime() ||
-        generationRange.end.getTime() !== range.end.getTime()
-      ) {
-        const response = await localFetch(
-          buildActivitySummaryPath(generationRange),
-          { signal: controller.signal },
-        );
-        if (!response.ok) {
-          throw new Error(`Activity request failed (${response.status}).`);
-        }
-        generationSummary = (await response.json()) as ActivitySummaryResponse;
+      const [summaryResponse, meetingsResponse] = await Promise.all([
+        localFetch(buildActivitySummaryPath(generationRange), {
+          signal: controller.signal,
+        }),
+        localFetch(buildActivityMeetingsPath(generationRange), {
+          signal: controller.signal,
+        }),
+      ]);
+      if (!summaryResponse.ok) {
+        throw new Error(`Activity request failed (${summaryResponse.status}).`);
       }
+      if (!meetingsResponse.ok) {
+        throw new Error(`Meeting request failed (${meetingsResponse.status}).`);
+      }
+      const [generationSummary, meetingRecords] = await Promise.all([
+        summaryResponse.json() as Promise<ActivitySummaryResponse>,
+        meetingsResponse.json() as Promise<MeetingResponse[]>,
+      ]);
+      const generationMeetings = meetingAnchors(
+        meetingRecords,
+        generationRange,
+      );
       const reviewRange = {
         start: generationRange.start.toISOString(),
         end: generationRange.end.toISOString(),
@@ -1028,56 +984,24 @@ export function ActivityLedger({
       }
     }
   }, [
-    meetings,
     preset,
     range,
     reviewPreset,
     settings,
-    summary,
     history,
     historyCoverage,
   ]);
 
-  const addRecentActivity = useCallback(() => {
+  const regenerateSelectedRange = useCallback((source: GenerationSource) => {
     const clickedRange = rangeForPreset(
       preset,
       new Date(),
       customStart,
       customEnd,
     );
-    const clickedHistoryRange = clickedRange
-      ? nextActivityHistoryRange(clickedRange, historyCoverage)
-      : null;
-    if (
-      !clickedRange ||
-      !clickedHistoryRange ||
-      !canAddRecentActivity(clickedRange, historyCoverage) ||
-      loading ||
-      historyLoading ||
-      !cacheReady ||
-      invalidRange
-    ) {
-      return;
-    }
-    void generateHistory(clickedHistoryRange, "refresh", clickedRange);
-  }, [
-    cacheReady,
-    customEnd,
-    customStart,
-    generateHistory,
-    historyCoverage,
-    historyLoading,
-    invalidRange,
-    loading,
-    preset,
-  ]);
-
-  const recentActivityDisabled =
-    loading ||
-    historyLoading ||
-    !cacheReady ||
-    invalidRange ||
-    !recentActivityAvailable;
+    if (!clickedRange) return;
+    void generateHistory(clickedRange, source, clickedRange);
+  }, [customEnd, customStart, generateHistory, preset]);
 
   const makeSkill = (entry: ActivityHistoryEntry) => {
     posthog.capture("activity_skill_clicked");
@@ -1206,8 +1130,10 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={addRecentActivity}
-                disabled={recentActivityDisabled}
+                onClick={() => regenerateSelectedRange("refresh")}
+                disabled={
+                  loading || historyLoading || !cacheReady || invalidRange
+                }
                 aria-label="Refresh history"
               >
                 <RefreshCw
@@ -1357,29 +1283,6 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                   ))}
                 </div>
               ))}
-              <div className="flex flex-col items-center border-t border-border py-10 text-center">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-10 rounded-none px-5 uppercase tracking-wide"
-                  onClick={addRecentActivity}
-                  disabled={recentActivityDisabled}
-                >
-                  <RefreshCw
-                    className={cn(
-                      "mr-2 h-3.5 w-3.5",
-                      historyLoading && "animate-spin",
-                    )}
-                    aria-hidden="true"
-                  />
-                  Add recent activities
-                </Button>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {recentActivityAvailable
-                    ? "Include work recorded since your last update."
-                    : "More activity can be added every 10 minutes."}
-                </p>
-              </div>
             </section>
           ) : loading && !summary ? (
             <div className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -1388,10 +1291,6 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
             </div>
           ) : error ? (
             <p className="text-sm text-muted-foreground">{error}</p>
-          ) : summary?.data_status !== "ok" ? (
-            <p className="text-sm text-muted-foreground">
-              There is not enough captured activity in this range yet.
-            </p>
           ) : !cacheReady ? (
             <div className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -1401,12 +1300,6 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
             <div className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
               Understanding what you worked on…
-            </div>
-          ) : cacheReady && !pendingHistoryRange ? (
-            <div className="py-12 text-center">
-              <p className="text-sm text-muted-foreground">
-                No generated activities in this range.
-              </p>
             </div>
           ) : (
             <div className="flex min-h-[320px] items-center justify-center py-12 text-center">
@@ -1421,9 +1314,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                 <Button
                   size="sm"
                   className="mt-5 h-10 px-5 uppercase tracking-wide"
-                  onClick={() => {
-                    if (range) void generateHistory(range, "empty_state");
-                  }}
+                  onClick={() => regenerateSelectedRange("empty_state")}
                 >
                   Generate activities
                 </Button>

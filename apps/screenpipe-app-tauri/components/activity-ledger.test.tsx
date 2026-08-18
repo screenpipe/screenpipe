@@ -92,7 +92,6 @@ import {
   buildActivityLedgerArtifactsPath,
   buildActivityMeetingsPath,
   buildActivitySummaryPath,
-  canAddRecentActivity,
   minimumHistoryEntryCount,
   rangeForPreset,
 } from "@/components/activity-ledger";
@@ -361,29 +360,6 @@ describe("activity history helpers", () => {
     expect(minimumHistoryEntryCount(480, { start, end })).toBe(7);
   });
 
-  it("offers recent activity only after more than ten uncovered minutes", () => {
-    const start = new Date("2026-08-17T07:00:00Z");
-    const coverage = [
-      {
-        start: start.toISOString(),
-        end: "2026-08-17T20:00:00.000Z",
-      },
-    ];
-
-    expect(
-      canAddRecentActivity(
-        { start, end: new Date("2026-08-17T20:10:00.000Z") },
-        coverage,
-      ),
-    ).toBe(false);
-    expect(
-      canAddRecentActivity(
-        { start, end: new Date("2026-08-17T20:10:00.001Z") },
-        coverage,
-      ),
-    ).toBe(true);
-  });
-
   it("ranks a compact artifact set while preserving a real website", () => {
     const entry = parseActivityHistoryResponse(HISTORY_RESPONSE, {
       start: new Date("2026-08-17T16:00:00Z"),
@@ -639,6 +615,68 @@ describe("ActivityLedger", () => {
     );
   });
 
+  it("generates through click time when capture starts after Activity opens", async () => {
+    let summaryCalls = 0;
+    mocks.localFetch.mockImplementation((path: string) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => {
+          if (path.startsWith("/meetings?")) return [];
+          if (path.startsWith("/activity-ledger?")) {
+            return LEDGER_ARTIFACTS_RESPONSE;
+          }
+          summaryCalls += 1;
+          return summaryCalls === 1
+            ? { data_status: "unknown", total_active_minutes: 0 }
+            : { data_status: "ok", total_active_minutes: 8 };
+        },
+      }),
+    );
+
+    render(<ActivityLedger />);
+
+    const generate = await screen.findByRole("button", {
+      name: "Generate activities",
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    fireEvent.click(generate);
+
+    await waitFor(() =>
+      expect(mocks.runDailySummaryWithPi).toHaveBeenCalledWith(
+        expect.objectContaining({
+          range: expect.objectContaining({
+            end: expect.stringMatching(
+              /^2026-08-17T20:00:30\.\d{3}Z$/,
+            ),
+          }),
+        }),
+      ),
+    );
+  });
+
+  it("keeps the generate action after a previously empty covered range", async () => {
+    mocks.loadPersistedActivityHistory.mockImplementation(
+      async (_producer: string, range: { start: Date; end: Date }) => ({
+        entries: [],
+        coverage: [
+          {
+            start: range.start.toISOString(),
+            end: range.end.toISOString(),
+          },
+        ],
+      }),
+    );
+
+    render(<ActivityLedger />);
+
+    expect(
+      await screen.findByRole("button", { name: "Generate activities" }),
+    ).toBeVisible();
+  });
+
   it("uses the selected preset for an explicit refresh", async () => {
     mocks.loadPersistedActivityHistory.mockImplementation(
       async (_producer: string, range: { start: Date; end: Date }) => ({
@@ -662,10 +700,6 @@ describe("ActivityLedger", () => {
       }),
     );
     const refresh = screen.getByRole("button", { name: "Refresh history" });
-    expect(refresh).toBeDisabled();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(10 * 60_000 + 30_000);
-    });
     await waitFor(() => expect(refresh).toBeEnabled());
     fireEvent.click(refresh);
 
@@ -674,61 +708,6 @@ describe("ActivityLedger", () => {
         expect.objectContaining({
           preset: expect.objectContaining({ id: "pipes" }),
           sessionPrefix: "activity-history",
-        }),
-      ),
-    );
-  });
-
-  it("shows a bottom action that unlocks with the header refresh", async () => {
-    mocks.loadPersistedActivityHistory.mockImplementation(
-      async (_producer: string, range: { start: Date; end: Date }) => ({
-        entries: parseActivityHistoryResponse(HISTORY_RESPONSE, range).entries,
-        coverage: [
-          {
-            start: range.start.toISOString(),
-            end: range.end.toISOString(),
-          },
-        ],
-      }),
-    );
-
-    render(<ActivityLedger />);
-
-    await screen.findByText("Fixed a capture reliability regression");
-    const addRecent = screen.getByRole("button", {
-      name: "Add recent activities",
-    });
-    const refresh = screen.getByRole("button", { name: "Refresh history" });
-    expect(addRecent).toBeVisible();
-    expect(addRecent).toBeDisabled();
-    expect(refresh).toBeDisabled();
-    expect(
-      screen.getByText("More activity can be added every 10 minutes."),
-    ).toBeVisible();
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(10 * 60_000 + 30_000);
-    });
-
-    await waitFor(() => {
-      expect(addRecent).toBeEnabled();
-      expect(refresh).toBeEnabled();
-    });
-    expect(
-      screen.getByText("Include work recorded since your last update."),
-    ).toBeVisible();
-
-    fireEvent.click(addRecent);
-
-    await waitFor(() =>
-      expect(mocks.runDailySummaryWithPi).toHaveBeenCalledWith(
-        expect.objectContaining({
-          range: expect.objectContaining({
-            start: "2026-08-17T19:50:00.000Z",
-            end: expect.stringMatching(
-              /^2026-08-17T20:10:30\.\d{3}Z$/,
-            ),
-          }),
         }),
       ),
     );
@@ -825,7 +804,9 @@ describe("ActivityLedger", () => {
     const view = render(<ActivityLedger />);
 
     await generateActivities();
-    expect(mocks.runDailySummaryWithPi).toHaveBeenCalledOnce();
+    await waitFor(() =>
+      expect(mocks.runDailySummaryWithPi).toHaveBeenCalledOnce(),
+    );
     const generationSignal = mocks.runDailySummaryWithPi.mock.calls[0][0]
       .signal as AbortSignal;
 
