@@ -161,6 +161,13 @@ export function AppZoomProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen<string>("menu-zoom", (event) => {
+      // In Tauri, multiple windows (overlay, chat, search, home) all receive the
+      // broadcast event. Only the active/visible window should process the user action
+      // and write to the settings store to prevent cross-window feedback loops.
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
+
       if (event.payload === "in") zoomIn();
       else if (event.payload === "out") zoomOut();
       else if (event.payload === "reset") resetZoom();
