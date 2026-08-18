@@ -13,6 +13,7 @@ import {
   submitHostedCheckoutStart,
 } from "@/lib/onboarding-checkout-navigation";
 import type { AppUser } from "@/lib/app-entitlement";
+import CaptureProofStep from "./capture-proof-step";
 
 const HOSTED_CHECKOUT_URL = screenpipeWebUrl(
   "/onboarding/checkout",
@@ -38,6 +39,7 @@ export default function PlanSelectionStep({
   const [returnRecoveryFinished, setReturnRecoveryFinished] = useState(
     returnStatus !== "complete",
   );
+  const [proofFinished, setProofFinished] = useState(returnStatus !== null);
   const submissionStartedRef = useRef(false);
   const recoveryStartedRef = useRef(false);
   const advancedRef = useRef(false);
@@ -77,9 +79,11 @@ export default function PlanSelectionStep({
   }, [userToken]);
 
   useEffect(() => {
-    if (returnStatus !== null) return;
-    startCheckout();
-  }, [returnStatus, startCheckout]);
+    if (returnStatus !== "cancelled") return;
+    posthog.capture("onboarding_card_checkout_cancelled", {
+      metric_version: "onboarding_checkout_v2",
+    });
+  }, [returnStatus]);
 
   useEffect(() => {
     if (returnStatus !== "complete") return;
@@ -202,11 +206,10 @@ export default function PlanSelectionStep({
         className="mx-auto w-full max-w-sm text-center"
         data-testid="onboarding-card-capture"
       >
-        <h2 className="text-xl font-semibold lowercase">
-          checkout was not completed
-        </h2>
+        <h2 className="text-xl font-semibold lowercase">nothing was charged</h2>
         <p className="mt-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
-          retry when you are ready to start your trial.
+          your local capture is unchanged. retry when you are ready to start the
+          7-day Business trial.
         </p>
         {error && (
           <p className="mt-4 font-mono text-[11px] text-destructive">{error}</p>
@@ -220,6 +223,17 @@ export default function PlanSelectionStep({
           {busy ? "opening checkout" : "retry secure checkout"}
         </button>
       </div>
+    );
+  }
+
+  if (!proofFinished) {
+    return (
+      <CaptureProofStep
+        onContinue={() => {
+          setProofFinished(true);
+          startCheckout();
+        }}
+      />
     );
   }
 

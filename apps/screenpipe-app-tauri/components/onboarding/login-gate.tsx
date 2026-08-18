@@ -10,6 +10,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import posthog from "posthog-js";
 import { isDevBillingBypassEnabled } from "@/lib/app-entitlement";
 import { ArrowRight } from "lucide-react";
+import { platform } from "@tauri-apps/plugin-os";
 import { LOCALITY_DETAIL } from "./trust-disclosure";
 
 const FAILURE_COPY: Record<string, string> = {
@@ -244,6 +245,9 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
   // Non-null once the system browser has been handed the login (Windows/Linux).
   const [awaitingBrowser, setAwaitingBrowser] = useState(false);
   const [browserFailure, setBrowserFailure] = useState<string | null>(null);
+  const loginPathRef = useRef<"system_browser" | "embedded_webview">(
+    "system_browser",
+  );
   const bgRef = useRef<HTMLCanvasElement>(null);
   const btnRef = useRef<HTMLCanvasElement>(null);
   const canSkipLogin = isDevBillingBypassEnabled();
@@ -269,7 +273,11 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
 
     if (!suppressAutoAdvance && isLoggedIn && !hasAdvanced.current) {
       if (loginCompleted) {
-        posthog.capture("onboarding_login_completed");
+        posthog.capture("onboarding_login_completed", {
+          metric_version: "onboarding_login_v2",
+          platform: platform(),
+          login_path: loginPathRef.current,
+        });
       }
       // hasAdvanced flips when the timer fires, not when it is scheduled —
       // a cancelled timer (StrictMode remount, dep change within the window)
@@ -283,7 +291,12 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
   }, [handleNextSlide, isLoggedIn, isSettingsLoaded, suppressAutoAdvance]);
 
   const handleLogin = useCallback(() => {
-    posthog.capture("onboarding_login_clicked");
+    const currentPlatform = platform();
+    loginPathRef.current = "system_browser";
+    posthog.capture("onboarding_login_clicked", {
+      metric_version: "onboarding_login_v2",
+      platform: currentPlatform,
+    });
     setBrowserFailure(null);
     // macOS: ASWebAuthenticationSession (shares Safari's session).
     // Windows/Linux: the user's real default browser, so the session they
@@ -294,16 +307,40 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
     void commands
       .openLoginWindow(null, authMode)
       .then((result) => {
-        if (result.status === "ok") setAwaitingBrowser(true);
-        else setBrowserFailure("failed");
+        if (result.status === "ok") {
+          posthog.capture("onboarding_login_browser_opened", {
+            metric_version: "onboarding_login_v2",
+            platform: currentPlatform,
+            auth_mode: authMode,
+          });
+          setAwaitingBrowser(true);
+        } else {
+          posthog.capture("onboarding_login_browser_open_failed", {
+            metric_version: "onboarding_login_v2",
+            platform: currentPlatform,
+            result_status: result.status,
+          });
+          setBrowserFailure("failed");
+        }
       })
-      .catch(() => setBrowserFailure("failed"));
+      .catch(() => {
+        posthog.capture("onboarding_login_browser_open_failed", {
+          metric_version: "onboarding_login_v2",
+          platform: currentPlatform,
+          result_status: "threw",
+        });
+        setBrowserFailure("failed");
+      });
   }, [suppressAutoAdvance]);
 
   // Escape hatch when the default browser is unusable or the user never
   // returns to it — falls back to the in-app WebView.
   const handleUseAppWindow = useCallback(() => {
-    posthog.capture("onboarding_login_webview_fallback_clicked");
+    loginPathRef.current = "embedded_webview";
+    posthog.capture("onboarding_login_webview_fallback_clicked", {
+      metric_version: "onboarding_login_v2",
+      platform: platform(),
+    });
     setAwaitingBrowser(false);
     setBrowserFailure(null);
     const authMode = suppressAutoAdvance ? "sign-in" : "sign-up";
@@ -349,7 +386,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
           animate={{ opacity: 1 }}
           transition={{ duration: 0.5, delay: 0.5 }}
         >
-          ai finally knows what you&apos;re doing
+          record · rewind · ask
         </motion.p>
 
         {isLoggedIn ? (
@@ -372,11 +409,11 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
             transition={{ duration: 0.35 }}
           >
             <span className="font-mono text-sm tracking-[0.18em] uppercase text-foreground/80">
-              waiting for your browser
+              finish in your browser
             </span>
             <p className="font-mono text-[10px] text-muted-foreground/50 tracking-wide max-w-[280px] text-center leading-relaxed">
-              finish signing in there, then come back. this window updates on
-              its own.
+              screenpipe opened your default browser. finish there, then come
+              back—this window detects the sign-in automatically.
             </p>
             <div className="flex flex-col items-center gap-2 mt-2">
               <button

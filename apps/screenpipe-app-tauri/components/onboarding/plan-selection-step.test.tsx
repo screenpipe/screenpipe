@@ -41,6 +41,11 @@ vi.mock("@/lib/web-url", () => ({
   screenpipeWebUrl: (path: string) => `https://example.test${path}`,
 }));
 vi.mock("posthog-js", () => ({ default: { capture: mocks.capture } }));
+vi.mock("./capture-proof-step", () => ({
+  default: ({ onContinue }: { onContinue: () => void }) => (
+    <button onClick={onContinue}>continue to trial</button>
+  ),
+}));
 
 import PlanSelectionStep from "./plan-selection-step";
 
@@ -79,6 +84,8 @@ describe("hosted onboarding checkout", () => {
   it("navigates the existing webview with a hidden POST and keeps secrets out of URLs", async () => {
     render(<PlanSelectionStep handleNextSlide={vi.fn()} />);
 
+    expect(submitSpy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "continue to trial" }));
     await waitFor(() => expect(submitSpy).toHaveBeenCalledOnce());
     const form = checkoutForm();
     expect(form.method).toBe("post");
@@ -99,6 +106,7 @@ describe("hosted onboarding checkout", () => {
 
   it("submits only once when the local controller rerenders", async () => {
     const view = render(<PlanSelectionStep handleNextSlide={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "continue to trial" }));
     await waitFor(() => expect(submitSpy).toHaveBeenCalledOnce());
 
     view.rerender(<PlanSelectionStep handleNextSlide={vi.fn()} />);
@@ -182,7 +190,7 @@ describe("hosted onboarding checkout", () => {
     window.history.replaceState({}, "", "/onboarding?checkout=cancelled");
     render(<PlanSelectionStep handleNextSlide={vi.fn()} />);
 
-    expect(screen.getByText("checkout was not completed")).toBeInTheDocument();
+    expect(screen.getByText("nothing was charged")).toBeInTheDocument();
     expect(submitSpy).not.toHaveBeenCalled();
     fireEvent.click(
       screen.getByRole("button", { name: "retry secure checkout" }),
@@ -193,6 +201,10 @@ describe("hosted onboarding checkout", () => {
       checkoutForm().querySelector<HTMLInputElement>('input[name="return_to"]')
         ?.value,
     ).toBe(buildLocalCheckoutReturnUrl(window.location.href));
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "onboarding_card_checkout_cancelled",
+      expect.objectContaining({ metric_version: "onboarding_checkout_v2" }),
+    );
   });
 
   it("keeps checkout required after cancellation", async () => {
