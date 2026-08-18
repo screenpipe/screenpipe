@@ -119,6 +119,63 @@ export async function fetchFirstRunMedia(
   }
 }
 
+/** Where preserved stills live. Deliberately NOT under the data dir: nothing
+ *  in here has a frames row, which is exactly what keeps compaction and
+ *  retention (both of which delete by DB row) away from it. */
+const PRESERVED_DIR = "first-run";
+
+function fileExtension(path: string): string {
+  return path.match(/\.[a-z0-9]+$/i)?.[0] ?? ".jpg";
+}
+
+/**
+ * Copy a still out of the capture directory so the summary keeps its proof.
+ *
+ * The path the search returns is live capture, and snapshot compaction encodes
+ * every JPEG older than ten minutes into an MP4 chunk and then deletes it. The
+ * summary is written minutes after setup and read whenever the user gets round
+ * to it, so embedding the capture path means the image is reliably gone by the
+ * time anyone looks — and the markdown `img` branch hides a broken local image,
+ * so it vanishes silently rather than failing loudly.
+ *
+ * Copying is the whole fix: a file with no frames row is invisible to both
+ * compaction and retention, and a plain local path needs no auth token, unlike
+ * `/frames/:id` which could otherwise re-resolve the frame out of the MP4.
+ *
+ * Video is returned untouched. Compaction only ever *produces* MP4 chunks, so
+ * a video path is already the durable form, and chunks are far too large to
+ * copy for decoration.
+ *
+ * Returns the original media on any failure — a stale path still renders for
+ * the first ten minutes, which beats dropping the proof outright.
+ */
+export async function preserveFirstRunMedia(
+  media: FirstRunMedia,
+): Promise<FirstRunMedia> {
+  if (media.kind !== "image") return media;
+  try {
+    // Imported lazily so modules that only classify or render markdown do not
+    // drag the Tauri fs graph in with them.
+    const [{ homeDir, join }, { copyFile, mkdir }] = await Promise.all([
+      import("@tauri-apps/api/path"),
+      import("@tauri-apps/plugin-fs"),
+    ]);
+    const dir = await join(await homeDir(), ".screenpipe", PRESERVED_DIR);
+    await mkdir(dir, { recursive: true });
+    // Timestamped rather than fixed: resetting onboarding must not overwrite
+    // the image an earlier summary is still pointing at.
+    const destination = await join(
+      dir,
+      `summary-${Date.now()}${fileExtension(media.path)}`,
+    );
+    await copyFile(media.path, destination);
+    return { ...media, path: destination };
+  } catch (error) {
+    console.warn("[first-run] failed to preserve media", error);
+    return media;
+  }
+}
+
 /**
  * Render the media as a markdown line the chat can display.
  *

@@ -219,7 +219,7 @@ export function LiveViewAiComposer({
           }
           placeholder={
             hostedUsageExhausted
-              ? "Hosted AI limit reached"
+              ? "AI limit reached"
               : compact
                 ? "Ask AI to change this Live View..."
                 : "For example: show how I spend my time and what changed this week"

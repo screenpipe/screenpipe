@@ -238,7 +238,39 @@ mod imp {
             );
         }
 
-        // ── 2. Highlight requested before its analysis lands still paints ────
+        // ── 2. Applied analysis retires while the next frame loads ───────
+        unsafe {
+            // Frame A is already applied from case 1. Give it a real selection
+            // so this reproduces the user-visible failure: after the pixels move
+            // to B, A's hit regions must not remain active while B is analyzed.
+            let rc = highlight(&[&term], &frame_a);
+            hs_pump(0.3);
+            let before_applied = applied_frame();
+            let before_selected = selected_len();
+            check(
+                "fixture has an applied, selectable frame",
+                rc > 0 && before_applied == "1001" && before_selected > 0,
+                format!(
+                    "rc={rc}, applied={before_applied:?}, selected_chars={before_selected}, expected >0/\"1001\"/>0"
+                ),
+                &mut failures,
+            );
+
+            // Timeline pixels advance immediately; analysis for B can still be
+            // queued or in flight. A must stop intercepting selection now.
+            position(&frame_b);
+            hs_pump(0.3);
+            let applied = applied_frame();
+            let selected = selected_len();
+            check(
+                "applied analysis is retired when the displayed frame advances",
+                applied.is_empty() && selected == 0,
+                format!("applied={applied:?}, selected_chars={selected}, expected empty/0"),
+                &mut failures,
+            );
+        }
+
+        // ── 3. Highlight requested before its analysis lands still paints ────
         unsafe {
             lt_clear_highlights(win());
             lt_hide(win());
@@ -266,8 +298,8 @@ mod imp {
             );
         }
 
-        // ── 3. Scrolling off the match clears the hit ────────────────────────
-        // Continues directly from 2: frame A is showing its highlight. The user
+        // ── 4. Scrolling off the match clears the hit ────────────────────────
+        // Continues directly from 3: frame A is showing its highlight. The user
         // now scrolls to frame B, whose pixels contain the same word but which
         // the search did not match. The highlight must not follow them.
         unsafe {

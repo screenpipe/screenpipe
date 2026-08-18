@@ -61,6 +61,7 @@ const EXPECTED_TARGETS: &[&str] = &[
     "windowsterminal",
     "windsurf",
     "xcode",
+    "zed",
 ];
 
 fn identity_for(profile: &screenpipe_semantic::parsers::BuiltinAppProfile) -> AppIdentity {
@@ -83,14 +84,14 @@ fn identity_for(profile: &screenpipe_semantic::parsers::BuiltinAppProfile) -> Ap
 }
 
 #[test]
-fn catalog_exactly_matches_all_51_targets() {
+fn catalog_exactly_matches_all_52_targets() {
     let actual: BTreeSet<_> = builtin_app_profiles()
         .iter()
         .map(|profile| profile.id)
         .collect();
     let expected: BTreeSet<_> = EXPECTED_TARGETS.iter().copied().collect();
-    assert_eq!(builtin_app_profiles().len(), 51);
-    assert_eq!(actual.len(), 51, "profile ids must be unique");
+    assert_eq!(builtin_app_profiles().len(), 52);
+    assert_eq!(actual.len(), 52, "profile ids must be unique");
     assert_eq!(actual, expected);
 }
 
@@ -169,6 +170,39 @@ fn web_variants_match_their_url_without_native_identity() {
             registry.capture_plan(&app).is_some(),
             "{} URL was not matched",
             profile.id
+        );
+    }
+}
+
+#[test]
+fn windows_desktop_executables_select_a_parser() {
+    // Executable names taken from live Windows captures on this machine. A
+    // missing alias means the app matches no parser at all, which is how the
+    // default Windows mail client (`olk.exe`, the "new Outlook") and store
+    // apps hosted behind ApplicationFrameHost went unparsed.
+    let registry = builtin_parser_registry().expect("built-in manifests must compile");
+    for executable in [
+        "olk.exe",
+        "OUTLOOK.EXE",
+        "ms-teams.exe",
+        "Notepad.exe",
+        "WINWORD.EXE",
+        "ToDo.exe",
+        "WindowsTerminal.exe",
+        "ChatGPT.exe",
+        "claude.exe",
+    ] {
+        let app = AppIdentity {
+            platform: Platform::Windows,
+            app_id: None,
+            executable: Some(executable.into()),
+            display_name: executable.into(),
+            version: None,
+            browser_url: None,
+        };
+        assert!(
+            registry.capture_plan(&app).is_some(),
+            "{executable} matched no parser identity"
         );
     }
 }

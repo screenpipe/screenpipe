@@ -16,6 +16,7 @@ import {
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import posthog from "posthog-js";
 import { cacheAnalyticsId, cacheAnalyticsEnabled } from "@/lib/analytics-id";
+import { captureSettingsChange } from "@/lib/analytics/settings-change";
 import { resolveTelemetryDisabledByEnv, shouldIdentifyInPostHog } from "@/lib/telemetry-env";
 import { User } from "../utils/tauri";
 import { SettingsStore } from "../utils/tauri";
@@ -25,10 +26,6 @@ import {
 	hasAppEntitlement,
 	normalizeAppUser,
 } from "@/lib/app-entitlement";
-import {
-	resolveFreePlanRetentionTransition,
-	type LocalRetentionPreference,
-} from "@/lib/free-plan-retention";
 import { screenpipeWebUrl } from "@/lib/web-url";
 import type { SourceCitation } from "@/lib/source-citations";
 import type {
@@ -49,7 +46,7 @@ import {
 	type UserGoalCategory,
 } from "@/lib/live-views/onboarding-activation";
 import {
-	LOCAL_DESKTOP_REMOTE_POLICY,
+	cloneLocalDesktopRemotePolicy,
 	NEW_INSTALL_REMOTE_CONTROL_PREFERENCES,
 	normalizeDesktopRemotePolicySnapshot,
 	normalizeDesktopRemotePreferences,
@@ -274,9 +271,7 @@ export type Settings = SettingsStore & {
 	/** Where the user says they found screenpipe, answered once during setup.
 	 *  A fixed enum from the onboarding step — never free text. */
 	acquisitionSource?: string;
-	/** Internal marker/snapshot used to unwind the forced free-plan policy. */
-	_freePlanRetentionApplied?: boolean;
-	_preFreePlanRetention?: LocalRetentionPreference | null;
+	/** Stable local identifier used for device-scoped behavior. */
 	deviceId?: string;
 	/** Device-key values enforced by the current enterprise policy. */
 	enterpriseManagedSettings?: Record<string, ManagedSettingValue>;
@@ -289,6 +284,11 @@ export type Settings = SettingsStore & {
 	updateChannel?: UpdateChannel;
 	chatHistory?: ChatHistoryStore;
 	ignoredUrls?: string[];
+	/**
+	 * Entries the capture-category switches created, so turning a category off
+	 * removes only those and never a rule the user wrote by hand.
+	 */
+	categoryOwnedFilters?: { apps: string[]; domains: string[] };
 	searchShortcut?: string;
 	lockVaultShortcut?: string;
 	/** When true, audio devices follow system default and auto-switch on changes */
@@ -632,30 +632,6 @@ const DEFAULT_CLOUD_PRESET: AIPreset = makeDefaultPresets(false)[0];
 
 const DEFAULT_AUDIO_ENGINE = "whisper-large-v3-turbo-quantized";
 
-async function configureLocalRetention(
-	policy: LocalRetentionPreference,
-): Promise<void> {
-	try {
-		const { localFetch } = await import("@/lib/api");
-		const response = await localFetch("/retention/configure", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				enabled: policy.enabled,
-				retention_days: policy.days,
-				mode: policy.mode,
-			}),
-		});
-		if (!response.ok) {
-			console.warn(`failed to configure local retention (${response.status})`);
-		}
-	} catch (error) {
-		// Persisted settings are still applied by the native startup path on the
-		// next launch. A temporarily unavailable local server must not fail login.
-		console.warn("failed to configure local retention", error);
-	}
-}
-
 // "Paid" = any active app entitlement (Basic / Business / Enterprise / Lifetime)
 // OR the legacy cloud-sync subscription. Broadened from `cloud_subscribed`-only so
 // every paying user — not just Cloud Sync subscribers — gets Screenpipe Cloud
@@ -784,34 +760,9 @@ let DEFAULT_SETTINGS: Settings = {
 			remoteControlPreferences: {
 				...NEW_INSTALL_REMOTE_CONTROL_PREFERENCES,
 			},
-			remoteControlPolicy: {
-				schemaVersion: 1,
-				boolean: {
-					semanticContext: {
-						...LOCAL_DESKTOP_REMOTE_POLICY.boolean.semanticContext,
-					},
-					coreAudioSystemAudio: {
-						...LOCAL_DESKTOP_REMOTE_POLICY.boolean.coreAudioSystemAudio,
-					},
-					smartRecording: {
-						...LOCAL_DESKTOP_REMOTE_POLICY.boolean.smartRecording,
-					},
-					filterMusic: {
-						...LOCAL_DESKTOP_REMOTE_POLICY.boolean.filterMusic,
-					},
-					prioritizeInputLatency: {
-						...LOCAL_DESKTOP_REMOTE_POLICY.boolean.prioritizeInputLatency,
-					},
-					sidebarCustomization: {
-						...LOCAL_DESKTOP_REMOTE_POLICY.boolean.sidebarCustomization,
-					},
-				},
-				aecMode: { ...LOCAL_DESKTOP_REMOTE_POLICY.aecMode },
-				autoUpdate: { ...LOCAL_DESKTOP_REMOTE_POLICY.autoUpdate },
-			},
+			remoteControlPolicy: cloneLocalDesktopRemotePolicy(),
 			semanticContextMode: "memory",
 			useAllMonitors: true,
-			showShortcutOverlay: true,
 			chatHistory: {
 				conversations: [],
 				activeConversationId: null,
@@ -830,6 +781,9 @@ let DEFAULT_SETTINGS: Settings = {
 			filterMusic: true,
 			prioritizeInputLatency: false,
 			enableSidebarCustomization: false,
+			allowHidingShortcutOverlay: false,
+			showShortcutOverlay: true,
+			shortcutOverlaySnoozedUntil: null,
 			sidebarNavLayout: { ...DEFAULT_SIDEBAR_NAV_LAYOUT },
 			ignoreIncognitoWindows: true,
 			enhancedIncognitoDetection: false,
@@ -1791,6 +1745,14 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 	}, [settings.fontSize]);
 
 	const updateSettings = async (updates: Partial<Settings>) => {
+		// Every settings mutation funnels through here, which makes this the one
+		// place that can answer "which controls do people actually change" without
+		// wiring ~40 call sites. The payload is redacted to booleans and numbers
+		// before it leaves — see lib/analytics/settings-change.
+		captureSettingsChange(
+			updates as Record<string, unknown>,
+			typeof window === "undefined" ? undefined : window.location.pathname,
+		);
 		const clearsAccount = "user" in updates && !updates.user;
 		// Sign-out (user → null) must invalidate any loadUser() request that is
 		// currently in flight so the cleared session can't be resurrected when a
@@ -1809,18 +1771,12 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		await settingsStore.set(updates);
 		// Settings will be updated via the listener
 		if (clearsAccount) {
-			// Signed-out state is Unknown. Apply the non-destructive feature cap and
-			// stop any cleanup loop left running by a previously verified account.
+			// Account changes must not alter the user's local retention policy.
 			try {
 				await commands.setCloudToken(null);
 			} catch (error) {
 				console.warn("failed to clear cloud token after sign-out:", error);
 			}
-			await configureLocalRetention({
-				enabled: false,
-				days: 14,
-				mode: "media",
-			});
 		}
 
 		// Only update the port in the API module immediately — auth changes
@@ -1939,20 +1895,10 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				} catch (e) {
 					console.warn("failed to apply unknown-plan restrictions:", e);
 				}
-				// A free-plan cleanup loop may already be running from the prior
-				// verified state. Pause it without overwriting the saved preference;
-				// unknown evidence can cap features, but it cannot authorize deletion.
-				await configureLocalRetention({
-					enabled: false,
-					days: 14,
-					mode: "media",
-				});
 				throw new Error(
 					"account response did not contain verified free or paid plan truth",
 				);
 			}
-			const isFreePlan = localPlanPolicy === "verified-free";
-			const isPaidPlan = localPlanPolicy === "verified-paid";
 
 			// if user was not logged in, send posthog event and bridge identity
 			if (!settings.user?.id) {
@@ -1972,29 +1918,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				}
 			}
 
-			const retentionTransition = resolveFreePlanRetentionTransition(
-				settingsRef.current,
-				isFreePlan,
-				isPaidPlan,
-			);
-			const retentionUpdates =
-				retentionTransition.kind === "enforce"
-					? {
-							_freePlanRetentionApplied: true,
-							_preFreePlanRetention: retentionTransition.previous,
-							localRetentionEnabled: retentionTransition.policy.enabled,
-							localRetentionDays: retentionTransition.policy.days,
-							localRetentionMode: retentionTransition.policy.mode,
-						}
-					: retentionTransition.kind === "restore"
-						? {
-								_freePlanRetentionApplied: false,
-								localRetentionEnabled: retentionTransition.policy.enabled,
-								localRetentionDays: retentionTransition.policy.days,
-								localRetentionMode: retentionTransition.policy.mode,
-							}
-						: {};
-			await updateSettings({ user: userData, ...retentionUpdates } as any);
+			await updateSettings({ user: userData });
 
 			// Push the fresh token into the running sidecar so the
 			// `Server.cloud_token` (used by /v1/chat/completions proxy) and
@@ -2009,21 +1933,6 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				console.warn("failed to push cloud token to sidecar:", e);
 			}
 
-			const verifiedRetentionPolicy =
-				retentionTransition.kind !== "none"
-					? retentionTransition.policy
-					: isPaidPlan
-						? {
-								enabled: settingsRef.current.localRetentionEnabled === true,
-								days: settingsRef.current.localRetentionDays ?? 14,
-								mode: settingsRef.current.localRetentionMode ?? "media",
-							}
-						: null;
-			if (verifiedRetentionPolicy) {
-				// setCloudToken updates native enforcement first. Then apply or resume
-				// the verified policy on the already-running retention task.
-				await configureLocalRetention(verifiedRetentionPolicy);
-			}
 		} catch (err) {
 			console.error("failed to load user:", err instanceof Error ? err.message : err);
 			throw err;

@@ -28,7 +28,30 @@ const EXCLUDED_APPS: &[&str] = &[
     "keychain access",
     "screenpipe",
     "loginwindow",
+    // Apple's screenshot UI (Cmd+Shift+3/4/5). `screencaptureui` is the process
+    // name, "screenshot" the localized app name; which one reaches us depends on
+    // whether the caller resolved the pid via proc_name or NSRunningApplication.
+    //
+    // Excluded for latency, not privacy. Pressing the shortcut makes this app
+    // frontmost, and mouse-down maps to `CaptureTrigger::Click`, so the walk
+    // fires exactly while the user is dragging the selection. Every AX read is
+    // synchronous IPC serviced on the *target's* main thread — the same thread
+    // drawing the selection rectangle — so walking it stutters the drag it is
+    // trying to observe. The overlay is a crosshair and a toolbar: no text worth
+    // indexing. Screen frames are unaffected; this skips the a11y walk only.
+    "screencaptureui",
+    "screenshot",
 ];
+
+/// Substring match against the lowercased app name, matching the two call sites
+/// that gate a11y capture. Broad by design: `EXCLUDED_APPS` entries are brand or
+/// process fragments, so "screenshot" also covers third-party screenshot tools.
+/// That is the intended trade — none of them carry indexable a11y text.
+fn is_excluded_app(app_lower: &str) -> bool {
+    EXCLUDED_APPS
+        .iter()
+        .any(|excluded| app_lower.contains(excluded))
+}
 
 /// Known browser app names (lowercase). Matches vision crate's list.
 const BROWSER_NAMES: &[&str] = &[
@@ -718,6 +741,11 @@ impl MacosTreeWalker {
 }
 
 impl TreeWalkerPlatform for MacosTreeWalker {
+    fn update_config(&mut self, mut config: TreeWalkerConfig) {
+        config.compile_patterns_reusing(Some(&self.config));
+        self.config = config;
+    }
+
     fn walk_focused_window(&self) -> Result<TreeWalkResult> {
         // Wrap in autorelease pool — cidre AX/NS APIs create autoreleased
         // ObjC objects. Without this, objects accumulate on the tokio
@@ -757,9 +785,7 @@ fn check_focused_window_filters_inner(
     };
     let window_name = get_string_attr(&window, ax::attr::title()).unwrap_or_default();
     let app_lower = app_name.to_lowercase();
-    let excluded = EXCLUDED_APPS
-        .iter()
-        .any(|excluded| app_lower.contains(excluded));
+    let excluded = is_excluded_app(&app_lower);
 
     let native_incognito =
         if config.ignore_incognito_windows {
@@ -799,9 +825,9 @@ impl MacosTreeWalker {
                 None => return Ok(TreeWalkResult::NotFound),
             };
 
-        // Skip excluded apps (password managers, etc.)
+        // Skip excluded apps (password managers, screenshot overlays, etc.)
         let app_lower = app_name.to_lowercase();
-        if EXCLUDED_APPS.iter().any(|ex| app_lower.contains(ex)) {
+        if is_excluded_app(&app_lower) {
             return Ok(TreeWalkResult::Skipped(SkipReason::ExcludedApp));
         }
 
@@ -2066,7 +2092,7 @@ fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
                 window_pattern::matches_any(&state.ignored_patterns, app_lc, &lower)
             };
             // title comes from the batch; url is not batched (read individually).
-            if attrs.title.as_deref().is_some_and(|t| matches(t))
+            if attrs.title.as_deref().is_some_and(&matches)
                 || get_string_attr(elem, ax::attr::url()).is_some_and(|u| matches(&u))
             {
                 state.hit_ignored_extension = true;
@@ -2456,6 +2482,12 @@ fn frontmost_pid_via_window_server() -> Option<i32> {
 fn resolve_focused_ax_app(
     capture_app_identity: bool,
 ) -> Option<(Retained<ax::UiElement>, i32, String, Option<String>)> {
+    // The walker runs from the engine's capture pipeline, which can be live
+    // without `MacosUiRecorder::start`. Bound AX here too so `focused_app()` /
+    // `pid()` below can never inherit the ~6s system default. `Once`, so this
+    // is an atomic load after the first walk.
+    crate::platform::macos::ensure_global_ax_timeout();
+
     // The AX system-wide focusedApplication is not just *empty* for
     // Chromium/Electron apps that haven't materialized their AX tree — it
     // can go STALE, still reporting the previously focused app. A walker
@@ -2803,6 +2835,46 @@ fn fill_ax_props(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn apple_screenshot_ui_is_excluded_from_walks() {
+        // Both spellings reach `is_excluded_app` depending on whether the pid
+        // was resolved via proc_name or NSRunningApplication.localizedName.
+        assert!(is_excluded_app("screencaptureui"));
+        assert!(is_excluded_app("screenshot"));
+        // Case is normalized by the callers, which lowercase before matching.
+        assert!(is_excluded_app(&"Screenshot".to_lowercase()));
+    }
+
+    #[test]
+    fn excluded_apps_still_cover_credential_managers_and_self() {
+        for app in [
+            "1password",
+            "bitwarden",
+            "lastpass",
+            "dashlane",
+            "keepassxc",
+            "keychain access",
+            "screenpipe",
+            "loginwindow",
+        ] {
+            assert!(is_excluded_app(app), "{app} should stay excluded");
+        }
+    }
+
+    #[test]
+    fn ordinary_apps_are_not_excluded() {
+        for app in [
+            "safari",
+            "google chrome",
+            "slack",
+            "code",
+            "notion",
+            "figma",
+        ] {
+            assert!(!is_excluded_app(app), "{app} must still be walked");
+        }
+    }
 
     #[test]
     fn test_should_skip_role() {

@@ -17,10 +17,11 @@ pub(crate) async fn start_or_adopt_auto_meeting(
     db: &DatabaseManager,
     manual_meeting: &tokio::sync::RwLock<Option<i64>>,
     platform: &str,
-    title: Option<&str>,
-    attendees: Option<&str>,
+    calendar: Option<&CalendarBinding>,
     last_explicit_stop_id: Option<i64>,
 ) -> AutoStartOutcome {
+    let title = calendar.map(|c| c.title.as_str());
+    let attendees = calendar.and_then(|c| c.attendees.as_deref());
     if let Some(id) = *manual_meeting.read().await {
         debug!(
             "audio-process meeting detector: not starting {}, manual meeting {} is active",
@@ -55,15 +56,32 @@ pub(crate) async fn start_or_adopt_auto_meeting(
     match merge_candidate {
         Ok(Some(recent)) => match db.reopen_meeting(recent.id).await {
             Ok(()) => {
-                if title.is_some() && recent.title.as_ref().is_none_or(|t| t.is_empty()) {
-                    if let Err(e) = db
-                        .update_meeting(recent.id, None, None, title, attendees, None, None)
-                        .await
-                    {
-                        warn!(
-                            "audio-process meeting detector: failed to enrich reopened meeting {}: {}",
+                if let Some(calendar) = calendar {
+                    // Claim the event first: enrich only if this meeting owns it.
+                    match db.bind_calendar_event(recent.id, &calendar.key).await {
+                        Ok(true) => {
+                            if recent.title.as_ref().is_none_or(|t| t.is_empty()) {
+                                if let Err(e) = db
+                                    .update_meeting(
+                                        recent.id, None, None, title, attendees, None, None,
+                                    )
+                                    .await
+                                {
+                                    warn!(
+                                        "audio-process meeting detector: failed to enrich reopened meeting {}: {}",
+                                        recent.id, e
+                                    );
+                                }
+                            }
+                        }
+                        Ok(false) => debug!(
+                            "audio-process meeting detector: calendar event already bound, leaving meeting {} unenriched",
+                            recent.id
+                        ),
+                        Err(e) => warn!(
+                            "audio-process meeting detector: failed to bind calendar event to meeting {}: {}",
                             recent.id, e
-                        );
+                        ),
                     }
                 }
                 if let Ok(meeting) = db.get_meeting_by_id(recent.id).await {
@@ -76,16 +94,16 @@ pub(crate) async fn start_or_adopt_auto_meeting(
                     "audio-process meeting detector: failed to reopen meeting {}: {}",
                     recent.id, e
                 );
-                insert_new_audio_process_meeting(db, platform, title, attendees).await
+                insert_new_audio_process_meeting(db, platform, calendar).await
             }
         },
-        Ok(None) => insert_new_audio_process_meeting(db, platform, title, attendees).await,
+        Ok(None) => insert_new_audio_process_meeting(db, platform, calendar).await,
         Err(e) => {
             warn!(
                 "audio-process meeting detector: failed to find recent meeting: {}",
                 e
             );
-            insert_new_audio_process_meeting(db, platform, title, attendees).await
+            insert_new_audio_process_meeting(db, platform, calendar).await
         }
     }
 }
@@ -93,11 +111,18 @@ pub(crate) async fn start_or_adopt_auto_meeting(
 pub(crate) async fn insert_new_audio_process_meeting(
     db: &DatabaseManager,
     platform: &str,
-    title: Option<&str>,
-    attendees: Option<&str>,
+    calendar: Option<&CalendarBinding>,
 ) -> AutoStartOutcome {
+    let title = calendar.map(|c| c.title.as_str());
+    let attendees = calendar.and_then(|c| c.attendees.as_deref());
     match db
-        .insert_meeting(platform, "audio_process", title, attendees)
+        .insert_meeting_with_calendar(
+            platform,
+            "audio_process",
+            title,
+            attendees,
+            calendar.map(|c| c.key.as_str()),
+        )
         .await
     {
         Ok(id) => {
@@ -234,14 +259,12 @@ pub(crate) async fn apply_state_action(
             pid,
             bundle_id,
         } => {
-            let (cal_title, cal_attendees) = find_overlapping_calendar_event(calendar_events);
-            let attendees_str = cal_attendees.as_ref().map(|a| a.join(", "));
+            let calendar = resolve_calendar_binding(db, calendar_events, Utc::now()).await;
             let outcome = start_or_adopt_auto_meeting(
                 db,
                 manual_meeting,
                 &platform,
-                cal_title.as_deref(),
-                attendees_str.as_deref(),
+                calendar.as_ref(),
                 last_explicit_stop_id,
             )
             .await;

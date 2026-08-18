@@ -4,7 +4,7 @@
 import type Anthropic from '@anthropic-ai/sdk';
 
 export interface Message {
-	role: 'system' | 'user' | 'assistant' | 'tool';
+	role: 'system' | 'developer' | 'user' | 'assistant' | 'tool';
 	content: string | ContentPart[];
 	name?: string;
 	tool_calls?: ToolCall[];
@@ -75,16 +75,25 @@ export interface Tool {
 	};
 }
 
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
 export interface RequestBody {
 	model: string;
 	messages: Message[];
 	stream?: boolean;
 	tools?: any[];
 	temperature?: number;
+	reasoning_effort?: ReasoningEffort;
 	max_tokens?: number;
 	max_completion_tokens?: number;
 	tool_choice?: string | { type: 'function'; function: { name: string } };
 	response_format?: ResponseFormat;
+	/**
+	 * Gateway-internal prompt-cache eligibility. The Worker overwrites this
+	 * from its validated session-affinity header and rollout mode; client input
+	 * is never authoritative, and providers never forward this field upstream.
+	 */
+	gpt56HistoryCacheEligible?: boolean;
 	/**
 	 * Gateway-internal latency tier for the Vertex Gemini lane. Set by the
 	 * router from the request's latency class (see resolveLatencyClass in
@@ -140,6 +149,8 @@ export interface GeminiResponse {
 
 export interface Env {
 	AI: Ai;
+	/** GPT-5.6 prompt caching: `system` (default/kill switch) or `history`. */
+	GPT56_HISTORY_CACHE_MODE?: string;
 	/** Hosted chat rollout switch. Any value other than `cloudflare` is legacy. */
 	HOSTED_CHAT_GATEWAY_MODE?: string;
 	/** Same-account Cloudflare AI Gateway used by the Workers AI binding. */
@@ -259,6 +270,10 @@ export interface Env {
 	MAX_DAILY_FREE_TRANSCRIPTION_COST?: string;
 	MAX_DAILY_BASIC_TRANSCRIPTION_COST?: string;
 	MAX_DAILY_BUSINESS_TRANSCRIPTION_COST?: string;
+	MAX_GLOBAL_HOURLY_TRANSCRIPTION_COST?: string;
+	MAX_GLOBAL_DAILY_TRANSCRIPTION_COST?: string;
+	/** Hard ceiling on a single realtime transcription session, in seconds. */
+	MAX_REALTIME_SESSION_SECONDS?: string;
 	FREE_CHAT_COST_RESERVATION_MICRO_USD?: string;
 	FREE_CHAT_DAILY_BUDGET_MICRO_USD?: string;
 	// Per-minute RPM for free (weight-0) models — a separate, much higher bucket

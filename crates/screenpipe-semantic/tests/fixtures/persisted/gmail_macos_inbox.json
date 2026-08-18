@@ -1,0 +1,27 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "company.thebrowser.Browser",
+    "executable": "Arc",
+    "display_name": "Gmail",
+    "version": "1.0",
+    "browser_url": "https://mail.google.com/mail/u/0/#inbox"
+  },
+  "nodes": [
+    { "role": "AXWindow", "text": "Gmail", "depth": 0 },
+    { "role": "AXWebArea", "text": "Gmail", "depth": 1, "automation_id": "RootWebArea" },
+    { "role": "AXButton", "text": "Compose", "depth": 2 },
+    { "role": "AXHeading", "text": "Search mail", "depth": 2 },
+    { "role": "AXLink", "text": "Inbox", "depth": 2 },
+    {
+      "role": "AXLink",
+      "text": "Build service Release complete The signed build is ready for review and the release checklist passed today at 10:20 AM",
+      "depth": 3
+    },
+    {
+      "role": "AXLink",
+      "text": "Customer feedback Parser request Please support the accessibility tree shape stored by Screenpipe yesterday at 4:30 PM",
+      "depth": 3
+    }
+  ]
+}

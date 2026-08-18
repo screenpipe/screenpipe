@@ -27,6 +27,8 @@ export type HostedAiCostControlEnv = Pick<Env,
 	| 'MAX_DAILY_FREE_TRANSCRIPTION_COST'
 	| 'MAX_DAILY_BASIC_TRANSCRIPTION_COST'
 	| 'MAX_DAILY_BUSINESS_TRANSCRIPTION_COST'
+	| 'MAX_GLOBAL_HOURLY_TRANSCRIPTION_COST'
+	| 'MAX_GLOBAL_DAILY_TRANSCRIPTION_COST'
 >;
 
 type PlanControls = Record<HostedAiPlan, number>;
@@ -46,7 +48,13 @@ export type HostedAiTextCostControls = {
 	};
 };
 
-export type HostedTranscriptionCostControls = PlanControls;
+export type HostedTranscriptionCostControls = {
+	plans: PlanControls;
+	global: {
+		hourly: number;
+		daily: number;
+	};
+};
 
 export type ResolvedHostedAiTextCostLimits = {
 	daily: number;
@@ -179,7 +187,20 @@ export function loadHostedTranscriptionCostControls(
 		],
 	);
 	requireNonDecreasing(controls, 'transcription plan ceilings');
-	return controls;
+	const global = {
+		hourly: requiredPrivateDecimal(
+			env.MAX_GLOBAL_HOURLY_TRANSCRIPTION_COST,
+			'MAX_GLOBAL_HOURLY_TRANSCRIPTION_COST',
+		),
+		daily: requiredPrivateDecimal(
+			env.MAX_GLOBAL_DAILY_TRANSCRIPTION_COST,
+			'MAX_GLOBAL_DAILY_TRANSCRIPTION_COST',
+		),
+	};
+	if (global.hourly > global.daily) {
+		throw new PrivateCostControlError('global transcription windows', 'inconsistent');
+	}
+	return { plans: controls, global };
 }
 
 export function accountPlanFromTier(tier: string): AccountPlan {
@@ -200,7 +221,14 @@ export function getTranscriptionDailyCostCap(
 	accountPlan: AccountPlan,
 	env: HostedAiCostControlEnv,
 ): number {
-	return loadHostedTranscriptionCostControls(env)[requireHostedPlan(accountPlan)];
+	return loadHostedTranscriptionCostControls(env).plans[requireHostedPlan(accountPlan)];
+}
+
+/** Account-wide transcription ceilings. Values stay private to the Worker. */
+export function getTranscriptionGlobalCostCaps(
+	env: HostedAiCostControlEnv,
+): { hourly: number; daily: number } {
+	return loadHostedTranscriptionCostControls(env).global;
 }
 
 export function getPlanDailyCostCap(

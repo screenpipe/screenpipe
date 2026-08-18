@@ -135,20 +135,48 @@ fn store_json_has_presets(data: &[u8]) -> bool {
 /// crash can never destroy both the live file and its backup at once.
 pub(crate) fn durable_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // The temp name must be unique per call. It used to be a fixed
+    // `<path>.durable.tmp`, which two concurrent writers to the same target
+    // shared: B's create truncated A's in-flight temp, and whichever renamed
+    // second got ENOENT because the first rename had already consumed it.
+    //
+    // Observed in production on 2026-08-13, six times in 22s, when
+    // set_overlay_anchor and set_overlay_display saved 103µs apart: the
+    // store.bin write and *both* last-good snapshots failed together, so the
+    // settings-wipe recovery chain was down exactly while writes contended.
+    // The same interleaving could also rename a half-written temp over the
+    // target — the torn file this helper exists to prevent.
+    //
+    // pid + counter is unique across every live writer. A hard crash mid-write
+    // still leaks at most one temp, the same as before; earlier temps are
+    // already consumed by their renames.
+    static SEQ: AtomicU64 = AtomicU64::new(0);
     let mut tmp = path.as_os_str().to_os_string();
-    tmp.push(".durable.tmp");
+    tmp.push(format!(
+        ".durable.{}.{}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
     let tmp = std::path::PathBuf::from(tmp);
 
     {
-        let mut f = std::fs::File::create(&tmp)?;
+        // Truncate rather than create_new: the unique name already excludes
+        // every live writer, and a leftover from a dead process that reused
+        // this pid should be reclaimed, not turned into a hard write failure.
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // store.bin and its snapshots hold API keys — owner-only from
+            // creation, so there is no window where the temp is world-readable.
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&tmp)?;
         f.write_all(bytes)?;
         f.sync_all()?; // contents + metadata to stable storage before the rename
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        // store.bin and its snapshots hold API keys — keep them owner-only.
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
     }
     if let Err(e) = std::fs::rename(&tmp, path) {
         let _ = std::fs::remove_file(&tmp);
@@ -951,11 +979,28 @@ pub struct SettingsStore {
     pub search_shortcut: String,
     #[serde(rename = "lockVaultShortcut", default)]
     pub lock_vault_shortcut: String,
-    #[serde(rename = "showShortcutOverlay", default = "default_true")]
-    pub show_shortcut_overlay: bool,
     /// Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
     #[serde(rename = "shortcutOverlaySize", default = "default_overlay_size")]
     pub shortcut_overlay_size: String,
+    /// The user's persistent choice for the shortcut reminder. Recording-health
+    /// incidents may still reveal their own temporary recovery surface.
+    #[serde(rename = "showShortcutOverlay", default = "default_true")]
+    pub show_shortcut_overlay: bool,
+    /// Unix timestamp until which the user asked to hide the shortcut reminder.
+    #[serde(rename = "shortcutOverlaySnoozedUntil", default)]
+    pub shortcut_overlay_snoozed_until: Option<i64>,
+    /// Compatibility capability written by the desktop remote-control registry.
+    /// Consumer visibility is controlled by `show_shortcut_overlay` above.
+    #[serde(rename = "allowHidingShortcutOverlay", default)]
+    pub allow_hiding_shortcut_overlay: bool,
+    /// Where the user dragged the overlay: one of top/bottom x left/center/right.
+    #[serde(rename = "shortcutOverlayAnchor", default = "default_overlay_anchor")]
+    pub shortcut_overlay_anchor: String,
+    /// Display the overlay was pinned to, as a stable per-display UUID. Empty
+    /// until the user drags it, and ignored when that display is not attached,
+    /// so the pill stays put instead of following the cursor between monitors.
+    #[serde(rename = "shortcutOverlayDisplay", default)]
+    pub shortcut_overlay_display: String,
     /// Unique device ID for AI usage tracking (generated on first launch)
     #[serde(rename = "deviceId", default = "generate_device_id")]
     pub device_id: String,
@@ -1054,6 +1099,10 @@ fn default_true() -> bool {
 
 fn default_overlay_size() -> String {
     "small".to_string()
+}
+
+fn default_overlay_anchor() -> String {
+    "top-center".to_string()
 }
 
 fn default_ui_theme() -> String {
@@ -1543,8 +1592,12 @@ Rules:
             lock_vault_shortcut: "Ctrl+Shift+L".to_string(),
             #[cfg(not(target_os = "windows"))]
             lock_vault_shortcut: "Super+Shift+L".to_string(),
-            show_shortcut_overlay: true,
             shortcut_overlay_size: "small".to_string(),
+            shortcut_overlay_anchor: default_overlay_anchor(),
+            shortcut_overlay_display: String::new(),
+            show_shortcut_overlay: true,
+            shortcut_overlay_snoozed_until: None,
+            allow_hiding_shortcut_overlay: false,
             device_id: uuid::Uuid::new_v4().to_string(),
             auto_update: true,
             auto_update_pipes: true,
@@ -1625,6 +1678,7 @@ impl SettingsStore {
             if let Some(presets) = obj.get_mut("aiPresets") {
                 if let Some(arr) = presets.as_array_mut() {
                     for preset in arr.iter_mut() {
+                        Self::repair_orphaned_acp_preset(preset);
                         if let Some(provider) = preset.get("provider").and_then(|p| p.as_str()) {
                             if !known_providers.contains(&provider) {
                                 tracing::warn!(
@@ -1644,6 +1698,59 @@ impl SettingsStore {
             }
         }
         val
+    }
+
+    /// Give a coding-agent preset its `acp` provider back.
+    ///
+    /// The unknown-provider fallback above rewrites `provider` in place and
+    /// leaves everything else alone. Any build predating ACP (`acp` reached
+    /// this allow-list on 2026-08-07) therefore turned a working coding-agent
+    /// preset into `provider: "custom"` with no URL, permanently — the agent id
+    /// survived in `model`, so the desktop then asked the cloud gateway for a
+    /// model literally named "codex-acp" and showed the 403 as "upgrade to
+    /// Screenpipe Business". One downgrade, or one older build opening the
+    /// store, was enough.
+    ///
+    /// The signature is deliberately narrow: an agent config, a model that is
+    /// still exactly that agent's id, and no URL. Switching a preset away from
+    /// a coding agent in the editor always rewrites `model` (cloud → "auto",
+    /// chatgpt → "gpt-5.6-terra") or sets a URL (ollama, custom), so a
+    /// deliberate choice can never match this and get flipped back.
+    fn repair_orphaned_acp_preset(preset: &mut Value) {
+        let Some(obj) = preset.as_object_mut() else {
+            return;
+        };
+        if obj.get("provider").and_then(|p| p.as_str()) == Some("acp") {
+            return;
+        }
+        let agent_id = obj
+            .get("acpAgent")
+            .and_then(|agent| agent.get("id"))
+            .and_then(|id| id.as_str())
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned);
+        let Some(agent_id) = agent_id else {
+            return;
+        };
+        if obj.get("model").and_then(|m| m.as_str()).map(str::trim) != Some(agent_id.as_str()) {
+            return;
+        }
+        let url_is_empty = obj
+            .get("url")
+            .map(|url| url.as_str().map(str::trim).unwrap_or("").is_empty())
+            .unwrap_or(true);
+        if !url_is_empty {
+            return;
+        }
+        tracing::warn!(
+            "restoring 'acp' provider for coding-agent preset '{}' (was '{}')",
+            agent_id,
+            obj.get("provider")
+                .and_then(|p| p.as_str())
+                .unwrap_or("none")
+        );
+        obj.insert("provider".to_string(), Value::String("acp".to_string()));
     }
 
     pub fn get(app: &AppHandle) -> Result<Option<Self>, String> {
@@ -1790,11 +1897,9 @@ impl SettingsStore {
         match self.local_plan_policy() {
             LocalPlanPolicy::VerifiedFree => {
                 config.max_non_template_pipes = Some(2);
-                config.enforce_free_plan_retention = true;
             }
             LocalPlanPolicy::Unknown => {
-                // Unknown must never inherit paid/unlimited behavior, but it is
-                // not safe evidence for destructive free-plan retention.
+                // Unknown must never inherit paid/unlimited behavior.
                 config.max_non_template_pipes = Some(2);
             }
             LocalPlanPolicy::VerifiedPaid => {}
@@ -1897,10 +2002,6 @@ impl SettingsStore {
         } else {
             LocalPlanPolicy::Unknown
         }
-    }
-
-    pub(crate) fn has_free_plan_policy(&self) -> bool {
-        self.local_plan_policy() == LocalPlanPolicy::VerifiedFree
     }
 
     pub(crate) fn restricts_paid_local_features(&self) -> bool {
@@ -2032,6 +2133,33 @@ fn restore_headed_mode_for_consumer(
     true
 }
 
+const WINDOWS_TIMELINE_WINDOW_MODE_MIGRATION: &str =
+    "windowsTimelineWindowModeMigrationV1";
+
+/// Move existing Windows installs off the legacy borderless fullscreen overlay.
+///
+/// The marker makes this a one-time migration: after the first upgraded launch,
+/// users can explicitly switch back to fullscreen without being overridden again.
+fn migrate_windows_timeline_to_window_mode(settings: &mut SettingsStore) -> bool {
+    if settings
+        .extra
+        .get(WINDOWS_TIMELINE_WINDOW_MODE_MIGRATION)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+
+    if settings.overlay_mode == "fullscreen" {
+        settings.overlay_mode = "window".to_string();
+    }
+    settings.extra.insert(
+        WINDOWS_TIMELINE_WINDOW_MODE_MIGRATION.to_string(),
+        Value::Bool(true),
+    );
+    true
+}
+
 pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
     println!("Initializing settings store");
 
@@ -2049,26 +2177,69 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
         .unwrap_or(false);
 
     let is_new_store;
-    let (mut store, mut should_save) = match SettingsStore::get(app) {
+    let (mut store, mut should_save, can_run_settings_migrations) = match SettingsStore::get(app) {
         Ok(Some(store)) => {
             is_new_store = false;
-            (store, should_persist_restart_notification_migration)
+            (store, should_persist_restart_notification_migration, true)
         }
         Ok(None) => {
             is_new_store = true;
-            (SettingsStore::default(), true) // New store, save defaults
+            (SettingsStore::default(), true, true) // New store, save defaults
         }
         Err(e) => {
             is_new_store = false;
-            // Fallback to defaults when deserialization fails (e.g., corrupted store)
-            // DON'T save - preserve original store in case it can be manually recovered
-            // This prevents crashes from invalid values like negative integers in u32 fields
-            // Non-fatal — logged as warn (not error) so Sentry doesn't pick it up.
-            warn!(
-                "Failed to deserialize settings, using defaults (store not overwritten): {}",
+            // Falling straight through to defaults here disabled the product.
+            //
+            // Defaults carry no account and no plan, so `local_plan_policy()`
+            // reads `Unknown`, the consumer recording gate refuses with
+            // `account_required`, and the engine never starts — `boot_phase`
+            // stays `idle` while onboarding waits on a readiness signal that
+            // cannot arrive. And because the bad file was deliberately left in
+            // place, it repeated on every launch: 178 Windows users on 2.6.21
+            // relaunched 6.5 times each and never once reached a started engine.
+            //
+            // L2 already restores a snapshot when store.bin *parses* but is
+            // degraded. A torn file — exactly what `durable_write`'s old shared
+            // temp path could produce by renaming a half-written temp over the
+            // target — does not parse, so it never reached that path. Run the
+            // same recovery here before surrendering to defaults.
+            //
+            // Logged at error, not warn. The previous level was chosen so
+            // "Sentry doesn't pick it up", which is backwards for a failure that
+            // silently turns recording off and self-perpetuates; it is why this
+            // ran unnoticed for 25 hours with no alert.
+            tracing::error!(
+                "settings failed to deserialize, attempting snapshot recovery: {}",
                 e
             );
-            (SettingsStore::default(), false)
+
+            let recovered = get_base_dir(app, None)
+                .ok()
+                .map(|base_dir| base_dir.join("store.bin"))
+                .filter(|store_path| {
+                    restore_snapshot_over(store_path, "store.bin failed to deserialize")
+                })
+                .and_then(|_| SettingsStore::get(app).ok().flatten());
+
+            match recovered {
+                Some(store) => {
+                    tracing::warn!(
+                        "settings recovered from a healthy snapshot after a deserialize failure"
+                    );
+                    (store, should_persist_restart_notification_migration, true)
+                }
+                None => {
+                    // Still don't overwrite: the file stays for forensics and a
+                    // later manual recovery. But say plainly what the user is
+                    // about to experience instead of logging it as routine.
+                    tracing::error!(
+                        "settings deserialize failure with no healthy snapshot — starting from \
+                         defaults; recording stays gated until an account refresh restores a \
+                         verified plan"
+                    );
+                    (SettingsStore::default(), false, false)
+                }
+            }
         }
     };
 
@@ -2152,13 +2323,37 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
         should_save = true;
     }
 
+    if cfg!(target_os = "windows")
+        && can_run_settings_migrations
+        && migrate_windows_timeline_to_window_mode(&mut store)
+    {
+        tracing::info!(
+            "settings migration: selected window mode for the Windows timeline overlay"
+        );
+        should_save = true;
+    }
+
     if should_save {
         if let Err(e) = store.save(app) {
-            // Non-fatal — logged as warn (not error) so Sentry doesn't pick it up.
-            // Common cause on Windows: antivirus / Controlled Folder Access / OneDrive
-            // blocks the first write; we retry on subsequent saves so the user isn't
-            // actually stuck. Not worth paging Louis about.
-            warn!("Failed to save initial settings store (non-fatal): {}", e);
+            // "We retry on subsequent saves so the user isn't actually stuck" is
+            // only true when the block is transient. The documented Windows
+            // causes — antivirus, Controlled Folder Access, OneDrive — are
+            // usually *persistent*, and every later save fails the same way.
+            // That includes the save that persists the account's verified plan,
+            // and without a persisted plan `local_plan_policy()` reads Unknown,
+            // the recording gate refuses with `account_required`, and the engine
+            // never starts. So this is not "not worth paging about": it is one
+            // of the two ways recording silently turns itself off on Windows.
+            //
+            // Reported at error. The old level was chosen so Sentry would skip
+            // it, which is exactly why the Windows onboarding collapse ran 25
+            // hours with no alert.
+            tracing::error!(
+                "failed to save settings store — if this persists (antivirus, Controlled \
+                 Folder Access, OneDrive), the account plan cannot be stored and recording \
+                 stays gated: {}",
+                e
+            );
         }
     }
     Ok(store)
@@ -2171,11 +2366,14 @@ pub fn init_onboarding_store(app: &AppHandle) -> Result<OnboardingStore, String>
         Ok(Some(onboarding)) => (onboarding, false),
         Ok(None) => (OnboardingStore::default(), true),
         Err(e) => {
-            // Fallback to defaults when deserialization fails
-            // DON'T save - preserve original store
-            // Non-fatal — logged as warn (not error) so Sentry doesn't pick it up.
-            warn!(
-                "Failed to deserialize onboarding, using defaults (store not overwritten): {}",
+            // Defaults mean "onboarding not completed", so an unreadable store
+            // silently replays setup for someone who already finished it — and
+            // setup now ends at a mandatory card ask. Still not saved, so the
+            // original file survives for recovery, but this is a user-visible
+            // reset rather than a routine miss and must be reported as one.
+            tracing::error!(
+                "failed to deserialize onboarding store, falling back to defaults \
+                 (file preserved) — setup will replay for this install: {}",
                 e
             );
             (OnboardingStore::default(), false)
@@ -2184,9 +2382,14 @@ pub fn init_onboarding_store(app: &AppHandle) -> Result<OnboardingStore, String>
 
     if should_save {
         if let Err(e) = onboarding.save(app) {
-            // Non-fatal — logged as warn (not error) so Sentry doesn't pick it up.
-            // See matching comment in init_settings_store.
-            warn!("Failed to save initial onboarding store (non-fatal): {}", e);
+            // Same persistence failure as the settings store above: if the write
+            // is blocked rather than merely late, onboarding completion never
+            // lands and setup replays on every launch.
+            tracing::error!(
+                "failed to save onboarding store — if this persists, setup completion \
+                 cannot be recorded and will replay on the next launch: {}",
+                e
+            );
         }
     }
     Ok(onboarding)
@@ -2334,7 +2537,10 @@ pub fn show_fatal_startup_alert(title: &str, message: &str) {
         );
         Command::new("osascript").arg("-e").arg(script).spawn()
     } else if cfg!(target_os = "windows") {
-        Command::new("powershell")
+        // `-WindowStyle Hidden` hides PowerShell's *own* window, not the
+        // console Windows allocates for a console child of a GUI process — the
+        // alert would otherwise arrive with a black terminal beside it.
+        screenpipe_core::no_window_command("powershell")
             .args([
                 "-NoProfile",
                 "-WindowStyle",
@@ -2425,6 +2631,42 @@ mod tests {
     #[test]
     fn auto_update_defaults_to_enabled() {
         assert!(SettingsStore::default().auto_update);
+    }
+
+    #[test]
+    fn shortcut_overlay_anchor_defaults_to_top_center() {
+        assert_eq!(SettingsStore::default().shortcut_overlay_anchor, "top-center");
+
+        // Settings written before the pill could be pinned have no anchor key.
+        let missing: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": []
+        }))
+        .unwrap();
+        assert_eq!(missing.shortcut_overlay_anchor, "top-center");
+    }
+
+    #[test]
+    fn shortcut_overlay_preferences_survive_old_and_new_stores() {
+        let defaults = SettingsStore::default();
+        assert!(defaults.show_shortcut_overlay);
+        assert_eq!(defaults.shortcut_overlay_snoozed_until, None);
+
+        let missing: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": []
+        }))
+        .unwrap();
+        assert!(missing.show_shortcut_overlay);
+        assert_eq!(missing.shortcut_overlay_snoozed_until, None);
+
+        let legacy: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": [],
+            "showShortcutOverlay": false,
+            "shortcutOverlaySnoozedUntil": 4_102_444_800_i64,
+            "shortcutOverlayMinimalReshowVersion": 1,
+        }))
+        .unwrap();
+        assert!(!legacy.show_shortcut_overlay);
+        assert_eq!(legacy.shortcut_overlay_snoozed_until, Some(4_102_444_800));
     }
 
     #[test]
@@ -2529,6 +2771,40 @@ mod tests {
         assert!(!restore_headed_mode_for_consumer(&mut enterprise, true));
         assert!(enterprise.headless);
         assert!(enterprise.headless_record_only);
+    }
+
+    #[test]
+    fn windows_timeline_migration_moves_legacy_fullscreen_to_window_once() {
+        let mut settings = SettingsStore {
+            overlay_mode: "fullscreen".to_string(),
+            ..Default::default()
+        };
+
+        assert!(migrate_windows_timeline_to_window_mode(&mut settings));
+        assert_eq!(settings.overlay_mode, "window");
+        assert_eq!(
+            settings.extra.get(WINDOWS_TIMELINE_WINDOW_MODE_MIGRATION),
+            Some(&Value::Bool(true))
+        );
+
+        settings.overlay_mode = "fullscreen".to_string();
+        assert!(!migrate_windows_timeline_to_window_mode(&mut settings));
+        assert_eq!(settings.overlay_mode, "fullscreen");
+    }
+
+    #[test]
+    fn windows_timeline_migration_marks_existing_window_mode_complete() {
+        let mut settings = SettingsStore {
+            overlay_mode: "window".to_string(),
+            ..Default::default()
+        };
+
+        assert!(migrate_windows_timeline_to_window_mode(&mut settings));
+        assert_eq!(settings.overlay_mode, "window");
+        assert_eq!(
+            settings.extra.get(WINDOWS_TIMELINE_WINDOW_MODE_MIGRATION),
+            Some(&Value::Bool(true))
+        );
     }
 
     #[test]
@@ -2638,6 +2914,142 @@ mod tests {
         assert!(!store.has_current_app_entitlement());
     }
 
+    /// An unreadable store must not read as "signed out".
+    ///
+    /// `SettingsStore::get` substitutes `SettingsStore::default()` when the read
+    /// fails. A defaulted store carries no account and no plan, so
+    /// `local_plan_policy()` is `Unknown`, and the consumer recording gate
+    /// (`recording_access_policy(.., has_verified_local_plan = false, ..)`,
+    /// already asserted false in recording.rs) refuses to start the engine with
+    /// `account_required`. The engine then never starts, `boot_phase` stays
+    /// `idle`, and onboarding waits on a readiness signal that cannot arrive.
+    ///
+    /// That is a lockout caused by an unreadable file rather than by the user's
+    /// actual entitlement, and it is durable: 178 Windows users on 2.6.21
+    /// relaunched 6.5 times each and never once reached a started engine.
+    /// Conflating the two states is the defect; this pins the conflation.
+    #[test]
+    fn unreadable_store_defaults_to_unknown_and_locks_the_engine_out() {
+        // What a failed read hands the gate.
+        assert_eq!(
+            SettingsStore::default().local_plan_policy(),
+            LocalPlanPolicy::Unknown,
+            "a defaulted store must be Unknown — this is what gates the engine off"
+        );
+
+        // Same code, same build, only the store contents differ: a signed-in
+        // free account is allowed to record. So the lockout is entirely a
+        // function of whether the store survived, not of entitlement.
+        let mut signed_in = SettingsStore::default();
+        signed_in.user.id = Some("user_free".to_string());
+        signed_in.user.subscription_plan = Some("none".to_string());
+        signed_in.user.entitlement = Some(json!({
+            "active": true,
+            "plan": "none",
+            "source": "free",
+            "checked_at": chrono::Utc::now().to_rfc3339(),
+            "features": { "app": true, "cloud": false }
+        }));
+        assert_eq!(
+            signed_in.local_plan_policy(),
+            LocalPlanPolicy::VerifiedFree,
+            "an intact signed-in free store must clear the gate"
+        );
+    }
+
+    /// Regression for the Windows 2.6.20+ onboarding outage: a torn `store.bin`
+    /// must be recovered, not converted into a permanent recording lockout.
+    ///
+    /// `durable_write`'s then-shared temp path could rename a half-written temp
+    /// over `store.bin` (ff5ca0ac5 records it happening six times in 22s on
+    /// 2026-08-13, taking out the file and *both* last-good snapshots). The torn
+    /// file does not parse, so L2 — which only fires when the file parses but is
+    /// degraded — never saw it, and `init_settings_store` substituted
+    /// `SettingsStore::default()`. Defaults carry no plan, so
+    /// `local_plan_policy()` read `Unknown`, the consumer recording gate refused
+    /// with `account_required`, the engine never started, `boot_phase` stayed
+    /// `idle`, and onboarding waited on a readiness signal that could not
+    /// arrive. The bad file was preserved rather than repaired, so it recurred
+    /// on every launch: 178 users, 6.5 launches each, zero successes.
+    ///
+    /// Pins the whole contract rather than one branch: the snapshot is
+    /// restored, the recovered store deserializes to a **non-Unknown** plan
+    /// policy (which is what actually reopens the gate), and the torn bytes
+    /// survive on disk for forensics.
+    #[test]
+    fn torn_store_is_recovered_and_clears_the_recording_gate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store_path = tmp.path().join("store.bin");
+
+        // Build the snapshot by serializing a store we have *asserted* opens the
+        // gate, so this fixture cannot drift from the real field names.
+        let mut good = SettingsStore::default();
+        good.user.id = Some("user_free".to_string());
+        good.user.subscription_plan = Some("none".to_string());
+        good.user.entitlement = Some(json!({
+            "active": true,
+            "plan": "none",
+            "source": "free",
+            "checked_at": chrono::Utc::now().to_rfc3339(),
+            "features": { "app": true, "cloud": false }
+        }));
+        assert_eq!(
+            good.local_plan_policy(),
+            LocalPlanPolicy::VerifiedFree,
+            "fixture must be a store that clears the gate, or the test proves nothing"
+        );
+
+        let mut settings_json = serde_json::to_value(&good).unwrap();
+        // read_healthy_snapshot requires presets, else it refuses the snapshot
+        // as degraded and there is nothing to restore from.
+        settings_json["aiPresets"] = json!([{ "id": "default" }]);
+        std::fs::write(
+            store_path.with_extension(LAST_GOOD_SUFFIX),
+            serde_json::to_vec(&json!({ "settings": settings_json })).unwrap(),
+        )
+        .unwrap();
+
+        // A half-written temp renamed over the target.
+        let torn = br#"{"settings":{"aiPresets":[{"id":"def"#;
+        std::fs::write(&store_path, torn).unwrap();
+        assert!(
+            serde_json::from_slice::<Value>(torn).is_err(),
+            "the fixture must actually be unparseable, or this is not the bug"
+        );
+
+        assert!(
+            restore_snapshot_over(&store_path, "test: torn store.bin"),
+            "a torn store.bin with a healthy snapshot must be restored"
+        );
+
+        // The recovered store must reopen the recording gate. This is the
+        // assertion that matters: bytes on disk are not the contract, a
+        // non-Unknown plan policy is.
+        let on_disk: Value = serde_json::from_slice(&std::fs::read(&store_path).unwrap())
+            .expect("restored store.bin must parse");
+        let recovered: SettingsStore =
+            serde_json::from_value(on_disk["settings"].clone()).expect("restored settings deserialize");
+        assert_ne!(
+            recovered.local_plan_policy(),
+            LocalPlanPolicy::Unknown,
+            "recovery that leaves the plan Unknown still locks recording off"
+        );
+        assert_eq!(recovered.local_plan_policy(), LocalPlanPolicy::VerifiedFree);
+
+        // The torn bytes must survive for forensics.
+        let preserved = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry.file_name().to_string_lossy().contains("pre-restore")
+                    && std::fs::read(entry.path()).map(|b| b == torn).unwrap_or(false)
+            });
+        assert!(
+            preserved,
+            "the torn store must be kept as a pre-restore copy, not silently discarded"
+        );
+    }
+
     #[test]
     fn fresh_explicit_free_plan_applies_pipe_limit() {
         let mut store = SettingsStore::default();
@@ -2651,11 +3063,9 @@ mod tests {
             "features": { "app": true, "cloud": false }
         }));
 
-        assert!(store.has_free_plan_policy());
         assert_eq!(store.local_plan_policy(), LocalPlanPolicy::VerifiedFree);
         let config = store.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
         assert_eq!(config.max_non_template_pipes, Some(2));
-        assert!(config.enforce_free_plan_retention);
     }
 
     #[test]
@@ -2667,7 +3077,7 @@ mod tests {
             "plan": "none",
             "checked_at": (chrono::Utc::now() - chrono::Duration::hours(73)).to_rfc3339()
         }));
-        assert!(stale.has_free_plan_policy());
+        assert_eq!(stale.local_plan_policy(), LocalPlanPolicy::VerifiedFree);
 
         let mut lifetime = SettingsStore::default();
         lifetime.user.id = Some("user_paid".to_string());
@@ -2680,15 +3090,13 @@ mod tests {
             "checked_at": chrono::Utc::now().to_rfc3339(),
             "features": { "app": true }
         }));
-        assert!(!lifetime.has_free_plan_policy());
         assert_eq!(lifetime.local_plan_policy(), LocalPlanPolicy::VerifiedPaid);
         let config = lifetime.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
         assert_eq!(config.max_non_template_pipes, None);
-        assert!(!config.enforce_free_plan_retention);
     }
 
     #[test]
-    fn unknown_plan_is_pipe_limited_without_enabling_destructive_retention() {
+    fn unknown_plan_is_pipe_limited() {
         let mut store = SettingsStore::default();
         store.user.id = Some("user_unknown".to_string());
         store.user.subscription_plan = Some("standard".to_string());
@@ -2705,17 +3113,15 @@ mod tests {
         assert!(store.restricts_paid_local_features());
         let config = store.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
         assert_eq!(config.max_non_template_pipes, Some(2));
-        assert!(!config.enforce_free_plan_retention);
     }
 
     #[test]
-    fn missing_identity_is_still_pipe_limited_but_cannot_trigger_retention() {
+    fn missing_identity_is_still_pipe_limited() {
         let store = SettingsStore::default();
         assert_eq!(store.local_plan_policy(), LocalPlanPolicy::Unknown);
         assert!(store.restricts_paid_local_features());
         let config = store.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
         assert_eq!(config.max_non_template_pipes, Some(2));
-        assert!(!config.enforce_free_plan_retention);
     }
 
     #[test]
@@ -2944,6 +3350,77 @@ mod tests {
         assert!(!store_json_has_presets(&invalid_json));
     }
 
+    /// Any `<name>.durable.<pid>.<seq>.tmp` still sitting in `dir`.
+    fn lingering_durable_temps(dir: &std::path::Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".durable.") && n.ends_with(".tmp"))
+            .collect()
+    }
+
+    /// Regression: concurrent writers to the same target used to share a fixed
+    /// `<path>.durable.tmp`. One truncated the other's in-flight temp and the
+    /// loser's rename failed with ENOENT — six times in production on
+    /// 2026-08-13, taking the store write and both last-good snapshots down
+    /// together. Against the fixed-name version this fails on nearly every run.
+    #[test]
+    fn durable_write_survives_concurrent_writers_to_same_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("store.bin");
+
+        // Distinct, long, byte-uniform payloads: any interleaving of two
+        // writers is trivially detectable, and the size widens the race window.
+        let payloads: Vec<Vec<u8>> = (0..8u8)
+            .map(|i| vec![b'a' + i; 256 * 1024])
+            .collect();
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(payloads.len()));
+        let handles: Vec<_> = payloads
+            .iter()
+            .cloned()
+            .map(|payload| {
+                let p = p.clone();
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    durable_write(&p, &payload)
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join()
+                .expect("writer thread panicked")
+                .expect("concurrent durable_write must not fail");
+        }
+
+        // Whoever won the rename race, the published file must be exactly one
+        // writer's bytes — never a mix, never truncated.
+        let got = std::fs::read(&p).unwrap();
+        assert!(
+            payloads.contains(&got),
+            "published file is torn: {} bytes, first={:?} last={:?}",
+            got.len(),
+            got.first(),
+            got.last()
+        );
+
+        let leftovers = lingering_durable_temps(tmp.path());
+        assert!(
+            leftovers.is_empty(),
+            "no durable temp may linger after concurrent writes: {leftovers:?}"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "store file must stay owner-only under a race");
+        }
+    }
+
     #[test]
     fn durable_write_writes_full_content_atomically() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2959,11 +3436,9 @@ mod tests {
         );
 
         // The atomic temp must be gone — never left as a torn sibling.
-        let mut tmp_path = p.clone().into_os_string();
-        tmp_path.push(".durable.tmp");
         assert!(
-            !std::path::Path::new(&tmp_path).exists(),
-            "durable .tmp must not linger after a successful write"
+            lingering_durable_temps(tmp.path()).is_empty(),
+            "durable temp must not linger after a successful write"
         );
 
         #[cfg(unix)]
@@ -3594,6 +4069,66 @@ mod tests {
         let preset = &sanitized_acp["aiPresets"][0];
         assert_eq!(preset["provider"].as_str(), Some("acp"));
         assert_eq!(preset["acpAgent"]["id"].as_str(), Some("codex-acp"));
+    }
+
+    /// The exact shape an ACP-unaware build leaves behind: provider rewritten
+    /// to "custom", no URL, agent id still sitting in `model`. Without the
+    /// repair the desktop asks the cloud gateway for a model named "codex-acp"
+    /// and shows the 403 as "upgrade to Screenpipe Business".
+    #[test]
+    fn orphaned_acp_preset_gets_its_provider_back() {
+        let downgraded = json!({
+            "aiPresets": [{
+                "id": "codex",
+                "provider": "custom",
+                "url": "",
+                "model": "codex-acp",
+                "acpAgent": {"id": "codex-acp"}
+            }]
+        });
+
+        let repaired = SettingsStore::sanitize_legacy_fields(downgraded);
+        let preset = &repaired["aiPresets"][0];
+        assert_eq!(preset["provider"].as_str(), Some("acp"));
+        assert_eq!(preset["acpAgent"]["id"].as_str(), Some("codex-acp"));
+        assert_eq!(preset["model"].as_str(), Some("codex-acp"));
+    }
+
+    /// A preset the user deliberately moved off a coding agent keeps a stale
+    /// `acpAgent` (the editor never clears it) but always gets a new model or a
+    /// URL. Neither may be dragged back onto the ACP backend.
+    #[test]
+    fn deliberate_non_acp_presets_are_left_alone() {
+        let intentional = json!({
+            "aiPresets": [
+                {
+                    // switched to cloud: editor rewrote the model
+                    "provider": "screenpipe-cloud",
+                    "url": "",
+                    "model": "auto",
+                    "acpAgent": {"id": "codex-acp"}
+                },
+                {
+                    // switched to ollama: editor set a URL, model kept
+                    "provider": "native-ollama",
+                    "url": "http://localhost:11434/v1",
+                    "model": "codex-acp",
+                    "acpAgent": {"id": "codex-acp"}
+                },
+                {
+                    // never an ACP preset at all
+                    "provider": "custom",
+                    "url": "",
+                    "model": "my-model"
+                }
+            ]
+        });
+
+        let sanitized = SettingsStore::sanitize_legacy_fields(intentional);
+        let presets = sanitized["aiPresets"].as_array().unwrap();
+        assert_eq!(presets[0]["provider"].as_str(), Some("screenpipe-cloud"));
+        assert_eq!(presets[1]["provider"].as_str(), Some("native-ollama"));
+        assert_eq!(presets[2]["provider"].as_str(), Some("custom"));
     }
 
     #[test]

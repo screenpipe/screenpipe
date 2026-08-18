@@ -391,7 +391,10 @@ const blockSchema = {
         "The source-backed calculation or summary this Block asks its task for, including how missing evidence is handled.",
     },
     component: { type: "string", enum: COMPONENTS },
-    width: { type: "integer", enum: WIDTHS },
+    width: {
+      type: "integer",
+      description: "Grid width in columns: 3, 6, or 12.",
+    },
     pipeName: {
       type: ["string", "null"],
       description:

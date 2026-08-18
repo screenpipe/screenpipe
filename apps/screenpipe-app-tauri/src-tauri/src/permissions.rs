@@ -421,6 +421,16 @@ pub(crate) async fn restart_capture_on_mic_grant(app: tauri::AppHandle) {
             );
             return;
         }
+        // Idle = no engine at all (signed-out / entitlement-gated install).
+        // Capture cannot start without an engine; the eventual sign-in path
+        // starts it and re-applies permissions itself.
+        crate::health::BootReadiness::Idle => {
+            warn!(
+                "start_capture after mic grant: engine is idle (never started) — \
+                 nothing to attach capture to; skipping"
+            );
+            return;
+        }
         crate::health::BootReadiness::Ready => {}
     }
 

@@ -21,11 +21,12 @@ export const FREE_CHAT_MAX_RESPONSE_FORMAT_BYTES = 16 * 1024;
 export const FREE_CHAT_MAX_STRUCTURE_DEPTH = 32;
 export const FREE_CHAT_MAX_IN_FLIGHT = 1;
 export const FREE_CHAT_IN_FLIGHT_LEASE_SECONDS = 10 * 60;
+export const SESSION_AFFINITY_MAX_LENGTH = 512;
+export const INTERNAL_TITLE_SESSION_PREFIX = '__title:';
 
 const FREE_CHAT_USAGE_TIER_PREFIX = 'free_chat_turn_v2';
 const FREE_CHAT_BUDGET_TIER_PREFIX = 'free_chat_budget_v2';
 const FREE_CHAT_LEASE_TIER = 'free_chat_in_flight_v1';
-const INTERNAL_TITLE_SESSION_PREFIX = '__title:';
 
 function requiredPrivatePositiveInteger(value: string | undefined, name: string): number {
 	const normalized = value?.trim();
@@ -96,8 +97,18 @@ function blocked(status: number, code: string, message: string): FreeChatPreflig
 	return { mode: 'blocked', error: { status, code, message } };
 }
 
-function getSessionAffinity(request: Request): string | null {
+export function getSessionAffinity(request: Request): string | null {
 	return request.headers.get('x-session-affinity')?.trim() || null;
+}
+
+/** Normal Pi chat/Pipe sessions are cacheable; one-shot internal titles are not. */
+export function hasHistoryCacheSessionAffinity(request: Request): boolean {
+	const affinity = getSessionAffinity(request);
+	return Boolean(
+		affinity &&
+		affinity.length <= SESSION_AFFINITY_MAX_LENGTH &&
+		!affinity.startsWith(INTERNAL_TITLE_SESSION_PREFIX),
+	);
 }
 
 function utcDay(now: Date): string {
@@ -213,7 +224,7 @@ export function validateFreeChatRequestBodyLimits(
 		return {
 			status: 400,
 			code: 'free_chat_structure_too_deep',
-			message: `Free hosted chat JSON structures are limited to ${FREE_CHAT_MAX_STRUCTURE_DEPTH} nested levels.`,
+			message: `Free AI chat JSON structures are limited to ${FREE_CHAT_MAX_STRUCTURE_DEPTH} nested levels.`,
 		};
 	}
 
@@ -221,7 +232,7 @@ export function validateFreeChatRequestBodyLimits(
 	try {
 		serializedBytes = jsonByteLength(body);
 	} catch {
-		return { status: 400, code: 'invalid_free_chat_request', message: 'Free hosted chat requires a JSON request body.' };
+		return { status: 400, code: 'invalid_free_chat_request', message: 'Free AI chat requires a JSON request body.' };
 	}
 	if (
 		serializedBytes > FREE_CHAT_MAX_REQUEST_BYTES
@@ -229,12 +240,12 @@ export function validateFreeChatRequestBodyLimits(
 	) {
 		return requestTooLarge(
 			'free_chat_request_too_large',
-			`Free hosted chat requests are limited to ${FREE_CHAT_MAX_REQUEST_BYTES} bytes.`,
+			`Free AI chat requests are limited to ${FREE_CHAT_MAX_REQUEST_BYTES} bytes.`,
 		);
 	}
 
 	if (!Array.isArray(body.messages)) {
-		return { status: 400, code: 'invalid_free_chat_messages', message: 'Free hosted chat requires a messages array.' };
+		return { status: 400, code: 'invalid_free_chat_messages', message: 'Free AI chat requires a messages array.' };
 	}
 
 	let imageCount = 0;
@@ -248,7 +259,7 @@ export function validateFreeChatRequestBodyLimits(
 				return {
 					status: 400,
 					code: 'invalid_free_chat_tool_calls',
-					message: 'Free hosted chat tool calls must be an array.',
+					message: 'Free AI chat tool calls must be an array.',
 				};
 			}
 			if (toolCalls.some((toolCall) => (
@@ -257,7 +268,7 @@ export function validateFreeChatRequestBodyLimits(
 				return {
 					status: 400,
 					code: 'invalid_free_chat_tool_call',
-					message: 'Every free hosted chat tool call must be an object.',
+					message: 'Every free AI chat tool call must be an object.',
 				};
 			}
 		}
@@ -265,7 +276,7 @@ export function validateFreeChatRequestBodyLimits(
 		if (messageBytes > FREE_CHAT_MAX_MESSAGE_BYTES) {
 			return requestTooLarge(
 				'free_chat_message_too_large',
-				`Each free hosted chat message is limited to ${FREE_CHAT_MAX_MESSAGE_BYTES} bytes.`,
+				`Each free AI chat message is limited to ${FREE_CHAT_MAX_MESSAGE_BYTES} bytes.`,
 			);
 		}
 
@@ -276,7 +287,7 @@ export function validateFreeChatRequestBodyLimits(
 					return {
 						status: 400,
 						code: 'invalid_free_chat_content_part',
-						message: 'Every free hosted chat content part must be an object.',
+						message: 'Every free AI chat content part must be an object.',
 					};
 				}
 				if (isImagePart(part)) {
@@ -285,13 +296,13 @@ export function validateFreeChatRequestBodyLimits(
 						return {
 							status: 400,
 							code: 'free_chat_image_unverifiable',
-							message: 'Free hosted chat images must use an inline base64 image payload so their type and size can be verified.',
+							message: 'Free AI chat images must use an inline base64 image payload so their type and size can be verified.',
 						};
 					}
 					if (jsonByteLength(part) > FREE_CHAT_MAX_IMAGE_BYTES) {
 						return requestTooLarge(
 							'free_chat_image_too_large',
-							`Each free hosted chat image is limited to ${FREE_CHAT_MAX_IMAGE_BYTES} encoded bytes.`,
+							`Each free AI chat image is limited to ${FREE_CHAT_MAX_IMAGE_BYTES} encoded bytes.`,
 						);
 					}
 				}
@@ -302,31 +313,31 @@ export function validateFreeChatRequestBodyLimits(
 	if (imageCount > FREE_CHAT_MAX_IMAGES) {
 		return requestTooLarge(
 			'free_chat_too_many_images',
-			`Free hosted chat supports at most ${FREE_CHAT_MAX_IMAGES} images per request.`,
+			`Free AI chat supports at most ${FREE_CHAT_MAX_IMAGES} images per request.`,
 		);
 	}
 
 	if (body.tools !== undefined && !Array.isArray(body.tools)) {
-		return { status: 400, code: 'invalid_free_chat_tools', message: 'Free hosted chat tools must be an array.' };
+		return { status: 400, code: 'invalid_free_chat_tools', message: 'Free AI chat tools must be an array.' };
 	}
 	const tools = body.tools ?? [];
 	if (tools.some((tool) => !tool || typeof tool !== 'object' || Array.isArray(tool))) {
 		return {
 			status: 400,
 			code: 'invalid_free_chat_tool',
-			message: 'Every free hosted chat tool definition must be an object.',
+			message: 'Every free AI chat tool definition must be an object.',
 		};
 	}
 	if (tools.length > FREE_CHAT_MAX_TOOLS) {
 		return requestTooLarge(
 			'free_chat_too_many_tools',
-			`Free hosted chat supports at most ${FREE_CHAT_MAX_TOOLS} tools per request.`,
+			`Free AI chat supports at most ${FREE_CHAT_MAX_TOOLS} tools per request.`,
 		);
 	}
 	if (jsonByteLength(tools) > FREE_CHAT_MAX_TOOLS_BYTES) {
 		return requestTooLarge(
 			'free_chat_tools_too_large',
-			`Free hosted chat tool definitions are limited to ${FREE_CHAT_MAX_TOOLS_BYTES} bytes per request.`,
+			`Free AI chat tool definitions are limited to ${FREE_CHAT_MAX_TOOLS_BYTES} bytes per request.`,
 		);
 	}
 	if (
@@ -335,7 +346,7 @@ export function validateFreeChatRequestBodyLimits(
 	) {
 		return requestTooLarge(
 			'free_chat_response_format_too_large',
-			`Free hosted chat response schemas are limited to ${FREE_CHAT_MAX_RESPONSE_FORMAT_BYTES} bytes.`,
+			`Free AI chat response schemas are limited to ${FREE_CHAT_MAX_RESPONSE_FORMAT_BYTES} bytes.`,
 		);
 	}
 
@@ -394,7 +405,7 @@ export async function prepareFreeChatTurn(
 		return blocked(
 			401,
 			'authentication_required',
-			'Sign in to use screenpipe hosted AI.',
+			'Sign in to use screenpipe AI.',
 		);
 	}
 
@@ -418,16 +429,16 @@ export async function prepareFreeChatTurn(
 		return blocked(
 			403,
 			'free_plan_hosted_background_disabled',
-			'Hosted AI for background pipes is available on a paid plan. Use a local model or your own provider key on the free plan.',
+			'screenpipe cloud AI for background pipes is available on a paid plan. Use a local model or your own provider key on the free plan.',
 		);
 	}
 
 	const affinity = getSessionAffinity(request);
-	if (!affinity || affinity.length > 512) {
+	if (!affinity || affinity.length > SESSION_AFFINITY_MAX_LENGTH) {
 		return blocked(
 			426,
 			'free_chat_client_update_required',
-			'Update screenpipe to use the free hosted chat allowance.',
+			'Update screenpipe to use the free AI chat allowance.',
 		);
 	}
 
@@ -458,7 +469,7 @@ export async function prepareFreeChatTurn(
 		return blocked(
 			400,
 			'invalid_free_chat_turn',
-			'A hosted chat request must contain a user message.',
+			'An AI chat request must contain a user message.',
 		);
 	}
 
@@ -590,7 +601,7 @@ export async function reserveFreeChatTurn(
 			error: {
 				status: 429,
 				code: 'free_chat_limit_exceeded',
-				message: `You've used today's ${FREE_CHAT_MESSAGE_LIMIT} free hosted AI messages. Try again tomorrow, upgrade, or use your own AI provider.`,
+				message: `You've used today's ${FREE_CHAT_MESSAGE_LIMIT} free AI messages. Try again tomorrow, upgrade, or use your own AI provider.`,
 			},
 		};
 	} catch (error) {
@@ -600,7 +611,7 @@ export async function reserveFreeChatTurn(
 			error: {
 				status: 503,
 				code: 'free_chat_control_unavailable',
-				message: 'Free hosted AI controls are temporarily unavailable. Try again shortly or use your own AI provider.',
+				message: 'Free AI controls are temporarily unavailable. Try again shortly or use your own AI provider.',
 			},
 		};
 	}
@@ -680,7 +691,7 @@ export async function acquireFreeChatLease(
 				error: {
 					status: 429,
 					code: 'free_chat_request_in_flight',
-					message: 'Another free hosted chat request is still running. Wait for it to finish before continuing.',
+					message: 'Another free AI chat request is still running. Wait for it to finish before continuing.',
 				},
 			};
 		}
@@ -692,7 +703,7 @@ export async function acquireFreeChatLease(
 			error: {
 				status: 503,
 				code: 'free_chat_control_unavailable',
-				message: 'Free hosted AI controls are temporarily unavailable. Try again shortly or use your own AI provider.',
+				message: 'Free AI controls are temporarily unavailable. Try again shortly or use your own AI provider.',
 			},
 		};
 	}
@@ -753,7 +764,7 @@ export async function reserveFreeChatBudget(
 				error: {
 					status: 429,
 					code: 'free_chat_daily_budget_exceeded',
-					message: "Today's free hosted AI budget has been used. Try again tomorrow, upgrade, or use your own AI provider.",
+					message: "Today's free AI budget has been used. Try again tomorrow, upgrade, or use your own AI provider.",
 				},
 			};
 		}
@@ -766,7 +777,7 @@ export async function reserveFreeChatBudget(
 			error: {
 				status: 503,
 				code: 'free_chat_budget_unavailable',
-				message: 'Free hosted AI controls are temporarily unavailable. Try again shortly or use your own AI provider.',
+				message: 'Free AI controls are temporarily unavailable. Try again shortly or use your own AI provider.',
 			},
 		};
 	}

@@ -160,20 +160,20 @@ export default function ViewerPage() {
         </div>
         <ToolbarButton
           label="reveal"
-          shortcut="⌘R"
+          shortcut={isMacPlatform() ? "⌘R" : "Ctrl+R"}
           onClick={revealInFinder}
           primary
         />
         {content?.kind === "text" && content.text !== "" && (
           <ToolbarButton
             label={copyContentToast ? "copied" : "copy"}
-            shortcut="⇧⌘C"
+            shortcut={isMacPlatform() ? "⇧⌘C" : "Ctrl+Shift+C"}
             onClick={copyContent}
           />
         )}
         <ToolbarButton
           label={copyToast ? "copied" : "copy path"}
-          shortcut="⌘L"
+          shortcut={isMacPlatform() ? "⌘L" : "Ctrl+L"}
           onClick={copyPath}
         />
       </header>

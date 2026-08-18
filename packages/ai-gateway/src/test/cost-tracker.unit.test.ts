@@ -226,11 +226,19 @@ describe('getModelCost — cache-aware pricing', () => {
 
 	it('bills GPT-5.6 cache writes at 1.25x input price', () => {
 		// GPT-5.6 Terra: $2.50/M in. A 10k-token cache write costs $0.03125.
-		const cost = getModelCost('gpt-5.6-terra', 10_000, 0, {
+		const write = getModelCost('gpt-5.6-terra', 10_000, 0, {
 			cache_creation_tokens: 10_000,
 		});
-		expect(cost).toBeCloseTo(0.03125, 10);
-		expect(cost).toBeGreaterThan(getModelCost('gpt-5.6-terra', 10_000, 0));
+		const read = getModelCost('gpt-5.6-terra', 10_000, 0, {
+			cache_read_tokens: 10_000,
+		});
+		const uncached = getModelCost('gpt-5.6-terra', 10_000, 0);
+		expect(write).toBeCloseTo(0.03125, 10);
+		expect(read).toBeCloseTo(0.0025, 10);
+		expect(write).toBeGreaterThan(uncached);
+		// One write + one reuse is 1.35x base input price instead of 2x.
+		expect(write + read).toBeCloseTo(uncached * 1.35, 10);
+		expect(write + read).toBeLessThan(uncached * 2);
 	});
 
 	it('bills gemini-2.5 cached input at 0.25x', () => {
@@ -295,9 +303,9 @@ describe('getModelCost — cache-aware pricing', () => {
 	});
 
 	it('isFrontierModel flags the premium tier (blocked on pipes), not mid/cheap', () => {
-		for (const m of ['claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-6', 'claude-fable-5', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.5-pro', 'gpt-5.4-pro'])
+		for (const m of ['claude-opus-5', 'claude-opus-5-20260801', 'claude-opus-4-8', 'claude-opus-4-6', 'claude-fable-5', 'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.5-pro', 'gpt-5.4-pro'])
 			expect(isFrontierModel(m)).toBe(true);
-		for (const m of ['claude-sonnet-4-5', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.4', 'gpt-5.4-mini', 'claude-haiku-4-5', 'glm-5', 'gemini-3.5-flash', 'gpt-5-nano'])
+		for (const m of ['claude-sonnet-4-5', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.4', 'gpt-5.4-mini', 'claude-haiku-4-5', 'glm-5', 'gemini-3.5-flash', 'gpt-5-nano', 'totally-unknown-model'])
 			expect(isFrontierModel(m)).toBe(false);
 	});
 });

@@ -35,6 +35,11 @@ vi.mock("@/components/chat/standalone/composer-utility-menu", () => ({
 vi.mock("@/components/chat/standalone/acp-config-selector", () => ({
   AcpConfigSelector: () => null,
 }));
+vi.mock("@/components/chat/standalone/acp-permission-selector", () => ({
+  AcpPermissionSelector: ({ agentId }: { agentId: string }) => (
+    <div data-testid="mock-acp-permission">{agentId}</div>
+  ),
+}));
 vi.mock("@/components/thinking-level-selector", () => ({
   ThinkingLevelSelector: () => null,
 }));
@@ -53,12 +58,12 @@ describe("ComposerControlsRow preset selection", () => {
       <ComposerControlsRow
         canChat
         filters={{
-          activeFilterCount: 0,
-          activeFilters: [],
-          activeFilterLabels: [],
-          hasActiveFilters: false,
-          appFilterOpen: false,
-          onFilterMenuOpenChange: vi.fn(),
+            activeFilterCount: 0,
+            activeFilters: [],
+            activeFilterLabels: [],
+            hasActiveFilters: false,
+            appFilterOpen: false,
+            onFilterMenuOpenChange: vi.fn(),
         } as any}
         modelControls={{
           settings: {
@@ -91,5 +96,89 @@ describe("ComposerControlsRow preset selection", () => {
 
     expect(onSelectPreset).toHaveBeenCalledWith(newPreset);
     expect(onPresetSaved).toHaveBeenCalledWith(newPreset);
+  });
+
+  it("shares the permission control across ACP presets only", () => {
+    const commonProps = {
+      canChat: true,
+      filters: {
+        activeFilterCount: 0,
+        activeFilters: [],
+        activeFilterLabels: [],
+        hasActiveFilters: false,
+        appFilterOpen: false,
+        onFilterMenuOpenChange: vi.fn(),
+      } as any,
+      isStreaming: false,
+      sendButton: {
+        isStopMode: false,
+        hasPendingDocs: false,
+        sendDisabled: false,
+        onStop: vi.fn(),
+      },
+    };
+
+    const { rerender } = render(
+      <ComposerControlsRow
+        {...commonProps}
+        modelControls={{
+          settings: { aiPresets: [] },
+          activePreset: {
+            id: "codex",
+            provider: "acp",
+            acpAgent: { id: "codex-acp" },
+          } as AIPreset,
+          activePipeExecution: null,
+          currentQueueSessionId: "chat-1",
+          onSelectPreset: vi.fn(),
+          onPresetSaved: vi.fn(),
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("mock-acp-permission")).toHaveTextContent(
+      "codex-acp",
+    );
+
+    rerender(
+      <ComposerControlsRow
+        {...commonProps}
+        modelControls={{
+          settings: { aiPresets: [] },
+          activePreset: {
+            id: "claude",
+            provider: "acp",
+            acpAgent: { id: "claude-acp" },
+          } as AIPreset,
+          activePipeExecution: null,
+          currentQueueSessionId: "chat-1",
+          onSelectPreset: vi.fn(),
+          onPresetSaved: vi.fn(),
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("mock-acp-permission")).toHaveTextContent(
+      "claude-acp",
+    );
+
+    rerender(
+      <ComposerControlsRow
+        {...commonProps}
+        modelControls={{
+          settings: { aiPresets: [] },
+          activePreset: {
+            id: "cloud",
+            provider: "openai-chatgpt",
+          } as AIPreset,
+          activePipeExecution: null,
+          currentQueueSessionId: "chat-1",
+          onSelectPreset: vi.fn(),
+          onPresetSaved: vi.fn(),
+        }}
+      />,
+    );
+
+    expect(screen.queryByTestId("mock-acp-permission")).not.toBeInTheDocument();
   });
 });

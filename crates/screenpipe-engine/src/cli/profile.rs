@@ -113,12 +113,7 @@ fn format_profile_report(health: &Value) -> String {
             ));
             out.push_str(&format!(
                 "  vad passthrough   {} %\n",
-                fmt_f64(
-                    a.get("vad_passthrough_rate")
-                        .map(|v| scale_ratio(v))
-                        .as_ref(),
-                    1
-                )
+                fmt_f64(a.get("vad_passthrough_rate").map(scale_ratio).as_ref(), 1)
             ));
         }
         None => out.push_str("audio pipeline    (no data — audio disabled or not started)\n"),

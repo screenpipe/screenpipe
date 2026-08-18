@@ -88,7 +88,7 @@ pub fn ensure_spotlight_excluded_best_effort(dir: &Path) -> bool {
 pub fn is_spotlight_excluded(dir: &Path) -> anyhow::Result<bool> {
     #[cfg(target_os = "macos")]
     {
-        return macos_spotlight::is_excluded(dir);
+        macos_spotlight::is_excluded(dir)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -103,7 +103,7 @@ pub fn is_spotlight_excluded(dir: &Path) -> anyhow::Result<bool> {
 pub fn set_spotlight_excluded(dir: &Path, excluded: bool) -> anyhow::Result<()> {
     #[cfg(target_os = "macos")]
     {
-        return macos_spotlight::set_excluded(dir, excluded);
+        macos_spotlight::set_excluded(dir, excluded)
     }
     #[cfg(not(target_os = "macos"))]
     {

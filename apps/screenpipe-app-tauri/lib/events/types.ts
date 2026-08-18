@@ -47,6 +47,9 @@ export interface AgentInnerEvent {
   assistantMessageEvent?: {
     type?: string;
     delta?: string;
+    /** Full text of the block, carried on `text_end` by providers that do
+     *  not emit incremental `text_delta` events. */
+    content?: string;
     contentIndex?: number;
     toolName?: string;
     partial?: { content?: Array<{ type?: string; name?: string }> };

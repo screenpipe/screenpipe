@@ -87,12 +87,89 @@ pub enum CaptureLoopStage {
     ExclusionProbe = 8,
     /// Bounded visual-change probe screenshot.
     VisualProbe = 9,
-    /// Waiting for a capture trigger.
+    /// Parked on the bounded (250ms) wait for the first capture trigger.
     TriggerWait = 10,
     /// Running the capture itself (screenshot + a11y walk + persist).
     Capture = 11,
     /// Pushing the captured frame into the hot cache.
     HotCachePush = 12,
+    /// Trigger wait returned; draining coalesced triggers and running the
+    /// synchronous gates (reduce, checkpoint promotion, visual-check decision)
+    /// before the exclusion probe.
+    ///
+    /// Split out of [`CaptureLoopStage::TriggerWait`] because that marker
+    /// covered both the bounded await *and* every synchronous gate after it.
+    /// A 250ms-bounded await cannot itself explain the multi-minute
+    /// gone-silent freezes, so "frozen in trigger-wait" was ambiguous exactly
+    /// where the #3939 triage needed precision: `trigger-wait` now means the
+    /// task was never resumed from a bounded timer, while `trigger-drain`
+    /// means a synchronous gate blocked (a lock held by another thread).
+    TriggerDrain = 13,
+}
+
+/// Whether the capture loop is currently taking screenshots, and if not, why.
+///
+/// The loop derives this from `config.disable_screenshots || profile
+/// .screenshot_disabled`, and neither input was visible outside the loop's own
+/// stack. `/health` therefore could not tell "screenpipe turned pixels off on
+/// purpose" apart from "the OS is refusing to hand us frames", and told every
+/// user to go check Screen Recording permission. Publishing the effective
+/// state here lets health name the real cause.
+///
+/// Discriminants are stable: they are stored in an [`AtomicU8`], so only
+/// append new variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ScreenshotCaptureState {
+    /// Screenshots are being taken.
+    Enabled = 0,
+    /// `--disable-screenshots` / the `disableScreenshots` setting. The
+    /// accessibility walk continues, so text capture is unaffected.
+    DisabledByConfig = 1,
+    /// The active power profile turned pixels off (low battery / OS low-power).
+    /// Restores itself when the machine leaves that profile.
+    DisabledByPowerProfile = 2,
+}
+
+impl ScreenshotCaptureState {
+    /// Resolve the effective state from the two inputs the capture loop uses.
+    /// Config wins when both apply: it is the one the user set deliberately
+    /// and the one that stays true after the battery recovers.
+    pub fn resolve(disabled_by_config: bool, disabled_by_power_profile: bool) -> Self {
+        if disabled_by_config {
+            Self::DisabledByConfig
+        } else if disabled_by_power_profile {
+            Self::DisabledByPowerProfile
+        } else {
+            Self::Enabled
+        }
+    }
+
+    /// Stable wire name. Kept exhaustive so a new variant cannot silently
+    /// report as "enabled".
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Enabled => "enabled",
+            Self::DisabledByConfig => "disabled_by_config",
+            Self::DisabledByPowerProfile => "disabled_by_power_profile",
+        }
+    }
+
+    /// True when pixel capture is off for any reason.
+    pub fn is_disabled(self) -> bool {
+        !matches!(self, Self::Enabled)
+    }
+
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::DisabledByConfig,
+            2 => Self::DisabledByPowerProfile,
+            // Unknown discriminants mean a newer writer than this reader.
+            // Treating that as "enabled" keeps health from inventing an
+            // intentional-disable excuse for a state it cannot name.
+            _ => Self::Enabled,
+        }
+    }
 }
 
 impl CaptureLoopStage {
@@ -113,6 +190,7 @@ impl CaptureLoopStage {
             CaptureLoopStage::TriggerWait => "trigger-wait",
             CaptureLoopStage::Capture => "capture",
             CaptureLoopStage::HotCachePush => "hot-cache-push",
+            CaptureLoopStage::TriggerDrain => "trigger-drain",
         }
     }
 
@@ -133,6 +211,7 @@ impl CaptureLoopStage {
             10 => CaptureLoopStage::TriggerWait,
             11 => CaptureLoopStage::Capture,
             12 => CaptureLoopStage::HotCachePush,
+            13 => CaptureLoopStage::TriggerDrain,
             _ => CaptureLoopStage::Unknown,
         }
     }
@@ -231,6 +310,11 @@ pub struct PipelineMetrics {
     pub loop_stage: AtomicU8,
     /// Unix timestamp (secs) at which `loop_stage` was last set.
     pub loop_stage_entered_ts: AtomicU64,
+    /// Effective [`ScreenshotCaptureState`] discriminant, published by the
+    /// capture loop whenever it re-derives `screenshot_disabled`. Lets
+    /// `/health` distinguish an intentional pixel-capture pause from a real
+    /// capture failure instead of blaming OS permission for both.
+    pub screenshot_capture_state: AtomicU8,
     /// Total number of capture operations attempted, regardless of outcome.
     /// Pair with `frames_captured` (successful persists) to detect silent loss between
     /// attempt and write — `attempts - captured - dedup_skips` over a window that should
@@ -287,6 +371,7 @@ impl PipelineMetrics {
             capture_loop_heartbeats: AtomicU64::new(0),
             loop_stage: AtomicU8::new(CaptureLoopStage::Unknown as u8),
             loop_stage_entered_ts: AtomicU64::new(0),
+            screenshot_capture_state: AtomicU8::new(ScreenshotCaptureState::Enabled as u8),
             capture_attempts: AtomicU64::new(0),
             dedup_skips: AtomicU64::new(0),
             frames_corrupt_black: AtomicU64::new(0),
@@ -347,19 +432,36 @@ impl PipelineMetrics {
         )
     }
 
+    /// Publish whether the capture loop is taking screenshots, and if not why.
+    /// Called by the loop every time it re-derives `screenshot_disabled`, so
+    /// `/health` always sees the state the loop is actually running under.
+    pub fn record_screenshot_capture_state(&self, state: ScreenshotCaptureState) {
+        self.screenshot_capture_state
+            .store(state as u8, Ordering::Relaxed);
+    }
+
+    /// Effective screenshot-capture state last published by the capture loop.
+    pub fn screenshot_capture_state(&self) -> ScreenshotCaptureState {
+        ScreenshotCaptureState::from_u8(self.screenshot_capture_state.load(Ordering::Relaxed))
+    }
+
     /// Record that a frame was skipped by similarity check.
     pub fn record_skip(&self) {
         self.frames_skipped.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Record OCR completion with latency.
-    pub fn record_ocr(&self, latency: std::time::Duration, cache_hits: u64, cache_misses: u64) {
+    /// Record one OCR engine execution with latency. Every execution is one
+    /// live-cache miss; callers cannot supply synthetic cache deltas.
+    pub fn record_ocr(&self, latency: std::time::Duration) {
         self.ocr_completed.fetch_add(1, Ordering::Relaxed);
         self.ocr_total_latency_us
             .fetch_add(latency.as_micros() as u64, Ordering::Relaxed);
-        self.ocr_cache_hits.fetch_add(cache_hits, Ordering::Relaxed);
-        self.ocr_cache_misses
-            .fetch_add(cache_misses, Ordering::Relaxed);
+        self.ocr_cache_misses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record reuse of one cached OCR payload without an OCR execution.
+    pub fn record_ocr_cache_hit(&self) {
+        self.ocr_cache_hits.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record that an OCR run produced (near-)empty text — an OCR-quality
@@ -730,6 +832,59 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    /// #5808: the capture loop's effective screenshot state has to survive the
+    /// trip to /health, or health falls back to blaming OS permission.
+    #[test]
+    fn screenshot_capture_state_round_trips_through_the_atomic() {
+        let metrics = PipelineMetrics::new();
+        assert_eq!(
+            metrics.screenshot_capture_state(),
+            ScreenshotCaptureState::Enabled,
+            "a loop that never published must not look intentionally disabled",
+        );
+
+        for state in [
+            ScreenshotCaptureState::DisabledByConfig,
+            ScreenshotCaptureState::DisabledByPowerProfile,
+            ScreenshotCaptureState::Enabled,
+        ] {
+            metrics.record_screenshot_capture_state(state);
+            assert_eq!(metrics.screenshot_capture_state(), state);
+            assert_eq!(
+                state.is_disabled(),
+                state != ScreenshotCaptureState::Enabled
+            );
+        }
+    }
+
+    /// A newer writer may store a discriminant this reader does not know.
+    /// Reading it as "enabled" keeps health from inventing an
+    /// intentional-disable excuse for a state it cannot name.
+    #[test]
+    fn an_unknown_screenshot_state_reads_as_enabled() {
+        let metrics = PipelineMetrics::new();
+        metrics
+            .screenshot_capture_state
+            .store(200, Ordering::Relaxed);
+        assert_eq!(
+            metrics.screenshot_capture_state(),
+            ScreenshotCaptureState::Enabled,
+        );
+    }
+
+    #[test]
+    fn screenshot_state_names_are_stable_and_distinct() {
+        assert_eq!(ScreenshotCaptureState::Enabled.as_str(), "enabled");
+        assert_eq!(
+            ScreenshotCaptureState::DisabledByConfig.as_str(),
+            "disabled_by_config"
+        );
+        assert_eq!(
+            ScreenshotCaptureState::DisabledByPowerProfile.as_str(),
+            "disabled_by_power_profile"
+        );
+    }
+
     #[test]
     fn loop_heartbeat_advances_without_a_capture_attempt() {
         let metrics = PipelineMetrics::new();
@@ -855,18 +1010,33 @@ mod tests {
     fn ocr_counters_track_completed_empty_and_latency() {
         let m = PipelineMetrics::new();
         // 3 OCR runs (each a cache miss), 1 of which yielded empty text.
-        m.record_ocr(Duration::from_millis(10), 0, 1);
-        m.record_ocr(Duration::from_millis(20), 0, 1);
-        m.record_ocr(Duration::from_millis(30), 0, 1);
+        m.record_ocr(Duration::from_millis(10));
+        m.record_ocr(Duration::from_millis(20));
+        m.record_ocr(Duration::from_millis(30));
         m.record_ocr_empty();
+        m.record_ocr_cache_hit();
+        m.record_ocr_cache_hit();
 
         let s = m.snapshot();
         assert_eq!(s.ocr_completed, 3);
         assert_eq!(s.ocr_cache_misses, 3);
-        assert_eq!(s.ocr_cache_hits, 0);
+        assert_eq!(s.ocr_cache_hits, 2);
         assert_eq!(s.ocr_empty, 1);
         // avg latency = (10 + 20 + 30) / 3 = 20ms
         assert!((s.avg_ocr_latency_ms - 20.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ocr_cache_hit_changes_only_the_hit_counter() {
+        let m = PipelineMetrics::new();
+        m.record_ocr_cache_hit();
+
+        let s = m.snapshot();
+        assert_eq!(s.ocr_cache_hits, 1);
+        assert_eq!(s.ocr_cache_misses, 0);
+        assert_eq!(s.ocr_completed, 0);
+        assert_eq!(s.ocr_empty, 0);
+        assert_eq!(s.avg_ocr_latency_ms, 0.0);
     }
 
     #[test]
@@ -915,5 +1085,125 @@ mod tests {
         assert_eq!(s.frames_dropped_timeout, 2);
         assert_eq!(s.frames_dropped_error, 1);
         assert_eq!(s.frames_dropped, 3);
+    }
+
+    /// The wire form (discriminant + name) every stage is expected to have.
+    ///
+    /// Deliberately no wildcard arm: adding a variant to [`CaptureLoopStage`]
+    /// stops compiling *here*, which forces whoever adds it to extend
+    /// `from_u8` and `ALL_STAGES` in the same edit. `from_u8` has a `_`
+    /// fallback, so without this guard a missing arm compiles fine and the
+    /// watchdog silently reports "unknown" for the new stage — the exact
+    /// failure the stage marker exists to prevent.
+    fn expected_wire_form(stage: CaptureLoopStage) -> (u8, &'static str) {
+        match stage {
+            CaptureLoopStage::Unknown => (0, "unknown"),
+            CaptureLoopStage::Heartbeat => (1, "heartbeat"),
+            CaptureLoopStage::FocusGate => (2, "focus-gate"),
+            CaptureLoopStage::WarmWait => (3, "warm-wait"),
+            CaptureLoopStage::ColdWait => (4, "cold-wait"),
+            CaptureLoopStage::PauseGate => (5, "pause-gate"),
+            CaptureLoopStage::ReleaseStream => (6, "release-stream"),
+            CaptureLoopStage::InvalidateStreams => (7, "invalidate-streams"),
+            CaptureLoopStage::ExclusionProbe => (8, "exclusion-probe"),
+            CaptureLoopStage::VisualProbe => (9, "visual-probe"),
+            CaptureLoopStage::TriggerWait => (10, "trigger-wait"),
+            CaptureLoopStage::Capture => (11, "capture"),
+            CaptureLoopStage::HotCachePush => (12, "hot-cache-push"),
+            CaptureLoopStage::TriggerDrain => (13, "trigger-drain"),
+        }
+    }
+
+    const ALL_STAGES: &[CaptureLoopStage] = &[
+        CaptureLoopStage::Unknown,
+        CaptureLoopStage::Heartbeat,
+        CaptureLoopStage::FocusGate,
+        CaptureLoopStage::WarmWait,
+        CaptureLoopStage::ColdWait,
+        CaptureLoopStage::PauseGate,
+        CaptureLoopStage::ReleaseStream,
+        CaptureLoopStage::InvalidateStreams,
+        CaptureLoopStage::ExclusionProbe,
+        CaptureLoopStage::VisualProbe,
+        CaptureLoopStage::TriggerWait,
+        CaptureLoopStage::Capture,
+        CaptureLoopStage::HotCachePush,
+        CaptureLoopStage::TriggerDrain,
+    ];
+
+    /// Every stage must survive the `AtomicU8` round-trip the watchdog reads
+    /// back, and must keep the discriminant it was released with.
+    #[test]
+    fn every_loop_stage_round_trips_through_its_discriminant() {
+        for stage in ALL_STAGES {
+            let (discriminant, name) = expected_wire_form(*stage);
+            assert_eq!(
+                *stage as u8, discriminant,
+                "{name} changed discriminant; stored values in flight would be misread"
+            );
+            assert_eq!(
+                CaptureLoopStage::from_u8(discriminant),
+                *stage,
+                "{name} does not round-trip through discriminant {discriminant}"
+            );
+            assert_eq!(stage.as_str(), name, "{name} reports the wrong name");
+        }
+    }
+
+    /// Catches the other half of the drift: a variant added to the enum and to
+    /// `from_u8`, but never added to `ALL_STAGES`, so the loop above silently
+    /// stops covering it.
+    #[test]
+    fn all_stages_covers_every_decodable_discriminant() {
+        let highest = ALL_STAGES
+            .iter()
+            .map(|stage| *stage as u8)
+            .max()
+            .expect("ALL_STAGES is never empty");
+
+        for discriminant in 0..=highest {
+            let claimants = ALL_STAGES
+                .iter()
+                .filter(|stage| **stage as u8 == discriminant)
+                .count();
+            assert_eq!(
+                claimants, 1,
+                "discriminant {discriminant} is claimed by {claimants} stages, expected exactly 1"
+            );
+        }
+
+        // Anything past the known range must stay Unknown. If it decodes to a
+        // real stage, a variant was added to the enum and `from_u8` but left
+        // out of `ALL_STAGES`.
+        for discriminant in (u16::from(highest) + 1)..=u16::from(u8::MAX) {
+            let decoded = CaptureLoopStage::from_u8(discriminant as u8);
+            assert_eq!(
+                decoded,
+                CaptureLoopStage::Unknown,
+                "discriminant {discriminant} decodes to {} but is missing from ALL_STAGES",
+                decoded.as_str()
+            );
+        }
+    }
+
+    /// The trigger wait and the synchronous gates after it must be
+    /// distinguishable, otherwise a #3939 freeze cannot be attributed to
+    /// either the timer or a blocking lock.
+    #[test]
+    fn trigger_wait_and_trigger_drain_are_distinct_stages() {
+        assert_ne!(
+            CaptureLoopStage::TriggerWait as u8,
+            CaptureLoopStage::TriggerDrain as u8
+        );
+        assert_eq!(CaptureLoopStage::TriggerWait.as_str(), "trigger-wait");
+        assert_eq!(CaptureLoopStage::TriggerDrain.as_str(), "trigger-drain");
+
+        // The watchdog reads the stage out of the live metrics, so prove the
+        // transition is observable there and not just on the enum.
+        let m = PipelineMetrics::new();
+        m.record_loop_stage(CaptureLoopStage::TriggerWait);
+        assert_eq!(m.loop_stage().0, CaptureLoopStage::TriggerWait);
+        m.record_loop_stage(CaptureLoopStage::TriggerDrain);
+        assert_eq!(m.loop_stage().0, CaptureLoopStage::TriggerDrain);
     }
 }

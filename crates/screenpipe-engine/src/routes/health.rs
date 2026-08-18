@@ -138,18 +138,41 @@ pub(crate) enum VisionStallCause {
     DbWritesNotLanding,
 }
 
+/// A fallback older than this is history, not an explanation for the stall in
+/// progress.
+const CAPTURE_BACKEND_FALLBACK_RECENT_SECS: u64 = 300;
+
 impl VisionStallCause {
-    pub(crate) fn detail(self, stalled_secs: u64, silent_loss: u64) -> String {
+    /// `backend_fallback_secs` is how long ago capture last dropped off its
+    /// primary backend, from
+    /// [`screenpipe_screen::monitor::secs_since_capture_backend_fallback`].
+    /// When that is recent, `CapturePaused` can name the wedged backend instead
+    /// of leaving the reader to guess between TCC, display sleep and a hung
+    /// daemon.
+    pub(crate) fn detail(
+        self,
+        stalled_secs: u64,
+        silent_loss: u64,
+        backend_fallback_secs: Option<u64>,
+    ) -> String {
         match self {
             Self::SilentLoss => format!(
                 "no vision frame written for {stalled_secs}s — capture is attempting but frames \
                  are not reaching the writer ({silent_loss} attempts unaccounted); the database \
                  is idle"
             ),
-            Self::CapturePaused => format!(
-                "no vision frame written for {stalled_secs}s — the capture backend has stopped \
-                 delivering frames; the database is idle"
-            ),
+            Self::CapturePaused => match backend_fallback_secs {
+                Some(ago) if ago <= CAPTURE_BACKEND_FALLBACK_RECENT_SECS => format!(
+                    "no vision frame written for {stalled_secs}s — the capture backend has \
+                     stopped delivering frames; ScreenCaptureKit last failed over to the \
+                     CoreGraphics fallback {ago}s ago, so the primary backend is wedged rather \
+                     than the screen being idle; the database is idle"
+                ),
+                _ => format!(
+                    "no vision frame written for {stalled_secs}s — the capture backend has \
+                     stopped delivering frames; the database is idle"
+                ),
+            },
             Self::DbWritesNotLanding => format!(
                 "vision DB writes stalled for {stalled_secs}s — capture running but DB writes not \
                  landing"
@@ -203,6 +226,130 @@ pub(crate) fn classify_vision_stall(
         VisionStallCause::DbWritesNotLanding
     } else {
         VisionStallCause::SilentLoss
+    }
+}
+
+/// Why vision is not fully recording, in terms the user can act on.
+///
+/// Before this existed, `/health` had one "off" string (`"disabled"`) plus
+/// `"stale"`, and [`get_verbose_instructions`] answered every non-ok vision
+/// state with "check if screen recording permissions are enabled" — without
+/// ever consulting a permission result. A user whose pixels were off because
+/// screenpipe itself turned them off was sent to macOS System Settings to fix
+/// a permission that was already granted (#5808).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VisionReason {
+    /// Vision is recording normally.
+    Ok,
+    /// `--disable-vision` / the `disableVision` setting. No vision at all.
+    DisabledBySetting,
+    /// Every selected display is user-paused, asleep, or inactive.
+    NoDisplaysExpected,
+    /// `disableScreenshots`: pixels are off on purpose, a11y text continues.
+    ScreenshotsDisabledByConfig,
+    /// The active power profile turned pixels off (low battery / low-power).
+    ScreenshotsDisabledByPowerProfile,
+    /// The OS is refusing screen capture. The only reason that warrants
+    /// permission advice.
+    PermissionDenied,
+    /// Capture is permitted and expected, but frames stopped arriving.
+    CaptureStalled,
+    /// Capture is permitted and expected, but never produced a first frame.
+    NotStarted,
+}
+
+impl VisionReason {
+    /// Stable wire name for the health response.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::DisabledBySetting => "disabled_by_setting",
+            Self::NoDisplaysExpected => "no_displays_expected",
+            Self::ScreenshotsDisabledByConfig => "screenshots_disabled_by_config",
+            Self::ScreenshotsDisabledByPowerProfile => "screenshots_disabled_by_power_profile",
+            Self::PermissionDenied => "permission_denied",
+            Self::CaptureStalled => "capture_stalled",
+            Self::NotStarted => "not_started",
+        }
+    }
+
+    /// Whether this reason is a fault the user should be told to fix.
+    /// Intentional pauses are not: they are the app doing what it was told.
+    pub(crate) fn is_fault(self) -> bool {
+        matches!(
+            self,
+            Self::PermissionDenied | Self::CaptureStalled | Self::NotStarted
+        )
+    }
+
+    /// The recovery step for this reason, or `None` when nothing is wrong.
+    /// Permission advice appears here for exactly one reason — the one backed
+    /// by an actual permission result.
+    pub(crate) fn instruction(self) -> Option<&'static str> {
+        match self {
+            Self::Ok => None,
+            // Deliberately avoids the phrase "screen recording": that is the
+            // name of the macOS permission, and reusing it here is what makes
+            // an intentional off-state read as a permission fault.
+            Self::DisabledBySetting => {
+                Some("Screen capture is turned off in screenpipe. Turn it back on in Settings → Recording.")
+            }
+            Self::NoDisplaysExpected => {
+                Some("No display is being recorded — every selected monitor is paused or asleep. Resume one in Settings → Recording.")
+            }
+            Self::ScreenshotsDisabledByConfig => {
+                Some("Screenshots are turned off in screenpipe, so only on-screen text is being captured. Re-enable them in Settings → Recording. This is not a permission problem.")
+            }
+            Self::ScreenshotsDisabledByPowerProfile => {
+                Some("Screenshots are paused to save power and will resume on their own once the battery recovers or the machine leaves low-power mode. Only on-screen text is being captured until then. This is not a permission problem.")
+            }
+            Self::PermissionDenied => {
+                Some("macOS is blocking screen capture. Grant Screen Recording to screenpipe in System Settings → Privacy & Security, then restart the app.")
+            }
+            Self::CaptureStalled => {
+                Some("Screen capture stopped producing frames. Restarting screenpipe usually clears it; if it returns, please send logs from the Help section.")
+            }
+            Self::NotStarted => {
+                Some("Screen capture has not produced a frame yet. If this persists, please send logs from the Help section.")
+            }
+        }
+    }
+}
+
+/// Classify vision into a single actionable reason.
+///
+/// Ordering is deliberate. Intentional off-states are checked before any
+/// fault, because a user who turned pixels off does not have a problem — and
+/// must not be handed a permission instruction for a permission that is fine.
+/// `permission_granted` is the last-known result from the permission monitor's
+/// 5s poll and capture-side enumeration, never a fresh syscall.
+pub(crate) fn classify_vision_reason(
+    vision_disabled: bool,
+    displays_expected: bool,
+    screenshot_state: screenpipe_screen::ScreenshotCaptureState,
+    permission_granted: bool,
+    frame_status: &str,
+) -> VisionReason {
+    use screenpipe_screen::ScreenshotCaptureState as S;
+
+    if vision_disabled {
+        return VisionReason::DisabledBySetting;
+    }
+    if !displays_expected {
+        return VisionReason::NoDisplaysExpected;
+    }
+    match screenshot_state {
+        S::DisabledByConfig => return VisionReason::ScreenshotsDisabledByConfig,
+        S::DisabledByPowerProfile => return VisionReason::ScreenshotsDisabledByPowerProfile,
+        S::Enabled => {}
+    }
+    // Only now can a missing frame be a real fault — and permission is only
+    // the answer when the permission monitor actually says so.
+    match frame_status {
+        "ok" | "disabled" => VisionReason::Ok,
+        _ if !permission_granted => VisionReason::PermissionDenied,
+        "not_started" => VisionReason::NotStarted,
+        _ => VisionReason::CaptureStalled,
     }
 }
 
@@ -439,6 +586,18 @@ pub struct HealthCheckResponse {
     pub last_frame_timestamp: Option<chrono::DateTime<Utc>>,
     pub last_audio_timestamp: Option<chrono::DateTime<Utc>>,
     pub frame_status: String,
+    /// Why vision is in `frame_status`, as a stable machine-readable reason:
+    /// `ok`, `disabled_by_setting`, `no_displays_expected`,
+    /// `screenshots_disabled_by_config`,
+    /// `screenshots_disabled_by_power_profile`, `permission_denied`,
+    /// `capture_stalled`, `not_started`.
+    ///
+    /// `frame_status` alone collapses "screenpipe turned pixels off" and "the
+    /// OS is blocking capture" into the same value, which is how #5808 sent
+    /// users to the permission screen for a permission that was already
+    /// granted. Clients should prefer this field when choosing what to tell
+    /// the user; only `permission_denied` warrants permission guidance.
+    pub vision_reason: String,
     /// Capture-loop stage last entered, and how long ago. A frozen loop is the
     /// only thing that can make `frame_status` stale (it is a max of the DB
     /// write, capture attempt and loop heartbeat clocks), so these two fields
@@ -576,6 +735,15 @@ pub struct PipelineHealthInfo {
     /// OCR runs that produced (near-)empty text (subset of ocr_completed).
     /// `ocr_empty / ocr_completed` is the OCR-quality failure rate.
     pub ocr_empty: u64,
+}
+
+fn ocr_cache_hit_rate(hits: u64, misses: u64) -> f64 {
+    let total = hits + misses;
+    if total == 0 {
+        0.0
+    } else {
+        hits as f64 / total as f64
+    }
 }
 
 #[derive(Serialize, OaSchema, Deserialize, Clone)]
@@ -752,6 +920,7 @@ fn degraded_response() -> HealthCheckResponse {
         last_frame_timestamp: None,
         last_audio_timestamp: None,
         frame_status: "unknown".to_string(),
+        vision_reason: "unknown".to_string(),
         loop_stage: "unknown".to_string(),
         loop_stage_age_secs: None,
         audio_status: "unknown".to_string(),
@@ -1246,6 +1415,16 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         "stale"
     };
 
+    // Why vision is in that state, in terms the user can act on. Permission is
+    // only ever named when the permission monitor's last known result says so.
+    let vision_reason = classify_vision_reason(
+        state.vision_disabled,
+        vision_capture_expected,
+        state.vision_metrics.screenshot_capture_state(),
+        crate::permission_monitor::screen_recording_granted(),
+        frame_status,
+    );
+
     // Cross-check: if audio is enabled, uptime > 2 min, but zero chunks were ever
     // sent, the audio pipeline never started capturing (e.g. device retry loop).
     // The per-device timestamp fallback would mask this as "ok", so override here.
@@ -1439,7 +1618,10 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         )
     } else {
         let mut unhealthy_systems = Vec::new();
-        if frame_status != "ok" && frame_status != "disabled" {
+        // An intentional pixel pause is not an unhealthy system: it is the app
+        // doing what it was configured to do. Reporting it as a fault is what
+        // dragged users to the permission screen in #5808.
+        if frame_status != "ok" && frame_status != "disabled" && vision_reason.is_fault() {
             unhealthy_systems.push("vision");
         }
         if vision_degraded && !unhealthy_systems.contains(&"vision") {
@@ -1481,6 +1663,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
                         .detail(
                             now_ts.saturating_sub(vision_snap.last_db_write_ts),
                             vision_snap.silent_loss,
+                            screenpipe_screen::monitor::secs_since_capture_backend_fallback(),
                         ),
                 );
             }
@@ -1528,7 +1711,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         (
             "degraded",
             msg,
-            Some(get_verbose_instructions(&unhealthy_systems)),
+            Some(get_verbose_instructions(&unhealthy_systems, vision_reason)),
             503,
         )
     };
@@ -1548,7 +1731,6 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
 
     // Build pipeline metrics from the snapshot already taken above
     let pipeline = if !state.vision_disabled {
-        let total_ocr_ops = vision_snap.ocr_cache_hits + vision_snap.ocr_cache_misses;
         Some(PipelineHealthInfo {
             uptime_secs: vision_snap.uptime_secs,
             frames_captured: vision_snap.frames_captured,
@@ -1573,11 +1755,10 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
             video_queue_depth: vision_snap.video_queue_depth,
             time_to_first_frame_ms: vision_snap.time_to_first_frame_ms,
             pipeline_stall_count: vision_snap.pipeline_stall_count,
-            ocr_cache_hit_rate: if total_ocr_ops > 0 {
-                vision_snap.ocr_cache_hits as f64 / total_ocr_ops as f64
-            } else {
-                0.0
-            },
+            ocr_cache_hit_rate: ocr_cache_hit_rate(
+                vision_snap.ocr_cache_hits,
+                vision_snap.ocr_cache_misses,
+            ),
             ocr_empty: vision_snap.ocr_empty,
         })
     } else {
@@ -1601,6 +1782,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
             None
         },
         frame_status: frame_status.to_string(),
+        vision_reason: vision_reason.as_str().to_string(),
         loop_stage: vision_loop_stage.as_str().to_string(),
         loop_stage_age_secs: vision_loop_stage_entered_ts
             .and_then(|ts| (ts > 0).then(|| now_ts.saturating_sub(ts))),
@@ -1748,11 +1930,25 @@ pub(crate) async fn audio_metrics_handler(
     JsonResponse(state.audio_metrics.snapshot())
 }
 
-pub(crate) fn get_verbose_instructions(unhealthy_systems: &[&str]) -> String {
+pub(crate) fn get_verbose_instructions(
+    unhealthy_systems: &[&str],
+    vision_reason: VisionReason,
+) -> String {
     let mut instructions = String::new();
 
     if unhealthy_systems.contains(&"vision") {
-        instructions.push_str("Vision system is not working properly. Check if screen recording permissions are enabled.\n");
+        // Name the actual cause. This used to be an unconditional "check if
+        // screen recording permissions are enabled", which pointed users at
+        // System Settings even when screenpipe had turned pixels off itself.
+        match vision_reason.instruction() {
+            Some(step) => {
+                instructions.push_str(step);
+                instructions.push('\n');
+            }
+            None => instructions.push_str(
+                "Vision system is not working properly. Please send logs from the Help section.\n",
+            ),
+        }
     }
 
     if unhealthy_systems.contains(&"audio") {
@@ -1846,7 +2042,7 @@ mod vision_stall_classification_tests {
     fn attempts_climbing_with_an_idle_writer_is_silent_loss_not_a_db_stall() {
         let cause = classify_vision_stall(45, 0, 119.0, 3);
         assert_eq!(cause, VisionStallCause::SilentLoss);
-        let detail = cause.detail(307, 43);
+        let detail = cause.detail(307, 43, None);
         assert!(
             detail.contains("not reaching the writer") && detail.contains("database is idle"),
             "must not blame the database: {detail}"
@@ -1865,7 +2061,53 @@ mod vision_stall_classification_tests {
     fn no_capture_attempts_means_the_backend_stopped_not_the_writer() {
         let cause = classify_vision_stall(0, 0, 119.0, 3);
         assert_eq!(cause, VisionStallCause::CapturePaused);
-        assert!(cause.detail(300, 0).contains("capture backend has stopped"));
+        assert!(cause
+            .detail(300, 0, None)
+            .contains("capture backend has stopped"));
+    }
+
+    /// A wedged ScreenCaptureKit daemon keeps serving frames through the
+    /// CoreGraphics fallback, so `/health` used to describe a stall without
+    /// ever naming the backend that had actually failed. Support then had to
+    /// ask for logs to distinguish it from TCC revoke or display sleep.
+    #[test]
+    fn a_recent_backend_failover_is_named_as_the_stall_cause() {
+        let detail = VisionStallCause::CapturePaused.detail(300, 0, Some(12));
+        assert!(
+            detail.contains("CoreGraphics fallback")
+                && detail.contains("primary backend is wedged"),
+            "must name the wedged backend: {detail}"
+        );
+        assert!(
+            !detail.contains("screen being idle") || detail.contains("rather than"),
+            "must not leave an idle screen as the reading: {detail}"
+        );
+    }
+
+    /// An old failover is history. Attributing an unrelated stall to it would
+    /// be the same guessing this classifier exists to remove.
+    #[test]
+    fn a_stale_backend_failover_is_not_blamed_for_a_later_stall() {
+        let stale = CAPTURE_BACKEND_FALLBACK_RECENT_SECS + 1;
+        let detail = VisionStallCause::CapturePaused.detail(300, 0, Some(stale));
+        assert!(!detail.contains("CoreGraphics fallback"), "{detail}");
+        assert_eq!(detail, VisionStallCause::CapturePaused.detail(300, 0, None));
+    }
+
+    /// The failover only explains a paused backend; it must not rewrite the
+    /// silent-loss or writer verdicts.
+    #[test]
+    fn a_failover_does_not_change_the_other_stall_causes() {
+        for cause in [
+            VisionStallCause::SilentLoss,
+            VisionStallCause::DbWritesNotLanding,
+        ] {
+            assert_eq!(
+                cause.detail(300, 7, Some(5)),
+                cause.detail(300, 7, None),
+                "{cause:?} must ignore the backend failover"
+            );
+        }
     }
 
     #[test]
@@ -1886,7 +2128,7 @@ mod vision_stall_classification_tests {
             VisionStallCause::DbWritesNotLanding
         );
         assert!(classify_vision_stall(10, 4, 119.0, 3)
-            .detail(120, 0)
+            .detail(120, 0, None)
             .contains("DB writes stalled"));
     }
 
@@ -1907,9 +2149,188 @@ mod vision_stall_classification_tests {
     }
 }
 
+/// #5808: `/health` blamed Screen Recording permission for every non-ok vision
+/// state, including the ones screenpipe itself caused. These pin the reason
+/// each state maps to, and that permission is only ever named when a
+/// permission result actually says so.
+#[cfg(test)]
+mod vision_reason_tests {
+    use super::*;
+    use screenpipe_screen::ScreenshotCaptureState as S;
+
+    const GRANTED: bool = true;
+    const DENIED: bool = false;
+
+    /// The reported case: permission is fine, screenpipe disabled screenshots
+    /// via config, capture goes stale because no pixel frame ever lands.
+    #[test]
+    fn config_disabled_screenshots_is_not_a_permission_problem() {
+        let reason = classify_vision_reason(false, true, S::DisabledByConfig, GRANTED, "stale");
+        assert_eq!(reason, VisionReason::ScreenshotsDisabledByConfig);
+        assert!(!reason.is_fault(), "an intentional pause is not a fault");
+
+        let instruction = reason.instruction().expect("names a recovery step");
+        assert!(instruction.contains("Settings → Recording"));
+        assert!(instruction.contains("not a permission problem"));
+        assert!(!instruction.to_lowercase().contains("screen recording"));
+    }
+
+    /// Low battery / OS low-power turns pixels off. It recovers on its own, so
+    /// the user must not be sent anywhere.
+    #[test]
+    fn power_profile_disabled_screenshots_is_not_a_permission_problem() {
+        let reason =
+            classify_vision_reason(false, true, S::DisabledByPowerProfile, GRANTED, "stale");
+        assert_eq!(reason, VisionReason::ScreenshotsDisabledByPowerProfile);
+        assert!(!reason.is_fault());
+
+        let instruction = reason.instruction().unwrap();
+        assert!(instruction.contains("resume on their own"));
+        assert!(instruction.contains("not a permission problem"));
+    }
+
+    /// The one case that earns the permission instruction.
+    #[test]
+    fn a_denied_permission_is_the_only_state_that_mentions_permission() {
+        let reason = classify_vision_reason(false, true, S::Enabled, DENIED, "stale");
+        assert_eq!(reason, VisionReason::PermissionDenied);
+        assert!(reason.is_fault());
+        assert!(reason.instruction().unwrap().contains("Screen Recording"));
+
+        // Every other reason must stay silent about permission.
+        for other in [
+            VisionReason::Ok,
+            VisionReason::DisabledBySetting,
+            VisionReason::NoDisplaysExpected,
+            VisionReason::ScreenshotsDisabledByConfig,
+            VisionReason::ScreenshotsDisabledByPowerProfile,
+            VisionReason::CaptureStalled,
+            VisionReason::NotStarted,
+        ] {
+            let text = other.instruction().unwrap_or("").to_lowercase();
+            assert!(
+                !text.contains("screen recording") && !text.contains("privacy & security"),
+                "{other:?} must not send the user to the permission screen: {text}"
+            );
+        }
+    }
+
+    /// Permission granted, pixels enabled, frames stopped: a real stall.
+    #[test]
+    fn a_genuine_capture_stall_is_reported_as_a_stall() {
+        let reason = classify_vision_reason(false, true, S::Enabled, GRANTED, "stale");
+        assert_eq!(reason, VisionReason::CaptureStalled);
+        assert!(reason.is_fault());
+
+        let reason = classify_vision_reason(false, true, S::Enabled, GRANTED, "not_started");
+        assert_eq!(reason, VisionReason::NotStarted);
+        assert!(reason.is_fault());
+    }
+
+    #[test]
+    fn intentional_off_states_outrank_any_frame_status() {
+        assert_eq!(
+            classify_vision_reason(true, true, S::Enabled, DENIED, "stale"),
+            VisionReason::DisabledBySetting,
+            "vision off by setting is not a permission story even if permission is denied",
+        );
+        assert_eq!(
+            classify_vision_reason(false, false, S::Enabled, DENIED, "stale"),
+            VisionReason::NoDisplaysExpected,
+        );
+        for reason in [
+            VisionReason::DisabledBySetting,
+            VisionReason::NoDisplaysExpected,
+        ] {
+            assert!(!reason.is_fault());
+        }
+    }
+
+    /// Config wins over the power profile: it is what the user set, and it
+    /// stays true after the battery recovers.
+    #[test]
+    fn config_outranks_the_power_profile_when_both_disable_pixels() {
+        assert_eq!(
+            S::resolve(true, true),
+            S::DisabledByConfig,
+            "the durable cause is the one worth naming",
+        );
+        assert_eq!(S::resolve(false, true), S::DisabledByPowerProfile);
+        assert_eq!(S::resolve(true, false), S::DisabledByConfig);
+        assert_eq!(S::resolve(false, false), S::Enabled);
+    }
+
+    #[test]
+    fn a_healthy_or_disabled_frame_status_reports_ok() {
+        for status in ["ok", "disabled"] {
+            assert_eq!(
+                classify_vision_reason(false, true, S::Enabled, GRANTED, status),
+                VisionReason::Ok,
+            );
+        }
+        assert_eq!(VisionReason::Ok.instruction(), None);
+        assert!(!VisionReason::Ok.is_fault());
+    }
+
+    /// The wire contract: every variant has a distinct, stable name.
+    #[test]
+    fn reason_names_are_distinct_and_snake_case() {
+        let all = [
+            VisionReason::Ok,
+            VisionReason::DisabledBySetting,
+            VisionReason::NoDisplaysExpected,
+            VisionReason::ScreenshotsDisabledByConfig,
+            VisionReason::ScreenshotsDisabledByPowerProfile,
+            VisionReason::PermissionDenied,
+            VisionReason::CaptureStalled,
+            VisionReason::NotStarted,
+        ];
+        let names: std::collections::HashSet<_> = all.iter().map(|r| r.as_str()).collect();
+        assert_eq!(names.len(), all.len(), "reason names must be unique");
+        for name in names {
+            assert!(
+                name.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                "{name} is not snake_case",
+            );
+        }
+    }
+
+    /// The instruction the user actually sees, through the real entry point.
+    #[test]
+    fn verbose_instructions_name_the_cause_instead_of_permission() {
+        let config =
+            get_verbose_instructions(&["vision"], VisionReason::ScreenshotsDisabledByConfig);
+        assert!(config.contains("Screenshots are turned off in screenpipe"));
+        assert!(!config.to_lowercase().contains("screen recording"));
+
+        let denied = get_verbose_instructions(&["vision"], VisionReason::PermissionDenied);
+        assert!(denied.contains("Screen Recording"));
+
+        // Audio guidance is untouched, and both can appear together.
+        let both = get_verbose_instructions(
+            &["vision", "audio"],
+            VisionReason::ScreenshotsDisabledByPowerProfile,
+        );
+        assert!(both.contains("resume on their own"));
+        assert!(both.contains("microphone permissions"));
+
+        // No unhealthy system: vision guidance must not leak in.
+        let none = get_verbose_instructions(&[], VisionReason::PermissionDenied);
+        assert!(!none.contains("Screen Recording"));
+        assert!(none.contains("Discord"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ocr_cache_rate_uses_measured_hits_and_misses() {
+        assert!((ocr_cache_hit_rate(2, 3) - 0.4).abs() < f64::EPSILON);
+        assert_eq!(ocr_cache_hit_rate(0, 0), 0.0);
+        assert_eq!(ocr_cache_hit_rate(1, 0), 1.0);
+    }
 
     #[test]
     fn transcription_mode_reports_configuration_not_activity() {
@@ -1972,6 +2393,7 @@ mod tests {
             last_frame_timestamp: None,
             last_audio_timestamp: None,
             frame_status: "ok".to_string(),
+            vision_reason: "ok".to_string(),
             loop_stage: "unknown".to_string(),
             loop_stage_age_secs: None,
             audio_status: "ok".to_string(),

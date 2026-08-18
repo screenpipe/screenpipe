@@ -100,9 +100,17 @@ describe('logCost — usage-table daily cost accumulator (migration 0006)', () =
 		})).toBe(true);
 
 		const usageUpserts = captured.filter((c) => c.sql.includes('ON CONFLICT(device_id)'));
-		expect(usageUpserts).toHaveLength(1);
-		expect(usageUpserts[0].binds[0]).toContain('hosted-transcription-cost:day:v1:');
-		expect(usageUpserts[0].binds[0]).not.toBe(baseEntry.device_id);
+		// Per-account day plus the single global hour row, written together so the
+		// breaker can never lag real spend. There is deliberately no second global
+		// row: the daily total is summed from today's hours instead of adding a
+		// write to every request on the hottest path in the gateway.
+		expect(usageUpserts).toHaveLength(2);
+		expect(usageUpserts[0].binds[0]).toBe(`hosted-transcription-cost:day:v1:${baseEntry.device_id}`);
+		expect(usageUpserts[1].binds[0]).toMatch(
+			/^hosted-transcription-cost:global-hour:v1:\d{4}-\d{2}-\d{2}T\d{2}$/,
+		);
+		// Transcription must never touch the text accumulator for the raw device id.
+		expect(usageUpserts.some((c) => c.binds[0] === baseEntry.device_id)).toBe(false);
 	});
 });
 

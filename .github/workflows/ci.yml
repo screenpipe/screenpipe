@@ -10,6 +10,7 @@ name: Rust CI
 
 on:
   push:
+    branches: [main]
     paths:
       - '**.rs'
       - '**/Cargo.toml'
@@ -25,11 +26,10 @@ on:
       - '.github/scripts/**'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
-  # Cancel superseded runs on PR branches (saves minutes when a contributor
-  # rapidly re-pushes). Main pushes use the commit SHA in the group so a
-  # newer merge does not sit pending behind a stale long-running commit.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  # Only the newest push or PR revision can describe the current tree.
+  # Keep scheduled/manual runs separate via event_name.
+  cancel-in-progress: true
 
 env:
   GIT_LFS_SKIP_SMUDGE: 1
@@ -465,6 +465,7 @@ jobs:
 
       - name: Run PII removal tests
         run: cargo test -p screenpipe-core pii_removal
+
 
       # A crash here is a real data race in livetext_bridge.swift; the test
       # skips itself when VisionKit is unavailable on the runner.

@@ -49,6 +49,7 @@ const SOURCE_STATUS_LABELS: Record<LiveViewSourceStatus, string | null> = {
   auto: null,
   manual: "manual only",
   paused: "paused",
+  unconfigured: "not configured",
   unknown: null,
 };
 
@@ -58,6 +59,8 @@ const SOURCE_STATUS_TITLES: Record<LiveViewSourceStatus, string | null> = {
     "This task has no schedule, so this block only changes when you press refresh.",
   paused:
     "This task is turned off, so this block only changes when you press refresh.",
+  unconfigured:
+    "This block is not connected to a scheduled task, so refresh cannot update it.",
   unknown: null,
 };
 
@@ -421,6 +424,7 @@ export function LiveViewCard({
   >(null);
   const hasActions = Boolean(onFeedback || onRegenerate || onAiEdit);
   const busy = refreshing || aiEditing || feedbackSaving !== null;
+  const effectiveSourceStatus = slot.binding ? sourceStatus : "unconfigured";
 
   const submitAiEdit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -658,13 +662,13 @@ export function LiveViewCard({
             ? `Scheduled task: ${slot.binding.pipeName}`
             : "No scheduled task connected"}
         </span>
-        {slot.binding && SOURCE_STATUS_LABELS[sourceStatus] && (
+        {SOURCE_STATUS_LABELS[effectiveSourceStatus] && (
           <span
             data-testid={`overview-card-source-status-${slot.id}`}
             className="shrink-0 border border-border px-1 py-px uppercase tracking-wide"
-            title={SOURCE_STATUS_TITLES[sourceStatus] ?? undefined}
+            title={SOURCE_STATUS_TITLES[effectiveSourceStatus] ?? undefined}
           >
-            {SOURCE_STATUS_LABELS[sourceStatus]}
+            {SOURCE_STATUS_LABELS[effectiveSourceStatus]}
           </span>
         )}
         {slot.value && (

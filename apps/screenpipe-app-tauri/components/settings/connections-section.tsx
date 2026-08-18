@@ -30,6 +30,7 @@ import {
   CONNECTION_CATEGORY_BY_ID,
   CONNECTION_HARDCODED_DESCRIPTIONS,
   compareConnectionTiles,
+  connectionMatchesSearch,
   getSuggestedConnectionsForDevice,
   normalizeConnectionCategory,
   type ConnectionSuggestionTile,
@@ -986,13 +987,12 @@ function PiExtensionsSpotlight({
   selected: boolean;
   onClick: () => void;
 }) {
-  const summary =
-    count === 0 ? "No extensions yet" : `${count} extension${count === 1 ? "" : "s"} enabled`;
+  const summary = `5 work with every agent · ${count} Pi package${count === 1 ? "" : "s"}`;
 
   return (
     <div
       className={`
-        rounded-xl border bg-card p-3 transition-colors
+        border bg-card p-3 transition-colors
         ${selected ? "border-foreground bg-accent" : "border-border"}
       `}
     >
@@ -1004,12 +1004,12 @@ function PiExtensionsSpotlight({
         >
           <IntegrationIcon
             icon="pi-extensions"
-            className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted"
+            className="flex h-10 w-10 items-center justify-center border border-border bg-muted"
           />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h3 className="text-sm font-medium text-foreground">Pi extensions</h3>
-              {count > 0 && <span className="h-2 w-2 rounded-full bg-foreground" />}
+              <h3 className="text-sm font-medium text-foreground">Agent extensions</h3>
+              <span className="h-2 w-2 rounded-full bg-foreground" />
             </div>
             <p className="text-xs text-muted-foreground">{summary}</p>
           </div>
@@ -1017,12 +1017,12 @@ function PiExtensionsSpotlight({
         <Button
           type="button"
           size="sm"
-          variant={count === 0 ? "default" : "outline"}
+          variant="outline"
           onClick={onClick}
           className="h-8 gap-1.5 text-xs normal-case font-sans tracking-normal"
         >
           <Plus className="h-3.5 w-3.5" />
-          {count === 0 ? "Browse" : "Manage"}
+          Manage
         </Button>
       </div>
     </div>
@@ -3971,7 +3971,7 @@ export function ConnectionsSection({
       { id: "excalidraw", name: "Excalidraw", icon: "excalidraw", connected: excalidrawConnected },
       { id: "custom-mcp", name: "Custom MCP", icon: "custom-mcp", connected: false, detected: customMcpServerCount > 0 },
       { id: "skills", name: "Skills", icon: "skills", connected: importedSkillsCount > 0, category: "Agent" },
-      { id: "pi-extensions", name: "Pi extensions", icon: "pi-extensions", connected: piExtensionCount > 0, category: "Agent" },
+      { id: "pi-extensions", name: "Agent extensions", icon: "pi-extensions", connected: true, category: "Agent" },
     ];
     // Merge API tiles, skipping duplicates already in hardcoded.
     // owned-default is hidden from settings — the agent drives it via the
@@ -4049,7 +4049,7 @@ export function ConnectionsSection({
     }
     const q = search.toLowerCase().trim();
     if (q) {
-      tiles = tiles.filter(t => t.name.toLowerCase().includes(q));
+      tiles = tiles.filter((tile) => connectionMatchesSearch(tile, q));
     }
     return [...tiles].sort(compareConnectionTiles);
   }, [allTiles, categoryFilter, search]);
@@ -4391,7 +4391,7 @@ export function ConnectionsSection({
         onClick={() => setSelected(selected === "skills" ? null : "skills")}
       />
 
-      {/* AI tools block — 4th sibling to MCP servers / Pi extensions / Skills.
+      {/* AI tools block — 4th sibling to MCP servers / Agent extensions / Skills.
           Connect-all when nothing is on, per-tool manage + disconnect-all once
           connected (Louis's "easy way to uninstall" ask). Default view only. */}
       {isDefaultView && (

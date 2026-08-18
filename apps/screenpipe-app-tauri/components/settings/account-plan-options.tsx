@@ -4,9 +4,12 @@
 
 "use client";
 
-import { Check } from "lucide-react";
+import { Check, ExternalLinkIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { planDisplayName } from "@/lib/app-entitlement";
+import {
+  getBusinessCapacityUpgrade,
+  type BusinessCapacityUpgrade,
+} from "@/lib/app-entitlement";
 import type { SelectablePlan } from "@/lib/upgrade-flow";
 
 /**
@@ -17,9 +20,28 @@ import type { SelectablePlan } from "@/lib/upgrade-flow";
  * `plan: "pro"`, so a user who wanted Basic had no way to choose it — and a
  * subscriber had no way to see what else existed. Free is listed because it is
  * what the account falls back to, not as something to buy.
+ *
+ * Business Max and Ultra are cards of their own. They shipped in #5681 behind
+ * `NEXT_PUBLIC_BUSINESS_POWER_PLANS_ENABLED`, which was never set in any build,
+ * so the only Max/Ultra surface in the app never rendered once.
  */
 
-export type AccountPlanId = "free" | "standard" | "pro";
+export type AccountPlanId =
+  | "free"
+  | "standard"
+  | "pro"
+  | "pro_max"
+  | "pro_ultra";
+
+/** Where a card's action goes.
+ *
+ *  Basic and Business run the in-app Stripe checkout. The capacity levels
+ *  change an existing subscription rather than start one, which needs the web
+ *  billing page for proration, so they deep-link with the target preset —
+ *  the same URL contract the (dark) capacity upsell used. */
+export type PlanPurchase =
+  | { kind: "checkout"; plan: SelectablePlan }
+  | { kind: "billing"; targetPlan: BusinessCapacityUpgrade["targetPlan"] };
 
 type PlanRow = {
   id: AccountPlanId;
@@ -27,10 +49,21 @@ type PlanRow = {
   monthly: number;
   cadence: string;
   points: string[];
+  /** Button copy. Spelled out because "choose business ultra" does not fit a
+   *  card this narrow. */
+  cta: string;
+  /** null for Free: it is the fallback, not something to buy. */
+  purchase: PlanPurchase | null;
 };
 
 // Mirrors lib/pricing-tiers.ts on the website. Kept as plain data here because
 // the desktop app has no import path to the marketing pricing module.
+//
+// Max and Ultra buy capacity, not credits or models: the gateway collapses
+// every business tier to the same 400 credits and the same frontier catalog
+// (getHostedAiPlan), and raises only daily queries and requests per minute
+// (60 → 120 → 240 in usage-tracker's DEFAULT_TIER_CONFIG). Say that, so nobody
+// upgrades expecting a bigger allowance.
 export const ACCOUNT_PLANS: PlanRow[] = [
   {
     id: "free",
@@ -38,6 +71,8 @@ export const ACCOUNT_PLANS: PlanRow[] = [
     monthly: 0,
     cadence: "/ month",
     points: ["10 AI credits / month · Auto only", "limited history"],
+    cta: "included",
+    purchase: null,
   },
   {
     id: "standard",
@@ -45,6 +80,8 @@ export const ACCOUNT_PLANS: PlanRow[] = [
     monthly: 25,
     cadence: "/ month",
     points: ["150 AI credits / month", "unlimited history & scheduled tasks"],
+    cta: "choose basic",
+    purchase: { kind: "checkout", plan: "standard" },
   },
   {
     id: "pro",
@@ -55,32 +92,52 @@ export const ACCOUNT_PLANS: PlanRow[] = [
       "400 AI credits / month",
       "frontier Claude + GPT · cloud sync",
     ],
+    cta: "choose business",
+    purchase: { kind: "checkout", plan: "pro" },
+  },
+  {
+    id: "pro_max",
+    name: "business max",
+    monthly: 100,
+    cadence: "/ seat / month",
+    points: [
+      "2x daily queries & request rate",
+      "same 400 credits & frontier models",
+    ],
+    cta: "choose max",
+    purchase: { kind: "billing", targetPlan: "pro_max" },
+  },
+  {
+    id: "pro_ultra",
+    name: "business ultra",
+    monthly: 200,
+    cadence: "/ seat / month",
+    points: [
+      "4x daily queries & request rate",
+      "same 400 credits & frontier models",
+    ],
+    cta: "choose ultra",
+    purchase: { kind: "billing", targetPlan: "pro_ultra" },
   },
 ];
 
-// Business is one family with capacity levels stacked above the $50 seat, so a
-// Max or Ultra subscriber belongs on the business card. They must not be shown
-// Business's price as their own, though: before this, a Business Max account
-// read "$50 / seat / month" under a "your plan" badge while actually paying
-// $100. Prices mirror `BusinessCapacityUpgrade` in lib/app-entitlement.ts.
-const BUSINESS_CAPACITY_MONTHLY: Record<string, number> = {
-  pro_max: 100,
-  business_max: 100,
-  pro_ultra: 200,
-  business_ultra: 200,
+/** Card ids keyed by the billing target they upgrade to, so the "next step"
+ *  badge follows the one ladder in lib/app-entitlement. */
+const CARD_FOR_TARGET: Record<
+  BusinessCapacityUpgrade["targetPlan"],
+  AccountPlanId
+> = {
+  pro_max: "pro_max",
+  pro_ultra: "pro_ultra",
 };
 
-/**
- * The capacity level an entitlement actually sits at, when it is above the
- * base Business seat. Returns null for every plan the business card already
- * describes correctly.
- */
-export function businessCapacityTier(
+/** The capacity card to mark as the immediate next step, so a Business account
+ *  is pointed at Max rather than at Max and Ultra shouting equally. */
+export function recommendedCapacityCard(
   plan: string | null | undefined,
-): { name: string; monthly: number } | null {
-  const monthly = BUSINESS_CAPACITY_MONTHLY[(plan || "").trim().toLowerCase()];
-  if (monthly === undefined) return null;
-  return { name: planDisplayName(plan).toLowerCase(), monthly };
+): AccountPlanId | null {
+  const upgrade = getBusinessCapacityUpgrade(plan);
+  return upgrade ? CARD_FOR_TARGET[upgrade.targetPlan] : null;
 }
 
 /** Which card to mark "current" for an entitlement plan (users.plan). */
@@ -95,12 +152,19 @@ export function accountPlanForEntitlement(
     // AI tier, so it is not Business.
     case "lifetime":
       return "standard";
-    case "pro":
-    case "business":
+    // Each capacity level owns a card now, so the badge lands on the tier the
+    // account actually pays for. Before this a Business Max account read
+    // "$50 / seat / month" under a "your plan" badge while paying $100.
     case "pro_max":
     case "business_max":
+      return "pro_max";
     case "pro_ultra":
     case "business_ultra":
+      return "pro_ultra";
+    case "pro":
+    case "business":
+    // Team and Enterprise are billed elsewhere; Business is the closest
+    // self-serve card and stays the one marked current.
     case "team":
     case "enterprise":
       return "pro";
@@ -115,11 +179,10 @@ export function AccountPlanOptions({
   fallbackTo,
   busy = false,
   disabledReason,
-  onChoose,
+  onSelect,
 }: {
   current: AccountPlanId;
-  /** Raw entitlement (users.plan), so a Business capacity level above the base
-   *  seat can state its own name and price instead of Business's. */
+  /** Raw entitlement (users.plan), used to point at the next capacity step. */
   entitlementPlan?: string | null;
   /** Plan the account drops to when a trial or grant ends. */
   fallbackTo?: AccountPlanId;
@@ -127,30 +190,25 @@ export function AccountPlanOptions({
   /** Set when this account must not buy from the app (e.g. a seat billed by a
    *  workspace). Prices stay readable, the purchase action does not. */
   disabledReason?: string;
-  onChoose: (plan: SelectablePlan) => void;
+  onSelect: (purchase: PlanPurchase) => void;
 }) {
+  const recommended = recommendedCapacityCard(entitlementPlan);
+
   return (
-    <div className="grid gap-3 sm:grid-cols-3" data-testid="account-plan-options">
+    <div
+      className="grid gap-3 sm:grid-cols-3 xl:grid-cols-5"
+      data-testid="account-plan-options"
+    >
       {ACCOUNT_PLANS.map((plan) => {
         const isCurrent = plan.id === current;
         const isFallback = !isCurrent && plan.id === fallbackTo;
-        const paidId: SelectablePlan | null =
-          plan.id === "free" ? null : plan.id;
-        const selectable = paidId !== null && !isCurrent && !disabledReason;
-
-        // Only the card the account is actually on restates itself; the other
-        // cards stay the plain self-serve offer.
-        const capacity =
-          plan.id === "pro" && isCurrent
-            ? businessCapacityTier(entitlementPlan)
-            : null;
-        const displayName = capacity?.name ?? plan.name;
-        const displayMonthly = capacity?.monthly ?? plan.monthly;
-        // The base seat's credit line is wrong for a higher capacity level, and
-        // the exact allowance is not modelled here — say only what is true.
-        const points = capacity
-          ? ["higher monthly AI credit allowance", ...plan.points.slice(1)]
-          : plan.points;
+        const isRecommended =
+          !isCurrent && !isFallback && plan.id === recommended;
+        const purchase = plan.purchase;
+        const selectable = purchase !== null && !isCurrent && !disabledReason;
+        // Capacity changes are proration on an existing subscription, so they
+        // finish in the browser. Say so rather than appearing to buy in place.
+        const leavesApp = purchase?.kind === "billing";
 
         return (
           <div
@@ -163,7 +221,7 @@ export function AccountPlanOptions({
           >
             <div className="flex items-start justify-between gap-2">
               <span className="text-sm font-semibold lowercase">
-                {displayName}
+                {plan.name}
               </span>
               {isCurrent ? (
                 <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
@@ -173,18 +231,25 @@ export function AccountPlanOptions({
                 <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
                   next
                 </span>
+              ) : isRecommended ? (
+                <span
+                  className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground"
+                  data-testid="account-plan-next-step"
+                >
+                  next step
+                </span>
               ) : null}
             </div>
 
             <div className="mt-1 flex items-baseline gap-1">
-              <span className="text-xl font-bold">${displayMonthly}</span>
+              <span className="text-xl font-bold">${plan.monthly}</span>
               <span className="text-[10px] text-muted-foreground">
                 {plan.cadence}
               </span>
             </div>
 
             <ul className="mt-2 flex-1 space-y-1">
-              {points.map((point) => (
+              {plan.points.map((point) => (
                 <li
                   key={point}
                   className="flex items-start gap-1.5 text-xs text-muted-foreground"
@@ -195,16 +260,25 @@ export function AccountPlanOptions({
               ))}
             </ul>
 
-            {selectable && paidId ? (
+            {selectable && purchase ? (
               <Button
                 size="sm"
-                variant={plan.id === "pro" ? "default" : "outline"}
+                // Emphasise the step forward. Keying this to Business alone
+                // made a downgrade the loudest button on a Max/Ultra account.
+                variant={
+                  isRecommended || (!recommended && plan.id === "pro")
+                    ? "default"
+                    : "outline"
+                }
                 className="mt-3 h-7 w-full text-xs"
                 disabled={busy}
-                onClick={() => onChoose(paidId)}
+                onClick={() => onSelect(purchase)}
                 data-testid={`account-plan-choose-${plan.id}`}
               >
-                {busy ? "checking…" : `choose ${plan.name}`}
+                {busy ? "checking…" : plan.cta}
+                {leavesApp && !busy ? (
+                  <ExternalLinkIcon className="ml-1.5 h-3 w-3" />
+                ) : null}
               </Button>
             ) : (
               <p className="mt-3 rounded-md bg-muted px-2 py-1.5 text-center text-[10px] text-muted-foreground">
@@ -212,7 +286,7 @@ export function AccountPlanOptions({
                   ? "your plan"
                   : isFallback
                     ? "after it ends"
-                    : (disabledReason ?? "included")}
+                    : (disabledReason ?? plan.cta)}
               </p>
             )}
           </div>

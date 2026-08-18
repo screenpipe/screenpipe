@@ -37,7 +37,7 @@ async function readHomeRenderState(): Promise<HomeRenderState | { error: string 
   }
 }
 
-async function openHomeForPiExtensionsCatalog(): Promise<void> {
+async function openHomeForAgentExtensionsCatalog(): Promise<void> {
   const windowPayload: ShowWindowPayload = { Home: { page: null } };
 
   await browser.executeAsync(
@@ -89,12 +89,12 @@ async function openHomeForPiExtensionsCatalog(): Promise<void> {
   }
 }
 
-describe('Pi extensions catalog', function () {
+describe('Agent extensions catalog', function () {
   this.timeout(t(180_000));
 
   before(async () => {
     await waitForAppReady();
-    await openHomeForPiExtensionsCatalog();
+    await openHomeForAgentExtensionsCatalog();
   });
 
   it('opens from Connections and filters the installable Pi package catalog', async () => {
@@ -105,31 +105,34 @@ describe('Pi extensions catalog', function () {
     await browser.waitUntil(
       async () => {
         const body = (await browser.execute(() => document.body.innerText.toLowerCase())) as string;
-        return body.includes('connections') && body.includes('pi extensions');
+        return body.includes('connections') && body.includes('agent extensions');
       },
-      { timeout: t(12_000), timeoutMsg: 'Connections did not render Pi extensions entry' },
+      { timeout: t(12_000), timeoutMsg: 'Connections did not render Agent extensions entry' },
     );
 
     await browser.execute(() => {
       const buttons = Array.from(document.querySelectorAll('button'));
       const target = buttons.find((button) =>
-        button.textContent?.toLowerCase().includes('pi extensions'),
-      ) ?? buttons.find((button) => button.textContent?.toLowerCase().includes('browse'));
+        button.textContent?.toLowerCase().includes('agent extensions'),
+      ) ?? buttons.find((button) => button.textContent?.toLowerCase().includes('manage'));
       target?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     });
 
     await browser.waitUntil(
       async () => {
         const body = (await browser.execute(() => document.body.innerText.toLowerCase())) as string;
-        return body.includes('third-party pi packages can execute local code') &&
+        return body.includes('screenpipe extensions use acp client middleware') &&
+          body.includes('screen history') &&
+          body.includes('all acp agents') &&
+          body.includes('pi only') &&
           body.includes('subagents') &&
           body.includes('web agent') &&
           body.includes('ask user');
       },
-      { timeout: t(12_000), timeoutMsg: 'Pi extensions catalog did not open' },
+      { timeout: t(12_000), timeoutMsg: 'Agent extensions catalog did not open' },
     );
 
-    const search = await $('input[placeholder="Search Pi extensions..."]');
+    const search = await $('input[placeholder="Search Pi packages..."]');
     await search.waitForExist({ timeout: t(8_000) });
     await search.setValue('web');
 
@@ -140,10 +143,10 @@ describe('Pi extensions catalog', function () {
           body.includes('npm:@demigodmode/pi-web-agent') &&
           !body.includes('delegate work to focused child agents');
       },
-      { timeout: t(8_000), timeoutMsg: 'Pi extensions catalog search did not filter to web agent' },
+      { timeout: t(8_000), timeoutMsg: 'Agent extensions catalog search did not filter to web agent' },
     );
 
-    const filepath = await saveScreenshot('connections-pi-extensions');
+    const filepath = await saveScreenshot('connections-agent-extensions');
     expect(existsSync(filepath)).toBe(true);
   });
 });

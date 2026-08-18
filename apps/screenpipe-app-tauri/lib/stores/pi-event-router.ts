@@ -88,6 +88,8 @@ import {
   type SessionRecord,
 } from "@/lib/stores/chat-store";
 import { connectionActionFromToolResult } from "@/components/chat/standalone/hooks/pi-event-handlers";
+import { normalizePlanEntries, upsertPlanBlock } from "@/lib/chat/acp-plan";
+import type { ContentBlock } from "@/lib/chat/types";
 
 // Module-level state — the router is a singleton process-wide.
 let mounted = false;
@@ -733,6 +735,20 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
   // it in place when the result lands. Matches standalone-chat's local
   // logic so the rendered shape is the same whether the panel reads from
   // store (via rehydrate) or from local state.
+  if (t === "plan_update") {
+    // ACP resends the whole plan; keep exactly one block and replace it.
+    const cur = store.sessions[sid];
+    if (!cur?.streamingMessageId) return;
+    const msgId = cur.streamingMessageId;
+    const entries = normalizePlanEntries((payload as any).entries);
+    const blocks = upsertPlanBlock(cur.contentBlocks as ContentBlock[] | undefined, entries);
+    // Identity is preserved when nothing changed — skip the re-render.
+    if (blocks === (cur.contentBlocks as unknown)) return;
+    store.actions.setStreaming(sid, { contentBlocks: blocks });
+    store.actions.patchMessage(sid, msgId, (m: any) => ({ ...m, contentBlocks: blocks }));
+    return;
+  }
+
   if (t === "tool_execution_start") {
     const cur = store.sessions[sid];
     if (!cur?.streamingMessageId) return;

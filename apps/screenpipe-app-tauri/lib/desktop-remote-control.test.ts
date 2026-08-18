@@ -135,6 +135,7 @@ describe("desktop remote control", () => {
       prioritizeInputLatency: true,
       // Never chosen: stays null so the rollout default still applies.
       sidebarCustomization: null,
+      overlayHiding: null,
       aecMode: "screenpipe",
     });
 
@@ -190,6 +191,7 @@ describe("desktop remote control", () => {
           defaultEnabled: false,
           forceDisabled: false,
         },
+        overlayHiding: { defaultEnabled: false, forceDisabled: false },
       },
       autoUpdate: { forceEnabled: false },
     });
@@ -336,5 +338,70 @@ describe("desktop remote control", () => {
     expect(
       buildDesktopRemoteControlPatch(settings, policy).changedControls,
     ).toEqual([]);
+  });
+
+  it("ships the rollout capability disabled and never seeds a local opt-in", () => {
+    // The user-facing visibility choice is independent of this legacy rollout.
+    expect(
+      resolveBooleanRemoteControlValue(
+        "overlayHiding",
+        null,
+        LOCAL_DESKTOP_REMOTE_POLICY.boolean.overlayHiding,
+      ),
+    ).toBe(false);
+
+    // Managed installs can still grant the legacy capability remotely.
+    expect(
+      resolveBooleanRemoteControlValue("overlayHiding", null, {
+        defaultEnabled: true,
+        forceDisabled: false,
+      }),
+    ).toBe(true);
+
+    // The capability remains inherited rather than becoming sticky.
+    expect(
+      normalizeDesktopRemotePreferences({
+        allowHidingShortcutOverlay: true,
+        remoteControlPreferences: {
+          ...NEW_INSTALL_REMOTE_CONTROL_PREFERENCES,
+          overlayHiding: true,
+        },
+      }).overlayHiding,
+    ).toBeNull();
+  });
+
+  it("grants overlay hiding without bouncing the recorder", () => {
+    const policy = normalizeDesktopRemotePolicySnapshot({
+      ...LOCAL_DESKTOP_REMOTE_POLICY,
+      boolean: {
+        ...LOCAL_DESKTOP_REMOTE_POLICY.boolean,
+        overlayHiding: { defaultEnabled: true, forceDisabled: false },
+      },
+    });
+
+    // Already sitting on every other shipped default, so `overlayHiding` is
+    // the only control that moves and the restart flag is attributable to it.
+    const result = buildDesktopRemoteControlPatch(
+      {
+        platform: "macos",
+        enableSemanticContext: false,
+        experimentalCoreaudioSystemAudio: true,
+        experimentalMeetingPiggyback: false,
+        filterMusic: true,
+        prioritizeInputLatency: false,
+        enableSidebarCustomization: false,
+        aecMode: "off",
+        screenpipeAecEnabled: false,
+        macosInputVpioEnabled: false,
+        windowsInputAecEnabled: false,
+        allowHidingShortcutOverlay: false,
+      },
+      policy,
+    );
+
+    expect(result.changedControls).toEqual(["overlayHiding"]);
+    expect(result.patch.allowHidingShortcutOverlay).toBe(true);
+    // Overlay visibility is not something the recorder reads.
+    expect(result.recorderRestartRequired).toBe(false);
   });
 });

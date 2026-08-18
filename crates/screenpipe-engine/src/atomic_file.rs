@@ -30,6 +30,9 @@ pub(crate) fn lock(path: &Path) -> io::Result<LockGuard> {
         .create(true)
         .read(true)
         .write(true)
+        // Explicit: a lock file must never be truncated on open. Its contents
+        // are irrelevant, but truncating would race another holder.
+        .truncate(false)
         .open(path)?;
     file.lock()?;
     Ok(LockGuard { file })

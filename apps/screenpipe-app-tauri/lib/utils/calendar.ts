@@ -540,6 +540,24 @@ export function findOverlappingEvent(
   return null;
 }
 
+/**
+ * Identity used to keep one calendar event bound to one meeting. Mirrors
+ * `CalendarBinding::from_event` in the Rust detector so both writers claim the
+ * same key: the provider id when there is one, otherwise the event's natural
+ * identity (an event is the same event when title and exact window match).
+ */
+export function calendarBindingKey(event: CalendarEvent): string {
+  if (event.id && event.id.length > 0) return event.id;
+  // Normalize to epoch ms: the same instant reaches the detector and this
+  // client in different shapes ("...:00Z" vs "...:00.000+00:00"), and the key
+  // must be byte-identical or the same event gets claimed twice.
+  const part = (raw: string) => {
+    const ms = Date.parse(raw);
+    return Number.isFinite(ms) ? String(ms) : raw;
+  };
+  return `${event.title}|${part(event.start)}|${part(event.end)}`;
+}
+
 export function attendeesToString(attendees?: string[] | null): string {
   if (!attendees) return "";
   return attendees.filter(Boolean).join(", ");

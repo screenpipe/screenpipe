@@ -33,6 +33,43 @@ use objc2_app_kit::NSPasteboard;
 /// and cause a SIGABRT in CFDictionarySetValue / __CFBasicHashRehash.
 static AX_QUERY_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
+/// Process-wide ceiling for any AX call that does not set its own timeout.
+///
+/// macOS defaults to roughly 6s per message. AX reads are synchronous IPC
+/// serviced on the *target app's* main thread, so an unbounded read against a
+/// busy app stalls that app's UI — including drag loops — for as long as we are
+/// willing to wait. Several focus-path reads (`focused_app`, `focused_window`,
+/// `focused_ui_element`, `element_at_pos`) run straight off AX notifications
+/// with no debounce and previously inherited that 6s default.
+///
+/// 1s is deliberately looser than the 0.1–0.2s per-element bounds the walker
+/// sets, so it only ever acts as a backstop: `AXUIElementSetMessagingTimeout`
+/// on a specific element still overrides it for that element.
+const AX_DEFAULT_TIMEOUT_SECS: f32 = 1.0;
+
+/// Apply [`AX_DEFAULT_TIMEOUT_SECS`] as this process's default AX timeout.
+///
+/// Passing the system-wide element to `AXUIElementSetMessagingTimeout` sets the
+/// default for every message the app sends, so this only needs to land once —
+/// hence the `Once`, which also keeps it off the hot notification path.
+pub(crate) fn ensure_global_ax_timeout() {
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        let sys = ax::UiElement::sys_wide();
+        match sys.set_messaging_timeout_secs(AX_DEFAULT_TIMEOUT_SECS) {
+            Ok(()) => debug!(
+                "AX default messaging timeout set to {}s (was the ~6s system default)",
+                AX_DEFAULT_TIMEOUT_SECS
+            ),
+            Err(e) => warn!(
+                "failed to set AX default messaging timeout: {:?} — unbounded AX reads \
+                 can stall the target app's main thread for ~6s",
+                e
+            ),
+        }
+    });
+}
+
 /// Process-wide ground truth for macOS Input Monitoring, learned from the ONE
 /// real CGEventTap we create in `run_event_tap` / `run_activity_only_tap`.
 ///
@@ -54,6 +91,26 @@ fn record_input_monitoring_truth(granted: bool) {
 }
 
 // Keycodes for clipboard operations (macOS)
+/// Did `run_in_mode` come back without having waited at all?
+///
+/// `Finished` (no sources or timers left in this mode) and `Stopped`
+/// (`CFRunLoopStop`) both return immediately, so a caller that loops straight
+/// back in spins a core. `TimedOut` already waited out the slice, and
+/// `HandledSource` is the healthy busy path that must stay hot.
+fn ax_run_loop_returned_without_waiting(result: cf::RunLoopRunResult) -> bool {
+    matches!(
+        result,
+        cf::RunLoopRunResult::Finished | cf::RunLoopRunResult::Stopped
+    )
+}
+
+/// How long one AX run-loop slice waits when the mode is idle but healthy.
+const AX_RUN_LOOP_SLICE_SECS: f64 = 0.1;
+/// Yield for a full slice when `run_in_mode` returned without waiting at all.
+/// Matching the slice keeps a sourceless observer thread at roughly the same
+/// wake rate as a healthy idle one instead of at 100% of a core.
+const AX_RUN_LOOP_IDLE_BACKOFF: Duration = Duration::from_millis(100);
+
 const KEY_C: u16 = 8;
 const KEY_X: u16 = 7;
 const KEY_V: u16 = 9;
@@ -261,6 +318,9 @@ impl UiRecorder {
                 perms.input_monitoring
             );
         }
+
+        // Bound every AX read this process makes before any of them can run.
+        ensure_global_ax_timeout();
 
         let (tx, rx) = bounded::<UiEvent>(self.config.max_buffer_size);
         let stop = Arc::new(AtomicBool::new(false));
@@ -1613,7 +1673,27 @@ fn run_app_observer(
     };
 
     while !stop.load(Ordering::Acquire) {
-        cf::RunLoop::run_in_mode(run_loop_mode, 0.1, true);
+        let result = cf::RunLoop::run_in_mode(run_loop_mode, AX_RUN_LOOP_SLICE_SECS, true);
+
+        // `Finished` means this mode has no sources or timers left — the
+        // observed app exited, the observer was invalidated, or every
+        // `add_notification` above failed — and `Stopped` means someone called
+        // CFRunLoopStop. Both return *immediately* instead of waiting out the
+        // interval, so looping straight back into `run_in_mode` turns this
+        // thread into a spin at 100% of one core. Nothing re-adds a source
+        // unless `refresh_requested` fires, so it never recovers on its own.
+        //
+        // This is the shape behind the macOS pinned-core cohort: p98 CPU sits
+        // at ~112% (one saturated core) in every uptime bucket, and the pinned
+        // share climbs with uptime because a latched process never comes back
+        // — 99 users at a 55.8h median while their median peer sits near 8%.
+        //
+        // `HandledSource` must keep looping immediately; returning promptly
+        // after one source is the entire point of `return_after_source_handled`
+        // and is what keeps focus tracking responsive.
+        if ax_run_loop_returned_without_waiting(result) {
+            std::thread::sleep(AX_RUN_LOOP_IDLE_BACKOFF);
+        }
 
         if refresh_requested.swap(false, Ordering::SeqCst) {
             reattach_observer();
@@ -1779,7 +1859,7 @@ fn find_labeled_descendant_at(
         // app costs at most ~0.1s per read instead of the ~6s macOS default
         // (tree-walker pattern, tree/macos.rs).
         let _ = child.set_messaging_timeout_secs(0.1);
-        let Some(b) = get_element_bounds(&child) else {
+        let Some(b) = get_element_bounds(child) else {
             continue;
         };
         // only descend into elements that actually contain the cursor
@@ -1787,10 +1867,10 @@ fn find_labeled_descendant_at(
             continue;
         }
         // prefer the deepest (most specific) labeled match
-        if let Some(found) = find_labeled_descendant_at(&child, x, y, depth - 1, budget) {
+        if let Some(found) = find_labeled_descendant_at(child, x, y, depth - 1, budget) {
             return Some(found);
         }
-        if let (Some(role), Some(name)) = (role_string(&child), element_label(&child)) {
+        if let (Some(role), Some(name)) = (role_string(child), element_label(child)) {
             let area = b.width * b.height;
             let better = best
                 .as_ref()
@@ -2044,6 +2124,13 @@ fn get_string_attr(elem: &ax::UiElement, attr: &ax::Attr) -> Option<String> {
 
 fn get_focused_window_title(pid: i32) -> Option<String> {
     let app = ax::UiElement::with_app_pid(pid);
+
+    // Runs on every AX focus notification with no debounce, so it is the most
+    // frequent unbounded read we make. Match the 0.1s the click/context paths
+    // already use rather than leaning on the 1s process default: a slow app
+    // should cost us a missing title, not a stalled observer thread.
+    let _ = app.set_messaging_timeout_secs(0.1);
+
     let focused = app.attr_value(ax::attr::focused_window()).ok()?;
 
     if focused.get_type_id() == ax::UiElement::type_id() {
@@ -2754,6 +2841,49 @@ extern "C" fn activity_only_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The AX observer thread loops on `run_in_mode`. Two of the four results
+    /// come back instantly: `Finished` when the mode has no sources or timers
+    /// left, and `Stopped` after `CFRunLoopStop`. Looping straight back in on
+    /// either pins the thread at 100% of one core, and nothing re-adds a source
+    /// unless a refresh is requested, so it never recovers — the shape behind
+    /// ~99 macOS users sitting at one saturated core with a 55.8h median
+    /// uptime while their median peer used ~8%.
+    #[test]
+    fn instant_run_loop_returns_back_off_and_waiting_ones_do_not() {
+        assert!(
+            ax_run_loop_returned_without_waiting(cf::RunLoopRunResult::Finished),
+            "no sources left returns immediately — looping on it is the spin"
+        );
+        assert!(
+            ax_run_loop_returned_without_waiting(cf::RunLoopRunResult::Stopped),
+            "CFRunLoopStop returns immediately too"
+        );
+
+        // These two must never back off. `TimedOut` already waited out the
+        // slice, and delaying `HandledSource` would add latency to every focus
+        // change — returning promptly after one source is the entire point of
+        // `return_after_source_handled`.
+        assert!(
+            !ax_run_loop_returned_without_waiting(cf::RunLoopRunResult::TimedOut),
+            "TimedOut already waited the full slice"
+        );
+        assert!(
+            !ax_run_loop_returned_without_waiting(cf::RunLoopRunResult::HandledSource),
+            "HandledSource is the healthy busy path and must stay hot"
+        );
+    }
+
+    /// A sourceless observer thread should wake at roughly the same rate as a
+    /// healthy idle one, not faster.
+    #[test]
+    fn idle_backoff_matches_one_healthy_slice() {
+        assert_eq!(
+            AX_RUN_LOOP_IDLE_BACKOFF.as_secs_f64(),
+            AX_RUN_LOOP_SLICE_SECS,
+            "backoff drifting from the slice changes the sourceless wake rate"
+        );
+    }
 
     #[test]
     fn test_permission_check() {

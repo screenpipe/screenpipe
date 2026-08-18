@@ -23,6 +23,39 @@ interface ObjectCoverRect {
 	height: number;
 }
 
+const MAX_HIGHLIGHT_FRAME_AREA = 0.15;
+
+export function selectThumbnailHighlights(
+	textPositions: TextPosition[],
+	highlightTerms: string[],
+): TextPosition[] {
+	const terms = highlightTerms
+		.map((term) => term.toLowerCase().trim())
+		.filter(Boolean);
+	if (terms.length === 0) return [];
+
+	return textPositions
+		.filter((position) => {
+			const text = position.text.toLowerCase();
+			if (!terms.some((term) => text.includes(term))) return false;
+
+			const { left, top, width, height } = position.bounds;
+			const area = width * height;
+			return (
+				[left, top, width, height, area].every(Number.isFinite) &&
+				width > 0 &&
+				height > 0 &&
+				area <= MAX_HIGHLIGHT_FRAME_AREA
+			);
+		})
+		.sort(
+			(a, b) =>
+				a.bounds.width * a.bounds.height -
+				b.bounds.width * b.bounds.height,
+		)
+		.slice(0, 3);
+}
+
 export function objectCoverRect(
 	containerWidth: number,
 	containerHeight: number,
@@ -112,35 +145,7 @@ export const ThumbnailHighlightOverlay = memo(function ThumbnailHighlightOverlay
 	}, [frameId]);
 
 	const highlights = useMemo(() => {
-		if (!highlightTerms.length || !textPositions.length) return [];
-
-		const terms = highlightTerms
-			.map((t) => t.toLowerCase().trim())
-			.filter((t) => t.length > 0);
-		if (terms.length === 0) return [];
-
-		const matches = textPositions.filter((pos) => {
-			const textLower = pos.text.toLowerCase();
-			return terms.some((term) => textLower.includes(term));
-		});
-
-		// Sort by area (smallest first) and take the 3 smallest matches.
-		// This naturally prefers tight word-level OCR boxes over wide
-		// accessibility paragraph nodes, keeping thumbnails readable.
-		matches.sort(
-			(a, b) =>
-				a.bounds.width * a.bounds.height -
-				b.bounds.width * b.bounds.height
-		);
-
-		if (matches.length === 0) return [];
-
-		// Skip if the smallest match already covers >15% of the frame area —
-		// that means we only have paragraph-level blocks, not useful highlights.
-		const smallest = matches[0];
-		if (smallest.bounds.width * smallest.bounds.height > 0.15) return [];
-
-		return matches.slice(0, 3);
+		return selectThumbnailHighlights(textPositions, highlightTerms);
 	}, [textPositions, highlightTerms]);
 
 	if (highlights.length === 0) return null;

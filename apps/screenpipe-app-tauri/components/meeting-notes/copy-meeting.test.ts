@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   copyTextToClipboard: vi.fn(),
   fetchMeetingAudio: vi.fn(),
   fetchMeetingContext: vi.fn(),
+  renderMeetingTranscript: vi.fn(),
 }));
 
 vi.mock("@/lib/utils/tauri", () => ({
@@ -21,10 +22,12 @@ vi.mock("@/lib/utils/meeting-context", () => ({
   buildMeetingMarkdown: mocks.buildMeetingMarkdown,
   fetchMeetingAudio: mocks.fetchMeetingAudio,
   fetchMeetingContext: mocks.fetchMeetingContext,
+  renderMeetingTranscript: mocks.renderMeetingTranscript,
 }));
 
 import {
   copyMeetingToClipboard,
+  copyMeetingTranscript,
   selectMeetingTranscript,
 } from "./copy-meeting";
 
@@ -95,6 +98,41 @@ describe("meeting clipboard", () => {
     });
     expect(mocks.copyTextToClipboard).toHaveBeenCalledWith(
       "# customer call\n",
+    );
+  });
+
+  // The transcript-only action shares the meeting dump's renderer, so a turn
+  // reads the same whichever one produced it.
+  it("copies the transcript alone in the shared render shape", async () => {
+    const transcript = [chunk(1, { source: "live" })];
+    mocks.fetchMeetingAudio.mockResolvedValue(transcript);
+    mocks.renderMeetingTranscript.mockReturnValue("- 10:01 line 1");
+
+    await expect(copyMeetingTranscript(meeting)).resolves.toBe(true);
+
+    expect(mocks.renderMeetingTranscript).toHaveBeenCalledWith(transcript);
+    expect(mocks.copyTextToClipboard).toHaveBeenCalledWith("- 10:01 line 1");
+    // Nothing about the note or the activity context is fetched for it.
+    expect(mocks.fetchMeetingContext).not.toHaveBeenCalled();
+  });
+
+  it("reports an empty transcript instead of clearing the clipboard", async () => {
+    mocks.fetchMeetingAudio.mockResolvedValue([]);
+    mocks.renderMeetingTranscript.mockReturnValue("");
+
+    await expect(copyMeetingTranscript(meeting)).resolves.toBe(false);
+    expect(mocks.copyTextToClipboard).not.toHaveBeenCalled();
+  });
+
+  it("runs a live meeting's window up to now so the tail is not dropped", async () => {
+    mocks.fetchMeetingAudio.mockResolvedValue([]);
+    mocks.renderMeetingTranscript.mockReturnValue("");
+
+    await copyMeetingTranscript({ ...meeting, meeting_end: null });
+
+    const [, end] = mocks.fetchMeetingAudio.mock.calls[0];
+    expect(new Date(end).getTime()).toBeGreaterThan(
+      new Date(meeting.meeting_end!).getTime(),
     );
   });
 });

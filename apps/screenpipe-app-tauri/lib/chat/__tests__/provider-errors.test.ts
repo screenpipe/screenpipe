@@ -113,7 +113,7 @@ describe("provider error copy", () => {
       '{"error":"free_chat_limit_exceeded","limit":2}',
       { provider: "screenpipe-cloud", model: "auto" },
     );
-    expect(msg).toContain("2 free hosted AI messages");
+    expect(msg).toContain("2 free AI messages");
     expect(msg).toContain("tomorrow");
     expect(msg).toContain("upgrade");
     expect(msg).toContain("Ollama");
@@ -184,6 +184,41 @@ describe("provider error copy", () => {
     expect(
       buildProviderErrorMessage("Error: Failed to extract accountId from token", null)
     ).toContain("ChatGPT account id");
+  });
+
+  it("maps only the full Codex usage-limit signature to sanitized recovery guidance", () => {
+    const expected =
+      "The AI provider usage limit has been reached. Wait for it to reset, or switch your AI preset or provider.";
+
+    expect(
+      buildProviderErrorMessage(
+        "Error: CODEX ERROR: THE USAGE LIMIT HAS BEEN REACHED. attacker suffix",
+        { provider: "openai-chatgpt", model: "gpt-5.2-codex" },
+      ),
+    ).toBe(expected);
+    expect(expected).not.toContain("attacker suffix");
+
+    for (const raw of [
+      "The usage limit has been reached.",
+      "Codex error: usage limit has been reached.",
+      "Codex error: the usage limit was reached.",
+    ]) {
+      expect(
+        buildProviderErrorMessage(raw, {
+          provider: "openai-chatgpt",
+          model: "gpt-5.2-codex",
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it("keeps hosted quota codes authoritative over the Codex usage-limit phrase", () => {
+    expect(
+      buildProviderErrorMessage(
+        '{"error":"free_chat_limit_exceeded","message":"Codex error: the usage limit has been reached"}',
+        { provider: "screenpipe-cloud", model: "auto" },
+      ),
+    ).toContain("2 free AI messages");
   });
 
   it("does not map unrelated token errors to the ChatGPT account-id message", () => {

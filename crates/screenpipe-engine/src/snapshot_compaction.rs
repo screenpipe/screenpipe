@@ -494,8 +494,9 @@ async fn compact_chunk(
     // Track which frames were actually encoded into the video and their
     // position in the video stream. Frames may be skipped (missing file,
     // read error) so the video position can differ from the array index.
-    let mut encoded_frames: Vec<(i64, u32)> = Vec::new(); // (frame_id, video_position)
+    let mut encoded_frames: Vec<(i64, u32, String)> = Vec::new();
     let mut video_position = 0u32;
+    let mut write_error = None;
     for (frame_id, snapshot_path, _) in frames {
         if let Some(reason) = current_pause_reason(power_manager).await {
             abort_ffmpeg_for_pause(child, stdin).await;
@@ -540,9 +541,10 @@ async fn compact_chunk(
 
                 if let Err(e) = write_result {
                     error!("failed to write frame to ffmpeg: {}", e);
+                    write_error = Some(e);
                     break;
                 }
-                encoded_frames.push((*frame_id, video_position));
+                encoded_frames.push((*frame_id, video_position, snapshot_path.to_string()));
                 video_position += 1;
                 // Pace writes to avoid CPU spikes — spread encoding over time
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -569,8 +571,13 @@ async fn compact_chunk(
     // check below cannot detect a truncated encode. Only a clean ffmpeg exit
     // proves every piped frame was muxed; anything else keeps the JPEGs and
     // retries next cycle (the output guard removes the partial MP4).
-    let encode_ok = exit_status.map(|s| s.success()).unwrap_or(false);
+    let encode_ok = write_error.is_none() && exit_status.is_some_and(|status| status.success());
     encoder.record_encode_outcome(encode_ok);
+    if let Some(error) = write_error {
+        return Err(anyhow::anyhow!(
+            "failed while feeding snapshots to ffmpeg: {error} — keeping source JPEGs for retry"
+        ));
+    }
     if !encode_ok {
         return Err(anyhow::anyhow!(
             "ffmpeg ({}) exited with failure — keeping source JPEGs for retry",
@@ -616,10 +623,11 @@ async fn compact_chunk(
     // semaphore for too long, which starves audio/frame insertion and causes
     // PoolTimedOut errors (data loss).
     for batch in encoded_frames.chunks(100) {
-        let batch_vec: Vec<(i64, u32)> = batch.to_vec();
-        if let Err(e) = db.compact_snapshots_queued(chunk_id, batch_vec).await {
-            warn!("snapshot compaction: queue submit failed for batch: {}", e);
-        }
+        let batch_vec: Vec<(i64, u32)> = batch
+            .iter()
+            .map(|(frame_id, position, _)| (*frame_id, *position))
+            .collect();
+        db.compact_snapshots_queued(chunk_id, batch_vec).await?;
         // Yield briefly between batches
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
@@ -628,13 +636,8 @@ async fn compact_chunk(
     // the MP4 (and repointed above). A frame skipped by a read error keeps
     // its JPEG and DB pointer so a later cycle retries it; deleting it here
     // would orphan the frame (next cycle clears the pointer as "missing").
-    let encoded_ids: std::collections::HashSet<i64> =
-        encoded_frames.iter().map(|(id, _)| *id).collect();
     let mut deleted = 0u32;
-    for (frame_id, snapshot_path, _) in frames {
-        if !encoded_ids.contains(frame_id) {
-            continue;
-        }
+    for (_, _, snapshot_path) in &encoded_frames {
         match tokio::fs::remove_file(snapshot_path).await {
             Ok(_) => deleted += 1,
             Err(e) => debug!(
@@ -663,7 +666,7 @@ async fn compact_chunk(
     // Only include frames that were actually encoded, with correct video positions
     let cache_updates: Vec<(i64, String, i64, f64)> = encoded_frames
         .iter()
-        .map(|(frame_id, pos)| (*frame_id, mp4_path_str.clone(), *pos as i64, fps))
+        .map(|(frame_id, pos, _)| (*frame_id, mp4_path_str.clone(), *pos as i64, fps))
         .collect();
 
     Ok(CompactChunkOutcome::Completed(Some(cache_updates)))
@@ -706,6 +709,7 @@ async fn start_ffmpeg_lowpri(
         let mut cmd = tokio::process::Command::new("nice");
         cmd.args(["-n", "19"]);
         cmd.arg(&ffmpeg_path);
+        cmd.kill_on_drop(true);
         cmd
     };
     #[cfg(not(unix))]

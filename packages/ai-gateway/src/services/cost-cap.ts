@@ -241,10 +241,10 @@ function capResponse(accountPlan: AccountPlan, period: 'request' | 'day' | 'mont
 					? 'trial_cost_limit_exceeded'
 					: 'monthly_cost_limit_exceeded',
 		message: period === 'request'
-			? 'This request is too large for your hosted AI plan. Shorten the context, use a local model, or use your own provider key.'
+			? 'This request is too large for your AI plan. Shorten the context, use a local model, or use your own provider key.'
 			: period === 'trial'
-				? "You've used the hosted AI allowance for this trial. Upgrade, use a local model, or use your own provider key."
-				: `You've used your ${period === 'day' ? 'daily' : 'monthly'} hosted AI allowance. Background pipes share this allowance.`,
+				? "You've used the AI allowance for this trial. Upgrade, use a local model, or use your own provider key."
+				: `You've used your ${period === 'day' ? 'daily' : 'monthly'} AI allowance. Background pipes share this allowance.`,
 		resets_at: period === 'request' || period === 'trial' ? null : resetsAt.toISOString(),
 		plan: accountPlan,
 		required_plan: upgrade?.requiredPlan ?? null,
@@ -268,7 +268,7 @@ function backgroundCapResponse(
 	const periodLabel = period === 'month' ? 'monthly' : period === 'trial' ? 'trial' : 'daily';
 	return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 		error: 'background_cost_limit_exceeded',
-		message: `Scheduled pipes reached their ${periodLabel} hosted AI budget. Foreground chat remains available.`,
+		message: `Scheduled pipes reached their ${periodLabel} AI budget. Foreground chat remains available.`,
 		resets_at: period === 'trial' ? null : resetsAt.toISOString(),
 		plan: accountPlan,
 		required_plan: null,
@@ -281,7 +281,7 @@ function backgroundCapResponse(
 function globalCapResponse(period: 'hour' | 'day'): Response {
 	const response = addCorsHeaders(createErrorResponse(503, JSON.stringify({
 		error: 'hosted_ai_global_spend_limit',
-		message: 'Hosted AI is temporarily paused by the global spend safety limit. Local models and your own provider keys still work.',
+		message: 'screenpipe cloud AI is temporarily paused by the global spend safety limit. Local models and your own provider keys still work.',
 		period,
 		retry_after_seconds: period === 'hour' ? 300 : 900,
 	})));
@@ -292,7 +292,7 @@ function globalCapResponse(period: 'hour' | 'day'): Response {
 function unavailableResponse(): Response {
 	return addCorsHeaders(createErrorResponse(503, JSON.stringify({
 		error: 'cost_control_unavailable',
-		message: 'Hosted AI spend controls are temporarily unavailable. Try again shortly or use a local model or your own provider key.',
+		message: 'AI spend controls are temporarily unavailable. Try again shortly or use a local model or your own provider key.',
 	})));
 }
 
@@ -300,8 +300,8 @@ function capacityResponse(tier: string, lane: DailyCostLane): Response {
 	const response = addCorsHeaders(createErrorResponse(429, JSON.stringify({
 		error: 'hosted_ai_capacity_reserved',
 		message: lane === 'background'
-			? 'Other hosted AI background requests are still running. Wait for one to finish, then retry.'
-			: 'Other hosted AI chats are still running. Wait for one to finish, then retry.',
+			? 'Other AI background requests are still running. Wait for one to finish, then retry.'
+			: 'Other AI chats are still running. Wait for one to finish, then retry.',
 		tier,
 		retry_after_seconds: 5,
 	})));

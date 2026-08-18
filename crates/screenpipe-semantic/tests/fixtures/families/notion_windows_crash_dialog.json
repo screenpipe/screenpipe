@@ -1,0 +1,30 @@
+{
+  "app": {
+    "platform": "windows",
+    "app_id": null,
+    "executable": "Notion.exe",
+    "display_name": "Notion.exe",
+    "version": null,
+    "browser_url": null
+  },
+  "nodes": [
+    {
+      "parent": null,
+      "role": "Text",
+      "identifier": "MainInstruction",
+      "classes": ["Element"],
+      "description": "text",
+      "text": "A JavaScript error occurred in the main process"
+    },
+    {
+      "parent": null,
+      "role": "Text",
+      "identifier": "ContentText",
+      "classes": ["Element"],
+      "description": "text",
+      "text": "Uncaught Exception:\nError: The specified module could not be found.\n    at process.func [as dlopen] (node:electron/js2c/node_init:2:2617)\n    at Module.load (node:internal/modules/cjs/loader:1448:32)"
+    },
+    { "parent": null, "role": "Button", "identifier": "CommandButton_1", "classes": ["CCPushButton"], "text": "OK" },
+    { "parent": null, "role": "Button", "text": "Close" }
+  ]
+}

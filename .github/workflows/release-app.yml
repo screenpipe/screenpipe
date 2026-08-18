@@ -24,9 +24,6 @@ on:
         description: "Force GitHub-hosted runners (skip self-hosted even if online)"
         type: boolean
         default: false
-  push:
-    branches: [main]
-
 concurrency:
   group: release-app-${{ github.event_name }}-${{ github.sha }}
   cancel-in-progress: true
@@ -878,6 +875,126 @@ jobs:
               Write-Host "ERROR: signtool.exe not found anywhere on ARM64 runner"
               exit 1
             }
+          }
+
+      # Tauri's bundler fetches the NSIS toolchain from github.com at bundle
+      # time, with no retry. Those two unauthenticated requests get their TLS
+      # connection reset from Azure runners often enough to have failed 2 of
+      # the last 4 Windows releases with `failed to bundle project
+      # io: Peer disconnected` - after ~25min of compiling and after
+      # CodeSignTool already signed the binaries. Restore the toolchain from
+      # cache, and on a miss download it ourselves with retries so the bundler
+      # finds it already on disk and never touches the network.
+      - name: Cache Tauri NSIS toolchain (Windows)
+        if: matrix.os_type == 'windows'
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/tauri/NSIS
+          key: tauri-nsis-${{ runner.os }}-${{ runner.arch }}-nsis3.11-utils0.5.3
+
+      - name: Pre-seed Tauri NSIS toolchain (Windows)
+        if: matrix.os_type == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+
+          # URLs and SHA1s are pinned to the constants the bundler itself uses.
+          # Source of truth (keep in sync with the tauri version in package.json):
+          # crates/tauri-bundler/src/bundle/windows/nsis/mod.rs @ tauri-bundler-v2.9.2
+          $nsisUrl   = 'https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.11/nsis-3.11.zip'
+          $nsisSha1  = 'EF7FF767E5CBD9EDD22ADD3A32C9B8F4500BB10D'
+          $utilsUrl  = 'https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll'
+          $utilsSha1 = '75197FEE3C6A814FE035788D1C34EAD39349B860'
+
+          # dirs::cache_dir() on Windows is %LOCALAPPDATA%, and the bundler
+          # looks for <cache>/tauri/NSIS.
+          $toolsPath = Join-Path $env:LOCALAPPDATA 'tauri'
+          $nsisPath  = Join-Path $toolsPath 'NSIS'
+          $utilsRel  = 'Plugins\x86-unicode\additional\nsis_tauri_utils.dll'
+
+          # NSIS_REQUIRED_FILES - if any of these is missing the bundler wipes
+          # the directory and re-downloads, so an incomplete seed just falls
+          # back to today's behaviour instead of breaking the build.
+          $required = @(
+            'makensis.exe'
+            'Bin\makensis.exe'
+            'Stubs\lzma-x86-unicode'
+            'Stubs\lzma_solid-x86-unicode'
+            $utilsRel
+            'Include\MUI2.nsh'
+            'Include\FileFunc.nsh'
+            'Include\x64.nsh'
+            'Include\nsDialogs.nsh'
+            'Include\WinMessages.nsh'
+            'Include\Win\COM.nsh'
+            'Include\Win\Propkey.nsh'
+            'Include\Win\RestartManager.nsh'
+          )
+
+          function Test-Seed {
+            if (-not (Test-Path $nsisPath)) { return $false }
+            foreach ($f in $required) {
+              if (-not (Test-Path (Join-Path $nsisPath $f))) {
+                Write-Host "missing $f"
+                return $false
+              }
+            }
+            # the bundler also re-downloads the plugin on a hash mismatch
+            (Get-FileHash (Join-Path $nsisPath $utilsRel) -Algorithm SHA1).Hash -eq $utilsSha1
+          }
+
+          function Get-WithRetry($url, $out, $sha1) {
+            for ($i = 1; $i -le 5; $i++) {
+              try {
+                Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing -TimeoutSec 180
+                $got = (Get-FileHash $out -Algorithm SHA1).Hash
+                if ($got -ne $sha1) { throw "sha1 mismatch: got $got, want $sha1" }
+                return $true
+              } catch {
+                Write-Host "attempt $i/5 failed for $url : $($_.Exception.Message)"
+                Remove-Item $out -Force -ErrorAction SilentlyContinue
+                if ($i -lt 5) { Start-Sleep -Seconds ([Math]::Pow(2, $i)) }
+              }
+            }
+            return $false
+          }
+
+          # Never fail the release over this - worst case the bundler downloads
+          # the toolchain itself exactly like it does today.
+          try {
+            if (Test-Seed) {
+              Write-Host "NSIS toolchain already present at $nsisPath"
+              exit 0
+            }
+
+            Write-Host "seeding NSIS toolchain into $nsisPath"
+            Remove-Item $nsisPath -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force -Path $toolsPath | Out-Null
+
+            $zip = Join-Path $env:RUNNER_TEMP 'nsis-3.11.zip'
+            if (-not (Get-WithRetry $nsisUrl $zip $nsisSha1)) {
+              Write-Host "::warning::could not pre-seed NSIS, leaving it to the bundler"
+              exit 0
+            }
+            Expand-Archive -Path $zip -DestinationPath $toolsPath -Force
+            Move-Item (Join-Path $toolsPath 'nsis-3.11') $nsisPath -Force
+
+            $dllDir = Join-Path $nsisPath 'Plugins\x86-unicode\additional'
+            New-Item -ItemType Directory -Force -Path $dllDir | Out-Null
+            if (-not (Get-WithRetry $utilsUrl (Join-Path $dllDir 'nsis_tauri_utils.dll') $utilsSha1)) {
+              Write-Host "::warning::could not pre-seed nsis_tauri_utils.dll, leaving it to the bundler"
+              exit 0
+            }
+
+            if (Test-Seed) {
+              Write-Host "NSIS toolchain seeded - bundler will not hit the network"
+            } else {
+              Write-Host "::warning::seeded NSIS failed verification, leaving it to the bundler"
+            }
+          } catch {
+            Write-Host "::warning::NSIS pre-seed errored: $($_.Exception.Message)"
+            exit 0
           }
 
       - name: Build (Windows)

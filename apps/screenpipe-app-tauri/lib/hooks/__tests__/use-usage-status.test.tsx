@@ -62,7 +62,16 @@ function usageResponse(upgradeEligible: boolean): Promise<Response> {
             technique: "fixed",
             resets_at: "2026-08-17T00:00:00.000Z",
           },
+          {
+            lane: "frontier",
+            used_percent: 80,
+            remaining_percent: 20,
+            window_seconds: 604_800,
+            technique: "fixed",
+            resets_at: "2026-08-17T00:00:00.000Z",
+          },
         ],
+        frontier_models: ["gpt-5.6-sol", "claude-opus-5"],
       },
     }),
   } as Response);
@@ -116,6 +125,10 @@ describe("useUsageStatus", () => {
       resetsAt: null,
     });
     expect(result.current?.cost_limit_reached).toBe(false);
+    expect(hostedAiAllowanceForModel(result.current, "gpt-5.6-sol")).toMatchObject({
+      lane: "frontier",
+      remaining_percent: 20,
+    });
   });
 
   it("preserves legacy cost exhaustion and its exact server upgrade", async () => {
@@ -212,7 +225,15 @@ describe("useUsageStatus", () => {
       window_seconds: 604_800,
       technique: "fixed",
       resets_at: "2026-08-13T00:00:00.000Z",
-    })).toBe("Weekly · all models");
+    })).toBe("Weekly AI allowance");
+    expect(formatAllowanceLabel({
+      lane: "frontier",
+      used_percent: 40,
+      remaining_percent: 60,
+      window_seconds: 604_800,
+      technique: "fixed",
+      resets_at: "2026-08-13T00:00:00.000Z",
+    })).toBe("Frontier models");
   });
   it("phrases a reset at the precision that is useful to act on", () => {
     const now = Date.parse("2026-08-07T18:00:00.000Z");

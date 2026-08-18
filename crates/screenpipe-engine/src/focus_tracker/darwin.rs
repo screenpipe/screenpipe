@@ -266,7 +266,12 @@ impl DarwinFocusTracker {
                     break;
                 }
                 tokio::time::sleep(poll_interval).await;
-                let monitors = screenpipe_screen::monitor::list_monitors().await;
+                // Cached: this poll only needs display geometry to resolve the
+                // cursor, and at 5s it is the single heaviest source of
+                // `SCShareableContent` traffic in the process. The monitor
+                // watcher owns connect/disconnect on its own fresh path and
+                // keeps this cache warm.
+                let monitors = screenpipe_screen::monitor::list_monitors_cached().await;
                 poll_inner.resolve_and_emit(&monitors);
             }
         });
@@ -276,7 +281,7 @@ impl DarwinFocusTracker {
         // spawn to avoid blocking start() on the async monitor list call.
         let seed_inner = Arc::clone(&inner);
         handle.spawn(async move {
-            let monitors = screenpipe_screen::monitor::list_monitors().await;
+            let monitors = screenpipe_screen::monitor::list_monitors_cached().await;
             seed_inner.resolve_and_emit(&monitors);
         });
 
@@ -311,12 +316,13 @@ fn run_workspace_observer(inner: Arc<Inner>) {
             // retains an NSNotification + any transient NSObjects from
             // `list_monitors` forever.
             cidre::objc::ar_pool(|| {
-                // Fetch the current monitor list synchronously. This call
-                // can block briefly (sck-rs query); the observer thread
-                // doesn't need to be snappy — tokio workers aren't starved
-                // by it.
+                // Fetch the current monitor list synchronously. Cached: an app
+                // switch does not change display topology, and resolving the
+                // focused monitor only needs geometry. Uncached this fired a
+                // full `SCShareableContent` round-trip on every activation,
+                // each one able to strand a worker permanently.
                 let monitors =
-                    futures::executor::block_on(screenpipe_screen::monitor::list_monitors());
+                    futures::executor::block_on(screenpipe_screen::monitor::list_monitors_cached());
                 inner_activate.resolve_and_emit(&monitors);
             });
         };
@@ -331,8 +337,10 @@ fn run_workspace_observer(inner: Arc<Inner>) {
         let space_cb = move |_note: &ns::Notification| {
             // Same autorelease-pool wrap as activate_cb above.
             cidre::objc::ar_pool(|| {
+                // Cached for the same reason as `activate_cb`: switching Space
+                // rearranges windows, not displays.
                 let monitors =
-                    futures::executor::block_on(screenpipe_screen::monitor::list_monitors());
+                    futures::executor::block_on(screenpipe_screen::monitor::list_monitors_cached());
                 inner_space.resolve_and_emit(&monitors);
             });
         };

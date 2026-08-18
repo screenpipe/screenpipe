@@ -400,13 +400,9 @@ fn transition_tick(
 pub fn current_state_payload() -> String {
     INNER
         .lock()
-        .map(|i| {
-            if i.last_detail.is_empty() {
-                i.state.as_str().to_string()
-            } else {
-                format!("{}|{}", i.state.as_str(), i.last_detail)
-            }
-        })
+        // Same builder as the pushed event, so the mount-time pull and the
+        // live event can never disagree about which subsystem failed.
+        .map(|i| build_health_payload(i.state, Some(i.last_detail.as_str())))
         .unwrap_or_else(|_| "normal".to_string())
 }
 
@@ -436,15 +432,31 @@ fn mark_capture_recovery_e2e() {
 #[cfg(not(all(debug_assertions, feature = "e2e")))]
 fn mark_capture_recovery_e2e() {}
 
+/// Wire format for both overlay surfaces: `state`, `state|detail`, or
+/// `state|detail|subsystem`.
+///
+/// The subsystem is appended rather than inlined so the pill can name what
+/// actually failed (#6126) while `detail` keeps its existing meaning and
+/// position. It is only present for a failure the engine could attribute to a
+/// single subsystem; both renderers fall back to the generic wording without
+/// it. Neither field ever contains a `|`, so a fixed 3-way split is exact.
+pub(crate) fn build_health_payload(state: OverlayHealthState, detail: Option<&str>) -> String {
+    let detail = detail.unwrap_or("");
+    if detail.is_empty() {
+        return state.as_str().to_string();
+    }
+    match crate::health::overlay_failure_subsystem(detail) {
+        "" => format!("{}|{}", state.as_str(), detail),
+        subsystem => format!("{}|{}|{}", state.as_str(), detail, subsystem),
+    }
+}
+
 /// Push a state to both overlay surfaces. The Swift panel keeps the state
 /// even while hidden; the webview additionally pulls it on mount via the
 /// `get_recording_health_state` command, so a lost emit is harmless.
 fn push_state(app: &tauri::AppHandle, state: OverlayHealthState, detail: Option<&str>) {
-    let payload = match detail {
-        Some(d) if !d.is_empty() => format!("{}|{}", state.as_str(), d),
-        _ => state.as_str().to_string(),
-    };
-    #[cfg(target_os = "macos")]
+    let payload = build_health_payload(state, detail);
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         crate::native_shortcut_reminder::set_health_state(&payload);
     }
@@ -561,7 +573,7 @@ pub async fn on_tick(
 
 /// True when either overlay surface is currently on screen.
 fn overlay_visible(app: &tauri::AppHandle) -> bool {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         if crate::native_shortcut_reminder::is_reminder_visible() {
             return true;
@@ -572,20 +584,27 @@ fn overlay_visible(app: &tauri::AppHandle) -> bool {
         .unwrap_or(false)
 }
 
-/// Briefly reveal the overlay for a confirmed incident even when the user has
-/// it hidden (issue #5127: "if hidden — show whatever visible"). Recovery puts
-/// it back via the `auto_revealed` flag.
+/// Briefly reveal the overlay for a confirmed incident even when it is off
+/// screen (issue #5127: "if hidden — show whatever visible"). Recovery puts it
+/// back via the `auto_revealed` flag.
 async fn reveal_overlay_if_hidden(app: &tauri::AppHandle) {
     if overlay_visible(app) {
         return;
     }
-    // Only take responsibility for re-hiding after recovery when the user's
-    // preference is actually "hidden". If the pref is on and we merely beat
-    // the startup show (incident 1s into boot), the overlay should stay.
+    // Take responsibility for re-hiding only when this reveal overrides the
+    // user's persistent choice or active one-hour snooze. If startup is merely
+    // slow, the normal shortcut pill should stay once recovery finishes.
+    let now_unix = chrono::Utc::now().timestamp();
     let user_wants_hidden = crate::store::SettingsStore::get(app)
         .ok()
         .flatten()
-        .map(|s| !s.show_shortcut_overlay)
+        .map(|store| {
+            crate::commands::shortcut_overlay_hidden_by_choice(
+                store.show_shortcut_overlay,
+                store.shortcut_overlay_snoozed_until,
+                now_unix,
+            )
+        })
         .unwrap_or(false);
     if let Ok(mut inner) = INNER.lock() {
         inner.auto_revealed = user_wants_hidden;
@@ -720,6 +739,85 @@ fn clear_simulated_break() {}
 mod tests {
     use super::*;
     use crate::recording::TeardownOutcome;
+
+    /// #6126: both overlay surfaces read the subsystem out of this payload, so
+    /// the wire format is the contract that keeps them in sync.
+    #[test]
+    fn health_payload_carries_the_failing_subsystem() {
+        assert_eq!(
+            build_health_payload(
+                OverlayHealthState::Failure,
+                Some("audio capture is not updating"),
+            ),
+            "failure|audio capture is not updating|audio",
+        );
+        assert_eq!(
+            build_health_payload(
+                OverlayHealthState::Failure,
+                Some("screen capture is not updating"),
+            ),
+            "failure|screen capture is not updating|screen",
+        );
+    }
+
+    /// An unattributable failure keeps the two-field shape, so the renderers
+    /// fall back to the generic wording rather than inventing a subsystem.
+    #[test]
+    fn health_payload_omits_the_subsystem_when_the_cause_is_not_attributable() {
+        assert_eq!(
+            build_health_payload(
+                OverlayHealthState::Failure,
+                Some("audio and screen capture are not updating"),
+            ),
+            "failure|audio and screen capture are not updating",
+        );
+        assert_eq!(
+            build_health_payload(OverlayHealthState::Fixing, Some("updating database")),
+            "fixing|updating database",
+        );
+    }
+
+    /// No detail at all stays a bare state — the shape every existing consumer
+    /// already handles.
+    #[test]
+    fn health_payload_stays_bare_without_a_detail() {
+        for state in [
+            OverlayHealthState::Normal,
+            OverlayHealthState::Failure,
+            OverlayHealthState::Fixing,
+            OverlayHealthState::Recovered,
+        ] {
+            assert_eq!(build_health_payload(state, None), state.as_str());
+            assert_eq!(build_health_payload(state, Some("")), state.as_str());
+        }
+    }
+
+    /// The renderers split on `|` into at most three parts, so no field may
+    /// contain one — otherwise the subsystem would absorb part of the reason.
+    #[test]
+    fn no_payload_field_contains_the_separator() {
+        for detail in [
+            "audio capture is not updating",
+            "screen capture is not updating",
+            "audio and screen capture are not updating",
+            "multiple recording errors detected",
+            "recording data cannot be saved",
+            "recording engine could not start",
+            "recording engine stopped",
+            "recording stopped unexpectedly",
+            "recording did not restart",
+            "simulated recording failure",
+            "updating database",
+        ] {
+            let payload = build_health_payload(OverlayHealthState::Failure, Some(detail));
+            assert!(
+                payload.matches('|').count() <= 2,
+                "{payload:?} would not parse into state/detail/subsystem",
+            );
+            let parts: Vec<&str> = payload.splitn(3, '|').collect();
+            assert_eq!(parts[1], detail, "detail must survive the round trip");
+        }
+    }
 
     fn test_inner(state: OverlayHealthState) -> Inner {
         Inner {

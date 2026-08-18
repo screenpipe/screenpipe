@@ -8,6 +8,7 @@ import {
   buildMeetingMarkdown,
   fetchMeetingAudio,
   fetchMeetingContext,
+  renderMeetingTranscript,
   type MeetingAudioChunk,
   type MeetingContext,
 } from "@/lib/utils/meeting-context";
@@ -22,20 +23,47 @@ export function selectMeetingTranscript(
   return inputChunks.length > 0 ? inputChunks : transcript;
 }
 
+/**
+ * A live meeting has no end yet, so its window runs up to now — otherwise the
+ * fetch would stop at the last saved boundary and drop the tail.
+ */
+function meetingWindow(meeting: MeetingRecord): [string, string] {
+  return [
+    new Date(meeting.meeting_start).toISOString(),
+    (meeting.meeting_end
+      ? new Date(meeting.meeting_end)
+      : new Date()
+    ).toISOString(),
+  ];
+}
+
+/**
+ * Transcript on its own, in the same shape the full meeting dump uses for its
+ * transcript section, so the two clipboard payloads never disagree about how a
+ * turn is rendered. Resolves `false` when there is nothing transcribed yet, so
+ * the caller can say that instead of clearing the clipboard.
+ */
+export async function copyMeetingTranscript(
+  meeting: MeetingRecord,
+): Promise<boolean> {
+  const [start, end] = meetingWindow(meeting);
+  const transcript = selectMeetingTranscript(
+    await fetchMeetingAudio(start, end, 1000, meeting.id).catch(() => []),
+  );
+  const text = renderMeetingTranscript(transcript);
+  if (!text) return false;
+
+  await commands.copyTextToClipboard(text);
+  return true;
+}
+
 export async function copyMeetingToClipboard(
   meeting: MeetingRecord,
 ): Promise<MeetingContext> {
+  const [start, end] = meetingWindow(meeting);
   const [context, allTranscript] = await Promise.all([
     fetchMeetingContext(meeting),
-    fetchMeetingAudio(
-      new Date(meeting.meeting_start).toISOString(),
-      (meeting.meeting_end
-        ? new Date(meeting.meeting_end)
-        : new Date()
-      ).toISOString(),
-      1000,
-      meeting.id,
-    ).catch(() => []),
+    fetchMeetingAudio(start, end, 1000, meeting.id).catch(() => []),
   ]);
 
   const markdown = buildMeetingMarkdown({

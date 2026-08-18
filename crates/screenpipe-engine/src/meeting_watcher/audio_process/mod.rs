@@ -17,13 +17,12 @@ use crate::meeting_watcher::shared::telemetry::{
     capture_detection_decision, capture_detection_outcome,
 };
 use crate::routes::meetings::{emit_meeting_status_changed, resolve_meeting_status_from};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use futures::{FutureExt, StreamExt};
 use screenpipe_audio::meeting_detector::MeetingDetector;
 use screenpipe_audio::meeting_processes::{self, AudioInputProcess};
 use screenpipe_db::{DatabaseManager, MEETING_END_REASON_AUTO_END, MEETING_END_REASON_SHUTDOWN};
 use screenpipe_events::subscribe_to_event;
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

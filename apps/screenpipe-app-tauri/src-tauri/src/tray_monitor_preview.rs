@@ -22,13 +22,27 @@ use tauri::image::Image;
 use tauri::AppHandle;
 use tracing::{debug, warn};
 
-use crate::health::{get_recording_info, DeviceKind};
+use crate::health::{get_recording_info, get_vision_device_status, DeviceKind};
 
 const PREVIEW_WIDTH: u32 = 150;
 const PREVIEW_HEIGHT: u32 = 84;
 const PREVIEW_ICON_HEIGHT: f64 = 84.0;
 const SCK_POLL_INTERVAL: Duration = Duration::from_millis(400);
 const MENU_REFRESH_DEBOUNCE: Duration = Duration::from_millis(250);
+
+/// First retry delay after a failed SCK bootstrap, doubled per consecutive
+/// failure up to [`BOOTSTRAP_BACKOFF_MAX`].
+///
+/// Without a backoff the poll loop re-bootstraps a failing monitor every
+/// [`SCK_POLL_INTERVAL`]: `poll_sck_frames` skips a monitor only once it has a
+/// *cached* preview, so a display whose stream never yields a frame falls
+/// through to `queue_sck_bootstrap` on every tick. On a Mac where
+/// ScreenCaptureKit answers slower than the sck-rs bound that turns into
+/// ~2.5 stream creations/sec forever — observed in production as continuous
+/// screen flicker plus enough wedged `SCShareableContent` calls to saturate the
+/// shared enumeration cap and starve real capture.
+const BOOTSTRAP_BACKOFF_BASE: Duration = Duration::from_secs(1);
+const BOOTSTRAP_BACKOFF_MAX: Duration = Duration::from_secs(60);
 
 struct CachedPreview {
     rgba: Vec<u8>,
@@ -54,6 +68,15 @@ static PLACEHOLDER: Lazy<Image<'static>> = Lazy::new(|| {
 });
 static LAST_MENU_REFRESH: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None));
 static BOOTSTRAP_TX: OnceLock<mpsc::Sender<u32>> = OnceLock::new();
+static BOOTSTRAP_BACKOFF: Lazy<Mutex<HashMap<u32, BootstrapBackoff>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Per-monitor retry gate for SCK preview bootstrap.
+#[derive(Debug, Clone, Copy)]
+struct BootstrapBackoff {
+    consecutive_failures: u32,
+    retry_after: Instant,
+}
 
 /// Call once at tray setup — polls SCK frame sequence for cached tray previews.
 pub fn install(app: &AppHandle) {
@@ -70,12 +93,15 @@ pub fn sync_refresh_monitors(monitor_ids: &[u32]) {
         clear_cached_previews();
         return;
     }
+    let now = Instant::now();
     for &monitor_id in monitor_ids {
         let update = refresh_monitor_from_sck(monitor_id);
         if update != PreviewUpdate::NoFrame {
             continue;
         }
-        queue_sck_bootstrap(monitor_id);
+        if bootstrap_ready(monitor_id, now) {
+            queue_sck_bootstrap(monitor_id);
+        }
     }
 }
 
@@ -99,6 +125,75 @@ fn preview_capture_expected_from(
 
 fn clear_cached_previews() {
     CACHE.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    // An intentional pause (lock, wake, DRM, schedule) is not a capture
+    // failure, so the next resume should bootstrap immediately rather than
+    // serve out a backoff earned before the pause.
+    BOOTSTRAP_BACKOFF
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
+}
+
+/// Delay before the next bootstrap attempt after `consecutive_failures`.
+///
+/// 1s, 2s, 4s ... saturating at [`BOOTSTRAP_BACKOFF_MAX`].
+fn bootstrap_backoff_delay(consecutive_failures: u32) -> Duration {
+    // Clamped before the shift so a long outage cannot overflow the multiplier.
+    let doublings = consecutive_failures.saturating_sub(1).min(16);
+    BOOTSTRAP_BACKOFF_BASE
+        .saturating_mul(1u32 << doublings)
+        .min(BOOTSTRAP_BACKOFF_MAX)
+}
+
+/// True when no backoff is outstanding for `monitor_id`.
+fn bootstrap_ready(monitor_id: u32, now: Instant) -> bool {
+    BOOTSTRAP_BACKOFF
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&monitor_id)
+        .map(|state| now >= state.retry_after)
+        .unwrap_or(true)
+}
+
+/// Record a failed bootstrap and return the delay before the next attempt.
+fn record_bootstrap_failure(monitor_id: u32, now: Instant) -> Duration {
+    let mut guard = BOOTSTRAP_BACKOFF.lock().unwrap_or_else(|e| e.into_inner());
+    let state = guard.entry(monitor_id).or_insert(BootstrapBackoff {
+        consecutive_failures: 0,
+        retry_after: now,
+    });
+    state.consecutive_failures = state.consecutive_failures.saturating_add(1);
+    let delay = bootstrap_backoff_delay(state.consecutive_failures);
+    state.retry_after = now + delay;
+    delay
+}
+
+fn clear_bootstrap_backoff(monitor_id: u32) {
+    BOOTSTRAP_BACKOFF
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&monitor_id);
+}
+
+/// Monitor ids the user has switched off in vision settings.
+fn user_disabled_monitor_ids() -> HashSet<u32> {
+    get_vision_device_status()
+        .iter()
+        .filter(|d| d.user_disabled)
+        .map(|d| d.id)
+        .collect()
+}
+
+/// Drop previews for displays the user just switched off so the tray cannot
+/// keep serving a frame captured before capture was disabled.
+fn prune_disabled_previews(disabled: &HashSet<u32>) {
+    if disabled.is_empty() {
+        return;
+    }
+    CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|monitor_id, _| !disabled.contains(monitor_id));
 }
 
 pub fn register_monitor_submenu(monitor_id: u32, checked: bool) {
@@ -197,7 +292,12 @@ async fn poll_sck_frames(app: &AppHandle) {
         }
 
         if screenpipe_screen::stream_invalidation::monitor_frame_seq(monitor_id).unwrap_or(0) == 0 {
-            queue_sck_bootstrap(monitor_id);
+            // Only re-queue once the per-monitor backoff has elapsed. A display
+            // that never produces a frame would otherwise be bootstrapped on
+            // every tick.
+            if bootstrap_ready(monitor_id, Instant::now()) {
+                queue_sck_bootstrap(monitor_id);
+            }
             continue;
         }
 
@@ -231,17 +331,28 @@ async fn bootstrap_sck_stream(monitor_id: u32) {
     if !preview_capture_expected() {
         return;
     }
+    if user_disabled_monitor_ids().contains(&monitor_id) {
+        return;
+    }
     if screenpipe_screen::stream_invalidation::peek_monitor_frame(monitor_id).is_some() {
+        clear_bootstrap_backoff(monitor_id);
+        return;
+    }
+    // Re-checked here as well as at queue time: a request can sit in the
+    // channel across a tick, and this is the only place that actually touches
+    // ScreenCaptureKit.
+    if !bootstrap_ready(monitor_id, Instant::now()) {
         return;
     }
     let Some(monitor) = screenpipe_screen::monitor::get_monitor_by_id(monitor_id).await else {
+        let delay = record_bootstrap_failure(monitor_id, Instant::now());
         debug!(
-            "tray preview: monitor {} not found for SCK bootstrap",
-            monitor_id
+            "tray preview: monitor {} not found for SCK bootstrap (retrying in {:?})",
+            monitor_id, delay
         );
         return;
     };
-    if !screenpipe_screen::stream_invalidation::ensure_monitor_stream(
+    if screenpipe_screen::stream_invalidation::ensure_monitor_stream(
         monitor_id,
         monitor.width(),
         monitor.height(),
@@ -249,9 +360,12 @@ async fn bootstrap_sck_stream(monitor_id: u32) {
     )
     .await
     {
+        clear_bootstrap_backoff(monitor_id);
+    } else {
+        let delay = record_bootstrap_failure(monitor_id, Instant::now());
         warn!(
-            "tray preview: failed to start SCK stream for monitor {}",
-            monitor_id
+            "tray preview: failed to start SCK stream for monitor {} (retrying in {:?})",
+            monitor_id, delay
         );
     }
 }
@@ -306,12 +420,30 @@ fn queue_menu_refresh(app: &AppHandle) {
     }
 }
 
+/// Displays eligible for a tray preview.
+///
+/// Previews run their own ScreenCaptureKit streams, independent of the
+/// recording engine, so they have to honour the user's per-display vision
+/// toggle themselves. Before this filter, switching screen capture off left the
+/// tray poller holding live streams against those displays — capture the user
+/// had explicitly disabled, and on slow-SCK machines a visible flicker that no
+/// setting could stop.
 fn active_monitor_ids() -> Vec<u32> {
-    get_recording_info()
+    let disabled = user_disabled_monitor_ids();
+    prune_disabled_previews(&disabled);
+    let reported = get_recording_info()
         .devices
         .iter()
         .filter(|d| d.kind == DeviceKind::Monitor)
         .filter_map(|d| d.monitor_id)
+        .collect();
+    preview_eligible_monitor_ids(reported, &disabled)
+}
+
+fn preview_eligible_monitor_ids(reported: Vec<u32>, disabled: &HashSet<u32>) -> Vec<u32> {
+    reported
+        .into_iter()
+        .filter(|id| !disabled.contains(id))
         .collect()
 }
 
@@ -392,5 +524,92 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&monitor_id);
+    }
+
+    #[test]
+    fn preview_skips_displays_the_user_switched_off() {
+        let disabled: HashSet<u32> = [2u32, 4].into_iter().collect();
+        assert_eq!(
+            preview_eligible_monitor_ids(vec![1, 2, 3, 4], &disabled),
+            vec![1, 3]
+        );
+        // Every display off means no preview stream at all, which is the whole
+        // point of the setting.
+        assert!(preview_eligible_monitor_ids(vec![2, 4], &disabled).is_empty());
+        assert_eq!(
+            preview_eligible_monitor_ids(vec![1, 3], &HashSet::new()),
+            vec![1, 3]
+        );
+    }
+
+    #[test]
+    fn disabling_a_display_drops_its_cached_preview() {
+        let kept = u32::MAX - 31;
+        let disabled_id = u32::MAX - 32;
+        let frame = RgbaImage::from_pixel(2, 2, Rgba([4, 5, 6, 255]));
+        apply_rgba_preview(kept, &frame);
+        apply_rgba_preview(disabled_id, &frame);
+
+        prune_disabled_previews(&[disabled_id].into_iter().collect());
+
+        assert!(has_cached_preview(kept));
+        assert!(!has_cached_preview(disabled_id));
+
+        let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        cache.remove(&kept);
+        cache.remove(&disabled_id);
+    }
+
+    #[test]
+    fn bootstrap_backoff_grows_then_saturates() {
+        assert_eq!(bootstrap_backoff_delay(1), Duration::from_secs(1));
+        assert_eq!(bootstrap_backoff_delay(2), Duration::from_secs(2));
+        assert_eq!(bootstrap_backoff_delay(3), Duration::from_secs(4));
+        assert_eq!(bootstrap_backoff_delay(7), BOOTSTRAP_BACKOFF_MAX);
+        // Must never overflow or wrap back to a hot loop on a long outage.
+        assert_eq!(bootstrap_backoff_delay(u32::MAX), BOOTSTRAP_BACKOFF_MAX);
+    }
+
+    /// The production flicker: a monitor whose stream never yields a frame was
+    /// re-bootstrapped every `SCK_POLL_INTERVAL`. After a failure the next
+    /// attempt must wait, and a success must restore immediate readiness.
+    #[test]
+    fn failed_bootstrap_defers_the_next_attempt() {
+        let monitor_id = u32::MAX - 33;
+        clear_bootstrap_backoff(monitor_id);
+        let now = Instant::now();
+
+        assert!(bootstrap_ready(monitor_id, now));
+
+        let delay = record_bootstrap_failure(monitor_id, now);
+        assert_eq!(delay, Duration::from_secs(1));
+        assert!(!bootstrap_ready(monitor_id, now));
+        assert!(!bootstrap_ready(monitor_id, now + SCK_POLL_INTERVAL));
+        assert!(bootstrap_ready(monitor_id, now + delay));
+
+        // Consecutive failures keep widening the window.
+        let second = record_bootstrap_failure(monitor_id, now + delay);
+        assert_eq!(second, Duration::from_secs(2));
+        assert!(!bootstrap_ready(
+            monitor_id,
+            now + delay + SCK_POLL_INTERVAL
+        ));
+
+        clear_bootstrap_backoff(monitor_id);
+        assert!(bootstrap_ready(monitor_id, now));
+    }
+
+    #[test]
+    fn resuming_from_an_intentional_pause_clears_backoff() {
+        let monitor_id = u32::MAX - 34;
+        clear_bootstrap_backoff(monitor_id);
+        let now = Instant::now();
+        record_bootstrap_failure(monitor_id, now);
+        assert!(!bootstrap_ready(monitor_id, now));
+
+        // Lock / wake / DRM / schedule pauses funnel through here.
+        clear_cached_previews();
+
+        assert!(bootstrap_ready(monitor_id, now));
     }
 }

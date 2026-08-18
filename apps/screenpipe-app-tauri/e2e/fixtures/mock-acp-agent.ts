@@ -283,6 +283,17 @@ function emitPromptPrelude(): void {
       { content: "Run the deterministic tool", priority: "medium", status: "in_progress" },
     ],
   });
+  // ACP redelivers the WHOLE plan whenever a step changes. Sending a second
+  // revision here is what makes the stacking regression observable: the old
+  // runtime rendered each delivery as its own collapsed "thinking" blob, so
+  // this turn left two copies of the plan in the transcript.
+  update({
+    sessionUpdate: "plan",
+    entries: [
+      { content: "Inspect the request", priority: "high", status: "completed" },
+      { content: "Run the deterministic tool", priority: "medium", status: "completed" },
+    ],
+  });
   update({
     sessionUpdate: "agent_thought_chunk",
     content: { type: "text", text: "Checking the mock workspace. " },

@@ -12,7 +12,10 @@ import {
   setFirstRunGuidePending,
   setFirstRunGuideReplayAfterOnboarding,
 } from "@/lib/first-run-guide";
-import { resetLearningWindow } from "@/lib/first-run/learning-window";
+import {
+  LEARNING_WINDOW_RESET_EVENT,
+  resetLearningWindow,
+} from "@/lib/first-run/learning-window";
 import type { OnboardingLiveViewFlowProperties } from "@/lib/analytics/onboarding-funnel";
 
 export type OnboardingCompletionContext = {
@@ -184,7 +187,16 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
         setFirstRunGuideReplayAfterOnboarding(false);
         // Clear any half-finished window so a replayed setup opens a fresh one
         // instead of resuming a countdown against the previous run's cutoff.
+        //
+        // The local call only clears THIS webview. Settings runs in `home`,
+        // but the banner also renders in the separate `chat` webview, and
+        // partitions do not share localStorage — so without the broadcast that
+        // copy keeps its spent seed claim and terminal phase, and its banner
+        // never returns however many times setup is replayed.
         resetLearningWindow();
+        await emit(LEARNING_WINDOW_RESET_EVENT).catch(() => {
+          // A webview that missed the broadcast still clears on next launch.
+        });
         // Update local state
         set((state) => ({
           onboardingData: {

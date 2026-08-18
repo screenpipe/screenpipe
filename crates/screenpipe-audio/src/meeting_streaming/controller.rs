@@ -26,6 +26,13 @@ use super::{
     selected_engine, MeetingStreamingConfig, MeetingStreamingProvider,
 };
 
+/// Event topic used to re-attach live streaming to a meeting that is still in
+/// progress after a recording restart. Deliberately separate from
+/// `meeting_started`: that topic also drives user pipe triggers, calendar
+/// speaker id, and detection telemetry, none of which should re-fire just
+/// because recording bounced mid-meeting.
+pub const MEETING_STREAMING_REATTACH_EVENT: &str = "meeting_streaming_reattach";
+
 const LIVE_FINAL_PERSIST_ATTEMPTS: usize = 18;
 const LIVE_FINAL_PERSIST_RETRY_DELAY: Duration = Duration::from_secs(5);
 const PROVIDER_STREAM_RESTART_BACKOFF: Duration = Duration::from_secs(5);
@@ -47,6 +54,15 @@ const STALL_NOTIFY_THRESHOLD: Duration = Duration::from_secs(60);
 /// audio landing anywhere between two checks still counts — otherwise the
 /// notification would depend on where the tick happened to fall.
 const STALL_VOICED_AUDIO_RECENCY: Duration = Duration::from_secs(45);
+/// How many times one session may rebase its inactivity clock because our own
+/// capture stack was disrupted (sleep/wake, display reconfiguration).
+///
+/// Each rebase buys another full `LIVE_NO_AUDIO_ACTIVITY_TIMEOUT`, so this is
+/// deliberately small: a genuinely dead capture path must still end the
+/// meeting rather than hold an empty session open forever. Four rebases caps
+/// the extension at roughly an hour, and `LIVE_MAX_SESSION_DURATION` remains
+/// the hard ceiling regardless.
+const MAX_CAPTURE_DISRUPTION_REBASES: u32 = 4;
 
 #[derive(Debug)]
 struct ActiveMeetingStream {
@@ -68,6 +84,13 @@ struct ActiveMeetingStream {
     last_live_transcript_at: Option<Instant>,
     notified_audio_stall: bool,
     notified_transcript_stall: bool,
+    // Watermark into `stream_invalidation::generation()`. Advancing means
+    // sleep/wake or a display reconfiguration forced every audio stream to be
+    // rebuilt, so any silence that follows is ours, not the meeting's.
+    capture_invalidation_watermark: u64,
+    // How many times this session has already rebased its inactivity clock
+    // for that reason. Bounded by `MAX_CAPTURE_DISRUPTION_REBASES`.
+    capture_disruption_rebases: u32,
     device_senders: HashMap<String, mpsc::Sender<MeetingAudioFrame>>,
     device_retry_after: HashMap<String, Instant>,
 }
@@ -114,6 +137,9 @@ pub fn start_meeting_streaming_loop(
         );
         let mut error_sub = screenpipe_events::subscribe_to_event::<MeetingStreamingError>(
             "meeting_streaming_error",
+        );
+        let mut reattach_sub = screenpipe_events::subscribe_to_event::<MeetingLifecycleEvent>(
+            MEETING_STREAMING_REATTACH_EVENT,
         );
         let mut inactivity_tick = tokio::time::interval(LIVE_INACTIVITY_CHECK_INTERVAL);
         let mut active: Option<ActiveMeetingStream> = None;
@@ -164,6 +190,46 @@ pub fn start_meeting_streaming_loop(
                         continue;
                     }
 
+                    let attendee_keyterms = meeting_attendee_keyterms(&db, meeting_id).await;
+                    start_streaming_session(
+                        &config,
+                        &audio_tap,
+                        &transcription_engine,
+                        &mut active,
+                        meeting_id,
+                        event.data.app.clone(),
+                        event.data.display_title().map(str::to_string),
+                        attendee_keyterms,
+                    )
+                    .await;
+                }
+                // A restart that interrupted a live meeting republishes the
+                // meeting here instead of on `meeting_started`, so recovery
+                // cannot re-fire user pipes bound to a real meeting start.
+                // This arm is what makes reattach ordering-independent: the
+                // coordinator's own startup probe (above) races the meeting
+                // watcher, which closes the row on shutdown and again via
+                // `close_orphaned_meetings` on start — so the probe routinely
+                // sees no active meeting and would otherwise idle for the rest
+                // of a meeting that is still in progress.
+                Some(event) = reattach_sub.next() => {
+                    let Some(meeting_id) = event.data.resolved_meeting_id() else {
+                        warn!("meeting streaming: ignoring reattach without meeting_id");
+                        continue;
+                    };
+
+                    if active.as_ref().is_some_and(|s| s.meeting_id == meeting_id) {
+                        debug!(
+                            "meeting streaming: already streaming meeting {} — ignoring reattach",
+                            meeting_id
+                        );
+                        continue;
+                    }
+
+                    info!(
+                        "meeting streaming: reattaching interrupted meeting (meeting_id={})",
+                        meeting_id
+                    );
                     let attendee_keyterms = meeting_attendee_keyterms(&db, meeting_id).await;
                     start_streaming_session(
                         &config,
@@ -259,6 +325,21 @@ pub fn start_meeting_streaming_loop(
                 }
                 _ = inactivity_tick.tick() => {
                     if let Some(session) = active.as_mut() {
+                        // Before judging silence, discount any of it that our
+                        // own capture teardown caused.
+                        if apply_capture_disruption_grace(
+                            session,
+                            crate::stream_invalidation::generation(),
+                            Instant::now(),
+                        ) {
+                            warn!(
+                                "meeting streaming: audio streams were invalidated (sleep/wake or \
+                                 display change) — rebasing inactivity clock ({}/{}, meeting_id={})",
+                                session.capture_disruption_rebases,
+                                MAX_CAPTURE_DISRUPTION_REBASES,
+                                session.meeting_id,
+                            );
+                        }
                         check_and_emit_stall_notifications(session, Instant::now());
                     }
                     if let Some(reason) = active
@@ -349,6 +430,8 @@ async fn start_streaming_session(
         last_live_transcript_at: None,
         notified_audio_stall: false,
         notified_transcript_stall: false,
+        capture_invalidation_watermark: crate::stream_invalidation::generation(),
+        capture_disruption_rebases: 0,
         device_senders: HashMap::new(),
         device_retry_after: HashMap::new(),
     });
@@ -724,6 +807,50 @@ fn should_request_auto_end_for_inactivity(session: &ActiveMeetingStream, now: In
         && now.duration_since(session.last_audio_activity_at) >= LIVE_NO_AUDIO_ACTIVITY_TIMEOUT
 }
 
+/// Rebase the inactivity clock when our own capture stack was torn down.
+///
+/// `LIVE_NO_AUDIO_ACTIVITY_TIMEOUT` answers "has this meeting gone quiet?",
+/// but it reads that from one signal: audio frames arriving. Sleep/wake and
+/// display reconfiguration invalidate every audio stream, and CoreAudio can
+/// come back silent without ever raising an error — so the frames stop while
+/// the meeting is still very much running. Left alone, the session ends
+/// itself mid-call and the user finds a truncated note.
+///
+/// Rather than suppress auto-end for a fixed window (the outage routinely
+/// outlives any window worth choosing), this treats the disruption as making
+/// the elapsed silence *unattributable* and restarts the clock from it. If
+/// capture recovers, frames advance the clock normally and the rebase costs
+/// nothing. If it never recovers, the next full timeout still ends the
+/// session — just from the disruption rather than through it.
+///
+/// Bounded by `MAX_CAPTURE_DISRUPTION_REBASES` so a permanently broken
+/// capture path cannot hold a session open indefinitely.
+///
+/// Returns `true` when the clock was rebased, for logging.
+fn apply_capture_disruption_grace(
+    session: &mut ActiveMeetingStream,
+    current_generation: u64,
+    now: Instant,
+) -> bool {
+    if current_generation <= session.capture_invalidation_watermark {
+        return false;
+    }
+    // Always take the watermark, even when the budget is spent. Otherwise a
+    // single stale generation would re-trigger on every subsequent tick.
+    session.capture_invalidation_watermark = current_generation;
+
+    if !session.live_transcription_enabled {
+        return false;
+    }
+    if session.capture_disruption_rebases >= MAX_CAPTURE_DISRUPTION_REBASES {
+        return false;
+    }
+
+    session.capture_disruption_rebases += 1;
+    session.last_audio_activity_at = now;
+    true
+}
+
 /// Fire at most one "audio stall" and one "transcript stall" event per
 /// session, when the live note has clearly failed to start streaming.
 ///
@@ -935,6 +1062,8 @@ mod tests {
             last_live_transcript_at: None,
             notified_audio_stall: false,
             notified_transcript_stall: false,
+            capture_invalidation_watermark: 0,
+            capture_disruption_rebases: 0,
             device_senders: HashMap::new(),
             device_retry_after: HashMap::new(),
         }
@@ -1207,6 +1336,123 @@ mod tests {
         assert_eq!(
             auto_end_reason(&session, now),
             Some(AutoEndReason::MaxDuration)
+        );
+    }
+
+    /// The regression this exists for: the machine sleeps (or the display
+    /// layout changes) mid-meeting, audio streams are invalidated, frames
+    /// stop, and the session ends itself while the user is still talking.
+    #[test]
+    fn capture_invalidation_prevents_auto_end_during_a_silent_stream_outage() {
+        let now = Instant::now();
+        let mut session = test_session(now, true);
+        session.capture_invalidation_watermark = 7;
+        // Frames stopped a full timeout ago — without the grace this ends.
+        session.last_audio_activity_at =
+            now - LIVE_NO_AUDIO_ACTIVITY_TIMEOUT - Duration::from_secs(1);
+        assert!(
+            should_request_auto_end_for_inactivity(&session, now),
+            "precondition: this session would otherwise auto-end"
+        );
+
+        assert!(apply_capture_disruption_grace(&mut session, 8, now));
+
+        assert!(
+            !should_request_auto_end_for_inactivity(&session, now),
+            "an invalidated capture stack must not read as a quiet meeting"
+        );
+        assert_eq!(session.capture_disruption_rebases, 1);
+    }
+
+    #[test]
+    fn capture_grace_is_bounded_so_a_dead_capture_still_ends_the_session() {
+        let now = Instant::now();
+        let mut session = test_session(now, true);
+
+        for i in 0..MAX_CAPTURE_DISRUPTION_REBASES {
+            assert!(
+                apply_capture_disruption_grace(&mut session, u64::from(i) + 1, now),
+                "rebase {i} should be granted"
+            );
+        }
+
+        assert!(
+            !apply_capture_disruption_grace(
+                &mut session,
+                u64::from(MAX_CAPTURE_DISRUPTION_REBASES) + 1,
+                now
+            ),
+            "budget is spent, further disruptions must not extend the session"
+        );
+
+        session.last_audio_activity_at =
+            now - LIVE_NO_AUDIO_ACTIVITY_TIMEOUT - Duration::from_secs(1);
+        assert!(
+            should_request_auto_end_for_inactivity(&session, now),
+            "a permanently dead capture path must still terminate the meeting"
+        );
+    }
+
+    /// Without taking the watermark on every advance, one stale generation
+    /// would re-trigger on each 30s tick and spend the whole budget.
+    #[test]
+    fn capture_grace_consumes_the_watermark_even_when_budget_is_spent() {
+        let now = Instant::now();
+        let mut session = test_session(now, true);
+        session.capture_disruption_rebases = MAX_CAPTURE_DISRUPTION_REBASES;
+
+        assert!(!apply_capture_disruption_grace(&mut session, 5, now));
+        assert_eq!(
+            session.capture_invalidation_watermark, 5,
+            "watermark must advance so the same generation cannot re-fire"
+        );
+    }
+
+    #[test]
+    fn capture_grace_is_inert_without_a_new_invalidation() {
+        let now = Instant::now();
+        let mut session = test_session(now, true);
+        session.capture_invalidation_watermark = 3;
+        let baseline = now - LIVE_NO_AUDIO_ACTIVITY_TIMEOUT - Duration::from_secs(1);
+        session.last_audio_activity_at = baseline;
+
+        assert!(!apply_capture_disruption_grace(&mut session, 3, now));
+
+        assert_eq!(
+            session.last_audio_activity_at, baseline,
+            "an unchanged generation must not touch the inactivity clock"
+        );
+        assert_eq!(session.capture_disruption_rebases, 0);
+    }
+
+    /// Background-only sessions have an inactive audio tap by design, so they
+    /// never auto-end for inactivity and must not burn rebase budget either.
+    #[test]
+    fn capture_grace_skips_background_only_sessions() {
+        let now = Instant::now();
+        let mut session = test_session(now, false);
+
+        assert!(!apply_capture_disruption_grace(&mut session, 1, now));
+        assert_eq!(session.capture_disruption_rebases, 0);
+        assert_eq!(
+            session.capture_invalidation_watermark, 1,
+            "watermark still advances so the session stays in step"
+        );
+    }
+
+    /// Max duration is the hard ceiling: capture grace must not defeat it.
+    #[test]
+    fn capture_grace_does_not_extend_past_max_session_duration() {
+        let now = Instant::now();
+        let mut session = test_session(now, true);
+        session.started_at = now - LIVE_MAX_SESSION_DURATION - Duration::from_secs(1);
+
+        assert!(apply_capture_disruption_grace(&mut session, 1, now));
+
+        assert_eq!(
+            auto_end_reason(&session, now),
+            Some(AutoEndReason::MaxDuration),
+            "the 2h ceiling still applies after a rebase"
         );
     }
 

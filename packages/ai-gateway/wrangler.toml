@@ -15,7 +15,7 @@ routes = [
   { pattern = "api.screenpipe.com", zone_name = "screenpipe.com", custom_domain = true }
 ]
 
-# tail_consumers = [{service = "ai-gateway-tail"}]
+tail_consumers = [{service = "ai-gateway-tail"}]
 
 # Workers Logs
 # Docs: https://developers.cloudflare.com/workers/observability/logs/workers-logs/
@@ -85,6 +85,9 @@ PIPE_FRONTIER_POLICY = "reject"
 # - ROUTER_MODE ("off"): interactive auto difficulty router. "off" = GPT-5.6 Luna
 #   (today's behavior). "heuristic" = regex tiering (0 latency). "embedding" =
 #   bge centroid via Workers AI (best accuracy, +1 embed call). See difficulty-router.ts.
+# - GPT56_HISTORY_CACHE_MODE ("system"): "system" keeps only the stable
+#   instruction/tool prefix cache; "history" also caches Pi chat/Pipe turn
+#   boundaries. Switch back to "system" for an immediate cost kill switch.
 # - PIPE_FRONTIER_POLICY ("downgrade"): background/pipe traffic on a frontier model
 #   (opus/gpt-5.5/*-pro/fable, output>=$20/Mtok) → "downgrade" to PIPE_FRONTIER_FALLBACK
 #   (default "auto"), or "reject" with a 403. Pipes shouldn't run frontier models.

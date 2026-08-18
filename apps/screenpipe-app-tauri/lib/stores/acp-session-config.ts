@@ -36,6 +36,68 @@ export interface AcpSessionConfig {
   sessionId?: string;
 }
 
+/** The adapter's explicit mode/permission select, when it advertises the same
+ *  axis both as a config option and as ACP session modes. Codex does this for
+ *  read-only / agent / full-access. Prefer the config option because changing
+ *  it returns the authoritative refreshed option list. */
+export function findAcpModeOption(
+  config: AcpSessionConfig | null | undefined,
+): AcpConfigOption | null {
+  return (
+    (config?.options ?? []).find(
+      (option) =>
+        option.type === "select" &&
+        option.values.length > 0 &&
+        (option.category === "mode" || option.id === "mode"),
+    ) ?? null
+  );
+}
+
+const PERMISSION_MODE_SIGNAL =
+  /permission|approval|sandbox|read.?only|full.?access|accept.?edit|dont.?ask|bypass|unrestricted/;
+
+function looksLikePermissionModes(
+  values: AcpConfigValue[],
+  context = "",
+): boolean {
+  const normalized = [
+    context,
+    ...values.flatMap((value) => [value.value, value.name, value.description ?? ""]),
+  ]
+    .join(" ")
+    .toLowerCase();
+  return PERMISSION_MODE_SIGNAL.test(normalized);
+}
+
+/** ACP modes are adapter-defined: Pi, for example, can use the mode axis for
+ *  thinking level rather than permissions. Only promote a mode into the
+ *  composer permission control when its advertised copy or values carry a
+ *  clear permission/access signal. */
+export function findAcpPermissionModeOption(
+  config: AcpSessionConfig | null | undefined,
+): AcpConfigOption | null {
+  const option = findAcpModeOption(config);
+  if (!option) return null;
+  return looksLikePermissionModes(
+    option.values,
+    `${option.name} ${option.description ?? ""}`,
+  )
+    ? option
+    : null;
+}
+
+export function hasAcpPermissionModes(
+  config: AcpSessionConfig | null | undefined,
+): boolean {
+  if (findAcpPermissionModeOption(config)) return true;
+  // An explicit non-permission mode option owns the axis; do not reinterpret
+  // its duplicate legacy session modes as approvals.
+  if (findAcpModeOption(config)) return false;
+  return config?.modes
+    ? looksLikePermissionModes(config.modes.availableModes)
+    : false;
+}
+
 interface AcpSessionConfigState {
   sessions: Record<string, AcpSessionConfig>;
   /** Last advertisement seen per adapter id, kept across sessions (and app
@@ -80,9 +142,9 @@ function flattenValues(options: unknown): AcpConfigValue[] {
     if (Array.isArray(entry?.options)) return flattenValues(entry.options);
     if (typeof entry?.value === "string") {
       return [{
-        value: entry.value,
-        name: typeof entry.name === "string" ? entry.name : entry.value,
-        description: entry.description ?? null,
+          value: entry.value,
+          name: typeof entry.name === "string" ? entry.name : entry.value,
+          description: entry.description ?? null,
       }];
     }
     return [];
@@ -131,7 +193,7 @@ export function dedupedModes(
   const selects = (config?.options ?? []).filter(
     (option) => option.type === "select" && option.values.length > 0,
   );
-  if (selects.some((option) => option.category === "mode")) return null;
+  if (findAcpModeOption(config)) return null;
   const modeIds = new Set(modes.availableModes.map((mode) => mode.value));
   const duplicated = selects.some(
     (option) =>

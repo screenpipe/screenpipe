@@ -9,6 +9,7 @@
     "e2e/tests/**/*.js",
     "e2e/helpers/**/*.ts",
     "e2e/scripts/verify-spotlight-exclusion.ts",
+    "scripts/timeline-parity-export.ts",
     "scripts/**/*.js"
   ],
   "project": [

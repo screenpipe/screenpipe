@@ -91,7 +91,8 @@ impl DatabaseManager {
                 COALESCE(vc.file_path, '') as file_path,
                 COALESCE(f.offset_index, 0) as offset_index,
                 f.name as frame_name,
-                f.browser_url
+                f.browser_url,
+                f.capture_trigger
             FROM candidates c
             JOIN frames f ON f.id = c.id
             LEFT JOIN video_chunks vc ON f.video_chunk_id = vc.id
@@ -217,7 +218,8 @@ impl DatabaseManager {
                 COALESCE(vc.file_path, '') as file_path,
                 COALESCE(f.offset_index, 0) as offset_index,
                 f.name as frame_name,
-                f.browser_url
+                f.browser_url,
+                f.capture_trigger
             FROM candidates c
             JOIN frames f ON f.id = c.id
             LEFT JOIN video_chunks vc ON f.video_chunk_id = vc.id

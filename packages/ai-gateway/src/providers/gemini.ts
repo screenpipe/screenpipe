@@ -478,8 +478,17 @@ export class GeminiProvider implements AIProvider {
 			return { type: 'OBJECT', properties: {} };
 		}
 
-		const rawType = String(params.type || 'object').toLowerCase();
+		// Gemini's `type` is a single enum, not a JSON-Schema union. A nullable
+		// field like `type: ["string", "null"]` used to stringify to "STRING,NULL"
+		// and 400 with "Invalid value at … .parameters.properties[X].type". Keep
+		// the first real type and move the nullability onto Gemini's own
+		// `nullable` flag, which also lets `["array", "null"]` still get `items`.
+		const declaredTypes = (Array.isArray(params.type) ? params.type : [params.type])
+			.filter((t: unknown): t is string => typeof t === 'string' && t.length > 0)
+			.map((t: string) => t.toLowerCase());
+		const rawType = declaredTypes.find((t: string) => t !== 'null') || 'object';
 		const converted: any = { type: rawType.toUpperCase() };
+		if (declaredTypes.includes('null')) converted.nullable = true;
 
 		if (params.description) converted.description = params.description;
 		// Gemini requires enum values to be TYPE_STRING regardless of the

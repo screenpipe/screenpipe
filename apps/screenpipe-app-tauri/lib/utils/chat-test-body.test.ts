@@ -17,6 +17,7 @@ describe("buildChatTestBody", () => {
     expect(body).toEqual({
       model: "gpt-4",
       messages: [{ role: "user", content: "say hi" }],
+      stream: false,
       max_tokens: 50,
     });
     expect(body.max_completion_tokens).toBeUndefined();
@@ -27,6 +28,7 @@ describe("buildChatTestBody", () => {
     expect(body).toEqual({
       model: "gpt-5",
       messages: [{ role: "user", content: "say hi" }],
+      stream: false,
       max_completion_tokens: 50,
     });
     expect(body.max_tokens).toBeUndefined();
@@ -37,6 +39,21 @@ describe("buildChatTestBody", () => {
     const b = buildChatTestBody("m", "hi", 10, "max_completion_tokens");
     expect(a.max_tokens !== undefined && a.max_completion_tokens !== undefined).toBe(false);
     expect(b.max_tokens !== undefined && b.max_completion_tokens !== undefined).toBe(false);
+  });
+
+  // Gateways such as omniroute stream by default when `stream` is absent,
+  // which breaks the response.json() the connection test performs.
+  it("always requests a non-streaming reply", () => {
+    for (const field of ["max_tokens", "max_completion_tokens"] as const) {
+      const body = buildChatTestBody("m", "hi", 10, field);
+      expect(body.stream).toBe(false);
+      expect(JSON.parse(JSON.stringify(body)).stream).toBe(false);
+    }
+  });
+
+  it("serializes stream:false rather than dropping it", () => {
+    const wire = JSON.stringify(buildChatTestBody("m", "hi", 10));
+    expect(wire).toContain('"stream":false');
   });
 });
 

@@ -14,6 +14,11 @@
  * - We can't detect the endpoint capability statically, so we try
  *   `max_tokens` first (broadest compatibility), and fall back to
  *   `max_completion_tokens` if the endpoint rejects it.
+ * - `stream` is always sent explicitly as `false`. The OpenAI spec says an
+ *   absent `stream` means non-streaming, but several compatible gateways
+ *   (omniroute and friends) default to SSE instead. The caller reads the
+ *   reply with `response.json()`, so an SSE body fails to parse and the
+ *   connection test reports a bogus failure.
  */
 
 export type ChatTokensField = "max_tokens" | "max_completion_tokens";
@@ -21,6 +26,7 @@ export type ChatTokensField = "max_tokens" | "max_completion_tokens";
 export interface ChatTestBody {
   model: string;
   messages: Array<{ role: string; content: string }>;
+  stream: false;
   max_tokens?: number;
   max_completion_tokens?: number;
 }
@@ -37,6 +43,7 @@ export function buildChatTestBody(
   const body: ChatTestBody = {
     model,
     messages: [{ role: "user", content: prompt }],
+    stream: false,
   };
   if (tokensField === "max_tokens") {
     body.max_tokens = maxTokens;

@@ -10,7 +10,7 @@ import { deleteConversationFile } from "@/lib/chat-storage";
 import { writeActiveAiPresetId } from "@/lib/active-ai-preset";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
-import { Settings2, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
 import { AcpSignInDialog, type AcpSignInRequest } from "@/components/chat/standalone/acp-sign-in-dialog";
@@ -34,7 +34,7 @@ import { useHardcodedTiles } from "@/lib/hooks/use-hardcoded-tiles";
 import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 import { useChatFilePreview } from "@/lib/hooks/use-chat-file-preview";
 import { useChatInspector } from "@/lib/hooks/use-chat-inspector";
-import { ChatInspector } from "@/components/chat/chat-inspector";
+import { ChatInspectorPopover } from "@/components/chat/chat-inspector";
 import { useSqlAutocomplete, useTagAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
 import { loadConversationFile } from "@/lib/chat-storage";
 import {
@@ -47,7 +47,11 @@ import {
   type ComposerCommandId,
   type ComposerSkillReference,
 } from "@/lib/chat-utils";
-import { useAutoSuggestions } from "@/lib/hooks/use-auto-suggestions";
+import {
+  useAutoSuggestions,
+  type Suggestion,
+} from "@/lib/hooks/use-auto-suggestions";
+import { postChatSuggestionSendOptions } from "@/lib/chat/suggestion-telemetry";
 import {
   buildInvalidatedAuthTokenMessage,
 } from "@/lib/chat/auth-errors";
@@ -626,7 +630,7 @@ export function StandaloneChat({
     });
 
     try {
-      await commands.openLoginWindow(null);
+      await commands.openLoginWindow(null, null);
     } catch (e) {
       console.warn("failed to open login after Pi auth error:", e);
     }
@@ -688,6 +692,13 @@ export function StandaloneChat({
       ? state.sessions[conversationId]?.messages
       : undefined,
   );
+  const pipeRunArtifactSource = useChatStore((state) => {
+    if (!conversationId) return null;
+    const context = state.sessions[conversationId]?.pipeContext;
+    return context
+      ? `pipe:${context.pipeName}:${context.executionId}`
+      : null;
+  });
   const messages = (pipeWatchMessages ?? localMessages) as Message[];
 
   const {
@@ -697,92 +708,39 @@ export function StandaloneChat({
   const { filePreview, openFilePreview, closeFilePreview } =
     useChatFilePreview(conversationId);
   const { inspectorOpen, setInspectorOpen, outputs: inspectorOutputs, sources: inspectorSources } =
-    useChatInspector(messages);
-  const [activeSideView, setActiveSideView] = useState<"inspector" | "side" | null>(null);
-  const [browserHiddenBehindInspector, setBrowserHiddenBehindInspector] = useState(false);
+    useChatInspector(messages, pipeRunArtifactSource);
   const [browserPanelState, setBrowserPanelState] = useState({
     hasUrl: false,
     open: false,
   });
   const filePreviewOpen = filePreview?.visible === true && !!filePreview.path;
   const sidePanelHasContent = filePreviewOpen || browserPanelState.hasUrl;
-  const sidePanelOpen = activeSideView === "side" && sidePanelHasContent;
+  const sidePanelOpen = filePreviewOpen || browserPanelState.open;
   const inspectorHasContent =
     inspectorOutputs.length > 0 ||
     inspectorSources.length > 0;
 
   useEffect(() => {
     setInspectorOpen(false);
-    setActiveSideView(null);
-    setBrowserHiddenBehindInspector(false);
   }, [conversationId, setInspectorOpen]);
 
-  // Auto-show side panel when a file preview is opened externally
-  // (e.g. clicking an artifact in the brain section emits
-  // "chat-load-conversation" with filePreviewPath).
-  useEffect(() => {
-    if (filePreviewOpen) {
-      setActiveSideView("side");
-    }
-  }, [filePreviewOpen]);
-
   const toggleInspector = useCallback(() => {
-    if (inspectorOpen && activeSideView === "inspector") {
-      setInspectorOpen(false);
-      if (browserHiddenBehindInspector && browserPanelState.hasUrl) {
-        setActiveSideView("side");
-      } else {
-        setActiveSideView(null);
-      }
-      setBrowserHiddenBehindInspector(false);
-    } else {
-      setBrowserHiddenBehindInspector(
-        activeSideView === "side" && browserPanelState.open && !filePreviewOpen,
-      );
-      closeFilePreview();
-      setInspectorOpen(true);
-      setActiveSideView("inspector");
-    }
-  }, [
-    activeSideView,
-    browserHiddenBehindInspector,
-    browserPanelState.hasUrl,
-    browserPanelState.open,
-    closeFilePreview,
-    filePreviewOpen,
-    inspectorOpen,
-    setInspectorOpen,
-  ]);
+    setInspectorOpen(!inspectorOpen);
+  }, [inspectorOpen, setInspectorOpen]);
 
   const toggleBrowserPanel = useCallback(() => {
-    if (activeSideView === "side" && filePreviewOpen) {
+    if (filePreviewOpen) {
       closeFilePreview();
-      setActiveSideView(inspectorOpen ? "inspector" : null);
       return;
     }
-    if (activeSideView === "side" && browserPanelState.hasUrl) {
+    if (browserPanelState.hasUrl) {
       window.dispatchEvent(
         new CustomEvent("screenpipe:browser-sidebar-toggle", {
           detail: { action: "toggle" },
         }),
       );
-      setActiveSideView(inspectorOpen ? "inspector" : null);
-      return;
     }
-    setBrowserHiddenBehindInspector(false);
-    setActiveSideView("side");
-    window.dispatchEvent(
-      new CustomEvent("screenpipe:browser-sidebar-toggle", {
-        detail: { action: "show" },
-      }),
-    );
-  }, [
-    activeSideView,
-    browserPanelState.hasUrl,
-    closeFilePreview,
-    filePreviewOpen,
-    inspectorOpen,
-  ]);
+  }, [browserPanelState.hasUrl, closeFilePreview, filePreviewOpen]);
 
   const handlePanelStateChange = useCallback(
     (nextState: { hasUrl: boolean; open: boolean }) => {
@@ -792,9 +750,6 @@ export function StandaloneChat({
           ? currentState
           : nextState,
       );
-      if (nextState.open) {
-        setActiveSideView("side");
-      }
     },
     [],
   );
@@ -865,6 +820,10 @@ export function StandaloneChat({
     pendingDocs,
     clearConnectionChip,
     refreshConnectionState,
+    prefillSource,
+    setPrefillContext,
+    setPrefillFrameId,
+    setPrefillSource,
   });
 
   // Chat conversations — stored as individual JSON files in ~/.screenpipe/chats/
@@ -1112,6 +1071,7 @@ export function StandaloneChat({
     flushPendingSteerBatch,
     handleStop,
     openConnectionSetup,
+    pendingSend,
     sendMessage,
     steerMessage,
     steerQueuedPrompt,
@@ -1205,6 +1165,17 @@ export function StandaloneChat({
             : "template_edited",
       });
     },
+    [sendMessage],
+  );
+
+  const sendPostChatSuggestion = useCallback(
+    (suggestion: Suggestion, position: number) =>
+      sendMessage(
+        suggestion.text,
+        undefined,
+        undefined,
+        postChatSuggestionSendOptions(suggestion, position),
+      ),
     [sendMessage],
   );
 
@@ -1964,6 +1935,7 @@ export function StandaloneChat({
         className={className}
         conversationId={conversationId}
         messages={messages}
+        pendingUserText={pendingSend?.text ?? null}
         sidebarCollapsed={sidebarCollapsed}
         isMac={isMac}
         isFullscreen={isFullscreen}
@@ -1982,21 +1954,6 @@ export function StandaloneChat({
         }}
         rightActions={
           <div className="relative z-10 flex items-center gap-1">
-            {inspectorHasContent ? (
-              <Button
-                variant="ghost"
-                size="icon"
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  toggleInspector();
-                }}
-                className={cn("h-7 w-7", activeSideView === "inspector" && "bg-muted")}
-                title="Inspector"
-              >
-                <Settings2 size={14} />
-              </Button>
-            ) : null}
             {sidePanelHasContent ? (
               <Button
                 variant="ghost"
@@ -2006,14 +1963,13 @@ export function StandaloneChat({
                   e.stopPropagation();
                   toggleBrowserPanel();
                 }}
-                className={cn("h-7 w-7", sidePanelOpen && "bg-muted")}
-                title={
-                  filePreviewOpen
-                    ? "Hide preview"
-                    : browserPanelState.open
-                      ? "Hide browser"
-                      : "Show browser"
-                }
+                className={cn(
+                  "h-7 w-7",
+                  sidePanelOpen && "bg-muted ring-2 ring-primary ring-offset-1 ring-offset-background",
+                )}
+                title="Toggle side panel"
+                aria-label="Toggle side panel"
+                aria-pressed={sidePanelOpen}
               >
                 {sidePanelOpen ? (
                   <PanelRightClose size={14} />
@@ -2027,10 +1983,22 @@ export function StandaloneChat({
       />
 
       <div className="flex-1 flex min-h-0" data-browser-panel-host>
-      <div className="flex-1 flex flex-col min-w-0" data-firstrun-target="messages">
+      <div className="relative flex-1 flex flex-col min-w-0" data-firstrun-target="messages">
+      {inspectorHasContent ? (
+        <div className="absolute -top-8 right-2 z-30">
+          <ChatInspectorPopover
+            open={inspectorOpen}
+            onOpenChange={setInspectorOpen}
+            outputs={inspectorOutputs}
+            sources={inspectorSources}
+            onOpenFile={openFilePreview}
+          />
+        </div>
+      ) : null}
       <ChatMainPane
         firstRunAiPreset={firstRunAiPreset}
         firstRunUserToken={settings?.user?.token ?? null}
+        firstRunAiSettingsLoaded={isSettingsLoaded}
         hideInlineHistory={hideInlineHistory}
         showHistory={showHistory}
         onCloseHistory={() => setShowHistory(false)}
@@ -2047,6 +2015,7 @@ export function StandaloneChat({
         onChatContextMenu={handleChatContextMenu}
         messages={messages}
         isPreparingPrefill={isPreparingPrefill}
+        pendingSend={pendingSend}
         activePipeExecution={activePipeExecution}
         continuousPipeChat={continuousPipeChat}
         isLoading={isLoading}
@@ -2056,7 +2025,7 @@ export function StandaloneChat({
         hasValidModel={hasValidModel}
         needsLogin={needsLogin}
         onOpenLogin={async () => {
-          await commands.openLoginWindow(null);
+          await commands.openLoginWindow(null, null);
         }}
         onOpenSettings={async () => {
           await commands.showWindow({ Home: { page: null } });
@@ -2127,7 +2096,7 @@ export function StandaloneChat({
           suggestions: connectionAwareSuggestions,
           inputSectionWidth,
           isRefreshing: suggestionsRefreshing,
-          onSendSuggestion: sendMessage,
+          onSendSuggestion: sendPostChatSuggestion,
           onRefresh: refreshVisibleSuggestions,
           onHide: () => updateSettings({ showChatSuggestions: false }),
         }}
@@ -2254,21 +2223,6 @@ export function StandaloneChat({
         agentSessionId={piSessionIdRef.current}
         filePreview={filePreview}
         onReplaceFilePreviewPath={openFilePreview}
-        inspectorContent={inspectorOpen && activeSideView === "inspector" ? (
-          <ChatInspector
-            outputs={inspectorOutputs}
-            sources={inspectorSources}
-            onOpenFile={(path) => {
-              setBrowserHiddenBehindInspector(false);
-              setActiveSideView("side");
-              openFilePreview(path);
-            }}
-          />
-        ) : null}
-        onBecomeVisible={() => {
-          setBrowserHiddenBehindInspector(false);
-          setActiveSideView("side");
-        }}
         onPanelStateChange={handlePanelStateChange}
       />
       </div> {/* End of horizontal chat+browser split */}

@@ -33,7 +33,7 @@ export const searchIndex: SettingsField[] = [
   { label: "Theme", keywords: ["dark", "light", "appearance"] },
   { label: "Font Size" },
   { label: "Chat Always on Top", keywords: ["pin", "window"] },
-  { label: "Show Shortcut Reminder" },
+  { label: "Shortcut Reminder", keywords: ["overlay", "pill", "pin", "drag", "position"] },
   { label: "Timeline / rewind", keywords: ["rewind", "timeline", "backend"] },
   { label: "Overlay Size" },
   { label: "Show Overlay in Screen Recording", keywords: ["capture", "obs", "screen share"] },
@@ -190,7 +190,7 @@ export function DisplaySection() {
                     try {
                       if (disabled) {
                         await commands.hideShortcutReminder();
-                      } else if (settings?.showShortcutOverlay) {
+                      } else {
                         await commands.showShortcutReminder(settings.showScreenpipeShortcut);
                       }
                     } catch {}
@@ -370,10 +370,10 @@ export function DisplaySection() {
             </div>
           </CardContent>
         </Card>
-        {/* Home sidebar layout. Meetings ships hidden from the sidebar, which
-            is what puts its compact icon in the top-left chrome strip — so
-            this switch and the right-click menu drive the same layout state
-            rather than two competing preferences. */}
+        {/* Home sidebar layout. Meetings ships as a sidebar row; hiding it is
+            what puts its compact icon in the top-left chrome strip — so this
+            switch and the right-click menu drive the same layout state rather
+            than two competing preferences. */}
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
             <div className="space-y-2.5">
@@ -562,74 +562,79 @@ export function DisplaySection() {
               <div className="flex items-center space-x-2.5">
                 <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
-                  <h3 className="text-sm font-medium text-foreground">Show Shortcut Reminder</h3>
-                  <p className="text-xs text-muted-foreground">Overlay showing the screenpipe shortcut</p>
+                  <h3 className="text-sm font-medium text-foreground">Shortcut Reminder</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Show the floating shortcut bar. Recording problems can still surface temporarily.
+                  </p>
                 </div>
               </div>
               <Switch
                 id="shortcut-overlay"
-                checked={settings?.showShortcutOverlay ?? false}
+                checked={settings?.showShortcutOverlay ?? true}
                 onCheckedChange={async (checked) => {
-                  handleSettingsChange({ showShortcutOverlay: checked });
+                  await updateSettings({
+                    showShortcutOverlay: checked,
+                    shortcutOverlaySnoozedUntil: null,
+                  });
                   try {
                     if (checked) {
                       await commands.showShortcutReminder(settings.showScreenpipeShortcut);
                     } else {
                       await commands.hideShortcutReminder();
                     }
-                  } catch (e) {}
+                  } catch (error) {
+                    console.warn("failed to update shortcut reminder visibility", error);
+                  }
                 }}
               />
             </div>
           </CardContent>
         </Card>
 
-        {settings?.showShortcutOverlay && (
-          <Card className="border-border bg-card">
-            <CardContent className="px-3 py-2.5">
-              <div className="space-y-2.5">
-                <div className="flex items-center space-x-2.5">
-                  <Maximize2 className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <div>
-                    <h3 className="text-sm font-medium text-foreground">Overlay Size</h3>
-                    <p className="text-xs text-muted-foreground">Size of the shortcut reminder overlay</p>
-                  </div>
-                </div>
-                <div className="flex gap-2 ml-[26px]">
-                  {([
-                    { value: "small", label: "Small" },
-                    { value: "medium", label: "Medium" },
-                    { value: "large", label: "Large" },
-                  ]).map((option) => {
-                    const isActive = (settings?.shortcutOverlaySize ?? "small") === option.value;
-                    return (
-                      <button
-                        key={option.value}
-                        onClick={async () => {
-                          handleSettingsChange({ shortcutOverlaySize: option.value });
-                          try {
-                            await commands.hideShortcutReminder();
-                            // Wait for store.bin to flush to disk before re-showing
-                            await new Promise(r => setTimeout(r, 500));
-                            await commands.showShortcutReminder(settings.showScreenpipeShortcut);
-                          } catch {}
-                        }}
-                        type="button"
-                        className={`flex-1 px-2.5 py-1.5 rounded-md border-2 transition-all text-center cursor-pointer ${
-                          isActive
-                            ? "border-primary bg-primary/5"
-                            : "border-border hover:border-muted-foreground/30"
-                        }`}
-                      >
-                        <div className="font-medium text-xs text-foreground">{option.label}</div>
-                      </button>
-                    );
-                  })}
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="space-y-2.5">
+              <div className="flex items-center space-x-2.5">
+                <Maximize2 className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground">Overlay Size</h3>
+                  <p className="text-xs text-muted-foreground">Size of the shortcut reminder overlay</p>
                 </div>
               </div>
-            </CardContent>
-          </Card>
-        )}
+              <div className="flex gap-2 ml-[26px]">
+                {([
+                  { value: "small", label: "Small" },
+                  { value: "medium", label: "Medium" },
+                  { value: "large", label: "Large" },
+                ]).map((option) => {
+                  const isActive = (settings?.shortcutOverlaySize ?? "small") === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      onClick={async () => {
+                        handleSettingsChange({ shortcutOverlaySize: option.value });
+                        try {
+                          await commands.hideShortcutReminder();
+                          // Wait for store.bin to flush to disk before re-showing
+                          await new Promise(r => setTimeout(r, 500));
+                          await commands.showShortcutReminder(settings.showScreenpipeShortcut);
+                        } catch {}
+                      }}
+                      type="button"
+                      className={`flex-1 px-2.5 py-1.5 rounded-md border-2 transition-all text-center cursor-pointer ${
+                        isActive
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:border-muted-foreground/30"
+                      }`}
+                    >
+                      <div className="font-medium text-xs text-foreground">{option.label}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
         </>
         )}
 

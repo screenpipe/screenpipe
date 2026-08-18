@@ -129,6 +129,10 @@ describe("Update banner surfacing", function () {
     const navSettings = await $('[data-testid="nav-settings"]');
     await navSettings.waitForDisplayed({ timeout: t(15_000) });
     await navSettings.click();
+    // nav-settings reopens the last-visited section (readLastSettingsSection),
+    // so select General explicitly — the auto-update toggle only exists there.
+    const navGeneral = await waitForTestId("settings-nav-general", 15_000);
+    await navGeneral.click();
     await waitForTestId("section-settings-general", 15_000);
 
     const toggle = await $("#auto-update-toggle");

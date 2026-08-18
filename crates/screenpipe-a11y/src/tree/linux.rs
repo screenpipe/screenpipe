@@ -1125,6 +1125,11 @@ impl LinuxTreeWalker {
 }
 
 impl TreeWalkerPlatform for LinuxTreeWalker {
+    fn update_config(&mut self, mut config: TreeWalkerConfig) {
+        config.compile_patterns_reusing(Some(&self.config));
+        self.config = config;
+    }
+
     fn walk_focused_window(&self) -> Result<TreeWalkResult> {
         let start = Instant::now();
 

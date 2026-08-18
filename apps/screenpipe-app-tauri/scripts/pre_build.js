@@ -663,11 +663,26 @@ if (platform == 'linux') {
 	} else {
 		console.log('FFMPEG already exists');
 	}
-		// Setup TESSERACT
-	if (!(await fs.exists(config.linux.tesseractName)) || (await isSymlink(config.linux.tesseractName))) {
+	// Setup TESSERACT
+	// wget's --tries budget here was ~10s of linear backoff, so a brief GitHub
+	// release-CDN blip ("No data received" / 503) failed the whole build. Route it
+	// through the same cache + exponential-backoff downloader every other native
+	// dependency uses, and size-validate so a truncated body or error page is
+	// re-fetched instead of being cached as a "tesseract binary".
+	const tesseractMinSize = 1_000_000 // real static tesseract is tens of MB; an error page is ~100 bytes
+	if (
+		(await isSymlink(config.linux.tesseractName)) ||
+		!(await validateFileSize(config.linux.tesseractName, tesseractMinSize))
+	) {
 		await fs.rm(config.linux.tesseractName, { force: true });
-		await $`wget --no-config -nc --tries=5 --waitretry=10 --retry-on-http-error=415,429,500,502,503,504 --timeout=60 ${config.linux.tesseractUrl} -O ${config.linux.tesseractName}`
-		await $`chmod +x ${config.linux.tesseractName}` // Make the Tesseract binary executable
+		await ensureCachedFile({
+			cacheKey: 'tesseract-static-linux-x64-5.5.0',
+			destination: config.linux.tesseractName,
+			validate: (filePath) => validateFileSize(filePath, tesseractMinSize),
+			populate: (filePath) =>
+				downloadFile(config.linux.tesseractUrl, filePath, { retries: 10, timeoutMs: 300000 }),
+		})
+		await fs.chmod(config.linux.tesseractName, 0o755) // Make the Tesseract binary executable
 	} else {
 		console.log('TESSERACT already exists');
 	}
@@ -677,7 +692,8 @@ if (platform == 'linux') {
 	// on hosts without a system tesseract install every OCR call exits 1.
 	// Bundled into the AppImage via tauri.linux.conf.json (appimage.files).
 	const tessdataFile = path.join(config.linux.tessdataDir, 'eng.traineddata');
-	if (!(await fs.exists(tessdataFile))) {
+	const tessdataMinSize = 1_000_000 // tessdata_fast eng is ~4MB
+	if (!(await validateFileSize(tessdataFile, tessdataMinSize))) {
 		await fs.mkdir(config.linux.tessdataDir, { recursive: true });
 		let copiedTessdata = false;
 		if (inCI) {
@@ -703,7 +719,15 @@ if (platform == 'linux') {
 			}
 		}
 		if (!copiedTessdata) {
-			await $`wget --no-config -nc ${config.linux.tessdataUrl} -O ${tessdataFile}`
+			// This was a single-shot wget with no retries at all: one blip and the
+			// build died. Same cache + backoff path as every other native dependency.
+			await ensureCachedFile({
+				cacheKey: 'tessdata-fast-eng-v1',
+				destination: tessdataFile,
+				validate: (filePath) => validateFileSize(filePath, tessdataMinSize),
+				populate: (filePath) =>
+					downloadFile(config.linux.tessdataUrl, filePath, { retries: 10, timeoutMs: 300000 }),
+			})
 		}
 	} else {
 		console.log('TESSDATA already exists');

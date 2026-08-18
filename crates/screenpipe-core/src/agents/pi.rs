@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
-pub const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.83.0";
-pub const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.83.0";
+pub const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.84.1";
+pub const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.84.1";
 pub const PI_NAMESPACE_DIR: &str = "@earendil-works";
 pub const SCREENPIPE_API_URL: &str = "https://api.screenpipe.com/v1";
 const PI_INSTALL_ARGS: [&str; 5] = [
@@ -1711,6 +1711,7 @@ impl PiExecutor {
         shared_pid: Option<super::SharedPid>,
         line_tx: tokio::sync::mpsc::UnboundedSender<String>,
         continue_session: bool,
+        thinking_level: Option<&str>,
         pipe_system_prompt: Option<&str>,
         mcp_server_allowlist: Option<&[String]>,
         session_owner: Option<&str>,
@@ -1737,6 +1738,9 @@ impl PiExecutor {
         }
         cmd.arg("--provider").arg(resolved_provider);
         cmd.arg("--model").arg(model);
+        if let Some(level) = thinking_level {
+            cmd.arg("--thinking").arg(level);
+        }
         // Pass pipe instructions as system prompt for Anthropic prompt caching.
         // Pi's internal system prompt + this appended text form the cached prefix.
         if let Some(sys) = pipe_system_prompt {
@@ -1859,7 +1863,7 @@ impl PiExecutor {
         // BufReader::lines() which crashes on invalid UTF-8 bytes.
         // See: toggl-sync crash "stream did not contain valid UTF-8".
         let mut reader = tokio::io::BufReader::new(child_stdout);
-        let mut stdout_buf = String::new();
+        let mut stdout_buf = BoundedOutput::default();
         let mut llm_error: Option<String> = None;
         let mut line_bytes = Vec::new();
 
@@ -1905,8 +1909,7 @@ impl PiExecutor {
                 }
             }
 
-            stdout_buf.push_str(&line);
-            stdout_buf.push('\n');
+            stdout_buf.push_line(&line);
         }
 
         let status = child.wait().await?;
@@ -1938,7 +1941,7 @@ impl PiExecutor {
         };
 
         Ok(AgentOutput {
-            stdout: stdout_buf,
+            stdout: stdout_buf.into_string(),
             stderr,
             success,
             pid,
@@ -2073,6 +2076,7 @@ impl AgentExecutor for PiExecutor {
         shared_pid: Option<super::SharedPid>,
         line_tx: tokio::sync::mpsc::UnboundedSender<String>,
         continue_session: bool,
+        thinking_level: Option<&str>,
         pipe_system_prompt: Option<&str>,
         mcp_server_allowlist: Option<&[String]>,
         session_owner: Option<&str>,
@@ -2123,8 +2127,10 @@ impl AgentExecutor for PiExecutor {
         })?;
 
         info!(
-            "pipe streaming using provider: {}, model: {}",
-            resolved_provider, resolved_model
+            "pipe streaming using provider: {}, model: {}, effort: {}",
+            resolved_provider,
+            resolved_model,
+            thinking_level.unwrap_or("pi-default"),
         );
 
         let mut output = self
@@ -2138,6 +2144,7 @@ impl AgentExecutor for PiExecutor {
                 shared_pid.clone(),
                 line_tx.clone(),
                 continue_session,
+                thinking_level,
                 pipe_system_prompt,
                 mcp_server_allowlist,
                 session_owner,
@@ -2172,6 +2179,7 @@ impl AgentExecutor for PiExecutor {
                     None,
                     line_tx.clone(),
                     continue_session,
+                    thinking_level,
                     pipe_system_prompt,
                     mcp_server_allowlist,
                     session_owner,
@@ -2208,6 +2216,7 @@ impl AgentExecutor for PiExecutor {
                 None,
                 line_tx.clone(),
                 continue_session,
+                thinking_level,
                 pipe_system_prompt,
                 mcp_server_allowlist,
                 session_owner,
@@ -2418,6 +2427,24 @@ pub fn apply_pi_isolation_env(apply: &mut dyn FnMut(&str, &str)) {
     // We pin the pi version ourselves (ensure_installed); don't let the
     // subprocess phone pi.dev for update checks on every run.
     apply("PI_SKIP_VERSION_CHECK", "1");
+    // Same reasoning one layer out: the bundled skills tell agents to run the
+    // screenpipe CLI, and `bun x screenpipe@latest` spends ~1.5s resolving the
+    // registry on every single call. Hand them an already-resolved native
+    // binary when one is published; the skills fall back to `bun x` when this
+    // is unset, so an unpublished launcher is slow, never broken.
+    // `default_screenpipe_data_dir` is the one authority for this path on every
+    // platform — including Windows, where `%LOCALAPPDATA%\screenpipe` holds
+    // bundled tooling (git-portable, bun) but *not* the data dir.
+    let dir = crate::paths::default_screenpipe_data_dir();
+    if let Some(cli) = super::cli_runtime::resolved_cli_binary(&dir) {
+        apply(super::cli_runtime::CLI_ENV_VAR, &cli.to_string_lossy());
+    }
+    // Due-or-missing launcher: resolve out of band so the *next* run is fast.
+    // Single-flighted and best-effort — this never blocks the spawn it is
+    // attached to, and a failure just leaves the `bun x` fallback in place.
+    if let Some(bun) = find_bun_executable() {
+        super::cli_runtime::maybe_refresh_in_background(&dir, std::path::Path::new(&bun));
+    }
 }
 
 /// Marker file recording that the one-time seed from `~/.pi/agent` ran.
@@ -2810,6 +2837,67 @@ pub fn describe_exit_status_code(code: i32) -> String {
     format!("exit code {code}")
 }
 
+/// Head bytes kept verbatim by [`BoundedOutput`] — enough for the run's setup.
+const BOUNDED_OUTPUT_HEAD: usize = 64 * 1024;
+/// Trailing bytes kept by [`BoundedOutput`] — where the result or error lands.
+const BOUNDED_OUTPUT_TAIL: usize = 192 * 1024;
+
+/// A run's captured stdout, bounded in memory while keeping both ends.
+///
+/// The agent's stdout was accumulated into an unbounded `String` for the whole
+/// run, so a long agent turn with large tool results held all of it resident.
+/// Nothing parses this buffer — the JSON events are decoded per line as they
+/// arrive and this is only the stored record — so eliding the middle costs no
+/// behavior.
+///
+/// Both ends are kept deliberately: the head carries the run's setup and the
+/// tail carries the result or the error, which are the two things anyone
+/// reading a failed run actually needs.
+#[derive(Default)]
+pub struct BoundedOutput {
+    head: String,
+    tail: String,
+    dropped: usize,
+}
+
+impl BoundedOutput {
+    pub fn push_line(&mut self, line: &str) {
+        // `self.tail.is_empty()` closes the head for good once anything has
+        // spilled. Without it a short line still fits the head's leftover
+        // capacity after longer lines have already gone to the tail, and the
+        // record silently reorders itself.
+        if self.tail.is_empty() && self.head.len() + line.len() + 1 <= BOUNDED_OUTPUT_HEAD {
+            self.head.push_str(line);
+            self.head.push('\n');
+            return;
+        }
+        self.tail.push_str(line);
+        self.tail.push('\n');
+        // Trim whole lines off the front so the tail stays a run of complete
+        // lines rather than resuming mid-token.
+        while self.tail.len() > BOUNDED_OUTPUT_TAIL {
+            let Some(cut) = self.tail.find('\n').map(|i| i + 1) else {
+                break;
+            };
+            self.dropped += cut;
+            self.tail.drain(..cut);
+        }
+    }
+
+    pub fn into_string(self) -> String {
+        if self.tail.is_empty() {
+            return self.head;
+        }
+        if self.dropped == 0 {
+            return self.head + &self.tail;
+        }
+        format!(
+            "{}\n...[{} bytes elided to bound memory]...\n{}",
+            self.head, self.dropped, self.tail
+        )
+    }
+}
+
 /// Last `max` bytes of a captured process stream, lossy-decoded and
 /// char-boundary safe, with an "(empty)" placeholder so a silent subprocess
 /// can never reduce an error message to nothing.
@@ -2880,14 +2968,18 @@ pub fn scrub_bun_runtime_env(cmd: &mut std::process::Command) {
     }
 }
 
+/// bun is a console program, so the flag belongs here and not at the call
+/// sites. A factory that hands out an unguarded `Command` makes every caller
+/// responsible for remembering it, and the callers that spawn directly instead
+/// of going through a `*_output` helper did not.
 fn std_bun_command(bun: &str) -> std::process::Command {
-    let mut cmd = std::process::Command::new(bun);
+    let mut cmd = crate::no_window::no_window_command(bun);
     scrub_bun_runtime_env(&mut cmd);
     cmd
 }
 
 fn tokio_bun_command(bun: &str) -> tokio::process::Command {
-    let mut cmd = tokio::process::Command::new(bun);
+    let mut cmd = crate::no_window::no_window_command_async(bun);
     if should_scrub_bun_runtime_env() {
         cmd.env_remove("LD_LIBRARY_PATH");
     }
@@ -3183,7 +3275,7 @@ fn build_async_command(path: &str) -> tokio::process::Command {
                 debug!("bypassing cmd.exe, running pi via bun: {} {}", bun, js_path);
                 c
             } else {
-                let mut c = tokio::process::Command::new("node");
+                let mut c = crate::no_window::no_window_command_async("node");
                 c.arg(js_path);
                 debug!("bypassing cmd.exe, running pi via node: {}", js_path);
                 c
@@ -3194,7 +3286,7 @@ fn build_async_command(path: &str) -> tokio::process::Command {
                 "could not resolve JS entry from {}, falling back to cmd.exe /C",
                 path
             );
-            let mut c = tokio::process::Command::new("cmd.exe");
+            let mut c = crate::no_window::no_window_command_async("cmd.exe");
             c.args(["/C", path]);
             c
         } else if path.ends_with(".js") {
@@ -3205,12 +3297,12 @@ fn build_async_command(path: &str) -> tokio::process::Command {
                 debug!("running pi JS entrypoint via bun: {} {}", bun, path);
                 c
             } else {
-                let mut c = tokio::process::Command::new("node");
+                let mut c = crate::no_window::no_window_command_async("node");
                 c.arg(path);
                 c
             }
         } else {
-            tokio::process::Command::new(path)
+            crate::no_window::no_window_command_async(path)
         };
 
         // Inject bundled bun directory into PATH so node_modules resolve correctly.
@@ -4609,7 +4701,7 @@ mod tests {
         assert_eq!(parse_rate_limit_reset_secs("model not found"), None);
 
         // hosted_ai_capacity_reserved uses "retry_after_seconds", not "reset_in".
-        let capacity_reserved = r#"429 {"error":"hosted_ai_capacity_reserved","message":"Other hosted AI chats are still running. Wait for one to finish, then retry.","retry_after_seconds":5}"#;
+        let capacity_reserved = r#"429 {"error":"hosted_ai_capacity_reserved","message":"Other AI chats are still running. Wait for one to finish, then retry.","retry_after_seconds":5}"#;
         assert_eq!(parse_rate_limit_reset_secs(capacity_reserved), Some(5));
     }
 
@@ -4853,7 +4945,7 @@ mod tests {
     #[test]
     fn test_next_rate_limit_retry_capacity_reserved_outlasts_fixed_retry_cap() {
         // Real gateway payload for contention on the shared hosted-AI slot.
-        let stderr = r#"429 {"error":"hosted_ai_capacity_reserved","message":"Other hosted AI chats are still running. Wait for one to finish, then retry.","retry_after_seconds":5}"#;
+        let stderr = r#"429 {"error":"hosted_ai_capacity_reserved","message":"Other AI chats are still running. Wait for one to finish, then retry.","retry_after_seconds":5}"#;
 
         // Simulate holding capacity for 35s (7 retries at 5s each) — longer
         // than the fixed MAX_RATE_LIMIT_RETRIES=3 a generic rate limit gets.
@@ -4964,7 +5056,7 @@ mod tests {
     ) {
         // Simulate the shared hosted-AI slot staying busy for 4 attempts —
         // one more than MAX_RATE_LIMIT_RETRIES=3 — before it frees up.
-        let capacity_stderr = r#"429 {"error":"hosted_ai_capacity_reserved","message":"Other hosted AI chats are still running. Wait for one to finish, then retry.","retry_after_seconds":5}"#;
+        let capacity_stderr = r#"429 {"error":"hosted_ai_capacity_reserved","message":"Other AI chats are still running. Wait for one to finish, then retry.","retry_after_seconds":5}"#;
         let calls = std::cell::RefCell::new(0u32);
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -5104,6 +5196,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_ensure_pi_config_adds_ollama_provider() {
+        // Redirect to a temp dir. Without this the test both reads and WRITES
+        // the developer's real `~/.screenpipe/pi-chat/.pi/models.json`, so it
+        // mutates live config on every `cargo test -p screenpipe-core` and then
+        // fails for anyone who already has an ollama model configured (the
+        // `models.len() == 1` assertion below sees their models, not ours).
+        // This is the only test in the module that touches the pi config dir,
+        // so overriding the process env here cannot disturb its neighbours.
+        let temp = tempfile::tempdir().expect("tempdir");
+        // Drop the migration marker in first: `pi_config_dir` seeds any
+        // unmarked dir from the global `~/.pi/agent`, which would copy the
+        // developer's own ollama models straight back in.
+        std::fs::write(temp.path().join(PI_MIGRATION_MARKER), "").expect("seed marker");
+        std::env::set_var("SCREENPIPE_PI_AGENT_DIR", temp.path());
+
         // Call ensure_pi_config with ollama provider info
         PiExecutor::ensure_pi_config(
             None,
@@ -5135,6 +5241,8 @@ mod tests {
         let models = ollama.get("models").unwrap().as_array().unwrap();
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].get("id").unwrap().as_str().unwrap(), "qwen3:8b");
+
+        std::env::remove_var("SCREENPIPE_PI_AGENT_DIR");
     }
 
     /// Regression: the engine used to capture the cloud user token once at
@@ -5275,6 +5383,72 @@ mod tests {
             "stdout diagnostics must survive: {}",
             msg
         );
+    }
+
+    /// A normal run must round-trip byte-for-byte — this replaced an unbounded
+    /// `String`, so anything short has to look exactly as it did before.
+    #[test]
+    fn short_output_is_unchanged() {
+        let mut out = BoundedOutput::default();
+        out.push_line("{\"type\":\"start\"}");
+        out.push_line("{\"type\":\"agent_end\"}");
+        assert_eq!(
+            out.into_string(),
+            "{\"type\":\"start\"}\n{\"type\":\"agent_end\"}\n"
+        );
+    }
+
+    /// A long agent turn is bounded, and both ends survive: the head carries
+    /// the setup, the tail carries the result or error. Losing the tail would
+    /// be worse than the memory it saves — that is where failures land.
+    #[test]
+    fn long_output_is_bounded_and_keeps_both_ends() {
+        let mut out = BoundedOutput::default();
+        out.push_line("FIRST_LINE_MARKER");
+        for i in 0..40_000 {
+            out.push_line(&format!(
+                "{{\"tool_result\":{},\"padding\":\"{}\"}}",
+                i,
+                "x".repeat(64)
+            ));
+        }
+        out.push_line("LAST_LINE_MARKER");
+
+        let s = out.into_string();
+        assert!(
+            s.starts_with("FIRST_LINE_MARKER\n"),
+            "head must survive so the run's setup is still readable"
+        );
+        assert!(
+            s.trim_end().ends_with("LAST_LINE_MARKER"),
+            "tail must survive — the result and any error land there"
+        );
+        assert!(
+            s.contains("bytes elided"),
+            "elision must be visible, not silent"
+        );
+        assert!(
+            s.len() <= BOUNDED_OUTPUT_HEAD + BOUNDED_OUTPUT_TAIL + 128,
+            "bounded output grew to {} bytes",
+            s.len()
+        );
+    }
+
+    /// The tail is trimmed by whole lines, so it never resumes mid-JSON.
+    #[test]
+    fn elided_tail_starts_on_a_line_boundary() {
+        let mut out = BoundedOutput::default();
+        for i in 0..40_000 {
+            out.push_line(&format!("{{\"n\":{},\"pad\":\"{}\"}}", i, "y".repeat(64)));
+        }
+        let s = out.into_string();
+        let tail = s.rsplit("]...\n").next().unwrap();
+        for line in tail.lines().take(5) {
+            assert!(
+                line.starts_with('{') && line.ends_with('}'),
+                "tail line resumed mid-record: {line}"
+            );
+        }
     }
 
     #[test]

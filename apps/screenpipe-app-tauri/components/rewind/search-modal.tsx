@@ -13,6 +13,14 @@ import {
   type SearchAnalyticsSurface,
 } from "@/lib/hooks/use-keyword-search-store";
 import { buildResultTimeRanges } from "@/lib/search/result-facets";
+import {
+  APP_ENTITY_SQL,
+  filterAppEntities,
+  formatAppEntityMeta,
+  parseAppEntities,
+  parseEntityFilter,
+  type AppEntity,
+} from "@/lib/search/app-entities";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useSearchFocus } from "./hooks/use-search-focus";
 import { listen, emit } from "@tauri-apps/api/event";
@@ -35,6 +43,7 @@ import { getFrameThumbnailSources } from "@/lib/frame-thumbnails";
 import { NearViewport } from "./near-viewport";
 import { localFetch, getApiBaseUrl, appendAuthToken } from "@/lib/api";
 import { searchInputBehaviorProps } from "@/lib/search-input-behavior";
+import { usePlatform } from "@/lib/hooks/use-platform";
 import posthog from "posthog-js";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
 
@@ -75,6 +84,7 @@ type SearchResultType =
   | "input"
   | "chat"
   | "person"
+  | "app"
   | "speaker_transcription"
   | "tagged_frame";
 
@@ -500,6 +510,13 @@ function SeeAllRow({ label, onClick }: { label: string; onClick: () => void }) {
 /** Shortest query that searches anything — every scope honours this one value */
 const MIN_QUERY_CHARS = 3;
 
+/**
+ * Page size for a keyword-free app browse. Deliberately larger than the keyword
+ * grid's page: browsing has no relevance ranking to lean on, so the first
+ * screen has to cover more ground before you scroll.
+ */
+const APP_BROWSE_PAGE_SIZE = 36;
+
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     // One treatment for every group label. No icon — the rows carry their own,
@@ -575,6 +592,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     : embedded
       ? "embedded"
       : "modal";
+  const { isMac } = usePlatform();
   const [query, setQuery] = useState("");
   // Index into `navItems` — the single selection shared by every section
   const [navIndex, setNavIndex] = useState(0);
@@ -673,12 +691,33 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const [selectedTranscriptionIndex, setSelectedTranscriptionIndex] = useState(0);
   const [transcriptionFrames, setTranscriptionFrames] = useState<Map<string, { frame_id: number; app_name: string }>>(new Map());
 
+  // App entity state. The roster is all-time and shared by every `@` keystroke,
+  // so it is fetched once per open rather than per filter change.
+  const [appEntities, setAppEntities] = useState<AppEntity[]>([]);
+  const [isLoadingAppEntities, setIsLoadingAppEntities] = useState(false);
+  const appRosterInFlightRef = useRef(false);
+  // Drill-down: browsing one app with no keyword at all.
+  const [selectedApp, setSelectedApp] = useState<AppEntity | null>(null);
+  const [appFrames, setAppFrames] = useState<SearchMatch[]>([]);
+  const [isLoadingAppFrames, setIsLoadingAppFrames] = useState(false);
+  const [appFrameOffset, setAppFrameOffset] = useState(0);
+  const [hasMoreAppFrames, setHasMoreAppFrames] = useState(true);
+  const [isLoadingMoreAppFrames, setIsLoadingMoreAppFrames] = useState(false);
+
   // Tag search state
   const [tagResults, setTagResults] = useState<TaggedFrame[]>([]);
   const [allTags, setAllTags] = useState<string[]>([]); // distinct tags for autocomplete
   const [isSearchingTags, setIsSearchingTags] = useState(false);
   const isTagSearch = query.startsWith("#");
-  const isPeopleSearch = query.startsWith("@");
+  // `@` is the entity namespace, matching the chat composer: apps and people
+  // share it, and the grouped dropdown does the disambiguating. It used to be
+  // people-only here, which left app filtering reachable only as a chip on a
+  // result set you had already found some other way.
+  // True only while the picker is showing. Once an app is chosen the query
+  // still reads `@signal`, but the surface is a result grid, so every render
+  // guard below has to stop treating it as the entity namespace.
+  const isEntitySearch = query.startsWith("@") && !selectedApp;
+  const entityFilter = parseEntityFilter(query) ?? "";
 
   // Content type filter
   type ContentFilter = "all" | "screen" | "input" | "chats";
@@ -892,20 +931,25 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   // Same rule as the app and domain chips: count only results the grid can
   // show, narrowed by the other active filters but not by the time filter
   // itself, so every day chip stays selectable.
+  // Browsing one app replaces the keyword result set wholesale. Everything
+  // downstream (grid, thumbnails, keyboard nav, day chips) then works unchanged
+  // instead of needing a second parallel surface.
+  const resultSource = selectedApp ? appFrames : searchResults;
+
   const timeRanges = useMemo(
-    () => buildResultTimeRanges(searchResults, { appFilter, domainFilter }),
-    [appFilter, domainFilter, searchResults],
+    () => buildResultTimeRanges(resultSource, { appFilter, domainFilter }),
+    [appFilter, domainFilter, resultSource],
   );
 
   const filteredResults = useMemo(() => {
-    let results = searchResults;
+    let results = resultSource;
     if (appFilter) results = results.filter(r => r.app_name === appFilter);
     if (domainFilter) results = results.filter(r => {
       try { return new URL(r.url).hostname.replace(/^www\./, "") === domainFilter; } catch { return false; }
     });
     if (timeFilter) results = results.filter(r => matchesTimeFilter(r.timestamp));
     return results;
-  }, [searchResults, appFilter, domainFilter, timeFilter, matchesTimeFilter]);
+  }, [resultSource, appFilter, domainFilter, timeFilter, matchesTimeFilter]);
 
   const handleThumbnailStatusChange = useCallback((
     frameId: number,
@@ -933,7 +977,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   // `searchQuery` on the previous query forever, and gating only on success
   // meant the chat pass never ran and the panel never stopped loading.
   useEffect(() => {
-    if (!isOpen || isTagSearch || isPeopleSearch) {
+    if (!isOpen || isTagSearch || isEntitySearch) {
       setChatsPassPending(false);
       return;
     }
@@ -959,7 +1003,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       return;
     }
     setChatsPassPending(true);
-  }, [contentFilter, debouncedQuery, isOpen, isTagSearch, isPeopleSearch, loadChats, searchQuery, searchError, isSearching]);
+  }, [contentFilter, debouncedQuery, isOpen, isTagSearch, isEntitySearch, loadChats, searchQuery, searchError, isSearching]);
 
   // Chat results are already bounded / searched in chat-storage.
   const filteredChats = useMemo(() => {
@@ -976,7 +1020,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   // and Enter for all content types, so selection is always defined — including
   // on open, over the recent chats, where nothing used to be selectable.
   const navItems = useMemo<NavItem[]>(() => {
-    if (selectedSpeaker || isTagSearch || isPeopleSearch) return [];
+    if (selectedSpeaker || isTagSearch || isEntitySearch) return [];
     const items: NavItem[] = [];
     const q = debouncedQuery.trim();
 
@@ -1011,7 +1055,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       const shown = contentFilter === "all" ? uiEventResults.slice(0, 5) : uiEventResults;
       for (const evt of shown) items.push({ kind: "uievent", id: String(evt.id) });
     }
-    if (searchResults.length > 0 && contentFilter !== "input") {
+    if (resultSource.length > 0 && contentFilter !== "input") {
       filteredResults.forEach((result, index) => {
         if (readyThumbnailFrameIds.has(result.frame_id)) {
           items.push({ kind: "frame", index });
@@ -1026,12 +1070,12 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     filteredChats,
     filteredResults,
     isLoadingChats,
-    isPeopleSearch,
+    isEntitySearch,
     isTagSearch,
     query,
     readyThumbnailFrameIds,
     recentChats,
-    searchResults.length,
+    resultSource.length,
     selectedSpeaker,
     uiEventResults,
   ]);
@@ -1099,9 +1143,9 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
   // Tokenize query for thumbnail highlights (split on spaces, filter empty)
   const queryTokens = useMemo(() => {
-    if (!debouncedQuery || isTagSearch || isPeopleSearch) return [];
+    if (!debouncedQuery || isTagSearch || isEntitySearch) return [];
     return queryHighlightTokens(debouncedQuery);
-  }, [debouncedQuery, isTagSearch, isPeopleSearch]);
+  }, [debouncedQuery, isTagSearch, isEntitySearch]);
 
   const { setHighlight, clear: clearHighlight } = useSearchHighlight();
 
@@ -1168,6 +1212,9 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       setTagResults([]);
       setAllTags([]);
       setSelectedSpeaker(null);
+      setSelectedApp(null);
+      setAppEntities([]);
+      appRosterInFlightRef.current = false;
       setSpeakerTranscriptions([]);
       setSelectedTranscriptionIndex(0);
       setOcrOffset(0);
@@ -1315,6 +1362,134 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
     return () => { cancelled = true; };
   }, [debouncedQuery]);
+
+  // Load the all-time app roster the first time `@` is used in this open.
+  // One fetch covers every subsequent keystroke: filtering happens in memory,
+  // so `@s` -> `@si` -> `@sig` does not re-hit the database.
+  //
+  // The in-flight guard is a ref, not the loading state. Depending on state
+  // this effect itself sets makes it re-run, and the re-run's cleanup aborts
+  // the request that was still in flight — leaving the skeleton up forever.
+  useEffect(() => {
+    if (!isEntitySearch || appEntities.length > 0 || appRosterInFlightRef.current) return;
+    appRosterInFlightRef.current = true;
+
+    let cancelled = false;
+    const controller = new AbortController();
+
+    (async () => {
+      setIsLoadingAppEntities(true);
+      try {
+        const resp = await localFetch("/raw_sql", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: APP_ENTITY_SQL }),
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]),
+        });
+        if (resp.ok && !cancelled) {
+          setAppEntities(parseAppEntities(await resp.json()));
+        }
+      } catch {
+        // A missing roster degrades to people-only, which is the old behaviour.
+      } finally {
+        appRosterInFlightRef.current = false;
+        if (!cancelled) setIsLoadingAppEntities(false);
+      }
+    })();
+
+    return () => { cancelled = true; controller.abort(); };
+  }, [isEntitySearch, appEntities.length]);
+
+  const appSuggestions = useMemo(() => {
+    if (!isEntitySearch || selectedApp || selectedSpeaker) return [];
+    return filterAppEntities(appEntities, entityFilter, 12);
+  }, [appEntities, entityFilter, isEntitySearch, selectedApp, selectedSpeaker]);
+
+  /**
+   * Map a `/search` OCR row onto the shape the result grid already renders.
+   * `text_positions` is empty on purpose: a keyword-free browse has nothing to
+   * highlight, and the grid treats an empty list as "no highlight" already.
+   */
+  const toAppFrame = useCallback((item: any): SearchMatch => ({
+    frame_id: item?.content?.frame_id ?? 0,
+    timestamp: item?.content?.timestamp || "",
+    text_positions: [],
+    app_name: item?.content?.app_name || "",
+    window_name: item?.content?.window_name || "",
+    confidence: 1,
+    text: item?.content?.text || "",
+    url: item?.content?.browser_url || "",
+    text_source: item?.content?.text_source ?? null,
+  }), []);
+
+  // Browse one app with no keyword. This is the query the `@` namespace exists
+  // for ("every time I used Signal"), and it is why the roster has to be
+  // all-time: `/search` takes `app_name` without `q`, so there is no FTS term
+  // and no minimum-character floor in play here.
+  useEffect(() => {
+    if (!selectedApp) {
+      setAppFrames([]);
+      setAppFrameOffset(0);
+      setHasMoreAppFrames(true);
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+
+    (async () => {
+      setIsLoadingAppFrames(true);
+      try {
+        const params = new URLSearchParams({
+          content_type: "ocr",
+          app_name: selectedApp.name,
+          limit: APP_BROWSE_PAGE_SIZE.toString(),
+          offset: "0",
+        });
+        const resp = await localFetch(`/search?${params}`, {
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]),
+        });
+        if (resp.ok && !cancelled) {
+          const data = await resp.json();
+          const items = (data?.data || []).map(toAppFrame);
+          setAppFrames(items);
+          setAppFrameOffset(items.length);
+          setHasMoreAppFrames(items.length >= APP_BROWSE_PAGE_SIZE);
+        }
+      } catch {
+        if (!cancelled) setHasMoreAppFrames(false);
+      } finally {
+        if (!cancelled) setIsLoadingAppFrames(false);
+      }
+    })();
+
+    return () => { cancelled = true; controller.abort(); };
+  }, [selectedApp, toAppFrame]);
+
+  const loadMoreAppFrames = useCallback(async () => {
+    if (isLoadingMoreAppFrames || !hasMoreAppFrames || !selectedApp) return;
+    setIsLoadingMoreAppFrames(true);
+    try {
+      const params = new URLSearchParams({
+        content_type: "ocr",
+        app_name: selectedApp.name,
+        limit: APP_BROWSE_PAGE_SIZE.toString(),
+        offset: appFrameOffset.toString(),
+      });
+      const resp = await localFetch(`/search?${params}`);
+      if (resp.ok) {
+        const data = await resp.json();
+        const items = (data?.data || []).map(toAppFrame);
+        setAppFrames(prev => [...prev, ...items]);
+        setAppFrameOffset(prev => prev + items.length);
+        setHasMoreAppFrames(items.length >= APP_BROWSE_PAGE_SIZE);
+      }
+    } catch {
+      setHasMoreAppFrames(false);
+    } finally {
+      setIsLoadingMoreAppFrames(false);
+    }
+  }, [appFrameOffset, hasMoreAppFrames, isLoadingMoreAppFrames, selectedApp, toAppFrame]);
 
   // Search speakers. @ queries are immediate; normal text queries wait for the
   // first keyword pass so names do not slow down the first result.
@@ -1580,6 +1755,16 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     requestAnimationFrame(() => focusInput());
   }, [focusInput]);
 
+  // Handle going back from an app browse. Leaves the `@` query in the input so
+  // Esc lands you back on the entity list rather than an empty search.
+  const handleBackFromApp = useCallback(() => {
+    setSelectedApp(null);
+    setAppFilter(null);
+    setDomainFilter(null);
+    setTimeFilter(null);
+    requestAnimationFrame(() => focusInput());
+  }, [focusInput]);
+
   // Load more OCR results
   const loadMoreOcr = useCallback(() => {
     if (isLoadingMore || !hasMoreOcr || !debouncedQuery.trim()) return;
@@ -1718,11 +1903,13 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     if (nearBottom) {
       if (selectedSpeaker) {
         loadMoreTranscriptions();
+      } else if (selectedApp) {
+        void loadMoreAppFrames();
       } else {
         loadMoreOcr();
       }
     }
-  }, [selectedSpeaker, loadMoreOcr, loadMoreTranscriptions]);
+  }, [selectedSpeaker, selectedApp, loadMoreAppFrames, loadMoreOcr, loadMoreTranscriptions]);
 
   const navigateToResult = useCallback(async (
     timestamp: string,
@@ -1864,7 +2051,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
       switch (e.key) {
         case "Escape":
-          onClose();
+          // An app browse is a drill-down like the speaker one: back out of it
+          // first so Esc does not throw away the window on the way past.
+          if (selectedApp) {
+            e.preventDefault();
+            handleBackFromApp();
+          } else {
+            onClose();
+          }
           break;
         case "ArrowRight":
           if (!framesOwnHorizontal) return;
@@ -1923,15 +2117,21 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     };
 
     window.addEventListener("keydown", handleKeyDown);
+    // Capture phase, so this runs before anything else can swallow Escape. It
+    // has to honour drill-downs itself: closing unconditionally here is what
+    // made "esc back" in the footer a lie for the speaker view, because the
+    // window was already gone by the time the bubble handler went back.
     const captureEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      if (selectedApp || selectedSpeaker) return;
+      onClose();
     };
     document.addEventListener("keydown", captureEscape, true);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       document.removeEventListener("keydown", captureEscape, true);
     };
-  }, [isOpen, selectedSpeaker, onClose, navigateToResult, handleSelectResult, handleSendToAI, handleBackFromSpeaker, handleOpenChatResult, trackSearchResultSelected, embedded, frameColumns]);
+  }, [isOpen, selectedSpeaker, selectedApp, handleBackFromApp, onClose, navigateToResult, handleSelectResult, handleSendToAI, handleBackFromSpeaker, handleOpenChatResult, trackSearchResultSelected, embedded, frameColumns]);
 
   // Scroll selected row into view (only on arrow-key navigation, not on new page load)
   const prevNavIndex = useRef(navIndex);
@@ -2098,7 +2298,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   // it hanging; `chatsFreshForQuery` still decides which rows are safe to show.
   const chatsFreshForQuery = chatsQuery === trimmedQuery;
   const chatsPending = contentFilter !== "screen" && chatsPassPending;
-  const anyLoading = isSearching || isSearchingSpeakers || isSearchingTags || isSearchingUiEvents || isLoadingChats || chatsPending;
+  const anyLoading = isSearching || isSearchingSpeakers || isSearchingTags || isSearchingUiEvents || isLoadingChats || chatsPending || isLoadingAppFrames;
   const pendingScreenCardsRendered =
     contentFilter !== "input" && filteredResults.length > 0;
   const nothingRendered =
@@ -2111,8 +2311,10 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   // character the recents are stale, so they go immediately rather than 250ms
   // later. Every scope reads this same flag.
   const queryBelowMinimum = liveQuery.length > 0 && liveQuery.length < MIN_QUERY_CHARS;
-  const emptyEligible = !selectedSpeaker && !isTagSearch && !isPeopleSearch && nothingRendered;
-  const showMinChars = emptyEligible && queryBelowMinimum;
+  const emptyEligible = !selectedSpeaker && !isTagSearch && !isEntitySearch && nothingRendered;
+  // An app browse has no keyword, so the minimum-character rule does not apply:
+  // picking Signal from `@si` must not answer with "keep typing".
+  const showMinChars = emptyEligible && queryBelowMinimum && !selectedApp;
   // In flight — including the debounce gap before the request even starts.
   // Without this the panel was simply blank until results landed, and blank
   // reads as "no matches" rather than "still looking".
@@ -2124,7 +2326,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   // The query found screen results but the applied facets filtered them all
   // out. Blaming the query ("no screen matches for X") is wrong — the results
   // exist, a chip is hiding them — and the fix is to clear the chip.
-  const facetsHidEverything = searchResults.length > 0 && filteredResults.length === 0
+  const facetsHidEverything = resultSource.length > 0 && filteredResults.length === 0
     && (contentFilter === "screen" || contentFilter === "all");
   // A search that failed is not a search that found nothing. Without its own
   // branch the panel said "No results for X" for a backend that never answered,
@@ -2163,7 +2365,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   // a segmented control instead of a dropdown because the search window is
   // sized to its card — a popup menu would be clipped by the window frame.
   const renderScopeSwitcher = () => {
-    if (isTagSearch || isPeopleSearch) return null;
+    if (isTagSearch || isEntitySearch) return null;
     // Nothing to scope until there's a query: the list is recent chats only,
     // and "screen"/"keys" would filter an empty search down to nothing. The
     // control appears on the first keystroke. It stays visible while a
@@ -2219,6 +2421,14 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         </>
       );
     }
+    if (selectedApp && !activeNavItem) {
+      return (
+        <>
+          <span>↑↓ navigate</span>
+          <span>esc back</span>
+        </>
+      );
+    }
     if (!activeNavItem) return <span>type to search</span>;
     return (
       <>
@@ -2227,9 +2437,9 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             line was typed or copied — and Enter opens the main timeline there. */}
         <span>{activeNavItem.kind === "chat" ? "⏎ open chat" : "⏎ go to timeline"}</span>
         {activeNavItem.kind === "frame" && (
-          <span className="flex items-center gap-1">
+          <span className="flex items-center gap-1" suppressHydrationWarning>
             <MessageSquare className="w-2.5 h-2.5" />
-            ⌘⏎ ask AI
+            {isMac ? "⌘⏎" : "Ctrl+⏎"} ask AI
           </span>
         )}
       </>
@@ -2419,6 +2629,31 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         </div>
       ) : (
         <>
+          {/* === App browse header ===
+              The grid below is the ordinary result grid: `filteredResults` is
+              already sourced from the browse, so day chips, thumbnails and
+              keyboard nav need no special case. */}
+          {selectedApp && (
+            <button
+              onClick={handleBackFromApp}
+              className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground mb-4 transition-colors"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <AppWindow className="w-3.5 h-3.5" />
+              <span className="font-medium text-foreground">{selectedApp.name}</span>
+              <span className="text-xs text-muted-foreground">
+                {formatAppEntityMeta(selectedApp)}
+              </span>
+            </button>
+          )}
+
+          {selectedApp && !isLoadingAppFrames && appFrames.length === 0 && (
+            <EmptyMessage
+              title={`No screen history for ${selectedApp.name}`}
+              hint="Frames may have been removed by a retention policy"
+            />
+          )}
+
           {/* Empty state */}
           {showMinChars && (
             <EmptyMessage
@@ -2590,8 +2825,38 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             </div>
           )}
 
-          {/* @ people search loading */}
-          {isPeopleSearch && isSearchingSpeakers && speakerResults.length === 0 && (
+          {/* === @ apps ===
+              Listed above people because "which app was that in" is the far
+              more common reason to reach for `@`, and because an app row opens
+              a browse whereas a person row needs their name to be known. */}
+          {isEntitySearch && appSuggestions.length > 0 && (
+            <div className="mb-4">
+              <SectionLabel>apps</SectionLabel>
+              <div className="space-y-1">
+                {appSuggestions.map((app) => (
+                  <button
+                    key={app.name}
+                    onClick={() => {
+                      trackSearchResultSelected("app", "click", "drilldown");
+                      setSelectedApp(app);
+                      setNavIndex(0);
+                    }}
+                    className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-[6px] text-left hover:bg-muted transition-colors"
+                  >
+                    <AppWindow className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                    <span className="text-sm text-foreground truncate">{app.name}</span>
+                    <span className="ml-auto text-xs text-muted-foreground shrink-0">
+                      {formatAppEntityMeta(app)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* @ entity search loading */}
+          {isEntitySearch && (isSearchingSpeakers || isLoadingAppEntities)
+            && speakerResults.length === 0 && appSuggestions.length === 0 && (
             <div className="space-y-3">
               {Array.from({ length: 4 }).map((_, i) => (
                 <div key={i} className="bg-muted animate-pulse rounded p-3 h-10" />
@@ -2599,17 +2864,19 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             </div>
           )}
 
-          {/* @ people search empty */}
-          {isPeopleSearch && !isSearchingSpeakers && speakerResults.length === 0 && (
+          {/* @ entity search empty. Has to account for both halves of the
+              namespace: an app match alone means this is not empty. */}
+          {isEntitySearch && !isSearchingSpeakers && !isLoadingAppEntities
+            && speakerResults.length === 0 && appSuggestions.length === 0 && (
             <div className="py-12 text-center text-sm text-muted-foreground">
-              {query.slice(1).trim()
-                ? <>no people matching &quot;{query.slice(1).trim()}&quot;</>
-                : "no speakers found"}
+              {entityFilter
+                ? <>no apps or people matching &quot;{entityFilter}&quot;</>
+                : "no apps or people found"}
             </div>
           )}
 
           {/* Loading skeleton — filter chips + thumbnail grid */}
-          {!isTagSearch && !isPeopleSearch && isSearching && searchResults.length === 0 && uiEventResults.length === 0 && speakerResults.length === 0 && (
+          {!isTagSearch && !isEntitySearch && isSearching && searchResults.length === 0 && uiEventResults.length === 0 && speakerResults.length === 0 && (
             <>
               {/* Skeleton filter chips */}
               <div className="flex gap-1.5 mb-2 overflow-hidden">
@@ -2671,7 +2938,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           )}
 
           {/* Inline chat section in "All" view — appears instantly (in-memory filter) while screen results load */}
-          {contentFilter === "all" && debouncedQuery.trim().length >= MIN_QUERY_CHARS && chatsFreshForQuery && filteredChats.length > 0 && !isTagSearch && !isPeopleSearch && (
+          {contentFilter === "all" && debouncedQuery.trim().length >= MIN_QUERY_CHARS && chatsFreshForQuery && filteredChats.length > 0 && !isTagSearch && !isEntitySearch && (
             <div className="mb-4">
               <SectionLabel>chats</SectionLabel>
               <div className="flex flex-col">
@@ -2852,7 +3119,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           )}
 
           {/* Screen results grid */}
-          {searchResults.length > 0 && contentFilter !== "input" && contentFilter !== "chats" && (
+          {resultSource.length > 0 && contentFilter !== "input" && contentFilter !== "chats" && (
             <>
               {/* Always labelled in the blended view. The facets below refine
                   only this section, so the heading is what scopes them — it
@@ -3229,7 +3496,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                 setHasMoreTranscriptions(true);
               }
             }}
-            placeholder="search memory & chats... (# tags, @ people)"
+            placeholder="search memory & chats... (# tags, @ apps & people)"
             className={cn(
               "min-w-[120px] flex-1 bg-transparent text-foreground placeholder:text-muted-foreground/60 outline-none",
               standalone ? "text-base" : "text-sm",
@@ -3329,7 +3596,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                 setHasMoreTranscriptions(true);
               }
             }}
-            placeholder="Search memory & chats... (# tags, @ people)"
+            placeholder="Search memory & chats... (# tags, @ apps & people)"
             className="min-w-[120px] flex-1 bg-transparent text-foreground placeholder:text-muted-foreground text-sm outline-none"
             {...searchInputBehaviorProps}
           />
@@ -3378,7 +3645,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           <div className="flex items-center gap-4">
             {renderFooterHints()}
           </div>
-          <span>esc {selectedSpeaker ? "back" : "close"}</span>
+          <span>esc {selectedSpeaker || selectedApp ? "back" : "close"}</span>
         </div>
       </div>
     </div>

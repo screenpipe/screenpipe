@@ -81,6 +81,9 @@ import {
   uninstallCursorMcp,
   installHermesMcp,
   uninstallHermesMcp,
+  installRunnerMcp,
+  uninstallRunnerMcp,
+  detectAiTools,
   connectAiTool,
   disconnectAiTool,
   friendlyToolError,
@@ -88,6 +91,7 @@ import {
 
 const CURSOR = "/Users/test/.cursor/mcp.json";
 const HERMES = "/Users/test/.hermes/config.yaml";
+const RUNNER = "/Users/test/.runner/mcp.json";
 
 const backupsOf = (path: string) =>
   Array.from(fsMock.files.keys()).filter((p) => p.startsWith(`${path}.screenpipe-backup-`));
@@ -194,6 +198,37 @@ describe("hermes yaml handling", () => {
   });
 });
 
+describe("runner desktop MCP", () => {
+  it("detects Runner from its global config directory", async () => {
+    fsMock.files.set("/Users/test/.runner", "directory marker");
+
+    await expect(detectAiTools()).resolves.toContain("runner");
+  });
+
+  it("writes Runner's stdio shape and preserves unrelated config", async () => {
+    const seeded = JSON.stringify({
+      mcpServers: { other: { type: "http", url: "https://example.com/mcp" } },
+      workspace: "kept",
+    });
+    fsMock.files.set(RUNNER, seeded);
+
+    await installRunnerMcp();
+
+    const config = JSON.parse(fsMock.files.get(RUNNER)!);
+    expect(config.workspace).toBe("kept");
+    expect(config.mcpServers.other.url).toBe("https://example.com/mcp");
+    expect(config.mcpServers.screenpipe.type).toBe("stdio");
+    expect(config.mcpServers.screenpipe.command).toBe("/app/bun");
+    expect(config.mcpServers.screenpipe.env.SCREENPIPE_MCP_CLIENT).toBe("runner");
+    expect(backupsOf(RUNNER)).toHaveLength(1);
+
+    await uninstallRunnerMcp();
+    const removed = JSON.parse(fsMock.files.get(RUNNER)!);
+    expect(removed.mcpServers.screenpipe).toBeUndefined();
+    expect(removed.mcpServers.other.url).toBe("https://example.com/mcp");
+  });
+});
+
 describe("friendlyToolError", () => {
   it("keeps the absolute path for the open-file action but displays it tildified", () => {
     const err = friendlyToolError(
@@ -245,9 +280,9 @@ describe("transactional connect / disconnect", () => {
     expect(skillsMock.removeExternalAgentSkills).toHaveBeenCalledWith("cursor");
   });
 
-  it("windsurf is MCP-only: no skills calls either way", async () => {
-    await connectAiTool("windsurf");
-    await disconnectAiTool("windsurf");
+  it.each(["runner", "windsurf"] as const)("%s is MCP-only: no skills calls either way", async (tool) => {
+    await connectAiTool(tool);
+    await disconnectAiTool(tool);
 
     expect(skillsMock.installExternalAgentSkills).not.toHaveBeenCalled();
     expect(skillsMock.removeExternalAgentSkills).not.toHaveBeenCalled();

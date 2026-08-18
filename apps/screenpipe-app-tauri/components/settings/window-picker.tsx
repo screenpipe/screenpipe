@@ -23,9 +23,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { useAppWindowTree, AppWindowNode } from "@/lib/hooks/use-sql-autocomplete";
-
-const APP_ICON_URL = (app: string) =>
-  `http://localhost:11435/app-icon?name=${encodeURIComponent(app)}`;
+import { appIconUrl } from "./capture-filters/icon-urls";
 
 function formatCount(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
@@ -193,7 +191,7 @@ export function WindowPicker({
                       <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
                     )}
                     <img
-                      src={APP_ICON_URL(node.app)}
+                      src={appIconUrl(node.app)}
                       alt=""
                       className="h-4 w-4 rounded-sm object-contain shrink-0"
                       onError={(e) => {

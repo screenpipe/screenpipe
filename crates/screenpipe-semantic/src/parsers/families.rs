@@ -5,10 +5,12 @@
 use super::catalog::{
     contains_ascii_case_insensitive, manifest_for_family, profile_for, AppFamily, BuiltinAppProfile,
 };
+use super::persisted_web::{action_anchored_turns, parse_gmail as parse_persisted_gmail};
 use crate::{
     apply_message_identity, apply_message_time, is_message_time_label, AccessibilityAttribute,
-    IdentityQuality, MessageIdentityInput, MessageTimeContext, NodeId, ParseContext, ParseOutcome,
-    ParserManifest, ProjectionError, SemanticItem, SemanticKind, SemanticParser, SemanticTree,
+    CapturedNodeFlags, IdentityQuality, MessageIdentityInput, MessageTimeContext, NodeId,
+    ParseContext, ParseOutcome, ParserManifest, ProjectionError, SemanticItem, SemanticKind,
+    SemanticParser, SemanticTree,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -88,6 +90,8 @@ impl FamilyParser {
             priority,
         );
         if family == AppFamily::Conversation {
+            manifest.parser_version = "3".into();
+        } else if family == AppFamily::Mail {
             manifest.parser_version = "2".into();
         }
         Self { family, manifest }
@@ -163,6 +167,17 @@ fn parse_conversation(
             title_override = Some(labeled.title);
             messages = labeled.messages;
         }
+    }
+    if messages.is_empty() {
+        messages = fluent_control_message_turns(tree);
+    }
+    if messages.is_empty() {
+        if let Some(chat_list) = fluent_chat_list(profile, tree) {
+            return chat_list;
+        }
+    }
+    if messages.is_empty() && profile.id == "discord" {
+        messages = action_anchored_turns(tree, &["Reply", "Add reaction"]);
     }
     if messages.is_empty() {
         return chromium_chat_list(profile, tree).unwrap_or_default();
@@ -308,7 +323,14 @@ fn parse_mail(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec<SemanticI
         messages.push((node, sender.to_owned(), body));
     }
     if messages.is_empty() {
-        return parse_mail_list_rows(profile, tree);
+        let rows = parse_mail_list_rows(profile, tree);
+        if !rows.is_empty() {
+            return rows;
+        }
+        if profile.id == "gmail" {
+            return parse_persisted_gmail(profile, tree);
+        }
+        return Vec::new();
     }
 
     let mut conversation = SemanticItem::new(
@@ -345,10 +367,10 @@ fn parse_document(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec<Seman
     let mut best: Option<(NodeId, &str, usize)> = None;
     for root in tree.roots() {
         for node in tree.descendants(root) {
-            if !is_document_role(tree.role(node)) || looks_like_search_field(tree, node) {
+            if !is_document_surface(tree, node) || looks_like_search_field(tree, node) {
                 continue;
             }
-            let Some(content) = tree.value(node).or_else(|| tree.text(node)).map(str::trim) else {
+            let Some(content) = document_content(tree, node) else {
                 continue;
             };
             if content.len() < 8 || contains_ascii_case_insensitive(content, "not accessible") {
@@ -369,10 +391,13 @@ fn parse_document(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec<Seman
         return Vec::new();
     };
     let body = truncate_body(body);
+    // Only the surface's own label or the selected tab names a document. The
+    // first root of a Windows walk is just the first node the walker reached,
+    // so using it as a title named documents after unrelated on-screen text.
     let title = node_label(tree, node)
         .filter(|label| !looks_like_search_label(label))
+        .filter(|label| !is_control_type_label(label, tree.role(node)))
         .or_else(|| first_tab_title(tree))
-        .or_else(|| first_root_title(tree))
         .unwrap_or(profile.display_name)
         .trim();
     let mut document = SemanticItem::new(
@@ -555,12 +580,12 @@ fn parse_windows_terminal(profile: &BuiltinAppProfile, tree: &SemanticTree) -> V
     vec![terminal]
 }
 
-/// Gmail's thread list through Chromium's UIA bridge on Windows: each
-/// conversation is a `DataItem` row carrying Gmail's long-stable class markers
-/// (`zA` row, `zE` unread) whose child cells are classed `yX` (sender),
-/// `a4W` (subject + snippet), and `xW` (date). AppKit and web-DOM trees never
-/// expose the `DataItem` control type, so this path abstains there. Tokens are
-/// matched with exact `has_class`, never substring signatures — 2-3 char
+/// Gmail's thread list through Chromium's UIA bridge: each conversation row
+/// carries Gmail's long-stable class markers (`zA` row, `zE` unread) whose
+/// child cells are classed `yX` (sender), `a4W` (subject + snippet), and `xW`
+/// (date). Windows publishes these rows as `DataItem`; macOS/AX and browser
+/// bridges can expose the same DOM row as a generic group/row/list item. Tokens
+/// are matched with exact `has_class`, never substring signatures -- 2-3 char
 /// tokens would collide with unrelated utility classes.
 fn parse_mail_list_rows(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec<SemanticItem> {
     let mut rows = Vec::new();
@@ -637,11 +662,16 @@ fn parse_mail_list_rows(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec
 }
 
 fn is_mail_list_row(tree: &SemanticTree, node: NodeId) -> bool {
-    tree.role(node)
-        .is_some_and(|role| role.eq_ignore_ascii_case("DataItem"))
+    tree.role(node).is_some_and(is_gmail_row_role)
         && tree.has_class(node, "zA")
         && tree.children(node).any(|cell| tree.has_class(cell, "yX"))
         && tree.children(node).any(|cell| tree.has_class(cell, "a4W"))
+}
+
+fn is_gmail_row_role(role: &str) -> bool {
+    ["DataItem", "AXGroup", "AXRow", "Group", "ListItem", "Row"]
+        .iter()
+        .any(|candidate| role.eq_ignore_ascii_case(candidate))
 }
 
 fn mail_row_cell_text<'a>(tree: &'a SemanticTree, row: NodeId, class: &str) -> Option<&'a str> {
@@ -796,6 +826,288 @@ fn labeled_uia_turns(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Option
         title: title.unwrap_or_else(|| profile.display_name.to_owned()),
         messages,
     })
+}
+
+/// Automation-ID prefix Teams puts on every message container.
+const FLUENT_MESSAGE_ANCHOR: &str = "control-message-";
+
+/// Fluent-UI conversation surfaces (Microsoft Teams on Windows): every message
+/// is a `Text` container whose automation ID is `control-message-<epoch-ms>`,
+/// and whose accessible name is the whole turn flattened as
+/// `"<sender> <body>"`. The Fluent class names are build-hashed
+/// (`___unfo430 f1ekcaio`), so the shared marker and direction-state paths find
+/// nothing and the family abstained on an open chat.
+///
+/// The sender is the per-turn person chip — a `Button` inside the container.
+/// Requiring the container's flattened name to start with that button's text is
+/// what proves the chip is the author rather than a reaction or action control;
+/// turns that cannot show it (call records, system notices, and the
+/// sender-eliding continuation rows) are dropped instead of guessed. The
+/// automation ID is a stable native message ID, so `apply_message_identity`
+/// promotes these to stable identity on its own.
+fn fluent_control_message_turns(
+    tree: &SemanticTree,
+) -> Vec<(NodeId, String, &'static str, Option<String>, String)> {
+    let mut messages = Vec::new();
+    'roots: for root in tree.roots() {
+        for node in tree.descendants(root) {
+            if !is_fluent_message_anchor(tree, node) {
+                continue;
+            }
+            let Some(container) = node_content(tree, node) else {
+                continue;
+            };
+            let Some(sender) = fluent_message_sender(tree, node, container) else {
+                continue;
+            };
+            let Some(body) = collect_descendant_text(tree, node) else {
+                continue;
+            };
+            let time_label = first_message_time_label(tree, node);
+            let body = remove_exact_line(remove_actor_prefix(body, sender), time_label.as_deref());
+            if body.trim().is_empty() {
+                continue;
+            }
+            messages.push((node, sender.to_owned(), "explicit_author", time_label, body));
+            if messages.len() == MAX_STRUCTURAL_CANDIDATES {
+                break 'roots;
+            }
+        }
+    }
+    messages
+}
+
+fn is_fluent_message_anchor(tree: &SemanticTree, node: NodeId) -> bool {
+    tree.identifier(node).is_some_and(|identifier| {
+        identifier
+            .strip_prefix(FLUENT_MESSAGE_ANCHOR)
+            .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()))
+    })
+}
+
+fn fluent_message_sender<'a>(
+    tree: &'a SemanticTree,
+    node: NodeId,
+    container: &str,
+) -> Option<&'a str> {
+    tree.descendants(node).skip(1).find_map(|descendant| {
+        let label = button_label(tree, descendant)?.trim();
+        (!label.is_empty()
+            && label.len() <= 120
+            && container.len() > label.len()
+            && container
+                .get(..label.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(label)))
+        .then_some(label)
+    })
+}
+
+struct FluentChatListEntry {
+    node: NodeId,
+    title: String,
+    last_sender: Option<String>,
+    last_message: Option<String>,
+    last_active: Option<String>,
+    status: Option<String>,
+    chat_type: &'static str,
+}
+
+fn fluent_chat_list(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Option<Vec<SemanticItem>> {
+    if profile.id != "microsoftteams" || tree_any(tree, |node| is_fluent_message_anchor(tree, node))
+    {
+        return None;
+    }
+
+    let mut has_new_message_control = false;
+    let mut entries = Vec::new();
+    'roots: for root in tree.roots() {
+        for node in tree.descendants(root) {
+            if button_label(tree, node).is_some_and(|label| {
+                label
+                    .trim_start()
+                    .get(..11)
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("new message"))
+            }) {
+                has_new_message_control = true;
+                continue;
+            }
+            if !tree
+                .role(node)
+                .is_some_and(|role| role.eq_ignore_ascii_case("TreeItem"))
+            {
+                continue;
+            }
+            let Some(raw) = node_content(tree, node) else {
+                continue;
+            };
+            let Some(mut entry) = parse_fluent_chat_row(raw) else {
+                continue;
+            };
+            entry.node = node;
+            entries.push(entry);
+            if entries.len() == MAX_STRUCTURAL_CANDIDATES {
+                break 'roots;
+            }
+        }
+    }
+    if !has_new_message_control || entries.is_empty() {
+        return None;
+    }
+
+    let mut list = SemanticItem::new(
+        "chat-list",
+        SemanticKind::Conversation,
+        format!("{}:chat-list", profile.id),
+        IdentityQuality::Derived,
+    );
+    list.title = Some(profile.display_name.to_owned());
+    list.metadata
+        .insert("app".into(), profile.display_name.into());
+    list.metadata.insert("family".into(), "conversation".into());
+    list.metadata.insert("view".into(), "chat_list".into());
+    if let Some(parent) = tree.parent(entries[0].node) {
+        list.source_nodes.push(parent);
+    }
+
+    let mut items = Vec::with_capacity(entries.len() + 1);
+    items.push(list);
+    for (index, entry) in entries.into_iter().enumerate() {
+        let mut chat = SemanticItem::new(
+            format!("chat-{index}"),
+            SemanticKind::Conversation,
+            format!("{}:chat:{}", profile.id, key_component(&entry.title)),
+            IdentityQuality::Derived,
+        );
+        chat.parent_local_id = Some("chat-list".into());
+        chat.title = Some(entry.title);
+        chat.body = entry.last_message;
+        chat.metadata
+            .insert("chat_type".into(), entry.chat_type.into());
+        if let Some(sender) = entry.last_sender {
+            chat.metadata.insert("last_sender".into(), sender);
+        }
+        if let Some(last_active) = entry.last_active {
+            chat.metadata.insert("last_active".into(), last_active);
+        }
+        if let Some(status) = entry.status {
+            chat.status = Some(status);
+        }
+        chat.source_nodes.push(entry.node);
+        items.push(chat);
+    }
+    Some(items)
+}
+
+fn parse_fluent_chat_row(raw: &str) -> Option<FluentChatListEntry> {
+    let raw = raw.trim();
+    let (chat_type, row) = raw
+        .strip_prefix("Meeting chat ")
+        .map(|row| ("meeting", row))
+        .or_else(|| raw.strip_prefix("Chat ").map(|row| ("chat", row)))?;
+    let (title, detail) = row.split_once(" Last message ")?;
+    let title = title.trim();
+    if title.is_empty() || title.len() > 240 {
+        return None;
+    }
+
+    let mut detail = detail.trim();
+    let mut last_active = None;
+    if let Some((before, token)) = split_last_token(detail) {
+        if is_simple_slash_date(token) {
+            last_active = Some(token.to_owned());
+            detail = before.trim_end();
+        }
+    }
+
+    let mut status = None;
+    if let Some((before, token)) = split_last_token(detail) {
+        if matches!(token, "Muted" | "Unmuted" | "Unread") {
+            status = Some(token.to_ascii_lowercase());
+            detail = before.trim_end();
+        }
+    }
+
+    let (last_sender, last_message) = match detail.split_once(": ") {
+        Some((sender, message))
+            if !sender.trim().is_empty()
+                && sender.trim().len() <= 80
+                && !message.trim().is_empty() =>
+        {
+            (
+                Some(sender.trim().to_owned()),
+                Some(message.trim().to_owned()),
+            )
+        }
+        _ if !detail.is_empty() => (None, Some(detail.to_owned())),
+        _ => (None, None),
+    };
+
+    Some(FluentChatListEntry {
+        node: NodeId(0),
+        title: title.to_owned(),
+        last_sender,
+        last_message,
+        last_active,
+        status,
+        chat_type,
+    })
+}
+
+fn split_last_token(text: &str) -> Option<(&str, &str)> {
+    let text = text.trim_end();
+    let (before, token) = text.rsplit_once(' ')?;
+    let token = token.trim();
+    (!token.is_empty()).then_some((before, token))
+}
+
+fn is_simple_slash_date(token: &str) -> bool {
+    let mut parts = token.split('/');
+    let (Some(month), Some(day), Some(year), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    let (Ok(month), Ok(day), Ok(year)) = (
+        month.parse::<u32>(),
+        day.parse::<u32>(),
+        year.parse::<u32>(),
+    ) else {
+        return false;
+    };
+    (1..=12).contains(&month) && (1..=31).contains(&day) && (2000..=2100).contains(&year)
+}
+
+fn tree_any(tree: &SemanticTree, predicate: impl Fn(NodeId) -> bool) -> bool {
+    tree.roots()
+        .any(|root| tree.descendants(root).any(|node| predicate(node)))
+}
+
+/// `collect_text` starting below `root`. A Fluent message container is itself a
+/// text node holding the flattened turn, so including it would repeat every
+/// line its children already carry.
+fn collect_descendant_text(tree: &SemanticTree, root: NodeId) -> Option<String> {
+    let mut lines: Vec<&str> = Vec::new();
+    let mut bytes = 0usize;
+    'nodes: for node in tree.descendants(root).skip(1) {
+        if !is_text_role(tree.role(node)) {
+            continue;
+        }
+        let Some(content) = node_content(tree, node) else {
+            continue;
+        };
+        for line in content.lines() {
+            let line = line.trim_end();
+            if line.trim().is_empty() || lines.last().is_some_and(|previous| *previous == line) {
+                continue;
+            }
+            bytes += line.len() + usize::from(!lines.is_empty());
+            if bytes > MAX_COLLECTED_BODY_BYTES {
+                break 'nodes;
+            }
+            lines.push(line);
+        }
+    }
+    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 /// Chromium-UIA chat-list surface (Codex desktop and relatives): no open
@@ -1142,7 +1454,14 @@ fn first_marked_text_in<'a>(
 /// `TabItem` rather than on the text surface itself. Prefer the tab's inner
 /// text node, which carries the bare name without state suffixes such as
 /// ". Unmodified.".
+///
+/// Only the *selected* tab names the document on screen. With several tabs open
+/// the first one in walk order is a different file, so a lone unselected tab is
+/// only trusted when it is the only tab; otherwise this abstains and the window
+/// title supplies the name.
 fn first_tab_title(tree: &SemanticTree) -> Option<&str> {
+    let mut fallback = None;
+    let mut tab_count = 0usize;
     for root in tree.roots() {
         for node in tree.descendants(root) {
             if !tree
@@ -1151,20 +1470,29 @@ fn first_tab_title(tree: &SemanticTree) -> Option<&str> {
             {
                 continue;
             }
+            tab_count += 1;
             let title = tree
                 .descendants(node)
                 .skip(1)
                 .find(|child| is_text_role(tree.role(*child)))
                 .and_then(|child| node_content(tree, child))
-                .or_else(|| node_content(tree, node));
-            if let Some(title) =
-                title.filter(|title| title.len() <= 240 && !title.contains(['\n', '\r']))
-            {
+                .or_else(|| node_content(tree, node))
+                .filter(|title| title.len() <= 240 && !title.contains(['\n', '\r']));
+            let Some(title) = title else {
+                continue;
+            };
+            if is_selected(tree, node) {
                 return Some(title);
             }
+            fallback.get_or_insert(title);
         }
     }
-    None
+    fallback.filter(|_| tab_count == 1)
+}
+
+fn is_selected(tree: &SemanticTree, node: NodeId) -> bool {
+    tree.flags(node)
+        .is_some_and(|flags| flags & CapturedNodeFlags::SELECTED != 0)
 }
 
 fn first_heading(tree: &SemanticTree) -> Option<&str> {
@@ -1188,6 +1516,13 @@ fn first_text_in(tree: &SemanticTree, root: NodeId) -> Option<&str> {
         .find_map(|node| node_content(tree, node))
 }
 
+/// Best window-level name the tree carries.
+///
+/// The capture adapter has no window node on Windows — the walk starts inside
+/// the content — so the "first root" is whatever the walker reached first, and
+/// its description is the localized control type. Control-type words and
+/// single-character fragments are rejected so callers fall through to their own
+/// app-name default instead of titling a document `text`.
 fn first_root_title(tree: &SemanticTree) -> Option<&str> {
     tree.roots().find_map(|root| {
         tree.title(root)
@@ -1196,7 +1531,10 @@ fn first_root_title(tree: &SemanticTree) -> Option<&str> {
             .or_else(|| tree.value(root))
             .map(str::trim)
             .filter(|title| {
-                !title.is_empty() && title.len() <= 240 && !title.contains(['\n', '\r'])
+                title.chars().count() > 1
+                    && title.len() <= 240
+                    && !title.contains(['\n', '\r'])
+                    && !is_control_type_label(title, tree.role(root))
             })
     })
 }
@@ -1239,24 +1577,99 @@ fn is_text_role(role: Option<&str>) -> bool {
     })
 }
 
-fn is_document_role(role: Option<&str>) -> bool {
-    role.is_some_and(|role| {
-        [
-            "AXTextArea",
-            "AXTextField",
-            "Edit",
-            "Text",
-            "DocumentText",
-            "Document",
-            "AXWebArea",
-        ]
+/// Roles that name a document surface on their own.
+const DOCUMENT_SURFACE_ROLES: &[&str] = &[
+    "AXTextArea",
+    "AXTextField",
+    "Edit",
+    "DocumentText",
+    "Document",
+    "AXWebArea",
+];
+
+/// Markers an otherwise generic node must carry to count as a document body.
+const DOCUMENT_SURFACE_MARKERS: &[&str] = &["document", "editor", "contenteditable", "canvas"];
+
+/// Chromium exposes its page root as a `Document` whose accessible name is the
+/// page URL, not page content. Electron shells (Claude desktop) therefore
+/// present a `file:///…/index.html` string as the largest "document" on screen.
+fn is_web_area_root(tree: &SemanticTree, node: NodeId) -> bool {
+    tree.identifier(node)
+        .is_some_and(|identifier| identifier == "RootWebArea")
+}
+
+/// Whether a node is plausibly a document *body*.
+///
+/// Windows UIA labels every static string `Text`, so accepting that role alone
+/// turned "longest label on screen" into a document: a crash dialog's stack
+/// trace, an Office subscription banner, or a toast all outscored real content.
+/// A bare `Text` node therefore needs an explicit document/editor marker, while
+/// the roles that mean "document surface" on their own still qualify.
+fn is_document_surface(tree: &SemanticTree, node: NodeId) -> bool {
+    let Some(role) = tree.role(node) else {
+        return false;
+    };
+    if is_web_area_root(tree, node) {
+        return false;
+    }
+    if DOCUMENT_SURFACE_ROLES
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(role))
-    })
+    {
+        return true;
+    }
+    role.eq_ignore_ascii_case("Text") && signature_has_any(tree, node, DOCUMENT_SURFACE_MARKERS)
+}
+
+/// Body text for a document candidate.
+///
+/// A Windows UIA `Edit` control's name is its *label* ("Search for a file",
+/// "Add a task"), never its content — only `Value` holds what the user typed.
+/// Falling back to the name published empty input boxes as documents, so this
+/// role is value-only. Platform text roles keep the name fallback because their
+/// accessible name does carry content.
+fn document_content(tree: &SemanticTree, node: NodeId) -> Option<&str> {
+    let value = tree.value(node).map(str::trim).filter(|v| !v.is_empty());
+    if tree
+        .role(node)
+        .is_some_and(|role| role.eq_ignore_ascii_case("Edit"))
+    {
+        return value;
+    }
+    value.or_else(|| tree.text(node).map(str::trim))
 }
 
 fn looks_like_search_field(tree: &SemanticTree, node: NodeId) -> bool {
     node_label(tree, node).is_some_and(looks_like_search_label)
+}
+
+/// Generic control-type words that are never a document title.
+///
+/// The capture adapter folds Windows `LocalizedControlType` into the node
+/// description, so `node_label` happily returned "document", "text" or "edit"
+/// as the title of every Windows document. Rejecting them lets the tab-title
+/// and window-title fallbacks supply the real name.
+const CONTROL_TYPE_LABELS: &[&str] = &[
+    "document",
+    "text",
+    "edit",
+    "terminal",
+    "pane",
+    "group",
+    "window",
+    "list item",
+    "text area",
+    "text field",
+    "static text",
+    "web area",
+];
+
+fn is_control_type_label(label: &str, role: Option<&str>) -> bool {
+    let label = label.trim();
+    role.is_some_and(|role| role.eq_ignore_ascii_case(label))
+        || CONTROL_TYPE_LABELS
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(label))
 }
 
 fn looks_like_search_label(label: &str) -> bool {

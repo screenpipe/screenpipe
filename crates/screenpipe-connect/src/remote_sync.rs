@@ -628,8 +628,8 @@ pub async fn sync_to_remote_with_opts(
 /// Open a short-lived sqlx pool against the live DB and run `VACUUM INTO`
 /// to produce a self-contained snapshot at `dest`. SQLite's WAL mode lets
 /// our connection coexist with the engine's writer pool; on macOS it joins
-/// the recorder's unix-excl domain and process-local WAL index. The pool is
-/// dropped before we return — important because we then SFTP the snapshot.
+/// the recorder's unix-excl locking domain. The pool is dropped before we
+/// return — important because we then SFTP the snapshot.
 async fn snapshot_db(live_db: &Path, dest: &Path) -> Result<()> {
     let url = format!("sqlite://{}", live_db.to_string_lossy());
     let mut opts = SqliteConnectOptions::from_str(&url)
@@ -639,9 +639,11 @@ async fn snapshot_db(live_db: &Path, dest: &Path) -> Result<()> {
     {
         opts = opts.read_only(true);
     }
-    // The recorder uses unix-excl on macOS so its WAL index lives in process
-    // memory instead of an APFS-backed `-shm` mapping. Snapshot connections
-    // run in that same process and must join the same VFS/locking domain.
+    // The recorder uses unix-excl on macOS, which takes one exclusive lock on
+    // the database file and makes later OS locking in-process bookkeeping.
+    // The `-shm` WAL index is still file-backed. Snapshot connections run in
+    // that same process and must join the same VFS/locking domain, or they
+    // would do real POSIX locking against handles that no longer lock at all.
     #[cfg(target_os = "macos")]
     {
         opts = opts.vfs("unix-excl");

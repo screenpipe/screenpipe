@@ -33,6 +33,15 @@ module.exports = {
 		  "4xl": ["var(--text-4xl)", { lineHeight: "2.5rem" }],
 		},
 		colors: {
+		  // Brand (DESIGN.md): phosphor marks transformation, trace is captured
+		  // evidence. Reserved — do not use as a generic accent.
+		  phosphor: {
+			DEFAULT: "hsl(var(--phosphor))",
+			strong: "hsl(var(--phosphor-strong))",
+			ink: "hsl(var(--phosphor-ink))",
+		  },
+		  trace: "hsl(var(--trace))",
+
 		  // Base colors
 		  border: "hsl(var(--border))",
 		  input: {

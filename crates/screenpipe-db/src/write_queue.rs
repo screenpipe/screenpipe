@@ -107,6 +107,51 @@ const FATAL_RUN_CLEAR_AFTER: u64 = 3;
 /// the app can escalate further instead of wedging silently forever.
 const PERSISTENT_FAILURE_REFIRE_EVERY: Duration = Duration::from_secs(600);
 
+// ── Sustained write-lock contention ──────────────────────────────────────
+//
+// Contention is normal: `compact()` (full VACUUM) and the RESTART checkpoint
+// legitimately hold the process-wide write coordinator for longer than a
+// batch's semaphore budget, and `db/maintenance.rs` documents that as "the
+// recording briefly pauses the UI warns about". So a contended batch must
+// NOT restart the engine.
+//
+// But a *permanently* held permit — a leaked `OwnedSemaphorePermit` from a
+// hung or aborted task — is indistinguishable from that, batch by batch, and
+// had no escape at all: `BatchOutcome::Contention` set `degraded` and nothing
+// else. Every batch then timed out forever with no reopen, no hook, no cure.
+//
+// These thresholds are deliberately far past any legitimate maintenance hold
+// so the hook only fires on a genuine wedge.
+
+/// Fire the persistent-failure hook after this many *consecutive* contended
+/// batches. Each one costs a full `write_semaphore` timeout, so 60 is already
+/// ~30 minutes of uninterrupted contention; this is the fast path for
+/// write-heavy load, not the primary trigger.
+const CONTENTION_PERSISTENT_AFTER: u64 = 60;
+/// The real trigger: a contention run that has spanned this long with no
+/// successful write in between.
+///
+/// Deliberately generous. `compact()` (full VACUUM) and `backup_to()`
+/// (VACUUM INTO) hold the coordinator for as long as it takes to rewrite a
+/// multi-GB capture database, and neither announces itself — they do not use
+/// `request_write_pause`, so the drain loop cannot tell them apart from a
+/// wedge. Restarting the engine mid-VACUUM would roll back the whole thing and
+/// waste the work, so the budget has to sit clearly beyond any plausible
+/// maintenance hold rather than merely beyond a typical one.
+///
+/// Thirty minutes without a single successful write is unambiguous: capture
+/// writes arrive continuously while recording, so a run this long is either a
+/// stuck coordinator or a maintenance operation that is itself a bug.
+///
+/// The better long-term fix is for the long maintenance paths to announce
+/// their hold (the `WRITE_PAUSED` seam already exists for sleep), at which
+/// point this can come down a lot.
+const CONTENTION_PERSISTENT_AFTER_WALL: Duration = Duration::from_secs(1_800);
+/// Require this many contended batches in the run before the wall-clock rule
+/// can fire, so a single slow checkpoint on an otherwise idle machine cannot
+/// request a restart.
+const CONTENTION_PERSISTENT_MIN_BATCHES: u64 = 5;
+
 /// Pure escalation state for a fatal run — decides when the persistent-failure
 /// hook fires. Extracted from the drain loop so the count/wall-clock/refire
 /// rules are unit-testable with injected time.
@@ -135,6 +180,24 @@ impl FatalRunEscalation {
             persistent_after,
             wall: PERSISTENT_FAILURE_AFTER_WALL,
             min_fatals_for_wall: PERSISTENT_FAILURE_MIN_FATALS,
+            clear_after: FATAL_RUN_CLEAR_AFTER,
+            refire_every: PERSISTENT_FAILURE_REFIRE_EVERY,
+            run_started: None,
+            fatal_in_run: 0,
+            consecutive_fatal: 0,
+            healthy_streak: 0,
+            last_fire: None,
+        }
+    }
+
+    /// Same state machine, but with the much longer budgets a *contention* run
+    /// needs. Legitimate maintenance holds the write coordinator for a while;
+    /// only a genuinely stuck coordinator should ever reach the hook.
+    fn for_contention(persistent_after: u64, wall: Duration, min_batches_for_wall: u64) -> Self {
+        Self {
+            persistent_after,
+            wall,
+            min_fatals_for_wall: min_batches_for_wall,
             clear_after: FATAL_RUN_CLEAR_AFTER,
             refire_every: PERSISTENT_FAILURE_REFIRE_EVERY,
             run_started: None,
@@ -189,6 +252,55 @@ impl FatalRunEscalation {
     }
 }
 
+// ── What a failed write actually means ───────────────────────────────────
+//
+// Two completely different failures used to be reported with the same
+// fabricated `sqlx::Error::PoolTimedOut`, which `send_error_to_all` then
+// flattened into `Error::Protocol(String)`. Both reached callers — and
+// Sentry — as the single string "encountered unexpected or invalid data:
+// pool timed out while waiting for an open connection", so:
+//
+//   * SCREENPIPE-CLI-SQ conflated "another writer holds the lock" (expected
+//     during VACUUM, retry) with "the pool has no connections" (a real
+//     starvation fault) and could not be triaged;
+//   * no caller could branch on the cause, because the variant was gone.
+//
+// These messages are the stable contract. They are matched by the predicates
+// below rather than re-derived at each call site, so a wording change cannot
+// silently turn a retryable stall into a reported fault.
+
+/// A batch never obtained the process-wide SQLite write coordinator inside its
+/// budget: some other writer (a sibling batch, `compact()`, a checkpoint) still
+/// holds it. The write did not happen, but nothing is broken.
+pub const WRITE_LOCK_HELD_MESSAGE: &str =
+    "screenpipe write queue: another writer held the SQLite write lock past this batch's budget";
+
+/// A batch owned the write coordinator — so every ordinary writer was already
+/// excluded — and still could not check out a pooled connection. That is real
+/// pool starvation, not contention.
+pub const WRITE_POOL_STARVED_MESSAGE: &str =
+    "screenpipe write queue: no write-pool connection became available inside this batch's budget";
+
+/// True when the write failed only because another writer held the SQLite write
+/// lock. Expected during maintenance; retry rather than reporting a fault.
+pub fn is_write_lock_contention(error: &sqlx::Error) -> bool {
+    matches!(error, sqlx::Error::Protocol(msg) if msg == WRITE_LOCK_HELD_MESSAGE)
+}
+
+/// True when the write pool itself was starved of connections.
+pub fn is_write_pool_starved(error: &sqlx::Error) -> bool {
+    matches!(error, sqlx::Error::Protocol(msg) if msg == WRITE_POOL_STARVED_MESSAGE)
+        || matches!(error, sqlx::Error::PoolTimedOut)
+}
+
+/// True when the write is worth retrying: the database is healthy, this batch
+/// just lost a race for the write path. Callers use this to keep expected
+/// stalls out of their error paths (and out of Sentry) without also swallowing
+/// genuine faults.
+pub fn is_retryable_write_stall(error: &sqlx::Error) -> bool {
+    is_write_lock_contention(error) || is_write_pool_starved(error)
+}
+
 /// Outcome of draining one batch, used by the drain loop to drive recovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BatchOutcome {
@@ -207,9 +319,9 @@ pub(crate) enum BatchOutcome {
 }
 
 #[derive(Clone, Copy)]
-struct BatchTimeouts {
-    write_semaphore: Duration,
-    write_pool: Duration,
+pub(crate) struct BatchTimeouts {
+    pub(crate) write_semaphore: Duration,
+    pub(crate) write_pool: Duration,
 }
 
 const BATCH_TIMEOUTS: BatchTimeouts = BatchTimeouts {
@@ -473,6 +585,15 @@ pub(crate) struct WriteDrainOpts {
     pub degraded_after: u64,
     /// Fire the persistent-failure hook after this many consecutive fatal batches.
     pub persistent_after: u64,
+    /// Fire the persistent-failure hook after this many consecutive *contended*
+    /// batches, or once a contention run has spanned `contention_wall` with at
+    /// least `contention_min_batches` batches. Injectable so the stuck-coordinator
+    /// escape can be tested without waiting out the production budget.
+    pub contention_persistent_after: u64,
+    pub contention_wall: Duration,
+    pub contention_min_batches: u64,
+    /// Per-batch acquisition budgets. Injectable for the same reason.
+    pub batch_timeouts: BatchTimeouts,
     /// Cancelled on `DatabaseManager::close()`. The drain loop exits and closes
     /// its current write pool (which may be a rebuilt one only it holds) so no
     /// SQLite connection survives teardown.
@@ -488,6 +609,10 @@ impl Default for WriteDrainOpts {
             reopen_every: WRITE_POOL_REOPEN_EVERY,
             degraded_after: DEGRADED_AFTER,
             persistent_after: PERSISTENT_FAILURE_AFTER,
+            contention_persistent_after: CONTENTION_PERSISTENT_AFTER,
+            contention_wall: CONTENTION_PERSISTENT_AFTER_WALL,
+            contention_min_batches: CONTENTION_PERSISTENT_MIN_BATCHES,
+            batch_timeouts: BATCH_TIMEOUTS,
             shutdown: tokio_util::sync::CancellationToken::new(),
         }
     }
@@ -883,11 +1008,20 @@ async fn drain_loop(
         reopen_every,
         degraded_after,
         persistent_after,
+        contention_persistent_after,
+        contention_wall,
+        contention_min_batches,
+        batch_timeouts,
         shutdown,
     } = opts;
     let mut batch: Vec<PendingWrite> = Vec::with_capacity(MAX_BATCH_SIZE);
     // Count + wall-clock + refire escalation rules (see FatalRunEscalation).
     let mut escalation = FatalRunEscalation::new(persistent_after);
+    let mut contention_escalation = FatalRunEscalation::for_contention(
+        contention_persistent_after,
+        contention_wall,
+        contention_min_batches,
+    );
 
     loop {
         // Block until at least one write arrives, then take up to MAX_BATCH_SIZE
@@ -941,7 +1075,7 @@ async fn drain_loop(
             &mut batch,
             &db_path,
             &health,
-            BATCH_TIMEOUTS,
+            batch_timeouts,
         )
         .await;
         batch.clear();
@@ -955,12 +1089,15 @@ async fn drain_loop(
                     );
                 }
                 health.record_success();
+                contention_escalation.on_healthy();
                 if escalation.on_healthy() {
                     health.note_fatal_run_recovered();
                     info!("write_queue: fatal run cleared");
                 }
             }
             BatchOutcome::Contention => {
+                let now = std::time::Instant::now();
+                let fire_hook = contention_escalation.on_fatal(now);
                 let consecutive_contention = health.record_contention();
                 warn!(
                     "write_queue: SQLite write contention exceeded the retry budget ({} consecutive batch(es))",
@@ -972,6 +1109,26 @@ async fn drain_loop(
                 // SQLite writer, but this must surface immediately and recover
                 // only after a later successful batch.
                 health.set_degraded();
+
+                // A held permit that never comes back is a permanent wedge:
+                // every batch times out, `degraded` is already set, and there
+                // was no further escape — no reopen (correctly, it cannot help)
+                // and no restart request. Restarting the engine drops the
+                // leaked permit with the process, so it IS the cure here, but
+                // only once the run has clearly outlived legitimate maintenance
+                // (see CONTENTION_PERSISTENT_AFTER_WALL).
+                if fire_hook {
+                    health.note_persistent_signal();
+                    error!(
+                        "write_queue: SQLite write lock held by another writer for {:?} across {} batch(es) — requesting engine restart to clear the stuck coordinator",
+                        contention_escalation.run_elapsed(now),
+                        contention_escalation.fatal_in_run
+                    );
+                    let hook = on_persistent_failure.hook();
+                    if let Some(hook) = hook {
+                        hook();
+                    }
+                }
             }
             BatchOutcome::FatalConnection => {
                 let now = std::time::Instant::now();
@@ -1071,7 +1228,7 @@ async fn drain_loop(
             &mut tail_batch,
             &db_path,
             &health,
-            BATCH_TIMEOUTS,
+            batch_timeouts,
         )
         .await;
         tail_batch.clear();
@@ -1102,7 +1259,13 @@ async fn execute_batch(
         }
         Err(_) => {
             warn!("write_queue: semaphore acquisition timed out for batch");
-            send_error_to_all(batch, sqlx::Error::PoolTimedOut);
+            // Say what actually happened. This is NOT a pool timeout: the pool
+            // was never consulted. Reporting it as one made CLI-SQ impossible
+            // to tell apart from genuine starvation below.
+            send_error_to_all(
+                batch,
+                sqlx::Error::Protocol(WRITE_LOCK_HELD_MESSAGE.to_string()),
+            );
             // Another serialized writer still owns admission. Rebuilding the
             // pool cannot release that owner, but calling this healthy clears
             // degradation and suppresses the sustained-contention signal.
@@ -1159,7 +1322,10 @@ async fn execute_batch(
                 };
             }
             Err(_) => {
-                send_error_to_all(batch, sqlx::Error::PoolTimedOut);
+                send_error_to_all(
+                    batch,
+                    sqlx::Error::Protocol(WRITE_POOL_STARVED_MESSAGE.to_string()),
+                );
                 // We already own the single write coordinator, so every normal
                 // writer is excluded. Exhausting the connection wait here means
                 // the pool itself is starved; drive the existing reopen/restart
@@ -2282,13 +2448,41 @@ async fn insert_ui_event_row(
     Ok(result.last_insert_rowid())
 }
 
+/// Fail every caller in `batch` with `error`.
+///
+/// The variant is preserved for the transport-level unit variants so callers
+/// can still `matches!` on them — flattening *everything* into
+/// `Error::Protocol(String)` is what made every write failure look alike to
+/// every caller. `Error::Database` and friends are not `Clone`, so those keep
+/// the existing stringified `Protocol` form, which is all issue #7331781144
+/// asked for (the original *message* must survive, unmasked).
 fn send_error_to_all(batch: &mut Vec<PendingWrite>, error: sqlx::Error) {
     let err_str = error.to_string();
     for pw in batch.drain(..) {
-        let _ = pw.respond.send(Err(sqlx::Error::Protocol(err_str.clone())));
+        let cloned = match &error {
+            sqlx::Error::PoolTimedOut => sqlx::Error::PoolTimedOut,
+            sqlx::Error::PoolClosed => sqlx::Error::PoolClosed,
+            sqlx::Error::WorkerCrashed => sqlx::Error::WorkerCrashed,
+            // Already a Protocol error: re-wrapping stacks another
+            // "encountered unexpected or invalid data: " prefix onto the
+            // message and breaks exact-message classification.
+            sqlx::Error::Protocol(msg) => sqlx::Error::Protocol(msg.clone()),
+            _ => sqlx::Error::Protocol(err_str.clone()),
+        };
+        let _ = pw.respond.send(Err(cloned));
     }
-    // Log the original error that caused the batch failure
-    error!("write_queue: batch failed: {}", error);
+    // Log the original error that caused the batch failure. Contention is an
+    // expected stall, not a fault: logging it at error! made every VACUUM and
+    // checkpoint raise a Sentry issue (SCREENPIPE-CLI-SQ). The drain loop still
+    // counts it and escalates a sustained run.
+    if is_write_lock_contention(&error) {
+        warn!(
+            "write_queue: batch stalled behind another writer: {}",
+            error
+        );
+    } else {
+        error!("write_queue: batch failed: {}", error);
+    }
 }
 
 /// Lowercased-message check shared with `is_connection_error`. Pulled
@@ -2453,6 +2647,179 @@ mod tests {
 
     fn esc() -> FatalRunEscalation {
         FatalRunEscalation::new(PERSISTENT_FAILURE_AFTER)
+    }
+
+    fn contention_esc() -> FatalRunEscalation {
+        FatalRunEscalation::for_contention(
+            CONTENTION_PERSISTENT_AFTER,
+            CONTENTION_PERSISTENT_AFTER_WALL,
+            CONTENTION_PERSISTENT_MIN_BATCHES,
+        )
+    }
+
+    /// A permanently held write coordinator used to be unrecoverable: the
+    /// `Contention` arm set `degraded` and stopped there — no pool reopen
+    /// (correctly, it cannot help) and no restart request. Every subsequent
+    /// batch timed out forever. A restart drops the leaked permit with the
+    /// process, so the hook must eventually fire.
+    #[test]
+    fn sustained_contention_eventually_requests_a_restart() {
+        let mut e = contention_esc();
+        let t0 = std::time::Instant::now();
+
+        // Enough batches to satisfy the minimum, but not yet long enough.
+        for i in 0..CONTENTION_PERSISTENT_MIN_BATCHES {
+            assert!(
+                !e.on_fatal(t0 + Duration::from_secs(i)),
+                "a short contention run must not request a restart"
+            );
+        }
+
+        assert!(
+            e.on_fatal(t0 + CONTENTION_PERSISTENT_AFTER_WALL),
+            "a contention run past the wall-clock budget must request a restart"
+        );
+    }
+
+    /// `compact()` (full VACUUM) and the RESTART checkpoint hold the same
+    /// process-wide coordinator by design, and `db/maintenance.rs` documents
+    /// the resulting pause as expected. Escalating those into an engine
+    /// restart would be worse than the stall.
+    #[test]
+    fn legitimate_maintenance_holds_do_not_request_a_restart() {
+        let mut e = contention_esc();
+        let t0 = std::time::Instant::now();
+
+        // A ten-minute VACUUM on a multi-GB capture database: far past a batch
+        // budget, still well inside ours. Restarting mid-VACUUM would roll the
+        // whole thing back.
+        let maintenance = Duration::from_secs(600);
+        assert!(
+            maintenance < CONTENTION_PERSISTENT_AFTER_WALL,
+            "the escalation budget must sit beyond a realistic maintenance hold"
+        );
+        for i in 0..CONTENTION_PERSISTENT_MIN_BATCHES * 2 {
+            let at = t0 + maintenance * (i as u32) / (CONTENTION_PERSISTENT_MIN_BATCHES * 2) as u32;
+            assert!(
+                !e.on_fatal(at),
+                "maintenance-length contention must not request a restart"
+            );
+        }
+
+        // Maintenance finishes and writes resume: the run clears.
+        for _ in 0..FATAL_RUN_CLEAR_AFTER {
+            e.on_healthy();
+        }
+
+        // A fresh run then starts from zero rather than inheriting the old clock.
+        assert!(
+            !e.on_fatal(t0 + CONTENTION_PERSISTENT_AFTER_WALL * 2),
+            "a recovered run must not carry its old elapsed time into the next stall"
+        );
+    }
+
+    /// The unit rules above prove the state machine. This drives the *real*
+    /// drain loop against a genuinely stuck coordinator — the production
+    /// failure — and proves three things end to end:
+    ///   1. every queued write is failed with a classifiable contention error
+    ///      (not a fabricated pool timeout),
+    ///   2. the queue reports itself degraded, and
+    ///   3. the restart hook fires, which is the only thing that can drop a
+    ///      leaked permit.
+    ///
+    /// Before this change (3) never happened: the `Contention` arm set
+    /// `degraded` and stopped, so the wedge was permanent.
+    #[tokio::test]
+    async fn a_stuck_write_coordinator_is_escalated_by_the_real_drain_loop() {
+        use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let semaphore = Arc::new(Semaphore::new(1));
+
+        // A leaked permit: the exact production shape of a hung or aborted
+        // task that never gives the coordinator back.
+        let leaked_permit = semaphore.clone().acquire_owned().await.unwrap();
+
+        let health = WriteQueueHealth::default();
+        let restart_requested = Arc::new(AtomicBool::new(false));
+        let hook_flag = restart_requested.clone();
+
+        let queue = spawn_write_drain_with(
+            pool.clone(),
+            semaphore.clone(),
+            Arc::from("sqlite::memory:"),
+            WriteDrainOpts {
+                health: health.clone(),
+                on_persistent_failure: persistent_failure_slot(Some(Arc::new(move || {
+                    hook_flag.store(true, AtomicOrdering::SeqCst);
+                }))),
+                // Escalate on the count rule so the test does not have to wait
+                // out a wall-clock budget. The wall-clock rule itself is
+                // covered by `sustained_contention_eventually_requests_a_restart`.
+                contention_persistent_after: 3,
+                contention_wall: Duration::from_secs(600),
+                contention_min_batches: 3,
+                batch_timeouts: BatchTimeouts {
+                    write_semaphore: Duration::from_millis(10),
+                    write_pool: Duration::from_millis(10),
+                },
+                ..Default::default()
+            },
+        );
+
+        for i in 0..3 {
+            let error = queue
+                .submit(WriteOp::InsertAudioChunk {
+                    file_path: format!("/tmp/wedged-{i}.wav"),
+                    timestamp: None,
+                })
+                .await
+                .expect_err("a stuck coordinator must fail the write");
+            assert!(
+                is_write_lock_contention(&error),
+                "caller must be able to tell this is contention, got: {error}"
+            );
+        }
+
+        assert!(
+            health.is_degraded(),
+            "a stuck coordinator must report the write path degraded"
+        );
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !restart_requested.load(AtomicOrdering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("a stuck write coordinator must request an engine restart");
+
+        drop(leaked_permit);
+        drop(queue);
+        pool.close().await;
+    }
+
+    /// One lucky commit in the middle of a wedge must not reset the clock, or
+    /// an intermittently-available coordinator defers escalation forever. This
+    /// is the contention twin of `escalation_single_success_does_not_reset_the_run`.
+    #[test]
+    fn a_single_success_does_not_clear_a_contention_run() {
+        let mut e = contention_esc();
+        let t0 = std::time::Instant::now();
+
+        for i in 0..CONTENTION_PERSISTENT_MIN_BATCHES {
+            e.on_fatal(t0 + Duration::from_secs(i));
+        }
+        assert!(!e.on_healthy(), "one success must not clear the run");
+
+        assert!(
+            e.on_fatal(t0 + CONTENTION_PERSISTENT_AFTER_WALL),
+            "the run must still escalate despite an intervening success"
+        );
     }
 
     #[test]
@@ -2866,7 +3233,116 @@ mod tests {
 
         assert_eq!(outcome, BatchOutcome::Contention);
         let error = response.await.unwrap().unwrap_err();
-        assert!(error.to_string().contains("pool timed out"));
+        // The pool was never consulted here, so this must not claim a pool
+        // timeout. Callers branch on this to keep an expected stall out of
+        // their error paths.
+        assert!(
+            is_write_lock_contention(&error),
+            "semaphore starvation must report lock contention, got: {error}"
+        );
+        assert!(
+            !is_write_pool_starved(&error),
+            "semaphore starvation must not masquerade as pool starvation: {error}"
+        );
+        assert!(is_retryable_write_stall(&error));
+    }
+
+    /// The two batch timeouts have opposite meanings — "someone else is
+    /// writing, retry" versus "this pool has no connections, recover" — and
+    /// both used to be reported as a fabricated `PoolTimedOut`, flattened to
+    /// the same string. SCREENPIPE-CLI-SQ was therefore untriageable: one
+    /// Sentry issue for two unrelated faults. They must stay distinguishable.
+    #[tokio::test]
+    async fn lock_contention_and_pool_starvation_are_distinguishable() {
+        async fn run(starve_pool: bool) -> sqlx::Error {
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect("sqlite::memory:")
+                .await
+                .unwrap();
+            let semaphore = Arc::new(Semaphore::new(1));
+            // Hold whichever resource the scenario is about.
+            let _held_permit = if starve_pool {
+                None
+            } else {
+                Some(semaphore.clone().acquire_owned().await.unwrap())
+            };
+            let _starved_connection = if starve_pool {
+                Some(pool.acquire().await.unwrap())
+            } else {
+                None
+            };
+            let health = WriteQueueHealth::default();
+            let (respond, response) = tokio::sync::oneshot::channel();
+            let mut batch = vec![PendingWrite {
+                op: WriteOp::InsertAudioChunk {
+                    file_path: "/tmp/distinguishable.wav".to_string(),
+                    timestamp: None,
+                },
+                respond,
+            }];
+            execute_batch(
+                &pool,
+                &semaphore,
+                &mut batch,
+                "sqlite::memory:",
+                &health,
+                BatchTimeouts {
+                    write_semaphore: Duration::from_millis(10),
+                    write_pool: Duration::from_millis(10),
+                },
+            )
+            .await;
+            response.await.unwrap().unwrap_err()
+        }
+
+        let contention = run(false).await;
+        let starvation = run(true).await;
+
+        assert_ne!(
+            contention.to_string(),
+            starvation.to_string(),
+            "the two failures must not share one message"
+        );
+        assert!(is_write_lock_contention(&contention));
+        assert!(!is_write_lock_contention(&starvation));
+        assert!(is_write_pool_starved(&starvation));
+        assert!(!is_write_pool_starved(&contention));
+        // Both are worth retrying, so a caller that only wants to suppress
+        // expected stalls can use the one predicate.
+        assert!(is_retryable_write_stall(&contention));
+        assert!(is_retryable_write_stall(&starvation));
+    }
+
+    /// `send_error_to_all` used to flatten every error into
+    /// `Error::Protocol(String)`, so no caller could ever `matches!` on the
+    /// transport variants. SCREENPIPE-CLI-SN's collateral-abort signal
+    /// (`WorkerCrashed`) and the shutdown signal (`PoolClosed`) both depend on
+    /// the variant surviving.
+    #[test]
+    fn send_error_to_all_preserves_transport_variants() {
+        for original in [
+            sqlx::Error::PoolClosed,
+            sqlx::Error::PoolTimedOut,
+            sqlx::Error::WorkerCrashed,
+        ] {
+            let expected = std::mem::discriminant(&original);
+            let (respond, response) = tokio::sync::oneshot::channel();
+            let mut batch = vec![PendingWrite {
+                op: WriteOp::InsertAudioChunk {
+                    file_path: "/tmp/variant.wav".into(),
+                    timestamp: None,
+                },
+                respond,
+            }];
+            send_error_to_all(&mut batch, original);
+            let received = response.blocking_recv().unwrap().unwrap_err();
+            assert_eq!(
+                std::mem::discriminant(&received),
+                expected,
+                "variant must survive the queue, got: {received}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -2903,7 +3379,14 @@ mod tests {
 
         assert_eq!(outcome, BatchOutcome::FatalConnection);
         let error = response.await.unwrap().unwrap_err();
-        assert!(error.to_string().contains("pool timed out"));
+        assert!(
+            is_write_pool_starved(&error),
+            "pool starvation must be reported as such, got: {error}"
+        );
+        assert!(
+            !is_write_lock_contention(&error),
+            "pool starvation must not masquerade as lock contention: {error}"
+        );
     }
 
     #[tokio::test]

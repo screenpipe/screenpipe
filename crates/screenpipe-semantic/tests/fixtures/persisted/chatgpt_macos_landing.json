@@ -1,0 +1,17 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "com.openai.codex",
+    "executable": "ChatGPT",
+    "display_name": "ChatGPT",
+    "version": "1.0",
+    "browser_url": null
+  },
+  "nodes": [
+    { "role": "AXWindow", "text": "ChatGPT", "depth": 0 },
+    { "role": "AXWebArea", "text": "", "depth": 1 },
+    { "role": "AXButton", "text": "New chat", "depth": 2 },
+    { "role": "AXStaticText", "text": "New chat", "depth": 3 },
+    { "role": "AXButton", "text": "Search", "depth": 2 }
+  ]
+}

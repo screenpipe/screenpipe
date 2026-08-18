@@ -21,6 +21,16 @@ type Gpt56CachedChatParams = ChatCompletionCreateParams & {
 	prompt_cache_options?: { mode: 'explicit' };
 };
 
+const GPT56_MAX_READ_BREAKPOINTS = 50;
+const GPT56_HISTORY_BREAKPOINTS = GPT56_MAX_READ_BREAKPOINTS - 1;
+const CACHEABLE_CONTENT_TYPES = new Set([
+	'text',
+	'image_url',
+	'input_audio',
+	'file',
+	'refusal',
+]);
+
 function stableJson(value: unknown): string {
 	if (value === null || typeof value !== 'object') return JSON.stringify(value);
 	if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
@@ -33,62 +43,155 @@ async function sha256Hex(value: string): Promise<string> {
 	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+function isCacheableContentPart(part: any): boolean {
+	if (!part || typeof part !== 'object' || !CACHEABLE_CONTENT_TYPES.has(part.type)) return false;
+	switch (part.type) {
+		case 'text':
+			return typeof part.text === 'string' && part.text.length > 0;
+		case 'refusal':
+			return typeof part.refusal === 'string' && part.refusal.length > 0;
+		case 'image_url':
+			return typeof part.image_url === 'string'
+				? part.image_url.length > 0
+				: Boolean(part.image_url?.url);
+		case 'input_audio':
+			return Boolean(part.input_audio?.data);
+		case 'file':
+			return Boolean(part.file?.file_id || part.file?.filename || part.file?.file_data);
+		default:
+			return false;
+	}
+}
+
+function clearPromptCacheBreakpoints(messages: ChatCompletionMessageParam[]): void {
+	for (const message of messages) {
+		const mutable = message as any;
+		delete mutable.prompt_cache_breakpoint;
+		if (!Array.isArray(mutable.content)) continue;
+		mutable.content = mutable.content.map((part: any) => {
+			if (!part || typeof part !== 'object' || !('prompt_cache_breakpoint' in part)) return part;
+			const { prompt_cache_breakpoint: _breakpoint, ...rest } = part;
+			return rest;
+		});
+	}
+}
+
+function markLastCacheableContent(message: ChatCompletionMessageParam): boolean {
+	const mutable = message as any;
+	if (typeof mutable.content === 'string' && mutable.content.length > 0) {
+		mutable.content = [{
+			type: 'text',
+			text: mutable.content,
+			prompt_cache_breakpoint: { mode: 'explicit' },
+		}];
+		return true;
+	}
+	if (!Array.isArray(mutable.content)) return false;
+	for (let index = mutable.content.length - 1; index >= 0; index--) {
+		const part = mutable.content[index];
+		if (!isCacheableContentPart(part)) continue;
+		const content = [...mutable.content];
+		content[index] = {
+			...part,
+			prompt_cache_breakpoint: { mode: 'explicit' },
+		};
+		mutable.content = content;
+		return true;
+	}
+	return false;
+}
+
+function stripPromptCacheBreakpoints(message: ChatCompletionMessageParam): ChatCompletionMessageParam {
+	const clone = structuredClone(message) as any;
+	delete clone.prompt_cache_breakpoint;
+	if (Array.isArray(clone.content)) {
+		clone.content = clone.content.map(({ prompt_cache_breakpoint: _breakpoint, ...part }: any) => part);
+	}
+	return clone;
+}
+
+function conversationInputRuns(
+	messages: ChatCompletionMessageParam[],
+	startIndex: number,
+): ChatCompletionMessageParam[][] {
+	const runs: ChatCompletionMessageParam[][] = [];
+	let current: ChatCompletionMessageParam[] = [];
+	let currentRole: 'user' | 'tool' | null = null;
+	const flush = () => {
+		if (current.length > 0) runs.push(current);
+		current = [];
+		currentRole = null;
+	};
+
+	for (let index = startIndex; index < messages.length; index++) {
+		const message = messages[index];
+		const role = message.role === 'user' || message.role === 'tool' ? message.role : null;
+		if (!role) {
+			flush();
+			continue;
+		}
+		if (currentRole !== role) flush();
+		currentRole = role;
+		current.push(message);
+	}
+	flush();
+	return runs;
+}
+
 /**
- * GPT-5.6 explicit prompt caching is opt-in. Cache only the leading system
- * prefix (plus stable tool definitions in the key); conversation turns remain
- * outside the breakpoint. Older models are deliberately untouched.
+ * GPT-5.6 explicit prompt caching keeps one stable instruction breakpoint and,
+ * for an eligible Pi session, re-marks up to the latest 49 user/tool input
+ * boundaries. Earlier-turn markers are read-only at OpenAI, while the newest
+ * boundary becomes the single growing-history write for the next model call.
+ * Older models are deliberately untouched.
  */
-export async function applyGpt56PromptCaching(params: ChatCompletionCreateParams): Promise<void> {
+export async function applyGpt56PromptCaching(
+	params: ChatCompletionCreateParams,
+	enableHistory = false,
+): Promise<void> {
 	if (!/^gpt-5\.6(?:$|[.-])/i.test(params.model)) return;
 
-	const leadingSystem: ChatCompletionMessageParam[] = [];
-	for (const message of params.messages) {
-		if (message.role !== 'system') break;
-		leadingSystem.push(message);
-	}
-	if (leadingSystem.length === 0) return;
+	const cached = params as Gpt56CachedChatParams;
+	delete cached.prompt_cache_key;
+	delete cached.prompt_cache_options;
+	clearPromptCacheBreakpoints(params.messages);
 
-	let marked = false;
-	for (let index = leadingSystem.length - 1; index >= 0 && !marked; index--) {
-		const message = leadingSystem[index] as any;
-		if (typeof message.content === 'string' && message.content.length > 0) {
-			message.content = [{
-				type: 'text',
-				text: message.content,
-				prompt_cache_breakpoint: { mode: 'explicit' },
-			}];
-			marked = true;
-			break;
-		}
-		if (Array.isArray(message.content)) {
-			for (let partIndex = message.content.length - 1; partIndex >= 0; partIndex--) {
-				const part = message.content[partIndex] as { type?: unknown; text?: unknown };
-				if (part?.type !== 'text' || typeof part.text !== 'string' || part.text.length === 0) continue;
-				const content: any[] = [...message.content];
-				content[partIndex] = {
-					...part,
-					prompt_cache_breakpoint: { mode: 'explicit' },
-				};
-				message.content = content;
-				marked = true;
+	const leadingInstructions: ChatCompletionMessageParam[] = [];
+	for (const message of params.messages) {
+		if (message.role !== 'system' && message.role !== 'developer') break;
+		leadingInstructions.push(message);
+	}
+	if (leadingInstructions.length === 0) return;
+
+	let instructionMarked = false;
+	for (let index = leadingInstructions.length - 1; index >= 0; index--) {
+		if (!markLastCacheableContent(leadingInstructions[index])) continue;
+		instructionMarked = true;
+		break;
+	}
+	if (!instructionMarked) return;
+
+	if (enableHistory) {
+		const runs = conversationInputRuns(params.messages, leadingInstructions.length);
+		let historyMarkers = 0;
+		for (let runIndex = runs.length - 1; runIndex >= 0 && historyMarkers < GPT56_HISTORY_BREAKPOINTS; runIndex--) {
+			const run = runs[runIndex];
+			for (let messageIndex = run.length - 1; messageIndex >= 0; messageIndex--) {
+				if (!markLastCacheableContent(run[messageIndex])) continue;
+				historyMarkers++;
 				break;
 			}
 		}
 	}
-	if (!marked) return;
 
-	const cached = params as Gpt56CachedChatParams;
-	const keyMaterial = stableJson({
+	const keyParts: Record<string, unknown> = {
 		model: params.model,
-		system: leadingSystem.map((message) => {
-			const clone = structuredClone(message) as any;
-			if (Array.isArray(clone.content)) {
-				clone.content = clone.content.map(({ prompt_cache_breakpoint, ...part }: any) => part);
-			}
-			return clone;
-		}),
+		// Retain the existing key field name so system-only prompts stay warm.
+		system: leadingInstructions.map(stripPromptCacheBreakpoints),
 		tools: params.tools ?? [],
-	});
+	};
+	if (params.response_format !== undefined) keyParts.response_format = params.response_format;
+	const keyMaterial = stableJson(keyParts);
 	cached.prompt_cache_key = `sp:${(await sha256Hex(keyMaterial)).slice(0, 48)}`;
 	cached.prompt_cache_options = { mode: 'explicit' };
 }
@@ -194,9 +297,12 @@ export class OpenAIProvider implements AIProvider {
 	}
 
 	private applyGenerationOptions(params: ChatCompletionCreateParams, body: RequestBody): void {
-		if (body.temperature === undefined) return;
-		if (this.usesMaxCompletionTokens(body.model)) return;
-		params.temperature = body.temperature;
+		if (body.reasoning_effort !== undefined) {
+			Object.assign(params, { reasoning_effort: body.reasoning_effort });
+		}
+		if (body.temperature !== undefined && !this.usesMaxCompletionTokens(body.model)) {
+			params.temperature = body.temperature;
+		}
 	}
 
 	// OpenAI keeps adding model families that reject `temperature` (and a few
@@ -300,7 +406,7 @@ export class OpenAIProvider implements AIProvider {
 		this.applyTokenLimit(params, body);
 		this.applyToolCompatibilityOptions(params, body);
 		this.applyProviderOptions(params);
-		await applyGpt56PromptCaching(params);
+		await applyGpt56PromptCaching(params, body.gpt56HistoryCacheEligible === true);
 
 		const response = await this.createWithUnsupportedParamRetry(params, (p) =>
 			this.client.chat.completions.create(p),
@@ -334,7 +440,7 @@ export class OpenAIProvider implements AIProvider {
 		this.applyTokenLimit(params, body);
 		this.applyToolCompatibilityOptions(params, body);
 		this.applyProviderOptions(params);
-		await applyGpt56PromptCaching(params);
+		await applyGpt56PromptCaching(params, body.gpt56HistoryCacheEligible === true);
 
 		const stream = (await this.createWithUnsupportedParamRetry(params, (p) =>
 			this.client.chat.completions.create(p as ChatCompletionCreateParams & { stream: true }),

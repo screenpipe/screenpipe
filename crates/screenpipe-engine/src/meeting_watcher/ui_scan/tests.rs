@@ -526,6 +526,7 @@ fn test_calendar_event_keep_alive() {
     let now = Utc::now();
     let rfc = |t: DateTime<Utc>| t.to_rfc3339();
     let ev = |start, end, all_day| CalendarEventSignal {
+        id: "cal-standup".to_string(),
         title: "Standup".to_string(),
         start: rfc(start),
         end: rfc(end),
@@ -2840,6 +2841,97 @@ fn ax_window_title_fallback_requires_meeting_code() {
         assert!(
             !ax_window_matches_meeting(None, Some(title), meet),
             "anchored non-call title {:?} must NOT match without a meeting code",
+            title
+        );
+    }
+}
+
+#[test]
+fn windows_title_sweep_ignores_meet_end_and_landing_pages() {
+    // Windows has no per-tab URL, so the anchored `Meet` title pattern is the
+    // only thing this sweep can key on. Chrome titles the post-call ("You left
+    // the meeting") page and the Meet landing page identically — `Meet - Google
+    // Chrome` — so ungated they became meeting candidates. A browser candidate
+    // skips the call-signal check in the audio-process detector, so a Chrome mic
+    // session that outlived the call was then enough to start a phantom meeting
+    // the moment the user hit the end page.
+    let profiles = load_detection_profiles();
+    let meet = google_meet_profile(&profiles);
+
+    let non_call_titles = [
+        // Post-call "You left the meeting" page and the landing page.
+        "Meet - Google Chrome",
+        "Meet - Google Chrome — Personal",
+        "Meet and Microsoft\u{200B}Edge",
+        // Ordinary pages that merely start with the anchor.
+        "Meet the Team | Acme - Google Chrome",
+        "Meet Kevin - YouTube - Google Chrome",
+        "Meet: quarterly planning - Google Chrome",
+    ];
+    for title in &non_call_titles {
+        assert_eq!(
+            windows_browser_title_match(title, meet),
+            None,
+            "non-call window title {:?} must NOT become a Meet candidate",
+            title
+        );
+    }
+}
+
+#[test]
+fn windows_title_sweep_still_matches_real_meet_windows() {
+    let profiles = load_detection_profiles();
+    let meet = google_meet_profile(&profiles);
+
+    // Chrome/Edge Meet pop-out: anchored title + standalone meeting code.
+    for title in &[
+        "Meet - abc-defg-hij - Google Chrome",
+        "Meet – abc-defg-hij",
+        "Meet - abc-defg-hij and 3 more pages - Personal - Microsoft\u{200B} Edge",
+    ] {
+        assert_eq!(
+            windows_browser_title_match(title, meet),
+            Some(WindowsTitleMatch::AnchoredTitle),
+            "live Meet pop-out {:?} must still match",
+            title
+        );
+    }
+
+    // A verbatim domain in the title still wins on the URL-pattern path, with
+    // or without a meeting code — this branch is unchanged by the code gate.
+    for title in &[
+        "meet.google.com/abc-defg-hij - Google Chrome",
+        "meet.google.com - Google Chrome",
+    ] {
+        assert_eq!(
+            windows_browser_title_match(title, meet),
+            Some(WindowsTitleMatch::UrlPattern),
+            "verbatim Meet domain in title {:?} must still match",
+            title
+        );
+    }
+}
+
+#[test]
+fn windows_title_sweep_ignores_calendar_named_calls_as_before() {
+    // Real in-call Chrome titles are the calendar event name, which never
+    // started with the `Meet` anchor and so never matched this sweep. The code
+    // gate does not change that: those calls are detected via DB frame evidence
+    // (`browser_window_matches_meeting`) and the UIA call-signal scan, both
+    // untouched here. Asserted so a future widening of the anchor is a
+    // deliberate, visible change.
+    let profiles = load_detection_profiles();
+    let meet = google_meet_profile(&profiles);
+
+    for title in &[
+        "Weekly Reflections (time change) - Google Chrome",
+        "Screenpipe troubleshooting with Rajat - Google Chrome",
+        "apd-yzrk-jxn - Google Chrome",
+    ] {
+        assert_eq!(
+            windows_browser_title_match(title, meet),
+            None,
+            "calendar-named / bare-code title {:?} is out of scope for this sweep",
             title
         );
     }

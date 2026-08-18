@@ -219,9 +219,9 @@ pub(crate) async fn handle_no_apps_path(
         // activity, else the continuously-written silent tap chunks would
         // keep an ended call alive forever here too.
         let recent_output_chunk = db.has_recent_output_audio(30).await.unwrap_or(false);
-        let recent_voice_activity = detector.as_ref().map_or(true, |d| {
-            d.audio_active_within(AUDIO_GATE_WINDOW.as_millis() as u64)
-        });
+        let recent_voice_activity = detector
+            .as_ref()
+            .is_none_or(|d| d.audio_active_within(AUDIO_GATE_WINDOW.as_millis() as u64));
         let calendar_active = has_active_calendar_event(calendar_events, Utc::now());
         audio_or_calendar_keepalive(recent_output_chunk, recent_voice_activity, calendar_active)
     } else {
@@ -309,9 +309,9 @@ pub(crate) async fn apply_state_action(
         StateAction::StartMeeting { app } => {
             // Fresh meeting -> reset the flap counter for outcome telemetry.
             *flap_count = 0;
-            // Calendar enrichment: find overlapping calendar event
-            let (cal_title, cal_attendees) = find_overlapping_calendar_event(calendar_events);
-            let attendees_str = cal_attendees.as_ref().map(|a| a.join(", "));
+            // Calendar enrichment, skipped when the event already names another
+            // meeting — one calendar event describes one meeting.
+            let calendar = resolve_calendar_binding(db, calendar_events, Utc::now()).await;
 
             // Try to merge with recently-ended meeting. The DB query
             // already filters out explicit_stop rows; the
@@ -336,25 +336,34 @@ pub(crate) async fn apply_state_action(
                             "meeting v2: reopened recent meeting (id={}, app={})",
                             recent.id, app
                         );
-                        // Enrich reopened meeting with calendar data if it has none
-                        if cal_title.is_some() && recent.title.as_ref().is_none_or(|t| t.is_empty())
-                        {
-                            if let Err(e) = db
-                                .update_meeting(
-                                    recent.id,
-                                    None,
-                                    None,
-                                    cal_title.as_deref(),
-                                    attendees_str.as_deref(),
-                                    None,
-                                    None,
-                                )
-                                .await
-                            {
-                                warn!(
-                                    "meeting v2: failed to enrich reopened meeting {}: {}",
+                        // Enrich reopened meeting with calendar data if it has
+                        // none — but only once this meeting owns the event.
+                        if let Some(calendar) = calendar.as_ref() {
+                            match db.bind_calendar_event(recent.id, &calendar.key).await {
+                                Ok(true) if recent.title.as_ref().is_none_or(|t| t.is_empty()) => {
+                                    if let Err(e) = db
+                                        .update_meeting(
+                                            recent.id,
+                                            None,
+                                            None,
+                                            Some(calendar.title.as_str()),
+                                            calendar.attendees.as_deref(),
+                                            None,
+                                            None,
+                                        )
+                                        .await
+                                    {
+                                        warn!(
+                                            "meeting v2: failed to enrich reopened meeting {}: {}",
+                                            recent.id, e
+                                        );
+                                    }
+                                }
+                                Ok(_) => {}
+                                Err(e) => warn!(
+                                    "meeting v2: failed to bind calendar event to meeting {}: {}",
                                     recent.id, e
-                                );
+                                ),
                             }
                         }
                         (recent.id, "auto_reopen")
@@ -362,32 +371,19 @@ pub(crate) async fn apply_state_action(
                     Err(e) => {
                         warn!("meeting v2: failed to reopen meeting {}: {}", recent.id, e);
                         (
-                            insert_new_meeting(
-                                db,
-                                &app,
-                                cal_title.as_deref(),
-                                attendees_str.as_deref(),
-                            )
-                            .await,
+                            insert_new_meeting(db, &app, calendar.as_ref()).await,
                             "auto_start",
                         )
                     }
                 },
                 Ok(None) => (
-                    insert_new_meeting(db, &app, cal_title.as_deref(), attendees_str.as_deref())
-                        .await,
+                    insert_new_meeting(db, &app, calendar.as_ref()).await,
                     "auto_start",
                 ),
                 Err(e) => {
                     warn!("meeting v2: failed to find recent meeting: {}", e);
                     (
-                        insert_new_meeting(
-                            db,
-                            &app,
-                            cal_title.as_deref(),
-                            attendees_str.as_deref(),
-                        )
-                        .await,
+                        insert_new_meeting(db, &app, calendar.as_ref()).await,
                         "auto_start",
                     )
                 }

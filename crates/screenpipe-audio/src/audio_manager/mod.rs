@@ -11,6 +11,7 @@ mod piggyback_listeners;
 // for reconciliation recovery (SCREENPIPE-CLI-RC). Items inside stay pub(crate).
 pub(crate) mod reconciliation;
 mod windows_output_follow;
+pub(crate) mod write_retry;
 pub use builder::*;
 pub use device_monitor::*;
 pub use manager::*;

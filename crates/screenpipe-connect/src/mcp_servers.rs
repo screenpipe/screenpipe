@@ -1305,7 +1305,10 @@ fn registry_path() -> &'static str {
             "$u=[Environment]::GetEnvironmentVariable('PATH','User');",
             "[Environment]::ExpandEnvironmentVariables($m+';'+$u)"
         );
-        let out = std::process::Command::new("powershell")
+        // No-window: this runs once per process, lazily, and PowerShell is a
+        // console program — without the flag the app pops a black terminal over
+        // the user's desktop the first time any stdio MCP server is reached.
+        let out = screenpipe_core::no_window_command("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", ps])
             .output();
         match out {
@@ -1522,7 +1525,8 @@ impl Drop for StdioSession {
         }
         // kill_on_drop kills cmd.exe but the grandchild MCP server is its
         // own process group on Windows. `taskkill /F /T` kills the whole tree.
-        let _ = std::process::Command::new("taskkill")
+        // No-window, or tearing a session down flashes a terminal.
+        let _ = screenpipe_core::no_window_command("taskkill")
             .args(["/F", "/T", "/PID", &self.pid.to_string()])
             .output();
     }

@@ -8,7 +8,14 @@ import type { SettingsField } from "./settings-search";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
-  { label: "Blocklist", keywords: ["ignore", "exclude", "block"] },
+  {
+    label: "Content filters",
+    keywords: ["ignore", "exclude", "block", "blocklist", "allowlist", "apps", "windows"],
+  },
+  {
+    label: "Excluded websites",
+    keywords: ["url", "domain", "site", "browser", "ignore", "exclude"],
+  },
   {
     label: "Ignore incognito windows",
     keywords: ["private", "browser", "enhanced", "automation"],
@@ -26,20 +33,16 @@ import { screenpipeWebUrl } from "@/lib/web-url";
 import {
   Eye,
   EyeOff,
-  Globe,
   Shield,
   Monitor,
   Loader2,
-  AlertCircle,
   RefreshCw,
-  AppWindowMac,
   Tv,
   Lock,
   Copy,
   ClipboardX,
   Keyboard,
   MousePointerClick,
-  FolderTree,
   ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -48,8 +51,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
-import { MultiSelect } from "@/components/ui/multi-select";
 import { WindowPicker } from "./window-picker";
+import { ContentFiltersCard } from "./capture-filters/content-filters-card";
+import { addRule, type WindowRules } from "@/lib/settings/capture-filters";
 import { InputMonitoringPanel } from "./input-monitoring-card";
 import { ApplyRestartBar } from "./apply-restart-bar";
 import { useSettings, Settings } from "@/lib/hooks/use-settings";
@@ -72,136 +76,6 @@ import {
   debounce,
   FieldValidationResult,
 } from "@/lib/utils/validation";
-
-const formatCount = (count: number): string => {
-  if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
-  return `${count}`;
-};
-
-const getAppIconUrl = (appName: string): string => {
-  return `http://localhost:11435/app-icon?name=${encodeURIComponent(appName)}`;
-};
-
-const createWindowOptions = (
-  windowItems: { name: string; count: number; app_name?: string }[],
-  existingPatterns: string[],
-  installedApps: string[] = []
-) => {
-  // For each observed window, surface BOTH the bare title (matches anywhere)
-  // and a scoped `App::Title` variant (matches that one window of that one
-  // app). Users can pick whichever matches their intent.
-  const seen = new Set<string>();
-  const windowOptions: ReturnType<typeof toOption>[] = [];
-  const sorted = [...windowItems].sort((a, b) => b.count - a.count);
-
-  function toOption(args: {
-    value: string;
-    label: string;
-    iconHint?: string;
-    description: string;
-  }) {
-    return {
-      value: args.value,
-      label: args.label,
-      icon: AppWindowMac,
-      iconUrl: getAppIconUrl(args.iconHint || args.value),
-      description: args.description,
-    };
-  }
-
-  for (const item of sorted) {
-    if (!seen.has(item.name)) {
-      seen.add(item.name);
-      windowOptions.push(
-        toOption({
-          value: item.name,
-          label: item.name,
-          iconHint: item.app_name || item.name,
-          description: [
-            item.app_name && item.app_name !== item.name
-              ? item.app_name
-              : null,
-            `${formatCount(item.count)} captures`,
-          ]
-            .filter(Boolean)
-            .join(" · "),
-        })
-      );
-    }
-    if (item.app_name && item.app_name !== item.name) {
-      const scoped = `${item.app_name}::${item.name}`;
-      if (!seen.has(scoped)) {
-        seen.add(scoped);
-        windowOptions.push(
-          toOption({
-            value: scoped,
-            label: scoped,
-            iconHint: item.app_name,
-            description: `scoped: only this window of ${item.app_name}`,
-          })
-        );
-      }
-    }
-  }
-
-  const seenLower = new Set(Array.from(seen, (s) => s.toLowerCase()));
-
-  // Installed apps that have no captures yet. Lets users add an ignore/include
-  // rule for an app before it's ever recorded; the icon still resolves by name
-  // so these render with their real app icon despite zero captures.
-  const installedOptions = installedApps
-    .filter((app) => app && !seenLower.has(app.toLowerCase()))
-    .map((app) => {
-      seenLower.add(app.toLowerCase());
-      return toOption({
-        value: app,
-        label: app,
-        iconHint: app,
-        description: "installed · not captured yet",
-      });
-    });
-
-  const customOptions = existingPatterns
-    .filter((pattern) => !seenLower.has(pattern.toLowerCase()))
-    .map((pattern) => ({
-      value: pattern,
-      label: pattern,
-      icon: AppWindowMac,
-      iconUrl: getAppIconUrl(pattern.includes("::") ? pattern.split("::")[0] : pattern),
-    }));
-
-  return [...windowOptions, ...installedOptions, ...customOptions];
-};
-
-const getFaviconUrl = (domain: string): string => {
-  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`;
-};
-
-const createUrlOptions = (
-  urlItems: { name: string; count: number }[],
-  existingUrls: string[]
-) => {
-  const urlOptions = [...urlItems]
-    .sort((a, b) => b.count - a.count)
-    .map((item) => ({
-      value: item.name,
-      label: item.name,
-      iconUrl: getFaviconUrl(item.name),
-      icon: Globe,
-      description: `${formatCount(item.count)} visits this week`,
-    }));
-
-  const customOptions = existingUrls
-    .filter((url) => !urlItems.some((item) => item.name === url))
-    .map((url) => ({
-      value: url,
-      label: url,
-      iconUrl: getFaviconUrl(url),
-      icon: Globe,
-    }));
-
-  return [...urlOptions, ...customOptions];
-};
 
 function EncryptDataCard({
   encryptStore,
@@ -534,7 +408,7 @@ export function PrivacySection() {
 
   const { items: windowItems, isLoading: isWindowItemsLoading } =
     useSqlAutocomplete("window");
-  const { items: urlItems, isLoading: isUrlItemsLoading } =
+  const { items: urlItems } =
     useSqlAutocomplete("url");
   // Installed apps with no captures yet — merged into the app filters so users
   // can block/allow an app before it's ever recorded.
@@ -990,117 +864,34 @@ export function PrivacySection() {
     }
   };
 
-  // Add one pattern from the WindowPicker. Reuses the MultiSelect change
-  // handler so the mutual-exclusion logic (a pattern in ignore is removed
-  // from include and vice versa) stays in one place.
+  // The two window lists travel together: `addRule` and friends drop a pattern
+  // from the opposite list so a window can't be included and ignored at once.
+  const windowRules = useMemo<WindowRules>(
+    () => ({
+      ignored: settings.ignoredWindows,
+      included: settings.includedWindows,
+    }),
+    [settings.ignoredWindows, settings.includedWindows]
+  );
+
+  const handleWindowRulesChange = useCallback(
+    (next: WindowRules) => {
+      handleSettingsChange(
+        { ignoredWindows: next.ignored, includedWindows: next.included },
+        true
+      );
+    },
+    [handleSettingsChange]
+  );
+
+  // Add one pattern from the WindowPicker.
   const addIgnoredPattern = (pattern: string) => {
-    const lower = pattern.toLowerCase();
-    if (settings.ignoredWindows.some((w) => w.toLowerCase() === lower)) return;
-    handleIgnoredWindowsChange([...settings.ignoredWindows, pattern]);
+    handleWindowRulesChange(addRule(windowRules, pattern, "ignored"));
   };
   const addIncludedPattern = (pattern: string) => {
-    const lower = pattern.toLowerCase();
-    if (settings.includedWindows.some((w) => w.toLowerCase() === lower)) return;
-    handleIncludedWindowsChange([...settings.includedWindows, pattern]);
+    handleWindowRulesChange(addRule(windowRules, pattern, "included"));
   };
 
-  const handleIgnoredWindowsChange = (values: string[]) => {
-    const lowerCaseValues = values.map((v) => v.toLowerCase());
-    const currentLowerCase = settings.ignoredWindows.map((v) =>
-      v.toLowerCase()
-    );
-    const addedValues = values.filter(
-      (v) => !currentLowerCase.includes(v.toLowerCase())
-    );
-    const removedValues = settings.ignoredWindows.filter(
-      (v) => !lowerCaseValues.includes(v.toLowerCase())
-    );
-
-    if (addedValues.length > 0) {
-      const newValue = addedValues[0];
-      handleSettingsChange(
-        {
-          ignoredWindows: [...settings.ignoredWindows, newValue],
-          includedWindows: settings.includedWindows.filter(
-            (w) => w.toLowerCase() !== newValue.toLowerCase()
-          ),
-        },
-        true
-      );
-    } else if (removedValues.length > 0) {
-      const removedValue = removedValues[0];
-      handleSettingsChange(
-        {
-          ignoredWindows: settings.ignoredWindows.filter(
-            (w) => w !== removedValue
-          ),
-        },
-        true
-      );
-    }
-  };
-
-  const handleIncludedWindowsChange = (values: string[]) => {
-    const lowerCaseValues = values.map((v) => v.toLowerCase());
-    const currentLowerCase = settings.includedWindows.map((v) =>
-      v.toLowerCase()
-    );
-    const addedValues = values.filter(
-      (v) => !currentLowerCase.includes(v.toLowerCase())
-    );
-    const removedValues = settings.includedWindows.filter(
-      (v) => !lowerCaseValues.includes(v.toLowerCase())
-    );
-
-    if (addedValues.length > 0) {
-      const newValue = addedValues[0];
-      handleSettingsChange(
-        {
-          includedWindows: [...settings.includedWindows, newValue],
-          ignoredWindows: settings.ignoredWindows.filter(
-            (w) => w.toLowerCase() !== newValue.toLowerCase()
-          ),
-        },
-        true
-      );
-    } else if (removedValues.length > 0) {
-      const removedValue = removedValues[0];
-      handleSettingsChange(
-        {
-          includedWindows: settings.includedWindows.filter(
-            (w) => w !== removedValue
-          ),
-        },
-        true
-      );
-    }
-  };
-
-  const handleIgnoredUrlsChange = (values: string[]) => {
-    const currentUrls = settings.ignoredUrls || [];
-    const lowerCaseValues = values.map((v) => v.toLowerCase());
-    const currentLowerCase = currentUrls.map((v) => v.toLowerCase());
-    const addedValues = values.filter(
-      (v) => !currentLowerCase.includes(v.toLowerCase())
-    );
-    const removedValues = currentUrls.filter(
-      (v) => !lowerCaseValues.includes(v.toLowerCase())
-    );
-
-    if (addedValues.length > 0) {
-      const newValue = addedValues[0];
-      handleSettingsChange(
-        { ignoredUrls: [...currentUrls, newValue] },
-        true
-      );
-    } else if (removedValues.length > 0) {
-      const removedValue = removedValues[0];
-      handleSettingsChange(
-        { ignoredUrls: currentUrls.filter((u) => u !== removedValue) },
-        true
-      );
-    }
-  };
 
   return (
     <div className="space-y-5">
@@ -1853,114 +1644,31 @@ export function PrivacySection() {
           Content filters
         </h2>
 
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center space-x-2.5 mb-2">
-              <EyeOff className="h-4 w-4 text-muted-foreground shrink-0" />
-              <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                Ignored Apps
-                <HelpTooltip text="Skip captures for these patterns. Plain text (e.g. '1Password') matches the app or any window title that contains it. Use 'App::Title' to scope to one window of an app (e.g. 'Slack::#hr' blocks only #hr in Slack)." />
-              </h3>
-            </div>
-            <div className="ml-[26px]">
-              <div data-testid="privacy-ignored-apps-select">
-                <MultiSelect
-                  options={createWindowOptions(
-                    windowItems || [],
-                    settings.ignoredWindows,
-                    installedApps
-                  )}
-                  defaultValue={settings.ignoredWindows}
-                  value={settings.ignoredWindows}
-                  onValueChange={handleIgnoredWindowsChange}
-                  placeholder="Select apps to ignore..."
-                  allowCustomValues
-                />
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-[11px] mt-1.5 gap-1.5"
-                onClick={() => setPicker("ignored")}
-              >
-                <FolderTree className="h-3 w-3" /> browse apps & windows
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center space-x-2.5 mb-2">
-              <Eye className="h-4 w-4 text-muted-foreground shrink-0" />
-              <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                Included Apps
-                <HelpTooltip text="When set, only matching windows are captured. Plain text is a global include (e.g. 'Slack' = only Slack). 'App::Title' creates a per-app whitelist (e.g. 'Slack::#engineering' keeps only that channel in Slack; other apps stay unaffected)." />
-              </h3>
-            </div>
-            <div className="ml-[26px]">
-              <div data-testid="privacy-included-apps-select">
-                <MultiSelect
-                  options={createWindowOptions(
-                    windowItems || [],
-                    settings.includedWindows,
-                    installedApps
-                  )}
-                  defaultValue={settings.includedWindows}
-                  value={settings.includedWindows}
-                  onValueChange={handleIncludedWindowsChange}
-                  placeholder="Only capture these apps (optional)..."
-                  allowCustomValues
-                />
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-[11px] mt-1.5 gap-1.5"
-                onClick={() => setPicker("included")}
-              >
-                <FolderTree className="h-3 w-3" /> browse apps & windows
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center space-x-2.5 mb-2">
-              <Globe className="h-4 w-4 text-muted-foreground shrink-0" />
-              <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                Ignored URLs
-                <HelpTooltip text="Browser URLs matching these patterns will not be captured. Use for privacy — e.g. add 'bank.com' to skip banking sites." />
-              </h3>
-            </div>
-            <div className="ml-[26px]">
-              <MultiSelect
-                options={createUrlOptions(
-                  urlItems || [],
-                  settings.ignoredUrls || []
-                )}
-                defaultValue={settings.ignoredUrls || []}
-                value={settings.ignoredUrls || []}
-                onValueChange={handleIgnoredUrlsChange}
-                placeholder="e.g. wellsfargo.com, chase.com..."
-                allowCustomValues={true}
-              />
-              {(settings.ignoredUrls || []).some(
-                (url) =>
-                  url.length < 5 ||
-                  ["bank", "pay", "money", "finance"].includes(
-                    url.toLowerCase()
-                  )
-              ) && (
-                <p className="text-xs text-yellow-600 dark:text-yellow-500 flex items-center gap-1 mt-1">
-                  <AlertCircle className="h-3 w-3" />
-                  Short patterns may over-match. Use specific domains.
-                </p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+        <ContentFiltersCard
+          rules={windowRules}
+          ignoredUrls={settings.ignoredUrls || []}
+          categoryOwned={settings.categoryOwnedFilters}
+          observedWindows={windowItems || []}
+          observedDomains={urlItems || []}
+          installedApps={installedApps}
+          isLoadingApps={isWindowItemsLoading}
+          onRulesChange={handleWindowRulesChange}
+          onIgnoredUrlsChange={(next) =>
+            handleSettingsChange({ ignoredUrls: next }, true)
+          }
+          onTargetsChange={(next) =>
+            handleSettingsChange(
+              {
+                ignoredWindows: next.rules.ignored,
+                includedWindows: next.rules.included,
+                ignoredUrls: next.ignoredUrls,
+                categoryOwnedFilters: next.owned ?? { apps: [], domains: [] },
+              },
+              true
+            )
+          }
+          onBrowse={(list) => setPicker(list)}
+        />
       </div>
 
       <RemoteSupportLogsCard />

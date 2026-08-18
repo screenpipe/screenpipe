@@ -200,7 +200,10 @@ describe("Chat keeps streaming when opening Settings", function () {
     await navSettings.waitForExist({ timeout: t(10_000) });
     await navSettings.click();
     // Settings page mounted ⇒ the home page (and chat panel) unmounted.
-    await waitForTestId("section-settings-general", 15_000);
+    // Assert on a section-independent marker: nav-settings opens whichever
+    // section was last visited (readLastSettingsSection), so waiting on the
+    // General panel specifically makes this depend on spec ordering.
+    await waitForTestId("settings-back-to-app", 15_000);
     // Sit in Settings briefly so the response keeps streaming in the background.
     await browser.pause(t(2_000));
 

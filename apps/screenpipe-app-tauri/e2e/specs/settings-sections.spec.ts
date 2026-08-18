@@ -57,6 +57,15 @@ async function openSettings(): Promise<void> {
   const navSettings = await $('[data-testid="nav-settings"]');
   await navSettings.waitForExist({ timeout: t(15_000) });
   await navSettings.click();
+  // The sidebar button calls openSettings() with no argument, which resolves to
+  // readLastSettingsSection() — the *persisted* section, not General. These tests
+  // walk every section, so the first run leaves a non-General section behind and
+  // every retry (specFileRetries) would then hang here waiting for a General
+  // panel the app never opened. Select General explicitly so the hook is
+  // idempotent no matter which section the previous attempt ended on.
+  const navGeneral = await $('[data-testid="settings-nav-general"]');
+  await navGeneral.waitForExist({ timeout: t(30_000) });
+  await navGeneral.click();
   const generalSection = await $('[data-testid="section-settings-general"]');
   await generalSection.waitForExist({ timeout: t(30_000) });
 }

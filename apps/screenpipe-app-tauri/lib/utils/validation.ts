@@ -135,7 +135,8 @@ export const settingsStoreSchema = z.object({
   stopAudioShortcut: z.string(),
   pipeShortcuts: z.record(z.string()),
   showShortcutOverlay: z.boolean().optional(),
-  
+  allowHidingShortcutOverlay: z.boolean().optional(),
+
   // Other
   isLoading: z.boolean(),
   installedPipes: z.array(z.any()), // Define proper pipe schema if needed
@@ -177,6 +178,27 @@ const parseUrl = (url?: string | null): URL | null => {
 
 export const isGeminiApiUrl = (url?: string | null): boolean =>
   parseUrl(url)?.hostname.toLowerCase() === GEMINI_API_HOST;
+
+/**
+ * Normalize a model id coming back from a provider's /models listing.
+ *
+ * Gemini's OpenAI-compatible endpoint reports ids in its native
+ * `models/gemini-2.5-flash` form, but rejects that prefix on
+ * /chat/completions and `validateAiModel` refuses to save it. Since the model
+ * field is a picker rather than a free-text input, a user who selects a
+ * fetched Gemini model has no way out — strip the prefix at the source so the
+ * value that lands in the preset is the one Gemini actually accepts.
+ */
+export const normalizeAiModelId = (
+  id: string,
+  url?: string | null,
+): string => {
+  const trimmed = id.trim();
+  if (!isGeminiApiUrl(url)) return trimmed;
+  const withoutPrefix = trimmed.replace(/^models\//, "");
+  // Guard against a listing that contains nothing but the prefix.
+  return withoutPrefix || trimmed;
+};
 
 export const validateAiProviderUrl = (
   url: string,

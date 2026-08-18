@@ -1,0 +1,30 @@
+{
+  "app": {
+    "platform": "windows",
+    "app_id": null,
+    "executable": "WINWORD.EXE",
+    "display_name": "WINWORD.EXE",
+    "version": null,
+    "browser_url": null
+  },
+  "nodes": [
+    {
+      "parent": null,
+      "role": "Text",
+      "classes": ["NetUILabel"],
+      "description": "Text",
+      "text": "Important notice. Your subscription expired."
+    },
+    {
+      "parent": null,
+      "role": "Text",
+      "classes": ["NetUIRichLabel"],
+      "description": "Text",
+      "text": "To restore full functionality and be able to create and edit files, please renew your subscription promptly."
+    },
+    { "parent": null, "role": "Edit", "identifier": "HomePageSearchBox", "description": "edit", "text": "Search for a file" },
+    { "parent": null, "role": "ListItem", "classes": ["NetUIListViewItem"], "text": "Blank document" },
+    { "parent": null, "role": "Button", "classes": ["NetUIElement"], "text": "Renew now" },
+    { "parent": null, "role": "TitleBar", "classes": ["NetUIOfficeCaption"], "text": "Word (Unlicensed Product)" }
+  ]
+}

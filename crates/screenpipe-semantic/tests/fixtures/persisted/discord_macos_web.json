@@ -1,0 +1,20 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "company.thebrowser.Browser",
+    "executable": "Arc",
+    "display_name": "Discord",
+    "version": "1.0",
+    "browser_url": "https://discord.com/channels/example/channel"
+  },
+  "nodes": [
+    { "role": "AXWindow", "text": "#release - Discord", "depth": 0 },
+    { "role": "AXWebArea", "text": "Discord", "depth": 1, "automation_id": "RootWebArea" },
+    { "role": "AXHeading", "text": "Alice", "depth": 2 },
+    { "role": "AXStaticText", "text": "Alice", "depth": 3 },
+    { "role": "AXStaticText", "text": "Today at 10:20 AM", "depth": 3 },
+    { "role": "AXStaticText", "text": "The release is ready.", "depth": 3 },
+    { "role": "AXButton", "text": "Add reaction", "depth": 3 },
+    { "role": "AXButton", "text": "Reply", "depth": 3 }
+  ]
+}

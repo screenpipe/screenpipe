@@ -730,14 +730,8 @@ async fn ffprobe_duration(ffprobe_path: &Path, file: &str) -> Result<f64> {
 }
 
 async fn run_ffprobe(ffprobe_path: &Path, args: &[&str]) -> Result<String> {
-    let mut cmd = tokio::process::Command::new(ffprobe_path);
+    let mut cmd = ffmpeg_cmd_async(ffprobe_path);
     cmd.args(args);
-    #[cfg(windows)]
-    {
-        // tokio's Command exposes creation_flags inherently, so the
-        // std CommandExt trait import would be unused here.
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
     let output = cmd.output().await.context("failed to spawn ffprobe")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

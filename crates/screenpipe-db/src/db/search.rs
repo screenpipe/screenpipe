@@ -652,7 +652,8 @@ impl DatabaseManager {
                 GROUP_CONCAT(tags.name, ',') as tags,
                 frames.browser_url,
                 frames.focused,
-                frames.text_source
+                frames.text_source,
+                frames.capture_trigger
             FROM candidates
             JOIN frames ON frames.id = candidates.id
             LEFT JOIN video_chunks ON frames.video_chunk_id = video_chunks.id
@@ -702,6 +703,7 @@ impl DatabaseManager {
                 browser_url: raw.browser_url,
                 focused: raw.focused,
                 text_source: raw.text_source,
+                capture_trigger: raw.capture_trigger,
             })
             .collect()
     }
@@ -859,7 +861,8 @@ impl DatabaseManager {
             GROUP_CONCAT(tags.name, ',') as tags,
             frames.browser_url,
             frames.focused,
-            frames.text_source
+            frames.text_source,
+            frames.capture_trigger
         FROM candidates
         JOIN frames ON frames.id = candidates.id
         LEFT JOIN video_chunks ON frames.video_chunk_id = video_chunks.id

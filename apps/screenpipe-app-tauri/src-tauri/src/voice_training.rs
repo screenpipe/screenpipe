@@ -165,6 +165,9 @@ async fn assign_chunks(
                         "audio_chunk_id": chunk_id,
                         "new_speaker_name": name,
                         "propagate_similar": true,
+                        // Enrollment picks its own chunks and spreads by voice
+                        // similarity; keep it off the identity-rename path.
+                        "scope": "chunk",
                     })),
             )
             .send()

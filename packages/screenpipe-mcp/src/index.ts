@@ -33,6 +33,12 @@ import {
 import { discoverTeamApiBase, discoverTeamToken } from "./team-config";
 import { PKG_VERSION } from "./version";
 import { formatForElementPurpose } from "./element-format";
+import { buildActivitySummaryResult } from "./activity-summary-tool";
+import {
+  localContextDayStarts,
+  normalizeTime,
+  normalizeTimeFields,
+} from "./time-normalization";
 
 initMcpTelemetry({ transport: "stdio" });
 
@@ -404,11 +410,11 @@ const TOOLS: Tool[] = [
         offset: { type: "integer", description: "Pagination offset. Use when results say 'use offset=N for more'.", default: 0 },
         start_time: {
           type: "string",
-          description: "Accepted: ISO 8601 ('2024-01-15T10:00:00Z'), 'Nh ago' / 'Nd ago' / 'Nw ago', 'now', 'yesterday', 'today', or bare 'YYYY-MM-DD'. Always provide to avoid scanning entire history.",
+          description: "Accepted: ISO 8601 ('2024-01-15T10:00:00Z'), relative time, or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD'). Always provide to avoid scanning entire history.",
         },
         end_time: {
           type: "string",
-          description: "ISO 8601 UTC or relative (e.g. 'now'). Defaults to now.",
+          description: "ISO 8601, relative time, or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD'). Defaults to now.",
         },
         app_name: { type: "string", description: "Filter by app name (e.g. 'Google Chrome', 'Slack', 'zoom.us'). Case-sensitive." },
         window_name: { type: "string", description: "Filter by window title substring" },
@@ -454,8 +460,8 @@ const TOOLS: Tool[] = [
     inputSchema: {
       type: "object",
       properties: {
-        start_time: { type: "string", description: "ISO 8601 UTC or relative (e.g. '1d ago'). Omit when searching by q — it filters all history." },
-        end_time: { type: "string", description: "ISO 8601 UTC or relative" },
+        start_time: { type: "string", description: "ISO 8601, relative time, or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD'). Omit when searching by q — it filters all history." },
+        end_time: { type: "string", description: "ISO 8601, relative time, or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
         q: { type: "string", description: "Case-insensitive substring filter on title, attendees (names/emails), and note. Searches all history." },
         limit: { type: "integer", description: "Max results (default 20)", default: 20 },
         offset: { type: "integer", description: "Pagination offset", default: 0 },
@@ -465,17 +471,31 @@ const TOOLS: Tool[] = [
   {
     name: "activity-summary",
     description:
-      "Rich activity overview: app usage, window/tab titles with URLs and time spent, key text per context, audio transcriptions. " +
+      "Rich activity overview: authoritative active minutes, app/window time, edited document paths, key text, and audio transcriptions, with optional parsed task context when available. " +
       "USE WHEN: any broad question about what the user did — 'what was I doing?', 'how long on X?', 'which apps?', 'recap my morning'. " +
       "This is almost always the right first call for time-range questions — usually sufficient without follow-up searches. " +
+      "Use parsed/path evidence to identify tasks, but only active-minute fields for duration; frame and row counts are never time. " +
       "DO NOT USE for: finding a specific keyword (use keyword-search) or a specific UI control (use search-elements).",
     annotations: { title: "Activity Summary", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
-        start_time: { type: "string", description: "ISO 8601 UTC or relative (e.g. '3h ago')" },
-        end_time: { type: "string", description: "ISO 8601 UTC or relative (e.g. 'now')" },
+        start_time: { type: "string", description: "ISO 8601, relative (e.g. '3h ago'), or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
+        end_time: { type: "string", description: "ISO 8601, relative (e.g. 'now'), or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
         app_name: { type: "string", description: "Optional app name filter to focus on one app" },
+        include_parsed_context: {
+          type: "boolean",
+          description:
+            "Optionally include a bounded parsed-context sample for identifying projects and tasks. Parsed capture is experimental and may be disabled or unsupported. Context only; never use row counts as duration.",
+          default: false,
+        },
+        parsed_context_limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: 20,
+          description: "Maximum parsed-context rows (default 10, max 20).",
+          default: 10,
+        },
       },
       required: ["start_time", "end_time"],
     },
@@ -498,8 +518,8 @@ const TOOLS: Tool[] = [
           description: "Element source. 'accessibility' is preferred (OS-native tree). 'ocr' for apps without a11y.",
         },
         role: { type: "string", description: "Element role filter (e.g. 'AXButton', 'AXLink', 'AXTextField')" },
-        start_time: { type: "string", description: "ISO 8601 UTC or relative" },
-        end_time: { type: "string", description: "ISO 8601 UTC or relative" },
+        start_time: { type: "string", description: "ISO 8601, relative time, or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
+        end_time: { type: "string", description: "ISO 8601, relative time, or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
         app_name: { type: "string", description: "Filter by app name" },
         purpose: {
           type: "string",
@@ -537,8 +557,8 @@ const TOOLS: Tool[] = [
     inputSchema: {
       type: "object",
       properties: {
-        start_time: { type: "string", description: 'ISO 8601 UTC or relative (e.g. "5m ago", "now")' },
-        end_time: { type: "string", description: 'ISO 8601 UTC or relative (e.g. "5m ago", "now")' },
+        start_time: { type: "string", description: "ISO 8601, relative time, or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
+        end_time: { type: "string", description: "ISO 8601, relative time, or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
         output_path: {
           type: "string",
           description:
@@ -823,8 +843,8 @@ const TOOLS: Tool[] = [
       type: "object",
       properties: {
         q: { type: "string", description: "Keyword query (FTS5 syntax: quoted phrases, AND/OR, prefix*)" },
-        start_time: { type: "string", description: "ISO 8601 UTC, 'Nh ago' / 'Nd ago' / 'Nw ago', 'now', 'yesterday', 'today', or 'YYYY-MM-DD'" },
-        end_time: { type: "string", description: "Same formats as start_time" },
+        start_time: { type: "string", description: "ISO 8601, relative time, or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
+        end_time: { type: "string", description: "ISO 8601, relative time, or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
         app_name: { type: "string", description: "Filter by exact app name (case-sensitive, e.g. 'Google Chrome')" },
         limit: { type: "integer", description: "Max results (default 20)", default: 20 },
         offset: { type: "integer", description: "Pagination offset", default: 0 },
@@ -1080,6 +1100,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   if (uri === "screenpipe://context") {
     const now = new Date();
     const ms = now.getTime();
+    const dayStarts = localContextDayStarts(now);
     return {
       contents: [
         {
@@ -1099,8 +1120,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
                 now: now.toISOString(),
                 one_hour_ago: new Date(ms - 60 * 60 * 1000).toISOString(),
                 three_hours_ago: new Date(ms - 3 * 60 * 60 * 1000).toISOString(),
-                today_start: `${now.toISOString().split("T")[0]}T00:00:00Z`,
-                yesterday_start: `${new Date(ms - 24 * 60 * 60 * 1000).toISOString().split("T")[0]}T00:00:00Z`,
+                ...dayStarts,
                 one_week_ago: new Date(ms - 7 * 24 * 60 * 60 * 1000).toISOString(),
               },
             },
@@ -1282,6 +1302,7 @@ async function fetchAPI(
       headers: {
         "Content-Type": "application/json",
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        "x-screenpipe-client": "mcp",
         ...options.headers,
       },
     });
@@ -1317,42 +1338,6 @@ const qualifiedValue = createMcpQualifiedValueReporter((payload) =>
       server.getClientVersion()?.name,
     ),
 );
-
-// Server's deserialize_flexible_datetime accepts ISO 8601 + "Nh ago" / "Nd ago"
-// / "Nw ago" / "now". Models also try "yesterday", "today", and bare dates
-// ("2026-05-17") — normalize those here so the request doesn't 400.
-function normalizeTime(input: string | undefined): string | undefined {
-  if (!input) return input;
-  const s = input.trim();
-  if (!s) return input;
-  const lower = s.toLowerCase();
-  if (lower === "yesterday") return "1d ago";
-  if (lower === "today") {
-    return `${new Date().toISOString().split("T")[0]}T00:00:00Z`;
-  }
-  if (lower === "tomorrow") {
-    const t = new Date();
-    t.setUTCDate(t.getUTCDate() + 1);
-    return `${t.toISOString().split("T")[0]}T00:00:00Z`;
-  }
-  // Bare YYYY-MM-DD → start of day UTC
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s}T00:00:00Z`;
-  return s;
-}
-
-// Apply normalizeTime to start_time/end_time fields in an args object.
-// Returns a new object — does not mutate the input.
-function normalizeTimeFields(
-  args: Record<string, unknown>,
-): Record<string, unknown> {
-  const out = { ...args };
-  for (const k of ["start_time", "end_time"] as const) {
-    if (typeof out[k] === "string") {
-      out[k] = normalizeTime(out[k] as string);
-    }
-  }
-  return out;
-}
 
 // Zone label for a timestamp's HH:MM slice. The server serializes timestamps in
 // its LOCAL timezone (e.g. "...T09:03:44+05:30"), so the HH:MM is already local —
@@ -1713,94 +1698,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "activity-summary": {
-        const normalized = normalizeTimeFields(args);
-        const params = new URLSearchParams();
-        for (const [key, value] of Object.entries(normalized)) {
-          if (value !== null && value !== undefined) {
-            params.append(key, String(value));
-          }
-        }
-
-        const response = await callAPI(`/activity-summary?${params.toString()}`);
-
-        const data = await response.json();
-
-        if (
-          (data.total_frames ?? 0) > 0 ||
-          (data.audio_summary?.segment_count ?? 0) > 0 ||
-          (data.apps?.length ?? 0) > 0
-        ) {
+        const result = await buildActivitySummaryResult(args, callAPI);
+        if (result.hasArtifact) {
           qualifiedValue.artifactResult();
         }
-
-        const appsLines = (data.apps || []).map(
-          (a: {
-            name: string;
-            frame_count: number;
-            minutes: number;
-            first_seen?: string;
-            last_seen?: string;
-          }) => {
-            const timeSpan =
-              a.first_seen && a.last_seen
-                ? `, ${a.first_seen.slice(11, 16)}–${a.last_seen.slice(11, 16)}${zoneSuffix(a.first_seen)}`
-                : "";
-            return `  ${a.name}: ${a.minutes} min (${a.frame_count} frames${timeSpan})`;
-          }
-        );
-
-        // Window/tab activity — what pages/documents were open
-        const windowLines = (data.windows || []).map(
-          (w: {
-            app_name: string;
-            window_name: string;
-            browser_url: string;
-            minutes: number;
-            frame_count: number;
-          }) => {
-            const url = w.browser_url ? ` (${w.browser_url})` : "";
-            return `  [${w.app_name}] ${w.window_name}${url} — ${w.minutes} min`;
-          }
-        );
-
-        const speakerLines = (data.audio_summary?.speakers || []).map(
-          (s: { name: string; segment_count: number }) =>
-            `  ${s.name}: ${s.segment_count} segments`
-        );
-
-        // Actual audio transcriptions (not just counts)
-        const transcriptLines = (data.audio_summary?.top_transcriptions || []).map(
-          (t: { transcription: string; speaker: string; device: string; timestamp: string }) =>
-            `  [${t.speaker}, ${t.timestamp.slice(11, 19)}] ${t.transcription}`
-        );
-
-        // Key text content sampled across the time range
-        const textLines = (data.key_texts || data.recent_texts || []).map(
-          (t: { text: string; app_name: string; window_name?: string; timestamp: string }) => {
-            const win = t.window_name ? ` | ${t.window_name}` : "";
-            return `  [${t.app_name}${win}, ${t.timestamp.slice(11, 19)}] ${t.text}`;
-          }
-        );
-
-        const summary = [
-          `Activity Summary (${data.time_range?.start} → ${data.time_range?.end})`,
-          `Total frames: ${data.total_frames}`,
-          "",
-          "Apps:",
-          ...(appsLines.length ? appsLines : ["  (none)"]),
-          "",
-          "Windows & Tabs:",
-          ...(windowLines.length ? windowLines.slice(0, 20) : ["  (none)"]),
-          "",
-          `Audio: ${data.audio_summary?.segment_count || 0} segments`,
-          ...(speakerLines.length ? speakerLines : []),
-          ...(transcriptLines.length ? ["", "Audio transcriptions:", ...transcriptLines.slice(0, 15)] : []),
-          "",
-          "Key content (sampled across time range):",
-          ...(textLines.length ? textLines.slice(0, 20) : ["  (none)"]),
-        ].join("\n");
-
-        return { content: [{ type: "text", text: summary }] };
+        return { content: [{ type: "text", text: result.text }] };
       }
 
       case "search-elements": {
@@ -1879,8 +1781,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "export-video": {
-        const startTime = normalizeTime(args.start_time as string);
-        const endTime = normalizeTime(args.end_time as string);
+        const now = new Date();
+        const startTime = normalizeTime(args.start_time as string, now);
+        const endTime = normalizeTime(args.end_time as string, now);
 
         if (!startTime || !endTime) {
           return {

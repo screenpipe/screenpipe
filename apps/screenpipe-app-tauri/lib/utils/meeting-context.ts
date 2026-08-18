@@ -736,6 +736,17 @@ function formatAppsLines(apps: AppUsage[], limit: number): string {
     .join("\n");
 }
 
+/**
+ * The transcript section on its own, for a transcript-only clipboard copy.
+ * Shares `renderTranscript` with the full meeting dump so a turn looks the same
+ * whichever action produced it.
+ */
+export function renderMeetingTranscript(
+  chunks: MeetingAudioChunk[] | null,
+): string {
+  return renderTranscript(chunks, null);
+}
+
 function renderTranscript(
   full: MeetingAudioChunk[] | null,
   activity: ActivitySummary | null,

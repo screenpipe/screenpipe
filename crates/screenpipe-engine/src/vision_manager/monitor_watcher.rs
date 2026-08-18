@@ -411,6 +411,28 @@ fn restart_cooldown_elapsed(
         .unwrap_or(true)
 }
 
+#[cfg(target_os = "macos")]
+async fn wait_for_stopped_vision_retry(
+    unlock: &tokio::sync::Notify,
+    screen_locked: bool,
+    unlocked_backstop: Duration,
+) -> bool {
+    if screen_locked {
+        // A locked session is authoritative. Do not probe SCK on a cadence;
+        // wait until macOS reports the exact transition that makes capture
+        // possible again.
+        unlock.notified().await;
+        return true;
+    }
+
+    // Clear a notification left from an earlier Running state, then retain the
+    // existing backstop for non-lock failures such as an enumeration timeout.
+    let _ = tokio::time::timeout(Duration::from_millis(0), unlock.notified()).await;
+    tokio::time::timeout(unlocked_backstop, unlock.notified())
+        .await
+        .is_ok()
+}
+
 /// Pure step function for the anomalous-empty-enumeration counter — how many
 /// consecutive passes SCK returned zero displays while CG topology said
 /// capture should be possible. Clock- and FFI-free for unit testing.
@@ -628,43 +650,60 @@ pub async fn start_monitor_watcher(
             _ => None,
         };
 
-        // Initialize with current monitors
-        match list_monitors_detailed().await {
-            Ok(monitors) => {
-                for monitor in &monitors {
-                    known_monitors.insert(monitor.id(), monitor.name().to_string());
+        // Never make the watcher's first ScreenCaptureKit call from a locked
+        // login session. A process launched while the lid is shut can otherwise
+        // retain the empty SCShareableContent state after unlock. The normal
+        // not-Running branch below waits for the authoritative unlock event.
+        #[cfg(target_os = "macos")]
+        let defer_startup_enumeration = crate::sleep_monitor::screen_is_locked();
+        #[cfg(not(target_os = "macos"))]
+        let defer_startup_enumeration = false;
+
+        // Initialize with current monitors when capture is currently possible.
+        let startup_monitors = if defer_startup_enumeration {
+            info!("Screen locked at monitor-watcher startup — deferring monitor enumeration until unlock");
+            None
+        } else {
+            Some(list_monitors_detailed().await)
+        };
+        if let Some(startup_monitors) = startup_monitors {
+            match startup_monitors {
+                Ok(monitors) => {
+                    for monitor in &monitors {
+                        known_monitors.insert(monitor.id(), monitor.name().to_string());
+                    }
+                    permission_denied_logged = false;
+                    // A successful enumeration is the only thing that can lift a
+                    // stale verdict left by an earlier watcher in this process, so
+                    // it must be reported from here too — not just from the loop.
+                    if permission_monitor::screen_enumeration_denied() {
+                        info!("Screen recording enumeration recovered at watcher startup");
+                        permission_monitor::report_screen_enumeration(true, None);
+                    }
                 }
-                permission_denied_logged = false;
-                // A successful enumeration is the only thing that can lift a
-                // stale verdict left by an earlier watcher in this process, so
-                // it must be reported from here too — not just from the loop.
-                if permission_monitor::screen_enumeration_denied() {
-                    info!("Screen recording enumeration recovered at watcher startup");
-                    permission_monitor::report_screen_enumeration(true, None);
+                Err(MonitorListError::PermissionDenied) => {
+                    warn!("Screen recording permission denied. Vision capture is disabled. Grant access in System Settings > Privacy & Security > Screen Recording");
+                    permission_denied_logged = true;
+                    permission_monitor::report_screen_enumeration(
+                        false,
+                        Some("list_monitors PermissionDenied (startup)"),
+                    );
                 }
-            }
-            Err(MonitorListError::PermissionDenied) => {
-                warn!("Screen recording permission denied. Vision capture is disabled. Grant access in System Settings > Privacy & Security > Screen Recording");
-                permission_denied_logged = true;
-                permission_monitor::report_screen_enumeration(
-                    false,
-                    Some("list_monitors PermissionDenied (startup)"),
-                );
-            }
-            Err(MonitorListError::NoMonitorsFound) => {
-                // Classify it here too: in the lapsed-grant state SCK succeeds
-                // with an empty list, which surfaces as NoMonitorsFound (not
-                // PermissionDenied). Falling through to the generic arm below
-                // meant a process that launched with the grant already lapsed
-                // never classified the signal at all.
-                classify_empty_enumeration(
-                    &mut consecutive_anomalous_empty,
-                    &mut permission_denied_logged,
-                    "startup",
-                );
-            }
-            Err(e) => {
-                warn!("Failed to list monitors on startup: {}", e);
+                Err(MonitorListError::NoMonitorsFound) => {
+                    // Classify it here too: in the lapsed-grant state SCK succeeds
+                    // with an empty list, which surfaces as NoMonitorsFound (not
+                    // PermissionDenied). Falling through to the generic arm below
+                    // meant a process that launched with the grant already lapsed
+                    // never classified the signal at all.
+                    classify_empty_enumeration(
+                        &mut consecutive_anomalous_empty,
+                        &mut permission_denied_logged,
+                        "startup",
+                    );
+                }
+                Err(e) => {
+                    warn!("Failed to list monitors on startup: {}", e);
+                }
             }
         }
 
@@ -777,13 +816,12 @@ pub async fn start_monitor_watcher(
                 #[cfg(target_os = "macos")]
                 {
                     let unlock = crate::sleep_monitor::screen_unlock_notify();
-                    // Drain any permit buffered while we were Running so we don't
-                    // wake instantly on a stale signal.
-                    let _ = tokio::time::timeout(Duration::from_millis(0), unlock.notified()).await;
-                    // Race unlock against the 5s backstop.
-                    if tokio::time::timeout(Duration::from_secs(5), unlock.notified())
-                        .await
-                        .is_ok()
+                    if wait_for_stopped_vision_retry(
+                        unlock,
+                        crate::sleep_monitor::screen_is_locked(),
+                        Duration::from_secs(5),
+                    )
+                    .await
                     {
                         info!("screen unlocked — retrying VisionManager start immediately");
                     }
@@ -1214,6 +1252,26 @@ mod tests {
     // Fixed "now" so deltas are exact and the tests never depend on wall clock.
     const NOW: u64 = 2_000_000_000;
 
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn locked_vision_retry_waits_for_the_unlock_event() {
+        let unlock = tokio::sync::Notify::new();
+        let wait = wait_for_stopped_vision_retry(&unlock, true, Duration::from_millis(1));
+        tokio::pin!(wait);
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut wait)
+                .await
+                .is_err(),
+            "the unlocked-failure backstop must not probe SCK while macOS still reports locked"
+        );
+
+        unlock.notify_one();
+        assert!(tokio::time::timeout(Duration::from_millis(100), &mut wait)
+            .await
+            .expect("unlock should release the retry immediately"));
+    }
+
     #[test]
     fn anomalous_empty_counter_only_advances_with_awake_unlocked_displays() {
         use std::collections::BTreeSet;
@@ -1404,6 +1462,10 @@ mod tests {
     /// change the watchdog waited 240s, so every wedge showed the user a pill
     /// ~100s before anything acted on it.
     #[test]
+    // Deliberate constant assertion: this is the regression guard. If someone
+    // raises the attended window past the desktop's alert threshold the wedge
+    // becomes user-visible before recovery acts, which is the bug this targets.
+    #[allow(clippy::assertions_on_constants)]
     fn attended_gone_silent_recovers_before_the_desktop_alert() {
         const DESKTOP_ALERT_SECS: u64 = 150;
         assert!(
@@ -1489,6 +1551,9 @@ mod tests {
 
     /// Guard the ordering the shortened window depends on.
     #[test]
+    // Deliberate constant assertion, same reason as above: it pins the ordering
+    // between the two windows so a future tuning pass cannot silently invert it.
+    #[allow(clippy::assertions_on_constants)]
     fn attended_window_stays_below_the_idle_window() {
         assert!(
             SILENT_DB_STALE_SECS_ATTENDED < SILENT_DB_STALE_SECS,

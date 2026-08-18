@@ -26,7 +26,7 @@ export function LoginDialog() {
           <Button
             variant="default"
             onClick={() => {
-              commands.openLoginWindow(null);
+              commands.openLoginWindow(null, null);
               setIsOpen(false);
             }}
           >

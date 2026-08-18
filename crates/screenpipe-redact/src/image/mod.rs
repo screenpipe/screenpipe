@@ -38,6 +38,7 @@
 //! and lets us advertise the right `unavailable` reason cleanly.
 
 pub mod frame_redactor;
+pub mod secret_continuation;
 pub mod worker;
 
 use std::path::Path;

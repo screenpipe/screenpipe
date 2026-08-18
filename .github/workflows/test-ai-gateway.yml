@@ -21,10 +21,9 @@ on:
       - ".github/workflows/test-ai-gateway.yml"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
-  # Same rule as ci.yml — cancel superseded PR runs, while main pushes
-  # use a per-commit group and do not queue behind stale commits.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  # Only the newest push or PR revision can describe the current tree.
+  cancel-in-progress: true
 
 permissions:
   contents: read

@@ -165,6 +165,11 @@ fn cache_ids_if_fresh(cache: &ExclusionCache, max_staleness: Duration) -> Option
 }
 
 #[cfg(test)]
+// `SHARED_STATE_TEST_LOCK` is deliberately held across `.await` in the async
+// tests below: it exists to serialize them, so releasing it at an await point
+// would defeat its only purpose. This is test-harness serialization, not
+// production code holding a std guard across a yield.
+#[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
 

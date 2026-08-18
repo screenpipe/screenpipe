@@ -12,6 +12,82 @@ use tracing::info;
 
 use super::util::with_autorelease_pool;
 
+/// Walk a bounded parent chain and report whether it reaches `ancestor`.
+///
+/// The bound makes a malformed native hierarchy harmless instead of letting a
+/// window-focus callback loop forever. Kept platform-neutral so the traversal
+/// itself is covered without constructing AppKit windows in a Rust unit test.
+fn ancestor_chain_contains<T: Copy + Eq>(
+    ancestor: T,
+    mut current: Option<T>,
+    mut parent_of: impl FnMut(T) -> Option<T>,
+) -> bool {
+    for _ in 0..16 {
+        let Some(window) = current else { return false };
+        if window == ancestor {
+            return true;
+        }
+        let parent = parent_of(window);
+        if parent == Some(window) {
+            return false;
+        }
+        current = parent;
+    }
+    false
+}
+
+/// Whether AppKit focus is inside the given Tauri window or one of its child
+/// windows.
+///
+/// A native timeline is an AppKit child pinned over the webview. Clicking it
+/// correctly makes the child key so Live Text and keyboard input work, but
+/// Tauri then emits `Focused(false)` for the parent. That is internal focus,
+/// not a reason to auto-hide the overlay.
+///
+/// A non-activating panel can have no `keyWindow` while AppKit is dispatching a
+/// mouse-down to its child. In that case `currentEvent.window` is the reliable
+/// source of truth. An external click is not dispatched through our
+/// application, so it cannot produce a false internal-focus match here.
+///
+/// Must be called from the macOS window-event callback on the main thread.
+#[cfg(target_os = "macos")]
+pub(crate) fn appkit_focus_is_descendant_of(window: &tauri::WebviewWindow) -> bool {
+    with_autorelease_pool(|| {
+        use objc::{msg_send, sel, sel_impl};
+        use tauri_nspanel::cocoa::base::{id, nil};
+
+        let Ok(host) = window.ns_window() else {
+            return false;
+        };
+        let host = host as id;
+        unsafe {
+            let app: id = msg_send![objc::class!(NSApplication), sharedApplication];
+            let key: id = msg_send![app, keyWindow];
+            let contains_host = |candidate: id| {
+                ancestor_chain_contains(host as usize, Some(candidate as usize), |candidate| {
+                    let candidate = candidate as id;
+                    let parent: id = msg_send![candidate, parentWindow];
+                    (parent != nil).then_some(parent as usize)
+                })
+            };
+            if key != nil && contains_host(key) {
+                return true;
+            }
+
+            let event: id = msg_send![app, currentEvent];
+            if event == nil {
+                return false;
+            }
+            let event_type: u64 = msg_send![event, type];
+            if !matches!(event_type, 1 | 3 | 25) {
+                return false;
+            }
+            let event_window: id = msg_send![event, window];
+            event_window != nil && contains_host(event_window)
+        }
+    })
+}
+
 /// Stores the previously frontmost application so we can re-activate it
 /// when the overlay hides. This prevents macOS from switching Spaces when
 /// the overlay resigns key window. Stored as a raw pointer (usize) because
@@ -259,7 +335,20 @@ pub(crate) fn restore_frontmost_app_if_external_with_app(app: Option<&AppHandle>
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::should_restore_search_origin;
+    use super::{ancestor_chain_contains, should_restore_search_origin};
+
+    #[test]
+    fn recognizes_focus_inside_a_bounded_child_window_chain() {
+        let parent = |window| match window {
+            30 => Some(20),
+            20 => Some(10),
+            _ => None,
+        };
+        assert!(ancestor_chain_contains(10, Some(30), parent));
+        assert!(ancestor_chain_contains(10, Some(10), |_| None));
+        assert!(!ancestor_chain_contains(10, Some(30), |_| None));
+        assert!(!ancestor_chain_contains(10, Some(30), |_| Some(30)));
+    }
 
     #[test]
     fn restores_only_when_search_activated_screenpipe() {

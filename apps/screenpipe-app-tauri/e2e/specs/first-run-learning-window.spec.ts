@@ -142,6 +142,20 @@ const learningState = (over: Record<string, unknown> = {}) => ({
     await waitForAppReady();
   });
 
+  // Several tests below call `reset_onboarding` to look like a user who has
+  // not finished setup. The app process is shared by the whole suite and the
+  // onboarding store is global, so leaving it reset does not end with this
+  // file: `ShowRewindWindow::Main` returns the onboarding window while
+  // onboarding is incomplete (window/show.rs), so every later spec that waits
+  // for a `main` / `main-window` handle never gets one. That is how one
+  // missing hook here reddened main-window, main-window-close-reopen,
+  // main-overlay-visibility, tray-search and window-lifecycle, and burned
+  // ~20 minutes of the job budget on their retries. Same restore as
+  // screen-recording-restart.spec.ts.
+  after(async () => {
+    await invokeOrThrow("complete_onboarding").catch(() => {});
+  });
+
   it("shows a live countdown while it is learning", async () => {
     await openHomeWith(learningState());
 

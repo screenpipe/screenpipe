@@ -25,14 +25,12 @@ Automate releasing all components of the screenpipe monorepo.
 
 ## When to Release What
 
-**Always release CLI** when there are changes to core screenpipe code:
-- `screenpipe-core/`
-- `screenpipe-vision/`
-- `screenpipe-audio/`
-- `screenpipe-server/`
-- `screenpipe-db/`
-- `screenpipe-events/`
-- `screenpipe-integrations/`
+**Always release CLI** when there are changes under `crates/`. Every shipped Rust
+crate lives there, and the `screenpipe` CLI binary is built from
+`crates/screenpipe-engine` (`[[bin]] name = "screenpipe"`), so it links whatever
+its dependency graph pulls in. That includes `screenpipe-a11y` and
+`screenpipe-semantic`, which are easy to overlook because they are not named
+"core" or "server".
 
 **App-only release** is fine when changes are only in:
 - `apps/screenpipe-app-tauri/` (UI/frontend changes)
@@ -44,8 +42,19 @@ To check what changed since last CLI release:
 git log --oneline --all | grep -E "CLI to v" | head -1
 
 # Check if core code changed since then
-git diff <COMMIT>..HEAD --stat -- screenpipe-core screenpipe-vision screenpipe-audio screenpipe-server screenpipe-db screenpipe-events screenpipe-integrations
+git diff <COMMIT>..HEAD --stat -- crates/
 ```
+
+> **An empty diff here is only trustworthy if the pathspec exists.** `git diff -- <path>`
+> prints nothing and exits 0 for a path that is not in the tree, so a stale pathspec
+> reads exactly like "nothing changed" and you ship an app-only release that drops
+> real engine fixes. This skill previously listed top-level `screenpipe-core/`,
+> `screenpipe-vision/`, `screenpipe-server/` and friends, all of which had moved
+> under `crates/`, so the check silently passed on every release. Confirm the path
+> resolves before believing the result:
+> ```bash
+> ls -d crates/ || echo "PATHSPEC STALE, fix this skill before trusting the diff"
+> ```
 
 ## Release Workflow
 

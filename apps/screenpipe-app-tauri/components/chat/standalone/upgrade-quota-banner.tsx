@@ -41,7 +41,10 @@ export function UpgradeQuotaBanner() {
   const [busy, setBusy] = useState(false);
   const cloudflareAllowance = usage?.hosted_ai?.allowances
     ?.filter((allowance) => allowance.remaining_percent <= 0)
-    .sort((left, right) => left.lane.localeCompare(right.lane))[0] ?? null;
+    .sort((left, right) => {
+      const order = { combined: 0, frontier: 1, auto: 2, explicit: 3 } as const;
+      return order[left.lane] - order[right.lane];
+    })[0] ?? null;
   const cloudflareBlocked = !blockedUpgrade && cloudflareAllowance !== null;
   const legacyCostBlocked =
     !blockedUpgrade &&
@@ -124,9 +127,12 @@ export function UpgradeQuotaBanner() {
   const requiredPlanProse = requiredPlanLabel ?? "a higher plan";
   const weeklyAllowance =
     cloudflareBlocked && cloudflareAllowance.window_seconds === 7 * 86_400;
-  const blockedTitle = weeklyAllowance
-    ? "Weekly hosted AI limit reached"
-    : "Hosted AI usage limit reached";
+  const frontierBlocked = cloudflareBlocked && cloudflareAllowance.lane === "frontier";
+  const blockedTitle = frontierBlocked
+    ? "Frontier model limit reached"
+    : weeklyAllowance
+      ? "Weekly AI limit reached"
+      : "AI usage limit reached";
 
   return (
     <>
@@ -162,7 +168,7 @@ export function UpgradeQuotaBanner() {
               ) : legacyCostBlocked ? (
                 activeUpgrade ? (
                   <>
-                    Upgrade to {requiredPlanProse} for a higher hosted AI allowance,
+                    Upgrade to {requiredPlanProse} for a higher AI allowance,
                     or switch to a local or own-key AI preset.
                   </>
                 ) : (
@@ -184,8 +190,8 @@ export function UpgradeQuotaBanner() {
               <Button
                 type="button"
                 size="sm"
-                variant="outline"
-                className="h-7 text-[12px]"
+                variant="default"
+                className="h-7 border-[#4A6B00] bg-[#C7FF3E] text-[12px] text-black hover:border-black hover:bg-black hover:text-[#C7FF3E]"
                 onClick={onUpgrade}
                 disabled={busy}
               >

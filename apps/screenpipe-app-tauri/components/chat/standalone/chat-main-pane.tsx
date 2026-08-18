@@ -4,7 +4,7 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDown, Loader2, Settings, Workflow } from "lucide-react";
+import { ChevronDown, Settings, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SummaryCards } from "@/components/chat/summary-cards";
 import { FirstRunLearningBanner } from "@/components/first-run/learning-banner";
@@ -32,6 +32,7 @@ interface ChatMainPaneProps {
    *  stay renderable without a settings provider. */
   firstRunAiPreset?: AIPreset | null;
   firstRunUserToken?: string | null;
+  firstRunAiSettingsLoaded?: boolean;
   hideInlineHistory?: boolean;
   showHistory: boolean;
   onCloseHistory: () => void;
@@ -65,6 +66,11 @@ interface ChatMainPaneProps {
     "summaryCardsProps"
   >;
   messageListProps: ChatMessageListProps;
+  /**
+   * A dispatched send whose durable row has not landed yet. Rendered as the
+   * user's bubble so the transcript is never empty during the preflight.
+   */
+  pendingSend?: { text: string; displayLabel?: string } | null;
   isUserScrolledUp: boolean;
   scrollToBottom: () => void;
 }
@@ -100,10 +106,12 @@ export function ChatMainPane({
   summaryCardsProps,
   homeStarterProps,
   messageListProps,
+  pendingSend,
   isUserScrolledUp,
   scrollToBottom,
   firstRunAiPreset,
   firstRunUserToken,
+  firstRunAiSettingsLoaded,
 }: ChatMainPaneProps) {
   return (
     <div className="flex-1 flex overflow-hidden">
@@ -124,6 +132,7 @@ export function ChatMainPane({
         <div
           ref={scrollContainerRef}
           data-testid="chat-message-scroll"
+          role="log"
           className="h-full overflow-y-auto overflow-x-hidden"
           onScroll={onMessagesScroll}
           onContextMenu={onChatContextMenu}
@@ -131,7 +140,8 @@ export function ChatMainPane({
           <div className={cn(
             CHAT_RAIL_CLASS,
             "px-5 sm:px-6 py-4 space-y-4",
-            messages.length === 0 && !isPreparingPrefill && !activePipeExecution
+            messages.length === 0 && !pendingSend && !isLoading && !isStreaming
+              && !isPreparingPrefill && !activePipeExecution
               && "min-h-full flex flex-col items-center justify-center"
           )}>
             {continuousPipeChat && (
@@ -182,27 +192,6 @@ export function ChatMainPane({
             {messages.length === 0 &&
               !isPreparingPrefill &&
               !activePipeExecution &&
-              (isLoading || isStreaming) && (
-                <div
-                  data-testid="chat-empty-active-turn"
-                  role="status"
-                  aria-live="polite"
-                  className="flex max-w-sm flex-col items-center gap-3 py-12 text-center"
-                >
-                  <div className="rounded-full border border-border/60 bg-muted/50 p-3">
-                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                  </div>
-                  <div className="space-y-1">
-                    <h3 className="font-medium">Working on your message</h3>
-                    <p className="text-sm text-muted-foreground">
-                      Your message is saved. Starting the AI can take a moment.
-                    </p>
-                  </div>
-                </div>
-              )}
-            {messages.length === 0 &&
-              !isPreparingPrefill &&
-              !activePipeExecution &&
               !isLoading &&
               !isStreaming &&
               disabledReason &&
@@ -248,18 +237,30 @@ export function ChatMainPane({
                 </div>
               )}
             {/* Post-setup learning window. Renders only while the window is
-                open, so it is inert for everyone else. It sits on the empty
-                chat because that is where setup now lands and where the
-                summary chat appears once the window resolves. */}
-            {messages.length === 0 && !activePipeExecution && (
+                open, so it is inert for everyone else. It sits on the chat
+                because that is where setup lands and where the summary chat
+                appears once the window resolves.
+
+                Deliberately NOT gated on `messages.length === 0`. The window
+                owns a ceiling timer, and unmounting the banner kills it: the
+                user sends one message, this subtree goes away mid-wait, and
+                the window never settles — no summary, and no
+                `first_run_learning_resolved`/`_empty` either, so the failure
+                is invisible. Typing is the behaviour we want, so it must not
+                destroy the first-run summary. Measured 2026-08: 69% of users
+                who completed setup produced no learning event at all while
+                staying in the app a median of 9.4 hours. */}
+            {!activePipeExecution && (
               <div className="mx-auto w-full max-w-3xl px-4 pb-4">
                 <FirstRunLearningBanner
                   aiPreset={firstRunAiPreset}
                   userToken={firstRunUserToken}
+                  aiSettingsLoaded={firstRunAiSettingsLoaded}
                 />
               </div>
             )}
             {messages.length === 0 &&
+              !pendingSend &&
               !isPreparingPrefill &&
               !activePipeExecution &&
               !isLoading &&
@@ -271,6 +272,23 @@ export function ChatMainPane({
                   {...homeStarterProps}
                 />
               )}
+            {/* The message the user just sent, shown from the send frame until
+                the durable row replaces it. Same geometry as a real user row so
+                nothing moves when the swap happens. */}
+            {pendingSend && (
+              <div
+                data-testid="chat-pending-user-message"
+                className="relative flex min-w-0 justify-end"
+              >
+                <div className="group/message flex min-w-0 max-w-[82%] flex-col items-end">
+                  <div className="relative max-w-full overflow-hidden rounded-xl bg-muted/60 px-4 py-3 text-sm text-foreground">
+                    <p className="whitespace-pre-wrap break-words">
+                      {pendingSend.displayLabel ?? pendingSend.text}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
             {/* A conversation switch is a hard visual boundary. Remounting the
                 list prevents AnimatePresence from carrying an outgoing chat's
                 exit nodes into the new chat's empty state. */}

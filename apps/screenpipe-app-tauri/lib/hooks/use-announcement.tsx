@@ -175,8 +175,10 @@ export function useAnnouncement(): UseAnnouncementResult {
   // rust side emits the `announcement` event with the announcement object.
   // The hook swallows a failed `listen()` (e.g. not running under Tauri in
   // tests), matching the previous `.catch(() => {})` guard.
+  // Parsed as `local`: this channel is reachable by any same-user process and
+  // carries no provenance, so it does not get the pipe-install destination.
   useTauriEvent("announcement", (event) => {
-    const a = parseAnnouncement(event.payload);
+    const a = parseAnnouncement(event.payload, "local");
     if (a) setTriggered(a);
   });
 
@@ -235,10 +237,24 @@ export function useAnnouncement(): UseAnnouncementResult {
         kind: announcement.kind,
         surface: announcement.surface,
         cta_label: cta.label,
+        // which destination kind fired, so A/B arms that differ only in the
+        // action are separable. never carries the slug, route or url.
+        cta_target: cta.pipe ? "pipe" : cta.route ? "route" : "url",
       });
     } catch {}
 
-    if (cta.route) {
+    if (cta.pipe) {
+      // Hand off to the same dialog a `screenpipe://install-pipe` deep link
+      // opens. It fetches the Store detail, shows permissions and required
+      // connections, and installs only after the user confirms. Nothing is
+      // written here, and the installed pipe stays disabled until the user
+      // enables it.
+      import("@tauri-apps/api/event")
+        .then((m) => m.emit("install-pipe", { url: `registry:${cta.pipe}` }))
+        .catch((err) =>
+          console.error("failed to open pipe install dialog:", err),
+        );
+    } else if (cta.route) {
       router.push(cta.route);
     } else if (cta.url) {
       // open externally in the system browser (never inside the webview).

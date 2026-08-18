@@ -9,8 +9,10 @@
     "gateway (divergence DEV-PLATFORM): neither field is in the wire format, so",
     "there is nothing for a gateway to read them from. `last_seen_at` is",
     "heartbeat liveness here and MAX(record timestamp) there (DEV-LIVENESS).",
-    "Both are recorded divergences, so the suite asserts their TYPE and not",
-    "their value.",
+    "`member_email` is the hosted heartbeat identity and is ALWAYS null on the",
+    "gateway (DEV-MEMBER-EMAIL), which has no account-identity channel.",
+    "The contract keeps every field present and nullable; target-specific cases",
+    "pin the values available on each side.",
     "",
     "`last_seen_at` sits inside the seeded July-22 window so a hosted /devices",
     "response is ordered the same way a gateway one is (bob newer than alice)."
@@ -19,6 +21,7 @@
     {
       "device_id": "dev-bob",
       "hostname": "bob-thinkpad",
+      "member_email": "bob@conformance.test",
       "platform": "windows",
       "app_version": "2.5.136",
       "last_seen_at": "2026-07-22T10:08:00+00:00",
@@ -27,6 +30,7 @@
     {
       "device_id": "dev-alice",
       "hostname": "alice-mbp",
+      "member_email": "alice@conformance.test",
       "platform": "macos",
       "app_version": "2.5.136",
       "last_seen_at": "2026-07-22T09:08:00+00:00",

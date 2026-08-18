@@ -289,9 +289,9 @@ pub async fn run_meeting_detection_loop(
         // Adaptive interval based on state, gated on recent audio when Idle.
         // With no detector, `audio_recent` is true => unchanged fast idle rate.
         idle_scan_count = 0; // reset idle counter when apps are present
-        let audio_recent = detector.as_ref().map_or(true, |d| {
-            d.audio_active_within(AUDIO_GATE_WINDOW.as_millis() as u64)
-        });
+        let audio_recent = detector
+            .as_ref()
+            .is_none_or(|d| d.audio_active_within(AUDIO_GATE_WINDOW.as_millis() as u64));
         current_interval = apps_present_scan_interval(
             matches!(state, MeetingState::Idle),
             audio_recent,

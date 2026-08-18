@@ -5,6 +5,7 @@
 //! candidate resolution, suppression, and lifecycle, sharing common fixtures.
 
 use super::*;
+use crate::meeting_watcher::shared::calendar::find_overlapping_calendar_event;
 use screenpipe_db::DatabaseManager;
 
 fn chrome_process() -> AudioInputProcess {
@@ -1122,7 +1123,7 @@ async fn active_meeting_blocks_audio_process_insert() {
         .unwrap();
     let manual_meeting = tokio::sync::RwLock::new(None);
     let outcome =
-        start_or_adopt_auto_meeting(&db, &manual_meeting, "Google Meet", None, None, None).await;
+        start_or_adopt_auto_meeting(&db, &manual_meeting, "Google Meet", None, None).await;
     assert_eq!(outcome, AutoStartOutcome::BlockedByActive(active_id));
 
     let open_count: (i64,) =
@@ -1484,7 +1485,7 @@ fn whatsapp_without_call_signal_blocked_by_gate() {
     );
 
     // Simulate what build_candidates does: check call_evidence with no call signals.
-    let call_evidence = vec![CallSignalEvidence {
+    let call_evidence = [CallSignalEvidence {
         platform: "whatsapp".to_string(),
         is_in_call: false,
         matched_signals: vec![],
@@ -1524,7 +1525,7 @@ fn whatsapp_with_call_signal_passes_gate() {
         ResolvedMeetingCandidate::Native { ref platform, .. } if platform == "WhatsApp"
     ));
 
-    let call_evidence = vec![CallSignalEvidence {
+    let call_evidence = [CallSignalEvidence {
         platform: "whatsapp".to_string(),
         is_in_call: true,
         matched_signals: vec!["AutomationIdContains(Calling_Window)".to_string()],
@@ -2082,5 +2083,405 @@ fn resolved_platform_identity_heals_pid_from_matching_candidate() {
         resolved_platform_identity(&candidates[..1], "Google Meet"),
         None,
         "an unresolved browser alone must not be adopted (could be any WebRTC page)"
+    );
+}
+
+// ── Calendar event binding ───────────────────────────────────────────────
+//
+// A calendar event describes ONE meeting. These tests pin that invariant at
+// the level the incident happened: real DB, real migrations, real lifecycle.
+
+fn calendar_event(
+    id: &str,
+    title: &str,
+    starts_in: chrono::Duration,
+    lasts: chrono::Duration,
+    attendees: &[&str],
+) -> CalendarEventSignal {
+    let start = Utc::now() + starts_in;
+    CalendarEventSignal {
+        id: id.to_string(),
+        title: title.to_string(),
+        start: start.to_rfc3339(),
+        end: (start + lasts).to_rfc3339(),
+        attendees: attendees.iter().map(|a| a.to_string()).collect(),
+        is_all_day: false,
+    }
+}
+
+/// Start a meeting exactly the way `apply_audio_process_action` does.
+async fn start_meeting_with_calendar(
+    db: &DatabaseManager,
+    events: &[CalendarEventSignal],
+    platform: &str,
+) -> AutoStartOutcome {
+    let manual_meeting = tokio::sync::RwLock::new(None);
+    let calendar = resolve_calendar_binding(db, events, Utc::now()).await;
+    start_or_adopt_auto_meeting(db, &manual_meeting, platform, calendar.as_ref(), None).await
+}
+
+async fn end_meeting_ago(db: &DatabaseManager, id: i64, ago: chrono::Duration) {
+    let ended_at = (Utc::now() - ago)
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+        .to_string();
+    db.end_meeting(id, &ended_at, None).await.unwrap();
+}
+
+/// Reproduces the 2026-08-13 incident. An 11:30–12:00 calendar event was still
+/// running when a second, unrelated Google Meet started at 11:40 — 2m13s after
+/// the first call ended, so past the 120s auto-merge window. Both rows were
+/// stamped with the same calendar title and the same attendee list, so the
+/// meetings list showed two identical entries and the second call carried
+/// three people who were never in it.
+#[tokio::test]
+async fn calendar_event_binds_to_a_single_meeting() {
+    let (_dir, db) = setup_db().await;
+    let events = vec![calendar_event(
+        "cal-evt-vercel",
+        "chat between louis030195 and Ben Fleschman",
+        chrono::Duration::minutes(-10),
+        chrono::Duration::minutes(30),
+        &[
+            "ben@example.com",
+            "christian@example.com",
+            "louis@example.com",
+        ],
+    )];
+
+    let first = match start_meeting_with_calendar(&db, &events, "Google Meet").await {
+        AutoStartOutcome::Started(id) => id,
+        other => panic!("expected the first meeting to start, got {other:?}"),
+    };
+    let first_row = db.get_meeting_by_id(first).await.unwrap();
+    assert_eq!(
+        first_row.title.as_deref(),
+        Some("chat between louis030195 and Ben Fleschman"),
+        "the meeting inside the event window owns the calendar identity"
+    );
+
+    // Ended long enough ago that `find_recent_meeting_for_app(_, 120)` will not
+    // adopt it — the second Meet becomes its own row, as it did in production.
+    end_meeting_ago(&db, first, chrono::Duration::minutes(5)).await;
+
+    let second = match start_meeting_with_calendar(&db, &events, "Google Meet").await {
+        AutoStartOutcome::Started(id) => id,
+        other => panic!("expected a second, separate meeting, got {other:?}"),
+    };
+    assert_ne!(first, second, "the second Meet must be its own row");
+
+    let second_row = db.get_meeting_by_id(second).await.unwrap();
+    assert!(
+        second_row.title.as_deref().unwrap_or("").is_empty(),
+        "a calendar event already bound to meeting {first} must not title \
+         meeting {second} too — got {:?}",
+        second_row.title
+    );
+    assert!(
+        second_row.attendees.as_deref().unwrap_or("").is_empty(),
+        "attendees from an already-bound event must not leak onto an \
+         unrelated meeting — got {:?}",
+        second_row.attendees
+    );
+}
+
+/// The other half of the same incident: the call that genuinely *was* the
+/// scheduled event started 26 seconds before it, so the strict
+/// `start <= now` predicate missed and the row landed with no attendees at
+/// all. Joining a moment early is the normal case, not an edge case.
+#[tokio::test]
+async fn meeting_joined_shortly_before_start_still_binds_the_event() {
+    let (_dir, db) = setup_db().await;
+    let events = vec![calendar_event(
+        "cal-evt-early",
+        "chat between louis030195 and Ben Fleschman",
+        chrono::Duration::seconds(26),
+        chrono::Duration::minutes(30),
+        &["ben@example.com", "louis@example.com"],
+    )];
+
+    let id = match start_meeting_with_calendar(&db, &events, "Google Meet").await {
+        AutoStartOutcome::Started(id) => id,
+        other => panic!("expected the meeting to start, got {other:?}"),
+    };
+    let row = db.get_meeting_by_id(id).await.unwrap();
+    assert_eq!(
+        row.title.as_deref(),
+        Some("chat between louis030195 and Ben Fleschman"),
+        "a meeting joined 26s early belongs to the event about to start"
+    );
+    assert_eq!(
+        row.attendees.as_deref(),
+        Some("ben@example.com, louis@example.com"),
+        "attendees must come along with the title"
+    );
+}
+
+/// A quick rejoin still lands inside the 120s merge window, so it adopts the
+/// same row and keeps the calendar identity it already owns. Binding must not
+/// break the normal drop-and-rejoin case.
+#[tokio::test]
+async fn quick_rejoin_keeps_its_own_calendar_identity() {
+    let (_dir, db) = setup_db().await;
+    let events = vec![calendar_event(
+        "cal-evt-standup",
+        "Standup",
+        chrono::Duration::minutes(-5),
+        chrono::Duration::minutes(30),
+        &["a@example.com", "b@example.com"],
+    )];
+
+    let first = match start_meeting_with_calendar(&db, &events, "Google Meet").await {
+        AutoStartOutcome::Started(id) => id,
+        other => panic!("expected a meeting to start, got {other:?}"),
+    };
+    end_meeting_ago(&db, first, chrono::Duration::seconds(10)).await;
+
+    let rejoined = start_meeting_with_calendar(&db, &events, "Google Meet").await;
+    assert_eq!(
+        rejoined,
+        AutoStartOutcome::AdoptedActive(first),
+        "a rejoin within the merge window continues the same meeting"
+    );
+    let row = db.get_meeting_by_id(first).await.unwrap();
+    assert_eq!(row.title.as_deref(), Some("Standup"));
+    assert_eq!(
+        row.attendees.as_deref(),
+        Some("a@example.com, b@example.com")
+    );
+}
+
+/// The DB is the backstop when two detectors race past the ownership check.
+#[tokio::test]
+async fn calendar_event_cannot_be_claimed_twice() {
+    let (_dir, db) = setup_db().await;
+
+    let first = db
+        .insert_meeting_with_calendar(
+            "Google Meet",
+            "audio_process",
+            Some("Sync"),
+            None,
+            Some("evt-1"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        db.meeting_id_for_calendar_event("evt-1").await.unwrap(),
+        Some(first)
+    );
+
+    end_meeting_ago(&db, first, chrono::Duration::minutes(5)).await;
+
+    // Racing insert for the same event: the meeting is still created, just
+    // without the identity that already belongs to `first`.
+    let second = db
+        .insert_meeting_with_calendar(
+            "Google Meet",
+            "audio_process",
+            Some("Sync"),
+            None,
+            Some("evt-1"),
+        )
+        .await
+        .unwrap();
+    assert_ne!(first, second);
+    let row = db.get_meeting_by_id(second).await.unwrap();
+    assert_eq!(
+        row.title, None,
+        "a meeting that lost the race must not keep the calendar title"
+    );
+    assert_eq!(
+        db.meeting_id_for_calendar_event("evt-1").await.unwrap(),
+        Some(first),
+        "the first claimant keeps the event"
+    );
+
+    // And the explicit bind path refuses too.
+    assert!(!db.bind_calendar_event(second, "evt-1").await.unwrap());
+    assert!(db.bind_calendar_event(second, "evt-2").await.unwrap());
+    assert!(
+        !db.bind_calendar_event(second, "evt-3").await.unwrap(),
+        "a meeting that already owns an event does not switch to another"
+    );
+}
+
+/// Matching must not depend on the order the publisher emitted events in.
+#[test]
+fn calendar_match_prefers_the_event_in_progress() {
+    let now = Utc::now();
+    let upcoming = calendar_event(
+        "upcoming",
+        "Next call",
+        chrono::Duration::seconds(60),
+        chrono::Duration::minutes(30),
+        &[],
+    );
+    let in_progress = calendar_event(
+        "in-progress",
+        "Current call",
+        chrono::Duration::minutes(-5),
+        chrono::Duration::minutes(30),
+        &[],
+    );
+
+    for events in [
+        vec![upcoming.clone(), in_progress.clone()],
+        vec![in_progress.clone(), upcoming.clone()],
+    ] {
+        let m = find_overlapping_calendar_event(&events, now).expect("expected a match");
+        assert_eq!(
+            m.key, "in-progress",
+            "an event already running wins over one about to start, in any order"
+        );
+    }
+}
+
+#[test]
+fn calendar_match_ignores_events_outside_the_join_window() {
+    let now = Utc::now();
+    let too_early = vec![calendar_event(
+        "later",
+        "Much later",
+        chrono::Duration::minutes(30),
+        chrono::Duration::minutes(30),
+        &[],
+    )];
+    assert!(
+        find_overlapping_calendar_event(&too_early, now).is_none(),
+        "an event 30 minutes out must not name the meeting happening now"
+    );
+
+    let all_day = vec![CalendarEventSignal {
+        is_all_day: true,
+        ..calendar_event(
+            "all-day",
+            "Offsite",
+            chrono::Duration::hours(-2),
+            chrono::Duration::hours(8),
+            &[],
+        )
+    }];
+    assert!(
+        find_overlapping_calendar_event(&all_day, now).is_none(),
+        "all-day events describe a day, not a meeting"
+    );
+}
+
+/// Events from feeds that omit a provider id still get a stable identity, so
+/// the one-event-one-meeting rule holds for them too.
+#[test]
+fn events_without_a_provider_id_still_get_a_stable_key() {
+    let now = Utc::now();
+    let mut event = calendar_event(
+        "",
+        "Weekly review",
+        chrono::Duration::minutes(-1),
+        chrono::Duration::minutes(30),
+        &[],
+    );
+    event.id = String::new();
+    let first = find_overlapping_calendar_event(std::slice::from_ref(&event), now).unwrap();
+    let second = find_overlapping_calendar_event(&[event], now).unwrap();
+    assert_eq!(first.key, second.key, "the same event yields the same key");
+    assert!(first.key.contains("Weekly review"));
+}
+
+/// Re-claiming an event you already own has to succeed. Callers read `false`
+/// as "someone else owns this, drop the calendar fields", so a non-idempotent
+/// bind silently discards a legitimate re-enrichment — and a meeting whose
+/// title write failed the first time could never be filled in again.
+#[tokio::test]
+async fn rebinding_the_same_event_to_its_owner_succeeds() {
+    let (_dir, db) = setup_db().await;
+    let id = db
+        .insert_meeting("Google Meet", "audio_process", None, None)
+        .await
+        .unwrap();
+
+    assert!(db.bind_calendar_event(id, "evt-1").await.unwrap());
+    assert!(
+        db.bind_calendar_event(id, "evt-1").await.unwrap(),
+        "the owner re-claiming its own event is a no-op that still means 'yes, it is yours'"
+    );
+    assert!(
+        !db.bind_calendar_event(id, "evt-other").await.unwrap(),
+        "but it still must not switch to a different event"
+    );
+}
+
+/// The manual "start from a Coming Up event" path writes the same calendar
+/// title and attendees, so it has to claim the event too. Otherwise the event
+/// stays unowned and the detector will happily stamp it onto the next meeting.
+#[tokio::test]
+async fn manually_started_meeting_claims_its_calendar_event() {
+    let (_dir, db) = setup_db().await;
+    let events = vec![calendar_event(
+        "cal-evt-manual",
+        "Design review",
+        chrono::Duration::minutes(-5),
+        chrono::Duration::minutes(30),
+        &["a@example.com", "b@example.com"],
+    )];
+
+    // What the manual path does: create the row, then stamp the event onto it.
+    let manual = db
+        .insert_meeting("manual", "manual", None, None)
+        .await
+        .unwrap();
+    let binding = find_overlapping_calendar_event(&events, Utc::now()).unwrap();
+    assert!(db.bind_calendar_event(manual, &binding.key).await.unwrap());
+    db.update_meeting(
+        manual,
+        None,
+        None,
+        Some(&binding.title),
+        binding.attendees.as_deref(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    end_meeting_ago(&db, manual, chrono::Duration::minutes(5)).await;
+
+    // A later, unrelated call inside the same window must not inherit it.
+    let auto = match start_meeting_with_calendar(&db, &events, "Google Meet").await {
+        AutoStartOutcome::Started(id) => id,
+        other => panic!("expected a separate meeting, got {other:?}"),
+    };
+    let row = db.get_meeting_by_id(auto).await.unwrap();
+    assert!(
+        row.title.as_deref().unwrap_or("").is_empty(),
+        "a manually claimed event must not also name the next meeting — got {:?}",
+        row.title
+    );
+}
+
+/// The detector and the client each build this key from their own copy of the
+/// event. Publishers spell the same instant differently, so the key has to
+/// normalize or one event would be claimed twice under two identities.
+#[test]
+fn binding_key_is_stable_across_timestamp_formats() {
+    let now = Utc::now();
+    let base = Utc::now() - chrono::Duration::minutes(5);
+    let end = base + chrono::Duration::minutes(30);
+    let mk = |start: String, end: String| CalendarEventSignal {
+        id: String::new(),
+        title: "Weekly review".to_string(),
+        start,
+        end,
+        attendees: vec![],
+        is_all_day: false,
+    };
+
+    let rfc = mk(base.to_rfc3339(), end.to_rfc3339());
+    let zulu = mk(
+        base.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+        end.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+    );
+    let a = find_overlapping_calendar_event(&[rfc], now).unwrap();
+    let b = find_overlapping_calendar_event(&[zulu], now).unwrap();
+    assert_eq!(
+        a.key, b.key,
+        "the same instant in two RFC3339 spellings is one event"
     );
 }

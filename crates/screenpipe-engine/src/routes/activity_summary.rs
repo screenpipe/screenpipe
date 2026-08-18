@@ -42,10 +42,12 @@ const MAX_TOP_TRANSCRIPTIONS: u32 = 20;
 
 #[derive(Debug, Deserialize, OaSchema)]
 pub struct ActivitySummaryQuery {
-    /// Start of time range (required, ISO 8601 or relative like "30m ago").
+    /// Start of time range (required). Accepts ISO 8601, relative values like
+    /// "30m ago", or machine-local calendar boundaries: "today", "yesterday",
+    /// and bare YYYY-MM-DD dates.
     #[serde(deserialize_with = "super::time::deserialize_flexible_datetime")]
     pub start_time: DateTime<Utc>,
-    /// End of time range (required).
+    /// End of time range (required), in the same formats as `start_time`.
     #[serde(deserialize_with = "super::time::deserialize_flexible_datetime")]
     pub end_time: DateTime<Utc>,
     /// Optional app name filter (case-sensitive equality).
@@ -874,9 +876,9 @@ async fn load_snippets(
         .filter(|key_text| {
             let text = key_text.text.trim();
             text.len() >= 20
-                && !query_text_lower
+                && query_text_lower
                     .as_ref()
-                    .is_some_and(|q| !text.to_lowercase().contains(q))
+                    .is_none_or(|q| text.to_lowercase().contains(q))
         })
         .collect();
 

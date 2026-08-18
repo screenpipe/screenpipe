@@ -700,24 +700,29 @@ describe("Brain Live Views", function () {
     await piConversation.waitForRequestCount(1, "Template model preflight");
     await piConversation.clearCaptures();
     piConversation.setResponseDelay(350);
-    piConversation.setTextResponse(
-      JSON.stringify({
-        title: "Recovered template view",
-        timeRange: "today",
-        timeRangeBehavior: "selectable",
-        blocks: [
-          {
-            id: "recovered-summary",
-            title: "Recovered summary",
-            component: "markdown.v1",
-            width: 12,
-            intent: "Summarize source-backed work for the selected outcome.",
-            pipeName: null,
-          },
-        ],
-        note: "The generated dashboard is ready for review.",
-      }),
-    );
+    // The builder reads the schema-validated screenpipe_live_view_propose tool
+    // arguments, not assistant text, so the model has to actually call the tool.
+    piConversation.setToolCallSequence([
+      {
+        name: "screenpipe_live_view_propose",
+        arguments: {
+          title: "Recovered template view",
+          timeRange: "today",
+          timeRangeBehavior: "selectable",
+          blocks: [
+            {
+              id: "recovered-summary",
+              title: "Recovered summary",
+              component: "markdown.v1",
+              width: 12,
+              intent: "Summarize source-backed work for the selected outcome.",
+              pipeName: null,
+            },
+          ],
+          note: "The generated dashboard is ready for review.",
+        },
+      },
+    ]);
 
     try {
       const existingViews =
@@ -946,12 +951,15 @@ describe("Brain Live Views", function () {
     await piConversation.waitForRequestCount(1, "Empty Canvas model preflight");
     await piConversation.clearCaptures();
     piConversation.setResponseDelay(350);
-    piConversation.setTextResponse(
-      JSON.stringify({
-        operations: proposedBlocks.map((block) => ({ op: "add", block })),
-        note: "Four Blocks are ready for review.",
-      }),
-    );
+    piConversation.setToolCallSequence([
+      {
+        name: "screenpipe_live_view_propose",
+        arguments: {
+          operations: proposedBlocks.map((block) => ({ op: "add", block })),
+          note: "Four Blocks are ready for review.",
+        },
+      },
+    ]);
 
     try {
       const existingViews =
@@ -1104,48 +1112,51 @@ describe("Brain Live Views", function () {
     await piConversation.waitForRequestCount(1, "Canvas model preflight");
     await piConversation.clearCaptures();
     piConversation.setResponseDelay(500);
-    piConversation.setTextResponse(
-      JSON.stringify({
-        operations: [
-          {
-            op: "add",
-            block: {
-              id: "ownership-lane",
-              title: "Ownership lane",
-              component: "list.v1",
-              width: 12,
-              intent:
-                "Show each accountable owner and the next source-backed handoff.",
-              pipeName: null,
+    piConversation.setToolCallSequence([
+      {
+        name: "screenpipe_live_view_propose",
+        arguments: {
+          operations: [
+            {
+              op: "add",
+              block: {
+                id: "ownership-lane",
+                title: "Ownership lane",
+                component: "list.v1",
+                width: 12,
+                intent:
+                  "Show each accountable owner and the next source-backed handoff.",
+                pipeName: null,
+              },
             },
-          },
-          {
-            op: "update",
-            blockId: "trigger-and-outcome",
-            block: {
-              title: "Trigger, owner, and outcome",
-              component: "table.v1",
-              width: 6,
-              intent:
-                "Show the workflow trigger, accountable owner, and verified outcome.",
-              pipeName: null,
+            {
+              op: "update",
+              blockId: "trigger-and-outcome",
+              block: {
+                title: "Trigger, owner, and outcome",
+                component: "table.v1",
+                width: 6,
+                intent:
+                  "Show the workflow trigger, accountable owner, and verified outcome.",
+                pipeName: null,
+              },
             },
-          },
-          {
-            op: "update",
-            blockId: "safe-improvement-path",
-            block: {
-              title: "Risky automation path",
-              component: "markdown.v1",
-              width: 6,
-              intent: "Describe a risky automation path.",
-              pipeName: null,
+            {
+              op: "update",
+              blockId: "safe-improvement-path",
+              block: {
+                title: "Risky automation path",
+                component: "markdown.v1",
+                width: 6,
+                intent: "Describe a risky automation path.",
+                pipeName: null,
+              },
             },
-          },
-        ],
-        note: "Three Block changes are ready for review.",
-      }),
-    );
+          ],
+          note: "Three Block changes are ready for review.",
+        },
+      },
+    ]);
 
     try {
       const existingViews =
@@ -1567,8 +1578,10 @@ describe("Brain Live Views", function () {
     await setCssWindowSize(1440, 900);
 
     const timeRange = await waitForTestId("overview-time-range", 10_000);
+    // Freshness reads "Updated <newest> · oldest <oldest> · N waiting" since
+    // #6003 gave bound tasks a cadence. Assert the prefix, not a relative time.
     expect((await timeRange.getAttribute("title"))?.toLowerCase()).toContain(
-      "latest update:",
+      "updated ",
     );
     expect(await $("[data-testid='overview-data-status']").isExisting()).toBe(
       false,
@@ -1855,7 +1868,7 @@ Refresh the assigned Live View output targets from source-backed activity.
     );
     expect(
       (await timeRangeFreshness.getAttribute("title"))?.toLowerCase(),
-    ).toContain("latest update:");
+    ).toContain("updated ");
     for (const size of SUPPORTED_WINDOW_SIZES) {
       await setCssWindowSize(size.width, size.height);
       await browser.pause(150);

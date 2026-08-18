@@ -5,7 +5,10 @@
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 import type { Env } from '../types';
 import type { HostedChatGatewayContext } from '../services/cloudflare-ai-gateway';
-import { getCloudflareHostedChatUsage } from '../services/cloudflare-ai-gateway-usage';
+import {
+	classifyCloudflareSpendLimitRule,
+	getCloudflareHostedChatUsage,
+} from '../services/cloudflare-ai-gateway-usage';
 
 const originalFetch = globalThis.fetch;
 const originalWarn = console.warn;
@@ -16,6 +19,7 @@ const context: HostedChatGatewayContext = {
 	plan: 'basic',
 	lane: 'auto',
 	workload: 'interactive',
+	trial: false,
 };
 
 function env(gatewayId: string): Env {
@@ -37,7 +41,7 @@ function gatewayResponse(rules: unknown[]): Response {
 
 function laneRule(
 	id: string,
-	lane: 'auto' | 'explicit',
+	lane: 'auto' | 'explicit' | 'frontier',
 	limit: number,
 	technique: 'fixed' | 'sliding' = 'fixed',
 	window = 2_592_000,
@@ -57,7 +61,11 @@ function laneRule(
 	};
 }
 
-function usageRow(lane: 'auto' | 'explicit', workload: 'interactive' | 'background', cost: number) {
+function usageRow(
+	lane: 'auto' | 'explicit' | 'frontier',
+	workload: 'interactive' | 'background',
+	cost: number,
+) {
 	return {
 		dimensions: {
 			metadataRaw: JSON.stringify({
@@ -322,6 +330,120 @@ describe('Cloudflare hosted-chat usage', () => {
 				window_seconds: 86_400,
 				technique: 'fixed',
 			}),
+		]);
+	});
+
+	it('reports one pooled frontier allowance alongside the total allowance', async () => {
+		globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes('/ai-gateway/gateways/frontier-pool-test')) {
+				return gatewayResponse([
+					{
+						...laneRule('basic-total', 'auto', 10, 'fixed', 604_800),
+						metadata: {
+							user_id: { mode: 'partition' },
+							plan: { mode: 'filter', values: ['basic'] },
+						},
+					},
+					laneRule('basic-frontier', 'frontier', 5, 'fixed', 604_800),
+				]);
+			}
+			return new Response(JSON.stringify({
+				data: {
+					viewer: {
+						accounts: [{
+							window0: [
+								usageRow('frontier', 'interactive', 2),
+								usageRow('auto', 'interactive', 3),
+							],
+						}],
+					},
+				},
+			}), { status: 200 });
+		}) as typeof fetch;
+
+		const result = await getCloudflareHostedChatUsage(
+			env('frontier-pool-test'),
+			context,
+			new Date('2026-08-04T16:30:00.000Z'),
+		);
+
+		expect(result?.allowances).toEqual([
+			expect.objectContaining({
+				lane: 'combined',
+				used_percent: 50,
+				remaining_percent: 50,
+			}),
+			expect.objectContaining({
+				lane: 'frontier',
+				used_percent: 40,
+				remaining_percent: 60,
+			}),
+		]);
+	});
+
+	it('classifies a fresh rejection only by its exact active rule ID', async () => {
+		globalThis.fetch = mock(async () => gatewayResponse([
+			{
+				...laneRule('basic-total-fresh', 'auto', 10, 'fixed', 604_800),
+				metadata: {
+					user_id: { mode: 'partition' },
+					plan: { mode: 'filter', values: ['basic'] },
+				},
+			},
+			laneRule('basic-frontier-fresh', 'frontier', 5, 'fixed', 604_800),
+		])) as typeof fetch;
+
+		await expect(classifyCloudflareSpendLimitRule(
+			env('fresh-rule-classification-test'),
+			'basic-frontier-fresh',
+			context,
+		)).resolves.toBe('frontier');
+		await expect(classifyCloudflareSpendLimitRule(
+			env('fresh-rule-classification-test'),
+			'basic-total-fresh',
+			context,
+		)).resolves.toBe('combined');
+		await expect(classifyCloudflareSpendLimitRule(
+			env('fresh-rule-classification-test'),
+			'unmatched',
+			context,
+		)).resolves.toBe('unknown');
+		expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+	});
+
+	it('warns once when the frontier rule drifts from half of its total', async () => {
+		const warnings: unknown[][] = [];
+		console.warn = mock((...args: unknown[]) => warnings.push(args));
+		globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes('/ai-gateway/gateways/frontier-drift-test')) {
+				return gatewayResponse([
+					{
+						...laneRule('basic-total-drift', 'auto', 10, 'fixed', 604_800),
+						metadata: {
+							user_id: { mode: 'partition' },
+							plan: { mode: 'filter', values: ['basic'] },
+						},
+					},
+					laneRule('basic-frontier-drift', 'frontier', 6, 'fixed', 604_800),
+				]);
+			}
+			return new Response(JSON.stringify({
+				data: { viewer: { accounts: [{ window0: [] }] } },
+			}), { status: 200 });
+		}) as typeof fetch;
+
+		await getCloudflareHostedChatUsage(
+			env('frontier-drift-test'),
+			context,
+			new Date('2026-08-04T16:30:00.000Z'),
+		);
+
+		expect(warnings).toEqual([
+			expect.arrayContaining([
+				'Cloudflare frontier allowance is not 50% of its matching total allowance',
+			]),
 		]);
 	});
 

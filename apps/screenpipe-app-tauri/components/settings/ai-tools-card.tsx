@@ -4,7 +4,7 @@
 
 "use client";
 
-// "AI tools" block — 4th sibling to MCP servers / Pi extensions / Skills in
+// "AI tools" block — 4th sibling to MCP servers / Agent extensions / Skills in
 // Settings > Connections. One place to see every AI tool detected on this
 // machine, connect them all in one click, connect/remove a single tool, or
 // disconnect everything (two-step confirm). Connect always leads; disconnect
@@ -29,6 +29,7 @@ import {
   type FriendlyToolError,
   isOpenclawMcpInstalled,
   isHermesMcpInstalled,
+  isRunnerMcpInstalled,
   isWindsurfMcpInstalled,
 } from "@/lib/ai-tools-mcp";
 import { areExternalAgentSkillsInstalled } from "@/lib/external-agent-skills";
@@ -56,6 +57,8 @@ async function isToolConnected(id: ConnectAllToolId): Promise<boolean> {
       return (await isOpenclawMcpInstalled()) && (await areExternalAgentSkillsInstalled("openclaw"));
     case "hermes":
       return (await isHermesMcpInstalled()) && (await areExternalAgentSkillsInstalled("hermes"));
+    case "runner":
+      return isRunnerMcpInstalled();
     case "windsurf":
       return isWindsurfMcpInstalled();
   }
@@ -63,7 +66,7 @@ async function isToolConnected(id: ConnectAllToolId): Promise<boolean> {
 
 type ToolBusy = "connecting" | "removing";
 
-// Real product logos, shipped in public/images.
+// Product marks, shipped in public/images where available.
 function ToolIcon({ id }: { id: ConnectAllToolId }) {
   const img = "h-5 w-5";
   switch (id) {
@@ -77,6 +80,8 @@ function ToolIcon({ id }: { id: ConnectAllToolId }) {
       return <img src="/images/openclaw.png" alt="" className={`${img} rounded`} />;
     case "hermes":
       return <img src="/images/hermes.png" alt="" className={`${img} rounded`} />;
+    case "runner":
+      return <Bot className={img} />;
     case "windsurf":
       // Devin mark (black vector) — Windsurf was rebranded to Devin Desktop.
       return <img src="/images/devin.svg" alt="" className={`${img} dark:invert`} />;
@@ -296,6 +301,11 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
                             open file
                           </button>
                         )}
+                      </p>
+                    )}
+                    {id === "runner" && isOn && !err && (
+                      <p className="text-[11px] mt-1 text-muted-foreground">
+                        In Runner, enable Settings &gt; Workspace &gt; Local MCP Servers, then start a new conversation.
                       </p>
                     )}
                   </div>

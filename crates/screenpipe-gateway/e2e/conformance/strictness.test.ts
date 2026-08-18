@@ -61,6 +61,7 @@ const goodDeviceList = () => ({
     {
       device_id: "dev-alice",
       label: "alice-mbp",
+      member_email: "alice@conformance.test",
       platform: "macos",
       app_version: "2.5.136",
       last_seen: "2026-07-22T09:08:00+00:00",
@@ -69,6 +70,7 @@ const goodDeviceList = () => ({
     {
       device_id: "dev-bob",
       label: "bob-thinkpad",
+      member_email: null,
       platform: null,
       app_version: null,
       last_seen: "2026-07-22T10:08:00Z",
@@ -125,6 +127,16 @@ describe("the good bodies validate (or every rejection below proves nothing)", (
     const v = componentValidator(name as string);
     expect(v(body), v.errorText()).toBe(true);
   });
+
+  it.each([
+    ["DeviceList", goodDeviceList()],
+    ["SearchResult", goodSearchResult()],
+    ["RollupList", goodRollupList()],
+  ])("%s also accepts the opt-in pagination field", (name, body: any) => {
+    body.next_cursor = null;
+    const v = componentValidator(name);
+    expect(v(body), v.errorText()).toBe(true);
+  });
 });
 
 describe("renaming a required field is REJECTED", () => {
@@ -167,7 +179,7 @@ describe("renaming a required field is REJECTED", () => {
       body.files[0][`x_${field}`] = body.files[0][field];
       delete body.files[0][field];
       expect(componentValidator("FileList")(body)).toBe(false);
-    }
+    },
   );
 });
 
@@ -263,7 +275,9 @@ describe("nulling a non-nullable field is REJECTED", () => {
 
 describe("the nullable fields ARE allowed to be null (accepted divergences)", () => {
   it("every RecordSummary field except kind", () => {
-    const nullable = Object.keys(goodRecordSummary()).filter((k) => k !== "kind");
+    const nullable = Object.keys(goodRecordSummary()).filter(
+      (k) => k !== "kind",
+    );
     for (const field of nullable) {
       const body: any = goodRecordSummary();
       body[field] = null;
@@ -279,6 +293,12 @@ describe("the nullable fields ARE allowed to be null (accepted divergences)", ()
     expect(componentValidator("DeviceList")(body)).toBe(true);
   });
 
+  it("Device.member_email — null when no verified identity source exists (DEV-MEMBER-EMAIL)", () => {
+    const body: any = goodDeviceList();
+    body.devices[0].member_email = null;
+    expect(componentValidator("DeviceList")(body)).toBe(true);
+  });
+
   it("FileEntry.size / last_modified — nullable on the gateway (FILES-NULLABILITY)", () => {
     const body: any = goodFileList();
     body.files[0].size = null;
@@ -288,10 +308,22 @@ describe("the nullable fields ARE allowed to be null (accepted divergences)", ()
 });
 
 describe("removing a required field is REJECTED", () => {
+  it("Device.member_email", () => {
+    const body: any = goodDeviceList();
+    delete body.devices[0].member_email;
+    expect(componentValidator("DeviceList")(body)).toBe(false);
+  });
+
   it.each([
     ["DeviceList", ["count", "devices"]],
-    ["SearchResult", ["query", "result_count", "results", "truncated", "window_hours"]],
-    ["FileList", ["device_id", "count", "files", "next_cursor", "window_hours"]],
+    [
+      "SearchResult",
+      ["query", "result_count", "results", "truncated", "window_hours"],
+    ],
+    [
+      "FileList",
+      ["device_id", "count", "files", "next_cursor", "window_hours"],
+    ],
     ["RollupList", ["ok", "device", "from", "to", "count", "rollups"]],
   ])("%s", (name, fields) => {
     for (const field of fields as string[]) {
@@ -304,7 +336,7 @@ describe("removing a required field is REJECTED", () => {
       delete body[field];
       expect(
         componentValidator(name as string)(body),
-        `${name} validated without required '${field}'`
+        `${name} validated without required '${field}'`,
       ).toBe(false);
     }
   });
@@ -313,7 +345,9 @@ describe("removing a required field is REJECTED", () => {
 describe("error bodies are strict too", () => {
   it("{error} accepts only that", () => {
     expect(componentValidator("Error")({ error: "not found" })).toBe(true);
-    expect(componentValidator("Error")({ error: "x", stack: "..." })).toBe(false);
+    expect(componentValidator("Error")({ error: "x", stack: "..." })).toBe(
+      false,
+    );
     expect(componentValidator("Error")({})).toBe(false);
   });
 
@@ -333,17 +367,23 @@ describe("error bodies are strict too", () => {
 
   it("the write-only denial code and surface are pinned", () => {
     const v = componentValidator("WriteOnlyDenial");
-    expect(v({ error: "x", code: "write_only_archive", surface: "hosted_api" })).toBe(true);
+    expect(
+      v({ error: "x", code: "write_only_archive", surface: "hosted_api" }),
+    ).toBe(true);
     expect(
       v({
         error: "x",
         code: "write_only_archive",
         surface: "hosted_api",
         gateway_url: "https://gw",
-      })
+      }),
     ).toBe(true);
-    expect(v({ error: "x", code: "write_only", surface: "hosted_api" })).toBe(false);
-    expect(v({ error: "x", code: "write_only_archive", surface: "made_up" })).toBe(false);
+    expect(v({ error: "x", code: "write_only", surface: "hosted_api" })).toBe(
+      false,
+    );
+    expect(
+      v({ error: "x", code: "write_only_archive", surface: "made_up" }),
+    ).toBe(false);
   });
 });
 
@@ -351,17 +391,25 @@ describe("the spec itself stays strict — a relaxation fails HERE", () => {
   it("every JSON response object schema sets additionalProperties: false", () => {
     // The one deliberate exception is documented in the spec: a rollup's `data`
     // and an artifact body are passthroughs whose shape the route does not own.
-    const allowed = new Set(["Rollup.data", "GeneratedWorkflows.artifacts.items"]);
+    const allowed = new Set([
+      "Rollup.data",
+      "GeneratedWorkflows.artifacts.items",
+    ]);
     const offenders: string[] = [];
     walk(rawSpec().components.schemas, "");
     function walk(node: any, path: string) {
       if (!node || typeof node !== "object") return;
-      if (Array.isArray(node)) return node.forEach((n, i) => walk(n, `${path}[${i}]`));
+      if (Array.isArray(node))
+        return node.forEach((n, i) => walk(n, `${path}[${i}]`));
       const isObjectSchema =
         node.type === "object" ||
         (Array.isArray(node.type) && node.type.includes("object")) ||
         !!node.properties;
-      if (isObjectSchema && node.additionalProperties !== false && !allowed.has(path)) {
+      if (
+        isObjectSchema &&
+        node.additionalProperties !== false &&
+        !allowed.has(path)
+      ) {
         offenders.push(path || "<root>");
       }
       for (const [k, v] of Object.entries(node)) {
@@ -374,7 +422,10 @@ describe("the spec itself stays strict — a relaxation fails HERE", () => {
         }
       }
     }
-    expect(offenders, `these object schemas would validate a renamed field`).toEqual([]);
+    expect(
+      offenders,
+      `these object schemas would validate a renamed field`,
+    ).toEqual([]);
   });
 
   it("every RESPONSE object schema has an exhaustive required list", () => {
@@ -402,10 +453,17 @@ describe("the spec itself stays strict — a relaxation fails HERE", () => {
     }
     expect(
       requestSchemas.size,
-      "no request schemas found — the derivation broke and this test is now vacuous"
+      "no request schemas found — the derivation broke and this test is now vacuous",
     ).toBeGreaterThan(0);
 
-    const optionalByDesign = new Set(["WriteOnlyDenial.gateway_url"]);
+    const optionalByDesign = new Set([
+      "WriteOnlyDenial.gateway_url",
+      // Pagination is opt-in so legacy responses retain their exact shape.
+      "DeviceList.next_cursor",
+      "SearchResult.next_cursor",
+      "RecordList.next_cursor",
+      "RollupList.next_cursor",
+    ]);
     const gaps: string[] = [];
     for (const [name, schema] of Object.entries<any>(doc.components.schemas)) {
       if (!schema.properties) continue;
@@ -418,7 +476,10 @@ describe("the spec itself stays strict — a relaxation fails HERE", () => {
         }
       }
     }
-    expect(gaps, "these properties could vanish without the schema noticing").toEqual([]);
+    expect(
+      gaps,
+      "these properties could vanish without the schema noticing",
+    ).toEqual([]);
   });
 
   it("every operation declares an x-scope, or is an explicitly public route", () => {
@@ -426,7 +487,7 @@ describe("the spec itself stays strict — a relaxation fails HERE", () => {
       expect(
         op.scope !== null || op.isPublic,
         `${op.method} ${op.path} has neither x-scope nor x-public: true — the ` +
-          `auth matrix cannot classify it, so it would be silently unasserted`
+          `auth matrix cannot classify it, so it would be silently unasserted`,
       ).toBe(true);
     }
   });
@@ -437,7 +498,7 @@ describe("the spec itself stays strict — a relaxation fails HERE", () => {
       for (const id of op.divergences) {
         expect(
           Object.keys(ledger),
-          `${op.method} ${op.path} claims divergence '${id}'`
+          `${op.method} ${op.path} claims divergence '${id}'`,
         ).toContain(id);
       }
     }
@@ -447,19 +508,22 @@ describe("the spec itself stays strict — a relaxation fails HERE", () => {
     for (const [id, entry] of Object.entries<any>(divergenceLedger())) {
       expect(entry.rationale, `${id} has no rationale`).toBeTruthy();
       expect(entry.hosted, `${id} does not say what hosted does`).toBeTruthy();
-      expect(entry.gateway, `${id} does not say what the gateway does`).toBeTruthy();
+      expect(
+        entry.gateway,
+        `${id} does not say what the gateway does`,
+      ).toBeTruthy();
     }
   });
 
   it("validatorFor THROWS for a status the spec does not describe", () => {
-    expect(() => validatorFor("GET", "/api/enterprise/v1/devices", 418)).toThrow(
-      /does not define a 418 response/
-    );
+    expect(() =>
+      validatorFor("GET", "/api/enterprise/v1/devices", 418),
+    ).toThrow(/does not define a 418 response/);
   });
 
   it("validatorFor THROWS for an operation the spec does not describe", () => {
-    expect(() => validatorFor("GET", "/api/enterprise/v1/experimental", 200)).toThrow(
-      /does not describe/
-    );
+    expect(() =>
+      validatorFor("GET", "/api/enterprise/v1/experimental", 200),
+    ).toThrow(/does not describe/);
   });
 });

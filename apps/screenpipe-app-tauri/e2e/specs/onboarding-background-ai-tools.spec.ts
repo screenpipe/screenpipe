@@ -150,9 +150,10 @@ async function callActivitySummaryThroughMcp(
       await waitForAppReady();
     });
 
-    it("connects detected Codex and Cursor configs in the Rust background task", async () => {
+    it("connects detected Codex, Cursor, and Runner configs in the Rust background task", async () => {
       const codexConfig = resolve(E2E_AI_TOOLS_HOME, ".codex", "config.toml");
       const cursorConfig = resolve(E2E_AI_TOOLS_HOME, ".cursor", "mcp.json");
+      const runnerConfig = resolve(E2E_AI_TOOLS_HOME, ".runner", "mcp.json");
       const requiredSkills = [
         resolve(
           E2E_AI_TOOLS_HOME,
@@ -189,7 +190,9 @@ async function callActivitySummaryThroughMcp(
           requiredSkills.every(existsSync) &&
           readFileSync(codexConfig, "utf8").includes(
             "[mcp_servers.screenpipe]",
-          ),
+          ) &&
+          JSON.parse(readFileSync(runnerConfig, "utf8")).mcpServers
+            ?.screenpipe?.type === "stdio",
         {
           timeout: t(30_000),
           interval: 250,
@@ -220,9 +223,20 @@ async function callActivitySummaryThroughMcp(
         SCREENPIPE_MCP_CLIENT: "cursor",
       });
 
+      const runner = JSON.parse(readFileSync(runnerConfig, "utf8"));
+      expect(runner.workspace).toBe("kept");
+      expect(runner.mcpServers.existing.url).toBe("https://example.com/mcp");
+      expect(runner.mcpServers.screenpipe.type).toBe("stdio");
+      expect(runner.mcpServers.screenpipe.env).toEqual({
+        SCREENPIPE_API_URL: `http://localhost:${api.port}`,
+        SCREENPIPE_LOCAL_API_KEY: api.key,
+        SCREENPIPE_MCP_CLIENT: "runner",
+      });
+
       if (process.platform !== "win32") {
         expect(statSync(codexConfig).mode & 0o777).toBe(0o600);
         expect(statSync(cursorConfig).mode & 0o777).toBe(0o600);
+        expect(statSync(runnerConfig).mode & 0o777).toBe(0o600);
       }
 
       const result = (await callActivitySummaryThroughMcp(

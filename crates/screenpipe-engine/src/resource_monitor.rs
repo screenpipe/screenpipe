@@ -846,7 +846,7 @@ mod tests {
     #[test]
     fn flat_memory_is_not_a_leak() {
         let s = samples_over(4.0, |dt| {
-            1.8 + if (dt / 30.0) as u64 % 2 == 0 {
+            1.8 + if ((dt / 30.0) as u64).is_multiple_of(2) {
                 0.005
             } else {
                 -0.005

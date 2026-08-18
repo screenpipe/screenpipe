@@ -225,6 +225,79 @@ describe('GeminiProvider tool schema conversion (Sentry SCREENPIPE-AI-PROXY-9)',
 		});
 		expect(out.properties.name.items).toBeUndefined();
 	});
+
+	it('collapses a nullable union type into one type plus nullable', () => {
+		// `type: ["string", "null"]` used to stringify to "STRING,NULL" — the
+		// shape the live-views block schema sends for pipeName.
+		const out = convert({
+			type: 'object',
+			properties: {
+				pipeName: {
+					type: ['string', 'null'],
+					description: 'Installed scheduled task, or null when none fits.',
+				},
+			},
+		});
+		expect(out.properties.pipeName.type).toBe('STRING');
+		expect(out.properties.pipeName.nullable).toBe(true);
+		expect(out.properties.pipeName.description).toBe(
+			'Installed scheduled task, or null when none fits.'
+		);
+	});
+
+	it('still fills items for a nullable array union', () => {
+		const out = convert({
+			type: 'object',
+			properties: {
+				tags: { type: ['array', 'null'], items: { type: 'string' } },
+			},
+		});
+		expect(out.properties.tags.type).toBe('ARRAY');
+		expect(out.properties.tags.nullable).toBe(true);
+		expect(out.properties.tags.items).toEqual({ type: 'STRING' });
+	});
+
+	it('recurses into a nullable object union', () => {
+		const out = convert({
+			type: ['object', 'null'],
+			properties: { a: { type: 'string' } },
+			required: ['a'],
+		});
+		expect(out.type).toBe('OBJECT');
+		expect(out.nullable).toBe(true);
+		expect(out.properties.a.type).toBe('STRING');
+		expect(out.required).toEqual(['a']);
+	});
+
+	it('leaves a plain string type untouched (no stray nullable)', () => {
+		const out = convert({
+			type: 'object',
+			properties: { name: { type: 'string' } },
+		});
+		expect(out.properties.name.type).toBe('STRING');
+		expect(out.properties.name.nullable).toBeUndefined();
+		expect(out.nullable).toBeUndefined();
+	});
+
+	it('coerces enum values on a nullable union without regressing the type', () => {
+		const out = convert({
+			type: 'object',
+			properties: {
+				width: { type: ['integer', 'null'], enum: [3, 6, 12] },
+			},
+		});
+		expect(out.properties.width.type).toBe('INTEGER');
+		expect(out.properties.width.nullable).toBe(true);
+		expect(out.properties.width.enum).toEqual(['3', '6', '12']);
+	});
+
+	it('falls back to OBJECT for a missing or unusable type', () => {
+		expect(convert({ description: 'no type at all' }).type).toBe('OBJECT');
+		expect(convert({ type: [] }).type).toBe('OBJECT');
+		// `type: ["null"]` has no real member left to keep.
+		expect(convert({ type: ['null'] }).type).toBe('OBJECT');
+		expect(convert({ type: ['null'] }).nullable).toBe(true);
+	});
 });
 
 describe('GeminiProvider.formatMessages history sanitization', () => {

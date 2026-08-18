@@ -9,6 +9,7 @@
 //! hidden mode of the signed Screenpipe executable so no second sidecar or
 //! handwritten protocol implementation is shipped.
 
+use crate::acp_extensions::AcpExtensionMiddleware;
 use agent_client_protocol::schema::v1::{
     AuthCapabilities, AuthMethod, AuthenticateRequest, BooleanConfigOptionCapabilities,
     CancelNotification, ClientCapabilities,
@@ -47,7 +48,7 @@ pub(crate) const CLOUD_API_KEY_ENV: &str = "SCREENPIPE_API_KEY";
 /// why these tools sometimes never registered and the agent fell back to raw
 /// SQL. `pi::prewarm_screenpipe_mcp` seeds the cache at install. Bump alongside
 /// packages/screenpipe-mcp.
-pub(crate) const SCREENPIPE_MCP_PKG: &str = "screenpipe-mcp@0.19.1";
+pub(crate) const SCREENPIPE_MCP_PKG: &str = "screenpipe-mcp@0.19.2";
 
 /// Environment carried into the runtime process by `pi.rs` that belongs to the
 /// runtime alone and must never be inherited by any child it spawns — neither
@@ -175,6 +176,9 @@ struct RuntimeConfig {
     preferred_auth_method: Option<String>,
     system_context: Option<String>,
     session_defaults: SessionDefaults,
+    /// Provider-neutral capabilities contributed by installed Pi packages
+    /// which explicitly expose a portable MCP entrypoint.
+    extension_middleware: AcpExtensionMiddleware,
     /// The user's own registered MCP servers, resolved (with secret header
     /// values) by the desktop before launch and forwarded to the adapter in
     /// session/new alongside the screenpipe server.
@@ -225,6 +229,33 @@ impl RuntimeConfig {
         let mut env = parse_json_env::<HashMap<String, String>>("SCREENPIPE_ACP_ENV_JSON")?
             .unwrap_or_default();
         env.retain(|name, _| !is_process_guard_env(name) && !is_forbidden_acp_env(name));
+
+        // ACP agents are pointed at the seeded `.pi/skills/*/SKILL.md` guides
+        // (see `build_first_turn_context`), and the always-on `screenpipe-cli`
+        // skill invokes `${SCREENPIPE_CLI:-bun x screenpipe@latest}`. Without
+        // this the adapter takes the ~4s npm fallback on every CLI call, where
+        // pi already gets the ~0.15s resolved binary via
+        // `apply_pi_isolation_env` — which ACP deliberately does not use,
+        // since that also carries pi-specific isolation vars.
+        //
+        // Inserted after the retain above so it cannot be spoofed by an
+        // inbound `SCREENPIPE_ACP_ENV_JSON` entry, and inherited from here by
+        // the adapter's own terminals (ACP never calls `env_clear`, and
+        // `SCREENPIPE_CLI` is not on the `RUNTIME_ONLY_ENV` scrub list).
+        let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+        if let Some(cli) = screenpipe_core::agents::cli_runtime::resolved_cli_binary(&data_dir) {
+            env.insert(
+                screenpipe_core::agents::cli_runtime::CLI_ENV_VAR.to_string(),
+                cli.to_string_lossy().to_string(),
+            );
+        }
+        // An ACP-only user never runs a pipe, so nothing else would ever
+        // publish a launcher for them. Best-effort, single-flighted, and off
+        // the critical path.
+        screenpipe_core::agents::cli_runtime::maybe_refresh_in_background(
+            &data_dir,
+            Path::new(&bun_path),
+        );
         let configured_command = env_nonempty("SCREENPIPE_ACP_COMMAND");
         let (command, args) = if let Some(command) = configured_command {
             (command, configured_args)
@@ -245,13 +276,15 @@ impl RuntimeConfig {
             project_dir,
             bun_path,
             preferred_auth_method: env_nonempty("SCREENPIPE_ACP_AUTH_METHOD"),
-            system_context: Some(build_first_turn_context(env_nonempty(
-                "SCREENPIPE_ACP_SYSTEM_PROMPT",
-            ))),
+            system_context: Some(build_first_turn_context(
+                load_screenpipe_agents_context(&data_dir),
+                env_nonempty("SCREENPIPE_ACP_SYSTEM_PROMPT"),
+            )),
             session_defaults: parse_json_env::<SessionDefaults>(
                 "SCREENPIPE_ACP_SESSION_CONFIG_JSON",
             )?
             .unwrap_or_default(),
+            extension_middleware: AcpExtensionMiddleware::discover(),
             user_mcp_servers: parse_json_env::<Vec<UserMcpServer>>(
                 "SCREENPIPE_ACP_USER_MCP_JSON",
             )?
@@ -271,7 +304,7 @@ impl RuntimeConfig {
 const SCREENPIPE_TOOLS_HINT: &str = "\
 You are running inside screenpipe. Prefer its MCP tools over shell/curl (this is your usage guide). Tool names below are written with hyphens; some agents expose the same tools with underscores (activity_summary, search_content) or a query_recordings tool for read-only SQL — use whatever your own tool list shows, and never fall back to curl or /raw_sql just because a name here doesn't match exactly:
 - the `screenpipe` server searches and summarizes the user's screen, audio, and UI history.
-  - `activity-summary` for broad questions (\"what was I doing?\", \"which apps?\", \"how long on X?\"): it pre-summarizes apps, windows, and transcripts and owns the time math — pass natural-language times (\"today\", \"2h ago\") and never sum minutes yourself.
+  - `activity-summary` for broad questions (\"what was I doing?\", \"which apps?\", \"how long on X?\"): it pre-summarizes apps, windows, and transcripts and owns the time math — pass natural-language times (\"today\", \"2h ago\"); \"today\" is the user's local calendar day starting at local midnight, not UTC midnight or a rolling 24 hours. Never sum minutes yourself.
   - `search-content` for specific lookups; filter by content_type, app_name, window_name, and a time range.
   - `update-memory` (and search with content_type=memory) to persist and recall facts across sessions.
 - `list_connections` shows the user's connected apps; `screenpipe_connect_app` connects one and waits for the user when a task needs it.
@@ -281,14 +314,81 @@ You are running inside screenpipe. Prefer its MCP tools over shell/curl (this is
 - screenpipe seeds task guides in `.pi/skills/*/SKILL.md` under your working directory. Before starting a task, list that folder and read the SKILL.md that matches the request; it names the exact tools and steps to use.
 Do not curl localhost for these; call the tools.";
 
-/// Combine the always-on tools hint with the user's configured system prompt
-/// (if any) into the first-turn context. Kept as one string so it is delivered
-/// exactly once, on the first prompt of the session.
-fn build_first_turn_context(user_prompt: Option<String>) -> String {
-    match user_prompt {
-        Some(prompt) => format!("{SCREENPIPE_TOOLS_HINT}\n\n{prompt}"),
-        None => SCREENPIPE_TOOLS_HINT.to_string(),
+/// Match Codex's default maximum for project instructions. A local user can
+/// still keep detailed, on-demand workflows in `<data_dir>/skills`; this file
+/// is for the durable instructions every session needs.
+const SCREENPIPE_AGENTS_MAX_BYTES: u64 = 32 * 1024;
+
+/// Load the screenpipe-global instructions used by every ACP-backed agent.
+///
+/// Native Pi already walks from a chat or Pipe cwd up through its parents and
+/// discovers `<data_dir>/AGENTS.md` itself. ACP adapters do not share one
+/// instruction-file convention: Claude looks for `CLAUDE.md`, while Codex can
+/// stop at the ACP cwd when it has no repository root. Injecting the data-dir
+/// file through ACP makes the screenpipe contract deterministic without
+/// copying it into every chat/Pipe directory.
+///
+/// `AGENTS.override.md` follows Codex/Pi precedence and is useful for a
+/// temporary replacement. Empty files fall through to the next candidate.
+fn load_screenpipe_agents_context(data_dir: &Path) -> Option<String> {
+    for filename in ["AGENTS.override.md", "AGENTS.md"] {
+        let path = data_dir.join(filename);
+        let file = match std::fs::File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                eprintln!("screenpipe ACP could not read {}: {error}", path.display());
+                continue;
+            }
+        };
+
+        let mut bytes = Vec::new();
+        if let Err(error) = file
+            .take(SCREENPIPE_AGENTS_MAX_BYTES + 1)
+            .read_to_end(&mut bytes)
+        {
+            eprintln!("screenpipe ACP could not read {}: {error}", path.display());
+            continue;
+        }
+
+        let truncated = bytes.len() as u64 > SCREENPIPE_AGENTS_MAX_BYTES;
+        bytes.truncate(SCREENPIPE_AGENTS_MAX_BYTES as usize);
+        let content = String::from_utf8_lossy(&bytes).trim().to_string();
+        if content.is_empty() {
+            continue;
+        }
+
+        let truncation_note = if truncated {
+            "\n\n[screenpipe truncated this instructions file at 32 KiB]"
+        } else {
+            ""
+        };
+        return Some(format!(
+            "# screenpipe user instructions\n\nLoaded from `{}`. These durable instructions apply to this session.\n\n{}{truncation_note}",
+            path.display(),
+            content
+        ));
     }
+
+    None
+}
+
+/// Combine the always-on tools hint, screenpipe-global AGENTS.md, and the
+/// user's configured system prompt into one first-turn context. It is
+/// delivered exactly once, on the first prompt of the ACP session.
+fn build_first_turn_context(
+    agents_context: Option<String>,
+    user_prompt: Option<String>,
+) -> String {
+    [
+        Some(SCREENPIPE_TOOLS_HINT.to_string()),
+        agents_context,
+        user_prompt,
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join("\n\n")
 }
 
 fn env_nonempty(name: &str) -> Option<String> {
@@ -346,6 +446,17 @@ enum AgentLaunch {
     },
 }
 
+/// An explicit, user-triggered installer for a binary ACP agent.
+///
+/// Installers are compiled into the static catalog. The runtime still checks
+/// each URL against a narrow allowlist before downloading anything so a future
+/// catalog edit cannot accidentally turn this into an arbitrary script runner.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum AgentInstaller {
+    ShellScript { url: String },
+}
+
 /// How an agent can be pointed at Screenpipe Cloud instead of the user's own
 /// provider account, from the catalog (agents.json).
 ///
@@ -378,6 +489,10 @@ struct CatalogAgent {
     /// JSON key is `installUrl`.
     #[serde(default)]
     install_url: Option<String>,
+    /// Optional in-app installer. A missing installer keeps the external-link
+    /// flow for agents whose supported installation cannot run in this app.
+    #[serde(default)]
+    installer: Option<AgentInstaller>,
     /// Serve screenpipe's MCP tools over loopback http instead of client stdio,
     /// for agents that reject stdio MCP servers (Cursor, GitHub Copilot). JSON
     /// key is `httpMcp`.
@@ -467,7 +582,10 @@ async fn run_terminal_login(
     };
     args.extend(method_args.iter().cloned());
 
-    let mut child = tokio::process::Command::new(program)
+    // No-window: the agent CLI is a console program, and sign-in already has
+    // the user's attention in the app — a terminal blinking beside it for up to
+    // five minutes reads as a crash.
+    let mut child = screenpipe_core::no_window_command_async(program)
         .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -493,18 +611,189 @@ fn agent_catalog() -> Vec<CatalogAgent> {
 /// Whether a binary agent's CLI is resolvable on PATH. npx agents (run via the
 /// bundled bun) always report installed; binary agents (OpenCode, Cursor, Kimi)
 /// require the user to install the CLI. Returns
-/// `(requires_install, installed, command, install_url)`.
-pub fn agent_install_status(id: &str) -> (bool, bool, Option<String>, Option<String>) {
+/// `(requires_install, installed, command, install_url, can_install_automatically)`.
+pub fn agent_install_status(id: &str) -> (bool, bool, Option<String>, Option<String>, bool) {
     let Some(agent) = agent_catalog().into_iter().find(|agent| agent.id == id) else {
-        return (false, true, None, None);
+        return (false, true, None, None, false);
     };
+    let can_install_automatically = agent.installer.is_some() && cfg!(unix);
     match agent.launch {
-        AgentLaunch::Npx { .. } => (false, true, None, agent.install_url),
+        AgentLaunch::Npx { .. } => (false, true, None, agent.install_url, false),
         AgentLaunch::Binary { command, .. } => {
             let installed = command_on_path(&command);
-            (true, installed, Some(command), agent.install_url)
+            (
+                true,
+                installed,
+                Some(command),
+                agent.install_url,
+                can_install_automatically,
+            )
         }
     }
+}
+
+const MAX_INSTALL_SCRIPT_BYTES: usize = 128 * 1024;
+
+/// Install a binary ACP agent after an explicit click in the desktop UI.
+///
+/// Only Cursor currently opts in. Native Windows retains the website flow:
+/// Cursor supports this shell installer on macOS/Linux (and Windows via WSL),
+/// while the desktop app itself runs outside WSL.
+pub async fn install_agent(id: &str) -> Result<(), String> {
+    let agent = agent_catalog()
+        .into_iter()
+        .find(|agent| agent.id == id)
+        .ok_or_else(|| "unknown ACP agent".to_string())?;
+    let command = match &agent.launch {
+        AgentLaunch::Binary { command, .. } => command.clone(),
+        AgentLaunch::Npx { .. } => {
+            return Err("this ACP agent does not require a separate install".to_string())
+        }
+    };
+    if command_on_path(&command) {
+        return Ok(());
+    }
+    let installer = agent
+        .installer
+        .ok_or_else(|| "automatic installation is not available for this ACP agent".to_string())?;
+
+    #[cfg(not(unix))]
+    {
+        let _ = installer;
+        return Err(
+            "automatic installation is not available on this platform; use the official installer"
+                .to_string(),
+        );
+    }
+
+    #[cfg(unix)]
+    {
+        match installer {
+            AgentInstaller::ShellScript { url } => run_shell_installer(&url).await?,
+        }
+        if command_on_path(&command) {
+            Ok(())
+        } else {
+            Err(format!(
+                "the installer finished, but the {command} command was not found"
+            ))
+        }
+    }
+}
+
+fn trusted_installer_url(url: &reqwest::Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some("cursor.com")
+        && url.path() == "/install"
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
+#[cfg(unix)]
+async fn run_shell_installer(url: &str) -> Result<(), String> {
+    let url =
+        reqwest::Url::parse(url).map_err(|error| format!("invalid installer URL: {error}"))?;
+    if !trusted_installer_url(&url) {
+        return Err("refusing an untrusted ACP installer URL".to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .user_agent("screenpipe-acp-installer")
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|error| format!("failed to prepare the installer download: {error}"))?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| format!("failed to download the official installer: {error}"))?;
+    if !trusted_installer_url(response.url()) {
+        return Err("the ACP installer redirected to an untrusted URL".to_string());
+    }
+    let mut response = response
+        .error_for_status()
+        .map_err(|error| format!("the official installer download failed: {error}"))?;
+    let content_length = response.content_length();
+    if content_length.is_some_and(|size| size > MAX_INSTALL_SCRIPT_BYTES as u64) {
+        return Err("the ACP installer script is unexpectedly large".to_string());
+    }
+    let mut script = Vec::with_capacity(content_length.unwrap_or(0) as usize);
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("failed to read the official installer: {error}"))?
+    {
+        if script.len().saturating_add(chunk.len()) > MAX_INSTALL_SCRIPT_BYTES {
+            return Err("the ACP installer script is unexpectedly large".to_string());
+        }
+        script.extend_from_slice(&chunk);
+    }
+    if !script.starts_with(b"#!/usr/bin/env bash") {
+        return Err("the ACP installer response is not the expected shell script".to_string());
+    }
+
+    let home = std::env::var_os("HOME").ok_or("HOME is unavailable; cannot install Cursor")?;
+    let mut command = tokio::process::Command::new("/bin/bash");
+    command
+        .arg("-s")
+        .env_clear()
+        .env("HOME", home)
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    for key in ["PATH", "SHELL", "TMPDIR", "LANG", "LC_ALL"] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("failed to start the Cursor installer: {error}"))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or("failed to open the Cursor installer input")?;
+    stdin
+        .write_all(&script)
+        .await
+        .map_err(|error| format!("failed to send the Cursor installer: {error}"))?;
+    drop(stdin);
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(180),
+        child.wait_with_output(),
+    )
+    .await
+    .map_err(|_| "the Cursor installer timed out".to_string())?
+    .map_err(|error| format!("failed while waiting for the Cursor installer: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = installer_error_detail(&output.stdout, &output.stderr);
+    if detail.is_empty() {
+        Err(format!(
+            "the Cursor installer exited with {}",
+            output.status
+        ))
+    } else {
+        Err(format!("the Cursor installer failed: {detail}"))
+    }
+}
+
+#[cfg(unix)]
+fn installer_error_detail(stdout: &[u8], stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr);
+    let stdout = String::from_utf8_lossy(stdout);
+    let detail = if stderr.trim().is_empty() {
+        stdout.trim()
+    } else {
+        stderr.trim()
+    };
+    let mut chars = detail.chars().rev().take(2_000).collect::<Vec<_>>();
+    chars.reverse();
+    chars.into_iter().collect()
 }
 
 /// bun's global package content-cache dir (`$BUN_INSTALL/install/cache`,
@@ -577,8 +866,37 @@ fn command_on_path(command: &str) -> bool {
         return true;
     }
     refresh_login_shell_path();
+    if path_has_command(command) {
+        return true;
+    }
+    make_local_bin_visible(command);
     path_has_command(command)
 }
+
+/// Cursor's official installer writes to `~/.local/bin` but intentionally does
+/// not edit shell startup files. Add that standard user bin directory to this
+/// process when it contains the requested CLI, so install works immediately
+/// and on the next app launch without mutating the user's dotfiles.
+#[cfg(not(windows))]
+fn make_local_bin_visible(command: &str) {
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let local_bin = PathBuf::from(home).join(".local/bin");
+    if !local_bin.join(command).is_file() {
+        return;
+    }
+    let mut paths = vec![local_bin];
+    if let Some(current) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&current));
+    }
+    if let Ok(path) = std::env::join_paths(paths) {
+        std::env::set_var("PATH", path);
+    }
+}
+
+#[cfg(windows)]
+fn make_local_bin_visible(_command: &str) {}
 
 fn path_has_command(command: &str) -> bool {
     let direct = std::path::Path::new(command);
@@ -680,7 +998,11 @@ fn supervised_command(program: &str, args: &[String]) -> Result<Command, String>
 #[cfg(windows)]
 fn windows_target_command(program: &str, args: &[String]) -> Result<Command, String> {
     let resolved = resolve_windows_program(program);
-    let mut command = Command::new(resolved);
+    // The guard that spawns this was itself created with CREATE_NO_WINDOW, so
+    // it holds no console — which is precisely why Windows would allocate a
+    // fresh one for a console-subsystem agent here. The flag does not disturb
+    // the inherited stdio the guard relays.
+    let mut command = screenpipe_core::no_window_command(resolved);
     command.args(args);
     Ok(command)
 }
@@ -1091,23 +1413,76 @@ unsafe extern "system" {
 
 struct RuntimeState {
     output: ParentOutput,
+    agent_id: String,
     project_dir: PathBuf,
     turn: Mutex<TurnState>,
     ui_waiters: Mutex<HashMap<String, oneshot::Sender<Option<String>>>>,
     terminals: Mutex<HashMap<String, Arc<TerminalRecord>>>,
     system_context: Mutex<Option<String>>,
+    provider_session_id: Mutex<Option<String>>,
 }
 
 impl RuntimeState {
     fn new(output: ParentOutput, config: &RuntimeConfig) -> Self {
         Self {
             output,
+            agent_id: config.agent_id.clone(),
             project_dir: config.project_dir.clone(),
             turn: Mutex::new(TurnState::default()),
             ui_waiters: Mutex::new(HashMap::new()),
             terminals: Mutex::new(HashMap::new()),
             system_context: Mutex::new(config.system_context.clone()),
+            provider_session_id: Mutex::new(None),
         }
+    }
+
+    /// Keep provider-owned schedules attached to exactly one live ACP session.
+    /// Reclaiming a resumed session preserves its projection; replacing the
+    /// session drops session-only tasks immediately.
+    fn replace_provider_session(&self, session_id: &str) {
+        let Ok(mut current) = self.provider_session_id.lock() else {
+            return;
+        };
+        if current.as_deref() == Some(session_id) {
+            crate::provider_automations::begin_provider_session(
+                &self.agent_id,
+                session_id,
+                &self.project_dir,
+            );
+            return;
+        }
+        if let Some(previous) = current.take() {
+            crate::provider_automations::end_provider_session(&self.agent_id, &previous);
+        }
+        crate::provider_automations::begin_provider_session(
+            &self.agent_id,
+            session_id,
+            &self.project_dir,
+        );
+        *current = Some(session_id.to_owned());
+    }
+
+    fn observe_provider_schedule(&self, update: &Value) {
+        let name = tool_name(update);
+        if !matches!(name.as_str(), "CronCreate" | "CronDelete" | "CronList") {
+            return;
+        }
+        let session_id = self
+            .provider_session_id
+            .lock()
+            .ok()
+            .and_then(|session| session.clone());
+        let Some(session_id) = session_id else {
+            return;
+        };
+        crate::provider_automations::observe_provider_schedule_tool(
+            &self.agent_id,
+            &session_id,
+            &name,
+            &tool_args(update),
+            &tool_result_text(update),
+            update.get("status").and_then(Value::as_str) == Some("failed"),
+        );
     }
 
     fn ensure_turn_locked(&self, turn: &mut TurnState) {
@@ -1273,27 +1648,26 @@ impl RuntimeState {
                 }
             }
             "plan" => {
+                // ACP resends the WHOLE plan on every change, so this must
+                // replace the previous one rather than append. It used to emit
+                // a fresh thinking_start/delta/end triple per update, which
+                // stacked one collapsed "Plan" blob per revision — a five-step
+                // plan touched five times left five of them in the transcript.
+                // Forward the entries structurally instead and let the desktop
+                // keep exactly one live plan block per turn.
+                //
+                // Closing an open thought first also matches every other arm;
+                // the old code was the only one that could emit thinking_start
+                // while a thought was already open.
+                self.close_thought_locked(&mut turn);
                 self.ensure_turn_locked(&mut turn);
-                let plan = update
-                    .get("entries")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|entry| {
-                        let content = entry.get("content")?.as_str()?;
-                        let prefix = match entry.get("status").and_then(Value::as_str) {
-                            Some("completed") => "✓",
-                            Some("in_progress") => "→",
-                            _ => "○",
-                        };
-                        Some(format!("{prefix} {content}"))
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if !plan.is_empty() {
-                    self.output.send(json!({ "type": "message_update", "assistantMessageEvent": { "type": "thinking_start" } }));
-                    self.output.send(json!({ "type": "message_update", "assistantMessageEvent": { "type": "thinking_delta", "delta": format!("Plan\n{plan}") } }));
-                    self.output.send(json!({ "type": "message_update", "assistantMessageEvent": { "type": "thinking_end" } }));
+                let entries = plan_entries(&update);
+                // An empty plan is a real signal (the agent cleared it), but
+                // there is nothing to show and emitting it would leave an empty
+                // card, so drop it rather than render a blank block.
+                if !entries.is_empty() {
+                    self.output
+                        .send(json!({ "type": "plan_update", "entries": entries }));
                 }
             }
             "tool_call" => {
@@ -1322,6 +1696,7 @@ impl RuntimeState {
                 }
                 self.output.send(start);
                 if update_status_finished(&update) {
+                    self.observe_provider_schedule(&update);
                     finish_tool(&self.output, &id, &update);
                     turn.active_tools.remove(&id);
                 }
@@ -1360,6 +1735,7 @@ impl RuntimeState {
                     self.output.send(start);
                 }
                 if update_status_finished(&merged) {
+                    self.observe_provider_schedule(&merged);
                     finish_tool(&self.output, &id, &merged);
                     turn.active_tools.remove(&id);
                 } else if let Some(progress) = tool_progress(&update) {
@@ -1511,6 +1887,16 @@ impl RuntimeState {
     /// Remove and return a terminal by id (release drops it from the map).
     fn take_terminal(&self, id: &str) -> Option<Arc<TerminalRecord>> {
         self.terminals.lock().ok().and_then(|mut map| map.remove(id))
+    }
+}
+
+impl Drop for RuntimeState {
+    fn drop(&mut self) {
+        if let Ok(session) = self.provider_session_id.get_mut() {
+            if let Some(session_id) = session.take() {
+                crate::provider_automations::end_provider_session(&self.agent_id, &session_id);
+            }
+        }
     }
 }
 
@@ -1713,6 +2099,40 @@ fn meta_tool_name(update: &Value) -> Option<&str> {
 
 // The ACP tool-call `kind` category, forwarded so the desktop can label native
 // agent tools by kind when their title isn't a recognized tool name.
+/// Structured entries for an ACP `plan` update.
+///
+/// ACP redelivers the whole plan whenever any step changes, so the desktop
+/// replaces its single plan block with this list rather than appending. Kept
+/// pure so the mapping is testable without a live agent connection.
+///
+/// Entries with no usable content are dropped, and an unknown or absent status
+/// becomes `pending` — the ACP default, and the safest thing to show for a step
+/// that has not started.
+fn plan_entries(update: &Value) -> Vec<Value> {
+    update
+        .get("entries")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let content = entry.get("content")?.as_str()?.trim();
+            if content.is_empty() {
+                return None;
+            }
+            let status = match entry.get("status").and_then(Value::as_str) {
+                Some("completed") => "completed",
+                Some("in_progress") => "in_progress",
+                _ => "pending",
+            };
+            let mut mapped = json!({ "content": content, "status": status });
+            if let Some(priority) = entry.get("priority").and_then(Value::as_str) {
+                mapped["priority"] = json!(priority);
+            }
+            Some(mapped)
+        })
+        .collect()
+}
+
 fn tool_kind(update: &Value) -> Option<String> {
     update
         .get("kind")
@@ -1740,14 +2160,18 @@ fn update_status_finished(update: &Value) -> bool {
     )
 }
 
-fn finish_tool(output: &ParentOutput, id: &str, update: &Value) {
-    let is_error = update.get("status").and_then(Value::as_str) == Some("failed");
-    let mut result = update
+fn tool_result_text(update: &Value) -> String {
+    update
         .get("content")
         .filter(|value| value.as_array().is_some_and(|items| !items.is_empty()))
         .or_else(|| update.get("rawOutput"))
         .and_then(|value| content_text(Some(value)))
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+fn finish_tool(output: &ParentOutput, id: &str, update: &Value) {
+    let is_error = update.get("status").and_then(Value::as_str) == Some("failed");
+    let mut result = tool_result_text(update);
     if result.trim().is_empty() {
         // Some adapters report completion with neither content nor rawOutput; a
         // minimal summary reads better than an empty result card.
@@ -2077,6 +2501,40 @@ fn engine_api_url() -> Option<String> {
     })
 }
 
+/// Deliberately narrow environment for third-party portable extension
+/// processes. Provider credentials and the Screenpipe cloud JWT stay in the
+/// ACP runtime/agent; an installed extension receives only local Screenpipe
+/// access plus the process basics Bun needs on each platform.
+fn extension_mcp_env() -> Vec<(String, String)> {
+    let mut env = Vec::new();
+    for name in [
+        "HOME",
+        "USERPROFILE",
+        "PATH",
+        "SHELL",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "LANG",
+        "LC_ALL",
+    ] {
+        if let Ok(value) = std::env::var(name) {
+            env.push((name.to_string(), value));
+        }
+    }
+    env.push(("NO_COLOR".into(), "1".into()));
+    if let Some(url) = engine_api_url() {
+        env.push(("SCREENPIPE_API_URL".into(), url));
+    }
+    if let Some(key) = env_nonempty("SCREENPIPE_LOCAL_API_KEY") {
+        env.push(("SCREENPIPE_LOCAL_API_KEY".into(), key));
+    }
+    if let Some(chat_id) = env_nonempty("SCREENPIPE_CHAT_SESSION_ID") {
+        env.push(("SCREENPIPE_CHAT_SESSION_ID".into(), chat_id));
+    }
+    env
+}
+
 fn mcp_servers(config: &RuntimeConfig) -> Vec<McpServer> {
     let mut servers: Vec<McpServer> = Vec::new();
 
@@ -2123,6 +2581,20 @@ fn mcp_servers(config: &RuntimeConfig) -> Vec<McpServer> {
                     .args(vec![tools_server.to_string_lossy().into_owned()])
                     .env(tools_env),
             ));
+        }
+        // Installed Pi packages may opt into the portable ACP subset by
+        // declaring a Screenpipe MCP entrypoint. A native launcher clears the
+        // inherited environment before Bun imports package code, then exposes
+        // one stdio server per package; arbitrary Pi hooks remain native to Pi.
+        // pi-acp runs the same isolated Pi installation and loads the package
+        // natively, so mounting its portable surface again would duplicate
+        // tools. Every non-Pi ACP agent receives the middleware form.
+        if config.agent_id != "pi-acp" {
+            servers.extend(
+                config
+                    .extension_middleware
+                    .stdio_servers(&config.bun_path, &extension_mcp_env()),
+            );
         }
     }
     // Forward the user's own registered MCP servers so every harness sees
@@ -2251,6 +2723,18 @@ fn spawn_http_mcp_servers(config: &RuntimeConfig) -> Vec<std::process::Child> {
             }
             Err(error) => eprintln!("[acp-runtime] core http mcp server failed to start: {error}"),
         }
+    }
+
+    // Cursor and Copilot reject client stdio MCP declarations. Portable
+    // package entrypoints use the same manifest but switch transports through
+    // the documented SCREENPIPE_MCP_* environment contract.
+    for (child, name, url) in config.extension_middleware.spawn_http_servers(
+        &config.bun_path,
+        &extension_mcp_env(),
+        free_loopback_port,
+    ) {
+        children.push(child);
+        urls.push((name, url));
     }
 
     let _ = HTTP_MCP_URLS.set(urls);
@@ -3085,6 +3569,7 @@ async fn run_protocol(
             );
             let (mut session, resumed) =
                 open_or_resume_session(&connection, &state, &init, &config).await?;
+            state.replace_provider_session(&session.session_id.to_string());
             // The agent is up (any first-run download finished) — clear the
             // "downloading" hint before announcing readiness.
             state.output.send(json!({
@@ -3209,6 +3694,7 @@ async fn run_protocol(
                                     match create_session_with_auth(&connection, &state, &init, &config).await {
                                         Ok(new_session) => {
                                             session = new_session;
+                                            state.replace_provider_session(&session.session_id.to_string());
                                             state.reset_system_context(config.system_context.clone());
                                             apply_session_defaults(&connection, &config, &mut session).await;
                                             send_session_config(&state.output, &config.agent_id, &session);
@@ -3744,9 +4230,22 @@ mod tests {
             preferred_auth_method: None,
             system_context: None,
             session_defaults: SessionDefaults::default(),
+            extension_middleware: AcpExtensionMiddleware::default(),
             user_mcp_servers: Vec::new(),
             resume_session_id: None,
         }
+    }
+
+    #[test]
+    fn screenpipe_mcp_pin_matches_workspace_package_version() {
+        let package: Value = serde_json::from_str(include_str!(
+            "../../../../packages/screenpipe-mcp/package.json"
+        ))
+        .expect("parse screenpipe-mcp package.json");
+        let version = package["version"]
+            .as_str()
+            .expect("screenpipe-mcp package version");
+        assert_eq!(SCREENPIPE_MCP_PKG, format!("screenpipe-mcp@{version}"));
     }
 
     #[test]
@@ -3770,21 +4269,46 @@ mod tests {
     #[test]
     fn install_status_only_gates_binary_agents() {
         // npx agents run via the bundled bun — never gated on a user install.
-        let (requires, installed, _, _) = agent_install_status("codex-acp");
+        let (requires, installed, _, _, can_install) = agent_install_status("codex-acp");
         assert!(!requires);
         assert!(installed);
+        assert!(!can_install);
 
         // Binary agents require the CLI on PATH (installed value is env-specific)
         // and surface their install URL (installUrl in agents.json).
-        let (requires, _, command, install_url) = agent_install_status("opencode");
+        let (requires, _, command, install_url, can_install) = agent_install_status("opencode");
         assert!(requires);
         assert_eq!(command.as_deref(), Some("opencode"));
         assert_eq!(install_url.as_deref(), Some("https://opencode.ai"));
+        assert!(!can_install);
+
+        // Cursor opts into the in-app installer on platforms that can execute
+        // its official bash installer. Native Windows keeps the website flow.
+        let (requires, _, command, _, can_install) = agent_install_status("cursor");
+        assert!(requires);
+        assert_eq!(command.as_deref(), Some("cursor-agent"));
+        assert_eq!(can_install, cfg!(unix));
 
         // Unknown ids don't gate.
-        let (requires, installed, _, _) = agent_install_status("not-a-real-agent");
+        let (requires, installed, _, _, can_install) = agent_install_status("not-a-real-agent");
         assert!(!requires);
         assert!(installed);
+        assert!(!can_install);
+    }
+
+    #[test]
+    fn automatic_installer_only_trusts_the_exact_cursor_endpoint() {
+        for url in [
+            "http://cursor.com/install",
+            "https://cursor.com.evil.example/install",
+            "https://cursor.com/other",
+            "https://cursor.com/install?next=evil",
+        ] {
+            assert!(!trusted_installer_url(&reqwest::Url::parse(url).unwrap()));
+        }
+        assert!(trusted_installer_url(
+            &reqwest::Url::parse("https://cursor.com/install").unwrap()
+        ));
     }
 
     #[test]
@@ -3793,6 +4317,19 @@ mod tests {
         assert!(is_forbidden_acp_env("screenpipe_api_key"));
         assert!(!is_forbidden_acp_env("SCREENPIPE_LOCAL_API_KEY"));
         assert!(!is_forbidden_acp_env("ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
+    fn portable_extensions_receive_only_local_screenpipe_access() {
+        let names = extension_mcp_env()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<std::collections::HashSet<_>>();
+
+        assert!(!names.contains("SCREENPIPE_API_KEY"));
+        assert!(!names.contains("OPENAI_API_KEY"));
+        assert!(!names.contains("ANTHROPIC_API_KEY"));
+        assert!(names.contains("NO_COLOR"));
     }
 
     #[test]
@@ -4088,16 +4625,111 @@ mod tests {
     }
 
     #[test]
+    fn portable_package_middleware_mounts_everywhere_except_native_pi() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let package = dir.path().join("npm/node_modules/portable-pi");
+        std::fs::create_dir_all(package.join("dist")).expect("package dir");
+        std::fs::write(package.join("dist/mcp.mjs"), "// MCP server").expect("entrypoint");
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"screenpipe":{"acp":{"mcpServer":"./dist/mcp.mjs"}}}"#,
+        )
+        .expect("package manifest");
+        std::fs::write(
+            dir.path().join("settings.json"),
+            r#"{"packages":["npm:portable-pi"]}"#,
+        )
+        .expect("Pi settings");
+
+        let mut config = runtime_config("claude-acp");
+        config.project_dir = dir.path().join("project");
+        config.extension_middleware = AcpExtensionMiddleware::discover_in(dir.path());
+        let names = |config: &RuntimeConfig| {
+            mcp_servers(config)
+                .into_iter()
+                .filter_map(|server| match server {
+                    McpServer::Stdio(stdio) => Some(stdio.name),
+                    McpServer::Http(_) => None,
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        assert!(names(&config)
+            .iter()
+            .any(|name| name == "pi-extension-portable-pi"));
+        config.agent_id = "pi-acp".into();
+        assert!(!names(&config)
+            .iter()
+            .any(|name| name == "pi-extension-portable-pi"));
+    }
+
+    #[test]
     fn first_turn_context_always_includes_the_tools_hint() {
         // With no user system prompt, the first-turn context is just the hint.
-        let none = build_first_turn_context(None);
+        let none = build_first_turn_context(None, None);
         assert!(none.contains("screenpipe_connect_app"));
         assert!(none.contains("save_artifact"));
+        assert!(none.contains(".pi/skills/*/SKILL.md"));
+        assert!(
+            none.contains("today\" is the user's local calendar day starting at local midnight")
+        );
+        assert!(none.contains("not UTC midnight or a rolling 24 hours"));
 
-        // With a user prompt, the hint is prepended and the prompt preserved.
-        let combined = build_first_turn_context(Some("Be terse.".to_string()));
+        // Durable instructions sit after the built-in tool contract, while an
+        // explicit preset prompt remains last.
+        let combined = build_first_turn_context(
+            Some("# screenpipe user instructions\n\nUse the weekly-report skill.".to_string()),
+            Some("Be terse.".to_string()),
+        );
         assert!(combined.contains("sp_web_search"));
+        assert!(combined.contains("Use the weekly-report skill."));
+        assert!(
+            combined.find("sp_web_search")
+                < combined.find("Use the weekly-report skill.")
+        );
         assert!(combined.trim_end().ends_with("Be terse."));
+    }
+
+    #[test]
+    fn screenpipe_agents_file_is_loaded_with_override_precedence() {
+        let data_dir = tempfile::tempdir().expect("data dir");
+        std::fs::write(data_dir.path().join("AGENTS.md"), "Use normal guidance.\n")
+            .expect("write AGENTS.md");
+
+        let normal = load_screenpipe_agents_context(data_dir.path()).expect("normal guidance");
+        assert!(normal.contains("AGENTS.md"));
+        assert!(normal.contains("Use normal guidance."));
+
+        std::fs::write(
+            data_dir.path().join("AGENTS.override.md"),
+            "Use temporary guidance.\n",
+        )
+        .expect("write override");
+        let overridden =
+            load_screenpipe_agents_context(data_dir.path()).expect("override guidance");
+        assert!(overridden.contains("AGENTS.override.md"));
+        assert!(overridden.contains("Use temporary guidance."));
+        assert!(!overridden.contains("Use normal guidance."));
+
+        // An empty temporary override must not hide the durable file.
+        std::fs::write(data_dir.path().join("AGENTS.override.md"), "\n")
+            .expect("empty override");
+        let fallback = load_screenpipe_agents_context(data_dir.path()).expect("fallback guidance");
+        assert!(fallback.contains("AGENTS.md"));
+        assert!(fallback.contains("Use normal guidance."));
+    }
+
+    #[test]
+    fn screenpipe_agents_file_is_optional_and_bounded() {
+        let data_dir = tempfile::tempdir().expect("data dir");
+        assert!(load_screenpipe_agents_context(data_dir.path()).is_none());
+
+        let oversized = "x".repeat(SCREENPIPE_AGENTS_MAX_BYTES as usize + 512);
+        std::fs::write(data_dir.path().join("AGENTS.md"), oversized).expect("write AGENTS.md");
+        let context = load_screenpipe_agents_context(data_dir.path()).expect("bounded guidance");
+        assert!(context.contains("truncated this instructions file at 32 KiB"));
+        assert!(!context.contains(&"x".repeat(SCREENPIPE_AGENTS_MAX_BYTES as usize + 1)));
     }
 
     #[test]
@@ -4193,6 +4825,7 @@ mod tests {
     fn test_state(output: &ParentOutput) -> RuntimeState {
         RuntimeState {
             output: output.clone(),
+            agent_id: "test-agent".to_owned(),
             project_dir: PathBuf::from("/tmp"),
             turn: Mutex::new(TurnState {
                 prompt_in_flight: true,
@@ -4201,6 +4834,7 @@ mod tests {
             ui_waiters: Mutex::new(HashMap::new()),
             terminals: Mutex::new(HashMap::new()),
             system_context: Mutex::new(None),
+            provider_session_id: Mutex::new(None),
         }
     }
 
@@ -4442,6 +5076,56 @@ mod tests {
         );
         assert_eq!(tool_call_id(&json!({ "toolCallId": "\n\t" })), None);
         assert_eq!(tool_call_id(&json!({})), None);
+    }
+
+    #[test]
+    fn plan_entries_are_forwarded_structurally_not_flattened_to_text() {
+        // Regression: the plan used to be joined into a "✓/→/○" string and
+        // pushed through the thinking channel, so every redelivery stacked
+        // another collapsed copy in the transcript.
+        let entries = plan_entries(&json!({
+            "entries": [
+                { "content": "read the file", "status": "completed" },
+                { "content": "edit it", "status": "in_progress", "priority": "high" },
+                { "content": "verify", "status": "pending" },
+            ]
+        }));
+        assert_eq!(
+            entries,
+            vec![
+                json!({ "content": "read the file", "status": "completed" }),
+                json!({ "content": "edit it", "status": "in_progress", "priority": "high" }),
+                json!({ "content": "verify", "status": "pending" }),
+            ]
+        );
+    }
+
+    #[test]
+    fn plan_entries_default_unknown_status_to_pending_and_drop_empty_content() {
+        let entries = plan_entries(&json!({
+            "entries": [
+                { "content": "no status" },
+                { "content": "weird", "status": "banana" },
+                { "content": "   " },
+                { "status": "completed" },
+                { "content": "  trimmed  ", "status": "completed" },
+            ]
+        }));
+        assert_eq!(
+            entries,
+            vec![
+                json!({ "content": "no status", "status": "pending" }),
+                json!({ "content": "weird", "status": "pending" }),
+                json!({ "content": "trimmed", "status": "completed" }),
+            ]
+        );
+    }
+
+    #[test]
+    fn plan_entries_are_empty_when_the_update_carries_none() {
+        assert!(plan_entries(&json!({})).is_empty());
+        assert!(plan_entries(&json!({ "entries": [] })).is_empty());
+        assert!(plan_entries(&json!({ "entries": "nope" })).is_empty());
     }
 
     #[test]

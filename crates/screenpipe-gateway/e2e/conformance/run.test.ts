@@ -21,22 +21,31 @@
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/supabase", async () => (await import("./targets/hosted-inproc")).supabaseMock());
-vi.mock("@/lib/enterprise/storage", async () =>
-  (await import("./targets/hosted-inproc")).storageMock()
+vi.mock("@/lib/supabase", async () =>
+  (await import("./targets/hosted-inproc")).supabaseMock(),
 );
-vi.mock("@/lib/enterprise/audit", async () => (await import("./targets/hosted-inproc")).auditMock());
+vi.mock("@/lib/enterprise/storage", async () =>
+  (await import("./targets/hosted-inproc")).storageMock(),
+);
+vi.mock("@/lib/enterprise/audit", async () =>
+  (await import("./targets/hosted-inproc")).auditMock(),
+);
 vi.mock("@/lib/enterprise/artifacts/store", async () =>
-  (await import("./targets/hosted-inproc")).artifactsStoreMock()
+  (await import("./targets/hosted-inproc")).artifactsStoreMock(),
 );
 vi.mock("@/lib/enterprise/auth", async () =>
-  (await import("./targets/hosted-inproc")).enterpriseAuthMock()
+  (await import("./targets/hosted-inproc")).enterpriseAuthMock(),
 );
 vi.mock("@clerk/backend", () => ({ verifyToken: vi.fn() }));
 vi.mock("@clerk/nextjs/server", () => ({ clerkClient: vi.fn() }));
 
 import { cases, type Case } from "./cases";
-import { ALL_SCOPES_TOKEN, EXPECTED, LICENSE_ID, SEEDED_WINDOW } from "./fixtures";
+import {
+  ALL_SCOPES_TOKEN,
+  EXPECTED,
+  LICENSE_ID,
+  SEEDED_WINDOW,
+} from "./fixtures";
 import {
   contentTypeFor,
   operationFor,
@@ -58,7 +67,9 @@ beforeAll(() => {
   process.env.SUPABASE_SERVICE_KEY ||= "conformance-service-key";
 });
 
-async function send(req: Parameters<typeof import("./targets/http").request>[0]) {
+async function send(
+  req: Parameters<typeof import("./targets/http").request>[0],
+) {
   if (activeTarget() === "http") {
     return (await import("./targets/http")).request(req);
   }
@@ -72,7 +83,8 @@ async function send(req: Parameters<typeof import("./targets/http").request>[0])
  * catch-all routes are templated in the spec and concrete in a case.
  */
 function specPathFor(path: string): string {
-  if (path.startsWith("/api/enterprise/v1/files/")) return "/api/enterprise/v1/files/{key}";
+  if (path.startsWith("/api/enterprise/v1/files/"))
+    return "/api/enterprise/v1/files/{key}";
   if (path.startsWith("/api/enterprise/v1/frames/")) {
     return "/api/enterprise/v1/frames/{device_id}/{frame_id}";
   }
@@ -101,20 +113,25 @@ async function check(c: Case) {
   const raw = await res.clone().text();
   expect(
     res.status,
-    `${method} ${c.path} -> ${res.status}, body: ${raw.slice(0, 400)}`
+    `${method} ${c.path} -> ${res.status}, body: ${raw.slice(0, 400)}`,
   ).toBe(c.expectStatus);
 
   // 2. Content type, exactly as the spec declares it for this status.
   const declared = contentTypeFor(method, specPath, c.expectStatus);
   const actual = (res.headers.get("content-type") ?? "").split(";")[0].trim();
-  expect(actual, `${method} ${c.path} ${c.expectStatus} content-type`).toBe(declared);
+  expect(actual, `${method} ${c.path} ${c.expectStatus} content-type`).toBe(
+    declared,
+  );
 
   // 3. Required response headers.
   for (const [name, schema] of Object.entries<any>(
-    requiredHeaders(method, specPath, c.expectStatus)
+    requiredHeaders(method, specPath, c.expectStatus),
   )) {
     const value = res.headers.get(name);
-    expect(value, `${method} ${c.path}: required header '${name}' is missing`).not.toBeNull();
+    expect(
+      value,
+      `${method} ${c.path}: required header '${name}' is missing`,
+    ).not.toBeNull();
     if (schema.schema?.const !== undefined) {
       expect(value, `header '${name}'`).toBe(schema.schema.const);
     }
@@ -129,7 +146,7 @@ async function check(c: Case) {
     expect(
       ok,
       `${method} ${c.path} ${c.expectStatus} does not match the spec:\n${validate.errorText()}\n` +
-        `body: ${JSON.stringify(body).slice(0, 600)}`
+        `body: ${JSON.stringify(body).slice(0, 600)}`,
     ).toBe(true);
   }
 
@@ -140,7 +157,9 @@ async function check(c: Case) {
   return { res, body, raw };
 }
 
-const applicable = cases.filter((c) => (c.targets ?? ["hosted", "gateway"]).includes(impl));
+const applicable = cases.filter((c) =>
+  (c.targets ?? ["hosted", "gateway"]).includes(impl),
+);
 
 describe(`conformance [${activeTarget()} / impl=${impl}]`, () => {
   it("has cases to run (an empty run must never look like a pass)", () => {
@@ -152,6 +171,106 @@ describe(`conformance [${activeTarget()} / impl=${impl}]`, () => {
       await check(c);
     });
   }
+});
+
+describe(`keyset pagination [${impl}]`, () => {
+  it.each([
+    [
+      "devices",
+      "/api/enterprise/v1/devices",
+      { pagination: "keyset", limit: "1" },
+      "devices",
+    ],
+    [
+      "search",
+      "/api/enterprise/v1/search",
+      {
+        q: "roadmap",
+        since: SEEDED_WINDOW.since,
+        until: SEEDED_WINDOW.until,
+        pagination: "keyset",
+        limit: "1",
+      },
+      "results",
+    ],
+    [
+      "records",
+      "/api/enterprise/v1/records",
+      {
+        since: SEEDED_WINDOW.since,
+        until: SEEDED_WINDOW.until,
+        pagination: "keyset",
+        limit: "3",
+      },
+      "records",
+    ],
+    [
+      "files",
+      "/api/enterprise/v1/files",
+      { since: SEEDED_WINDOW.since, page_size: "1" },
+      "files",
+    ],
+  ])(
+    "%s follows the returned opaque cursor without repeating a row",
+    async (name, path, query, field) => {
+      const first = await send({ path, query, headers: authHeader() });
+      expect(first.status, await first.clone().text()).toBe(200);
+      const firstBody = await first.json();
+      expect(firstBody.next_cursor).toEqual(expect.any(String));
+      if (name !== "files" || impl === "gateway") {
+        expect(firstBody.next_cursor).not.toMatch(/^\d+$/);
+      }
+
+      const second = await send({
+        path,
+        query: { ...query, cursor: firstBody.next_cursor },
+        headers: authHeader(),
+      });
+      expect(second.status, await second.clone().text()).toBe(200);
+      const secondBody = await second.json();
+      const identity = (row: any) =>
+        row.kind === undefined
+          ? (row.key ?? row.device_id)
+          : [
+              row.device_id,
+              row.kind,
+              row.t,
+              row.frame_id,
+              row.memory_id,
+              row.text,
+              row.transcription,
+            ].join("|");
+      expect(firstBody[field].map(identity)).not.toContain(
+        secondBody[field][0] && identity(secondBody[field][0]),
+      );
+    },
+  );
+
+  it("binds a cursor to its original filters", async () => {
+    const first = await send({
+      path: "/api/enterprise/v1/search",
+      query: {
+        q: "roadmap",
+        ...SEEDED_WINDOW,
+        pagination: "keyset",
+        limit: "1",
+      },
+      headers: authHeader(),
+    });
+    const body = await first.json();
+    const reused = await send({
+      path: "/api/enterprise/v1/search",
+      query: {
+        q: "different",
+        ...SEEDED_WINDOW,
+        pagination: "keyset",
+        limit: "1",
+        cursor: body.next_cursor,
+      },
+      headers: authHeader(),
+    });
+    expect(reused.status).toBe(400);
+  });
 });
 
 /**
@@ -171,9 +290,14 @@ describe(`binary routes [${impl}]`, () => {
     expect(files.length).toBe(EXPECTED.batchObjects);
     const key: string = files[0].key;
 
-    const res = await send({ path: `/api/enterprise/v1/files/${key}`, headers: authHeader() });
+    const res = await send({
+      path: `/api/enterprise/v1/files/${key}`,
+      headers: authHeader(),
+    });
     expect(res.status, await res.clone().text()).toBe(200);
-    expect((res.headers.get("content-type") ?? "").split(";")[0]).toBe("application/x-ndjson");
+    expect((res.headers.get("content-type") ?? "").split(";")[0]).toBe(
+      "application/x-ndjson",
+    );
     // The spec marks this header required — it is how a consumer knows WHICH
     // object it got when it followed a cursor.
     expect(res.headers.get("x-screenpipe-source")).toBe(key);
@@ -181,9 +305,11 @@ describe(`binary routes [${impl}]`, () => {
     // The bytes are the wire format, not a re-serialization.
     const text = await res.text();
     const lines = text.trim().split("\n");
-    expect(lines.length).toBe(6); // 2 frames + 1 parsed + 1 audio + 1 ui + 1 memory
+    expect(lines.length).toBe(7); // the six in-window records + one stale record
     const kinds = lines.map((l) => JSON.parse(l).kind);
-    expect(new Set(kinds)).toEqual(new Set(["frame", "parsed", "audio", "ui", "memory"]));
+    expect(new Set(kinds)).toEqual(
+      new Set(["frame", "parsed", "audio", "ui", "memory"]),
+    );
     for (const line of lines) {
       const rec = JSON.parse(line);
       expect(EXPECTED.deviceIds).toContain(rec.device_id);
@@ -202,12 +328,14 @@ describe(`binary routes [${impl}]`, () => {
         headers: authHeader(),
       });
       expect(res.status, await res.clone().text()).toBe(200);
-      expect((res.headers.get("content-type") ?? "").split(";")[0]).toBe("image/jpeg");
+      expect((res.headers.get("content-type") ?? "").split(";")[0]).toBe(
+        "image/jpeg",
+      );
       expect(res.headers.get("cache-control")).toBe("private, max-age=3600");
       const bytes = new Uint8Array(await res.arrayBuffer());
       // A real JPEG SOI marker, so a JSON error body cannot pass as an image.
       expect([bytes[0], bytes[1]]).toEqual([0xff, 0xd8]);
-    }
+    },
   );
 });
 
@@ -218,43 +346,62 @@ describe(`binary routes [${impl}]`, () => {
  * This is the SCR-288 divergence-11 fix, asserted at the surface rather than the
  * unit: every content scope refuses, and the two hand-rolled routes refuse too.
  */
-describe.runIf(activeTarget() === "hosted-inproc")("write-only archive (hosted only)", () => {
-  beforeEach(async () => {
-    const { posture } = await import("./targets/hosted-inproc");
-    posture.writeOnlyArchive = true;
-  });
+describe.runIf(activeTarget() === "hosted-inproc")(
+  "write-only archive (hosted only)",
+  () => {
+    beforeEach(async () => {
+      const { posture } = await import("./targets/hosted-inproc");
+      posture.writeOnlyArchive = true;
+    });
 
-  const contentRoutes: Array<[string, string, Record<string, string> | undefined]> = [
-    ["GET", "/api/enterprise/v1/search", { q: "roadmap" }],
-    ["GET", "/api/enterprise/v1/records", undefined],
-    ["GET", "/api/enterprise/v1/files", undefined],
-    ["GET", "/api/enterprise/v1/rollups", undefined],
-    ["GET", "/api/enterprise/v1/workflows/generated", undefined],
-    [
-      "GET",
-      `/api/enterprise/v1/files/enterprise-telemetry/${LICENSE_ID}/dev-alice/direct/batch-alice.jsonl`,
-      undefined,
-    ],
-    ["GET", "/api/enterprise/v1/frames/dev-alice/1", undefined],
-  ];
+    const contentRoutes: Array<
+      [string, string, Record<string, string> | undefined]
+    > = [
+      ["GET", "/api/enterprise/v1/search", { q: "roadmap" }],
+      ["GET", "/api/enterprise/v1/records", undefined],
+      ["GET", "/api/enterprise/v1/files", undefined],
+      ["GET", "/api/enterprise/v1/rollups", undefined],
+      ["GET", "/api/enterprise/v1/workflows/generated", undefined],
+      [
+        "GET",
+        `/api/enterprise/v1/files/enterprise-telemetry/${LICENSE_ID}/dev-alice/direct/batch-alice.jsonl`,
+        undefined,
+      ],
+      ["GET", "/api/enterprise/v1/frames/dev-alice/1", undefined],
+    ];
 
-  it.each(contentRoutes)("%s %s refuses with a typed 409", async (method, path, query) => {
-    const { request } = await import("./targets/hosted-inproc");
-    const res = await request({ method, path, query, headers: authHeader() });
-    const raw = await res.clone().text();
-    expect(res.status, `${path} -> ${res.status}: ${raw.slice(0, 300)}`).toBe(409);
-    const validate = validatorFor(method, specPathFor(path), 409)!;
-    const body = JSON.parse(raw);
-    expect(validate(body), validate.errorText()).toBe(true);
-    expect(body.code).toBe("write_only_archive");
-    expect(body.surface).toBe("hosted_api");
-    // The whole point of the denial is to route the caller somewhere useful.
-    expect(body.gateway_url).toBeTruthy();
-  });
+    it.each(contentRoutes)(
+      "%s %s refuses with a typed 409",
+      async (method, path, query) => {
+        const { request } = await import("./targets/hosted-inproc");
+        const res = await request({
+          method,
+          path,
+          query,
+          headers: authHeader(),
+        });
+        const raw = await res.clone().text();
+        expect(
+          res.status,
+          `${path} -> ${res.status}: ${raw.slice(0, 300)}`,
+        ).toBe(409);
+        const validate = validatorFor(method, specPathFor(path), 409)!;
+        const body = JSON.parse(raw);
+        expect(validate(body), validate.errorText()).toBe(true);
+        expect(body.code).toBe("write_only_archive");
+        expect(body.surface).toBe("hosted_api");
+        // The whole point of the denial is to route the caller somewhere useful.
+        expect(body.gateway_url).toBeTruthy();
+      },
+    );
 
-  it("does NOT refuse /devices — fleet metadata is control-plane, not content", async () => {
-    const { request } = await import("./targets/hosted-inproc");
-    const res = await request({ path: "/api/enterprise/v1/devices", headers: authHeader() });
-    expect(res.status).toBe(200);
-  });
-});
+    it("does NOT refuse /devices — fleet metadata is control-plane, not content", async () => {
+      const { request } = await import("./targets/hosted-inproc");
+      const res = await request({
+        path: "/api/enterprise/v1/devices",
+        headers: authHeader(),
+      });
+      expect(res.status).toBe(200);
+    });
+  },
+);

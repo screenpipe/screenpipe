@@ -39,6 +39,7 @@ const CONNECT_ALL_TOOL_IDS = [
   "cursor",
   "openclaw",
   "hermes",
+  "runner",
   "windsurf",
 ] as const;
 export type ConnectAllToolId = (typeof CONNECT_ALL_TOOL_IDS)[number];
@@ -49,6 +50,7 @@ export const CONNECT_ALL_TOOL_NAMES: Record<ConnectAllToolId, string> = {
   cursor: "Cursor",
   openclaw: "OpenClaw",
   hermes: "Hermes",
+  runner: "Runner",
   // Windsurf was rebranded to Devin Desktop (Cognition, June 2026) but the
   // config stayed at ~/.codeium/windsurf — show both names so users on either
   // side of the OTA update recognize it.
@@ -57,7 +59,7 @@ export const CONNECT_ALL_TOOL_NAMES: Record<ConnectAllToolId, string> = {
 
 // Skills support per tool lives in the disconnect-all component's
 // SKILLS_TARGET map: claude/codex/openclaw/hermes read SKILL.md skills,
-// cursor and windsurf are MCP-only. Grok is intentionally not in this matrix:
+// cursor, runner, and windsurf are MCP-only. Grok is intentionally not in this matrix:
 // it isn't part of connect-all and its settings panel has its own disconnect.
 
 export async function detectAiTools(): Promise<ConnectAllToolId[]> {
@@ -77,6 +79,7 @@ export async function detectAiTools(): Promise<ConnectAllToolId[]> {
     // settings remote agent card.
     ["openclaw", async () => exists(await join(home, ".openclaw"))],
     ["hermes", async () => exists(await join(home, ".hermes"))],
+    ["runner", async () => exists(await join(home, ".runner"))],
     ["windsurf", async () => exists(await join(home, ".codeium", "windsurf"))],
   ];
 
@@ -508,12 +511,44 @@ export async function uninstallWindsurfMcp(): Promise<void> {
   await removeScreenpipeFromJsonConfig(await getWindsurfMcpConfigPath());
 }
 
+// ─── Runner ──────────────────────────────────────────────────────────────────
+// Runner loads global local MCP servers from ~/.runner/mcp.json. Local
+// subprocess entries require type: "stdio"; Runner's per-workspace Local MCP
+// Servers setting remains an explicit user-controlled permission.
+
+export async function getRunnerMcpConfigPath(): Promise<string> {
+  const home = await homeDir();
+  return join(home, ".runner", "mcp.json");
+}
+
+export async function isRunnerMcpInstalled(): Promise<boolean> {
+  try {
+    const content = await readTextFile(await getRunnerMcpConfigPath());
+    return JSON.parse(content)?.mcpServers?.screenpipe?.type === "stdio";
+  } catch { return false; }
+}
+
+export async function installRunnerMcp(): Promise<McpCommand> {
+  const configPath = await getRunnerMcpConfigPath();
+  const config = await readJsonConfigStrict(configPath);
+  const mcp = await buildMcpConfig({ client: "runner" });
+  if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
+  (config.mcpServers as Record<string, unknown>).screenpipe = { type: "stdio", ...mcp };
+  await writeJsonConfig(configPath, config);
+  return mcp;
+}
+
+export async function uninstallRunnerMcp(): Promise<void> {
+  await removeScreenpipeFromJsonConfig(await getRunnerMcpConfigPath());
+}
+
 // ─── Transactional Settings connect / disconnect orchestrators (#5291) ──────
 
-// Tools whose agent reads global SKILL.md skills. Windsurf (Devin Desktop)
-// only discovers skills per-project (docs.devin.ai/product-guides/skills),
-// so it stays MCP-only. Grok is not in the matrix: it isn't part of
-// connect-all and its settings panel has its own disconnect.
+// Tools whose agent reads global SKILL.md skills. Runner has no global skills
+// contract, and Windsurf (Devin Desktop) only discovers skills per-project
+// (docs.devin.ai/product-guides/skills), so both stay MCP-only. Grok is not in
+// the matrix: it isn't part of connect-all and its settings panel has its own
+// disconnect.
 export const SKILLS_TARGET: Partial<Record<ConnectAllToolId, ExternalAgentWithSkills>> = {
   claude: "claude",
   codex: "codex",
@@ -528,6 +563,7 @@ const INSTALL_MCP: Record<ConnectAllToolId, () => Promise<McpCommand>> = {
   cursor: installCursorMcp,
   openclaw: installOpenclawMcp,
   hermes: installHermesMcp,
+  runner: installRunnerMcp,
   windsurf: installWindsurfMcp,
 };
 
@@ -537,6 +573,7 @@ const UNINSTALL_MCP: Record<ConnectAllToolId, () => Promise<void>> = {
   cursor: uninstallCursorMcp,
   openclaw: uninstallOpenclawMcp,
   hermes: uninstallHermesMcp,
+  runner: uninstallRunnerMcp,
   windsurf: uninstallWindsurfMcp,
 };
 
@@ -662,6 +699,9 @@ export async function isToolConfigHealthy(id: ConnectAllToolId): Promise<boolean
         return true;
       case "windsurf":
         await readJsonConfigStrict(await getWindsurfMcpConfigPath());
+        return true;
+      case "runner":
+        await readJsonConfigStrict(await getRunnerMcpConfigPath());
         return true;
       case "codex":
         // The TOML merge is append-based and tolerates any content — only an

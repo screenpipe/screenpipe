@@ -4,6 +4,8 @@
 # Set TypeScript as secondary but still detected
 *.ts linguist-detectable=true
 *.ts linguist-language=TypeScript
+# Generated bindings are compared byte-for-byte and emitted with LF.
+apps/screenpipe-app-tauri/lib/utils/tauri.ts text eol=lf
 # Ignore build outputs and vendored code
 dist/* linguist-vendored
 target/* linguist-vendored

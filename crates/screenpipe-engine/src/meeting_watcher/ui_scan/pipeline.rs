@@ -241,9 +241,9 @@ pub(crate) async fn ending_keepalive(
     let in_ending = matches!(state, MeetingState::Ending { .. });
     let recent_output_chunk = in_ending && db.has_recent_output_audio(30).await.unwrap_or(false);
     // No detector wired (tests / detector disabled) -> default true.
-    let recent_voice_activity = detector.as_ref().map_or(true, |d| {
-        d.audio_active_within(AUDIO_GATE_WINDOW.as_millis() as u64)
-    });
+    let recent_voice_activity = detector
+        .as_ref()
+        .is_none_or(|d| d.audio_active_within(AUDIO_GATE_WINDOW.as_millis() as u64));
     let has_output_audio =
         output_audio_keeps_meeting_alive(recent_output_chunk, recent_voice_activity);
     // Same shared keep-alive helper as the no-apps path so the gating can't drift.

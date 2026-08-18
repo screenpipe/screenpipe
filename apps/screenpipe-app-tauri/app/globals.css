@@ -133,6 +133,15 @@
     --sidebar-border: 0 0% 80%;
     --sidebar-ring: 0 0% 0%;
 
+    /* Brand: phosphor intelligence (DESIGN.md).
+       Phosphor marks the boundary where captured work becomes model context or
+       an agent acts. It is not a generic accent — see the phosphor rules in
+       DESIGN.md before using these anywhere new. */
+    --phosphor: 77 100% 62%;          /* #C7FF3E */
+    --phosphor-strong: 79 100% 21%;   /* #4A6B00 — small text/borders on bone */
+    --phosphor-ink: 0 0% 2%;          /* foreground on a phosphor fill */
+    --trace: 60 4% 45%;               /* #78786F — captured evidence, inactive */
+
     /* Sharp corners - no radius */
     --radius: 0;
 
@@ -156,6 +165,13 @@
     color-scheme: dark;
 
     /* Base colors - Slightly lifted black */
+    /* Brand: phosphor reads brighter on ink, so the strong variant is only
+       needed on bone. On ink, phosphor itself is the small-text colour. */
+    --phosphor: 77 100% 62%;
+    --phosphor-strong: 77 100% 62%;
+    --phosphor-ink: 0 0% 2%;
+    --trace: 60 4% 56%;
+
     --background: 0 0% 7%; /* #121212 */
     --foreground: 0 0% 100%; /* #FFFFFF */
 
@@ -945,4 +961,31 @@
   float: left;
   height: 0;
   pointer-events: none;
+}
+
+/* Reduced motion — global safety net.
+   Individual components opt in today (`.meeting-listening-stick`,
+   `.sp-flow-dot`, `.sp-onboarding-*`), which means every animation added
+   since has to remember to. This catches the rest.
+
+   Durations collapse to 0.01ms rather than `animation: none`, deliberately:
+   `none` never fires `animationend`/`transitionend`, so anything awaiting
+   those events to advance a state machine would hang instead of finishing
+   instantly. Iteration count is left alone for the same reason — an
+   infinite liveness indicator keeps ticking, just imperceptibly, rather
+   than freezing on a frame and reading as "stuck".
+
+   Components needing a *meaningful* static fallback (a recording dot that
+   must still look live) keep their own rule; those still win on the
+   properties they set. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
 }

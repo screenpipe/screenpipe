@@ -8,6 +8,7 @@ import {
   aiProviderTypeSchema,
   extractAiProviderErrorMessage,
   GEMINI_OPENAI_BASE_URL,
+  normalizeAiModelId,
   shouldRequireAiPresetConnectionTest,
   validateAiModel,
   validateAiPresetConnectionFields,
@@ -83,6 +84,51 @@ describe("BYOK connection validation", () => {
     expect(
       validateAiModel("gemini-3.6-flash", "custom", GEMINI_OPENAI_BASE_URL),
     ).toEqual({ isValid: true });
+  });
+
+  // #5963: Gemini lists ids as `models/<name>`, but rejects that prefix on
+  // /chat/completions and validateAiModel refuses to save it. The model field
+  // is a picker, so a fetched id has to arrive already usable.
+  it("strips the Gemini models/ prefix so a fetched id passes validateAiModel", () => {
+    const listed = "models/gemini-2.5-flash";
+    expect(validateAiModel(listed, "custom", GEMINI_OPENAI_BASE_URL).isValid).toBe(
+      false,
+    );
+
+    const normalized = normalizeAiModelId(listed, GEMINI_OPENAI_BASE_URL);
+    expect(normalized).toBe("gemini-2.5-flash");
+    expect(
+      validateAiModel(normalized, "custom", GEMINI_OPENAI_BASE_URL),
+    ).toEqual({ isValid: true });
+  });
+
+  it("leaves already-clean Gemini ids untouched", () => {
+    expect(normalizeAiModelId("gemini-2.5-flash", GEMINI_OPENAI_BASE_URL)).toBe(
+      "gemini-2.5-flash",
+    );
+  });
+
+  it("strips only the leading segment, never an inner models/", () => {
+    expect(
+      normalizeAiModelId("models/tunedModels/models/x", GEMINI_OPENAI_BASE_URL),
+    ).toBe("tunedModels/models/x");
+  });
+
+  it("keeps models/-prefixed ids on non-Gemini endpoints", () => {
+    // Another gateway may legitimately namespace an id this way; only Gemini
+    // is known to reject its own prefix.
+    expect(normalizeAiModelId("models/llama-3", "https://gw.example.com/v1")).toBe(
+      "models/llama-3",
+    );
+    expect(normalizeAiModelId("models/llama-3", undefined)).toBe("models/llama-3");
+    expect(normalizeAiModelId("models/llama-3", "not a url")).toBe("models/llama-3");
+  });
+
+  it("trims surrounding whitespace and never returns an empty id", () => {
+    expect(normalizeAiModelId("  models/gemini-2.5-flash  ", GEMINI_OPENAI_BASE_URL))
+      .toBe("gemini-2.5-flash");
+    expect(normalizeAiModelId("models/", GEMINI_OPENAI_BASE_URL)).toBe("models/");
+    expect(normalizeAiModelId("", GEMINI_OPENAI_BASE_URL)).toBe("");
   });
 
   it("requires credentials for known BYOK providers but leaves generic custom auth optional", () => {

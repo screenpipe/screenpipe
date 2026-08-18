@@ -1695,7 +1695,17 @@ impl AudioManager {
             TranscriptionMode::Batch => "background",
         };
         let use_pii_removal = options.use_pii_removal;
-        let output_path = options.output_path.clone();
+        // `AudioManagerBuilder::validate` rejects a missing output path, so this
+        // is a resolve, not a real branch. Doing it here rather than deeper down
+        // means a dropped chunk+transcription insert always has somewhere to
+        // record itself for recovery — there is no arm left where the audio just
+        // disappears (SCREENPIPE-CLI-SN).
+        let Some(output_path) = options.output_path.clone() else {
+            drop(options);
+            anyhow::bail!(
+                "audio manager has no output path; refusing to start transcription without durable recovery"
+            );
+        };
         drop(options); // Release lock before spawning
         let metrics = self.metrics.clone();
         let on_insert = self.on_transcription_insert.clone();

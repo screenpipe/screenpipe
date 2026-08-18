@@ -4,7 +4,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { LockedSetting } from "@/components/enterprise-locked-setting";
+import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -248,7 +248,8 @@ export default function GeneralSettings() {
                   <p className="text-xs text-muted-foreground">Start in the background when you log in</p>
                 </div>
               </div>
-              <Switch
+              <ManagedSwitch
+                settingKey="autoStartEnabled"
                 id="auto-start-toggle"
                 checked={settings?.autoStartEnabled ?? false}
                 onCheckedChange={handleAutoStartChange}

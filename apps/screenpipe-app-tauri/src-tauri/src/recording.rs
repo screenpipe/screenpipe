@@ -504,6 +504,19 @@ async fn remember_active_meeting_for_capture_restart(state: &RecordingState) {
     *state.interrupted_meeting.lock().await = Some(interrupted);
 }
 
+/// Whether this restart interrupted a meeting recently enough to still be the
+/// same call. Read-only — the restore path is what consumes the entry.
+async fn has_fresh_interrupted_meeting(state: &RecordingState) -> bool {
+    state
+        .interrupted_meeting
+        .lock()
+        .await
+        .as_ref()
+        .is_some_and(|interrupted| {
+            interrupted.captured_at.elapsed() <= CAPTURE_RESTART_MEETING_REATTACH_WINDOW
+        })
+}
+
 async fn restore_interrupted_meeting_for_capture_restart(
     state: &RecordingState,
 ) -> Result<(), String> {
@@ -558,6 +571,26 @@ async fn restore_interrupted_meeting_for_capture_restart(
                 manual: true,
             }));
         }
+    }
+
+    // Reopening the row is not enough. The streaming coordinator only probes
+    // for an active meeting once, at startup, and the meeting watcher closes
+    // the row on shutdown and again on start — so that probe reliably finds
+    // nothing and the coordinator idles while the meeting is still running.
+    // Republishing makes the attach ordering-independent instead of racy.
+    if let Err(e) = screenpipe_events::send_event(
+        screenpipe_audio::meeting_streaming::MEETING_STREAMING_REATTACH_EVENT,
+        serde_json::json!({
+            "meeting_id": interrupted.id,
+            "app": interrupted.app,
+            "title": interrupted.title,
+            "detection_source": interrupted.detection_source,
+        }),
+    ) {
+        warn!(
+            "failed to republish interrupted meeting {} for live streaming: {}",
+            interrupted.id, e
+        );
     }
 
     info!(
@@ -720,7 +753,15 @@ async fn stop_screenpipe_inner(state: &RecordingState) -> Result<(), String> {
 
     // Stop capture first
     {
-        *state.interrupted_meeting.lock().await = None;
+        // Must run BEFORE `session.stop()`: the meeting watcher's shutdown hook
+        // closes the row (`MEETING_END_REASON_SHUTDOWN`), and the next start
+        // closes anything still open via `close_orphaned_meetings`. After that
+        // there is no active meeting left to find, which is exactly how a
+        // restart mid-meeting used to strand live transcription for the rest of
+        // the call. The capture-only path (`stop_capture`) has always done this;
+        // the full restart used by "Apply & Restart", audio shortcuts, updates,
+        // and the health overlay's RESTART button cleared it instead.
+        remember_active_meeting_for_capture_restart(state).await;
         let mut capture_guard = state.capture.lock().await;
         if let Some(session) = capture_guard.take() {
             session.stop().await;
@@ -804,7 +845,25 @@ pub async fn spawn_screenpipe(
     // a crashed/failed server back instead of treating it as a user stop.
     state.set_capture_intent(true);
 
-    let _lifecycle_guard = state.server_lifecycle.lock().await;
+    // Do not wait for the lifecycle lock. It is held across a full stop/start,
+    // so when the app is already bringing the server up — the ordinary case
+    // right after the macOS Screen Recording grant restarts us — this await
+    // parks for the whole boot. Onboarding calls this command on mount and its
+    // 20s guard was firing at 20.0-23.0s on every platform, with two users
+    // observed giving up: one closed the app at the timeout, one stayed 11
+    // minutes and never completed setup.
+    //
+    // A held lock means a startup or teardown is already running, and capture
+    // intent is set above, so the desired end state is already being reached.
+    // Report success and let the caller's health poll observe the engine come
+    // up — which is what already rescues most of these users, just without the
+    // dead wait first. If that in-flight startup fails, capture intent keeps
+    // the health watchdog retrying and the caller's own health timeout still
+    // surfaces it, so a real failure is not swallowed here.
+    let Ok(_lifecycle_guard) = state.server_lifecycle.try_lock() else {
+        info!("spawn_screenpipe: startup already in progress, not queueing behind it");
+        return Ok(());
+    };
     spawn_screenpipe_inner(&state, app).await
 }
 
@@ -1143,6 +1202,14 @@ async fn spawn_screenpipe_inner(
     let capture_arc = state.capture.clone();
     let wants_recording = state.wants_recording.clone();
     let cloud_token_arc = state.cloud_token.clone();
+    // Orphan-closing exists to clean up meetings a *crash* left open. When this
+    // restart is the thing that interrupted the meeting we already know which
+    // one is still running, so sweeping it is not cleanup — it is the bug: the
+    // watcher's sweep lands microseconds after the restore reopens the row and
+    // closes it right back, leaving live transcription with nothing to attach
+    // to. `interrupted_meeting` is in-memory, so a real crash still finds it
+    // empty here and sweeps normally.
+    let close_orphaned_meetings_on_start = !has_fresh_interrupted_meeting(&state).await;
     // Wire the DB-wedge auto-recovery hook onto every (re)created DB. Captured into
     // the dedicated server thread so the freshly-built `ServerCore` gets the hook
     // before it starts writing.
@@ -1233,7 +1300,13 @@ async fn spawn_screenpipe_inner(
                 // from starting or waits and then tears down the new session.
                 let mut capture_guard = capture_arc.lock().await;
                 let capture = if capture_intended_now(&wants_recording) {
-                    match CaptureSession::start(&server, &recording_config, true).await {
+                    match CaptureSession::start(
+                        &server,
+                        &recording_config,
+                        close_orphaned_meetings_on_start,
+                    )
+                    .await
+                    {
                         Ok(c) => Some(c),
                         Err(e) => {
                             error!("Failed to start capture session: {}", e);
@@ -1283,6 +1356,14 @@ async fn spawn_screenpipe_inner(
             crate::db_relaunch::reset_db_boot_failures();
             state.is_starting.store(false, Ordering::SeqCst);
             state.is_starting_capture.store(false, Ordering::SeqCst);
+            // A meeting that was in progress when this restart began is still
+            // in progress now. Reopen it and republish it to the streaming
+            // coordinator; without this the full-restart path (unlike the
+            // capture-only path) left the call transcribing on the delayed
+            // background chunker only, with no live notes and no way back.
+            if let Err(e) = restore_interrupted_meeting_for_capture_restart(&state).await {
+                warn!("failed to restore interrupted meeting after restart: {}", e);
+            }
             let spawn_epoch = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -1464,6 +1545,46 @@ async fn kill_process_on_port(port: u16) {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod spawn_lifecycle_lock_tests {
+    /// `spawn_screenpipe` must not await `server_lifecycle`.
+    ///
+    /// That lock is held across a full stop/start, so awaiting it parks the
+    /// command for an entire boot. Onboarding calls it on mount, and its 20s
+    /// guard fired at 20.0-23.0s across Windows, macOS and Linux — most users
+    /// were rescued by the health poll, but one closed the app at the timeout
+    /// and another stayed eleven minutes without ever completing setup.
+    ///
+    /// Guarded at the source because the runtime symptom is indistinguishable
+    /// from a slow machine: the command eventually returns the right answer.
+    #[test]
+    fn spawn_screenpipe_does_not_await_the_lifecycle_lock() {
+        // Assembled so the needles never match their own source lines.
+        let fn_needle = concat!("pub async fn ", "spawn_screenpipe(");
+        let blocking = concat!("server_lifecycle.lock()", ".await");
+        let non_blocking = concat!("server_lifecycle.", "try_lock()");
+
+        let source = include_str!("recording.rs");
+        let start = source
+            .find(fn_needle)
+            .expect("spawn_screenpipe renamed — repoint this guard at it");
+        let body = &source[start..];
+        let end = body.find("\n}\n").expect("unterminated function body");
+        let body = &body[..end];
+
+        assert!(
+            !body.contains(blocking),
+            "spawn_screenpipe awaits server_lifecycle again — this parks the \
+             command behind an in-flight startup and strands onboarding"
+        );
+        assert!(
+            body.contains(non_blocking),
+            "expected a non-blocking try_lock so an in-progress startup is \
+             reported rather than queued behind"
+        );
     }
 }
 

@@ -75,6 +75,89 @@ describe("meeting workspace tabs", () => {
     expect(transcript).toHaveFocus();
     expect(screen.getByLabelText("summary working")).toBeVisible();
   });
+
+  // The note-wide copy action shares the tab rule so it is visible from every
+  // tab, but it must not become a fourth tab: arrow keys still cycle three
+  // tabs, and screen readers must not announce it as one.
+  it("renders a trailing action outside the tablist without adding a tab", () => {
+    const onValueChange = vi.fn();
+    render(
+      <MeetingWorkspaceTabs
+        value="notes"
+        onValueChange={onValueChange}
+        trailing={
+          <button type="button" aria-label="copy meeting and transcript">
+            copy
+          </button>
+        }
+      />,
+    );
+
+    const copy = screen.getByRole("button", {
+      name: "copy meeting and transcript",
+    });
+    expect(copy).toBeVisible();
+    expect(screen.getAllByRole("tab")).toHaveLength(3);
+    expect(copy.closest('[role="tablist"]')).toBeNull();
+
+    // End must land on the last real tab, not the trailing action.
+    fireEvent.keyDown(screen.getByRole("tab", { name: "notes" }), {
+      key: "End",
+    });
+    expect(onValueChange).toHaveBeenCalledWith("summary");
+    expect(screen.getByRole("tab", { name: "summary" })).toHaveFocus();
+  });
+
+  // A dot on a tab is a request for attention. Work in flight and failures
+  // qualify; a summary that finished normally does not, and it used to stay
+  // lit on every summarized meeting forever.
+  it("only marks the summary tab while work is in flight or has failed", () => {
+    const { rerender } = render(
+      <MeetingWorkspaceTabs
+        value="notes"
+        onValueChange={vi.fn()}
+        summaryState="working"
+      />,
+    );
+    expect(screen.getByLabelText("summary working")).toBeVisible();
+
+    rerender(
+      <MeetingWorkspaceTabs
+        value="notes"
+        onValueChange={vi.fn()}
+        summaryState="attention"
+      />,
+    );
+    expect(screen.getByLabelText("summary attention")).toBeVisible();
+
+    rerender(
+      <MeetingWorkspaceTabs
+        value="notes"
+        onValueChange={vi.fn()}
+        summaryState={null}
+      />,
+    );
+    expect(screen.queryByLabelText(/^summary /)).toBeNull();
+  });
+
+  // Standalone, the tabs draw their own rule. With a trailing action they are
+  // the last row of the meeting header, which already draws a full-bleed rule,
+  // so drawing one here too produced a visibly doubled line.
+  it("draws its own bottom rule only when it is not in the meeting header", () => {
+    const { container: plain } = render(
+      <MeetingWorkspaceTabs value="notes" onValueChange={vi.fn()} />,
+    );
+    expect(plain.querySelectorAll(".border-b")).toHaveLength(1);
+
+    const { container: withTrailing } = render(
+      <MeetingWorkspaceTabs
+        value="notes"
+        onValueChange={vi.fn()}
+        trailing={<button type="button">copy</button>}
+      />,
+    );
+    expect(withTrailing.querySelectorAll(".border-b")).toHaveLength(0);
+  });
 });
 
 describe("meeting summary surface", () => {
@@ -125,6 +208,51 @@ describe("meeting summary surface", () => {
     expect(screen.queryByText(/private draft/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "summarize again" }));
     expect(onGenerate).toHaveBeenCalledOnce();
+  });
+
+  // The replay scrubber and the "related during this meeting" list used to
+  // render under the note editor, below a draft of unbounded length. They are
+  // evidence for the summary, so they now hang off the summary tab — after the
+  // summary text, inside the same centered shell, and selectable.
+  it("renders meeting evidence after the summary, not before it", () => {
+    render(
+      <MeetingSummarySurface
+        note={"## Summary\nThe team agreed to ship."}
+        state="ready"
+        detail="saved locally"
+        onGenerate={vi.fn()}
+        canGenerate
+        activity={<div data-testid="evidence">replay the moment</div>}
+      />,
+    );
+
+    const activity = screen.getByTestId("meeting-summary-activity");
+    expect(screen.getByTestId("evidence")).toBeVisible();
+    expect(activity).toHaveClass("select-text");
+    expect(activity.closest(".max-w-3xl")).not.toBeNull();
+
+    // Order matters: the summary is the answer, the evidence supports it.
+    const column = screen.getByTestId("meeting-summary-reading-column");
+    expect(
+      column.compareDocumentPosition(activity) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("leaves no evidence container behind when a meeting has none", () => {
+    render(
+      <MeetingSummarySurface
+        note={"## Summary\nThe team agreed to ship."}
+        state="ready"
+        detail="saved locally"
+        onGenerate={vi.fn()}
+        canGenerate
+      />,
+    );
+
+    expect(
+      screen.queryByTestId("meeting-summary-activity"),
+    ).not.toBeInTheDocument();
   });
 
   it("offers a truthful empty state before a summary exists", () => {

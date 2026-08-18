@@ -8,9 +8,22 @@ import { describe, expect, it, vi } from "vitest";
 import type { Message } from "@/lib/chat/types";
 import { ChatMainPane } from "./chat-main-pane";
 
-const { messageListUnmounted } = vi.hoisted(() => ({
+const { messageListUnmounted, firstRunBannerUnmounted } = vi.hoisted(() => ({
   messageListUnmounted: vi.fn(),
+  firstRunBannerUnmounted: vi.fn(),
 }));
+
+// The real banner owns the first-run window's ceiling timer. This stand-in
+// only has to prove it stays mounted, so it reports its own teardown.
+vi.mock("@/components/first-run/learning-banner", async () => {
+  const ReactModule = await import("react");
+  return {
+    FirstRunLearningBanner: () => {
+      ReactModule.useEffect(() => () => firstRunBannerUnmounted(), []);
+      return <div data-testid="first-run-banner" />;
+    },
+  };
+});
 
 vi.mock("@/components/chat/standalone/inline-chat-history", () => ({
   InlineChatHistory: () => null,
@@ -67,6 +80,14 @@ function paneProps(conversationId: string, messages: Message[]) {
 }
 
 describe("ChatMainPane", () => {
+  // Testing-library unmounts the tree after each test, which trips both
+  // teardown spies. Without this the second test inherits the first test's
+  // cleanup and fails on an unmount it never caused.
+  beforeEach(() => {
+    messageListUnmounted.mockClear();
+    firstRunBannerUnmounted.mockClear();
+  });
+
   it("remounts the message list when a new blank conversation replaces an old chat", () => {
     const previousMessage: Message = {
       id: "previous-message",
@@ -86,5 +107,26 @@ describe("ChatMainPane", () => {
     expect(messageListUnmounted).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("summary-cards")).toBeInTheDocument();
     expect(screen.getByTestId("message-list")).toHaveTextContent("0");
+  });
+
+  it("keeps the first-run banner mounted once the user sends a message", () => {
+    // The regression this guards. The banner used to render behind
+    // `messages.length === 0`, so the first message tore it down along with
+    // the ceiling timer it owns: the first-run window then never settled and
+    // emitted no event at all. Typing is the behaviour we want, so it must not
+    // destroy the first-run summary.
+    const { rerender } = render(<ChatMainPane {...paneProps("chat", [])} />);
+    expect(screen.getByTestId("first-run-banner")).toBeInTheDocument();
+
+    const sent: Message = {
+      id: "sent-message",
+      role: "user",
+      content: "what did I work on this morning?",
+      timestamp: Date.now(),
+    };
+    rerender(<ChatMainPane {...paneProps("chat", [sent])} />);
+
+    expect(firstRunBannerUnmounted).not.toHaveBeenCalled();
+    expect(screen.getByTestId("first-run-banner")).toBeInTheDocument();
   });
 });

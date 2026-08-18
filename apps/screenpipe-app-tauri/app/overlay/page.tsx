@@ -22,6 +22,9 @@ import { UpdateBanner } from "@/components/update-banner";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { ModelDownloadTracker } from "@/components/model-download-tracker";
 import Timeline from "@/components/rewind/timeline";
+import { NativeTimeline, NativeTimelineBridge } from "@/components/rewind/native-timeline";
+import { TIMELINE_DISMISS_TOP_OVERLAY_EVENT } from "@/components/rewind/timeline/daily-summary";
+import { listen } from "@tauri-apps/api/event";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { RefreshCw, AlertTriangle, WifiOff, Upload, Loader, Check, Calendar, X } from "lucide-react";
@@ -156,15 +159,25 @@ export default function OverlayPage() {
   }, []);
 
   useEffect(() => {
-    // add a shortcut to hide overlay window when pressed esc
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        commands.closeWindow("Main");
+    const dismissTopSurfaceOrClose = () => {
+      if (document.querySelector('[data-native-timeline-occluder="true"]')) {
+        window.dispatchEvent(new Event(TIMELINE_DISMISS_TOP_OVERLAY_EVENT));
+        return;
       }
+      void commands.closeWindow("Main");
     };
+    // DOM key events cover the React fallback. The native attached window and
+    // an unfocused macOS panel use the app-level Escape shortcut instead.
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") dismissTopSurfaceOrClose();
+    };
+    const nativeEscape = listen("escape-pressed", dismissTopSurfaceOrClose);
 
     window.addEventListener("keydown", handleEscape);
-    return () => window.removeEventListener("keydown", handleEscape);
+    return () => {
+      window.removeEventListener("keydown", handleEscape);
+      void nativeEscape.then((unlisten) => unlisten());
+    };
   }, []);
 
   useEffect(() => {
@@ -384,7 +397,8 @@ export default function OverlayPage() {
           <UpdateBanner />
           
           {showTimeline ? (
-            <div className="w-full scrollbar-hide bg-background relative">
+            <div className="w-full h-screen scrollbar-hide bg-transparent relative">
+              <NativeTimelineBridge />
               {/* Subtle disconnected indicator - only show if we have data but no connection */}
               {hasAnyData && !isConnected && isServerDown && (
                 <div className="fixed top-10 right-4 z-50 flex items-center gap-2 px-3 py-1.5 bg-muted/90 backdrop-blur-sm rounded-full text-xs text-muted-foreground border">
@@ -403,7 +417,11 @@ export default function OverlayPage() {
                 </div>
               )}
               <TimelineErrorBoundary>
-                <Timeline />
+                <NativeTimeline
+                  fallback={<Timeline />}
+                  transparentHost
+                  closeOnEscape
+                />
               </TimelineErrorBoundary>
             </div>
           ) : showServerError ? (

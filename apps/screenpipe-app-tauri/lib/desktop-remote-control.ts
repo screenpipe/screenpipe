@@ -43,6 +43,13 @@ export const BOOLEAN_REMOTE_CONTROL_DEFINITIONS = {
     settingKey: "enableSidebarCustomization",
     shippedDefault: false,
   },
+  // Compatibility control retained for managed installs. The consumer UI's
+  // visibility choice is independent from this rollout capability.
+  overlayHiding: {
+    flagKey: "overlay-hiding-control",
+    settingKey: "allowHidingShortcutOverlay",
+    shippedDefault: false,
+  },
 } as const satisfies Record<string, BooleanRemoteControlDefinition>;
 
 /**
@@ -51,7 +58,7 @@ export const BOOLEAN_REMOTE_CONTROL_DEFINITIONS = {
  */
 export const NON_RECORDER_REMOTE_CONTROLS = new Set<
   BooleanRemoteControlKey | "aecMode" | "autoUpdate"
->(["autoUpdate", "sidebarCustomization"]);
+>(["autoUpdate", "sidebarCustomization", "overlayHiding"]);
 
 export const AEC_MODE_CONTROL_FLAG_KEY = "aec-mode-control";
 export const AUTO_UPDATE_CONTROL_FLAG_KEY = "auto-update-control";
@@ -87,6 +94,7 @@ export type DesktopRemotePreferences = {
   filterMusic: boolean | null;
   prioritizeInputLatency: boolean | null;
   sidebarCustomization: boolean | null;
+  overlayHiding: boolean | null;
   aecMode: AecMode | null;
 };
 
@@ -103,6 +111,7 @@ export type RemoteControllableSettings = {
   filterMusic?: boolean;
   prioritizeInputLatency?: boolean;
   enableSidebarCustomization?: boolean;
+  allowHidingShortcutOverlay?: boolean;
   aecMode?: AecMode;
   screenpipeAecEnabled?: boolean;
   macosInputVpioEnabled?: boolean;
@@ -130,6 +139,7 @@ export const LOCAL_DESKTOP_REMOTE_POLICY: DesktopRemotePolicySnapshot = {
     filterMusic: localBooleanPolicy("filterMusic"),
     prioritizeInputLatency: localBooleanPolicy("prioritizeInputLatency"),
     sidebarCustomization: localBooleanPolicy("sidebarCustomization"),
+    overlayHiding: localBooleanPolicy("overlayHiding"),
   },
   aecMode: {
     defaultValue: "off",
@@ -148,6 +158,7 @@ export const NEW_INSTALL_REMOTE_CONTROL_PREFERENCES: DesktopRemotePreferences =
     filterMusic: null,
     prioritizeInputLatency: null,
     sidebarCustomization: null,
+    overlayHiding: null,
     aecMode: null,
   };
 
@@ -192,7 +203,7 @@ function isAutoUpdateRemotePolicy(
   );
 }
 
-function cloneLocalDesktopRemotePolicy(): DesktopRemotePolicySnapshot {
+export function cloneLocalDesktopRemotePolicy(): DesktopRemotePolicySnapshot {
   return {
     schemaVersion: 1,
     boolean: {
@@ -210,6 +221,7 @@ function cloneLocalDesktopRemotePolicy(): DesktopRemotePolicySnapshot {
       sidebarCustomization: {
         ...LOCAL_DESKTOP_REMOTE_POLICY.boolean.sidebarCustomization,
       },
+      overlayHiding: { ...LOCAL_DESKTOP_REMOTE_POLICY.boolean.overlayHiding },
     },
     aecMode: { ...LOCAL_DESKTOP_REMOTE_POLICY.aecMode },
     autoUpdate: { ...LOCAL_DESKTOP_REMOTE_POLICY.autoUpdate },
@@ -372,6 +384,12 @@ export function readDesktopRemotePolicySnapshot(
           BOOLEAN_REMOTE_CONTROL_DEFINITIONS.sidebarCustomization.flagKey,
         ),
       ),
+      overlayHiding: parseBooleanRemotePolicy(
+        "overlayHiding",
+        payloadForFlag(
+          BOOLEAN_REMOTE_CONTROL_DEFINITIONS.overlayHiding.flagKey,
+        ),
+      ),
     },
     aecMode: parseAecModeRemotePolicy(
       payloadForFlag(AEC_MODE_CONTROL_FLAG_KEY),
@@ -487,6 +505,10 @@ export function normalizeDesktopRemotePreferences(
       : // Existing installs never chose; leave them on the rollout default
         // instead of freezing today's (off) value as an explicit opt-out.
         null,
+    // Always null. Nothing lets a user grant themselves the ability to hide
+    // the overlay, so this control must track the remote default forever — a
+    // seeded `false` would make flipping the flag on a no-op.
+    overlayHiding: null,
     aecMode: validAecPreference(current?.aecMode)
       ? current.aecMode
       : normalizeAecModeForPlatform(
@@ -602,6 +624,13 @@ export function buildDesktopRemoteControlPatch(
       settings.platform,
       parseManagedBoolean(managed.enableSidebarCustomization),
     ),
+    overlayHiding: resolveBooleanRemoteControlValue(
+      "overlayHiding",
+      preferences.overlayHiding,
+      booleanPolicyOf(policy, "overlayHiding"),
+      settings.platform,
+      parseManagedBoolean(managed.allowHidingShortcutOverlay),
+    ),
     aecMode: resolveAecModeRemoteValue(
       preferences.aecMode,
       policy.aecMode,
@@ -660,6 +689,13 @@ export function buildDesktopRemoteControlPatch(
   ) {
     patch.enableSidebarCustomization = effective.sidebarCustomization;
     changedControls.push("sidebarCustomization");
+  }
+
+  if (
+    Boolean(settings.allowHidingShortcutOverlay) !== effective.overlayHiding
+  ) {
+    patch.allowHidingShortcutOverlay = effective.overlayHiding;
+    changedControls.push("overlayHiding");
   }
 
   const aecSettings = getAecModeSettings(effective.aecMode);

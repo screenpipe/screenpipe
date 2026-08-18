@@ -420,7 +420,7 @@ export function AppEntitlementGate({
 
   const openLogin = useCallback(() => {
     posthog.capture("app_entitlement_login_clicked");
-    commands.openLoginWindow(null);
+    commands.openLoginWindow(null, null);
   }, []);
 
   const refreshUser = useCallback(async () => {
@@ -453,7 +453,7 @@ export function AppEntitlementGate({
     } catch (e) {
       console.warn("failed to clear pi config before switching accounts:", e);
     }
-    commands.openLoginWindow(true);
+    commands.openLoginWindow(true, null);
   }, [updateSettings]);
 
   const downloadEnterpriseApp = useCallback(() => {

@@ -34,6 +34,27 @@ function base(props: BaseProps) {
 }
 
 export const cardAskEvents = {
+  /**
+   * Fired once per install the moment an arm is resolved, before any ask.
+   *
+   * Without this, `control` is unobservable: it listens to no triggers, so it
+   * emits no `card_ask_shown`, and `card_ask_skipped` means the user dismissed
+   * a modal rather than that the arm was skipped. Analysts were forced to
+   * reconstruct the cohort from PostHog's auto-captured `$feature_flag_called`,
+   * and anyone reaching for `card_ask_*` silently analysed three arms and
+   * concluded control had no users.
+   *
+   * `enabled` is recorded alongside the arm so a readout can separate "control"
+   * from "everyone, because the kill switch was off".
+   */
+  enrolled: (p: { arm: CardAskArm; enabled: boolean; os: string }) =>
+    posthog.capture("card_ask_enrolled", {
+      metric_version: METRIC_VERSION,
+      arm: p.arm,
+      enabled: p.enabled,
+      os: p.os,
+    }),
+
   shown: (p: BaseProps & { isFirstAsk: boolean }) =>
     posthog.capture("card_ask_shown", {
       ...base(p),

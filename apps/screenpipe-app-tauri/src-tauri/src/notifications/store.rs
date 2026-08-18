@@ -155,26 +155,9 @@ pub fn read_all() -> Vec<NotificationHistoryEntry> {
     entries
 }
 
-/// Bell badge count for the native macOS shortcut overlay. The webview overlay
-/// on Windows/Linux computes its own dot from the list it already polls.
-#[cfg(target_os = "macos")]
-pub fn unread_count() -> usize {
-    read_all()
-        .iter()
-        .filter(|entry| !entry.read && entry.is_high_priority())
-        .count()
-}
-
-fn update_native_inbox(entries: &[NotificationHistoryEntry], json: &str) {
-    // Every mutation funnels through here — keep the shortcut overlay's bell
-    // dot and the native inbox list in sync without instrumenting each
-    // caller. (The webview overlay polls the app server itself; only the
-    // native panels need a push. update_inbox no-ops while hidden.)
-    let unread = entries
-        .iter()
-        .filter(|entry| !entry.read && entry.is_high_priority())
-        .count();
-    crate::native_shortcut_reminder::set_inbox_unread(unread as i32);
+fn update_native_inbox(_entries: &[NotificationHistoryEntry], json: &str) {
+    // Every mutation funnels through here so the standalone native inbox stays
+    // in sync. The webview overlay polls the app server itself.
     crate::native_notification::update_inbox(json);
 }
 

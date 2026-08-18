@@ -13,6 +13,7 @@ use axum::{
 };
 use oasgen::OaSchema;
 
+use screenpipe_audio::core::device::DeviceType;
 use screenpipe_events::{send_event, subscribe_to_all_events, Event as ScreenpipeEvent};
 
 use futures::{SinkExt, StreamExt};
@@ -669,9 +670,14 @@ async fn handle_metrics_socket(
             _ = interval.tick() => {
                 let audio = state.audio_metrics.snapshot();
                 let per_device_levels = state.audio_metrics.per_device_rms_snapshot();
+                let mic_capture_active = state.audio_manager.current_devices().iter().any(|device| {
+                    device.device_type == DeviceType::Input
+                        && state.audio_manager.is_device_actively_streaming(device)
+                });
                 let vision = state.vision_metrics.snapshot();
                 let payload = serde_json::json!({
                     "audio": {
+                        "mic_capture_active": mic_capture_active,
                         "vad_passed": audio.vad_passed,
                         "vad_rejected": audio.vad_rejected,
                         "chunks_sent": audio.chunks_sent,

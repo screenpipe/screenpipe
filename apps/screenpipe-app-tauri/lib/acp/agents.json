@@ -52,6 +52,7 @@
     "description": "Use Cursor's ACP agent installed on this computer.",
     "launch": { "kind": "binary", "command": "cursor-agent", "args": ["acp"] },
     "installUrl": "https://cursor.com/cli",
+    "installer": { "kind": "shellScript", "url": "https://cursor.com/install" },
     "httpMcp": true,
     "flag": "acp_agent_cursor"
   },

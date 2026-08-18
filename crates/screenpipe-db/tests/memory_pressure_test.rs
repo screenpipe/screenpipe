@@ -406,7 +406,7 @@ async fn concurrent_write_read_churn_stays_bounded() {
                 app_name: Some("ChurnWriter".to_string()),
                 window_name: Some(format!("Writer window {}", i % 64)),
                 browser_url: Some(format!("https://example.test/churn/{}", i % 32)),
-                focused: i % 2 == 0,
+                focused: i.is_multiple_of(2),
                 text: pressure_text(i),
                 text_json: String::new(),
             }];
@@ -420,7 +420,7 @@ async fn concurrent_write_read_churn_stays_bounded() {
                 )
                 .await
                 .unwrap();
-            if i % 5 == 0 {
+            if i.is_multiple_of(5) {
                 writer_db
                     .insert_ui_events_batch(&[ui_event(i, Utc::now(), None)])
                     .await

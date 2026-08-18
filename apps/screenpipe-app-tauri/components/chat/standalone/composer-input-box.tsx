@@ -22,7 +22,7 @@ export function ComposerInputBox({
   return (
     <div
       className={cn(
-        "flex flex-col rounded-lg border bg-input ring-offset-background transition-colors focus-within:border-foreground focus-within:ring-foreground/10 focus-within:ring-1",
+        "flex flex-col rounded-lg border bg-input ring-offset-background transition-colors duration-150 focus-within:border-phosphor-strong focus-within:ring-phosphor-strong/20 focus-within:ring-1",
         "bg-background/80 border-border/50 shadow-lg shadow-black/5",
         input.disabledReason && "border-muted-foreground/30",
       )}
@@ -79,7 +79,7 @@ export function ComposerInputBox({
           autoCorrect="off"
           rows={1}
           className={cn(
-            "w-full min-h-[44px] border-0 bg-transparent px-3 text-sm font-mono placeholder:text-muted-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 caret-foreground resize-none overflow-y-auto scrollbar-minimal py-2.5",
+            "w-full min-h-[38px] border-0 bg-transparent px-3 text-sm font-mono placeholder:text-muted-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 caret-phosphor-strong resize-none overflow-y-auto scrollbar-minimal py-2",
             input.connectionChip ? "pr-7" : "pr-3",
           )}
           style={{

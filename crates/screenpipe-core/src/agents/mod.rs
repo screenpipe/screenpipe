@@ -10,6 +10,7 @@
 //! implementations without touching any pipe code.
 
 pub mod bash_env;
+pub mod cli_runtime;
 pub mod pi;
 
 use anyhow::Result;
@@ -139,6 +140,7 @@ pub trait AgentExecutor: Send + Sync {
     /// `continue_session` — when `true`, the agent resumes its last session for
     /// this working directory (Pi: `--continue`); when `false`, starts fresh
     /// (Pi: `--no-session`).
+    /// `thinking_level` controls model reasoning effort when the agent supports it.
     async fn run(
         &self,
         prompt: &str,
@@ -167,6 +169,7 @@ pub trait AgentExecutor: Send + Sync {
         shared_pid: Option<SharedPid>,
         line_tx: tokio::sync::mpsc::UnboundedSender<String>,
         continue_session: bool,
+        _thinking_level: Option<&str>,
         _pipe_system_prompt: Option<&str>,
         _mcp_server_allowlist: Option<&[String]>,
         // Chat/session that owns this run (e.g. `pipe:<name>`). Exported to the

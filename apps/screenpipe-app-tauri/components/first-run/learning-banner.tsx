@@ -15,6 +15,8 @@ import {
   type FirstRunEmptyReason,
 } from "@/lib/first-run/learning-window";
 import { appIconUrl } from "@/lib/first-run/recent-activity";
+import { AgentHandoffPicker } from "@/components/first-run/agent-handoff-picker";
+import { useAgentHandoff } from "@/lib/first-run/use-agent-handoff";
 import {
   useLearningWindow,
   type LearningWindowOptions,
@@ -77,8 +79,15 @@ function CapturedAppIcon({ app }: { app: FirstRunCapturedApp }) {
 export function FirstRunLearningBanner(props: LearningWindowOptions = {}) {
   const { phase, capturedApps, remainingMs, chatId, emptyReason, dismiss } =
     useLearningWindow(props);
+  const { targets: handoffTargets, hint: handoffHint, askAgent } =
+    useAgentHandoff(phase === "ready");
 
-  if (phase !== "learning" && phase !== "ready" && phase !== "empty") {
+  if (
+    phase !== "learning" &&
+    phase !== "writing" &&
+    phase !== "ready" &&
+    phase !== "empty"
+  ) {
     return null;
   }
 
@@ -139,6 +148,38 @@ export function FirstRunLearningBanner(props: LearningWindowOptions = {}) {
         </div>
       )}
 
+      {phase === "writing" && (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-3">
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+            <p className="text-xs font-medium text-foreground">
+              Writing your summary
+            </p>
+          </div>
+          {/* No countdown. The clock measured how long we would keep waiting
+              for something to summarize, and that question is already
+              answered; the model can take tens of seconds and outlast the
+              ceiling, so a timer here would tick to 0:00 and then keep
+              spinning. */}
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            Screenpipe saw enough. Putting the summary together now — this
+            takes a few seconds.
+          </p>
+          {capturedApps.length > 0 && (
+            <div className="flex items-center gap-2 pt-0.5">
+              <span className="shrink-0 text-[11px] text-muted-foreground">
+                Reading from
+              </span>
+              <span className="flex items-center gap-1">
+                {capturedApps.map((app) => (
+                  <CapturedAppIcon key={app.name} app={app} />
+                ))}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
       {phase === "ready" && (
         <div className="flex flex-col gap-2">
           <p className="text-xs font-medium text-foreground">
@@ -158,6 +199,14 @@ export function FirstRunLearningBanner(props: LearningWindowOptions = {}) {
             >
               Open the summary
             </Button>
+            {/* Setup already wired these agents over MCP, so they can answer
+                from real captured context. Offered second, never instead: the
+                summary is guaranteed to exist, the handoff depends on another
+                app being where we think it is. */}
+            <AgentHandoffPicker
+              targets={handoffTargets}
+              onPick={(target) => void askAgent(target)}
+            />
             <Button
               size="sm"
               variant="ghost"
@@ -167,6 +216,15 @@ export function FirstRunLearningBanner(props: LearningWindowOptions = {}) {
               Later
             </Button>
           </div>
+          {handoffHint && (
+            <p
+              className="text-[11px] leading-relaxed text-muted-foreground"
+              data-testid="first-run-ask-agent-hint"
+              role="status"
+            >
+              {handoffHint}
+            </p>
+          )}
         </div>
       )}
 

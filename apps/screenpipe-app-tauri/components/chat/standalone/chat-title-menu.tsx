@@ -9,15 +9,19 @@ import { ChevronDown, Pencil, Pin, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { isInjectedTitle, isInjectedTitleSourcePrompt } from "@/lib/chat-utils";
-import { isPlaceholderConversationTitle } from "@/lib/chat/message-rendering";
 import type { Message } from "@/lib/chat/types";
 import { useChatStore } from "@/lib/stores/chat-store";
-import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
+import { resolveVisibleChatTitle } from "@/lib/chat/conversation-title";
 
 interface ChatTitleMenuProps {
   conversationId: string | null;
   messages: Message[];
+  /**
+   * Text of a dispatched send whose durable row has not landed yet. This menu
+   * renders the visible title, so without it a chat showing an optimistic
+   * bubble has a header strip and no title in it.
+   */
+  pendingUserText?: string | null;
   renameConversation: (id: string, title: string) => Promise<void> | void;
   deleteConversation: (id: string) => Promise<void> | void;
   startNewConversation: (id?: string) => Promise<void> | void;
@@ -26,6 +30,7 @@ interface ChatTitleMenuProps {
 export function ChatTitleMenu({
   conversationId,
   messages,
+  pendingUserText,
   renameConversation,
   deleteConversation,
   startNewConversation,
@@ -54,20 +59,12 @@ export function ChatTitleMenu({
     conversationId ? s.sessions[conversationId] : undefined
   );
   const isPinned = session?.pinned ?? false;
-  const firstUserMsg = messages.find(
-    (m) => m.role === "user" && !isInjectedTitleSourcePrompt(m.content)
-  );
-  const derivedTitle = firstUserMsg
-    ? deriveFallbackConversationTitle(firstUserMsg)
-    : undefined;
-  const hasMessages = messages.length > 0;
-  const title =
-    streamingTitle ||
-    (storeTitle &&
-      !isPlaceholderConversationTitle(storeTitle) &&
-      !isInjectedTitle(storeTitle)
-        ? storeTitle
-        : derivedTitle || (hasMessages ? "untitled" : ""));
+  const title = resolveVisibleChatTitle({
+    storeTitle,
+    streamingTitle,
+    messages,
+    pendingUserText,
+  });
 
   // No conversation id OR no real content → don't render. The "+ New"
   // button on the right is enough; no point showing actions for a
@@ -157,7 +154,7 @@ export function ChatTitleMenu({
           className="relative z-10 inline-flex items-center gap-1 max-w-[260px] h-7 px-2 rounded-md text-xs font-medium text-foreground hover:bg-muted/50 transition-colors"
           title="Chat options"
         >
-          <span className="truncate">{title}</span>
+          <span data-testid="chat-title" className="truncate">{title}</span>
           <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground/70" />
         </button>
       </PopoverTrigger>

@@ -167,6 +167,6 @@ describe("ReferralCard", () => {
     render(<ReferralCard />);
 
     fireEvent.click(screen.getByRole("button", { name: /^sign in$/i }));
-    expect(mocks.openLoginWindow).toHaveBeenCalledWith(null);
+    expect(mocks.openLoginWindow).toHaveBeenCalledWith(null, null);
   });
 });

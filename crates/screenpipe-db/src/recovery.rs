@@ -19,6 +19,58 @@ pub struct RecoveryVerification {
     pub foreign_key_violations: usize,
 }
 
+/// Outcome of probing a quarantined generation that is still installed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QuarantineHealthProbe {
+    pub file_identity: SqliteFileIdentity,
+    pub quick_check_rows: usize,
+}
+
+/// Read-only health probe for a quarantined generation still installed at its
+/// live path.
+///
+/// Distinct from [`verify_fresh_sqlite_recovery_candidate`], which vets a
+/// freshly rebuilt file before installation and may write to it. This one runs
+/// against the database the app refused to open, so it must not perturb that
+/// durable database or WAL bytes: the connection is strictly read-only, which
+/// keeps SQLite from checkpointing, truncating, or appending to them. SQLite
+/// may rebuild the disposable `-shm` WAL index while opening the connection.
+///
+/// `quick_check` — not `integrity_check` — because this runs at launch on a
+/// database that can be tens of gigabytes, and it is the same bar
+/// `screenpipe db check` already reports as "database is healthy". Callers
+/// that are about to *install* a generation still owe it the full battery.
+pub async fn probe_quarantined_generation_health(
+    path: impl AsRef<Path>,
+) -> Result<QuarantineHealthProbe> {
+    let path = path.as_ref();
+    let file_identity = sqlite_file_identity(path)
+        .with_context(|| format!("reading identity of {}", path.display()))?;
+    let options = SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(false)
+        .read_only(true)
+        .busy_timeout(Duration::from_secs(5))
+        .disable_statement_logging();
+    let mut connection = SqliteConnection::connect_with(&options)
+        .await
+        .with_context(|| {
+            format!(
+                "opening quarantined generation {} read-only",
+                path.display()
+            )
+        })?;
+    let quick_check_rows = check_pragma_is_ok(&mut connection, "quick_check").await?;
+    connection
+        .close()
+        .await
+        .context("closing the quarantine health probe connection")?;
+    Ok(QuarantineHealthProbe {
+        file_identity,
+        quick_check_rows,
+    })
+}
+
 fn sqlite_sidecar(database_path: &Path, suffix: &str) -> PathBuf {
     let mut name = database_path
         .file_name()

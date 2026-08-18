@@ -14,12 +14,14 @@ import {
   buildLearningSummary,
   capturedAppsFrom,
   claimLearningSeed,
+  clearPendingEmptyReport,
   formatCountdown,
   hasEnoughEvidence,
   learningWindowRemainingMs,
   markLearningDone,
   markLearningEmpty,
   markLearningReady,
+  markLearningWriting,
   normalizeEmptyReason,
   readLearningWindow,
   resetLearningWindow,
@@ -94,13 +96,16 @@ describe("evidence gate", () => {
     ).toBe(false);
   });
 
-  it("never treats app names as a substitute for captured frames", () => {
+  it("never treats app names as a substitute for observed working time", () => {
     // The shipped regression: two apps with one frame each resolved, and
     // produced "I watched Google Chrome and Claude … 2 screens indexed".
+    // The floor beside the app count is now active minutes rather than frames,
+    // so this shape must still be refused — it has no observed time at all.
     expect(
       hasEnoughEvidence(
         ok({
           total_frames: 2,
+          total_active_minutes: 0,
           apps: [
             { name: "Google Chrome", frame_count: 1 },
             { name: "Claude", frame_count: 1 },
@@ -108,6 +113,42 @@ describe("evidence gate", () => {
         }),
       ),
     ).toBe(false);
+  });
+
+  it("resolves from accessibility alone when screenshots are off", () => {
+    // The bug this gate was changed for. Screenshots disabled means no pixels
+    // and slowly-accruing frames, so the old `frames >= 6 && apps >= 2` clause
+    // could not clear inside the ceiling and the window burned its whole wait
+    // before reporting nothing. Accessibility still names the frontmost app
+    // and capture timestamps still produce active minutes, which is enough to
+    // say something true.
+    expect(
+      hasEnoughEvidence(
+        ok({
+          total_frames: 2,
+          total_active_minutes: 3,
+          apps: [
+            { name: "Google Chrome", frame_count: 1 },
+            { name: "Claude", frame_count: 1 },
+          ],
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("resolves on one app plus captured speech", () => {
+    // A call with screenshots off: the screen says almost nothing, the audio
+    // says plenty, and audio is independent of the pixel path.
+    expect(
+      hasEnoughEvidence(
+        ok({
+          total_frames: 1,
+          total_active_minutes: 0,
+          apps: [{ name: "zoom.us", frame_count: 1 }],
+          audio_summary: { segment_count: 12 },
+        }),
+      ),
+    ).toBe(true);
   });
 
   it("resolves on plenty of frames, or fewer frames across several apps", () => {
@@ -487,5 +528,102 @@ describe("classifyEmptyReason", () => {
     ).toBe("unknown");
     expect(classifyEmptyReason(null)).toBe("unknown");
     expect(classifyEmptyReason(undefined)).toBe("unknown");
+  });
+});
+
+describe("writing phase", () => {
+  it("resumes a persisted writing phase as ready when the chat was seeded", () => {
+    // The process died after seedFirstRunSummaryChat but before markReady.
+    // The summary exists, so send the user to it rather than to an empty state.
+    beginLearningWindow(new Date().toISOString());
+    markLearningWriting();
+    const current = readLearningWindow();
+    localStorage.setItem(
+      "screenpipe.first-run.learning-window.v1",
+      JSON.stringify({ ...current, phase: "writing", chatId: "chat-42" }),
+    );
+    const resumed = readLearningWindow();
+    expect(resumed.phase).toBe("ready");
+    expect(resumed.chatId).toBe("chat-42");
+  });
+
+  it("settles a persisted writing phase with no chat instead of restoring a spinner", () => {
+    // The model call died with the process and the seed claim is already
+    // spent, so nothing will resume the work. Restoring `writing` would show a
+    // spinner that can never finish.
+    beginLearningWindow(new Date().toISOString());
+    markLearningWriting();
+    expect(readLearningWindow().phase).toBe("empty");
+  });
+
+  it("marks writing without disturbing the anchor", () => {
+    const anchor = new Date().toISOString();
+    beginLearningWindow(anchor);
+    const writing = markLearningWriting();
+    expect(writing.phase).toBe("writing");
+    expect(writing.startedAt).toBe(anchor);
+  });
+});
+
+describe("a window that expired while nothing was mounted", () => {
+  const seedExpiredLearning = () => {
+    window.localStorage.setItem(
+      "screenpipe.first-run.learning-window.v1",
+      JSON.stringify({
+        phase: "learning",
+        startedAt: new Date(
+          Date.now() - LEARNING_WINDOW_CEILING_MS - 60_000,
+        ).toISOString(),
+        seededAt: null,
+        chatId: null,
+        emptyReason: null,
+      }),
+    );
+  };
+
+  it("flags itself for reporting instead of settling silently", () => {
+    // The regression: this settle path emits nothing of its own, because the
+    // ceiling effect is gated on `phase === "learning"` and normalize has
+    // already left it. Without the flag the most common first-run outcome is
+    // invisible in analytics.
+    seedExpiredLearning();
+    const state = readLearningWindow();
+    expect(state.phase).toBe("empty");
+    // Still `unknown` on purpose: the hook re-derives the real engine reason
+    // from the pending flag, so rehydration must not invent a user-visible
+    // state of its own.
+    expect(state.emptyReason).toBe("unknown");
+    expect(state.pendingEmptyReport).toBe(true);
+  });
+
+  it("flags the settle rather than inventing a new user-visible reason", () => {
+    // A rehydrated window must reach the same copy a ceiling-settled one does.
+    // An "expired while closed" state replaced an actionable engine reason
+    // with a shrug and broke the existing first-run E2E, which asserts the
+    // copy names something the user can act on.
+    seedExpiredLearning();
+    const state = readLearningWindow();
+    expect(state.pendingEmptyReport).toBe(true);
+    expect(state.emptyReason).toBe("unknown");
+  });
+
+  it("clears the flag exactly once and is safe to call on every mount", () => {
+    seedExpiredLearning();
+    expect(readLearningWindow().pendingEmptyReport).toBe(true);
+    expect(clearPendingEmptyReport().pendingEmptyReport).toBe(false);
+    expect(clearPendingEmptyReport().pendingEmptyReport).toBe(false);
+    expect(readLearningWindow().pendingEmptyReport).toBe(false);
+  });
+
+  it("leaves a live window alone", () => {
+    beginLearningWindow();
+    const state = readLearningWindow();
+    expect(state.phase).toBe("learning");
+    expect(state.pendingEmptyReport).toBe(false);
+  });
+
+  it("does not flag a settle the ceiling effect already reported", () => {
+    beginLearningWindow();
+    expect(markLearningEmpty("no_frames_captured").pendingEmptyReport).toBe(false);
   });
 });

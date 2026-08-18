@@ -47,8 +47,8 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
 | `content_type` | string | No | `all` (default), `accessibility`, `audio`, `input`, `ocr`, `memory`, `parsed`. Use `parsed` for compact app-specific messages, emails, tasks, documents, and code review. Parsed capture is experimental, may be empty when disabled/unsupported, and is not included in `all`. Screen text is primarily captured via the OS accessibility tree (`accessibility`); OCR is a fallback for apps without accessibility support. |
 | `limit` | integer | No | Max 1-20. Default: 10 |
 | `offset` | integer | No | Pagination. Default: 0 |
-| `start_time` | ISO 8601 or relative | **Yes** | Accepts `2024-01-15T10:00:00Z` or `16h ago`, `2d ago`, `30m ago` |
-| `end_time` | ISO 8601 or relative | No | Defaults to now. Accepts `now`, `1h ago` |
+| `start_time` | ISO 8601, relative, or local calendar | **Yes** | Accepts `2024-01-15T10:00:00Z`, `16h ago`, `today`, `yesterday`, or `YYYY-MM-DD` |
+| `end_time` | Same as `start_time` | No | Defaults to `now` |
 | `app_name` | string | No | e.g. "Google Chrome", "Slack", "zoom.us" |
 | `window_name` | string | No | Window title substring |
 | `frame_id` | integer | No | With `content_type=parsed`, return parsed data attached to one frame. |
@@ -101,11 +101,13 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
 
 ### Critical Rules
 
+**Calendar ranges are local:** `today`, `yesterday`, and bare `YYYY-MM-DD` dates mean the user's LOCAL calendar days in their timezone, not UTC days or rolling 24-hour ranges. Pass calendar literals directly to the API (`start_time=today&end_time=now`, `start_time=yesterday&end_time=today`). Never calculate midnight with `date -u` or append `T00:00:00Z`.
+
 1. **ALWAYS include `start_time`** — queries without time bounds WILL timeout
 2. **Start with 1-2 hour ranges** — expand only if no results
 3. **Use `app_name`** when user mentions a specific app
 4. **Keep `limit` low** (5-10) initially
-5. **"recent"** = 30 min. **"today"** = since midnight. **"yesterday"** = yesterday's range
+5. **"recent"** = 30 min
 6. If timeout, narrow the time range
 
 ### Response Format

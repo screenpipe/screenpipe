@@ -327,23 +327,205 @@ describe('OpenAI API accounting and routing', () => {
 		expect(params.messages[2].prompt_cache_breakpoint).toBeUndefined();
 	});
 
-	it('changes the GPT-5.6 cache key when the system prefix or tools change', async () => {
+	it('adds history breakpoints after leading system and developer instructions', async () => {
+		const params: any = {
+			model: 'gpt-5.6-luna',
+			messages: [
+				{ role: 'system', content: 'stable base' },
+				{ role: 'developer', content: 'stable policy' },
+				{ role: 'user', content: 'first turn' },
+				{ role: 'assistant', content: 'first answer' },
+				{ role: 'user', content: 'second turn' },
+			],
+		};
+
+		await applyGpt56PromptCaching(params, true);
+
+		expect(params.messages[0].content).toBe('stable base');
+		expect(params.messages[1].content[0].prompt_cache_breakpoint).toEqual({ mode: 'explicit' });
+		expect(params.messages[2].content[0].prompt_cache_breakpoint).toEqual({ mode: 'explicit' });
+		expect(params.messages[3].content).toBe('first answer');
+		expect(params.messages[4].content[0].prompt_cache_breakpoint).toEqual({ mode: 'explicit' });
+	});
+
+	it('keeps only the newest 49 history breakpoints plus one instruction breakpoint', async () => {
+		const history = Array.from({ length: 55 }, (_, index) => [
+			{ role: 'user', content: `u${index}` },
+			{ role: 'assistant', content: `a${index}` },
+		]).flat();
+		const params: any = {
+			model: 'gpt-5.6-sol',
+			messages: [{ role: 'system', content: 'stable' }, ...history],
+		};
+
+		await applyGpt56PromptCaching(params, true);
+
+		const markedMessages = params.messages.filter((message: any) =>
+			Array.isArray(message.content)
+			&& message.content.some((part: any) => part.prompt_cache_breakpoint?.mode === 'explicit'),
+		);
+		expect(markedMessages).toHaveLength(50);
+		for (let index = 0; index < 55; index++) {
+			const user = params.messages[1 + index * 2];
+			expect(Array.isArray(user.content)).toBe(index >= 6);
+		}
+	});
+
+	it('marks only the last message in consecutive user and tool-result runs', async () => {
+		const params: any = {
+			model: 'gpt-5.6-terra',
+			messages: [
+				{ role: 'system', content: 'stable' },
+				{ role: 'user', content: 'u0' },
+				{ role: 'user', content: 'u1' },
+				{
+					role: 'assistant',
+					content: '',
+					tool_calls: [
+						{ id: 'call_0', type: 'function', function: { name: 'search', arguments: '{}' } },
+						{ id: 'call_1', type: 'function', function: { name: 'search', arguments: '{}' } },
+					],
+				},
+				{ role: 'tool', content: 't0', tool_call_id: 'call_0' },
+				{ role: 'tool', content: 't1', tool_call_id: 'call_1' },
+				{ role: 'assistant', content: 'a2' },
+				{ role: 'user', content: 'steer' },
+				{
+					role: 'assistant',
+					content: '',
+					tool_calls: [
+						{ id: 'call_2', type: 'function', function: { name: 'search', arguments: '{}' } },
+						{ id: 'call_3', type: 'function', function: { name: 'search', arguments: '{}' } },
+					],
+				},
+				{ role: 'tool', content: 't2', tool_call_id: 'call_2' },
+				{ role: 'tool', content: 't3', tool_call_id: 'call_3' },
+			],
+		};
+
+		await applyGpt56PromptCaching(params, true);
+
+		const marked = params.messages.map((message: any) =>
+			Array.isArray(message.content)
+			&& message.content.some((part: any) => part.prompt_cache_breakpoint),
+		);
+		expect(marked).toEqual([true, false, true, false, false, true, false, true, false, false, true]);
+	});
+
+	it('marks the last supported multipart image or file block without changing it', async () => {
+		const imagePart = {
+			type: 'image_url',
+			image_url: { url: 'data:image/png;base64,AA', detail: 'high' },
+		};
+		const filePart = { type: 'file', file: { file_id: 'file_123' } };
+		const params: any = {
+			model: 'gpt-5.6-luna',
+			messages: [
+				{ role: 'system', content: 'stable' },
+				{ role: 'user', content: [{ type: 'text', text: 'look' }, imagePart, { type: 'text', text: '' }] },
+				{ role: 'assistant', content: 'seen' },
+				{ role: 'user', content: [filePart, { type: 'text', text: '' }] },
+			],
+		};
+
+		await applyGpt56PromptCaching(params, true);
+
+		expect(params.messages[1].content[1]).toEqual({
+			...imagePart,
+			prompt_cache_breakpoint: { mode: 'explicit' },
+		});
+		expect(params.messages[3].content[0]).toEqual({
+			...filePart,
+			prompt_cache_breakpoint: { mode: 'explicit' },
+		});
+	});
+
+	it('recomputes GPT-5.6 breakpoints idempotently after rewritten history', async () => {
+		const params: any = {
+			model: 'gpt-5.6-luna',
+			messages: [
+				{ role: 'system', content: 'stable' },
+				{ role: 'user', content: '[Old tool result removed]' },
+				{ role: 'assistant', content: 'previous answer' },
+				{ role: 'user', content: 'current turn' },
+			],
+		};
+
+		await applyGpt56PromptCaching(params, true);
+		const once = structuredClone(params);
+		await applyGpt56PromptCaching(params, true);
+
+		expect(params).toEqual(once);
+		await applyGpt56PromptCaching(params, false);
+		const remainingMarkers = params.messages.flatMap((message: any) =>
+			Array.isArray(message.content)
+				? message.content.filter((part: any) => part.prompt_cache_breakpoint)
+				: [],
+		);
+		expect(remainingMarkers).toHaveLength(1);
+	});
+
+	it('changes the GPT-5.6 cache key when stable instructions, tools, or response schema change', async () => {
 		const base: any = {
 			model: 'gpt-5.6-sol',
-			messages: [{ role: 'system', content: 'base' }, { role: 'user', content: 'hello' }],
+			messages: [{ role: 'system', content: 'base' }, { role: 'developer', content: 'policy' }, { role: 'user', content: 'hello' }],
 			tools: [],
 		};
 		const changedSystem = structuredClone(base);
 		changedSystem.messages[0].content = 'different';
 		const changedTools = structuredClone(base);
 		changedTools.tools = [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object' } } }];
+		const changedSchema = structuredClone(base);
+		changedSchema.response_format = { type: 'json_schema', json_schema: { name: 'answer', schema: { type: 'object' } } };
 		await Promise.all([
 			applyGpt56PromptCaching(base),
 			applyGpt56PromptCaching(changedSystem),
 			applyGpt56PromptCaching(changedTools),
+			applyGpt56PromptCaching(changedSchema),
 		]);
 		expect(changedSystem.prompt_cache_key).not.toBe(base.prompt_cache_key);
 		expect(changedTools.prompt_cache_key).not.toBe(base.prompt_cache_key);
+		expect(changedSchema.prompt_cache_key).not.toBe(base.prompt_cache_key);
+	});
+
+	it('applies identical history caching metadata to streaming and non-streaming calls', async () => {
+		const messages: any = [
+			{ role: 'system', content: 'stable' },
+			{ role: 'user', content: 'first' },
+			{ role: 'assistant', content: 'answer' },
+			{ role: 'user', content: 'second' },
+		];
+		const nonStreaming = new OpenAIProvider('sk-test') as any;
+		let nonStreamingParams: any;
+		nonStreaming.client.chat.completions.create = mock(async (params: any) => {
+			nonStreamingParams = structuredClone(params);
+			return { choices: [{ message: { content: 'ok' } }] };
+		});
+		await nonStreaming.createCompletion({
+			model: 'gpt-5.6-luna',
+			messages: structuredClone(messages),
+			gpt56HistoryCacheEligible: true,
+		});
+
+		const streaming = new OpenAIProvider('sk-test') as any;
+		let streamingParams: any;
+		streaming.client.chat.completions.create = mock((params: any) => {
+			streamingParams = structuredClone(params);
+			return (async function* () {
+				yield { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] };
+			})();
+		});
+		await readStream(await streaming.createStreamingCompletion({
+			model: 'gpt-5.6-luna',
+			messages: structuredClone(messages),
+			stream: true,
+			gpt56HistoryCacheEligible: true,
+		}));
+
+		expect(streamingParams.prompt_cache_key).toBe(nonStreamingParams.prompt_cache_key);
+		expect(streamingParams.prompt_cache_options).toEqual(nonStreamingParams.prompt_cache_options);
+		expect(streamingParams.messages).toEqual(nonStreamingParams.messages);
+		expect(JSON.stringify(streamingParams)).not.toContain('gpt56HistoryCacheEligible');
 	});
 
 	it('leaves pre-GPT-5.6 requests unchanged', async () => {
@@ -351,7 +533,7 @@ describe('OpenAI API accounting and routing', () => {
 			model: 'gpt-5.5',
 			messages: [{ role: 'system', content: 'stable' }, { role: 'user', content: 'hello' }],
 		};
-		await applyGpt56PromptCaching(params);
+		await applyGpt56PromptCaching(params, true);
 		expect(params.prompt_cache_key).toBeUndefined();
 		expect(params.prompt_cache_options).toBeUndefined();
 		expect(params.messages[0].content).toBe('stable');

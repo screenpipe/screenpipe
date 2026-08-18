@@ -11,7 +11,7 @@
 
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { AcpConfigSelector } from "./acp-config-selector";
 import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
 import type { AIPreset } from "@/lib/utils/tauri";
@@ -124,5 +124,63 @@ describe("ACP config trigger", () => {
     );
 
     expect(screen.getByTestId("acp-config-trigger")).toHaveTextContent("config");
+  });
+
+  it("can move the mode axis into a dedicated composer control", () => {
+    seedSession([
+      modelOption("sonnet"),
+      {
+        id: "mode",
+        name: "Mode",
+        category: "mode",
+        type: "select",
+        currentValue: "agent",
+        values: [
+          { value: "read-only", name: "Read-only" },
+          { value: "agent", name: "Agent" },
+          { value: "agent-full-access", name: "Agent (full access)" },
+        ],
+      },
+    ]);
+
+    render(
+      <AcpConfigSelector
+        sessionId={SESSION}
+        agentId="codex-acp"
+        hideModeControl
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("acp-config-trigger"));
+    expect(screen.getByLabelText("Model")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Mode")).not.toBeInTheDocument();
+  });
+
+  it("keeps a non-permission mode such as Pi thinking in general config", () => {
+    seedSession([
+      modelOption("sonnet"),
+      {
+        id: "mode",
+        name: "Thinking level",
+        category: "mode",
+        type: "select",
+        currentValue: "high",
+        values: [
+          { value: "low", name: "Low" },
+          { value: "high", name: "High" },
+        ],
+      },
+    ]);
+
+    render(
+      <AcpConfigSelector
+        sessionId={SESSION}
+        agentId="pi-acp"
+        hideModeControl
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("acp-config-trigger"));
+    expect(screen.getByLabelText("Thinking level")).toBeInTheDocument();
   });
 });

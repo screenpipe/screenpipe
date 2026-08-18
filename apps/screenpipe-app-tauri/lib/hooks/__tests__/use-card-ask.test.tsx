@@ -14,6 +14,10 @@ import {
 } from "@/lib/card-ask/trigger-bus";
 
 let flagVariant: string | undefined = "at_first_value";
+// The kill switch is read live on every decision, so it has to be
+// mocked or every ask is (correctly) suppressed.
+let flagEnabled: boolean | undefined = true;
+let flagPayload: unknown = undefined;
 let settingsState: { settings: any; isSettingsLoaded: boolean } = {
   settings: { user: { id: "u1", email: "a@b.com" } },
   isSettingsLoaded: true,
@@ -21,6 +25,8 @@ let settingsState: { settings: any; isSettingsLoaded: boolean } = {
 
 vi.mock("posthog-js/react", () => ({
   useFeatureFlagVariantKey: () => flagVariant,
+  useFeatureFlagEnabled: () => flagEnabled,
+  useFeatureFlagPayload: () => flagPayload,
 }));
 
 vi.mock("@/lib/hooks/use-settings", () => ({
@@ -53,6 +59,10 @@ function reset() {
   });
   resetCardAskTriggerBus();
   flagVariant = "at_first_value";
+  // Both flag mocks have to be restored too, or a test that simulates an
+  // unresolved flag leaks its `undefined` into every test that follows.
+  flagEnabled = true;
+  flagPayload = undefined;
   settingsState = {
     settings: { user: { id: "u1", email: "a@b.com" } },
     isSettingsLoaded: true,
@@ -168,6 +178,80 @@ describe("useCardAsk", () => {
     const { result, unmount } = renderHook(() => useCardAsk());
     unmount();
     expect(() => emitCardAskTrigger("first_value")).not.toThrow();
+    expect(result.current.activeTrigger).toBeNull();
+  });
+
+  // The production failure this guards against: the trigger site fires as soon
+  // as its own preconditions are met, but the kill switch is a separate PostHog
+  // flag that resolves over the network and fails closed while unresolved. The
+  // bus has no replay, so an emission evaluated against an unresolved switch
+  // used to be lost for the whole session. Measured 2026-08-12..16 that dropped
+  // roughly 95% of expiry asks.
+  it("re-evaluates a trigger that fired before the kill switch resolved", () => {
+    flagEnabled = undefined;
+    const { result, rerender } = renderHook(() => useCardAsk());
+
+    act(() => emitCardAskTrigger("first_value"));
+    expect(result.current.activeTrigger).toBeNull();
+
+    flagEnabled = true;
+    act(() => rerender());
+    expect(result.current.activeTrigger).toBe("first_value");
+  });
+
+  it("re-evaluates a trigger that fired before the arm resolved", () => {
+    flagVariant = undefined;
+    const { result, rerender } = renderHook(() => useCardAsk());
+
+    act(() => emitCardAskTrigger("first_value"));
+    expect(result.current.activeTrigger).toBeNull();
+    expect(result.current.arm).toBeNull();
+
+    flagVariant = "at_first_value";
+    act(() => rerender());
+    expect(result.current.activeTrigger).toBe("first_value");
+  });
+
+  it("re-evaluates a trigger that fired before the account loaded", () => {
+    settingsState = { settings: { user: null }, isSettingsLoaded: false };
+    const { result, rerender } = renderHook(() => useCardAsk());
+
+    act(() => emitCardAskTrigger("first_value"));
+    expect(result.current.activeTrigger).toBeNull();
+
+    settingsState = {
+      settings: { user: { id: "u1", email: "a@b.com" } },
+      isSettingsLoaded: true,
+    };
+    act(() => rerender());
+    expect(result.current.activeTrigger).toBe("first_value");
+  });
+
+  // Retrying must not turn into a second ask: a dismissed trigger is spent.
+  it("does not re-show a pending trigger once it has been dismissed", () => {
+    const { result, rerender } = renderHook(() => useCardAsk());
+
+    act(() => emitCardAskTrigger("first_value"));
+    expect(result.current.activeTrigger).toBe("first_value");
+
+    act(() => result.current.dismiss());
+    expect(result.current.activeTrigger).toBeNull();
+
+    // Any later re-render (a flag refresh, an account refetch) must stay quiet.
+    flagEnabled = true;
+    act(() => rerender());
+    expect(result.current.activeTrigger).toBeNull();
+  });
+
+  // A trigger this arm does not own must not be resurrected by the retry pass.
+  it("never shows a foreign trigger even after inputs settle", () => {
+    flagEnabled = undefined;
+    const { result, rerender } = renderHook(() => useCardAsk());
+
+    act(() => emitCardAskTrigger("limit"));
+    flagEnabled = true;
+    act(() => rerender());
+
     expect(result.current.activeTrigger).toBeNull();
   });
 });

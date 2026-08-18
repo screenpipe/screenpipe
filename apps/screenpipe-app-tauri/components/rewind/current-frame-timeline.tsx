@@ -282,9 +282,8 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 		return result;
 	}, [ocrTextPositions, frameContext, contextLoading]);
 
-	// Search membership and yellow geometry are both pixel-verified before the
-	// result enters the keyword store. Reuse those exact boxes in the timeline
-	// so it cannot fall back to hidden accessibility bounds for a verified hit.
+	// Desktop search filters accessibility-source results before navigation. The
+	// remaining OCR results carry the exact pixel boxes selected by the store.
 	const searchHighlightPositions = useMemo(() => {
 		return timelineSearchHighlightPositions(
 			textPositions,
@@ -402,6 +401,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 
 	const { nativeLiveTextActive } = useLiveText({
 		debouncedFrame,
+		isFrameReady: !isLoading && !hasError,
 		renderedImageInfo,
 		isSnapshotFrame,
 		isSearchModalOpen,

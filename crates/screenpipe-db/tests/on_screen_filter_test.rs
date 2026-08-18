@@ -258,7 +258,7 @@ mod tests {
             None, // browser_url
             None, // document_path
             true,
-            Some("event"),
+            Some("visual_change"),
             Some("alpha-marker first\nalpha-marker second"),
             Some("accessibility"),
             Some(&tree),
@@ -280,5 +280,6 @@ mod tests {
             1,
             "GROUP BY f.id must collapse multiple matching elements to one frame row"
         );
+        assert_eq!(rows[0].capture_trigger.as_deref(), Some("visual_change"));
     }
 }

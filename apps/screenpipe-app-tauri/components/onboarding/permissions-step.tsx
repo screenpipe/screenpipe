@@ -9,6 +9,7 @@ import { Monitor, Mic, Keyboard, Check, RefreshCw } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands } from "@/lib/utils/tauri";
 import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
+import TrustDisclosure from "./trust-disclosure";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { motion } from "framer-motion";
 import posthog from "posthog-js";
@@ -138,7 +139,6 @@ export default function PermissionsStep({
   const [requesting, setRequesting] = useState(false);
   const [screenRestartRequired, setScreenRestartRequired] = useState(false);
   const [restarting, setRestarting] = useState(false);
-  const [showSkip, setShowSkip] = useState(false);
   const hasAdvancedRef = useRef(false);
   const mountTimeRef = useRef(Date.now());
   const statusesRef = useRef<Record<string, boolean>>({});
@@ -184,7 +184,7 @@ export default function PermissionsStep({
       title: "Capture your screen",
       subtitle: (
         <>
-          Lets Screenpipe index what&apos;s on your screen — windows, docs,
+          Lets Screenpipe index what&apos;s on your screen: windows, docs,
           chats, code. {" "}
           <strong className="font-bold">
             restart after granting this permission.
@@ -332,12 +332,6 @@ export default function PermissionsStep({
     }
   }, [allRequiredGranted, isPlatformLoading, handleNextSlide, statuses]);
 
-  // Show skip after 8s
-  useEffect(() => {
-    const timer = setTimeout(() => setShowSkip(true), 8000);
-    return () => clearTimeout(timer);
-  }, []);
-
   // Handle grant click with immediate refresh
   const handleGrant = async (perm: PermissionDef) => {
     if (requesting || perm.id !== focusedPerm?.id) return;
@@ -390,7 +384,7 @@ export default function PermissionsStep({
           Unlock the full experience
         </h1>
         <p className="font-mono text-[10px] text-muted-foreground mt-1 text-center max-w-xs">
-          Three permissions unlock recording. Optional access can wait.
+          Three permissions turn on recording.
         </p>
       </div>
 
@@ -420,7 +414,10 @@ export default function PermissionsStep({
         <>
           {/* Permission wheel — rows recede the further they are from the
               focused step; only the focused row is interactive */}
-          <div className="space-y-2 w-full max-w-sm">
+          <div
+            data-testid="permission-wheel"
+            className="space-y-2 w-full max-w-sm"
+          >
             {activePermissions.map((perm, i) => (
               <PermissionRow
                 key={perm.id}
@@ -435,27 +432,12 @@ export default function PermissionsStep({
             ))}
           </div>
 
-          {/* Skip link */}
-          {showSkip && !allRequiredGranted && (
-            <motion.button
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              onClick={() => {
-                posthog.capture("onboarding_permission_skipped", {
-                  time_spent_ms: Date.now() - mountTimeRef.current,
-                  statuses,
-                  unresolved_permissions: activePermissions
-                    .filter((permission) => statuses[permission.id] !== true)
-                    .map((permission) => permission.id),
-                });
-                hasAdvancedRef.current = true;
-                handleNextSlide();
-              }}
-              className="mt-5 font-mono text-[10px] text-muted-foreground/50 hover:text-foreground transition-colors"
-            >
-              continue without all permissions →
-            </motion.button>
-          )}
+          {/* Trust sits BELOW the wheel and collapsed by default: the
+              permissions are the task, and the reassurance should not
+              outweigh them. The login gate carries the same promise as plain
+              copy, because this step auto-advances on non-mac and would leave
+              Windows and Linux told nothing. */}
+          <TrustDisclosure surface="permissions" />
         </>
       )}
     </motion.div>

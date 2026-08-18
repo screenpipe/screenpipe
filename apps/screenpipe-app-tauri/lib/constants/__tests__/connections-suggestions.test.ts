@@ -7,6 +7,7 @@ import {
   getSuggestedConnectionsForDevice,
   isSuggestedForThisDevice,
   compareConnectionTiles,
+  connectionMatchesSearch,
   type ConnectionSuggestionTile,
 } from "../connections";
 
@@ -82,5 +83,23 @@ describe("connection suggestions", () => {
     );
 
     expect(group.map((t) => t.id)).toEqual(["github", "linear"]);
+  });
+});
+
+describe("connection search", () => {
+  const gmail = tile("gmail", {
+    name: "Gmail",
+    description: "Read your Gmail inbox",
+  });
+
+  it.each(["gmail", "google", "google mail", "email", "mail"])(
+    "finds Gmail with %s",
+    (query) => {
+      expect(connectionMatchesSearch(gmail, query)).toBe(true);
+    },
+  );
+
+  it("does not match unrelated searches", () => {
+    expect(connectionMatchesSearch(gmail, "calendar")).toBe(false);
   });
 });

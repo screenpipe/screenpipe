@@ -80,24 +80,11 @@ fn encode_single_audio(
 
     debug!("FFmpeg command: {:?}", command);
 
-    #[allow(clippy::zombie_processes)]
-    let mut ffmpeg = command
+    let ffmpeg = command
         .spawn()
         .map_err(|e| anyhow::anyhow!("Failed to spawn FFmpeg process: {e}"))?;
     debug!("FFmpeg process spawned");
-    let mut stdin = ffmpeg
-        .stdin
-        .take()
-        .ok_or_else(|| anyhow::anyhow!("Failed to open FFmpeg stdin"))?;
-
-    stdin.write_all(data)?;
-
-    debug!("Dropping stdin");
-    drop(stdin);
-    debug!("Waiting for FFmpeg process to exit");
-    let output = ffmpeg
-        .wait_with_output()
-        .map_err(|e| anyhow::anyhow!("FFmpeg wait failed: {e}"))?;
+    let output = pipe_and_wait(ffmpeg, data)?;
     let status = output.status;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -116,6 +103,43 @@ fn encode_single_audio(
     }
 
     Ok(())
+}
+
+/// Write `data` to the child's stdin and wait for it. Guarantees the child is
+/// reaped on every path — `std::process::Child::drop` does not wait, so an
+/// early `?` here would leave a zombie behind (one per failed chunk when
+/// ffmpeg dies on startup and the write hits EPIPE). On error the child is
+/// killed first: in the EPIPE case it is already dead, and otherwise the
+/// chunk is being discarded anyway and a bare wait() could block on a hung
+/// ffmpeg.
+fn pipe_and_wait(
+    mut child: std::process::Child,
+    data: &[u8],
+) -> anyhow::Result<std::process::Output> {
+    let mut stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(anyhow::anyhow!("Failed to open FFmpeg stdin"));
+        }
+    };
+
+    if let Err(e) = stdin.write_all(data) {
+        drop(stdin);
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(anyhow::anyhow!(
+            "failed to write audio to ffmpeg stdin: {e}"
+        ));
+    }
+
+    debug!("Dropping stdin");
+    drop(stdin);
+    debug!("Waiting for FFmpeg process to exit");
+    child
+        .wait_with_output()
+        .map_err(|e| anyhow::anyhow!("FFmpeg wait failed: {e}"))
 }
 
 pub fn get_new_file_path_with_timestamp(
@@ -168,7 +192,6 @@ pub fn read_audio_from_file(path: &Path) -> Result<(Vec<f32>, u32)> {
         command.creation_flags(CREATE_NO_WINDOW);
     }
 
-    #[allow(clippy::zombie_processes)]
     let output = command
         .output()
         .map_err(|e| anyhow::anyhow!("failed to run ffmpeg for audio decode: {}", e))?;
@@ -198,4 +221,61 @@ pub fn write_audio_to_file(
         )?;
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::pipe_and_wait;
+    use std::process::{Command, Stdio};
+
+    fn assert_reaped(pid: i32) {
+        // waitpid returning ECHILD proves the child was already reaped by
+        // pipe_and_wait — a zombie would return the pid (or 0 with WNOHANG).
+        let mut status = 0;
+        let ret = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        assert_eq!(
+            ret, -1,
+            "child {pid} was not reaped (waitpid returned {ret})"
+        );
+        let errno = std::io::Error::last_os_error().raw_os_error();
+        assert_eq!(errno, Some(libc::ECHILD));
+    }
+
+    #[test]
+    fn pipe_and_wait_reaps_child_on_broken_pipe() {
+        // Child exits immediately without reading stdin — mimics ffmpeg dying
+        // at startup. Writing a buffer larger than the pipe capacity forces
+        // write_all to hit EPIPE.
+        let child = Command::new("sh")
+            .args(["-c", "exit 1"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = child.id() as i32;
+
+        let data = vec![0u8; 4 * 1024 * 1024];
+        let result = pipe_and_wait(child, &data);
+
+        assert!(result.is_err());
+        assert_reaped(pid);
+    }
+
+    #[test]
+    fn pipe_and_wait_success_path() {
+        let child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = child.id() as i32;
+
+        let output = pipe_and_wait(child, b"hello").unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"hello");
+        assert_reaped(pid);
+    }
 }

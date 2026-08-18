@@ -189,6 +189,14 @@ export function getApiPort(): number {
 }
 
 /**
+ * The key a non-webview client needs to talk to the local API. Null when auth
+ * is off, in which case the server takes unauthenticated requests.
+ */
+export function getApiKey(): string | null {
+  return _authEnabled ? _apiKey : null;
+}
+
+/**
  * Build auth headers for the current config.
  */
 export function getAuthHeaders(): Record<string, string> {

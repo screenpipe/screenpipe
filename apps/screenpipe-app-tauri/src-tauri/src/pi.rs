@@ -248,7 +248,11 @@ fn truncate_stderr(stderr: &str) -> String {
 #[cfg(windows)]
 fn build_command_for_path(path: &str) -> Command {
     if path.ends_with(".cmd") || path.ends_with(".bat") {
-        let mut cmd = Command::new("cmd.exe");
+        // No-window here rather than relying on the caller: both of today's
+        // callers do set the flag, but only after ~2500 lines of indirection,
+        // and a third caller that forgets would flash a terminal. Setting it
+        // twice is harmless.
+        let mut cmd = screenpipe_core::no_window_command("cmd.exe");
         cmd.args(["/C", path]);
         cmd
     } else if path.ends_with(".exe") {
@@ -263,17 +267,19 @@ fn build_command_for_path(path: &str) -> Command {
                 cmd.arg(js);
                 return cmd;
             }
-            // Not a bun shim or resolution failed — run .exe directly
-            Command::new(path)
+            // Not a bun shim or resolution failed — run .exe directly. Still a
+            // console program, so it gets the same treatment as the bun path
+            // above rather than being the one branch that flashes.
+            screenpipe_core::no_window_command(path)
         } else {
-            Command::new(path)
+            screenpipe_core::no_window_command(path)
         }
     } else if let Some(bun) = find_bun_executable() {
         let mut cmd = bun_command(&bun);
         cmd.arg(path);
         cmd
     } else {
-        Command::new(path)
+        screenpipe_core::no_window_command(path)
     }
 }
 
@@ -286,7 +292,9 @@ fn build_command_for_path(path: &str) -> Command {
         cmd.arg(path);
         cmd
     } else {
-        Command::new(path)
+        // A no-op off Windows, kept in the same shape as the windows arm so
+        // both read as "every command this factory returns is guarded".
+        screenpipe_core::no_window_command(path)
     }
 }
 
@@ -447,6 +455,9 @@ pub struct PiExtensionPackage {
     pub scope: String,
     pub filtered: bool,
     pub installed: bool,
+    /// True only after Screenpipe validates the installed package's portable
+    /// ACP MCP manifest and its entrypoint stays inside the package directory.
+    pub acp_compatible: bool,
 }
 
 /// RPC Response from Pi
@@ -1228,17 +1239,19 @@ fn clear_pi_install_artifacts(install_dir: &Path) {
     let _ = std::fs::remove_file(install_dir.join("package-lock.json"));
 }
 
-fn apply_no_window(_cmd: &mut Command) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        _cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+/// Local alias so the many call sites below stay unchanged while there is only
+/// one implementation of the flag, in `screenpipe_core::no_window`.
+fn apply_no_window(cmd: &mut Command) {
+    screenpipe_core::apply_no_window(cmd);
 }
 
 fn bun_command(bun: &str) -> Command {
-    let mut cmd = Command::new(bun);
+    // No-window at construction, not left to `run_command_output`: bun is a
+    // console program and not every caller runs it through that helper. The
+    // screenpipe-mcp prewarm spawns this directly at every launch and waits up
+    // to two minutes for it, so the missing flag was a terminal sitting on the
+    // user's desktop for the whole startup.
+    let mut cmd = screenpipe_core::no_window_command(bun);
     // Single source of truth in screenpipe-core: on Linux, bun subprocesses
     // must not inherit the app's LD_LIBRARY_PATH, or bundled runtimes like
     // AppImage can make bun crash before it prints diagnostics.
@@ -1295,7 +1308,10 @@ fn should_retry_install_with_npm(stderr: &str) -> bool {
 fn npm_install_command(install_dir: &Path) -> Command {
     #[cfg(windows)]
     {
-        let mut cmd = Command::new("cmd.exe");
+        // Guarded at construction, not left to `run_command_output`: an npm
+        // fallback install can run for minutes, so a missed flag here is a
+        // terminal sitting on the user's desktop, not a blink.
+        let mut cmd = screenpipe_core::no_window_command("cmd.exe");
         cmd.args(["/C", "npm"])
             .args(NPM_INSTALL_ARGS)
             .current_dir(install_dir);
@@ -2329,6 +2345,34 @@ fn kill_orphan_pi_processes(managed_alive: bool) {
 /// 200ms is enough to detect immediate-exit crashes without delaying first chat.
 const PI_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(200);
 
+/// What a caller sees when an `acp` preset reaches a raw-Pi spawn path.
+pub(crate) const ACP_PRESET_WITHOUT_BACKEND: &str =
+    "This coding-agent preset is missing its agent configuration. Re-select the agent in Settings → AI presets.";
+
+/// Map a preset provider onto Pi's internal registry name.
+///
+/// An `acp` preset has no Pi provider at all: its model calls belong to the
+/// coding agent, not to a Pi provider. Reaching this mapping with `acp` means
+/// the ACP backend was dropped between the preset and the spawn, and the
+/// catch-all used to answer that with "screenpipe" — which sent the *agent id*
+/// ("codex-acp") to the cloud gateway as a model name. The gateway rejected it
+/// as `model_not_allowed`, and the desktop rendered that as "upgrade to
+/// Screenpipe Business": a billing dead end for what is really a broken preset,
+/// on an account that already had the plan. Fail loudly instead of silently
+/// spending someone's hosted allowance on a model id that cannot exist.
+fn pi_registry_provider(provider: &str, url: &str) -> Result<&'static str, String> {
+    Ok(match provider {
+        "openai" => "openai-byok",
+        "openai-chatgpt" => "openai-chatgpt",
+        "native-ollama" => "ollama",
+        "anthropic" => "anthropic-byok",
+        // "custom" requires a valid URL; fall back to screenpipe cloud if missing
+        "custom" if !url.is_empty() => "custom",
+        "acp" => return Err(ACP_PRESET_WITHOUT_BACKEND.to_string()),
+        "screenpipe-cloud" | "pi" | _ => "screenpipe",
+    })
+}
+
 /// Resolve a model name for the screenpipe provider.
 ///
 /// The gateway (api.screenpipe.com) is the source of truth for model validation
@@ -2551,16 +2595,11 @@ pub async fn pi_start_inner(
 
     // Determine which Pi provider and model to use
     let (pi_provider, pi_model) = match &provider_config {
+        // An ACP session's model calls belong to the adapter, so there is no Pi
+        // provider to resolve — these values are only used for logging below.
+        Some(config) if use_acp => ("acp".to_string(), config.model.clone()),
         Some(config) => {
-            let provider_name = match config.provider.as_str() {
-                "openai" => "openai-byok",
-                "openai-chatgpt" => "openai-chatgpt",
-                "native-ollama" => "ollama",
-                "anthropic" => "anthropic-byok",
-                // "custom" requires a valid URL; fall back to screenpipe cloud if missing
-                "custom" if !config.url.is_empty() => "custom",
-                "screenpipe-cloud" | "pi" | _ => "screenpipe",
-            };
+            let provider_name = pi_registry_provider(&config.provider, &config.url)?;
             let model = resolve_pi_model(&config.model, provider_name);
             (provider_name.to_string(), model)
         }
@@ -4194,17 +4233,10 @@ pub async fn pi_set_model(
 ) -> Result<(), String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
 
-    // Map frontend provider name → Pi's internal registry name. Must stay in
-    // sync with the mapping in `pi_start_inner` (line ~1045) — a mismatch
-    // means Pi can't find the model and returns "Model not found".
-    let pi_provider = match provider_config.provider.as_str() {
-        "openai" => "openai-byok",
-        "openai-chatgpt" => "openai-chatgpt",
-        "native-ollama" => "ollama",
-        "anthropic" => "anthropic-byok",
-        "custom" if !provider_config.url.is_empty() => "custom",
-        "screenpipe-cloud" | "pi" | _ => "screenpipe",
-    };
+    // Map frontend provider name → Pi's internal registry name. Shared with
+    // `pi_start_inner` so the two can't drift — a mismatch means Pi can't find
+    // the model and returns "Model not found".
+    let pi_provider = pi_registry_provider(&provider_config.provider, &provider_config.url)?;
     let pi_model = resolve_pi_model(&provider_config.model, pi_provider);
 
     let queue = {
@@ -4401,19 +4433,30 @@ pub struct AcpAgentInstallStatus {
     pub installed: bool,
     pub command: Option<String>,
     pub install_url: Option<String>,
+    pub can_install_automatically: bool,
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn pi_acp_agent_install_status(agent_id: String) -> AcpAgentInstallStatus {
-    let (requires_install, installed, command, install_url) =
+    let (requires_install, installed, command, install_url, can_install_automatically) =
         crate::acp_runtime::agent_install_status(&agent_id);
     AcpAgentInstallStatus {
         requires_install,
         installed,
         command,
         install_url,
+        can_install_automatically,
     }
+}
+
+/// Install a supported binary ACP agent after the user clicks Install, then
+/// return a fresh status so the UI only unblocks once the CLI is resolvable.
+#[tauri::command]
+#[specta::specta]
+pub async fn pi_acp_agent_install(agent_id: String) -> Result<AcpAgentInstallStatus, String> {
+    crate::acp_runtime::install_agent(&agent_id).await?;
+    Ok(pi_acp_agent_install_status(agent_id))
 }
 
 /// Whether launching this agent will trigger a first-run package install (a
@@ -4594,6 +4637,7 @@ fn pi_settings_packages(settings: &serde_json::Value) -> Vec<PiExtensionPackage>
 
             Some(PiExtensionPackage {
                 installed: pi_package_source_looks_installed(&source),
+                acp_compatible: crate::acp_extensions::package_source_is_portable(&source),
                 source,
                 scope: "user".to_string(),
                 filtered,
@@ -4633,7 +4677,7 @@ fn validate_pi_extension_package_source(source: &str) -> Result<String, String> 
     Err("Only npm: packages and GitHub package URLs can be installed from screenpipe".to_string())
 }
 
-fn npm_package_name_from_source(source: &str) -> Option<String> {
+pub(crate) fn npm_package_name_from_source(source: &str) -> Option<String> {
     let spec = source.strip_prefix("npm:")?.trim();
     if spec.is_empty() {
         return None;
@@ -6800,7 +6844,8 @@ error: InstallFailed extracting tarball"#;
     // -- build_models_json tests --
 
     use super::{
-        build_models_json, build_models_json_with_api_url, resolve_pi_model, PiProviderConfig,
+        build_models_json, build_models_json_with_api_url, pi_registry_provider, resolve_pi_model,
+        PiProviderConfig, ACP_PRESET_WITHOUT_BACKEND,
     };
 
     fn make_provider_config(provider: &str, model: &str) -> PiProviderConfig {
@@ -6859,6 +6904,42 @@ error: InstallFailed extracting tarball"#;
         assert_eq!(
             config["providers"]["screenpipe"]["baseUrl"],
             "http://127.0.0.1:8787/v1"
+        );
+    }
+
+    /// An `acp` preset that lost its backend must never be answered with the
+    /// cloud provider. That silent fallback sent the *agent id* to the gateway
+    /// as a model name, and the 403 surfaced as "upgrade to Screenpipe
+    /// Business" on accounts that already had the plan.
+    #[test]
+    fn acp_provider_never_falls_back_to_the_cloud() {
+        let error =
+            pi_registry_provider("acp", "").expect_err("acp must not resolve to a provider");
+        assert_eq!(error, ACP_PRESET_WITHOUT_BACKEND);
+        assert!(pi_registry_provider("acp", "https://example.com/v1").is_err());
+    }
+
+    #[test]
+    fn known_providers_still_map_as_before() {
+        assert_eq!(pi_registry_provider("openai", "").unwrap(), "openai-byok");
+        assert_eq!(
+            pi_registry_provider("openai-chatgpt", "").unwrap(),
+            "openai-chatgpt"
+        );
+        assert_eq!(pi_registry_provider("native-ollama", "").unwrap(), "ollama");
+        assert_eq!(
+            pi_registry_provider("anthropic", "").unwrap(),
+            "anthropic-byok"
+        );
+        assert_eq!(
+            pi_registry_provider("custom", "http://localhost:11434/v1").unwrap(),
+            "custom"
+        );
+        // custom without a URL keeps its long-standing cloud fallback
+        assert_eq!(pi_registry_provider("custom", "").unwrap(), "screenpipe");
+        assert_eq!(
+            pi_registry_provider("screenpipe-cloud", "").unwrap(),
+            "screenpipe"
         );
     }
 

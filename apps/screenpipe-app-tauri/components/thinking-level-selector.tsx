@@ -5,7 +5,6 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Brain } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
 import { usePiThinkingLevel } from "@/lib/hooks/use-pi-thinking-level";
 import { ComposerSettingsPopover } from "@/components/chat/standalone/composer-settings-popover";
@@ -125,7 +124,6 @@ export function ThinkingLevelSelector({ streaming = false, sessionId = null }: T
   // rearrange the composer row. The trigger keeps naming the active level.
   return (
     <ComposerSettingsPopover
-      icon={Brain}
       label={currentLabel}
       title={disabledReason || "Thinking level: controls reasoning depth"}
       ariaLabel="Thinking level"

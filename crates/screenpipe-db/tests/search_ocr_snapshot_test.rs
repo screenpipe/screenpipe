@@ -40,7 +40,7 @@ mod tests {
                 Some("GitHub"),
                 None,
                 true,
-                None,
+                Some("typing_pause"),
                 None,
                 None,
                 None,
@@ -99,6 +99,38 @@ mod tests {
                     ocr.ocr_text
                 );
                 assert_eq!(ocr.app_name, "chrome.exe");
+                assert_eq!(ocr.capture_trigger.as_deref(), Some("typing_pause"));
+            }
+            other => panic!("Expected OCR result, got: {:?}", other),
+        }
+
+        // Empty-query browsing uses a separate optimized SQL projection.
+        let browse_results = db
+            .search(
+                "",
+                ContentType::OCR,
+                100,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        match &browse_results[0] {
+            SearchResult::OCR(ocr) => {
+                assert_eq!(ocr.capture_trigger.as_deref(), Some("typing_pause"));
             }
             other => panic!("Expected OCR result, got: {:?}", other),
         }

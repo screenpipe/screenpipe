@@ -4,7 +4,6 @@
 "use client";
 
 import type { ReactNode } from "react";
-import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -22,6 +21,10 @@ import { cn } from "@/lib/utils";
  * two had different widths and different popover anatomy, so picking a coding
  * agent silently rearranged the row.
  *
+ * The trigger is the value alone. Claude and Codex both name the model in
+ * plain text with no glyph, and next to three other controls that reads as
+ * one line of state instead of a row of buttons.
+ *
  * Native `<select>` on purpose, for both. The OS draws their menu above the
  * webview; Radix menus get painted over on Windows. It also degrades better
  * than a hand-rolled list when an adapter advertises a long model catalog.
@@ -35,7 +38,6 @@ const FIELD_CONTROL =
   "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 
 export function ComposerSettingsPopover({
-  icon: Icon,
   label,
   title,
   ariaLabel,
@@ -46,7 +48,6 @@ export function ComposerSettingsPopover({
   disabled = false,
   children,
 }: {
-  icon: LucideIcon;
   /** The active value, named on the trigger so it is readable before opening. */
   label: string;
   title: string;
@@ -67,12 +68,16 @@ export function ComposerSettingsPopover({
           variant="ghost"
           size="sm"
           disabled={disabled}
-          className="h-7 max-w-[160px] gap-1.5 px-2 text-xs text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+          // No leading glyph: the value IS the affordance, the way Claude reads
+          // "Opus 5 · Fast  High" and Codex reads "5.6 Sol  Extra High". An icon
+          // in front of a value that already names itself is a second thing to
+          // parse, and this row has four controls competing for one line. The
+          // freed width goes to the label so fewer names truncate.
+          className="h-7 max-w-[190px] px-2 text-xs text-muted-foreground hover:bg-muted/50 hover:text-foreground"
           title={title}
           aria-label={ariaLabel}
           data-testid={triggerTestId}
         >
-          <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
           <span className="truncate font-medium">{label}</span>
         </Button>
       </PopoverTrigger>

@@ -11,7 +11,7 @@
  * the refresh button is pressed says so, instead of silently showing a value
  * frozen at whenever it was last clicked.
  */
-export type LiveViewSourceStatus = "auto" | "manual" | "paused" | "unknown";
+export type LiveViewSourceStatus = "auto" | "manual" | "paused" | "unconfigured" | "unknown";
 
 export type PipeScheduleSnapshot = {
   name: string;
@@ -47,7 +47,7 @@ export function liveViewSourceStatus(
   pipeName: string | null | undefined,
   snapshots: readonly PipeScheduleSnapshot[],
 ): LiveViewSourceStatus {
-  if (!pipeName) return "unknown";
+  if (!pipeName) return "unconfigured";
   const snapshot = snapshots.find((candidate) => candidate.name === pipeName);
   if (!snapshot) return "unknown";
   if (!snapshot.enabled) return "paused";

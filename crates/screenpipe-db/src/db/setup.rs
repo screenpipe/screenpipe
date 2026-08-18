@@ -207,14 +207,27 @@ impl DatabaseManager {
             .pragma("mmap_size", config.mmap_size.to_string());
         // macOS delivers an uncatchable SIGBUS when APFS invalidates a page in
         // SQLite's file-backed WAL index after the `-shm` file was shortened.
-        // `unix-excl` keeps the WAL index in process memory and takes one OS
-        // lock for the recorder process, while SQLite still coordinates all
-        // SQLx connections internally. Screenpipe already requires exclusive
-        // ownership for live capture, recovery, and maintenance operations.
+        // `unix-excl` does NOT move that index into process memory: in the
+        // bundled SQLite (3.51.3) `unixOpenSharedMemory` always creates the
+        // `-shm` file, and a heap wal-index requires `locking_mode=EXCLUSIVE`,
+        // which this database deliberately never sets. What `unix-excl` does
+        // is take one real exclusive lock on the database file the first time
+        // any lock is attempted and turn every later OS locking operation into
+        // in-process bookkeeping (`unixFileLock`). That is what keeps another
+        // process from attaching and shortening `-shm` underneath us, while
+        // every connection in this process shares the one shm node for the
+        // inode. Screenpipe already requires exclusive ownership for live
+        // capture, recovery, and maintenance operations.
+        //
+        // Do not restate this as "the WAL index lives in memory". That claim
+        // was wrong, and `db.sqlite-shm` existing on disk is normal, not
+        // evidence that some other opener touched the database.
         #[cfg(target_os = "macos")]
         if !is_in_memory {
             connect_options = connect_options.vfs("unix-excl");
-            info!("macOS capture database using unix-excl VFS with a process-local WAL index");
+            info!(
+                "macOS capture database using unix-excl VFS with a process-exclusive database lock"
+            );
         }
         for (pragma, value) in screenpipe_config::WAL_SAFETY_PRAGMAS {
             connect_options = connect_options.pragma(pragma, value);
@@ -247,18 +260,22 @@ impl DatabaseManager {
 
         // Every file-backed query connection enables query_only. Non-macOS
         // builds also open the file with mode=ro as an independent physical
-        // barrier. macOS keeps all unix-excl handles physically RW so they
-        // share one process-local WAL index instead of reopening `-shm`.
-        // In-memory test databases remain writable for fixtures that seed them
-        // directly.
+        // barrier. macOS keeps all unix-excl handles physically RW so every
+        // connection shares one shm node under the same exclusive-lock
+        // regime, rather than splitting into two locking modes over the same
+        // `-shm`. In-memory test databases remain writable for fixtures that
+        // seed them directly.
         let read_connect_options = if is_in_memory {
             connect_options.clone()
         } else {
             let options = connect_options.clone().pragma("query_only", "ON");
-            // A read-only unix-excl handle falls back to POSIX file locks and a
-            // file-backed WAL index. Keep macOS query handles physically RW so
-            // every connection shares the process-local WAL index; query_only
-            // remains the connection-level write barrier.
+            // `unixFileLock` only takes the one-shot exclusive lock when
+            // UNIXFILE_EXCL is set and UNIXFILE_RDONLY is not, so opening a
+            // handle `mode=ro` drops it out of the exclusive regime and back
+            // onto real POSIX locks — against sibling handles that are no
+            // longer doing OS-level locking at all. Keep macOS query handles
+            // physically RW so every connection stays in one regime;
+            // query_only remains the connection-level write barrier.
             #[cfg(not(target_os = "macos"))]
             let options = options.read_only(true);
             options

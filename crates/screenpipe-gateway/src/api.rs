@@ -60,10 +60,12 @@ use axum::{
     routing::{any, get, MethodRouter},
     Json, Router,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 use screenpipe_db::DatabaseManager;
 use screenpipe_sync::{BlobSource, ListRequest};
 use screenpipe_telemetry_wire::{frame_image_key, org_telemetry_prefix, sanitize_id};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::warn;
 
@@ -411,6 +413,84 @@ fn parse_limit(params: &HashMap<String, String>) -> Result<i64, Box<Response>> {
     parse_bounded_int(params, "limit", DEFAULT_LIMIT, 1, MAX_LIMIT)
 }
 
+#[derive(Serialize, Deserialize)]
+struct CursorEnvelope {
+    v: u8,
+    endpoint: String,
+    filters: String,
+    state: Value,
+}
+
+fn invalid_cursor() -> Box<Response> {
+    err_json_code(
+        StatusCode::BAD_REQUEST,
+        INVALID_QUERY_PARAM,
+        "invalid 'cursor': expected a cursor returned by this endpoint with the same filters",
+    )
+}
+
+fn encode_cursor(endpoint: &str, filters: &str, state: Value) -> String {
+    URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&CursorEnvelope {
+            v: 1,
+            endpoint: endpoint.to_string(),
+            filters: filters.to_string(),
+            state,
+        })
+        .expect("cursor envelope serializes"),
+    )
+}
+
+fn parse_cursor(
+    params: &HashMap<String, String>,
+    endpoint: &str,
+    filters: &str,
+) -> Result<Option<Value>, Box<Response>> {
+    let Some(raw) = param(params, "cursor") else {
+        return Ok(None);
+    };
+    if raw.len() > 4096 {
+        return Err(invalid_cursor());
+    }
+    let envelope: CursorEnvelope = URL_SAFE_NO_PAD
+        .decode(raw)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .filter(|c: &CursorEnvelope| {
+            c.v == 1 && c.endpoint == endpoint && c.filters == filters && c.state.is_object()
+        })
+        .ok_or_else(invalid_cursor)?;
+    Ok(Some(envelope.state))
+}
+
+fn cursor_string(state: &Value, name: &str) -> Result<String, Box<Response>> {
+    state
+        .get(name)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(invalid_cursor)
+}
+
+fn filter_signature(values: Value) -> String {
+    serde_json::to_string(&values).expect("filter signature serializes")
+}
+
+fn cursor_window(state: &Value) -> Result<TimeWindow, Box<Response>> {
+    let since = cursor_string(state, "since")?;
+    let until = cursor_string(state, "until")?;
+    let since = DateTime::parse_from_rfc3339(&since)
+        .map(|t| t.with_timezone(&Utc))
+        .map_err(|_| invalid_cursor())?;
+    let until = DateTime::parse_from_rfc3339(&until)
+        .map(|t| t.with_timezone(&Utc))
+        .map_err(|_| invalid_cursor())?;
+    Ok(TimeWindow {
+        since,
+        until,
+        window_hours: ((until - since).num_milliseconds() as f64 / 3_600_000.0).max(0.0),
+    })
+}
+
 fn rfc3339z(t: &DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
@@ -492,13 +572,40 @@ struct KindQuery<'a> {
     until: String,
     limit: i64,
     newest_first: bool,
+    cursor_t: Option<&'a str>,
+    cursor_id: Option<&'a str>,
+}
+
+fn with_cursor_id(mut record: Value, id: String) -> Value {
+    record["_cursor_id"] = Value::String(id);
+    record
+}
+
+fn cursor_id_of(v: &Value) -> &str {
+    v.get("_cursor_id").and_then(Value::as_str).unwrap_or("")
+}
+
+fn compare_records(a: &Value, b: &Value, newest_first: bool) -> std::cmp::Ordering {
+    let by_time = match (
+        DateTime::parse_from_rfc3339(t_of(a)),
+        DateTime::parse_from_rfc3339(t_of(b)),
+    ) {
+        (Ok(a), Ok(b)) => a.cmp(&b),
+        _ => t_of(a).cmp(t_of(b)),
+    };
+    let order = by_time.then_with(|| cursor_id_of(a).cmp(cursor_id_of(b)));
+    if newest_first {
+        order.reverse()
+    } else {
+        order
+    }
 }
 
 async fn query_frames(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Value>, sqlx::Error> {
     let fts = kq.q.and_then(fts_expression);
     let order = if kq.newest_first { "DESC" } else { "ASC" };
     let sql = format!(
-        r#"SELECT f.sync_id, f.machine_id, f.device_name, f.timestamp, f.app_name,
+        r#"SELECT f.id, f.sync_id, f.machine_id, f.device_name, f.timestamp, f.app_name,
                   f.window_name, f.browser_url, f.full_text
            FROM frames f
            {fts_join}
@@ -506,10 +613,13 @@ async fn query_frames(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Va
              AND datetime(f.timestamp) >= datetime(?1) AND datetime(f.timestamp) <= datetime(?2)
              AND (?3 IS NULL OR f.machine_id = ?3)
              AND (?4 IS NULL OR f.app_name IS NULL OR lower(f.app_name) = lower(?4))
-           ORDER BY datetime(f.timestamp) {order}
-           LIMIT ?5"#,
+             AND (?5 IS NULL OR datetime(f.timestamp) {cmp} datetime(?5)
+                  OR (datetime(f.timestamp) = datetime(?5) AND printf('frame:%020d', f.id) {cmp} ?6))
+           ORDER BY datetime(f.timestamp) {order}, printf('frame:%020d', f.id) {order}
+           LIMIT ?7"#,
+        cmp = if kq.newest_first { "<" } else { ">" },
         fts_join = if fts.is_some() {
-            "JOIN frames_fts ON frames_fts.rowid = f.id AND frames_fts MATCH ?6"
+            "JOIN frames_fts ON frames_fts.rowid = f.id AND frames_fts MATCH ?8"
         } else {
             ""
         },
@@ -517,6 +627,7 @@ async fn query_frames(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Va
     let mut query = sqlx::query_as::<
         _,
         (
+            i64,
             Option<String>,
             Option<String>,
             Option<String>,
@@ -531,6 +642,8 @@ async fn query_frames(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Va
     .bind(&kq.until)
     .bind(kq.device_id)
     .bind(kq.app_name)
+    .bind(kq.cursor_t)
+    .bind(kq.cursor_id)
     .bind(kq.limit);
     if let Some(f) = &fts {
         query = query.bind(f.clone());
@@ -539,24 +652,27 @@ async fn query_frames(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Va
     Ok(rows
         .into_iter()
         .map(
-            |(sync_id, machine_id, device_name, ts, app, window, url, text)| {
-                record_summary(
-                    "frame",
-                    Some(ts),
-                    device_name,
-                    machine_id,
-                    app,
-                    window,
-                    url,
-                    text,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    local_id_from_sync_id(sync_id.as_deref()),
-                    None,
+            |(id, sync_id, machine_id, device_name, ts, app, window, url, text)| {
+                with_cursor_id(
+                    record_summary(
+                        "frame",
+                        Some(ts),
+                        device_name,
+                        machine_id,
+                        app,
+                        window,
+                        url,
+                        text,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        local_id_from_sync_id(sync_id.as_deref()),
+                        None,
+                    ),
+                    format!("frame:{id:020}"),
                 )
             },
         )
@@ -567,17 +683,20 @@ async fn query_parsed(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Va
     let fts = kq.q.and_then(fts_expression);
     let order = if kq.newest_first { "DESC" } else { "ASC" };
     let sql = format!(
-        r#"SELECT p.device_id, p.device_label, p.timestamp, p.app_name,
+        r#"SELECT p.rowid, p.device_id, p.device_label, p.timestamp, p.app_name,
                   p.window_name, p.browser_url, p.text, p.frame_id
            FROM gateway_parsed_records p
            {fts_join}
            WHERE datetime(p.timestamp) >= datetime(?1) AND datetime(p.timestamp) <= datetime(?2)
              AND (?3 IS NULL OR p.device_id = ?3)
              AND (?4 IS NULL OR lower(p.app_name) = lower(?4))
-           ORDER BY datetime(p.timestamp) {order}
-           LIMIT ?5"#,
+             AND (?5 IS NULL OR datetime(p.timestamp) {cmp} datetime(?5)
+                  OR (datetime(p.timestamp) = datetime(?5) AND printf('parsed:%020d', p.rowid) {cmp} ?6))
+           ORDER BY datetime(p.timestamp) {order}, printf('parsed:%020d', p.rowid) {order}
+           LIMIT ?7"#,
+        cmp = if kq.newest_first { "<" } else { ">" },
         fts_join = if fts.is_some() {
-            "JOIN gateway_parsed_records_fts fts ON fts.rowid = p.rowid AND gateway_parsed_records_fts MATCH ?6"
+            "JOIN gateway_parsed_records_fts fts ON fts.rowid = p.rowid AND gateway_parsed_records_fts MATCH ?8"
         } else {
             ""
         },
@@ -585,6 +704,7 @@ async fn query_parsed(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Va
     let mut query = sqlx::query_as::<
         _,
         (
+            i64,
             String,
             String,
             String,
@@ -599,6 +719,8 @@ async fn query_parsed(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Va
     .bind(&kq.until)
     .bind(kq.device_id)
     .bind(kq.app_name)
+    .bind(kq.cursor_t)
+    .bind(kq.cursor_id)
     .bind(kq.limit);
     if let Some(f) = &fts {
         query = query.bind(f.clone());
@@ -606,26 +728,31 @@ async fn query_parsed(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Va
     let rows = query.fetch_all(&db.pool).await?;
     Ok(rows
         .into_iter()
-        .map(|(device_id, label, ts, app, window, url, text, frame_id)| {
-            record_summary(
-                "parsed",
-                Some(ts),
-                Some(label),
-                Some(device_id),
-                Some(app),
-                Some(window),
-                url,
-                Some(text),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some(frame_id),
-                None,
-            )
-        })
+        .map(
+            |(id, device_id, label, ts, app, window, url, text, frame_id)| {
+                with_cursor_id(
+                    record_summary(
+                        "parsed",
+                        Some(ts),
+                        Some(label),
+                        Some(device_id),
+                        Some(app),
+                        Some(window),
+                        url,
+                        Some(text),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        Some(frame_id),
+                        None,
+                    ),
+                    format!("parsed:{id:020}"),
+                )
+            },
+        )
         .collect())
 }
 
@@ -633,7 +760,7 @@ async fn query_audio(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Val
     let fts = kq.q.and_then(fts_expression);
     let order = if kq.newest_first { "DESC" } else { "ASC" };
     let sql = format!(
-        r#"SELECT at.sync_id, ac.machine_id, gd.device_label, at.timestamp,
+        r#"SELECT at.id, at.sync_id, ac.machine_id, gd.device_label, at.timestamp,
                   at.transcription, s.name
            FROM audio_transcriptions at
            JOIN audio_chunks ac ON at.audio_chunk_id = ac.id
@@ -643,10 +770,13 @@ async fn query_audio(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Val
            WHERE ac.machine_id IS NOT NULL
              AND datetime(at.timestamp) >= datetime(?1) AND datetime(at.timestamp) <= datetime(?2)
              AND (?3 IS NULL OR ac.machine_id = ?3)
-           ORDER BY datetime(at.timestamp) {order}
-           LIMIT ?4"#,
+             AND (?4 IS NULL OR datetime(at.timestamp) {cmp} datetime(?4)
+                  OR (datetime(at.timestamp) = datetime(?4) AND printf('audio:%020d', at.id) {cmp} ?5))
+           ORDER BY datetime(at.timestamp) {order}, printf('audio:%020d', at.id) {order}
+           LIMIT ?6"#,
+        cmp = if kq.newest_first { "<" } else { ">" },
         fts_join = if fts.is_some() {
-            "JOIN audio_transcriptions_fts fts ON fts.rowid = at.id AND audio_transcriptions_fts MATCH ?5"
+            "JOIN audio_transcriptions_fts fts ON fts.rowid = at.id AND audio_transcriptions_fts MATCH ?7"
         } else {
             ""
         },
@@ -654,6 +784,7 @@ async fn query_audio(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Val
     let mut query = sqlx::query_as::<
         _,
         (
+            i64,
             Option<String>,
             Option<String>,
             Option<String>,
@@ -665,6 +796,8 @@ async fn query_audio(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Val
     .bind(&kq.since)
     .bind(&kq.until)
     .bind(kq.device_id)
+    .bind(kq.cursor_t)
+    .bind(kq.cursor_id)
     .bind(kq.limit);
     if let Some(f) = &fts {
         query = query.bind(f.clone());
@@ -673,24 +806,27 @@ async fn query_audio(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Val
     Ok(rows
         .into_iter()
         .map(
-            |(_sync_id, machine_id, label, ts, transcription, speaker)| {
-                record_summary(
-                    "audio",
-                    Some(ts),
-                    label,
-                    machine_id,
-                    None,
-                    None,
-                    None,
-                    None,
-                    Some(transcription),
-                    speaker,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
+            |(id, _sync_id, machine_id, label, ts, transcription, speaker)| {
+                with_cursor_id(
+                    record_summary(
+                        "audio",
+                        Some(ts),
+                        label,
+                        machine_id,
+                        None,
+                        None,
+                        None,
+                        None,
+                        Some(transcription),
+                        speaker,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
+                    format!("audio:{id:020}"),
                 )
             },
         )
@@ -701,7 +837,7 @@ async fn query_ui(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Value>
     let fts = kq.q.and_then(fts_expression);
     let order = if kq.newest_first { "DESC" } else { "ASC" };
     let sql = format!(
-        r#"SELECT ue.sync_id, ue.machine_id, gd.device_label, ue.timestamp,
+        r#"SELECT ue.id, ue.sync_id, ue.machine_id, gd.device_label, ue.timestamp,
                   ue.app_name, ue.browser_url
            FROM ui_events ue
            LEFT JOIN gateway_devices gd ON gd.device_id = ue.machine_id
@@ -710,10 +846,13 @@ async fn query_ui(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Value>
              AND datetime(ue.timestamp) >= datetime(?1) AND datetime(ue.timestamp) <= datetime(?2)
              AND (?3 IS NULL OR ue.machine_id = ?3)
              AND (?4 IS NULL OR ue.app_name IS NULL OR lower(ue.app_name) = lower(?4))
-           ORDER BY datetime(ue.timestamp) {order}
-           LIMIT ?5"#,
+             AND (?5 IS NULL OR datetime(ue.timestamp) {cmp} datetime(?5)
+                  OR (datetime(ue.timestamp) = datetime(?5) AND printf('ui:%020d', ue.id) {cmp} ?6))
+           ORDER BY datetime(ue.timestamp) {order}, printf('ui:%020d', ue.id) {order}
+           LIMIT ?7"#,
+        cmp = if kq.newest_first { "<" } else { ">" },
         fts_join = if fts.is_some() {
-            "JOIN ui_events_fts ON ui_events_fts.rowid = ue.id AND ui_events_fts MATCH ?6"
+            "JOIN ui_events_fts ON ui_events_fts.rowid = ue.id AND ui_events_fts MATCH ?8"
         } else {
             ""
         },
@@ -721,6 +860,7 @@ async fn query_ui(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Value>
     let mut query = sqlx::query_as::<
         _,
         (
+            i64,
             Option<String>,
             Option<String>,
             Option<String>,
@@ -733,6 +873,8 @@ async fn query_ui(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Value>
     .bind(&kq.until)
     .bind(kq.device_id)
     .bind(kq.app_name)
+    .bind(kq.cursor_t)
+    .bind(kq.cursor_id)
     .bind(kq.limit);
     if let Some(f) = &fts {
         query = query.bind(f.clone());
@@ -743,24 +885,27 @@ async fn query_ui(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Value>
     // on the hosted side too.
     Ok(rows
         .into_iter()
-        .map(|(_sync_id, machine_id, label, ts, app, url)| {
-            record_summary(
-                "ui",
-                Some(ts),
-                label,
-                machine_id,
-                app,
-                None,
-                url,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
+        .map(|(id, _sync_id, machine_id, label, ts, app, url)| {
+            with_cursor_id(
+                record_summary(
+                    "ui",
+                    Some(ts),
+                    label,
+                    machine_id,
+                    app,
+                    None,
+                    url,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                format!("ui:{id:020}"),
             )
         })
         .collect())
@@ -773,7 +918,7 @@ async fn query_memories(
     let fts = kq.q.and_then(fts_expression);
     let order = if kq.newest_first { "DESC" } else { "ASC" };
     let sql = format!(
-        r#"SELECT m.sync_uuid, m.sync_modified_by, gd.device_label, m.created_at,
+        r#"SELECT m.id, m.sync_uuid, m.sync_modified_by, gd.device_label, m.created_at,
                   m.content, m.importance, m.tags, m.source
            FROM memories m
            LEFT JOIN gateway_devices gd ON gd.device_id = m.sync_modified_by
@@ -781,10 +926,13 @@ async fn query_memories(
            WHERE m.sync_modified_by IS NOT NULL
              AND datetime(m.created_at) >= datetime(?1) AND datetime(m.created_at) <= datetime(?2)
              AND (?3 IS NULL OR m.sync_modified_by = ?3)
-           ORDER BY datetime(m.created_at) {order}
-           LIMIT ?4"#,
+             AND (?4 IS NULL OR datetime(m.created_at) {cmp} datetime(?4)
+                  OR (datetime(m.created_at) = datetime(?4) AND printf('memory:%020d', m.id) {cmp} ?5))
+           ORDER BY datetime(m.created_at) {order}, printf('memory:%020d', m.id) {order}
+           LIMIT ?6"#,
+        cmp = if kq.newest_first { "<" } else { ">" },
         fts_join = if fts.is_some() {
-            "JOIN memories_fts ON memories_fts.rowid = m.id AND memories_fts MATCH ?5"
+            "JOIN memories_fts ON memories_fts.rowid = m.id AND memories_fts MATCH ?7"
         } else {
             ""
         },
@@ -792,6 +940,7 @@ async fn query_memories(
     let mut query = sqlx::query_as::<
         _,
         (
+            i64,
             Option<String>,
             Option<String>,
             Option<String>,
@@ -805,6 +954,8 @@ async fn query_memories(
     .bind(&kq.since)
     .bind(&kq.until)
     .bind(kq.device_id)
+    .bind(kq.cursor_t)
+    .bind(kq.cursor_id)
     .bind(kq.limit);
     if let Some(f) = &fts {
         query = query.bind(f.clone());
@@ -813,25 +964,28 @@ async fn query_memories(
     Ok(rows
         .into_iter()
         .map(
-            |(sync_uuid, machine_id, label, created_at, content, importance, tags, source)| {
+            |(id, sync_uuid, machine_id, label, created_at, content, importance, tags, source)| {
                 let tags: Option<Vec<String>> = tags.and_then(|t| serde_json::from_str(&t).ok());
-                record_summary(
-                    "memory",
-                    Some(created_at),
-                    label,
-                    machine_id,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    Some(content),
-                    importance,
-                    tags,
-                    source,
-                    None,
-                    local_id_from_sync_id(sync_uuid.as_deref()),
+                with_cursor_id(
+                    record_summary(
+                        "memory",
+                        Some(created_at),
+                        label,
+                        machine_id,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        Some(content),
+                        importance,
+                        tags,
+                        source,
+                        None,
+                        local_id_from_sync_id(sync_uuid.as_deref()),
+                    ),
+                    format!("memory:{id:020}"),
                 )
             },
         )
@@ -858,8 +1012,11 @@ async fn query_feedback(
                  OR lower(COALESCE(f.comment, '')) LIKE '%' || lower(?4) || '%'
                  OR lower(COALESCE(f.snapshot, '')) LIKE '%' || lower(?4) || '%'
                  OR lower(f.context) LIKE '%' || lower(?4) || '%')
-           ORDER BY datetime(f.updated_at) {order}
-           LIMIT ?5"#,
+             AND (?5 IS NULL OR datetime(f.updated_at) {cmp} datetime(?5)
+                  OR (datetime(f.updated_at) = datetime(?5) AND 'feedback:' || f.id {cmp} ?6))
+           ORDER BY datetime(f.updated_at) {order}, 'feedback:' || f.id {order}
+           LIMIT ?7"#,
+        cmp = if kq.newest_first { "<" } else { ">" },
     );
     let rows = sqlx::query_as::<
         _,
@@ -884,6 +1041,8 @@ async fn query_feedback(
     .bind(&kq.until)
     .bind(kq.device_id)
     .bind(kq.q)
+    .bind(kq.cursor_t)
+    .bind(kq.cursor_id)
     .bind(kq.limit)
     .fetch_all(&db.pool)
     .await?;
@@ -906,7 +1065,7 @@ async fn query_feedback(
                 context,
                 created_at,
             )| {
-                json!({
+                with_cursor_id(json!({
                     "kind": "feedback",
                     "t": updated_at,
                     "device": device,
@@ -938,7 +1097,7 @@ async fn query_feedback(
                     "context": serde_json::from_str::<Value>(&context).unwrap_or_else(|_| json!({})),
                     "created_at": created_at,
                     "updated_at": updated_at,
-                })
+                }), format!("feedback:{id}"))
             },
         )
         .collect())
@@ -972,26 +1131,90 @@ fn t_of(v: &Value) -> &str {
 
 // ─── GET /api/enterprise/v1/devices ─────────────────────────────────────────
 
-async fn devices(State(state): State<ApiState>) -> Response {
-    let rows: Result<Vec<(String, String, String, String)>, sqlx::Error> = sqlx::query_as(
-        "SELECT device_id, device_label, enrolled_at, last_seen \
-         FROM gateway_devices ORDER BY last_seen DESC",
-    )
-    .fetch_all(&state.db.pool)
-    .await;
+async fn devices(
+    State(state): State<ApiState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let keyset = param(&params, "pagination") == Some("keyset");
+    let limit = if keyset {
+        match parse_limit(&params) {
+            Ok(v) => v as usize,
+            Err(resp) => return *resp,
+        }
+    } else {
+        usize::MAX
+    };
+    let filters = "{}";
+    let cursor = if keyset {
+        match parse_cursor(&params, "devices", filters) {
+            Ok(v) => v,
+            Err(resp) => return *resp,
+        }
+    } else {
+        None
+    };
+    let (as_of, after_device_id) = match cursor {
+        Some(ref state) => match (
+            cursor_string(state, "as_of"),
+            cursor_string(state, "device_id"),
+        ) {
+            (Ok(as_of), Ok(device_id)) => (as_of, Some(device_id)),
+            _ => return *invalid_cursor(),
+        },
+        None => (rfc3339z(&Utc::now()), None),
+    };
+    let rows: Result<Vec<(String, String, String, String)>, sqlx::Error> = if keyset {
+        sqlx::query_as(
+            "SELECT device_id, device_label, enrolled_at, last_seen \
+             FROM gateway_devices \
+             WHERE datetime(enrolled_at) <= datetime(?1) \
+               AND (?2 IS NULL OR device_id > ?2) \
+             ORDER BY device_id ASC LIMIT ?3",
+        )
+        .bind(&as_of)
+        .bind(after_device_id.as_deref())
+        .bind((limit + 1) as i64)
+        .fetch_all(&state.db.pool)
+        .await
+    } else {
+        sqlx::query_as(
+            "SELECT device_id, device_label, enrolled_at, last_seen \
+             FROM gateway_devices ORDER BY last_seen DESC",
+        )
+        .fetch_all(&state.db.pool)
+        .await
+    };
     match rows {
-        Ok(rows) => Json(json!({
-            "count": rows.len(),
-            "devices": rows.into_iter().map(|(device_id, label, enrolled_at, last_seen)| json!({
-                "device_id": device_id,
-                "label": label,
-                "platform": null,
-                "app_version": null,
-                "last_seen": last_seen,
-                "enrolled_at": enrolled_at,
-            })).collect::<Vec<_>>(),
-        }))
-        .into_response(),
+        Ok(mut rows) => {
+            let has_more = keyset && rows.len() > limit;
+            if keyset {
+                rows.truncate(limit);
+            }
+            let next_cursor = has_more && !rows.is_empty();
+            let next_cursor = next_cursor.then(|| {
+                encode_cursor(
+                    "devices",
+                    filters,
+                    json!({ "as_of": as_of, "device_id": rows.last().unwrap().0 }),
+                )
+            });
+            let mut body = json!({
+                "count": rows.len(),
+                "devices": rows.into_iter().map(|(device_id, label, enrolled_at, last_seen)| json!({
+                    "device_id": device_id,
+                    "label": label,
+                    "member_email": null,
+                    "platform": null,
+                    "app_version": null,
+                    "last_seen": last_seen,
+                    "enrolled_at": enrolled_at,
+                })).collect::<Vec<_>>(),
+            });
+            if keyset {
+                body["next_cursor"] = json!(next_cursor);
+            }
+            Json(body).into_response()
+        }
         Err(e) => err_json(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("device list failed: {e}"),
@@ -1005,26 +1228,57 @@ async fn search(
     State(state): State<ApiState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
+    let keyset = param(&params, "pagination") == Some("keyset");
     let q = params.get("q").map(|s| s.trim()).unwrap_or("");
     let device_id = param(&params, "device_id");
     let app_name = param(&params, "app_name");
-    let window = match parse_time_window(&params) {
-        Ok(w) => w,
-        Err(resp) => return *resp,
+    let filters = filter_signature(json!({
+        "q": q,
+        "device_id": device_id,
+        "app_name": app_name,
+        "since": param(&params, "since"),
+        "until": param(&params, "until"),
+        "since_hours_ago": param(&params, "since_hours_ago"),
+    }));
+    let cursor = if keyset {
+        match parse_cursor(&params, "search", &filters) {
+            Ok(v) => v,
+            Err(resp) => return *resp,
+        }
+    } else {
+        None
+    };
+    let window = match cursor.as_ref() {
+        Some(state) => match cursor_window(state) {
+            Ok(w) => w,
+            Err(resp) => return *resp,
+        },
+        None => match parse_time_window(&params) {
+            Ok(w) => w,
+            Err(resp) => return *resp,
+        },
+    };
+    let cursor_position = match cursor.as_ref() {
+        Some(state) => match (cursor_string(state, "t"), cursor_string(state, "id")) {
+            (Ok(t), Ok(id)) => Some((t, id)),
+            _ => return *invalid_cursor(),
+        },
+        None => None,
     };
     let limit = match parse_limit(&params) {
         Ok(l) => l,
         Err(resp) => return *resp,
     };
-
     let kq = KindQuery {
         q: if q.is_empty() { None } else { Some(q) },
         device_id,
         app_name,
         since: rfc3339z(&window.since),
         until: rfc3339z(&window.until),
-        limit,
+        limit: if keyset { limit + 1 } else { limit },
         newest_first: true,
+        cursor_t: cursor_position.as_ref().map(|p| p.0.as_str()),
+        cursor_id: cursor_position.as_ref().map(|p| p.1.as_str()),
     };
     let mut results = match query_kinds(
         &state.db,
@@ -1037,10 +1291,33 @@ async fn search(
         Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &format!("search: {e}")),
     };
     let records_scanned = results.len();
-    results.sort_by(|a, b| t_of(b).cmp(t_of(a)));
+    results.sort_by(|a, b| {
+        if keyset {
+            compare_records(a, b, true)
+        } else {
+            t_of(b).cmp(t_of(a))
+        }
+    });
+    let has_more = keyset && results.len() > limit as usize;
     results.truncate(limit as usize);
+    let next_cursor = (has_more && !results.is_empty()).then(|| {
+        let last = results.last().unwrap();
+        encode_cursor(
+            "search",
+            &filters,
+            json!({
+                "since": rfc3339z(&window.since),
+                "until": rfc3339z(&window.until),
+                "t": t_of(last),
+                "id": cursor_id_of(last),
+            }),
+        )
+    });
+    for result in &mut results {
+        result.as_object_mut().map(|o| o.remove("_cursor_id"));
+    }
 
-    Json(json!({
+    let mut body = json!({
         "query": q,
         "device_id": device_id,
         "app_name": app_name,
@@ -1051,8 +1328,11 @@ async fn search(
         "truncated": false,
         "result_count": results.len(),
         "results": results,
-    }))
-    .into_response()
+    });
+    if keyset {
+        body["next_cursor"] = json!(next_cursor);
+    }
+    Json(body).into_response()
 }
 
 // ─── GET /api/enterprise/v1/records ─────────────────────────────────────────
@@ -1061,19 +1341,47 @@ async fn records(
     State(state): State<ApiState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
+    let keyset = param(&params, "pagination") == Some("keyset");
     let device_id = param(&params, "device_id");
     let kind_filter = param(&params, "kind")
         .map(|s| s.to_ascii_lowercase())
         .unwrap_or_else(|| "all".to_string());
-    let window = match parse_time_window(&params) {
-        Ok(w) => w,
-        Err(resp) => return *resp,
+    let filters = filter_signature(json!({
+        "device_id": device_id,
+        "kind": kind_filter,
+        "since": param(&params, "since"),
+        "until": param(&params, "until"),
+        "since_hours_ago": param(&params, "since_hours_ago"),
+    }));
+    let cursor = if keyset {
+        match parse_cursor(&params, "records", &filters) {
+            Ok(v) => v,
+            Err(resp) => return *resp,
+        }
+    } else {
+        None
+    };
+    let window = match cursor.as_ref() {
+        Some(state) => match cursor_window(state) {
+            Ok(w) => w,
+            Err(resp) => return *resp,
+        },
+        None => match parse_time_window(&params) {
+            Ok(w) => w,
+            Err(resp) => return *resp,
+        },
+    };
+    let cursor_position = match cursor.as_ref() {
+        Some(state) => match (cursor_string(state, "t"), cursor_string(state, "id")) {
+            (Ok(t), Ok(id)) => Some((t, id)),
+            _ => return *invalid_cursor(),
+        },
+        None => None,
     };
     let limit = match parse_limit(&params) {
         Ok(l) => l,
         Err(resp) => return *resp,
     };
-
     let kinds: Vec<&str> = match kind_filter.as_str() {
         "all" => vec!["frame", "parsed", "audio", "ui", "memory", "feedback"],
         k => vec![k],
@@ -1084,18 +1392,42 @@ async fn records(
         app_name: None,
         since: rfc3339z(&window.since),
         until: rfc3339z(&window.until),
-        limit,
+        limit: if keyset { limit + 1 } else { limit },
         newest_first: false,
+        cursor_t: cursor_position.as_ref().map(|p| p.0.as_str()),
+        cursor_id: cursor_position.as_ref().map(|p| p.1.as_str()),
     };
     let mut recs = match query_kinds(&state.db, &kinds, &kq).await {
         Ok(r) => r,
         Err(e) => return err_json(StatusCode::INTERNAL_SERVER_ERROR, &format!("records: {e}")),
     };
-    // Hosted sorts the collected page ascending by `t` (lexicographic).
-    recs.sort_by(|a, b| t_of(a).cmp(t_of(b)));
+    recs.sort_by(|a, b| {
+        if keyset {
+            compare_records(a, b, false)
+        } else {
+            t_of(a).cmp(t_of(b))
+        }
+    });
+    let has_more = keyset && recs.len() > limit as usize;
     recs.truncate(limit as usize);
+    let next_cursor = (has_more && !recs.is_empty()).then(|| {
+        let last = recs.last().unwrap();
+        encode_cursor(
+            "records",
+            &filters,
+            json!({
+                "since": rfc3339z(&window.since),
+                "until": rfc3339z(&window.until),
+                "t": t_of(last),
+                "id": cursor_id_of(last),
+            }),
+        )
+    });
+    for record in &mut recs {
+        record.as_object_mut().map(|o| o.remove("_cursor_id"));
+    }
 
-    Json(json!({
+    let mut body = json!({
         "device_id": device_id,
         "kind": kind_filter,
         "window_hours": window.window_hours,
@@ -1104,8 +1436,11 @@ async fn records(
         "truncated": false,
         "record_count": recs.len(),
         "records": recs,
-    }))
-    .into_response()
+    });
+    if keyset {
+        body["next_cursor"] = json!(next_cursor);
+    }
+    Json(body).into_response()
 }
 
 // ─── GET /api/enterprise/v1/files ───────────────────────────────────────────
@@ -1115,22 +1450,42 @@ async fn files(
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
     let device_id = param(&params, "device_id");
-    let window = match parse_time_window(&params) {
-        Ok(w) => w,
-        Err(resp) => return *resp,
+    let filters = filter_signature(json!({
+        "device_id": device_id,
+        "since": param(&params, "since"),
+        "until": param(&params, "until"),
+        "since_hours_ago": param(&params, "since_hours_ago"),
+    }));
+    let legacy_offset = param(&params, "cursor").and_then(|raw| raw.parse::<usize>().ok());
+    let cursor = if legacy_offset.is_none() {
+        match parse_cursor(&params, "files", &filters) {
+            Ok(v) => v,
+            Err(resp) => return *resp,
+        }
+    } else {
+        None
+    };
+    let window = match cursor.as_ref() {
+        Some(state) => match cursor_window(state) {
+            Ok(w) => w,
+            Err(resp) => return *resp,
+        },
+        None => match parse_time_window(&params) {
+            Ok(w) => w,
+            Err(resp) => return *resp,
+        },
+    };
+    let after_key = match cursor.as_ref() {
+        Some(state) => match cursor_string(state, "key") {
+            Ok(key) => Some(key),
+            Err(resp) => return *resp,
+        },
+        None => None,
     };
     let page_size = match parse_bounded_int(&params, "page_size", 100, 1, 1000) {
         Ok(v) => v as usize,
         Err(resp) => return *resp,
     };
-    // `cursor` is an OPAQUE token by contract (the hosted target's is a storage
-    // continuation token, not a number), so an unparseable one is deliberately
-    // page-one rather than a 400 — a client is not supposed to construct it.
-    let offset: usize = params
-        .get("cursor")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-
     let prefix = match device_id {
         Some(d) => format!(
             "{}{}/",
@@ -1145,21 +1500,32 @@ async fn files(
     };
     let since = rfc3339z(&window.since);
     let until = rfc3339z(&window.until);
-    let in_window: Vec<_> = listed
+    let mut in_window: Vec<_> = listed
         .entries
         .into_iter()
         .filter(|e| {
-            e.last_modified
-                .as_deref()
-                .map(|lm| lm >= since.as_str() && lm <= until.as_str())
-                .unwrap_or(true)
+            after_key
+                .as_ref()
+                .is_none_or(|key| e.key.as_str() > key.as_str())
+                && e.last_modified
+                    .as_deref()
+                    .map(|lm| lm >= since.as_str() && lm <= until.as_str())
+                    .unwrap_or(true)
         })
         .collect();
+    in_window.sort_by(|a, b| a.key.cmp(&b.key));
     let total = in_window.len();
+    let has_more = legacy_offset.map_or(total > page_size, |offset| {
+        offset.saturating_add(page_size) < total
+    });
+    if let Some(offset) = legacy_offset {
+        in_window = in_window.into_iter().skip(offset).take(page_size).collect();
+    } else {
+        in_window.truncate(page_size);
+    }
+    let last_key = in_window.last().map(|entry| entry.key.clone());
     let page: Vec<Value> = in_window
         .into_iter()
-        .skip(offset)
-        .take(page_size)
         .map(|e| {
             let dev = e
                 .key
@@ -1176,8 +1542,19 @@ async fn files(
             })
         })
         .collect();
-    let next_cursor = if offset + page.len() < total {
-        Some((offset + page.len()).to_string())
+    let next_cursor = if has_more && !page.is_empty() {
+        Some(match legacy_offset {
+            Some(offset) => offset.saturating_add(page.len()).to_string(),
+            None => encode_cursor(
+                "files",
+                &filters,
+                json!({
+                    "since": rfc3339z(&window.since),
+                    "until": rfc3339z(&window.until),
+                    "key": last_key.unwrap(),
+                }),
+            ),
+        })
     } else {
         None
     };
@@ -1288,32 +1665,65 @@ async fn rollups(
     State(state): State<ApiState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    let device: String = param(&params, "device")
-        .map(|s| {
-            s.chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() || " _.-".contains(c) {
-                        c
-                    } else {
-                        '_'
-                    }
-                })
-                .collect()
-        })
-        .filter(|s: &String| !s.is_empty())
-        .unwrap_or_else(|| "org".to_string());
-    let today = Utc::now().format("%Y-%m-%d").to_string();
-    let to = param(&params, "to").map(str::to_string).unwrap_or(today);
-    let from = param(&params, "from")
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            (Utc::now() - ChronoDuration::days(31))
-                .format("%Y-%m-%d")
-                .to_string()
-        });
+    let keyset = param(&params, "pagination") == Some("keyset");
     let limit = match parse_bounded_int(&params, "limit", 35, 1, 100) {
         Ok(v) => v as usize,
         Err(resp) => return *resp,
+    };
+    let filters = filter_signature(json!({
+        "device": param(&params, "device"),
+        "from": param(&params, "from"),
+        "to": param(&params, "to"),
+    }));
+    let cursor = if keyset {
+        match parse_cursor(&params, "rollups", &filters) {
+            Ok(v) => v,
+            Err(resp) => return *resp,
+        }
+    } else {
+        None
+    };
+    let (device, from, to, as_of, after) = match cursor {
+        Some(ref state) => match (
+            cursor_string(state, "device"),
+            cursor_string(state, "from"),
+            cursor_string(state, "to"),
+            cursor_string(state, "as_of"),
+            cursor_string(state, "day"),
+            cursor_string(state, "key"),
+        ) {
+            (Ok(device), Ok(from), Ok(to), Ok(as_of), Ok(day), Ok(key)) => {
+                (device, from, to, as_of, Some((day, key)))
+            }
+            _ => return *invalid_cursor(),
+        },
+        None => {
+            let device: String = param(&params, "device")
+                .map(|s| {
+                    s.chars()
+                        .map(|c| {
+                            if c.is_ascii_alphanumeric() || " _.-".contains(c) {
+                                c
+                            } else {
+                                '_'
+                            }
+                        })
+                        .collect()
+                })
+                .filter(|s: &String| !s.is_empty())
+                .unwrap_or_else(|| "org".to_string());
+            let to = param(&params, "to")
+                .map(str::to_string)
+                .unwrap_or_else(|| Utc::now().format("%Y-%m-%d").to_string());
+            let from = param(&params, "from")
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    (Utc::now() - ChronoDuration::days(31))
+                        .format("%Y-%m-%d")
+                        .to_string()
+                });
+            (device, from, to, rfc3339z(&Utc::now()), None)
+        }
     };
 
     let prefix = format!("rollups/{}/{}/", sanitize_id(&state.license_id, 64), device);
@@ -1325,18 +1735,32 @@ async fn rollups(
         .entries
         .into_iter()
         .filter_map(|e| {
+            if keyset
+                && e.last_modified
+                    .as_deref()
+                    .is_some_and(|modified| modified > as_of.as_str())
+            {
+                return None;
+            }
             let day = e.key.strip_prefix(&prefix)?.strip_suffix(".json")?;
             let ok = day.len() == 10
                 && day.chars().enumerate().all(|(i, c)| match i {
                     4 | 7 => c == '-',
                     _ => c.is_ascii_digit(),
                 });
-            (ok && day >= from.as_str() && day <= to.as_str())
+            let after_cursor = after.as_ref().is_none_or(|(after_day, after_key)| {
+                day < after_day.as_str()
+                    || (day == after_day && e.key.as_str() < after_key.as_str())
+            });
+            (ok && day >= from.as_str() && day <= to.as_str() && after_cursor)
                 .then(|| (day.to_string(), e.key.clone()))
         })
         .collect();
-    days.sort_by(|a, b| b.0.cmp(&a.0));
+    days.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    let has_more = keyset && days.len() > limit;
     days.truncate(limit);
+    let selected_count = days.len();
+    let last_position = days.last().cloned();
 
     let mut out = Vec::with_capacity(days.len());
     for (day, key) in days {
@@ -1349,15 +1773,33 @@ async fn rollups(
         }
     }
 
-    Json(json!({
+    let next_cursor = (has_more && selected_count > 0).then(|| {
+        let (day, key) = last_position.unwrap();
+        encode_cursor(
+            "rollups",
+            &filters,
+            json!({
+                "device": &device,
+                "from": &from,
+                "to": &to,
+                "as_of": &as_of,
+                "day": day,
+                "key": key,
+            }),
+        )
+    });
+    let mut body = json!({
         "ok": true,
         "device": device,
         "from": from,
         "to": to,
         "count": out.len(),
         "rollups": out,
-    }))
-    .into_response()
+    });
+    if keyset {
+        body["next_cursor"] = json!(next_cursor);
+    }
+    Json(body).into_response()
 }
 
 #[cfg(test)]
@@ -1535,6 +1977,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn keyset_cursors_are_endpoint_and_filter_bound() {
+        let p = |v: &str| HashMap::from([("cursor".to_string(), v.to_string())]);
+        assert!(parse_cursor(&HashMap::new(), "search", "filters")
+            .unwrap()
+            .is_none());
+        let token = encode_cursor("search", "filters", json!({ "t": "x", "id": "y" }));
+        assert_eq!(
+            parse_cursor(&p(&token), "search", "filters").unwrap(),
+            Some(json!({ "t": "x", "id": "y" }))
+        );
+        assert!(parse_cursor(&p(&token), "records", "filters").is_err());
+        assert!(parse_cursor(&p(&token), "search", "different").is_err());
+        assert!(parse_cursor(&p("not-a-cursor"), "search", "filters").is_err());
+    }
+
     /// The window parser refuses at the ROUTE, with the machine code the hosted
     /// side emits — not just in the unit above.
     #[tokio::test]
@@ -1703,6 +2161,13 @@ mod tests {
         dir: &tempfile::TempDir,
         policy: Option<crate::auth::PolicyStore>,
     ) -> Router {
+        seeded_router_and_db_with_policy(dir, policy).await.0
+    }
+
+    async fn seeded_router_and_db_with_policy(
+        dir: &tempfile::TempDir,
+        policy: Option<crate::auth::PolicyStore>,
+    ) -> (Router, Arc<DatabaseManager>) {
         let db = Arc::new(
             DatabaseManager::new(
                 dir.path().join("gateway.db").to_str().unwrap(),
@@ -1771,6 +2236,14 @@ mod tests {
                 .await
                 .unwrap();
         }
+        for day in ["2026-07-21", "2026-07-22"] {
+            src.put_for_tests(
+                &format!("rollups/lic-1/org/{day}.json"),
+                serde_json::to_vec(&json!({ "day": day, "records": 1 })).unwrap(),
+            )
+            .await
+            .unwrap();
+        }
         let ingestor = Ingestor::new(
             src.clone() as Arc<dyn BlobSource>,
             db.clone(),
@@ -1780,7 +2253,8 @@ mod tests {
         .await
         .unwrap();
         ingestor.run_once().await.unwrap();
-        router(db, src, "lic-1".to_string(), policy)
+        let app = router(db.clone(), src, "lic-1".to_string(), policy);
+        (app, db)
     }
 
     async fn get_json(router: &Router, uri: &str) -> (StatusCode, Value) {
@@ -1806,6 +2280,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
+        assert!(body.get("next_cursor").is_none());
         let results = body["results"].as_array().unwrap();
         // 2 frames + 2 audio + 2 memories match "roadmap"-adjacent tokens?
         // "roadmap" appears in frame text, audio transcription, and memory
@@ -1848,6 +2323,22 @@ mod tests {
         let mut sorted = ts.clone();
         sorted.sort_by(|a, b| b.cmp(a));
         assert_eq!(ts, sorted);
+
+        let (_, first) = get_json(
+            &router,
+            "/api/enterprise/v1/search?q=roadmap&since=2026-07-22T00:00:00Z&until=2026-07-23T00:00:00Z&pagination=keyset&limit=1",
+        )
+        .await;
+        assert_eq!(first["result_count"], 1);
+        let cursor = first["next_cursor"].as_str().unwrap();
+        assert!(!cursor.bytes().all(|b| b.is_ascii_digit()));
+        let (_, second) = get_json(
+            &router,
+            &format!("/api/enterprise/v1/search?q=roadmap&since=2026-07-22T00:00:00Z&until=2026-07-23T00:00:00Z&pagination=keyset&limit=1&cursor={cursor}"),
+        )
+        .await;
+        assert_eq!(second["result_count"], 1);
+        assert_ne!(first["results"][0], second["results"][0]);
     }
 
     #[tokio::test]
@@ -1883,6 +2374,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
+        assert!(body.get("next_cursor").is_none());
         let records = body["records"].as_array().unwrap();
         assert_eq!(records.len(), 2);
         assert!(records.iter().all(|r| r["kind"] == "memory"));
@@ -1894,6 +2386,21 @@ mod tests {
         sorted.sort();
         assert_eq!(ts, sorted, "records are ascending by t");
         assert_eq!(records[0]["memory_id"], 1);
+
+        let (_, first) = get_json(
+            &router,
+            "/api/enterprise/v1/records?since=2026-07-22T00:00:00Z&until=2026-07-23T00:00:00Z&pagination=keyset&limit=1",
+        )
+        .await;
+        assert_eq!(first["record_count"], 1);
+        let cursor = first["next_cursor"].as_str().unwrap();
+        let (_, second) = get_json(
+            &router,
+            &format!("/api/enterprise/v1/records?since=2026-07-22T00:00:00Z&until=2026-07-23T00:00:00Z&pagination=keyset&limit=1&cursor={cursor}"),
+        )
+        .await;
+        assert_eq!(second["record_count"], 1);
+        assert_ne!(first["records"][0], second["records"][0]);
     }
 
     #[tokio::test]
@@ -1935,11 +2442,126 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["count"], 2);
         let devices = body["devices"].as_array().unwrap();
-        // Ordered by last_seen DESC — dev-b's records are newer.
         assert_eq!(devices[0]["device_id"], "dev-b");
         assert_eq!(devices[0]["label"], "bob-mbp");
+        assert!(devices[0]["member_email"].is_null());
         assert!(devices[0]["platform"].is_null());
         assert!(devices[0].get("last_seen").is_some());
+        assert!(body.get("next_cursor").is_none());
+
+        let (_, first) = get_json(
+            &router,
+            "/api/enterprise/v1/devices?pagination=keyset&limit=1",
+        )
+        .await;
+        assert_eq!(first["count"], 1);
+        assert_eq!(first["devices"][0]["device_id"], "dev-a");
+        let cursor = first["next_cursor"].as_str().unwrap();
+        let (_, second) = get_json(
+            &router,
+            &format!("/api/enterprise/v1/devices?pagination=keyset&limit=1&cursor={cursor}"),
+        )
+        .await;
+        assert_eq!(second["count"], 1);
+        assert_ne!(first["devices"][0], second["devices"][0]);
+    }
+
+    #[tokio::test]
+    async fn keyset_pages_do_not_shift_when_rows_change_between_requests() {
+        let dir = tempfile::tempdir().unwrap();
+        let router = seeded_router(&dir).await;
+        let (_, first) = get_json(
+            &router,
+            "/api/enterprise/v1/devices?pagination=keyset&limit=1",
+        )
+        .await;
+        assert_eq!(first["devices"][0]["device_id"], "dev-a");
+        let cursor = first["next_cursor"].as_str().unwrap();
+        let writable = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(dir.path().join("gateway.db"))
+                    .read_only(false),
+            )
+            .await
+            .unwrap();
+
+        sqlx::query(
+            "INSERT INTO gateway_devices (device_id, device_label, enrolled_at, last_seen) \
+             VALUES ('dev-0', 'new-before-cursor', '2026-07-22T08:00:00Z', '2026-07-22T12:00:00Z')",
+        )
+        .execute(&writable)
+        .await
+        .unwrap();
+
+        let (_, second) = get_json(
+            &router,
+            &format!("/api/enterprise/v1/devices?pagination=keyset&limit=1&cursor={cursor}"),
+        )
+        .await;
+        assert_eq!(
+            second["devices"][0]["device_id"], "dev-b",
+            "an inserted row before the keyset must not repeat or shift dev-a"
+        );
+
+        let (_, first) = get_json(
+            &router,
+            "/api/enterprise/v1/records?since=2026-07-22T00:00:00Z&until=2026-07-23T00:00:00Z&pagination=keyset&limit=1",
+        )
+        .await;
+        let first_record = first["records"][0].clone();
+        let cursor = first["next_cursor"].as_str().unwrap();
+        sqlx::query(
+            "UPDATE memories SET created_at = '2026-07-22T09:00:00Z' \
+             WHERE sync_modified_by = 'dev-b'",
+        )
+        .execute(&writable)
+        .await
+        .unwrap();
+        let (_, second) = get_json(
+            &router,
+            &format!("/api/enterprise/v1/records?since=2026-07-22T00:00:00Z&until=2026-07-23T00:00:00Z&pagination=keyset&limit=1&cursor={cursor}"),
+        )
+        .await;
+        assert_ne!(
+            second["records"][0], first_record,
+            "moving a later row before the keyset must not duplicate page one"
+        );
+    }
+
+    #[tokio::test]
+    async fn rollups_return_continuation_cursors() {
+        let dir = tempfile::tempdir().unwrap();
+        let router = seeded_router(&dir).await;
+
+        let (_, legacy) = get_json(
+            &router,
+            "/api/enterprise/v1/rollups?from=2026-07-01&to=2026-07-31",
+        )
+        .await;
+        assert!(legacy.get("next_cursor").is_none());
+
+        let (status, first) = get_json(
+            &router,
+            "/api/enterprise/v1/rollups?from=2026-07-01&to=2026-07-31&pagination=keyset&limit=1",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(first["count"], 1);
+        assert_eq!(first["rollups"][0]["day"], "2026-07-22");
+        let cursor = first["next_cursor"].as_str().unwrap();
+
+        let (_, second) = get_json(
+            &router,
+            &format!(
+                "/api/enterprise/v1/rollups?from=2026-07-01&to=2026-07-31&pagination=keyset&limit=1&cursor={cursor}"
+            ),
+        )
+        .await;
+        assert_eq!(second["count"], 1);
+        assert_eq!(second["rollups"][0]["day"], "2026-07-21");
+        assert!(second["next_cursor"].is_null());
     }
 
     #[tokio::test]
@@ -1956,6 +2578,32 @@ mod tests {
         assert_eq!(body["count"], 2);
         let key = body["files"][0]["key"].as_str().unwrap().to_string();
         assert!(key.starts_with("enterprise-telemetry/lic-1/"));
+
+        let (_, first) = get_json(
+            &router,
+            "/api/enterprise/v1/files?since=2020-01-01T00:00:00Z&page_size=1",
+        )
+        .await;
+        let cursor = first["next_cursor"].as_str().unwrap();
+        assert!(!cursor.bytes().all(|b| b.is_ascii_digit()));
+        let (_, second) = get_json(
+            &router,
+            &format!(
+                "/api/enterprise/v1/files?since=2020-01-01T00:00:00Z&page_size=1&cursor={cursor}"
+            ),
+        )
+        .await;
+        assert_eq!(second["count"], 1);
+        assert_ne!(first["files"][0], second["files"][0]);
+
+        let (_, legacy_second) = get_json(
+            &router,
+            "/api/enterprise/v1/files?since=2020-01-01T00:00:00Z&page_size=1&cursor=1",
+        )
+        .await;
+        assert_eq!(legacy_second["count"], 1);
+        assert_eq!(legacy_second["files"][0], second["files"][0]);
+        assert!(legacy_second["next_cursor"].is_null());
 
         let resp = router
             .clone()

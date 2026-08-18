@@ -20,7 +20,7 @@ use base64::{
 };
 use oasgen::{oasgen, OaSchema};
 use screenpipe_core::sync::{
-    derive_auto_sync_password, BlobType, SyncClientConfig, SyncManager, SyncService,
+    derive_auto_sync_password, BlobType, SyncClient, SyncClientConfig, SyncManager, SyncService,
     SyncServiceConfig, SyncServiceHandle,
 };
 use serde::{Deserialize, Serialize};
@@ -461,6 +461,13 @@ async fn sync_init_inner(
 /// `/sync/init` path and the engine-driven [`ensure_sync_runtime`] path.
 const SYNC_MASTER_PASSWORD_KEY: &str = "sync.master_password";
 
+/// Serializes lazy initialization and destructive account resets. A reset must
+/// not race a connection/memory sync that is trying to initialize the same
+/// runtime with the legacy key.
+static SYNC_INIT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+const SYNC_RESET_CONFIRMATION: &str = "delete remote sync data";
+
 /// Extract the Clerk account id from the unsigned JWT payload.
 ///
 /// This is only a stable, non-secret account identifier for deriving the
@@ -512,6 +519,16 @@ fn is_sync_password_decrypt_error(err: &(StatusCode, JsonResponse<Value>)) -> bo
     sync_init_error_text(err).is_some_and(is_sync_password_decrypt_message)
 }
 
+async fn resolve_cloud_token(state: &Arc<AppState>) -> String {
+    let in_mem = (**state.cloud_token.load()).clone();
+    match in_mem.filter(|token| !token.is_empty()) {
+        Some(token) => token,
+        None => crate::auth_key::find_cloud_token(&state.screenpipe_dir)
+            .await
+            .unwrap_or_default(),
+    }
+}
+
 /// Lazily initialize the sync runtime if it isn't already running.
 ///
 /// Connection-, pipe-, and memory-sync endpoints used to hard-fail with
@@ -535,23 +552,14 @@ pub async fn ensure_sync_runtime(
 
     // Serialize concurrent first-time inits so we don't spawn duplicate sync
     // loops or race two `/init` posts.
-    static INIT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-    let _guard = INIT_LOCK.lock().await;
+    let _guard = SYNC_INIT_LOCK.lock().await;
     if state.sync_state.read().await.is_some() {
         return Ok(());
     }
 
     // Resolve the cloud auth token: freshest in-memory handle first, then the
     // shared encrypted secret store as a fallback.
-    let token = {
-        let in_mem = (**state.cloud_token.load()).clone();
-        match in_mem.filter(|t| !t.is_empty()) {
-            Some(t) => t,
-            None => crate::auth_key::find_cloud_token(&state.screenpipe_dir)
-                .await
-                .unwrap_or_default(),
-        }
-    };
+    let token = resolve_cloud_token(state).await;
     if token.is_empty() {
         return Err((
             StatusCode::UNAUTHORIZED,
@@ -641,6 +649,163 @@ pub async fn ensure_sync_runtime(
             JsonResponse(json!({"error": "failed to initialize sync"})),
         )
     }))
+}
+
+/// Explicit confirmation required by the destructive new-device recovery
+/// endpoint. The desktop UI explains the scope and sends this value only after
+/// the user confirms the reset dialog.
+#[derive(Debug, Serialize, Deserialize, OaSchema)]
+pub struct SyncResetAccountRequest {
+    pub confirmation: String,
+}
+
+/// Delete this account's remote sync state and initialize a fresh,
+/// account-derived encryption key.
+///
+/// This path intentionally constructs a `SyncClient` directly. The legacy
+/// Tauri command depended on an initialized `SyncManager`, which is exactly
+/// what a new device with an old key cannot create, and could therefore report
+/// success without deleting anything.
+#[oasgen]
+pub async fn sync_reset_account(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<SyncResetAccountRequest>,
+) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
+    if request.confirmation != SYNC_RESET_CONFIRMATION {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            JsonResponse(json!({
+                "error": "explicit confirmation is required to reset remote sync data"
+            })),
+        ));
+    }
+
+    let _guard = SYNC_INIT_LOCK.lock().await;
+    let token = resolve_cloud_token(&state).await;
+    if token.is_empty() {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            JsonResponse(
+                json!({"error": "not signed in: resetting sync requires a logged-in account"}),
+            ),
+        ));
+    }
+
+    let account_password = auto_sync_password_from_token(&token).ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            JsonResponse(json!({
+                "error": "cloud token is missing an account id; cannot reset sync"
+            })),
+        )
+    })?;
+
+    // Validate the durable destination before deleting remote state. The
+    // account-derived key is deterministic, but the secret store should still
+    // be available so normal restarts do not need the fallback path.
+    let secret_store = state.secret_store.as_ref().ok_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            JsonResponse(json!({"error": "secret store unavailable; cannot reset sync safely"})),
+        )
+    })?;
+
+    // Stop any active background loops before deleting their remote state.
+    if let Some(runtime) = state.sync_state.write().await.take() {
+        if let Err(error) = runtime.service_handle.stop().await {
+            warn!(
+                "failed to stop sync service before account reset: {}",
+                error
+            );
+        }
+        runtime.manager.lock().await;
+    }
+
+    let machine_id = screenpipe_core::sync::get_or_create_machine_id();
+    let device_name = hostname::get()
+        .map(|hostname| hostname.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "Unknown".to_string());
+    let config = SyncClientConfig::new(
+        token.clone(),
+        machine_id.clone(),
+        device_name,
+        std::env::consts::OS.to_string(),
+    );
+    let client = SyncClient::new(config).map_err(|error| {
+        error!("failed to create sync client for account reset: {}", error);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            JsonResponse(json!({"error": "failed to prepare remote sync reset"})),
+        )
+    })?;
+
+    client.delete_all_data().await.map_err(|error| {
+        error!("failed to delete remote sync state: {}", error);
+        (
+            StatusCode::BAD_GATEWAY,
+            JsonResponse(json!({
+                "error": "remote sync data was not reset; nothing was changed locally"
+            })),
+        )
+    })?;
+
+    // The delete route reports partial failures, then this independent status
+    // read verifies that the two remotely observable collections are empty.
+    // Key absence is verified by the fresh-key initialization below: an old
+    // key left behind would make that initialization fail instead of showing
+    // success in the desktop UI.
+    let reset_status = client.get_status().await.map_err(|error| {
+        error!("failed to verify remote sync reset: {}", error);
+        (
+            StatusCode::BAD_GATEWAY,
+            JsonResponse(json!({
+                "error": "remote sync reset could not be verified; no new key was created"
+            })),
+        )
+    })?;
+    if reset_status.stats.total_blobs != 0 || reset_status.quota.device_count != 0 {
+        error!(
+            "remote sync reset verification found remaining state: {} blobs, {} devices",
+            reset_status.stats.total_blobs, reset_status.quota.device_count
+        );
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            JsonResponse(json!({
+                "error": "remote sync reset was incomplete; no new key was created"
+            })),
+        ));
+    }
+
+    sync_init_inner(
+        state.clone(),
+        SyncInitRequest {
+            token,
+            password: account_password.clone(),
+            machine_id: Some(machine_id),
+            sync_interval_secs: Some(300),
+        },
+        false,
+    )
+    .await?;
+
+    if let Err(error) = secret_store
+        .set(SYNC_MASTER_PASSWORD_KEY, account_password.as_bytes())
+        .await
+    {
+        // The runtime is healthy and the password is account-derived, so the
+        // next launch can derive it again. Log the persistence failure without
+        // turning a completed remote reset into a false failure response.
+        warn!(
+            "sync account reset succeeded but the managed key was not persisted: {}",
+            error
+        );
+    }
+
+    info!("remote sync state reset and account-managed key initialized");
+    Ok(JsonResponse(json!({
+        "success": true,
+        "message": "remote sync data reset; local recordings and databases were not changed"
+    })))
 }
 
 /// Response for sync status.
@@ -1790,6 +1955,18 @@ mod tests {
         let message = format_sync_init_error_message("crypto error: aead::Error");
         assert!(message.contains("older device-local key"));
         assert!(!message.contains("enter the password"));
+    }
+
+    #[test]
+    fn test_sync_reset_confirmation_is_exact() {
+        assert_eq!(SYNC_RESET_CONFIRMATION, "delete remote sync data");
+        assert_ne!(SYNC_RESET_CONFIRMATION, "delete all local data");
+
+        let request: SyncResetAccountRequest = serde_json::from_value(json!({
+            "confirmation": SYNC_RESET_CONFIRMATION
+        }))
+        .unwrap();
+        assert_eq!(request.confirmation, SYNC_RESET_CONFIRMATION);
     }
 
     #[test]

@@ -99,17 +99,17 @@ function costLimitReason(window: CostLimitWindow, errorStr: string): string {
   const shared = "Background scheduled tasks share this budget.";
   switch (window) {
     case "trial":
-      return `you've used the hosted AI allowance included with your trial. It doesn't refill during the trial. ${shared}`;
+      return `you've used the AI allowance included with your trial. It doesn't refill during the trial. ${shared}`;
     case "month":
       return resetTime
-        ? `you've used this month's hosted AI usage limit. It resets ${resetTime}. ${shared}`
-        : `you've used this month's hosted AI usage limit. It resets at the start of next month. ${shared}`;
+        ? `you've used this month's AI usage limit. It resets ${resetTime}. ${shared}`
+        : `you've used this month's AI usage limit. It resets at the start of next month. ${shared}`;
     case "day":
       return resetTime
-        ? `you've used today's hosted AI usage limit. It resets ${resetTime}. ${shared}`
-        : `you've used today's hosted AI usage limit. It resets tomorrow. ${shared}`;
+        ? `you've used today's AI usage limit. It resets ${resetTime}. ${shared}`
+        : `you've used today's AI usage limit. It resets tomorrow. ${shared}`;
     default:
-      return `your plan's hosted AI usage limit is reached. ${shared}`;
+      return `your plan's AI usage limit is reached. ${shared}`;
   }
 }
 
@@ -156,16 +156,52 @@ export function parseQuotaUpgradeAction(
   });
 }
 
+/**
+ * The rejected model id, read from the gateway's own prose (`Model "x" is not
+ * available…`) because the body carries no dedicated field for it. Bounded so a
+ * hostile or malformed body can't paste an essay into the chat transcript.
+ */
+function modelNotAllowedName(errorStr: string): string | null {
+  // Pi may hand this body over raw, escaped once, or escaped twice depending on
+  // how many JSON hops it took, so the quotes are matched with any amount of
+  // backslash in front of them rather than unescaping first.
+  return errorStr.match(/model\s+\\*"([^"\\]{1,64})\\*"/i)?.[1] ?? null;
+}
+
+/**
+ * Copy for a `model_not_allowed` rejection.
+ *
+ * This used to be one hardcoded "upgrade to Screenpipe Business" string, which
+ * is wrong for most of the cases that reach it. The gateway sends
+ * `required_plan: null` when no plan unlocks the model — a Business account
+ * asking for a model id that does not exist gets told to buy the plan it is
+ * already on. Only claim an upgrade when the gateway actually offers one.
+ */
+export function buildModelNotAllowedMessage(errorStr: string): string {
+  const upgrade = validateQuotaUpgradeAction({
+    requiredPlan: structuredString(errorStr, "required_plan"),
+    upgradeUrl: structuredString(errorStr, "upgrade_url"),
+  });
+  if (upgrade) {
+    const plan = QUOTA_PLAN_LABELS[upgrade.requiredPlan];
+    return `This model needs the ${plan} plan. Switch to Auto to keep going, or upgrade.`;
+  }
+  const named = modelNotAllowedName(errorStr)
+    ? `"${modelNotAllowedName(errorStr)}" isn't`
+    : "This model isn't";
+  return `${named} available on Screenpipe Cloud. Switch to Auto, or use your own provider key. If you picked a coding agent, re-select it in Settings → AI presets.`;
+}
+
 export function buildDailyLimitMessage(errorStr: string): string {
   try {
     const normalized = errorStr.toLowerCase();
     if (normalized.includes("hosted_ai_allowance_exceeded")) {
       return parseQuotaUpgradeAction(errorStr)
-        ? "Your hosted AI usage limit is reached. Switch to Auto or upgrade."
-        : "Your hosted AI usage limit is reached. Switch to Auto.";
+        ? "Your AI usage limit is reached. Switch to Auto or upgrade."
+        : "Your AI usage limit is reached. Switch to Auto.";
     }
     if (normalized.includes("free_chat_limit_exceeded")) {
-      return "You've used today's 2 free hosted AI messages. Try again tomorrow, upgrade, or switch your AI preset to Ollama, Claude, Codex, or your own provider key.";
+      return "You've used today's 2 free AI messages. Try again tomorrow, upgrade, or switch your AI preset to Ollama, Claude, Codex, or your own provider key.";
     }
     if (normalized.includes("free_chat_turn_request_limit_exceeded")) {
       return "This free message reached its 8-step agent limit. Upgrade for longer agent runs, or switch your AI preset to your own provider.";
@@ -188,7 +224,7 @@ export function buildDailyLimitMessage(errorStr: string): string {
         ? // The persistent recovery panel owns the explanation and actions.
           "Choose a recovery option below."
         : "Switch to a local model or your own provider key to keep working.";
-      return `Hosted AI didn't run this request because ${costLimitReason(window, errorStr)} ${recovery}`;
+      return `This request didn't run because ${costLimitReason(window, errorStr)} ${recovery}`;
     }
 
     if (isRateLimit) {
@@ -196,7 +232,7 @@ export function buildDailyLimitMessage(errorStr: string): string {
     }
 
     if (parseQuotaUpgradeAction(errorStr)) {
-      return "Hosted AI didn't run this request because your plan's usage limit is reached. Choose a recovery option below.";
+      return "This request didn't run because your plan's usage limit is reached. Choose a recovery option below.";
     }
 
     const tierMatch = errorStr.match(/"tier":\s*"([^"]+)"/);
@@ -320,7 +356,7 @@ export function presentQuotaError(errorStr: string): QuotaErrorPresentation {
       const message = buildDailyLimitMessage(errorStr).endsWith(
         "Choose a recovery option below.",
       )
-        ? "Your plan's hosted AI usage limit is reached. Upgrade for a higher limit, or switch to a local model or your own provider key."
+        ? "Your plan's AI usage limit is reached. Upgrade for a higher limit, or switch to a local model or your own provider key."
         : buildDailyLimitMessage(errorStr);
       return { kind, message, upgrade };
     }
@@ -334,7 +370,7 @@ export function presentQuotaError(errorStr: string): QuotaErrorPresentation {
 }
 
 export function buildHostedBusyMessage(): string {
-  return "Another hosted AI request is finishing. Retrying automatically… You can keep typing — new messages will be queued.";
+  return "Another AI request is finishing. Retrying automatically… You can keep typing — new messages will be queued.";
 }
 
 export function buildHostedBusyRetryMessage(
@@ -343,11 +379,11 @@ export function buildHostedBusyRetryMessage(
   delayMs: number,
 ): string {
   const waitSeconds = Math.max(1, Math.ceil(delayMs / 1000));
-  return `Another hosted AI request is finishing. Retrying in ${waitSeconds}s… (${attempt}/${maxAttempts}) You can keep typing — new messages will be queued.`;
+  return `Another AI request is finishing. Retrying in ${waitSeconds}s… (${attempt}/${maxAttempts}) You can keep typing — new messages will be queued.`;
 }
 
 export function buildHostedBusyFinalMessage(): string {
-  return "Hosted AI stayed busy with another request, so this reply could not start. Try again in a moment.";
+  return "AI stayed busy with another request, so this reply could not start. Try again in a moment.";
 }
 
 export function buildRateLimitMessage(errorStr: string): string {

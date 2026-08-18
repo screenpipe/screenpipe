@@ -8,10 +8,36 @@
 //! when no ffmpeg is available, so CI without ffmpeg stays green.
 
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use screenpipe_engine::compaction_encoder::CompactionEncoder;
+use screenpipe_engine::video_utils::extract_frame_from_video;
 use tokio::io::AsyncWriteExt;
+
+/// Locate an already-installed ffmpeg without invoking screenpipe's production
+/// auto-installer. These tests promise to skip when ffmpeg is unavailable, and
+/// a network download would make offline CI hang instead of honoring that.
+fn find_installed_ffmpeg() -> Option<PathBuf> {
+    #[cfg(windows)]
+    let executable_name = "ffmpeg.exe";
+    #[cfg(not(windows))]
+    let executable_name = "ffmpeg";
+
+    let mut candidates = Vec::new();
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            candidates.push(parent.join(executable_name));
+        }
+    }
+    candidates.push(PathBuf::from(executable_name));
+
+    candidates.into_iter().find(|candidate| {
+        screenpipe_core::ffmpeg_cmd(candidate)
+            .arg("-version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+    })
+}
 
 /// A synthetic screenshot-ish JPEG: gradient + per-frame variation so the
 /// encoder sees non-identical frames.
@@ -38,6 +64,16 @@ async fn compact_frames(
     frames: &[Vec<u8>],
     out: &Path,
 ) -> Result<(), String> {
+    compact_frames_at_fps(ffmpeg, encoder, frames, out, "1").await
+}
+
+async fn compact_frames_at_fps(
+    ffmpeg: &Path,
+    encoder: CompactionEncoder,
+    frames: &[Vec<u8>],
+    out: &Path,
+    fps: &str,
+) -> Result<(), String> {
     let mut cmd = screenpipe_core::ffmpeg_cmd_async(ffmpeg);
     cmd.args([
         "-f",
@@ -45,7 +81,7 @@ async fn compact_frames(
         "-vcodec",
         "mjpeg",
         "-r",
-        "1",
+        fps,
         "-i",
         "-",
         "-vf",
@@ -87,6 +123,51 @@ async fn compact_frames(
     Ok(())
 }
 
+#[tokio::test]
+async fn extracts_fractional_compaction_frame_by_decoded_index() {
+    let Some(ffmpeg) = find_installed_ffmpeg() else {
+        eprintln!("skipping: ffmpeg not available on this machine");
+        return;
+    };
+
+    let frames = [
+        solid_jpeg(640, 360, [240, 20, 20]),
+        solid_jpeg(640, 360, [20, 240, 20]),
+        solid_jpeg(640, 360, [20, 20, 240]),
+    ];
+    let dir = tempfile::tempdir().expect("temp dir");
+    let out = dir.path().join("compact_fractional.mp4");
+
+    compact_frames_at_fps(&ffmpeg, CompactionEncoder::X264, &frames, &out, "0.18")
+        .await
+        .expect("encode fractional compact video");
+
+    let extracted = extract_frame_from_video(out.to_str().unwrap(), 2, "2")
+        .await
+        .expect("extract third decoded frame");
+    let image = image::open(&extracted)
+        .expect("open extracted frame")
+        .to_rgb8();
+    let [red, green, blue] = image.get_pixel(image.width() / 2, image.height() / 2).0;
+
+    assert!(
+        blue > 180
+            && u16::from(blue) > u16::from(red) * 3
+            && u16::from(blue) > u16::from(green) * 3,
+        "expected blue third frame, got center pixel [{red}, {green}, {blue}]"
+    );
+    let _ = std::fs::remove_file(extracted);
+}
+
+fn solid_jpeg(w: u32, h: u32, color: [u8; 3]) -> Vec<u8> {
+    let img = image::RgbImage::from_pixel(w, h, image::Rgb(color));
+    let mut buf = Vec::new();
+    image::DynamicImage::ImageRgb8(img)
+        .write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Jpeg)
+        .expect("jpeg encode");
+    buf
+}
+
 /// Full decode to the null muxer — proves the produced file is a playable
 /// video, exactly what frame extraction relies on.
 async fn assert_decodable(ffmpeg: &Path, file: &Path) {
@@ -103,7 +184,7 @@ async fn assert_decodable(ffmpeg: &Path, file: &Path) {
 
 #[tokio::test]
 async fn selected_encoder_produces_decodable_mp4() {
-    let Some(ffmpeg) = screenpipe_core::find_ffmpeg_path() else {
+    let Some(ffmpeg) = find_installed_ffmpeg() else {
         eprintln!("skipping: ffmpeg not available on this machine");
         return;
     };
@@ -132,7 +213,7 @@ async fn selected_encoder_produces_decodable_mp4() {
 
 #[tokio::test]
 async fn software_fallback_produces_decodable_mp4() {
-    let Some(ffmpeg) = screenpipe_core::find_ffmpeg_path() else {
+    let Some(ffmpeg) = find_installed_ffmpeg() else {
         eprintln!("skipping: ffmpeg not available on this machine");
         return;
     };

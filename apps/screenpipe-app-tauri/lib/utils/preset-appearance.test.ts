@@ -45,11 +45,51 @@ describe("presetImageSrc", () => {
   });
 
   it("maps providers and falls back to the custom icon", () => {
-    expect(presetImageSrc("openai-chatgpt")).toBe("/images/openai.png");
+    expect(presetImageSrc("openai-chatgpt")).toBe("/images/openai.svg");
     expect(presetImageSrc("screenpipe-cloud")).toBe("/images/screenpipe.png");
     expect(presetImageSrc("acp")).not.toBe("/images/screenpipe.png");
     expect(presetImageSrc("never-heard-of-it")).toBe("/images/custom.png");
     expect(presetImageSrc(undefined)).toBe("/images/custom.png");
+  });
+
+  it("uses the model maker for hosted models", () => {
+    expect(presetImageSrc("screenpipe-cloud", undefined, "gpt-5.6-terra")).toBe(
+      "/images/openai.svg",
+    );
+    expect(presetImageSrc("screenpipe-cloud", undefined, "claude-sonnet-5")).toBe(
+      "/images/claude-ai.svg",
+    );
+    expect(presetImageSrc("screenpipe-cloud", undefined, "auto")).toBe(
+      "/images/screenpipe.png",
+    );
+  });
+
+  it("recognizes Codex and Gemini model selections", () => {
+    expect(presetImageSrc("openai-chatgpt", undefined, "gpt-5.2-codex")).toBe(
+      "/images/codex.svg",
+    );
+    expect(
+      presetImageSrc(
+        "custom",
+        undefined,
+        "gemini-3.6-flash",
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+      ),
+    ).toBe("/images/gemini.svg");
+  });
+
+  it("uses a known custom endpoint when the model name is opaque", () => {
+    expect(
+      presetImageSrc(
+        "custom",
+        undefined,
+        "latest",
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+      ),
+    ).toBe("/images/gemini.svg");
+    expect(presetImageSrc("custom", undefined, "latest", "http://localhost:11434/v1")).toBe(
+      "/images/ollama.png",
+    );
   });
 });
 
@@ -62,7 +102,10 @@ describe("presetImageClass", () => {
   it("leaves self-contained icons alone", () => {
     expect(presetImageClass("acp", "pi-acp")).toBe("");
     expect(presetImageClass("acp", "codex-acp")).toBe("");
-    expect(presetImageClass("openai-chatgpt")).toBe("");
+    expect(presetImageClass("openai-chatgpt")).toBe("dark:invert");
+    expect(
+      presetImageClass("screenpipe-cloud", undefined, "gpt-5.6-terra"),
+    ).toBe("dark:invert");
   });
 });
 

@@ -262,10 +262,6 @@ pub struct RecordingConfig {
     /// Optional product limit for user-installed (non-bundled) pipes.
     /// `None` keeps the engine and standalone CLI behavior unlimited.
     pub max_non_template_pipes: Option<usize>,
-
-    /// Enforce the desktop free-plan retention policy at the local API layer.
-    /// Kept false for the standalone engine/CLI.
-    pub enforce_free_plan_retention: bool,
 }
 
 impl RecordingConfig {
@@ -450,7 +446,6 @@ impl RecordingConfig {
             },
             encrypt_secrets: false, // desktop app handles keychain via Tauri commands
             max_non_template_pipes: None,
-            enforce_free_plan_retention: false,
         }
     }
 

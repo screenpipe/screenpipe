@@ -199,6 +199,75 @@ fn shortcut_reminder_visible(app_handle: tauri::AppHandle) -> bool {
         .unwrap_or(false)
 }
 
+/// E2E helper: open an auto-detected meeting the way the audio-process
+/// watcher would.
+///
+/// `POST /meetings/start` hardcodes `detection_source = "manual"`, and manual
+/// meetings are exactly the ones a recording restart does *not* strand: the
+/// audio-process watcher never owns them, so its shutdown hook leaves them
+/// open, and `close_orphaned_meetings` spares them for 12h. Reproducing the
+/// stranded-live-transcription bug therefore needs a genuine auto meeting —
+/// which normally only the detector creates, and the detector needs a real
+/// meeting app plus audio no CI runner has.
+#[command]
+async fn open_auto_meeting(
+    state: State<'_, RecordingState>,
+    app_name: String,
+    title: Option<String>,
+) -> Result<i64, String> {
+    let server_guard = state.server.lock().await;
+    let server = server_guard
+        .as_ref()
+        .ok_or_else(|| "server not running".to_string())?;
+    server
+        .db
+        .insert_meeting(&app_name, "audio_process", title.as_deref(), None)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// E2E helper: report the currently open meeting, if any.
+///
+/// Mirrors the "is a meeting still in progress?" question the streaming
+/// coordinator asks (`meeting_end IS NULL`), so a spec can assert a restart
+/// did not silently close the meeting out from under live transcription.
+#[command]
+async fn active_meeting_id(state: State<'_, RecordingState>) -> Result<Option<i64>, String> {
+    let server_guard = state.server.lock().await;
+    let Some(server) = server_guard.as_ref() else {
+        return Ok(None);
+    };
+    server
+        .db
+        .get_most_recent_active_meeting_id()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// E2E helper: observed state of the native macOS live-meeting transcript card.
+///
+/// Returns `None` off macOS and whenever the native panel is unavailable, so a
+/// spec can tell "not this platform" apart from "card is hidden".
+#[command]
+fn native_meeting_overlay_state() -> Option<crate::native_shortcut_reminder::MeetingOverlayPanelState>
+{
+    crate::native_shortcut_reminder::meeting_overlay_state()
+}
+
+/// E2E helper: enter or leave the native chip. AppKit does not deliver a
+/// synthetic hover to a nonactivating panel, so this calls the same controller
+/// entry point the `.activeAlways` tracking area uses.
+#[command]
+fn native_shortcut_set_hovering(hovering: bool) -> bool {
+    crate::native_shortcut_reminder::set_pill_hovering(hovering)
+}
+
+/// E2E helper: the same pin toggle the native card's button invokes.
+#[command]
+fn native_toggle_meeting_pin() -> bool {
+    crate::native_shortcut_reminder::toggle_meeting_pin()
+}
+
 /// E2E helper: publish the production live-transcript event shape without
 /// depending on microphone hardware or an external transcription provider.
 #[command]
@@ -607,6 +676,20 @@ async fn capture_pi_start_error(
     }
 }
 
+/// E2E helper: allow (or re-suppress) real macOS window activation.
+///
+/// The suite runs on a developer's desktop, so e2e builds are non-activating by
+/// default — otherwise every window show swaps them out of their fullscreen
+/// Space. The specs that assert activation itself turn it on for their own
+/// duration and hand it back.
+#[command]
+fn e2e_set_activation_allowed(allowed: bool) {
+    #[cfg(target_os = "macos")]
+    crate::window::set_window_activation_allowed(allowed);
+    #[cfg(not(target_os = "macos"))]
+    let _ = allowed;
+}
+
 pub(super) fn plugin() -> TauriPlugin<Wry> {
     Builder::<Wry>::new("e2e")
         // build.rs verifies this inventory matches the feature-only plugin ACL.
@@ -625,6 +708,11 @@ pub(super) fn plugin() -> TauriPlugin<Wry> {
             set_tray_recording_status,
             installed_tray_recording_status,
             shortcut_reminder_visible,
+            open_auto_meeting,
+            active_meeting_id,
+            native_meeting_overlay_state,
+            native_shortcut_set_hovering,
+            native_toggle_meeting_pin,
             emit_meeting_overlay_transcript,
             emit_agent_stream,
             emit_settled_agent_follow_up,
@@ -642,6 +730,7 @@ pub(super) fn plugin() -> TauriPlugin<Wry> {
             seed_flags,
             capture_pi_start_error,
             set_onboarding_completed_ago,
+            e2e_set_activation_allowed,
         ])
         .build()
 }

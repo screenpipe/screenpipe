@@ -38,11 +38,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { localFetch } from "@/lib/api";
-import {
-  FREE_PLAN_RETENTION_DAYS,
-  FREE_PLAN_RETENTION_MODE,
-  hasFreePlanPolicy,
-} from "@/lib/app-entitlement";
 import { cn } from "@/lib/utils";
 import { commands } from "@/lib/utils/tauri";
 
@@ -125,14 +120,10 @@ export function RetentionSettings({
     "the safety reserve",
   );
 
-  const isFreePlan = hasFreePlanPolicy(settings.user as any);
-  const enabled = isFreePlan ? true : (settings.localRetentionEnabled ?? false);
-  const retentionDays = isFreePlan
-    ? FREE_PLAN_RETENTION_DAYS
-    : (settings.localRetentionDays ?? 14);
-  const mode: RetentionMode = isFreePlan
-    ? FREE_PLAN_RETENTION_MODE
-    : ((settings.localRetentionMode as RetentionMode | undefined) ?? "media");
+  const enabled = settings.localRetentionEnabled ?? false;
+  const retentionDays = settings.localRetentionDays ?? 14;
+  const mode: RetentionMode =
+    (settings.localRetentionMode as RetentionMode | undefined) ?? "media";
   const effective: EffectiveMode = enabled ? mode : "off";
   const compactRequiredBytes =
     databaseBytes && databaseBytes > 0
@@ -226,7 +217,6 @@ export function RetentionSettings({
   };
 
   const handleSelectMode = async (next: EffectiveMode) => {
-    if (isFreePlan) return;
     if (next === effective) return;
     if (next === "off") {
       try {
@@ -248,7 +238,7 @@ export function RetentionSettings({
   };
 
   const confirmEnable = async () => {
-    if (isFreePlan || pendingMode === null) return;
+    if (pendingMode === null) return;
     const nextMode = pendingMode;
     setPendingMode(null);
     try {
@@ -280,7 +270,6 @@ export function RetentionSettings({
   };
 
   const handleRetentionChange = async (value: string) => {
-    if (isFreePlan) return;
     const days = parseInt(value, 10);
     await updateSettings({ localRetentionDays: days });
     if (enabled) {
@@ -472,26 +461,8 @@ export function RetentionSettings({
                 ? `currently: dropping video + audio older than ${retentionDays} days, text stays searchable.`
                 : effective === "lean"
                   ? `currently: dropping video + audio and the bulky ocr/accessibility detail older than ${retentionDays} days, text + memories stay searchable.`
-                  : isFreePlan
-                    ? `currently: permanently deleting captured activity older than ${retentionDays} days.`
-                    : `currently: deleting everything older than ${retentionDays} days.`}
+                  : `currently: deleting everything older than ${retentionDays} days.`}
           </p>
-
-          {isFreePlan && (
-            <div
-              data-testid="free-plan-retention-policy"
-              className="ml-6 rounded border border-border bg-muted/30 p-3 text-xs"
-            >
-              <p className="font-medium text-foreground">
-                free plan: 7 days of captured activity
-              </p>
-              <p className="mt-1 text-muted-foreground">
-                screenpipe permanently deletes recordings, transcripts, ocr, and
-                captured ui activity after 7 days. upgrade to choose a longer
-                retention period or keep activity indefinitely.
-              </p>
-            </div>
-          )}
 
           <div className="space-y-2 pl-6">
             <ModeRow
@@ -500,17 +471,15 @@ export function RetentionSettings({
               title="keep everything"
               body="disk keeps growing. you monitor space yourself."
               onClick={() => handleSelectMode("off")}
-              disabled={isFreePlan}
             />
             <ModeRow
               testId="retention-mode-media"
               checked={effective === "media"}
-              recommended={!isFreePlan}
+              recommended
               icon={<Film className="h-4 w-4" />}
               title="drop video + audio, keep text"
               body="reclaims mp4/wav/jpeg files. transcripts, ocr, and app history stay searchable. you won't be able to replay clips past the cutoff."
               onClick={() => handleSelectMode("media")}
-              disabled={isFreePlan}
             />
             <ModeRow
               testId="retention-mode-lean"
@@ -519,22 +488,14 @@ export function RetentionSettings({
               title="trim heavy ui data, keep text + memories"
               body="everything media mode does, plus drops the bulky per-element ocr + accessibility detail (the biggest part of the database) older than the cutoff. text search, transcripts, timeline, and memories still work — only the on-screen element geometry is dropped. stops the database from ballooning and frees that space for reuse."
               onClick={() => handleSelectMode("lean")}
-              disabled={isFreePlan}
             />
             <ModeRow
               testId="retention-mode-all"
               checked={effective === "all"}
               icon={<Trash2 className="h-4 w-4" />}
-              title={
-                isFreePlan ? "delete captured activity" : "delete everything"
-              }
-              body={
-                isFreePlan
-                  ? "permanently deletes captured recordings, transcripts, ocr, and ui activity past the cutoff. search won't find captured activity from that period."
-                  : "permanently deletes all data past the cutoff. search won't find anything from that period."
-              }
+              title="delete everything"
+              body="permanently deletes all data past the cutoff. search won't find anything from that period."
               onClick={() => handleSelectMode("all")}
-              disabled={isFreePlan}
             />
           </div>
 
@@ -552,7 +513,7 @@ export function RetentionSettings({
             <Select
               value={retentionDays.toString()}
               onValueChange={handleRetentionChange}
-              disabled={effective === "off" || isFreePlan}
+              disabled={effective === "off"}
             >
               <SelectTrigger className="w-[120px] h-8">
                 <SelectValue />
@@ -784,7 +745,6 @@ export function RetentionSettings({
             <Select
               value={retentionDays.toString()}
               onValueChange={handleRetentionChange}
-              disabled={isFreePlan}
             >
               <SelectTrigger className="w-[120px] h-8">
                 <SelectValue />

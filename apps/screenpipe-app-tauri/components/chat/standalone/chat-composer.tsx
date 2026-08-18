@@ -73,7 +73,7 @@ export function ChatComposer({
 
         <form
           onSubmit={input.onSubmit}
-          className="px-5 sm:px-6 pb-4 pt-3 relative"
+          className="px-5 sm:px-6 pb-3 pt-2 relative"
           onPaste={input.onPaste}
           data-firstrun-target="composer"
         >

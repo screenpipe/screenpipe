@@ -762,6 +762,126 @@ describe('usage reservations against workerd D1', () => {
 		expect(hold).toBeNull();
 	});
 
+	it('settles GPT-5.6 OpenAI cache writes and reads at their discounted provider cost', async () => {
+		const deviceId = 'user-d1-gpt56-cache-settlement';
+		const model = 'gpt-5.6-sol';
+		const promptTokens = 10_000;
+		const outputTokens = 100;
+		const settleOpenAiUsage = async (
+			cacheReadTokens: number,
+			cacheCreationTokens: number,
+		): Promise<void> => {
+			const admitted = await reserveDailyCostCap(
+				env,
+				deviceId,
+				'subscribed',
+				model,
+				new Date(),
+				'interactive',
+				{},
+				'business',
+			);
+			if (!admitted.allowed || !admitted.reservation) {
+				throw new Error('expected GPT-5.6 cache settlement reservation');
+			}
+
+			const upstream = new Response(
+				`data: ${JSON.stringify({
+					choices: [],
+					usage: {
+						prompt_tokens: promptTokens,
+						completion_tokens: outputTokens,
+						prompt_tokens_details: { cached_tokens: cacheReadTokens },
+						cache_creation_input_tokens: cacheCreationTokens,
+					},
+				})}\n\ndata: [DONE]\n\n`,
+			);
+			const tracked = trackResponseUsage(upstream, 'openai');
+			const settlement = tracked.usage.then((usage) => logCost(env, {
+				settlement_id: admitted.reservation!.key,
+				device_id: deviceId,
+				tier: 'subscribed',
+				provider: 'openai',
+				model,
+				input_tokens: usage.input_tokens,
+				output_tokens: usage.output_tokens,
+				cache_read_tokens: usage.cache_read_input_tokens,
+				cache_creation_tokens: usage.cache_creation_input_tokens,
+				estimated_cost_usd: getStreamSettlementCost(model, {
+					input_tokens: usage.input_tokens,
+					output_tokens: usage.output_tokens,
+					cache_read_tokens: usage.cache_read_input_tokens,
+					cache_creation_tokens: usage.cache_creation_input_tokens,
+					usage_complete: usage.usage_complete,
+				}, admitted.reservation!.reservedMicroUsd),
+				endpoint: '/v1/chat/completions',
+				stream: true,
+				lane: admitted.reservation!.lane,
+				cost_ledger_epoch: admitted.reservation!.ledgerEpoch,
+				cost_total_ledger_epoch: admitted.reservation!.totalLedgerEpoch,
+			}));
+			const response = withDailyCostSettlement(
+				tracked.response,
+				env,
+				admitted.reservation,
+				settlement,
+			);
+
+			expect(await response.text()).toContain('data: [DONE]');
+			expect(await settlement).toBe(true);
+		}
+
+		await settleOpenAiUsage(0, promptTokens);
+		await settleOpenAiUsage(promptTokens, 0);
+
+		// GPT-5.6 Sol: input $5/M, cache write 1.25x, cache read 0.1x,
+		// output $30/M. The two input prefixes therefore cost 1.35x instead
+		// of 2x before the identical output charges are added.
+		const expectedSettledCost =
+			(promptTokens / 1_000_000) * 5 * 1.25
+			+ (promptTokens / 1_000_000) * 5 * 0.1
+			+ 2 * (outputTokens / 1_000_000) * 30;
+		const twoUncachedRequests =
+			2 * ((promptTokens / 1_000_000) * 5 + (outputTokens / 1_000_000) * 30);
+
+		const account = await env.DB.prepare(
+			'SELECT daily_cost_usd FROM usage WHERE device_id = ?',
+		).bind(deviceId).first<{ daily_cost_usd: number }>();
+		expect(account?.daily_cost_usd).toBeCloseTo(expectedSettledCost, 8);
+		expect(account!.daily_cost_usd).toBeLessThan(twoUncachedRequests);
+
+		const aggregate = await env.DB.prepare(`
+			SELECT requests, input_tokens, output_tokens, cache_read_tokens,
+				cache_creation_tokens, estimated_cost_usd
+			FROM cost_daily
+			WHERE provider = 'openai' AND model = ? AND stream = 1
+		`).bind(model).first<{
+			requests: number;
+			input_tokens: number;
+			output_tokens: number;
+			cache_read_tokens: number;
+			cache_creation_tokens: number;
+			estimated_cost_usd: number;
+		}>();
+		expect(aggregate).toEqual({
+			requests: 2,
+			input_tokens: promptTokens * 2,
+			output_tokens: outputTokens * 2,
+			cache_read_tokens: promptTokens,
+			cache_creation_tokens: promptTokens,
+			estimated_cost_usd: expectedSettledCost,
+		});
+
+		const ledger = await env.DB.prepare(`
+			SELECT COUNT(*) AS count, SUM(cost_micro_cents) AS total_micro_cents
+			FROM hosted_ai_settlements WHERE applied_at IS NOT NULL
+		`).first<{ count: number; total_micro_cents: number }>();
+		expect(ledger).toEqual({
+			count: 2,
+			total_micro_cents: Math.round(expectedSettledCost * 100_000_000),
+		});
+	});
+
 	it('refreshes the private spend lease while a response is actively consumed', async () => {
 		env.PRIVATE_COST_RESERVATION_TTL_SECONDS = '6';
 		env.PRIVATE_CAPACITY_ACTIVITY_SECONDS = '2';

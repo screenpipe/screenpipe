@@ -500,7 +500,7 @@ fn render_current_outline(nodes: &[CapturedAccessibilityNode], frame_id: i64) ->
         .enumerate()
         .filter_map(|(index, node)| {
             let text = node.text.split_whitespace().collect::<Vec<_>>().join(" ");
-            (!text.is_empty()).then(|| (index, node, text))
+            (!text.is_empty()).then_some((index, node, text))
         })
         .collect();
     let mut output = format!(

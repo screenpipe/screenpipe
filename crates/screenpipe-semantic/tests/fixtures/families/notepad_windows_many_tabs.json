@@ -1,0 +1,24 @@
+{
+  "app": {
+    "platform": "windows",
+    "app_id": null,
+    "executable": "Notepad.exe",
+    "display_name": "Notepad.exe",
+    "version": null,
+    "browser_url": null
+  },
+  "nodes": [
+    {
+      "parent": null,
+      "role": "Document",
+      "classes": ["RichEditD2DPT"],
+      "description": "document",
+      "text": "release checklist\nsign the installer",
+      "value": "release checklist\nsign the installer"
+    },
+    { "parent": null, "role": "TabItem", "classes": ["ListViewItem"], "text": "archive-001.txt. Unmodified." },
+    { "parent": 1, "role": "Text", "classes": ["TextBlock"], "text": "archive-001.txt" },
+    { "parent": null, "role": "TabItem", "classes": ["ListViewItem"], "text": "release-notes.txt. Unmodified.", "selected": true },
+    { "parent": 3, "role": "Text", "classes": ["TextBlock"], "text": "release-notes.txt" }
+  ]
+}

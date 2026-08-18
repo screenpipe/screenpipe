@@ -125,8 +125,8 @@ export function acpAdapterInfo(id?: string | null): AcpAdapterInfo {
 }
 
 export const PROVIDER_IMAGE_SRC: Record<string, string> = {
-  openai: "/images/openai.png",
-  "openai-chatgpt": "/images/openai.png",
+  openai: "/images/openai.svg",
+  "openai-chatgpt": "/images/openai.svg",
   anthropic: "/images/claude-ai.svg",
   "native-ollama": "/images/ollama.png",
   custom: "/images/custom.png",
@@ -136,13 +136,55 @@ export const PROVIDER_IMAGE_SRC: Record<string, string> = {
   acp: "/images/acp.svg",
 };
 
+/** Resolve the company/model mark a person actually picked, rather than the
+ *  transport that happens to carry it. Screenpipe Cloud can serve GPT and
+ *  Claude models, while `custom` is also how Gemini's OpenAI-compatible API is
+ *  configured. `auto` deliberately stays Screenpipe: its upstream model can
+ *  change between requests, so any vendor mark would be false certainty. */
+function modelImageSrc(
+  provider?: string | null,
+  model?: string | null,
+  url?: string | null,
+): string | null {
+  const normalizedModel = model?.trim().toLowerCase() ?? "";
+  const normalizedUrl = url?.trim().toLowerCase() ?? "";
+
+  if (normalizedModel.includes("codex")) return "/images/codex.svg";
+  if (normalizedModel.includes("claude")) return "/images/claude-ai.svg";
+  if (normalizedModel.includes("gemini")) return "/images/gemini.svg";
+  if (
+    normalizedModel.startsWith("gpt-") ||
+    /^o[1345](?:[-.:]|$)/.test(normalizedModel)
+  ) {
+    return "/images/openai.svg";
+  }
+
+  if (provider !== "custom") return null;
+  if (
+    normalizedUrl.includes("generativelanguage.googleapis.com") ||
+    normalizedUrl.includes("ai.google.dev")
+  ) {
+    return "/images/gemini.svg";
+  }
+  if (normalizedUrl.includes("anthropic.com")) return "/images/claude-ai.svg";
+  if (normalizedUrl.includes("openai.com")) return "/images/openai.svg";
+  if (normalizedUrl.includes("localhost:11434") || normalizedUrl.includes("ollama")) {
+    return "/images/ollama.png";
+  }
+  return null;
+}
+
 /** Icon for a preset row/card. ACP presets show their agent's icon, not the
  *  generic provider icon. */
 export function presetImageSrc(
   provider?: string | null,
   acpAgentId?: string | null,
+  model?: string | null,
+  url?: string | null,
 ): string {
   if (provider === "acp") return acpAdapterInfo(acpAgentId).imageSrc;
+  const modelIcon = modelImageSrc(provider, model, url);
+  if (modelIcon) return modelIcon;
   return PROVIDER_IMAGE_SRC[provider ?? ""] ?? "/images/custom.png";
 }
 
@@ -151,8 +193,13 @@ export function presetImageSrc(
 export function presetImageClass(
   provider?: string | null,
   acpAgentId?: string | null,
+  model?: string | null,
+  url?: string | null,
 ): string {
   if (provider === "acp" && acpAdapterInfo(acpAgentId).invertInDark) {
+    return "dark:invert";
+  }
+  if (presetImageSrc(provider, acpAgentId, model, url) === "/images/openai.svg") {
     return "dark:invert";
   }
   return "";

@@ -37,8 +37,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetClassNameW, GetForegroundWindow, GetMessageW,
-    GetWindowTextW, GetWindowThreadProcessId, KillTimer, PostThreadMessageW, SetTimer,
+    CallNextHookEx, DispatchMessageW, EnumChildWindows, GetClassNameW, GetForegroundWindow,
+    GetMessageW, GetWindowTextW, GetWindowThreadProcessId, KillTimer, PostThreadMessageW, SetTimer,
     SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, EVENT_SYSTEM_FOREGROUND, HC_ACTION,
     HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL,
     WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
@@ -2087,6 +2087,67 @@ const SHELL_HOST_PROCESSES: &[&str] = &[
     "runtimebroker.exe",
 ];
 
+/// The frame process UWP / WinUI store apps are hosted in, and the window class
+/// of the hosted app's own top-level window inside that frame.
+const UWP_FRAME_HOST_PROCESS: &str = "applicationframehost.exe";
+const UWP_HOSTED_WINDOW_CLASS: &str = "Windows.UI.Core.CoreWindow";
+
+/// Whether a window's process name needs a hosted-app lookup before it can be
+/// attributed. Pure so the policy is unit-testable without a live window.
+pub(crate) fn hosts_uwp_app(raw_process: &str, window_class: &str) -> bool {
+    raw_process.eq_ignore_ascii_case(UWP_FRAME_HOST_PROCESS)
+        // The Chromium shell-host path already claims this class for Edge.
+        && window_class != "Chrome_WidgetWin_1"
+        && window_class != "Chrome_WidgetWin_0"
+}
+
+/// Resolve the real process behind an `ApplicationFrameHost.exe` window.
+///
+/// Store apps (Microsoft To Do, Photos, the Store, Sticky Notes' packaged
+/// builds) draw into a frame window owned by ApplicationFrameHost, so
+/// `GetWindowThreadProcessId` on the top-level window returns the *host*. Every
+/// one of them was therefore recorded as "ApplicationFrameHost.exe" — a name
+/// that matches no parser identity and tells the user nothing about what they
+/// were doing. The app's own `Windows.UI.Core.CoreWindow` child carries the
+/// real PID, which is the documented way to recover the hosted app.
+///
+/// Returns `None` when the child is absent (the frame is still initializing) or
+/// its process cannot be named, so attribution falls back to the host rather
+/// than inventing one.
+fn resolve_uwp_hosted_process(hwnd: HWND) -> Option<String> {
+    use windows::Win32::Foundation::BOOL;
+
+    unsafe extern "system" fn find_core_window(child: HWND, out: LPARAM) -> BOOL {
+        unsafe {
+            let mut buf = [0u16; 64];
+            let len = GetClassNameW(child, &mut buf);
+            if len > 0 && String::from_utf16_lossy(&buf[..len as usize]) == UWP_HOSTED_WINDOW_CLASS
+            {
+                let mut pid: u32 = 0;
+                GetWindowThreadProcessId(child, Some(&mut pid));
+                if pid != 0 {
+                    *(out.0 as *mut u32) = pid;
+                    return BOOL(0);
+                }
+            }
+            BOOL(1)
+        }
+    }
+
+    let mut hosted_pid: u32 = 0;
+    unsafe {
+        let _ = EnumChildWindows(
+            hwnd,
+            Some(find_core_window),
+            LPARAM(&mut hosted_pid as *mut u32 as isize),
+        );
+    }
+    if hosted_pid == 0 {
+        return None;
+    }
+    get_process_name(hosted_pid).filter(|name| !name.eq_ignore_ascii_case(UWP_FRAME_HOST_PROCESS))
+}
+
 /// Pure decision logic for resolving the effective app name from a raw process name
 /// + window class. Extracted from [`get_effective_app_name`] so it can be unit-tested
 /// without Windows API calls. See [`get_effective_app_name`] for the *why*.
@@ -2134,6 +2195,18 @@ pub(crate) fn get_effective_app_name(hwnd: HWND, pid: u32) -> String {
             String::new()
         }
     };
+
+    if hosts_uwp_app(&raw, &window_class) {
+        if let Some(hosted) = resolve_uwp_hosted_process(hwnd) {
+            debug!(
+                pid,
+                raw_process = %raw,
+                hosted = %hosted,
+                "a11y: resolved UWP-hosted app behind the frame host"
+            );
+            return hosted;
+        }
+    }
 
     let effective = normalize_app_name(&raw, &window_class);
     if effective != raw {
@@ -2263,6 +2336,29 @@ mod tests {
             normalize_app_name("RuntimeBroker.exe", "Chrome_WidgetWin_1"),
             "msedge.exe"
         );
+    }
+
+    #[test]
+    fn test_hosts_uwp_app() {
+        // Store apps (Microsoft To Do, Photos, the Store) live behind the
+        // frame host and need the hosted-window lookup.
+        assert!(hosts_uwp_app(
+            "ApplicationFrameHost.exe",
+            "ApplicationFrameWindow"
+        ));
+        assert!(hosts_uwp_app("applicationframehost.exe", ""));
+        // Chromium classes stay with the Edge attribution path above.
+        assert!(!hosts_uwp_app(
+            "ApplicationFrameHost.exe",
+            "Chrome_WidgetWin_1"
+        ));
+        assert!(!hosts_uwp_app(
+            "ApplicationFrameHost.exe",
+            "Chrome_WidgetWin_0"
+        ));
+        // Every other process names itself.
+        assert!(!hosts_uwp_app("explorer.exe", "CabinetWClass"));
+        assert!(!hosts_uwp_app("ToDo.exe", "ApplicationFrameWindow"));
     }
 
     #[test]

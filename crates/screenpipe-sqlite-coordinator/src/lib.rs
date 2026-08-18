@@ -15,9 +15,9 @@ mod quarantine;
 
 pub use quarantine::{
     archive_resolved_sqlite_quarantine, persist_sqlite_quarantine,
-    prepare_sqlite_quarantine_reserve, read_sqlite_quarantine, sqlite_file_identity,
-    sqlite_quarantine_exists, sqlite_quarantine_marker_path, SqliteFileIdentity,
-    SqliteQuarantineMarker,
+    prepare_sqlite_quarantine_reserve, read_sqlite_quarantine, resolve_verified_sqlite_quarantine,
+    sqlite_file_identity, sqlite_quarantine_exists, sqlite_quarantine_is_self_healable,
+    sqlite_quarantine_marker_path, SqliteFileIdentity, SqliteQuarantineMarker,
 };
 
 pub const FIRST_WAL_RESET_SAFE_SQLITE: i32 = 3_051_003;
@@ -206,6 +206,23 @@ pub fn latch_sqlite_hard_fault(db_path: impl AsRef<Path>, code: i32) -> bool {
     }
 
     inserted
+}
+
+/// True when *this process* already latched a hard fault for the path.
+///
+/// Unlike [`registered_sqlite_hard_fault`] this never promotes a durable
+/// marker into the in-memory map, so it answers "did we fault since launch?"
+/// rather than "is this path quarantined?". Self-heal needs that distinction:
+/// latching also permanently closes the write semaphore, which cannot be
+/// reopened, so resolving a marker after a fault would clear the metadata and
+/// still leave every writer blocked.
+pub fn sqlite_hard_fault_latched(db_path: impl AsRef<Path>) -> bool {
+    let key = lock_key(db_path.as_ref());
+    SQLITE_HARD_FAULTS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains_key(&key)
 }
 
 /// Return the first hard SQLite code recorded for this path in this process.

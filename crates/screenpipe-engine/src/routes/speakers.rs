@@ -10,7 +10,7 @@ use axum::{
 };
 use oasgen::{oasgen, OaSchema};
 
-use screenpipe_db::Speaker;
+use screenpipe_db::{ReassignScope, Speaker};
 
 use super::search::{default_speaker_ids, from_comma_separated_array};
 use crate::server::AppState;
@@ -48,6 +48,10 @@ pub struct ReassignSpeakerRequest {
     pub new_speaker_name: String,
     #[serde(default = "default_propagate_similar")]
     pub propagate_similar: bool,
+    /// How much of the voice to relabel. Defaults to `auto`: name the whole
+    /// voice when it has none yet, correct just this chunk when it does.
+    #[serde(default)]
+    pub scope: ReassignScope,
 }
 
 pub(crate) fn default_propagate_similar() -> bool {
@@ -64,16 +68,29 @@ pub struct SpeakerOldAssignment {
 pub struct ReassignSpeakerResponse {
     pub new_speaker_id: i64,
     pub new_speaker_name: String,
+    /// Transcript rows now carrying this speaker. For an in-place rename
+    /// nothing moves, but this many lines change on screen.
     pub transcriptions_updated: u64,
     pub embeddings_moved: u64,
+    /// Whether the whole voice was relabelled rather than this chunk alone.
+    pub renamed_whole_speaker: bool,
+    /// The name this speaker had before an in-place rename. Undo for that path
+    /// is writing this name back, not restoring row assignments.
+    pub previous_speaker_name: Option<String>,
     /// Old assignments for undo
     pub old_assignments: Vec<SpeakerOldAssignment>,
+    /// Old meeting-segment assignments for undo
+    #[serde(default)]
+    pub old_segment_assignments: Vec<SpeakerOldAssignment>,
 }
 
 #[derive(OaSchema, Serialize, Deserialize, Debug)]
 pub struct UndoSpeakerReassignRequest {
     /// Old assignments from the reassign response
     pub old_assignments: Vec<SpeakerOldAssignment>,
+    /// Old meeting-segment assignments from the reassign response
+    #[serde(default)]
+    pub old_segment_assignments: Vec<SpeakerOldAssignment>,
 }
 
 #[derive(OaSchema, Serialize, Debug)]
@@ -482,12 +499,13 @@ pub(crate) async fn reassign_speaker_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ReassignSpeakerRequest>,
 ) -> Result<JsonResponse<ReassignSpeakerResponse>, (StatusCode, JsonResponse<Value>)> {
-    let (new_speaker_id, transcriptions_updated, embeddings_moved, old_assignments) = state
+    let outcome = state
         .db
         .reassign_speaker(
             payload.audio_chunk_id,
             &payload.new_speaker_name,
             payload.propagate_similar,
+            payload.scope,
         )
         .await
         .map_err(|e| {
@@ -497,18 +515,25 @@ pub(crate) async fn reassign_speaker_handler(
             )
         })?;
 
-    Ok(JsonResponse(ReassignSpeakerResponse {
-        new_speaker_id,
-        new_speaker_name: payload.new_speaker_name,
-        transcriptions_updated,
-        embeddings_moved,
-        old_assignments: old_assignments
+    let to_wire = |pairs: Vec<(i64, i64)>| {
+        pairs
             .into_iter()
-            .map(|(tid, sid)| SpeakerOldAssignment {
-                transcription_id: tid,
+            .map(|(row_id, sid)| SpeakerOldAssignment {
+                transcription_id: row_id,
                 old_speaker_id: sid,
             })
-            .collect(),
+            .collect::<Vec<_>>()
+    };
+
+    Ok(JsonResponse(ReassignSpeakerResponse {
+        new_speaker_id: outcome.speaker_id,
+        new_speaker_name: payload.new_speaker_name,
+        transcriptions_updated: outcome.transcriptions_updated,
+        embeddings_moved: outcome.embeddings_moved,
+        renamed_whole_speaker: outcome.renamed_whole_speaker,
+        previous_speaker_name: outcome.previous_speaker_name,
+        old_assignments: to_wire(outcome.old_assignments),
+        old_segment_assignments: to_wire(outcome.old_segment_assignments),
     }))
 }
 
@@ -517,18 +542,24 @@ pub(crate) async fn undo_speaker_reassign_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<UndoSpeakerReassignRequest>,
 ) -> Result<JsonResponse<UndoSpeakerReassignResponse>, (StatusCode, JsonResponse<Value>)> {
-    let tuples: Vec<(i64, i64)> = payload
-        .old_assignments
-        .iter()
-        .map(|a| (a.transcription_id, a.old_speaker_id))
-        .collect();
+    let to_tuples = |rows: &[SpeakerOldAssignment]| {
+        rows.iter()
+            .map(|a| (a.transcription_id, a.old_speaker_id))
+            .collect::<Vec<(i64, i64)>>()
+    };
+    let tuples = to_tuples(&payload.old_assignments);
+    let segment_tuples = to_tuples(&payload.old_segment_assignments);
 
-    let restored = state.db.undo_speaker_reassign(&tuples).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            JsonResponse(json!({"error": e.to_string()})),
-        )
-    })?;
+    let restored = state
+        .db
+        .undo_speaker_reassign(&tuples, &segment_tuples)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                JsonResponse(json!({"error": e.to_string()})),
+            )
+        })?;
 
     Ok(JsonResponse(UndoSpeakerReassignResponse { restored }))
 }

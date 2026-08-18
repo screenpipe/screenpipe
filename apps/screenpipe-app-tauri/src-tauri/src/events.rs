@@ -11,9 +11,10 @@ use tauri::Emitter;
 pub const JOB_EVENT: &str = "job:event";
 pub const EXPORT_EVENT: &str = "export:event";
 pub const ENGINE_EVENT: &str = "engine:event";
-/// Native notification/shortcut action routing is macOS-only
-/// (`commands/native_actions.rs`); other platforms handle actions in the webview.
-#[cfg(target_os = "macos")]
+/// Native notification/shortcut action routing exists where there is a native
+/// overlay (`commands/native_actions.rs`): the SwiftUI panel on macOS, the win32
+/// pill on windows. Linux handles actions in the webview.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub const NOTIFICATION_ACTION_EVENT: &str = "notification:action";
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
@@ -114,7 +115,9 @@ pub fn emit_engine(app: &tauri::AppHandle, event: EngineEvent) {
     let _ = app.emit(ENGINE_EVENT, event);
 }
 
-#[cfg(target_os = "macos")]
+// Both native overlays route notification actions through here: the SwiftUI
+// panel on macOS and the win32 pill on windows.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub fn emit_notification_action(app: &tauri::AppHandle, event: NotificationActionEvent) {
     let _ = app.emit(NOTIFICATION_ACTION_EVENT, event);
 }

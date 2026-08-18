@@ -9,6 +9,8 @@ import { commands } from "@/lib/utils/tauri";
 import { motion, AnimatePresence } from "framer-motion";
 import posthog from "posthog-js";
 import { isDevBillingBypassEnabled } from "@/lib/app-entitlement";
+import { ArrowRight } from "lucide-react";
+import { LOCALITY_DETAIL } from "./trust-disclosure";
 
 const FAILURE_COPY: Record<string, string> = {
   cancelled: "sign in was cancelled in your browser.",
@@ -288,14 +290,15 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
     // already have with Google/etc. is reused instead of asking them to
     // re-type credentials into a cold embedded WebView. Either way the token
     // comes back on the screenpipe:// deep link; nothing is typed by hand.
+    const authMode = suppressAutoAdvance ? "sign-in" : "sign-up";
     void commands
-      .openLoginWindow(null)
+      .openLoginWindow(null, authMode)
       .then((result) => {
         if (result.status === "ok") setAwaitingBrowser(true);
         else setBrowserFailure("failed");
       })
       .catch(() => setBrowserFailure("failed"));
-  }, []);
+  }, [suppressAutoAdvance]);
 
   // Escape hatch when the default browser is unusable or the user never
   // returns to it — falls back to the in-app WebView.
@@ -303,8 +306,9 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
     posthog.capture("onboarding_login_webview_fallback_clicked");
     setAwaitingBrowser(false);
     setBrowserFailure(null);
-    void commands.openLoginWindow(true);
-  }, []);
+    const authMode = suppressAutoAdvance ? "sign-in" : "sign-up";
+    void commands.openLoginWindow(true, authMode);
+  }, [suppressAutoAdvance]);
 
   const handleSkip = useCallback(() => {
     posthog.capture("onboarding_login_skipped_dev");
@@ -409,7 +413,11 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
               onClick={handleLogin}
               onMouseEnter={() => setIsHovered(true)}
               onMouseLeave={() => setIsHovered(false)}
-              className="relative overflow-hidden border border-foreground/70 bg-transparent hover:bg-foreground transition-colors duration-150 group"
+              className={`relative overflow-hidden transition-colors duration-150 group ${
+                suppressAutoAdvance
+                  ? "border border-foreground/70 bg-transparent hover:bg-foreground"
+                  : "border border-primary bg-primary text-primary-foreground hover:bg-background hover:text-primary"
+              }`}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.4, delay: 0.7 }}
@@ -424,13 +432,30 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
               />
 
               {/* Text */}
-              <span className="relative z-10 font-mono text-sm tracking-[0.25em] uppercase font-medium text-foreground group-hover:text-background transition-colors duration-150">
+              <span
+                className={`relative z-10 flex items-center justify-center gap-2 font-mono text-sm tracking-[0.25em] uppercase font-medium transition-colors duration-150 ${
+                  suppressAutoAdvance
+                    ? "text-foreground group-hover:text-background"
+                    : "text-primary-foreground group-hover:text-primary"
+                }`}
+              >
                 {/* Enterprise users are handed an existing account by their
                     admin, so "sign in" is literally correct there. Everyone
                     else on this slide is a fresh install with no account yet,
                     and "sign in" reads as an instruction for people who
                     already have one. */}
-                {suppressAutoAdvance ? "sign in" : "get started"}
+                {suppressAutoAdvance ? (
+                  "sign in"
+                ) : (
+                  <>
+                    get started
+                    <ArrowRight
+                      data-testid="login-cta-icon"
+                      className="h-4 w-4"
+                      strokeWidth={2}
+                    />
+                  </>
+                )}
               </span>
 
               {/* Corner marks */}
@@ -451,6 +476,27 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
                 ? "sign in with your enterprise account"
                 : "sign in or create a free account"}
             </motion.p>
+
+            {/* Locality promise. This slide is the only one every platform
+                sees: the permissions step auto-advances on non-mac, so
+                without this line Windows and Linux users are never told
+                where their recordings live. Scoped to STORAGE, not
+                transmission, because paid users are auto-switched to cloud
+                transcription (applyProCloudAudioDefaults in use-settings) so
+                any "nothing ever leaves" claim would be false for them.
+                The pause half rides on the same line rather than a second
+                stacked note: three muted lines under the CTA read as noise,
+                and the off switch matters most to the same users who only
+                ever see this slide. */}
+            <motion.p
+              data-testid="login-locality"
+              className="font-mono text-[10px] text-muted-foreground/40 mt-1.5 tracking-wide"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.5, delay: 1.15 }}
+            >
+              {LOCALITY_DETAIL} · pause anytime
+            </motion.p>
           </>
         )}
 
@@ -463,7 +509,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
               onClick={handleSkip}
               className="font-mono text-xs text-muted-foreground/70 hover:text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground transition-colors mt-8 tracking-wide"
             >
-              skip for dev — continue without an account
+              skip for dev, continue without an account
             </motion.button>
           )}
         </AnimatePresence>

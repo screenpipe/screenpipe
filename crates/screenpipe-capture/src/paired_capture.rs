@@ -16,7 +16,9 @@ use chrono::{DateTime, Utc};
 use image::{DynamicImage, GenericImageView};
 use once_cell::sync::Lazy;
 use regex::Regex;
-use screenpipe_a11y::tree::{create_tree_walker, TreeSnapshot, TreeWalkerConfig};
+use screenpipe_a11y::tree::{
+    create_tree_walker, TreeSnapshot, TreeWalkerConfig, TreeWalkerPlatform,
+};
 use screenpipe_core::pii_removal::remove_pii;
 use screenpipe_db::DatabaseManager;
 use screenpipe_screen::snapshot_writer::SnapshotWriter;
@@ -26,6 +28,8 @@ use screenpipe_screen::text_regions::{
 use screenpipe_screen::OcrGateDecision;
 
 use crate::ocr_gate::{OcrDecision, OcrGate};
+#[cfg(target_os = "windows")]
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -159,13 +163,11 @@ pub struct CaptureContext<'a> {
     /// meeting apps/URLs get no special OCR treatment at all.
     pub in_meeting: bool,
     /// Whether the captured monitor is the one hosting the focused window.
-    /// App/window metadata comes from the globally focused window, so on a
-    /// multi-monitor setup a second monitor's frames inherit the meeting
-    /// app's name while showing unrelated pixels — the meeting OCR gate
-    /// must not fingerprint-gate those (#5054 review). Callers without
-    /// per-monitor focus knowledge should pass `true` (single-monitor and
-    /// unknown-focus cases behave like the focused monitor, matching the
-    /// focus controller's own all-Active fallback).
+    /// This is a capture-source boundary: only that monitor may pair its
+    /// screenshot with the globally focused accessibility tree and focused
+    /// app/window identity. Other monitors use screenshot OCR with unknown
+    /// metadata. Callers without per-monitor focus knowledge should pass
+    /// `true` only when capturing a single monitor.
     pub monitor_hosts_focus: bool,
     /// Screen bounds of the focused window in this frame's pixel space, when
     /// the platform exposes them (macOS AX frame, Windows GetWindowRect).
@@ -205,6 +207,9 @@ pub struct PairedCaptureResult {
     /// True when OCR ran but produced (near-)empty text — an OCR-quality
     /// failure proxy. False when OCR didn't run or returned usable text.
     pub ocr_was_empty: bool,
+    /// True only when this capture reused the live OCR gate's cached payload.
+    /// A gate skip with no detected text is not a cache hit.
+    pub ocr_cache_hit: bool,
     /// How the OCR gate resolved this capture — `Some` only when an OCR
     /// trigger fired AND a gate was wired (the engine loop).
     /// The capture loop feeds this to
@@ -239,9 +244,25 @@ pub async fn paired_capture(
 ) -> Result<PairedCaptureResult> {
     let start = Instant::now();
 
+    // AX and focused-window identity describe one global focused window, not
+    // every monitor captured alongside it. Keep them inseparable from focus
+    // ownership so callers cannot attach the focused app's tree or identity
+    // to unrelated pixels from another monitor.
+    let tree_snapshot = tree_snapshot.filter(|_| ctx.monitor_hosts_focus);
+    let (app_name, window_name, browser_url, document_path) = if ctx.monitor_hosts_focus {
+        (
+            ctx.app_name,
+            ctx.window_name,
+            ctx.browser_url,
+            ctx.document_path,
+        )
+    } else {
+        (None, None, None, None)
+    };
+
     // Write JPEG snapshot to disk — skipped when screenshot_disabled (AudioPaused / FullPause).
-    // The accessibility tree walk still runs so metadata rows keep timestamp,
-    // app_name, window_name, and full_text for search/timeline queries.
+    // On the focused monitor the accessibility tree can still supply text;
+    // other monitors remain screenshot-only by the boundary above.
     let snapshot_path_str = if ctx.screenshot_disabled {
         debug!(
             "paired_capture: screenshot skipped (screenshot_disabled, trigger={})",
@@ -271,7 +292,7 @@ pub async fn paired_capture(
     // without visual formatting). For these apps we always run OCR to get
     // proper bounding-box text positions for the selectable overlay.
     let app_prefers_ocr = !ctx.screenshot_disabled
-        && ctx.app_name.is_some_and(|name| {
+        && app_name.is_some_and(|name| {
             let n = name.to_lowercase();
             // Terminal emulators whose AX text is raw buffer and not useful
             // for bounding-box overlay. OCR produces better results.
@@ -297,15 +318,15 @@ pub async fn paired_capture(
     // their forced OCR is gated on an actual detected meeting below (#5054).
     let a11y_is_thin_generic = has_accessibility_text
         && tree_snapshot
-            .map(|s| a11y_content_is_thin(s, ctx.window_name, ctx.browser_url))
+            .map(|s| a11y_content_is_thin(s, window_name, browser_url))
             .unwrap_or(false);
 
     // What would trigger OCR at all (the pre-gate rules, unchanged):
     // terminals that always prefer OCR, meeting apps during a detected call
     // (screen-share pixels have no a11y tree even when chrome a11y is
     // rich), and the generic no/thin-a11y fallback (canvas apps, games).
-    let meeting_matched = ctx.app_name.map(is_meeting_app).unwrap_or(false)
-        || ctx.browser_url.map(is_meeting_url).unwrap_or(false);
+    let meeting_matched = app_name.map(is_meeting_app).unwrap_or(false)
+        || browser_url.map(is_meeting_url).unwrap_or(false);
     let meeting_trigger = ctx.in_meeting && meeting_matched && ctx.monitor_hosts_focus;
     let wants_ocr = !ctx.screenshot_disabled
         && (app_prefers_ocr || meeting_trigger || !has_accessibility_text || a11y_is_thin_generic);
@@ -326,12 +347,14 @@ pub async fn paired_capture(
     // monitor-frame behavior.
     let (frame_w, frame_h) = ctx.image.dimensions();
     let window_crop = ctx
-        .focused_window_bounds
+        .monitor_hosts_focus
+        .then_some(ctx.focused_window_bounds)
+        .flatten()
         .and_then(|b| clamp_window_crop(b, frame_w, frame_h));
     if wants_ocr {
         match ocr_gate.as_deref_mut() {
             Some(gate) => {
-                let app_key = ctx.app_name.unwrap_or("unknown").to_lowercase();
+                let app_key = app_name.unwrap_or("unknown").to_lowercase();
                 // The gated OCR pipeline (#5060) — applies to EVERY OCR
                 // trigger, not just meetings: screenshot → crop to the app
                 // window → detect text → crop to the padded union of the
@@ -458,6 +481,7 @@ pub async fn paired_capture(
     // The raw crop-relative OCR output, cached into the gate at the commit
     // point so pixel-identical future captures can reuse it without OCR.
     let mut ocr_cache_payload: Option<(String, String)> = None;
+    let mut ocr_cache_hit = false;
     let (ocr_text, ocr_text_json) = if ocr_ran {
         // Gated captures OCR the padded union of the detected text regions
         // (#5054: measured 4-5.5x cheaper than full-frame on sparse
@@ -534,6 +558,7 @@ pub async fn paired_capture(
         // that text (json already re-mapped to the current crop position)
         // at zero OCR cost. Matters for surfaces whose ONLY text source is
         // OCR — terminals, no-a11y apps.
+        ocr_cache_hit = true;
         (cached_text, cached_json)
     } else {
         (String::new(), "[]".to_string())
@@ -658,11 +683,11 @@ pub async fn paired_capture(
             ctx.device_name,
             ctx.captured_at,
             &snapshot_path_str,
-            ctx.app_name,
-            ctx.window_name,
-            ctx.browser_url,
-            ctx.document_path,
-            ctx.focused,
+            app_name,
+            window_name,
+            browser_url,
+            document_path,
+            ctx.focused && ctx.monitor_hosts_focus,
             Some(ctx.capture_trigger),
             sanitized_text.as_deref(),
             text_source,
@@ -670,7 +695,9 @@ pub async fn paired_capture(
             content_hash,
             simhash,
             ocr_data,
-            ctx.elements_ref_frame_id,
+            ctx.monitor_hosts_focus
+                .then_some(ctx.elements_ref_frame_id)
+                .flatten(),
         )
         .await?;
 
@@ -685,11 +712,10 @@ pub async fn paired_capture(
     // detector boxed but that holds no readable text must stay marked or
     // it would re-OCR forever.
     if ocr_gate_escalated && !ocr_engine_failed {
-        if let (Some(gate), Some((cache_text, cache_json))) =
-            (ocr_gate.as_deref_mut(), ocr_cache_payload.as_ref())
+        if let (Some(gate), Some((cache_text, cache_json))) = (ocr_gate, ocr_cache_payload.as_ref())
         {
             gate.ocr_indexed(
-                &ctx.app_name.unwrap_or("unknown").to_lowercase(),
+                &app_name.unwrap_or("unknown").to_lowercase(),
                 cache_text,
                 cache_json,
             );
@@ -712,11 +738,12 @@ pub async fn paired_capture(
         duration_ms,
         ocr_duration_ms,
         ocr_was_empty,
+        ocr_cache_hit,
         ocr_gate_decision,
         ocr_gate_detect_duration,
-        app_name: ctx.app_name.map(String::from),
-        window_name: ctx.window_name.map(String::from),
-        browser_url: ctx.browser_url.map(String::from),
+        app_name: app_name.map(String::from),
+        window_name: window_name.map(String::from),
+        browser_url: browser_url.map(String::from),
         content_hash,
     })
 }
@@ -726,8 +753,35 @@ pub async fn paired_capture(
 ///
 /// This is a blocking operation that should be spawned on a blocking thread.
 pub fn walk_accessibility_tree(config: &TreeWalkerConfig) -> screenpipe_a11y::tree::TreeWalkResult {
+    #[cfg(target_os = "windows")]
+    {
+        thread_local! {
+            static CACHED_TREE_WALKER: RefCell<Option<Box<dyn TreeWalkerPlatform>>> =
+                RefCell::new(None);
+        }
+
+        return CACHED_TREE_WALKER.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(create_tree_walker(config.clone()));
+            }
+            let walker = slot.as_mut().expect("cached walker initialized");
+            walker.update_config(config.clone());
+            run_accessibility_tree_walk(walker.as_ref())
+        });
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let walker = create_tree_walker(config.clone());
+        run_accessibility_tree_walk(walker.as_ref())
+    }
+}
+
+pub(crate) fn run_accessibility_tree_walk(
+    walker: &dyn TreeWalkerPlatform,
+) -> screenpipe_a11y::tree::TreeWalkResult {
     use screenpipe_a11y::tree::TreeWalkResult;
-    let walker = create_tree_walker(config.clone());
     match walker.walk_focused_window() {
         Ok(TreeWalkResult::Found(snapshot)) => {
             debug!(
@@ -1720,6 +1774,10 @@ mod tests {
             result.ocr_duration_ms.is_none(),
             "gate must skip OCR when no text regions are detected"
         );
+        assert!(
+            !result.ocr_cache_hit,
+            "a no-text gate skip has no cached OCR payload to reuse"
+        );
         // The frame is still stored with its accessibility text.
         assert_eq!(result.text_source.as_deref(), Some("accessibility"));
     }
@@ -1764,13 +1822,10 @@ mod tests {
 
     #[tokio::test]
     async fn non_focused_monitor_gets_gated_ocr_on_its_own_pixels() {
-        // Multi-monitor: a second monitor's frames inherit the focused
-        // meeting app's NAME while showing unrelated pixels. Since the gate
-        // moved to pixel-exact skipping (#5060), gating them is safe — a
-        // changing dashboard changes the signature and OCRs; only truly
-        // static content skips. This replaced the earlier rule that
-        // exempted non-focused monitors (which existed to protect changing
-        // content from fingerprint-stability starvation).
+        // Multi-monitor: a second monitor receives the globally focused
+        // window's AX result, but its pixels show unrelated content. The
+        // capture boundary must discard both that tree and its identity,
+        // then OCR the second monitor's own screenshot.
         let tmp = TempDir::new().unwrap();
         let snapshot_writer = SnapshotWriter::new(tmp.path(), 80, 1920);
         let db = DatabaseManager::new("sqlite::memory:", Default::default())
@@ -1815,6 +1870,11 @@ mod tests {
             result.ocr_duration_ms.is_some(),
             "new text on a non-focused monitor must be OCR'd"
         );
+        assert!(result.app_name.is_none());
+        assert!(result.window_name.is_none());
+        assert!(result.browser_url.is_none());
+        assert_ne!(result.accessibility_text.as_deref(), Some("Leave meeting"));
+        assert_ne!(result.content_hash, Some(snap.content_hash as i64));
         // Content changes (a second text line appears): the union crop's
         // pixels differ → OCR again. This is the coverage the old
         // fingerprint gate starved. (Note: purely MOVED text is skipped by
@@ -1876,6 +1936,7 @@ mod tests {
             result.ocr_duration_ms.is_some(),
             "new text crop must run OCR"
         );
+        assert!(!result.ocr_cache_hit, "a real OCR run is a cache miss");
         // Gate telemetry travels out with the result for PipelineMetrics.
         assert_eq!(result.ocr_gate_decision, Some(OcrGateDecision::CropOcr));
         assert!(
@@ -1889,6 +1950,10 @@ mod tests {
         assert!(
             result2.ocr_duration_ms.is_none(),
             "unchanged text crop must not re-run OCR"
+        );
+        assert!(
+            result2.ocr_cache_hit,
+            "unchanged indexed text must reuse the cached OCR payload"
         );
         assert_eq!(result2.ocr_gate_decision, Some(OcrGateDecision::Skip));
         assert!(
@@ -2055,6 +2120,10 @@ mod tests {
         );
         assert_eq!(moved.ocr_gate_decision, Some(OcrGateDecision::Skip));
         assert!(
+            moved.ocr_cache_hit,
+            "moved identical content must reuse the remapped cached OCR payload"
+        );
+        assert!(
             moved.ocr_gate_detect_duration.is_some(),
             "detect ran (interval elapsed) and produced the skip"
         );
@@ -2114,6 +2183,10 @@ mod tests {
             retried.ocr_duration_ms.is_some(),
             "layout unpersisted by the failed insert must be retried"
         );
+        assert!(
+            !retried.ocr_cache_hit,
+            "retrying uncommitted OCR work is not a cache hit"
+        );
 
         // Now durably stored: the identical frame skips OCR.
         let settled = paired_capture(&ctx_ok, None, Some(&mut gate))
@@ -2122,6 +2195,10 @@ mod tests {
         assert!(
             settled.ocr_duration_ms.is_none(),
             "persisted layout must not re-OCR"
+        );
+        assert!(
+            settled.ocr_cache_hit,
+            "the settled identical frame must reuse the persisted OCR payload"
         );
     }
 

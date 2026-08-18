@@ -168,6 +168,63 @@ pub(crate) fn browser_window_matches_meeting(
     false
 }
 
+/// Why a Windows browser window was accepted as a meeting candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(any(target_os = "windows", test))]
+pub(crate) enum WindowsTitleMatch {
+    /// A `browser_url_patterns` entry (e.g. `meet.google.com`) appeared
+    /// verbatim in the window title.
+    UrlPattern,
+    /// An anchored `browser_title_patterns` entry matched AND the title carries
+    /// a standalone Meet-code token.
+    AnchoredTitle,
+}
+
+/// Per-window decision for the Windows window-title sweep.
+///
+/// Windows exposes no per-tab URL, so both checks run against the window title:
+///
+/// - `browser_url_patterns` must appear verbatim with boundary matching — this
+///   keeps a real meeting host matching while closing the `daily.co` ⊂
+///   `thedaily.com` substring leak.
+/// - Anchored `browser_title_patterns` are gated on a standalone Meet-code
+///   token, exactly as the macOS AX sweep gates them in
+///   `ax_window_matches_meeting`.
+///
+/// The code gate is what stops the post-call page from starting a meeting.
+/// Chrome titles both the "You left the meeting" end page and the Meet landing
+/// page `Meet - Google Chrome`, whereas a live call is titled after the calendar
+/// event ("Weekly Reflections - Google Chrome"), the bare meeting code, or
+/// `Meet – abc-defg-hij`. Ungated, the bare `Meet` anchor therefore fired almost
+/// exclusively on the states that are *not* a call, handing the audio-process
+/// detector a Meet candidate the instant the user landed on the end page. A
+/// browser candidate skips the call-signal check, so a Chrome mic session that
+/// outlived the call it belonged to was then enough to start a phantom meeting
+/// immediately after a real one ended. Requiring the code keeps the genuine
+/// URL-less pop-out and drops the idle states.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) fn windows_browser_title_match(
+    title: &str,
+    profile: &MeetingDetectionProfile,
+) -> Option<WindowsTitleMatch> {
+    let ids = &profile.app_identifiers;
+    if ids
+        .browser_url_patterns
+        .iter()
+        .any(|p| browser_url_pattern_matches(title, p))
+    {
+        return Some(WindowsTitleMatch::UrlPattern);
+    }
+    if ids.browser_title_patterns.is_empty() || !title_contains_meeting_code(title) {
+        return None;
+    }
+    let title_lower = title.to_lowercase();
+    ids.browser_title_patterns
+        .iter()
+        .any(|p| browser_title_matches_pattern(&title_lower, p))
+        .then_some(WindowsTitleMatch::AnchoredTitle)
+}
+
 /// Per-window decision for the macOS AX window sweep, which sees each window's
 /// AXDocument (the page URL, when the browser exposes one — Safari does,
 /// Chrome mostly doesn't) and its title.
@@ -245,11 +302,12 @@ pub(crate) fn ax_window_matches_meeting(
 /// ("how-to-run-fast-fyi") does not count as standalone.
 ///
 /// A real Chrome/Edge Meet pop-out is titled "Meet – abc-defg-hij"; this is
-/// the gate `ax_window_matches_meeting` applies on top of the anchored
-/// `browser_title_patterns` fallback for URL-less windows. Byte-level scan is
+/// the gate `ax_window_matches_meeting` (macOS AX sweep) and
+/// `find_running_meeting_apps` (Windows window-title sweep) apply on top of the
+/// anchored `browser_title_patterns` fallback for URL-less windows. Byte-level scan is
 /// UTF-8 safe: multi-byte separators (the en dash above) have non-ASCII bytes,
 /// which neither form the code nor extend the token.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub(crate) fn title_contains_meeting_code(title: &str) -> bool {
     const CODE_LEN: usize = 12; // aaa-bbbb-ccc
     let bytes = title.as_bytes();

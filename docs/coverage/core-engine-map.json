@@ -253,6 +253,7 @@
         "src/high_fps_controller.rs",
         "src/hot_frame_cache.rs",
         "src/snapshot_compaction.rs",
+        "src/video_cache.rs",
         "src/video_utils.rs",
         "src/vision_manager/manager.rs",
         "src/vision_manager/monitor_watcher.rs",
@@ -263,6 +264,7 @@
         "tests/first_frames_test.rs",
         "tests/frame_extraction_test.rs",
         "tests/frame_linker_actor_integration.rs",
+        "tests/frame_locator_test.rs",
         "tests/stream_frames_test.rs",
         "tests/timeline_refresh_bug_test.rs",
         "tests/video_cache_test.rs",
@@ -309,6 +311,7 @@
         "src/routes/meeting_summary_status.rs",
         "src/routes/meetings.rs",
         "src/routes/memories.rs",
+        "src/routes/pipe_store.rs",
         "src/routes/request_origin.rs",
         "src/routes/response_format.rs",
         "src/routes/retranscribe.rs",
@@ -697,6 +700,7 @@
         "tests/close_severs_connections_test.rs",
         "tests/memory_pressure_test.rs",
         "tests/multi_pool_wal_parity_test.rs",
+        "tests/quarantine_self_heal_test.rs",
         "tests/sqlite_architecture_invariants_test.rs",
         "tests/sqlite_runtime_version.rs",
         "tests/wal_chaos_e2e_test.rs"
@@ -716,7 +720,7 @@
       "criticality": "high",
       "confidence": "partial",
       "kind": "mixed",
-      "notes": "SQLite hard-fault classification, failpoint VFS injection, fresh-identity recovery verification with integrity/FK/write canaries, query cancellation, close-severs-connections regressions, multi-pool WAL parity, runtime version pinning, and WAL chaos plus memory-pressure probes."
+      "notes": "SQLite hard-fault classification, failpoint VFS injection, fresh-identity recovery verification with integrity/FK/write canaries, query cancellation, close-severs-connections regressions, multi-pool WAL parity, runtime version pinning, and WAL chaos plus memory-pressure probes, plus read-only quarantine self-heal verification for transient IOERR faults."
     },
     {
       "id": "db-audio-meetings-speakers",
@@ -811,6 +815,7 @@
         "src/transcription/whisper/detect_language.rs",
         "src/utils/audio/convert.rs",
         "src/utils/audio/resample.rs",
+        "src/utils/ffmpeg.rs",
         "tests/accuracy_test.rs",
         "tests/batch_deferral_test.rs",
         "tests/core_tests.rs"
@@ -833,7 +838,7 @@
       "criticality": "high",
       "confidence": "partial",
       "kind": "mixed",
-      "notes": "Batch deferral, cleanup, language detection, result normalization, and real recording/transcription tests. Hardware/model-heavy tests are ignored by default."
+      "notes": "Batch deferral, cleanup, language detection, result normalization, and real recording/transcription tests. Hardware/model-heavy tests are ignored by default. Also covers ffmpeg encode child reaping on error paths."
     },
     {
       "id": "audio-device-stream-health",
@@ -915,6 +920,7 @@
         "src/audio_manager/meeting_piggyback.rs",
         "src/audio_manager/piggyback_listeners.rs",
         "src/audio_manager/reconciliation.rs",
+        "src/audio_manager/write_retry.rs",
         "src/meeting_detector.rs",
         "src/meeting_processes.rs",
         "src/meeting_streaming/config.rs",

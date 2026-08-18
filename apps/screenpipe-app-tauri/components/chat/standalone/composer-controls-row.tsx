@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/popover";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { AcpConfigSelector } from "@/components/chat/standalone/acp-config-selector";
+import { AcpPermissionSelector } from "@/components/chat/standalone/acp-permission-selector";
 import { ThinkingLevelSelector } from "@/components/thinking-level-selector";
 import { ComposerUtilityMenu } from "@/components/chat/standalone/composer-utility-menu";
 import { UsagePopover } from "@/components/usage/usage-popover";
@@ -48,8 +49,11 @@ export function ComposerControlsRow({
   const acpAgentId = modelControls.activePreset?.acpAgent?.id ?? null;
 
   return (
+    // Every control here is h-7, matching the settings-popover triggers that
+    // were already that size. The row is chrome under the thing people came to
+    // type in, so it stays one compact line rather than a second toolbar.
     <div
-      className="flex items-center gap-1.5 px-1 pt-2"
+      className="flex items-center gap-1.5 px-1 pt-1.5"
       data-firstrun-target="composer-controls"
     >
       <Popover
@@ -62,7 +66,7 @@ export function ComposerControlsRow({
             size="icon"
             variant="ghost"
             className={cn(
-              "h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-muted/50 relative shrink-0",
+              "h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-muted/50 relative shrink-0",
               filters.hasActiveFilters && "text-foreground bg-muted/50",
             )}
             title="Add attachments and filters"
@@ -119,12 +123,20 @@ export function ComposerControlsRow({
           />
         </PopoverContent>
       </Popover>
+      {isAcp && (
+        <AcpPermissionSelector
+          sessionId={modelControls.currentQueueSessionId}
+          agentId={acpAgentId}
+          activePreset={modelControls.activePreset}
+          onPersistDefault={modelControls.onAcpConfigDefault}
+        />
+      )}
       <ActiveFilterLabels filters={filters} />
       <AIPresetsSelector
         compact
         showModelOnly
         containerClassName="w-[180px] max-w-[42vw] min-w-[120px] shrink-0 gap-0"
-        triggerClassName="h-8 border-0 bg-transparent px-1.5 text-xs text-muted-foreground shadow-none hover:bg-muted/50 hover:text-foreground"
+        triggerClassName="h-7 border-0 bg-transparent px-1.5 text-xs text-muted-foreground shadow-none hover:bg-muted/50 hover:text-foreground"
         onPresetSaved={modelControls.onPresetSaved}
         controlledPresetId={
           modelControls.activePreset?.id ??
@@ -151,6 +163,7 @@ export function ComposerControlsRow({
           activePreset={modelControls.activePreset}
           onPersistDefault={modelControls.onAcpConfigDefault}
           onReauthenticate={modelControls.onReauthenticate}
+          hideModeControl
         />
       ) : (
         <ThinkingLevelSelector
@@ -166,7 +179,7 @@ export function ComposerControlsRow({
         onClick={sendButton.isStopMode ? sendButton.onStop : undefined}
         data-firstrun-target="send"
         className={cn(
-          "h-8 w-8 transition-all duration-200 relative",
+          "h-7 w-7 transition-all duration-200 relative",
           "bg-foreground text-background hover:bg-foreground/80",
         )}
         title={

@@ -193,6 +193,27 @@ pub async fn send_notification(
         }));
     }
 
+    // Repeat gate: the same alert, again, inside its cooldown. A
+    // condition-driven producer re-fires while its condition holds; drop the
+    // echo here rather than expecting every producer to latch for itself. The
+    // body is part of the identity because for some producers it carries the
+    // only thing that tells two distinct alerts apart — see the gate's notes.
+    // A peek, not a check-and-record: `show_notification_panel` below is the
+    // choke point that records. Recording here too made that second look find
+    // this one's own entry and drop every high-priority alert sent over http.
+    if super::gate::repeat_suppressed_peek(
+        Some(resolved_type.as_str()),
+        source.pipe_name.as_deref(),
+        &payload.title,
+        &payload.body,
+    ) {
+        debug!("notify: skipped (identical alert already shown recently)");
+        return Ok(Json(ApiResponse {
+            success: true,
+            message: "duplicate notification suppressed".to_string(),
+        }));
+    }
+
     // Gate pipe-typed alerts behind the `Pipe notifications` toggle.
     // Other types (`system`, `captureStalls`, …) self-gate upstream
     // before they reach `/notify`, so we let them through here to
@@ -318,16 +339,32 @@ pub async fn send_notification(
         tokio::spawn(async move {
             match tokio::time::timeout(
                 std::time::Duration::from_secs(5),
-                crate::commands::show_notification_panel(app, panel_json),
+                // `false`: the repeat gate already ran above, and it records as
+                // well as checks — running it again here would collide with the
+                // record this same alert just wrote and drop every notification.
+                crate::commands::deliver_notification_panel(app, panel_json, false),
             )
             .await
             {
-                Ok(Ok(())) => {
-                    info!(
-                        id = %delivery_id,
-                        notification_type = %delivery_type,
-                        "High-priority notification panel shown"
-                    );
+                Ok(Ok(delivery)) => {
+                    // Report what happened, not that we asked. The delivery path
+                    // still drops alerts at the reduced-state gate, so a blanket
+                    // "shown" here hid real suppressions in the logs.
+                    if delivery.was_shown() {
+                        info!(
+                            id = %delivery_id,
+                            notification_type = %delivery_type,
+                            outcome = %delivery.as_str(),
+                            "High-priority notification shown"
+                        );
+                    } else {
+                        info!(
+                            id = %delivery_id,
+                            notification_type = %delivery_type,
+                            outcome = %delivery.as_str(),
+                            "High-priority notification suppressed before display"
+                        );
+                    }
                 }
                 Ok(Err(e)) => {
                     error!(
@@ -586,27 +623,38 @@ pub struct NotifyPayload {
     pub source_url: Option<String>,
 
     // ── announcement mode ────────────────────────────────────────────
-    // When `surface` names an announcement surface (modal/banner/card),
-    // `/notify` pushes an in-app announcement instead of a notification
-    // panel — the on-demand counterpart to the PostHog `app-announcement`
-    // flag. These fields mirror the announcement payload; validation /
-    // normalization happens in the frontend (lib/announcements.ts).
+    // When `surface` names an announcement surface, `/notify` pushes an
+    // in-app announcement instead of a notification panel — the on-demand
+    // counterpart to the PostHog `app-announcement` flag. These fields mirror
+    // the announcement payload; validation / normalization happens in the
+    // frontend (lib/announcements.ts).
     #[serde(default)]
     pub surface: Option<String>,
     #[serde(default)]
     pub kind: Option<String>,
     #[serde(default)]
     pub position: Option<String>,
+    /// Stable `data-announcement-anchor` value. Required by `bubble`, ignored
+    /// by every other surface. A bubble without one is dropped in
+    /// `parseAnnouncement`, so it must survive the hand-off.
+    #[serde(default)]
+    pub anchor: Option<String>,
     #[serde(default)]
     pub cta: Option<serde_json::Value>,
+    /// Bounded single/multiple-choice survey. Mirrors the flag payload so a
+    /// locally triggered prompt can ask the same question a remote one can.
+    #[serde(default)]
+    pub survey: Option<serde_json::Value>,
     #[serde(default)]
     pub dismissible: Option<bool>,
     #[serde(default, alias = "expiresAt")]
     pub expires_at: Option<String>,
 }
 
-/// Surfaces that turn a `/notify` call into an announcement push.
-const ANNOUNCEMENT_SURFACES: [&str; 3] = ["modal", "banner", "card"];
+/// Surfaces that turn a `/notify` call into an announcement push. Kept in step
+/// with `SURFACES` in `lib/announcements.ts` — a surface the frontend renders
+/// but this list omits is unreachable for locally triggered announcements.
+const ANNOUNCEMENT_SURFACES: [&str; 5] = ["modal", "banner", "card", "bubble", "sidebar"];
 
 /// When the `/notify` payload carries an announcement `surface`, build the
 /// announcement object to hand to the frontend. Returns `None` for ordinary
@@ -622,9 +670,11 @@ fn announcement_from_payload(payload: &NotifyPayload, id: &str) -> Option<serde_
         "kind": payload.kind,
         "surface": surface,
         "position": payload.position,
+        "anchor": payload.anchor,
         "title": payload.title,
         "body": payload.body,
         "cta": payload.cta,
+        "survey": payload.survey,
         "dismissible": payload.dismissible,
         "autoDismissMs": payload.auto_dismiss_ms,
         "expiresAt": payload.expires_at,
@@ -794,7 +844,9 @@ mod tests {
             surface: surface.map(ToOwned::to_owned),
             kind: Some("news".to_string()),
             position: Some("bottom-right".to_string()),
+            anchor: None,
             cta: Some(json!({ "label": "open settings", "route": "/settings" })),
+            survey: None,
             dismissible: Some(true),
             expires_at: None,
         }
@@ -820,6 +872,59 @@ mod tests {
     #[test]
     fn no_announcement_for_unknown_surface() {
         assert!(announcement_from_payload(&notify_payload(Some("toast")), "x").is_none());
+    }
+
+    #[test]
+    fn every_frontend_surface_can_be_pushed_locally() {
+        // Kept in step with `SURFACES` in lib/announcements.ts. A surface the
+        // renderer supports but this list omits is unreachable for a locally
+        // triggered announcement, which is the bug this guards.
+        for surface in ["modal", "banner", "card", "bubble", "sidebar"] {
+            let ann = announcement_from_payload(&notify_payload(Some(surface)), "ann-1")
+                .unwrap_or_else(|| panic!("{surface} should produce an announcement"));
+            assert_eq!(ann["surface"], surface);
+        }
+    }
+
+    #[test]
+    fn anchor_survives_the_handoff_for_bubbles() {
+        // parseAnnouncement drops a bubble with no anchor, so losing it here
+        // would make every locally pushed bubble silently disappear.
+        let mut payload = notify_payload(Some("bubble"));
+        payload.anchor = Some("pipes-nav".to_string());
+        let ann = announcement_from_payload(&payload, "ann-1").expect("bubble announcement");
+        assert_eq!(ann["anchor"], "pipes-nav");
+    }
+
+    #[test]
+    fn survey_survives_the_handoff() {
+        let mut payload = notify_payload(Some("card"));
+        payload.survey = Some(json!({
+            "questions": [{
+                "id": "q1",
+                "type": "single-choice",
+                "prompt": "did this help?",
+                "options": [{ "id": "yes", "label": "yes" }],
+            }],
+        }));
+        let ann = announcement_from_payload(&payload, "ann-1").expect("card announcement");
+        assert_eq!(ann["survey"]["questions"][0]["id"], "q1");
+    }
+
+    #[test]
+    fn cta_is_forwarded_verbatim_for_the_frontend_to_narrow() {
+        // This layer does not decide which destinations are legal. It hands the
+        // cta over unchanged and `parseAnnouncement` applies the per-channel
+        // contract — notably it drops `pipe` for a locally pushed announcement,
+        // because this endpoint is reachable by any same-user process and the
+        // result is indistinguishable from a first-party announcement.
+        let mut payload = notify_payload(Some("card"));
+        payload.cta = Some(json!({
+            "label": "install it",
+            "pipe": "daily-email-summary",
+        }));
+        let ann = announcement_from_payload(&payload, "ann-1").expect("card announcement");
+        assert_eq!(ann["cta"]["pipe"], "daily-email-summary");
     }
 
     #[test]
@@ -862,7 +967,9 @@ mod tests {
             surface: None,
             kind: None,
             position: None,
+            anchor: None,
             cta: None,
+            survey: None,
             dismissible: None,
             expires_at: None,
         };

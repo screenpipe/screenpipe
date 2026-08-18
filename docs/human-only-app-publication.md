@@ -1,5 +1,7 @@
 # Human-only app publication
 
+<!-- doc-covers: none -->
+
 The app release pipeline deliberately separates artifact preparation from public publication.
 
 ## AI and automation may release artifacts

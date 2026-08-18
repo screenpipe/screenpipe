@@ -47,6 +47,28 @@ export function clampCanvasZoom(zoom: number): number {
   return Math.max(CANVAS_MIN_ZOOM, Math.min(CANVAS_MAX_ZOOM, zoom));
 }
 
+// A single NSMagnificationGestureRecognizer callback never legitimately scales
+// the canvas by more than this. Coalesced or replayed deltas are clamped here
+// so one bad frame cannot slam the viewport into a zoom limit.
+export const MAX_NATIVE_MAGNIFY_STEP = 1.25;
+
+/**
+ * Convert one `native-magnify` payload into a canvas zoom factor.
+ *
+ * AppKit defines `NSMagnificationGestureRecognizer.magnification` so that the
+ * gesture's resulting scale is `1 + magnification`, and the Rust handler
+ * resets it to 0 after every callback, so each payload is an incremental
+ * delta. Anything other than `1 + magnification` misreports how far the
+ * user's fingers actually moved.
+ */
+export function nativeMagnifyZoomFactor(magnification: number): number {
+  if (!Number.isFinite(magnification)) return 1;
+  return Math.max(
+    1 / MAX_NATIVE_MAGNIFY_STEP,
+    Math.min(MAX_NATIVE_MAGNIFY_STEP, 1 + magnification),
+  );
+}
+
 export function snapCanvasValue(value: number): number {
   return Math.round(value / CANVAS_GRID) * CANVAS_GRID;
 }

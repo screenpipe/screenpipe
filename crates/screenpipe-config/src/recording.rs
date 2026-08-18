@@ -399,10 +399,10 @@ pub struct RecordingSettings {
 
     /// Override `UiRecorderConfig::capture_scroll`.
     /// None = engine default (false). When true, scroll wheel events are
-    /// recorded into `ui_events` so the `ScrollBurstTracker` can fire a
-    /// `ScrollStop` trigger at burst-end and link the last scroll row to
-    /// the resulting frame. Off by default — wheel ticks fire at ~60Hz
-    /// and inflate the table fast.
+    /// recorded into `ui_events` so the `ScrollBurstTracker` can retain every
+    /// correlation ID, fire a `ScrollStop` trigger at burst-end, and link every
+    /// persisted scroll row in the settled burst to the resulting frame. Off by
+    /// default — wheel ticks fire at ~60Hz and inflate the table fast.
     #[serde(rename = "captureScroll", default)]
     pub capture_scroll: Option<bool>,
 

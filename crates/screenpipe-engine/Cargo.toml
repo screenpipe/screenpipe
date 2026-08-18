@@ -143,11 +143,13 @@ dhat = { version = "0.3", optional = true }
 tikv-jemallocator = { version = "0.6", optional = true }
 
 [dev-dependencies]
+chrono-tz = "0.10"
 env_logger = { workspace = true }
 tempfile = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tower = { version = "0.4", features = ["util"] }
 tiktoken-rs = "0.11.0"
+wiremock = { workspace = true }
 
 # Lock-free queue used by tests/consumer_sleep_test.rs to reproduce the
 # OCR frame-drop bug (see the test's docstring). Not needed by the crate

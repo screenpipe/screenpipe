@@ -1,5 +1,9 @@
 # Timeline Video-Based Frame Loading — Architecture Spec
 
+<!-- doc-covers: crates/screenpipe-db/src/video_db.rs, crates/screenpipe-core/src/video.rs -->
+<!-- doc-verified: 2c41cccff -->
+> **Current.** Last verified against 2c41cccff (2026-06-19).
+
 > **Status**: Draft  
 > **Issue**: #2165  
 > **Author**: screenpipe team  

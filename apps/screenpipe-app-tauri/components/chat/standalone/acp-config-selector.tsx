@@ -4,7 +4,7 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, SlidersHorizontal } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -18,6 +18,9 @@ import {
 import { commands, type AIPreset } from "@/lib/utils/tauri";
 import {
   dedupedModes,
+  findAcpModeOption,
+  findAcpPermissionModeOption,
+  hasAcpPermissionModes,
   useAcpSessionConfig,
   type AcpConfigOption,
 } from "@/lib/stores/acp-session-config";
@@ -69,6 +72,7 @@ export function AcpConfigSelector({
   activePreset,
   onPersistDefault,
   onReauthenticate,
+  hideModeControl = false,
 }: {
   sessionId: string | null | undefined;
   /** The preset's ACP adapter id, used to fall back to the session-agnostic
@@ -84,6 +88,10 @@ export function AcpConfigSelector({
   onPersistDefault?: (change: AcpConfigDefaultChange) => void;
   /** Sign the agent out and respawn so the sign-in card returns. */
   onReauthenticate?: () => void;
+  /** A client can promote an agent's permission/mode axis into a dedicated
+   *  composer control. Hide that duplicated select from this general config
+   *  popover while leaving model, effort, toggles, and re-authentication here. */
+  hideModeControl?: boolean;
 }) {
   const live = useAcpSessionConfig((state) =>
     sessionId ? state.sessions[sessionId] : undefined,
@@ -105,13 +113,22 @@ export function AcpConfigSelector({
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [reauthPending, setReauthPending] = useState(false);
-  const selects = (config?.options ?? []).filter(
+  const allSelects = (config?.options ?? []).filter(
     (option) => option.type === "select" && option.values.length > 0,
   );
+  const modeOption = hideModeControl
+    ? findAcpPermissionModeOption(config)
+    : findAcpModeOption(config);
+  const selects = hideModeControl
+    ? allSelects.filter((option) => option.id !== modeOption?.id)
+    : allSelects;
   // Boolean options (e.g. Codex "fast mode") advertise no value list; render
   // them as toggles rather than dropping them.
   const toggles = (config?.options ?? []).filter((option) => option.type === "boolean");
-  const modes = dedupedModes(config);
+  const modes =
+    hideModeControl && hasAcpPermissionModes(config)
+      ? null
+      : dedupedModes(config);
   // Live session wins once it exists; before that the saved preset default is
   // the chosen value. Shared by the trigger label and the selects so the button
   // can never name a different model than the dropdown has selected.
@@ -177,7 +194,6 @@ export function AcpConfigSelector({
 
   return (
     <ComposerSettingsPopover
-      icon={SlidersHorizontal}
       label={triggerLabel}
       title={`Agent configuration${triggerLabel === "config" ? "" : `: ${triggerLabel}`}`}
       ariaLabel="Agent configuration"

@@ -9,6 +9,7 @@
     "types": ["bun", "node"]
   },
   "include": [
-    "updater-harness.ts"
+    "updater-harness.ts",
+    "packaged-update-restart.e2e.ts"
   ]
 }

@@ -536,25 +536,11 @@ pub fn find_running_meeting_apps(
                 continue;
             }
 
-            // url_patterns are matched against the window TITLE on Windows (no
-            // per-tab URL available). Boundary matching still applies — it keeps
-            // a real meeting host in a title matching while closing the
-            // `daily.co` ⊂ `thedaily.com` substring leak.
-            let url_match = profile
-                .app_identifiers
-                .browser_url_patterns
-                .iter()
-                .any(|p| browser_url_pattern_matches(title, p));
-            // See `browser_title_matches_pattern` for the matching rules.
-            let title_match = !profile.app_identifiers.browser_title_patterns.is_empty() && {
-                let title_lower = title.to_lowercase();
-                profile
-                    .app_identifiers
-                    .browser_title_patterns
-                    .iter()
-                    .any(|p| browser_title_matches_pattern(&title_lower, p))
-            };
-            if url_match || title_match {
+            // Pure decision, unit-tested in `shared::ignore` — see
+            // `windows_browser_title_match` for the URL-pattern / anchored-title
+            // rules and the Meet-code gate.
+            let matched = windows_browser_title_match(title, profile);
+            if matched.is_some() {
                 // Confirms screenpipe saw the meeting window; pairs with the
                 // scanner's UIA scan line via pid + profile_idx. DEBUG, not
                 // INFO: titles can contain sensitive context (URLs, attendee
@@ -565,8 +551,8 @@ pub fn find_running_meeting_apps(
                     pid,
                     proc_name.as_deref().unwrap_or("?"),
                     title,
-                    url_match,
-                    title_match
+                    matched == Some(WindowsTitleMatch::UrlPattern),
+                    matched == Some(WindowsTitleMatch::AnchoredTitle)
                 );
                 results.push(RunningMeetingApp {
                     pid: *pid,

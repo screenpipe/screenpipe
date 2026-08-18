@@ -33,7 +33,38 @@ interface EngineStartupProps {
 type StartupState = "starting" | "running" | "stuck";
 
 const TAKING_LONGER_MS = 8000;
-const STUCK_TIMEOUT_MS = 15000;
+export const STUCK_TIMEOUT_MS = 15000;
+// spawn_screenpipe has no internal deadline: when it is asked to spawn an engine
+// that is already running it can neither resolve nor reject, and that await was
+// the only thing standing between the user and the rest of setup. A hang here
+// used to be completely silent — the stuck timer re-arms on every boot-phase
+// update, so nothing ever fired. Bounded so the health poll and the stuck timer
+// stay in charge of the outcome.
+const SPAWN_TIMEOUT_MS = 20000;
+// Absolute ceiling on the whole engine step. The stuck timer buys more time
+// whenever the backend reports genuine progress, which is right for a 31.5GB
+// migration but was unbounded: 426 users in six days viewed this screen and
+// produced no outcome at all — not started, not failed, not stuck — because a
+// phase that stalls never re-arms the timer. They sat on a spinner, gave up,
+// and used the app from Home instead (95% reached Home, 69% sent a chat).
+// Progress still buys time. It no longer buys forever.
+//
+// 120s was a judgement call with no data behind it, and production promptly
+// found its edge: a macOS user who granted Screen Recording mid-setup — which
+// restarts the app — had `spawn_screenpipe` never settle (spawn_timeout at
+// 20.1s), then reached `engine_started` at 114.9s and went on to complete setup
+// and reach the plan step. A legitimate recovery finished 5.1s inside the
+// ceiling. A ceiling that close to observed-good behaviour reports healthy
+// engines as stuck, so it sits comfortably above the worst legitimate case we
+// have actually seen rather than just above the ones we imagined.
+export const MAX_ENGINE_WAIT_MS = 180000;
+// How long the health poll must fail continuously before it is worth reporting.
+// The server binds only after the audio manager is built, so every poll before
+// that fails by construction — the first real firing of the unreachable event
+// was a `TimeoutError` at 2.0s from a Windows user who reached `engine_started`
+// at 9s and finished setup. Past this mark a normal bind has had time to happen,
+// so continued failure is a finding rather than a startup in progress.
+export const HEALTH_UNREACHABLE_REPORT_AFTER_MS = 12000;
 
 // Boot phases emitted by the Rust backend — see src-tauri/src/health.rs.
 // We use these to show actionable copy during long migrations (Mike Cloke
@@ -68,14 +99,42 @@ type EngineHealthPayload = {
 // progress, so HTTP success cannot be used as an engine-liveness check here.
 // Validate the response shape instead so an unrelated service on the port does
 // not let onboarding advance.
+// Onboarding needs to know the engine is *up*, not that capture is warm.
+//
+// Requiring the health payload's shape meant any response that was not that
+// payload read as "not ready" forever. The important such response is a 401:
+// the local API's auth is on by default, and if the key is not in hand yet the
+// engine answers its own port with an error body. `frame_status` and
+// `audio_status` are non-Option `String` in HealthCheckResponse, so they are
+// never the thing missing — a rejected 200 is not the failure mode, a non-health
+// body is. 2.6.20+ on Windows sat on this screen at 11% pass while 210 of those
+// users were emitting live engine telemetry the whole time.
+//
+// A response object at all proves something is listening: localFetch throws on
+// connection refused and never reaches here. We still require either the health
+// payload or an auth rejection, so an unrelated process on the port cannot be
+// mistaken for the engine — that case stays with the port-conflict boot phase.
 async function isEngineHealthResponse(response: Response): Promise<boolean> {
+  if (response.status === 401 || response.status === 403) return true;
   try {
     const data = (await response.json()) as EngineHealthPayload;
-    return (
+    const conforms =
       typeof data.audio_status === "string" &&
-      typeof data.frame_status === "string"
-    );
+      typeof data.frame_status === "string";
+    // The whole failure was a body we never looked at. Report the shape (keys
+    // only, no values) so a future mismatch names itself instead of costing
+    // another week of silence.
+    if (!conforms) {
+      posthog.capture("onboarding_engine_health_unrecognized", {
+        http_status: response.status,
+        keys: Object.keys(data ?? {}).slice(0, 20).join(","),
+      });
+    }
+    return conforms;
   } catch {
+    posthog.capture("onboarding_engine_health_unparseable", {
+      http_status: response.status,
+    });
     return false;
   }
 }
@@ -115,6 +174,38 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
   const hasAdvancedRef = useRef(false);
   const hasReportedReadyRef = useRef(false);
   const mountTimeRef = useRef(Date.now());
+  // Once per mount: the health poll used to swallow its own failure, which is
+  // how a 95%-to-11% collapse produced no telemetry at all.
+  const hasReportedPollFailureRef = useRef(false);
+  // When the health poll started failing, and how many times in a row. A poll
+  // issued before the server binds always fails, so the duration is what
+  // separates "still starting" from "never coming up".
+  const pollFailingSinceRef = useRef<number | null>(null);
+  const consecutivePollFailuresRef = useRef(0);
+  // Stamped on the unreachable report; triage otherwise has to join another
+  // event to learn which build produced it.
+  const appVersionRef = useRef<string | null>(null);
+  // Set when the user chooses to move on from the stuck screen. A permission
+  // skip is a healthy outcome — the engine names the real reason, the user
+  // continues, reaches the plan step and lands on Home — and counting it as
+  // abandonment would bury the signal the beacon exists to carry.
+  const leftDeliberatelyRef = useRef(false);
+  // Read by the unmount beacon so it can tell "left while still waiting" apart
+  // from "left after the engine came up".
+  const stateRef = useRef<StartupState>("starting");
+
+  useEffect(() => {
+    // Promise.resolve so a non-promise return cannot throw inside a passive
+    // effect — a version stamp must never be able to break this screen.
+    Promise.resolve()
+      .then(() => getVersion())
+      .then((v) => {
+        appVersionRef.current = typeof v === "string" ? v : null;
+      })
+      .catch(() => {
+        appVersionRef.current = null;
+      });
+  }, []);
 
   // The preceding permissions screen checks macOS TCC directly before it
   // persists the `engine` step. Engine startup only needs to prove that the
@@ -127,6 +218,33 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
     setState("running");
   }, []);
 
+  // Assigned during render, per the ref-mirror rule in CLAUDE.md.
+  stateRef.current = state;
+
+  // Unmount beacon.
+  //
+  // Every other signal on this screen fires only when something resolves, so a
+  // user who sits here and then leaves produced no event whatsoever — 51 of 81
+  // on 2.6.26, and the reason the collapse was invisible for a day. This closes
+  // the hole: leaving without reaching "running" is itself the finding.
+  useEffect(
+    () => () => {
+      if (stateRef.current === "running" || leftDeliberatelyRef.current) return;
+      posthog.capture(
+        "onboarding_engine_abandoned",
+        {
+          time_spent_ms: Date.now() - mountTimeRef.current,
+          state: stateRef.current,
+          health_unreachable: hasReportedPollFailureRef.current,
+        },
+        // sendBeacon so the report survives the webview going away, which is
+        // the only situation this event exists to describe.
+        { transport: "sendBeacon" },
+      );
+    },
+    [],
+  );
+
   // Progress 0→1
   const progressVal =
     (serverStarted ? 0.33 : 0) +
@@ -134,6 +252,9 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
     (visionReady ? 0.34 : 0);
 
   const [animatedProgress, setAnimatedProgress] = useState(0.15);
+  // Bumped by the stuck timer to re-arm itself while the backend is genuinely
+  // progressing. Without it the timer only re-arms on a phase change.
+  const [stuckCheckTick, setStuckCheckTick] = useState(0);
 
   // Smooth animation
   useEffect(() => {
@@ -165,7 +286,31 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
           return;
         }
 
-        const result = await commands.spawnScreenpipe(null);
+        const SPAWN_TIMED_OUT = Symbol("spawn-timed-out");
+        let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+        const result = await Promise.race([
+          commands.spawnScreenpipe(null),
+          new Promise<typeof SPAWN_TIMED_OUT>((resolve) => {
+            timeoutHandle = setTimeout(
+              () => resolve(SPAWN_TIMED_OUT),
+              SPAWN_TIMEOUT_MS,
+            );
+          }),
+        ]);
+        clearTimeout(timeoutHandle);
+
+        // Not an error: the engine is very often already up (its own telemetry
+        // proves it), and the health poll is the path that notices. Report it so
+        // this stops being invisible, then let the poll or the stuck timer own
+        // the outcome rather than forcing either one here.
+        if (result === SPAWN_TIMED_OUT) {
+          posthog.capture("onboarding_engine_spawn_timeout", {
+            time_spent_ms: Date.now() - mountTimeRef.current,
+            timeout_ms: SPAWN_TIMEOUT_MS,
+          });
+          return;
+        }
+
         if (result.status === "error") {
           throw new Error(result.error);
         }
@@ -214,8 +359,43 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
         if (await isEngineHealthResponse(res)) {
           markEngineReady();
         }
-      } catch {
-        // not ready yet
+      } catch (pollError) {
+        // Swallowing this was the whole reason the failure was invisible: the
+        // health poll could fail forever and emit nothing.
+        //
+        // But the first miss is not a failure. The server binds after the audio
+        // manager is built — 4.6-8.8s on an M4 Max — so a poll issued before
+        // that has nothing to connect to, and the very first real firing of
+        // this event was exactly that: `TimeoutError` at 2.0s on Windows, from
+        // a user who then reached `engine_started` at 9s and completed setup.
+        // Reporting that would make this event fire for healthy users and tell
+        // us nothing. Wait until the failures have persisted past the point
+        // where a normal bind would have happened, then report once.
+        pollFailingSinceRef.current ??= Date.now();
+        consecutivePollFailuresRef.current += 1;
+        const unreachableForMs = Date.now() - pollFailingSinceRef.current;
+
+        if (
+          !hasReportedPollFailureRef.current &&
+          unreachableForMs >= HEALTH_UNREACHABLE_REPORT_AFTER_MS
+        ) {
+          hasReportedPollFailureRef.current = true;
+          posthog.capture("onboarding_engine_health_unreachable", {
+            time_spent_ms: Date.now() - mountTimeRef.current,
+            unreachable_for_ms: unreachableForMs,
+            consecutive_failures: consecutivePollFailuresRef.current,
+            reason:
+              pollError instanceof Error
+                ? pollError.name || "error"
+                : typeof pollError,
+            message:
+              pollError instanceof Error
+                ? pollError.message.slice(0, 120)
+                : String(pollError ?? "unknown").slice(0, 120),
+            // Triage needed this and had to join another event to get it.
+            app_version: appVersionRef.current ?? "unknown",
+          });
+        }
       }
     };
 
@@ -338,34 +518,49 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
     // own error path will set phase=error, which we handle separately.
     if (bootPhase?.phase === "error") return;
     const stuckTimer = setTimeout(() => {
-      // Re-check at fire time — state or phase may have advanced.
+      const activePhases: BootPhaseSnapshot["phase"][] = [
+        "migrating_database",
+        "building_audio",
+        "starting_pipes",
+      ];
+      const stillProgressing =
+        bootPhase !== null && activePhases.includes(bootPhase.phase);
+      const withinBudget =
+        Date.now() - mountTimeRef.current < MAX_ENGINE_WAIT_MS;
+
+      if (stillProgressing && withinBudget) {
+        // Re-arm explicitly. Returning without scheduling another check is
+        // what made the hang silent: the deps below only re-run the effect
+        // when the phase *string* changes, so an engine parked in one active
+        // phase got a single check at 15s and then nothing, forever.
+        setStuckCheckTick((tick) => tick + 1);
+        return;
+      }
+
+      // Re-check at fire time — state may have advanced.
       setState((current) => {
         if (current === "running") return current;
-        const activePhases: BootPhaseSnapshot["phase"][] = [
-          "migrating_database",
-          "building_audio",
-          "starting_pipes",
-        ];
-        if (bootPhase && activePhases.includes(bootPhase.phase)) {
-          // Progress is happening — don't flip to stuck. Timer will re-arm
-          // when bootPhase updates.
-          return current;
-        }
         posthog.capture("onboarding_engine_stuck", {
           time_spent_ms: Date.now() - mountTimeRef.current,
           serverStarted,
           audioReady,
           visionReady,
           boot_phase: bootPhase?.phase ?? "unknown",
+          // True means a phase claimed to be progressing right past the
+          // ceiling, which is a stalled engine rather than a slow one.
+          exhausted_budget: !withinBudget,
         });
         return "stuck";
       });
     }, STUCK_TIMEOUT_MS);
     return () => clearTimeout(stuckTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, bootPhase?.phase]);
+  }, [state, bootPhase?.phase, stuckCheckTick]);
 
   const handleSkip = async () => {
+    // Leaving by choice is not abandonment. `handleContinueWithoutRecording`
+    // routes through here too, so this covers both explicit exits.
+    leftDeliberatelyRef.current = true;
     posthog.capture("onboarding_startup_skipped", {
       serverStarted,
       audioReady,
@@ -723,6 +918,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
               )}
               <button
                 onClick={handleSkip}
+                data-testid="onboarding-startup-skip"
                 className="font-mono text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-4"
               >
                 continue without recording →

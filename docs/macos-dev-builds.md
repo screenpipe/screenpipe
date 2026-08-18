@@ -1,5 +1,7 @@
 # macOS dev builds
 
+<!-- doc-covers: none -->
+
 Dev builds are signed with a developer certificate so macOS TCC keeps recognizing
 the app across rebuilds and permissions persist.
 

@@ -24,10 +24,10 @@ const body: RequestBody = {
 };
 
 describe('Cloudflare hosted-chat routing', () => {
-	it('treats a spend-limit error as terminal without provider cascade', async () => {
+	it.each(['combined', 'unknown'] as const)('treats a %s spend-limit error as terminal without provider cascade', async (limitScope) => {
 		const context = await buildHostedChatGatewayContext(basicAuth, body.model, 'interactive');
 		const attempts = mock(async () => {
-			throw new HostedChatAllowanceExceededError(context);
+			throw new HostedChatAllowanceExceededError(context, limitScope);
 		});
 
 		const result = await runChain(
@@ -45,8 +45,77 @@ describe('Cloudflare hosted-chat routing', () => {
 		expect(attempts).toHaveBeenCalledTimes(1);
 		if ('error' in result) {
 			expect(result.error.code).toBe('hosted_ai_allowance_exceeded');
-			expect(result.error.allowance).toEqual({ lane: 'explicit', plan: 'basic', managed_by: 'cloudflare' });
+			expect(result.error.allowance).toEqual({
+				lane: 'explicit',
+				limit_scope: limitScope,
+				plan: 'basic',
+				managed_by: 'cloudflare',
+			});
 		}
+	});
+
+	it('keeps an explicit frontier allowance failure terminal', async () => {
+		const auth = { ...basicAuth, tier: 'subscribed', accountPlan: 'business' } as AuthResult;
+		const context = await buildHostedChatGatewayContext(auth, 'gpt-5.6-sol', 'interactive');
+		const attempts = mock(async () => {
+			throw new HostedChatAllowanceExceededError(context, 'frontier');
+		});
+
+		const result = await runChain(
+			['gpt-5.6-sol', 'gpt-5.6-luna'],
+			{ ...body, model: 'gpt-5.6-sol' },
+			{} as Env,
+			'fallback',
+			false,
+			2,
+			context,
+			attempts,
+		);
+
+		expect('error' in result).toBe(true);
+		expect(attempts).toHaveBeenCalledTimes(1);
+		if ('error' in result) {
+			expect(result.error.allowance).toMatchObject({
+				lane: 'frontier',
+				limit_scope: 'frontier',
+			});
+		}
+	});
+
+	it('lets Auto skip exhausted frontier attempts and continue on a standard model', async () => {
+		const context = await buildHostedChatGatewayContext(basicAuth, 'auto', 'interactive');
+		const seen: Array<{ model: string; lane: string | undefined }> = [];
+		const attempts = mock(async (
+			model: string,
+			_requestBody: RequestBody,
+			_env: Env,
+			_ctx: 'auto' | 'fallback' | 'explicit',
+			_flex: boolean,
+			gatewayContext?: typeof context,
+		) => {
+			seen.push({ model, lane: gatewayContext?.lane });
+			if (model === 'gpt-5.6-sol') {
+				throw new HostedChatAllowanceExceededError(gatewayContext!, 'frontier');
+			}
+			return new Response(JSON.stringify({ ok: true }));
+		});
+
+		const result = await runChain(
+			['gpt-5.6-sol', 'claude-opus-5', 'gpt-5.6-luna'],
+			{ ...body, model: 'auto' },
+			{} as Env,
+			'auto',
+			false,
+			3,
+			context,
+			attempts,
+		);
+
+		expect('response' in result).toBe(true);
+		expect(seen).toEqual([
+			{ model: 'gpt-5.6-sol', lane: 'frontier' },
+			{ model: 'gpt-5.6-luna', lane: 'auto' },
+		]);
 	});
 
 	it('keeps provider-rate errors eligible for cross-provider fallback', async () => {
@@ -131,17 +200,22 @@ describe('Cloudflare hosted-chat routing', () => {
 				accountPlan,
 			} as AuthResult;
 			const autoContext = await buildHostedChatGatewayContext(auth, 'auto', 'interactive');
-			const error = new HostedChatAllowanceExceededError(autoContext);
+			const error = new HostedChatAllowanceExceededError(autoContext, 'combined');
 			const jsonResponse = allowanceErrorResponse({ ...body, model: 'auto' }, error);
 			const json = await jsonResponse.json() as any;
 			expect(jsonResponse.status).toBe(429);
 			expect(json.error.code).toBe('hosted_ai_allowance_exceeded');
-			expect(json.allowance).toEqual({ lane: 'auto', plan: accountPlan, managed_by: 'cloudflare' });
+			expect(json.allowance).toEqual({
+				lane: 'auto',
+				limit_scope: 'combined',
+				plan: accountPlan,
+				managed_by: 'cloudflare',
+			});
 			expect(json.required_plan).toBe(requiredPlan);
 			expect(json.upgrade_url).toBe(upgradeUrl);
 			expect(json.error.message).toBe(requiredPlan
-				? 'Your hosted AI usage limit is reached. Switch to Auto or upgrade.'
-				: 'Your hosted AI usage limit is reached. Switch to Auto.');
+				? 'Your AI usage limit is reached. Switch to Auto or upgrade.'
+				: 'Your AI usage limit is reached. Switch to Auto.');
 			expect(json.error.message).not.toMatch(/explicit|allowance for Auto/i);
 			expect(JSON.stringify(json)).not.toMatch(/usd|dollar|amount/i);
 
@@ -151,6 +225,7 @@ describe('Cloudflare hosted-chat routing', () => {
 			expect(streamResponse.headers.get('content-type')).toContain('text/event-stream');
 			expect(stream).toContain('hosted_ai_allowance_exceeded');
 			expect(stream).toContain('"lane":"auto"');
+			expect(stream).toContain('"limit_scope":"combined"');
 			expect(stream).toContain(`"required_plan":${requiredPlan === null ? 'null' : `"${requiredPlan}"`}`);
 			expect(stream).toContain('data: [DONE]');
 		},

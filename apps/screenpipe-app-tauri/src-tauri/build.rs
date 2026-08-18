@@ -38,7 +38,7 @@ fn build_livetext_bridge() {
     }
 
     let has_vk = has_visionkit_sdk();
-    println!("cargo:warning=VisionKit SDK check: {}", has_vk);
+    eprintln!("VisionKit SDK check: {}", has_vk);
     if !has_vk {
         println!("cargo:warning=VisionKit.framework not found in SDK, building Live Text stub");
         build_livetext_stub(&out_dir, &lib_path);
@@ -170,6 +170,159 @@ void lt_free_string(char* ptr) { if (ptr) free(ptr); }
 
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rustc-link-lib=static=livetext_bridge");
+}
+
+/// Compile the native SwiftUI timeline into a static library.
+///
+/// Unlike the other Swift bridges this is a directory of sources compiled as
+/// one module, so `swift/timeline/*.swift` are all passed to a single swiftc
+/// invocation.
+#[cfg(target_os = "macos")]
+fn build_native_timeline() {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let swift_dir = PathBuf::from("swift/timeline");
+    let lib_path = out_dir.join("libnative_timeline.a");
+
+    println!("cargo:rerun-if-changed=swift/timeline");
+
+    let mut sources: Vec<PathBuf> = Vec::new();
+    if swift_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&swift_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("swift") {
+                    println!("cargo:rerun-if-changed={}", path.display());
+                    sources.push(path);
+                }
+            }
+        }
+    }
+    // Deterministic order so a rebuild is reproducible.
+    sources.sort();
+
+    if sources.is_empty() {
+        println!("cargo:warning=swift/timeline/*.swift not found, skipping native timeline");
+        build_native_timeline_stub(&out_dir, &lib_path);
+        return;
+    }
+
+    let sdk_path = Command::new("xcrun")
+        .args(["--sdk", "macosx", "--show-sdk-path"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default();
+    let sdk_path = sdk_path.trim().to_string();
+
+    let target_arch =
+        std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "aarch64".to_string());
+    let swift_target = if target_arch == "x86_64" {
+        "x86_64-apple-macos13.0"
+    } else {
+        "arm64-apple-macos13.0"
+    };
+
+    let output = Command::new("swiftc")
+        .args([
+            "-emit-library",
+            "-static",
+            "-module-name",
+            "NativeTimeline",
+            "-swift-version",
+            "5",
+            "-sdk",
+            &sdk_path,
+            "-target",
+            swift_target,
+            "-O",
+            "-whole-module-optimization",
+            "-o",
+        ])
+        .arg(&lib_path)
+        .args(&sources)
+        .output()
+        .expect("failed to run swiftc for native timeline");
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // On macOS a Swift error is a broken build, not a reason to ship the
+        // stub: falling back silently produces an app where the timeline is
+        // simply the old webview one, with a warning nobody reads to say why.
+        if cfg!(target_os = "macos") {
+            panic!(
+                "swiftc failed for the native timeline:\n{}",
+                stderr.chars().take(4000).collect::<String>()
+            );
+        }
+        println!(
+            "cargo:warning=swiftc failed for the native timeline: {}",
+            stderr.chars().take(800).collect::<String>()
+        );
+        build_native_timeline_stub(&out_dir, &lib_path);
+        return;
+    }
+
+    println!("cargo:rustc-link-search=native={}", out_dir.display());
+    println!("cargo:rustc-link-lib=static=native_timeline");
+    println!("cargo:rustc-link-arg=-Wl,-weak_framework,SwiftUI");
+    // AVFoundation is already hard-linked above; CoreMedia supplies the CMTime
+    // symbols the chunk seek uses.
+    println!("cargo:rustc-link-arg=-Wl,-weak_framework,CoreMedia");
+}
+
+/// Build a C stub when the native timeline cannot be compiled, so the app still
+/// links and simply reports the window as unavailable.
+#[cfg(target_os = "macos")]
+fn build_native_timeline_stub(out_dir: &std::path::Path, lib_path: &std::path::Path) {
+    use std::process::Command;
+
+    let stub_src = out_dir.join("native_timeline_stub.c");
+    std::fs::write(
+        &stub_src,
+        r#"// Stub: native SwiftUI timeline not available
+#include <stdlib.h>
+
+typedef void (*timeline_action_callback_t)(const char*);
+
+int timeline_is_available(void) { return 0; }
+void timeline_set_action_callback(timeline_action_callback_t cb) { (void)cb; }
+int timeline_show(const char* json) { (void)json; return -2; }
+int timeline_hide(void) { return -2; }
+int timeline_close(void) { return -2; }
+int timeline_navigate(const char* json) { (void)json; return -2; }
+void timeline_free_string(char* ptr) { if (ptr) free(ptr); }
+"#,
+    )
+    .expect("failed to write native timeline stub");
+
+    let target_arch =
+        std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "aarch64".to_string());
+    let cc_arch = if target_arch == "x86_64" {
+        "x86_64"
+    } else {
+        "arm64"
+    };
+    let status = Command::new("cc")
+        .args(["-c", "-arch", cc_arch, "-o"])
+        .arg(out_dir.join("native_timeline_stub.o").to_str().unwrap())
+        .arg(stub_src.to_str().unwrap())
+        .status()
+        .expect("failed to compile native timeline stub");
+    assert!(status.success(), "native timeline stub compilation failed");
+
+    let status = Command::new("ar")
+        .args(["rcs"])
+        .arg(lib_path)
+        .arg(out_dir.join("native_timeline_stub.o").to_str().unwrap())
+        .status()
+        .expect("failed to create native timeline stub archive");
+    assert!(status.success(), "native timeline stub archive failed");
+
+    println!("cargo:rustc-link-search=native={}", out_dir.display());
+    println!("cargo:rustc-link-lib=static=native_timeline");
 }
 
 /// Compile notification_panel.swift into a static library for native macOS notifications.
@@ -374,6 +527,11 @@ const E2E_COMMANDS: &[&str] = &[
     "set_tray_recording_status",
     "installed_tray_recording_status",
     "shortcut_reminder_visible",
+    "open_auto_meeting",
+    "active_meeting_id",
+    "native_meeting_overlay_state",
+    "native_shortcut_set_hovering",
+    "native_toggle_meeting_pin",
     "emit_meeting_overlay_transcript",
     "emit_agent_stream",
     "emit_settled_agent_follow_up",
@@ -391,6 +549,7 @@ const E2E_COMMANDS: &[&str] = &[
     "seed_flags",
     "capture_pi_start_error",
     "set_onboarding_completed_ago",
+    "e2e_set_activation_allowed",
 ];
 
 fn validate_e2e_command_inventory() {
@@ -466,6 +625,9 @@ fn main() {
 
         // Build SwiftUI shortcut reminder
         build_shortcut_reminder();
+
+        // Build the native SwiftUI timeline
+        build_native_timeline();
 
         // Stage macOS runtime sidecars into src-tauri/. Release builds bundle
         // mlx.metallib as a Tauri externalBin on arm64 so Tauri signs it, and
@@ -726,7 +888,6 @@ int shortcut_hide(void) { return -2; }
 int shortcut_is_available(void) { return 0; }
 void shortcut_set_meeting_active(int active) { (void)active; }
 void shortcut_set_meeting_stop_result(int succeeded) { (void)succeeded; }
-void shortcut_set_inbox_unread(int count) { (void)count; }
 int shortcut_set_health_state(const char* state) { (void)state; return -2; }
 int shortcut_get_frame(double* x, double* y, double* w, double* h) {
     (void)x; (void)y; (void)w; (void)h; return -2;
@@ -798,7 +959,7 @@ fn stage_mlx_metallib() {
         // Download mlx.metallib (pre-compiled MLX Metal shaders) for parakeet-mlx.
         // MLX needs this file next to the binary at runtime. The release
         // workflow exposes the target-suffixed externalBin copy to Tauri.
-        println!("cargo:warning=mlx-metallib: downloading from GitHub releases...");
+        eprintln!("mlx-metallib: downloading from GitHub releases...");
         let url =
             "https://github.com/screenpipe/screenpipe/releases/download/mlx-metallib-v0.2.0/mlx.metallib";
         let status = std::process::Command::new("curl")
@@ -807,10 +968,7 @@ fn stage_mlx_metallib() {
         match status {
             Ok(s) if s.success() => {
                 let size = std::fs::metadata(&metallib).map(|m| m.len()).unwrap_or(0);
-                println!(
-                    "cargo:warning=mlx-metallib: downloaded ({} MB)",
-                    size / 1_000_000
-                );
+                eprintln!("mlx-metallib: downloaded ({} MB)", size / 1_000_000);
             }
             _ => println!(
                 "cargo:warning=mlx-metallib: download failed — parakeet-mlx will crash at runtime"
@@ -818,10 +976,7 @@ fn stage_mlx_metallib() {
         }
     } else {
         let size = std::fs::metadata(&metallib).map(|m| m.len()).unwrap_or(0);
-        println!(
-            "cargo:warning=mlx-metallib: already present ({} MB)",
-            size / 1_000_000
-        );
+        eprintln!("mlx-metallib: already present ({} MB)", size / 1_000_000);
     }
 
     sign_macos_sidecar_if_needed(&metallib);
@@ -848,8 +1003,8 @@ fn stage_libonnxruntime_dylib() {
                     if let Err(e) = std::fs::copy(&src, &dylib) {
                         println!("cargo:warning=libonnxruntime: ORT_DYLIB_PATH copy failed: {e}");
                     } else {
-                        println!(
-                            "cargo:warning=libonnxruntime: copied from ORT_DYLIB_PATH ({})",
+                        eprintln!(
+                            "libonnxruntime: copied from ORT_DYLIB_PATH ({})",
                             src.display()
                         );
                     }
@@ -861,14 +1016,9 @@ fn stage_libonnxruntime_dylib() {
             !dylib.exists() || std::fs::metadata(&dylib).map(|m| m.len()).unwrap_or(0) < min_size;
 
         if still_needs_fetch {
-            println!(
-                "cargo:warning=libonnxruntime: downloading x86_64 dylib from Homebrew bottle..."
-            );
+            eprintln!("libonnxruntime: downloading x86_64 dylib from Homebrew bottle...");
             match download_homebrew_onnxruntime_dylib(&dylib) {
-                Ok(size) => println!(
-                    "cargo:warning=libonnxruntime: downloaded ({} MB)",
-                    size / 1_000_000
-                ),
+                Ok(size) => eprintln!("libonnxruntime: downloaded ({} MB)", size / 1_000_000),
                 Err(e) => {
                     let msg = format!("libonnxruntime dylib fetch failed: {e}");
                     if is_release {
@@ -923,8 +1073,8 @@ fn sign_macos_sidecar_if_needed(path: &std::path::Path) {
 
     match status {
         Ok(status) if status.success() => {
-            println!(
-                "cargo:warning=macos-sidecar-sign: signed {}",
+            eprintln!(
+                "macos-sidecar-sign: signed {}",
                 path.file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("sidecar")

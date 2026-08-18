@@ -43,7 +43,8 @@
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { E2E_SEED_FLAGS, getAppPid } from "../helpers/app-launcher.js";
 import {
@@ -57,21 +58,51 @@ import { t, waitForAppReady } from "../helpers/test-utils.js";
 const dataDir = resolve(homedir(), ".screenpipe", ".e2e");
 const SILENT_MARKER = resolve(dataDir, "e2e-capture-loop-silent-fired");
 
-/** Every stage the loop can report. A frozen loop must name one of these. */
-const KNOWN_STAGES = [
-  "heartbeat",
-  "focus-gate",
-  "warm-wait",
-  "cold-wait",
-  "pause-gate",
-  "release-stream",
-  "invalidate-streams",
-  "exclusion-probe",
-  "visual-probe",
-  "trigger-wait",
-  "capture",
-  "hot-cache-push",
-];
+const METRICS_RS = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../../crates/screenpipe-screen/src/metrics.rs",
+);
+
+/**
+ * Every stage the loop can report, read from the enum that emits them.
+ *
+ * Derived rather than hand-mirrored. A copied list goes stale the moment a
+ * stage is added, and since a short-lived stage is rarely the one sampled, the
+ * stale copy fails as an intermittent flake instead of an honest error — which
+ * is how it gets written off as infrastructure. Reading the single source of
+ * truth means a new stage is either picked up automatically, or extraction
+ * fails loudly right here.
+ */
+function knownStagesFromRust(): string[] {
+  const source = readFileSync(METRICS_RS, "utf8");
+  const asStr = source.match(
+    /pub fn as_str\(self\) -> &'static str \{([\s\S]*?)\n {4}\}/,
+  );
+  if (!asStr) {
+    throw new Error(
+      `could not find CaptureLoopStage::as_str in ${METRICS_RS}. ` +
+        `Fix the extraction rather than hardcoding the stage list.`,
+    );
+  }
+
+  const stages = [...asStr[1].matchAll(/=>\s*"([a-z-]+)"/g)].map((m) => m[1]);
+
+  // Guard the extraction itself. A regex that silently matched nothing, or
+  // matched the wrong block, would leave every membership assertion below
+  // vacuously true — the spec would pass while checking nothing.
+  for (const anchor of ["unknown", "heartbeat", "capture", "trigger-wait"]) {
+    if (!stages.includes(anchor)) {
+      throw new Error(
+        `stage extraction looks wrong: expected "${anchor}" among ` +
+          `[${stages.join(", ")}]`,
+      );
+    }
+  }
+  return stages;
+}
+
+/** A frozen loop must name one of these. */
+const KNOWN_STAGES = knownStagesFromRust();
 
 type HealthBody = {
   frame_status?: string;

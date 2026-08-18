@@ -341,4 +341,86 @@ describe("Chat tool activity progressive disclosure", function () {
     expect(existsSync(filepath)).toBe(true);
   });
 
+  it("renders every MCP startup state outside the command rail", async () => {
+    const startup = (
+      server: string,
+      state: "connecting" | "connected" | "auth" | "error",
+    ) => ({
+      type: "tool",
+      toolCall: {
+        id: `startup-${server}`,
+        toolName: `mcp__${server}__startup`,
+        args: {},
+        isRunning: state === "connecting",
+        isError: state === "auth" || state === "error",
+        result:
+          state === "auth"
+            ? `MCP server \`${server}\` failed to start: Not logged in. Run \`codex mcp login ${server}\`.`
+            : state === "error"
+              ? `MCP server \`${server}\` failed to start: HTTP 404: No workspace here`
+              : undefined,
+      },
+    });
+
+    const captureState = async (
+      name: string,
+      blocks: unknown[],
+      expectedText: string,
+      expand = false,
+    ) => {
+      await seedConversation(randomUUID(), "Check my MCP connections.", {
+        content: "",
+        contentBlocks: blocks,
+      });
+      const card = await $('[data-testid="mcp-startup-status"]');
+      await card.waitForDisplayed({ timeout: t(5_000) });
+      expect(await card.getText()).toContain(expectedText);
+      expect((await $$('[data-testid="tool-activity-summary"]')).length).toBe(0);
+      if (expand) {
+        const toggle = await card.$('[data-testid="mcp-startup-toggle"]');
+        if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+      }
+      await browser.execute(() => {
+        if (document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+      });
+      await browser.pause(250);
+      const filepath = await saveScreenshot(name);
+      expect(existsSync(filepath)).toBe(true);
+    };
+
+    await captureState(
+      "chat-mcp-startup-connecting",
+      [startup("linear", "connecting")],
+      "1 connecting",
+    );
+    await captureState(
+      "chat-mcp-startup-connected",
+      [startup("screenpipe", "connected")],
+      "1 connected",
+      true,
+    );
+    await captureState(
+      "chat-mcp-startup-auth-required",
+      [startup("notion", "auth")],
+      "Sign in required",
+    );
+    await captureState(
+      "chat-mcp-startup-error",
+      [startup("n8n", "error")],
+      "Needs attention",
+    );
+    await captureState(
+      "chat-mcp-startup-mixed",
+      [
+        startup("screenpipe", "connected"),
+        startup("linear", "connecting"),
+        startup("notion", "auth"),
+        startup("n8n", "error"),
+      ],
+      "2 need attention · 1 connecting · 1 connected",
+    );
+  });
+
 });

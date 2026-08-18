@@ -13,8 +13,11 @@ async function openPrivacySettings(): Promise<void> {
   await navSettings.waitForExist({ timeout: t(12_000) });
   await navSettings.click();
 
-  const generalSection = await $('[data-testid="section-settings-general"]');
-  await generalSection.waitForExist({ timeout: t(20_000) });
+  // nav-settings reopens the last-visited section (readLastSettingsSection), so
+  // assert Settings mounted via a section-independent marker rather than the
+  // General panel, then navigate to Privacy explicitly below.
+  const settingsRoot = await $('[data-testid="settings-back-to-app"]');
+  await settingsRoot.waitForExist({ timeout: t(20_000) });
 
   const navPrivacy = await $('[data-testid="settings-nav-privacy"]');
   await navPrivacy.waitForExist({ timeout: t(20_000) });

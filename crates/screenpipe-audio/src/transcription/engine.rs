@@ -605,6 +605,20 @@ pub enum TranscriptionSession {
 }
 
 impl TranscriptionSession {
+    /// Force a single decoding language on this session, overriding the engine's
+    /// configured languages. A single language makes Whisper skip per-chunk
+    /// auto-detection (see `detect_language`) and pins the code on
+    /// Deepgram/OpenAI-compatible requests. No-op for engines without a language
+    /// selection.
+    pub fn set_language(&mut self, language: Language) {
+        match self {
+            Self::Whisper { languages, .. }
+            | Self::Deepgram { languages, .. }
+            | Self::OpenAICompatible { languages, .. } => *languages = vec![language],
+            _ => {}
+        }
+    }
+
     pub async fn transcribe_detailed(
         &mut self,
         audio: &[f32],
@@ -947,5 +961,25 @@ mod merge_keyterms_tests {
     fn empty_extra_returns_base_unchanged() {
         let base = vec![v("Screenpipe")];
         assert_eq!(merge_keyterms(&base, &[]).len(), 1);
+    }
+
+    #[test]
+    fn set_language_forces_single_language() {
+        let mut session = TranscriptionSession::Deepgram {
+            config: DeepgramTranscriptionConfig {
+                endpoint: String::new(),
+                auth_token: String::new(),
+                auth_header_prefix: "Token",
+            },
+            languages: vec![Language::English, Language::Spanish],
+            vocabulary: vec![],
+        };
+        session.set_language(Language::Russian);
+        match session {
+            TranscriptionSession::Deepgram { languages, .. } => {
+                assert_eq!(languages, vec![Language::Russian]);
+            }
+            _ => panic!("expected deepgram session"),
+        }
     }
 }

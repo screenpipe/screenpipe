@@ -82,8 +82,11 @@ export default function RootLayout({
   const pathname = usePathname();
   const isOverlay =
     pathname === "/shortcut-reminder" || pathname === "/notification-inbox";
+  const isTimelineOverlay = pathname === "/overlay";
   // Transparent-body windows: floating search bar + the overlay inbox card.
   const isSearch = pathname === "/search" || pathname === "/notification-inbox";
+  const usesTransparentWindowBackground =
+    isSearch || isOverlay || isTimelineOverlay;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -240,7 +243,7 @@ export default function RootLayout({
   }, []);
 
   return (
-    <html lang="en" suppressHydrationWarning className={isSearch ? "bg-transparent" : ""}>
+    <html lang="en" suppressHydrationWarning className={usesTransparentWindowBackground ? "bg-transparent" : ""}>
       <head>
         <script
           dangerouslySetInnerHTML={{
@@ -287,7 +290,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className={`${inter.className} scrollbar-hide ${isSearch ? "bg-transparent" : ""}`}>
+      <body className={`${inter.className} scrollbar-hide ${usesTransparentWindowBackground ? "bg-transparent" : ""}`}>
         {/* Providers sits INSIDE <body> so the body element is present in
             both the static export and the first client render. With Providers
             wrapping <body>, gating Providers' children on a post-mount flag

@@ -43,6 +43,12 @@ use crate::{
 /// Transcriptions within this window are checked for cross-device duplicates.
 const DEDUP_TIME_WINDOW_SECS: i64 = 45;
 
+/// Attempts for the read-pool lookups a transcription insert performs before it
+/// submits its write. Read-pool pressure is bursty — search, timeline, the local
+/// API and pipes all share that pool — and failing the whole insert on the first
+/// stall threw away recordings the write path could have stored (CLI-SN).
+const PRE_READ_ATTEMPTS: u32 = 3;
+
 /// Similarity threshold for cross-device deduplication (0.0 to 1.0).
 /// Higher = stricter matching, lower = more aggressive deduplication.
 const DEDUP_SIMILARITY_THRESHOLD: f64 = 0.85;
@@ -461,7 +467,7 @@ pub use self::semantic::{
     SemanticCleanupResult, SemanticContextQuery, SemanticFrameContext,
     SemanticProjectionWriteResult,
 };
-pub(crate) use self::text_positions::calculate_confidence;
+pub(crate) use self::text_positions::{calculate_confidence, match_on_screen_a11y};
 pub use self::text_positions::{
     find_matching_a11y_positions, find_matching_positions, parse_all_text_positions,
 };

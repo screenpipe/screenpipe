@@ -28,7 +28,7 @@ export type UsageTier =
   | "business_max"
   | "business_ultra";
 
-export type HostedAiLane = "auto" | "explicit" | "combined";
+export type HostedAiLane = "auto" | "explicit" | "frontier" | "combined";
 
 export interface HostedAiAllowance {
   lane: HostedAiLane;
@@ -44,6 +44,8 @@ export interface HostedAiUsage {
   allowance_managed_by?: "cloudflare";
   usage_as_of: string | null;
   allowances: HostedAiAllowance[] | null;
+  /** Canonical hosted model IDs classified by the worker's pricing policy. */
+  frontierModels?: string[];
   upgrade: QuotaUpgradeAction | null;
 }
 
@@ -82,7 +84,10 @@ function parseHostedAiAllowance(value: unknown): HostedAiAllowance | null {
   if (!value || typeof value !== "object") return null;
   const candidate = value as Partial<HostedAiAllowance>;
   if (
-    (candidate.lane !== "auto" && candidate.lane !== "explicit" && candidate.lane !== "combined") ||
+    (candidate.lane !== "auto" &&
+      candidate.lane !== "explicit" &&
+      candidate.lane !== "frontier" &&
+      candidate.lane !== "combined") ||
     (candidate.technique !== "fixed" && candidate.technique !== "sliding") ||
     (candidate.resets_at !== null && typeof candidate.resets_at !== "string")
   ) {
@@ -120,6 +125,7 @@ function parseHostedAiUsage(value: unknown): HostedAiUsage | undefined {
     allowance_managed_by?: unknown;
     usage_as_of?: unknown;
     allowances?: unknown;
+    frontier_models?: unknown;
     required_plan?: unknown;
     upgrade_url?: unknown;
   };
@@ -137,6 +143,11 @@ function parseHostedAiUsage(value: unknown): HostedAiUsage | undefined {
     usage_as_of:
       typeof candidate.usage_as_of === "string" ? candidate.usage_as_of : null,
     allowances,
+    frontierModels: Array.isArray(candidate.frontier_models)
+      ? candidate.frontier_models.filter(
+          (model): model is string => typeof model === "string",
+        )
+      : [],
     upgrade: validateQuotaUpgradeAction({
       requiredPlan: candidate.required_plan,
       upgradeUrl: candidate.upgrade_url,
@@ -220,9 +231,13 @@ export function hostedAiAllowanceForModel(
   model: string | undefined,
 ): HostedAiAllowance | null {
   if (!model) return null;
+  const normalizedModel = model.toLowerCase();
+  const frontier = usage?.hosted_ai?.frontierModels?.some(
+    (candidate) => candidate.toLowerCase() === normalizedModel,
+  ) === true;
   return hostedAiAllowanceForLane(
     usage,
-    model.toLowerCase() === "auto" ? "auto" : "explicit",
+    normalizedModel === "auto" ? "auto" : frontier ? "frontier" : "explicit",
   );
 }
 
@@ -248,8 +263,9 @@ export function sortHostedAiAllowances(
 ): HostedAiAllowance[] {
   const laneOrder: Record<HostedAiLane, number> = {
     combined: 0,
-    auto: 1,
-    explicit: 2,
+    frontier: 1,
+    auto: 2,
+    explicit: 3,
   };
   return [...allowances].sort(
     (left, right) =>
@@ -277,16 +293,20 @@ export function allowanceScopeLabel(lane: HostedAiLane): string {
       return "all models";
     case "auto":
       return "Auto";
+    case "frontier":
+      return "frontier models";
     case "explicit":
       return "explicit models";
   }
 }
 
 export function formatAllowanceLabel(allowance: HostedAiAllowance): string {
-  const scope = allowanceScopeLabel(allowance.lane);
   if (allowance.window_seconds === 7 * 86_400) {
-    return `Weekly · ${scope}`;
+    if (allowance.lane === "combined") return "Weekly AI allowance";
+    if (allowance.lane === "frontier") return "Frontier models";
+    return `Weekly · ${allowanceScopeLabel(allowance.lane)}`;
   }
+  const scope = allowanceScopeLabel(allowance.lane);
   const period = formatAllowanceWindow(allowance.window_seconds);
   return allowance.lane === "combined"
     ? `${period} limit`

@@ -1,5 +1,11 @@
 # Single-Click Summaries — Product Spec
 
+<!-- doc-covers: apps/screenpipe-app-tauri/components/chat -->
+<!-- doc-verified: 3606788c6 -->
+> **Historical.** Last verified against 3606788c6 (2026-02-19). `apps/screenpipe-app-tauri/components/chat` has moved a long way
+> since; read this for original intent only. Names, signatures, and thresholds are
+> probably wrong. The code wins. Run `bun scripts/check-doc-freshness.ts` for current drift.
+
 **Author:** Louis / Menelaus (znitchi)
 **Date:** Feb 19, 2026
 **Status:** Draft

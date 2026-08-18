@@ -72,6 +72,45 @@ describe("SummaryCards", () => {
     ]);
   });
 
+  it("keeps every built-in action directly available", () => {
+    render(
+      <SummaryCards
+        onSendMessage={vi.fn()}
+        customTemplates={[]}
+        onSaveCustomTemplate={vi.fn()}
+        onUpdateCustomTemplate={vi.fn()}
+        onDeleteCustomTemplate={vi.fn()}
+        userGoalCategory="work_memory"
+      />,
+    );
+
+    expect(screen.getAllByTestId(/^summary-card-/)).toHaveLength(4);
+    expect(screen.getByText("Meeting Prep")).toBeInTheDocument();
+    expect(screen.queryByTestId("summary-cards-more")).not.toBeInTheDocument();
+  });
+
+  it("keeps the user's saved templates alongside the built-in actions", () => {
+    render(
+      <SummaryCards
+        onSendMessage={vi.fn()}
+        customTemplates={[
+          {
+            id: "tpl-1",
+            title: "Client recap",
+            prompt: "recap my client work",
+            timeRange: "today",
+          } as never,
+        ]}
+        onSaveCustomTemplate={vi.fn()}
+        onUpdateCustomTemplate={vi.fn()}
+        onDeleteCustomTemplate={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Client recap")).toBeInTheDocument();
+    expect(screen.getByText("+ custom")).toBeInTheDocument();
+  });
+
   it("dispatches every built-in home card once with its visible label", () => {
     const onSendMessage = vi.fn();
     render(

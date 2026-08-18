@@ -75,6 +75,7 @@ const ruleCache = new TtlSingleFlightCache<SpendRuleSet>({
 	ttlForValue: (_key, value) => value.rules.length > 0 ? RULE_CACHE_TTL_MS : null,
 });
 const loggedEmptyRuleSelections = new Set<string>();
+const loggedFrontierShareDrift = new Set<string>();
 
 type CloudflareCacheStorage = CacheStorage & { default?: Cache };
 
@@ -173,6 +174,35 @@ function normalizeSpendRule(value: unknown): CloudflareSpendRule | null {
 	};
 }
 
+async function readSpendRules(
+	settings: NonNullable<ReturnType<typeof cloudflareSettings>>,
+): Promise<SpendRuleSet> {
+	const url = `https://api.cloudflare.com/client/v4/accounts/${settings.accountId}/ai-gateway/gateways/${encodeURIComponent(settings.gatewayId)}`;
+	const response = await fetch(url, {
+		headers: { Authorization: `Bearer ${settings.token}` },
+	});
+	if (!response.ok) throw new Error(`Cloudflare gateway settings returned ${response.status}`);
+	const payload = await response.json() as {
+		success?: unknown;
+		result?: { spend_limits?: { enabled?: unknown; rules?: unknown } };
+	};
+	const spendLimitsEnabled = payload.result?.spend_limits?.enabled === true;
+	if (payload.success !== true || !spendLimitsEnabled) {
+		return { rules: [], rawRuleCount: 0, spendLimitsEnabled };
+	}
+	const rawRules = payload.result?.spend_limits?.rules;
+	if (!Array.isArray(rawRules)) {
+		return { rules: [], rawRuleCount: 0, spendLimitsEnabled };
+	}
+	return {
+		rules: rawRules
+			.map(normalizeSpendRule)
+			.filter((rule): rule is CloudflareSpendRule => rule !== null),
+		rawRuleCount: rawRules.length,
+		spendLimitsEnabled,
+	};
+}
+
 async function fetchSpendRules(
 	settings: NonNullable<ReturnType<typeof cloudflareSettings>>,
 ): Promise<SpendRuleSet> {
@@ -181,30 +211,7 @@ async function fetchSpendRules(
 		const sharedRequest = sharedCacheRequest('rules', cacheKey);
 		const shared = await readSharedJson<SpendRuleSet>(sharedRequest);
 		if (shared && Array.isArray(shared.rules) && shared.rules.length > 0) return shared;
-		const url = `https://api.cloudflare.com/client/v4/accounts/${settings.accountId}/ai-gateway/gateways/${encodeURIComponent(settings.gatewayId)}`;
-		const response = await fetch(url, {
-			headers: { Authorization: `Bearer ${settings.token}` },
-		});
-		if (!response.ok) throw new Error(`Cloudflare gateway settings returned ${response.status}`);
-		const payload = await response.json() as {
-			success?: unknown;
-			result?: { spend_limits?: { enabled?: unknown; rules?: unknown } };
-		};
-		const spendLimitsEnabled = payload.result?.spend_limits?.enabled === true;
-		if (payload.success !== true || !spendLimitsEnabled) {
-			return { rules: [], rawRuleCount: 0, spendLimitsEnabled };
-		}
-		const rawRules = payload.result?.spend_limits?.rules;
-		if (!Array.isArray(rawRules)) {
-			return { rules: [], rawRuleCount: 0, spendLimitsEnabled };
-		}
-		const ruleSet = {
-			rules: rawRules
-			.map(normalizeSpendRule)
-			.filter((rule): rule is CloudflareSpendRule => rule !== null),
-			rawRuleCount: rawRules.length,
-			spendLimitsEnabled,
-		};
+		const ruleSet = await readSpendRules(settings);
 		if (ruleSet.rules.length > 0) await writeSharedJson(sharedRequest, ruleSet);
 		return ruleSet;
 	});
@@ -219,7 +226,8 @@ function filterMatches(dimension: SpendDimension | undefined, value: string): bo
  * Provider/model rules and rules partitioned by another dimension are separate
  * buckets and cannot truthfully be collapsed into a single meter.
  *
- * Rules that filter to a single lane produce an 'auto' or 'explicit' allowance.
+ * Rules that filter to a single lane produce an 'auto', 'explicit', or
+ * 'frontier' allowance.
  * Rules with no lane dimension at all produce a 'combined' allowance that sums
  * all traffic for the user — this is the current production setup where auto
  * and explicit share a single spend limit.
@@ -241,7 +249,7 @@ function applicableLaneRules(
 			lane = 'combined';
 		} else if (laneDimension.mode === 'filter' && laneDimension.values?.length === 1) {
 			const value = laneDimension.values[0];
-			if (value !== 'auto' && value !== 'explicit') return [];
+			if (value !== 'auto' && value !== 'explicit' && value !== 'frontier') return [];
 			lane = value;
 		} else {
 			return [];
@@ -263,11 +271,36 @@ function ruleSelectionReason(
 	if (!filterMatches(rule.metadata.plan, context.plan)) return 'plan_filter_mismatch';
 	const lane = rule.metadata.lane;
 	if (lane && (lane.mode !== 'filter' || lane.values?.length !== 1 ||
-		!['auto', 'explicit'].includes(lane.values[0]))) return 'unsupported_lane_dimension';
+		!['auto', 'explicit', 'frontier'].includes(lane.values[0]))) return 'unsupported_lane_dimension';
 	if (Object.keys(rule.metadata).some((key) => !['user_id', 'plan', 'lane'].includes(key))) {
 		return 'unsupported_metadata_dimension';
 	}
 	return 'matched';
+}
+
+function logFrontierShareDrift(
+	settings: NonNullable<ReturnType<typeof cloudflareSettings>>,
+	rules: ApplicableSpendRule[],
+	context: HostedChatGatewayContext,
+): void {
+	const frontierRules = rules.filter((rule) => rule.lane === 'frontier');
+	if (frontierRules.length === 0) return;
+	const drifted = frontierRules.some((frontier) => {
+		const combined = rules.find((candidate) =>
+			candidate.lane === 'combined' &&
+			candidate.window === frontier.window &&
+			candidate.technique === frontier.technique,
+		);
+		return !combined || Math.abs(frontier.limit / combined.limit - 0.5) > 0.000_001;
+	});
+	if (!drifted) return;
+	const logKey = `${settings.gatewayId}:${context.plan}`;
+	if (loggedFrontierShareDrift.has(logKey)) return;
+	loggedFrontierShareDrift.add(logKey);
+	console.warn('Cloudflare frontier allowance is not 50% of its matching total allowance', {
+		gateway: settings.gatewayId,
+		plan: context.plan,
+	});
 }
 
 function logEmptyRuleSelection(
@@ -323,13 +356,39 @@ function metadataFromRow(row: UsageRow): HostedChatGatewayContext | null {
 		const value = JSON.parse(raw) as Partial<HostedChatGatewayContext>;
 		if (
 			typeof value.user_id !== 'string' ||
-			(value.lane !== 'auto' && value.lane !== 'explicit') ||
+			(value.lane !== 'auto' && value.lane !== 'explicit' && value.lane !== 'frontier') ||
 			typeof value.plan !== 'string' ||
 			typeof value.workload !== 'string'
 		) return null;
 		return value as HostedChatGatewayContext;
 	} catch {
 		return null;
+	}
+}
+
+/** Classify a fresh spend-limit rejection by exact active Cloudflare rule ID. */
+export async function classifyCloudflareSpendLimitRule(
+	env: Env,
+	ruleId: string | null,
+	context: HostedChatGatewayContext,
+): Promise<'combined' | 'frontier' | 'unknown'> {
+	const settings = cloudflareSettings(env);
+	if (!settings || !ruleId) return 'unknown';
+	try {
+		// Limit failures are rare and routing depends on current configuration.
+		// Bypass both display caches rather than classifying from stale usage.
+		const ruleSet = await readSpendRules(settings);
+		const exact = applicableLaneRules(ruleSet.rules, context)
+			.find((rule) => rule.id === ruleId);
+		return exact?.lane === 'combined' || exact?.lane === 'frontier'
+			? exact.lane
+			: 'unknown';
+	} catch (error) {
+		console.warn('Cloudflare spend-limit rule classification unavailable', {
+			plan: context.plan,
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return 'unknown';
 	}
 }
 
@@ -428,6 +487,7 @@ export async function getCloudflareHostedChatUsage(
 	const ruleSet = await fetchSpendRules(settings);
 	const rules = applicableLaneRules(ruleSet.rules, context);
 	if (rules.length === 0) logEmptyRuleSelection(settings, ruleSet, context);
+	logFrontierShareDrift(settings, rules, context);
 	const intervalsByKey = new Map<string, UsageInterval>();
 	for (const rule of rules) {
 		const interval = intervalForRule(rule, now);

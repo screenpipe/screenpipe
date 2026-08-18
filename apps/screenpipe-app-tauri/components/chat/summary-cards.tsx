@@ -186,7 +186,7 @@ export function SummaryCards({
         <button
           data-testid={`summary-card-${featured[0].name}`}
           onClick={() => handleCardClick(featured[0])}
-          className="group w-full max-w-lg mb-1.5 text-left px-4 py-3.5 border border-border/40 bg-amber-500/[0.06] dark:bg-amber-400/[0.08] hover:!bg-foreground hover:text-background hover:border-foreground transition-all duration-150 cursor-pointer"
+          className="group relative w-full max-w-lg mb-1.5 text-left px-4 py-3.5 border border-border/40 border-l-2 border-l-phosphor-strong hover:!bg-foreground hover:text-background hover:border-foreground hover:border-l-phosphor transition-all duration-150 cursor-pointer"
         >
           <div className="flex items-center gap-3">
             <HomeCardIcon

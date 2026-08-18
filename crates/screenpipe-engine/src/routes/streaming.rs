@@ -63,6 +63,34 @@ fn stream_db_fetch_limit(display_limit: usize) -> usize {
     }
 }
 
+/// Split a display budget at the hot-cache coverage boundary so a partial
+/// current-day cache cannot consume every slot before the older DB backfill
+/// runs. The split is proportional to wall-clock span because the timeline is
+/// a temporal overview: dense recent capture should not make the morning
+/// disappear. Any unused recent-cache slots remain available to the backfill.
+fn recent_cache_display_limit(
+    limit: usize,
+    start_time: DateTime<Utc>,
+    cache_start: DateTime<Utc>,
+    end_time: DateTime<Utc>,
+) -> usize {
+    if limit <= 1 || cache_start <= start_time || cache_start >= end_time {
+        return limit;
+    }
+
+    let total_millis = end_time
+        .signed_duration_since(start_time)
+        .num_milliseconds()
+        .max(1) as i128;
+    let recent_millis = end_time
+        .signed_duration_since(cache_start)
+        .num_milliseconds()
+        .max(1) as i128;
+    let proportional = ((limit as i128 * recent_millis) + total_millis / 2) / total_millis;
+
+    (proportional as usize).clamp(1, limit - 1)
+}
+
 /// Reduce an already-display-ordered list to at most `limit` items by keeping an
 /// evenly-spaced stride across the WHOLE list (both ends included), rather than
 /// `truncate`, which keeps only the head and silently drops the tail.
@@ -375,11 +403,37 @@ async fn handle_stream_frames_socket(
                             let frames =
                                 cache_clone.get_frames_in_range(start_time, end_time).await;
 
+                            // Work out cache coverage before applying the display
+                            // cap. When coverage is partial, reserve a proportional
+                            // share of the cap for the older DB range. Previously we
+                            // downsampled the recent cache to `limit` first, leaving
+                            // a zero-sized backfill budget on dense days.
+                            let cache_start = cache_clone.earliest_coverage().await;
+                            let backfill_needed = match cache_start {
+                                Some(cs) if cs <= start_time => false,
+                                Some(cs) => {
+                                    // Cache only covers cs..now, backfill start_time..cs
+                                    info!(
+                                        "partial cache coverage: cache from {}, backfilling {}..{}",
+                                        cs, start_time, cs
+                                    );
+                                    true
+                                }
+                                None => true, // no cache coverage at all
+                            };
+                            let cache_display_limit = match (backfill_needed, cache_start) {
+                                (true, Some(cs)) => {
+                                    recent_cache_display_limit(limit, start_time, cs, end_time)
+                                }
+                                (true, None) => 0,
+                                (false, _) => limit,
+                            };
+
                             let mut sorted = frames;
                             if is_descending {
                                 sorted.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
                             }
-                            downsample_in_place(&mut sorted, limit);
+                            downsample_in_place(&mut sorted, cache_display_limit);
                             let initial_count = sorted.len();
 
                             // Record sent IDs first (fast, no async), then send
@@ -399,25 +453,6 @@ async fn handle_stream_frames_socket(
                             for frame in sorted {
                                 let _ = frame_tx.send(frame).await;
                             }
-
-                            // Only backfill from DB if the hot cache doesn't
-                            // cover the requested range. The cache knows its
-                            // earliest coverage timestamp from warm_from_db +
-                            // push_frame. If the cache covers start_time, we
-                            // skip the 60s+ find_video_chunks query entirely.
-                            let cache_start = cache_clone.earliest_coverage().await;
-                            let backfill_needed = match cache_start {
-                                Some(cs) if cs <= start_time => false,
-                                Some(cs) => {
-                                    // Cache only covers cs..now, backfill start_time..cs
-                                    info!(
-                                        "partial cache coverage: cache from {}, backfilling {}..{}",
-                                        cs, start_time, cs
-                                    );
-                                    true
-                                }
-                                None => true, // no cache coverage at all
-                            };
 
                             let backfill_limit = limit.saturating_sub(initial_count);
                             let backfill_fetch_limit = stream_db_fetch_limit(backfill_limit);
@@ -946,6 +981,49 @@ mod tests {
             stream_db_fetch_limit(MAX_STREAM_FRAME_LIMIT),
             MAX_STREAM_FRAME_LIMIT
         );
+    }
+
+    #[test]
+    fn partial_today_cache_reserves_slots_for_older_db_frames() {
+        let start = DateTime::parse_from_rfc3339("2026-08-16T07:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let cache_start = DateTime::parse_from_rfc3339("2026-08-16T15:34:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let end = DateTime::parse_from_rfc3339("2026-08-16T23:24:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let display_limit = 2_500;
+
+        let cache_limit = recent_cache_display_limit(display_limit, start, cache_start, end);
+        let backfill_limit = display_limit - cache_limit;
+
+        assert!(
+            cache_limit > 0,
+            "recent cache must remain visible immediately"
+        );
+        assert!(
+            backfill_limit > 0,
+            "a full recent cache must not starve the older DB range"
+        );
+        assert_eq!(cache_limit + backfill_limit, display_limit);
+        assert!(
+            backfill_limit > cache_limit,
+            "the longer older span should receive more timeline slots"
+        );
+    }
+
+    #[test]
+    fn full_today_cache_keeps_the_entire_display_budget() {
+        let start = DateTime::parse_from_rfc3339("2026-08-16T07:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let end = DateTime::parse_from_rfc3339("2026-08-16T23:24:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        assert_eq!(recent_cache_display_limit(2_500, start, start, end), 2_500);
     }
 
     #[tokio::test]

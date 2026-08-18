@@ -189,8 +189,9 @@ describe("AccountSection subscription/login gating", () => {
     expect(mocks.openUrl).toHaveBeenCalledWith("https://screenpipe.com/account");
   });
 
-  it("shows one quiet next-tier action and opens the exact Max billing target", () => {
-    vi.stubEnv("NEXT_PUBLIC_BUSINESS_POWER_PLANS_ENABLED", "true");
+  it("shows Max and Ultra as plans and opens the exact Max billing target", () => {
+    // These cards replace a strip that shipped behind
+    // NEXT_PUBLIC_BUSINESS_POWER_PLANS_ENABLED, an env var no build ever set.
     mocks.state.user = {
       id: "u1",
       email: "pro@screenpipe.test",
@@ -200,10 +201,19 @@ describe("AccountSection subscription/login gating", () => {
     };
 
     render(<AccountSection />);
-    const upgrade = screen.getByTestId("account-capacity-upgrade");
-    expect(within(upgrade).getByText("need more AI capacity?")).toBeInTheDocument();
-    expect(within(upgrade).getByText(/higher query and request-rate limits/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("account-capacity-upgrade-button"));
+    const options = screen.getByTestId("account-plan-options");
+    expect(within(options).getByText("business max")).toBeInTheDocument();
+    expect(within(options).getByText("business ultra")).toBeInTheDocument();
+    expect(within(options).getByText("$100")).toBeInTheDocument();
+    expect(within(options).getByText("$200")).toBeInTheDocument();
+    // Business is the current plan, so Max is the immediate next step.
+    expect(
+      within(screen.getByTestId("account-plan-pro_max")).getByTestId(
+        "account-plan-next-step",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("account-plan-choose-pro_max"));
 
     expect(mocks.openUrl).toHaveBeenCalledWith(
       "https://screenpipe.com/account/billing?target_plan=pro_max&interval=month",
@@ -214,25 +224,39 @@ describe("AccountSection subscription/login gating", () => {
     );
   });
 
-  it("does not show power-plan promotion while the rollout flag is off", () => {
+  it("marks the capacity level a Max account actually pays for", () => {
+    // The Max card used to be the Business card wearing Max's name and price,
+    // which cost the ladder its rungs and claimed "higher monthly AI credit
+    // allowance" — the gateway grants Max the same 400 credits as Business.
     mocks.state.user = {
       id: "u1",
-      email: "pro@screenpipe.test",
+      email: "max@screenpipe.test",
       token: "tok",
       cloud_subscribed: true,
-      subscription_plan: "pro",
+      subscription_plan: "pro_max",
     };
 
     render(<AccountSection />);
-    expect(screen.queryByTestId("account-capacity-upgrade")).not.toBeInTheDocument();
+    const max = screen.getByTestId("account-plan-pro_max");
+    expect(max).toHaveAttribute("data-current", "true");
+    expect(within(max).getByText("$100")).toBeInTheDocument();
+    expect(within(max).getByText("your plan")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("account-plan-pro"),
+    ).not.toHaveAttribute("data-current");
   });
 
-  it("routes Max to Ultra and never promotes Ultra or org plans", () => {
-    vi.stubEnv("NEXT_PUBLIC_BUSINESS_POWER_PLANS_ENABLED", "true");
-    mocks.state.user = { id: "u1", email: "max@screenpipe.test", token: "tok", cloud_subscribed: true, subscription_plan: "pro_max" };
+  it("routes Max to Ultra and recommends nothing above Ultra or off-ladder", () => {
+    mocks.state.user = {
+      id: "u1",
+      email: "max@screenpipe.test",
+      token: "tok",
+      cloud_subscribed: true,
+      subscription_plan: "pro_max",
+    };
 
     const { rerender } = render(<AccountSection />);
-    fireEvent.click(screen.getByTestId("account-capacity-upgrade-button"));
+    fireEvent.click(screen.getByTestId("account-plan-choose-pro_ultra"));
     expect(mocks.openUrl).toHaveBeenLastCalledWith(
       "https://screenpipe.com/account/billing?target_plan=pro_ultra&interval=month",
     );
@@ -240,7 +264,9 @@ describe("AccountSection subscription/login gating", () => {
     for (const plan of ["pro_ultra", "team", "enterprise"]) {
       mocks.state.user = { ...mocks.state.user, subscription_plan: plan };
       rerender(<AccountSection />);
-      expect(screen.queryByTestId("account-capacity-upgrade")).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("account-plan-next-step"),
+      ).not.toBeInTheDocument();
     }
   });
 

@@ -753,27 +753,53 @@ const TOOLS = [
 // ---------------------------------------------------------------------------
 
 // Engine accepts ISO 8601, "Nh/Nd/Nw ago", and "now"; models also send
-// "today"/"yesterday"/bare dates, which would 400. Normalize like the core
-// server so a recap prompt's time range never bounces.
-function normalizeTime(input) {
+// calendar words and bare dates. Resolve those against this process's LOCAL
+// calendar, then send absolute UTC instants that older engines also accept.
+function localCalendarDayStartIso(reference, dayOffset = 0) {
+  return new Date(
+    reference.getFullYear(),
+    reference.getMonth(),
+    reference.getDate() + dayOffset,
+  ).toISOString().replace(".000Z", "Z");
+}
+
+function bareLocalDateStartIso(input) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(input);
+  if (!match) return undefined;
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const midnight = new Date(year, month, day);
+  if (
+    midnight.getFullYear() !== year ||
+    midnight.getMonth() !== month ||
+    midnight.getDate() !== day
+  ) {
+    return `${input}T00:00:00Z`;
+  }
+  return midnight.toISOString().replace(".000Z", "Z");
+}
+
+function normalizeTime(input, now = new Date()) {
   if (typeof input !== "string") return input;
   const s = input.trim();
   if (!s) return input;
   const lower = s.toLowerCase();
-  if (lower === "yesterday") return "1d ago";
-  if (lower === "today") return `${new Date().toISOString().slice(0, 10)}T00:00:00Z`;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s}T00:00:00Z`;
-  return s;
+  if (lower === "yesterday") return localCalendarDayStartIso(now, -1);
+  if (lower === "today") return localCalendarDayStartIso(now);
+  if (lower === "tomorrow") return localCalendarDayStartIso(now, 1);
+  return bareLocalDateStartIso(s) ?? s;
 }
 
 // Build a query string from whitelisted keys, skipping empty values and
 // normalizing the time fields. Returns "" or "?a=1&b=2".
 function queryString(args, keys) {
   const params = new URLSearchParams();
+  const now = new Date();
   for (const key of keys) {
     let value = args?.[key];
     if (value === null || value === undefined || value === "") continue;
-    if (key === "start_time" || key === "end_time") value = normalizeTime(value);
+    if (key === "start_time" || key === "end_time") value = normalizeTime(value, now);
     params.append(key, String(value));
   }
   const s = params.toString();
@@ -807,8 +833,8 @@ const HTTP_PARITY_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        start_time: { type: "string", description: "ISO 8601 UTC or relative (e.g. '3h ago', '16h ago')" },
-        end_time: { type: "string", description: "ISO 8601 UTC or relative (e.g. 'now')" },
+        start_time: { type: "string", description: "ISO 8601, relative (e.g. '3h ago'), or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
+        end_time: { type: "string", description: "ISO 8601, relative (e.g. 'now'), or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
         app_name: { type: "string", description: "Optional app name filter to focus on one app" },
       },
       required: ["start_time", "end_time"],
@@ -829,8 +855,8 @@ const HTTP_PARITY_TOOLS = [
       type: "object",
       properties: {
         q: { type: "string", description: "Keyword query (FTS5 syntax: quoted phrases, AND/OR, prefix*)" },
-        start_time: { type: "string", description: "ISO 8601 UTC or relative" },
-        end_time: { type: "string", description: "ISO 8601 UTC or relative" },
+        start_time: { type: "string", description: "ISO 8601, relative, or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
+        end_time: { type: "string", description: "ISO 8601, relative, or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
         app_name: { type: "string", description: "Filter by exact app name (case-sensitive)" },
         limit: { type: "integer", description: "Max results (default 20)" },
         offset: { type: "integer", description: "Pagination offset" },
@@ -847,8 +873,9 @@ const HTTP_PARITY_TOOLS = [
       if (!q) return JSON.stringify({ error: "q is required" });
       const params = new URLSearchParams();
       params.append("query", q);
-      const start = normalizeTime(args?.start_time);
-      const end = normalizeTime(args?.end_time);
+      const now = new Date();
+      const start = normalizeTime(args?.start_time, now);
+      const end = normalizeTime(args?.end_time, now);
       if (start) params.append("start_time", String(start));
       if (end) params.append("end_time", String(end));
       if (args?.app_name) params.append("app_names", String(args.app_name));
@@ -871,8 +898,8 @@ const HTTP_PARITY_TOOLS = [
         frame_id: { type: "integer", description: "Filter to a specific frame ID" },
         source: { type: "string", enum: ["accessibility", "ocr"], description: "Element source; 'accessibility' preferred" },
         role: { type: "string", description: "Element role filter (e.g. 'AXButton', 'AXLink', 'AXTextField')" },
-        start_time: { type: "string", description: "ISO 8601 UTC or relative" },
-        end_time: { type: "string", description: "ISO 8601 UTC or relative" },
+        start_time: { type: "string", description: "ISO 8601, relative, or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
+        end_time: { type: "string", description: "ISO 8601, relative, or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
         app_name: { type: "string", description: "Filter by app name" },
         purpose: { type: "string", enum: ["read", "automation"], description: "read = compact outline; automation = fresh refs + actions" },
         limit: { type: "integer", description: "Max results (default 50). Start with 10-20." },
@@ -928,8 +955,8 @@ const HTTP_PARITY_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        start_time: { type: "string", description: "ISO 8601 UTC or relative. Omit when searching by q." },
-        end_time: { type: "string", description: "ISO 8601 UTC or relative" },
+        start_time: { type: "string", description: "ISO 8601, relative, or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD'). Omit when searching by q." },
+        end_time: { type: "string", description: "ISO 8601, relative, or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
         q: { type: "string", description: "Case-insensitive substring filter on title, attendees, and note" },
         limit: { type: "integer", description: "Max results (default 20)" },
         offset: { type: "integer", description: "Pagination offset" },

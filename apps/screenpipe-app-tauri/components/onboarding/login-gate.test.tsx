@@ -83,6 +83,40 @@ beforeEach(() => {
 afterEach(() => vi.clearAllTimers());
 
 describe("onboarding login gate", () => {
+  // The permissions step auto-advances on non-mac, so this slide is the only
+  // place Windows and Linux users are ever told where their recordings live.
+  // It must not become mac-specific or platform-gated.
+  it("tells every platform that recordings are stored locally", () => {
+    mocks.settings = { user: {} };
+    render(<OnboardingLogin handleNextSlide={vi.fn()} />);
+    const locality = screen.getByTestId("login-locality");
+    expect(locality).toHaveTextContent(
+      "your recordings are stored on this computer",
+    );
+    // Device-neutral: naming one OS would exclude the platforms that only
+    // ever see this slide.
+    expect(locality.textContent ?? "").not.toMatch(/\bmac\b/i);
+  });
+
+  // Same reach argument as the locality line: permissions is mac-only, so
+  // without this the off switch is invisible to Windows and Linux until after
+  // they have already granted screen and mic.
+  it("tells every platform that recording can be paused", () => {
+    mocks.settings = { user: {} };
+    render(<OnboardingLogin handleNextSlide={vi.fn()} />);
+    // One line, not a second stacked note: three muted lines under the CTA
+    // read as noise. The locality assertion above covers the same element.
+    const locality = screen.getByTestId("login-locality");
+    expect(locality).toHaveTextContent("pause anytime");
+    // Device-neutral, and no keystroke: the pause shortcut is user-editable
+    // and can be disabled outright, so a printed chord would go stale on the
+    // user's own machine.
+    expect(locality.textContent ?? "").not.toMatch(
+      /\bmac\b|menu bar|system tray/i,
+    );
+    expect(locality.textContent ?? "").not.toMatch(/⌘|ctrl|alt|super/i);
+  });
+
   it("advances once when signed in AND entitled", async () => {
     mocks.settings = { user: { token: "t1", email: "maribel@bungalow.com" } };
     mocks.hasAppEntitlement.mockReturnValue(true);
@@ -207,6 +241,31 @@ describe("onboarding login gate", () => {
     expect(screen.getByText(/^get started$/i)).toBeInTheDocument();
   });
 
+  it("makes the consumer get-started action primary and shows a direction icon", () => {
+    mocks.settings = { user: null };
+    mocks.hasAppEntitlement.mockReturnValue(false);
+
+    render(<OnboardingLogin handleNextSlide={vi.fn()} />);
+
+    expect(screen.getByTestId("login-cta")).toHaveClass(
+      "bg-primary",
+      "text-primary-foreground",
+    );
+    expect(screen.getByTestId("login-cta-icon")).toBeInTheDocument();
+  });
+
+  it("opens account creation directly for consumer onboarding", async () => {
+    mocks.settings = { user: null };
+    mocks.openLoginWindow.mockResolvedValue({ status: "ok", data: "" });
+
+    render(<OnboardingLogin handleNextSlide={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("login-cta"));
+
+    await waitFor(() =>
+      expect(mocks.openLoginWindow).toHaveBeenCalledWith(null, "sign-up"),
+    );
+  });
+
   // Everyone reaching this slide on a consumer build is a fresh install with
   // no account. Labelling the only affordance "sign in" tells them the app is
   // for people who already have one, and nothing on the slide offered to
@@ -236,6 +295,18 @@ describe("onboarding login gate", () => {
     expect(screen.getByText(/^sign in$/i)).toBeInTheDocument();
     expect(screen.queryByText(/^get started$/i)).toBeNull();
     expect(screen.queryByText(/create a free account/i)).toBeNull();
+  });
+
+  it("opens sign in directly for managed enterprise onboarding", async () => {
+    mocks.settings = { user: null };
+    mocks.openLoginWindow.mockResolvedValue({ status: "ok", data: "" });
+
+    render(<OnboardingLogin handleNextSlide={vi.fn()} suppressAutoAdvance />);
+    fireEvent.click(screen.getByTestId("login-cta"));
+
+    await waitFor(() =>
+      expect(mocks.openLoginWindow).toHaveBeenCalledWith(null, "sign-in"),
+    );
   });
 
   it("labels sign-in as the enterprise-account option during enterprise onboarding", () => {
@@ -314,7 +385,7 @@ describe("onboarding login gate", () => {
 
     // `true` requests the isolated-profile WebView, the one path that still
     // works when the default browser is unusable.
-    expect(mocks.openLoginWindow).toHaveBeenCalledWith(true);
+    expect(mocks.openLoginWindow).toHaveBeenCalledWith(true, "sign-up");
     expect(mocks.capture).toHaveBeenCalledWith(
       "onboarding_login_webview_fallback_clicked",
     );
@@ -358,6 +429,6 @@ describe("onboarding login gate", () => {
     await waitFor(() =>
       expect(screen.queryByTestId("login-browser-failure")).toBeNull(),
     );
-    expect(mocks.openLoginWindow).toHaveBeenCalledWith(null);
+    expect(mocks.openLoginWindow).toHaveBeenCalledWith(null, "sign-up");
   });
 });

@@ -54,33 +54,42 @@ const FILES_W = { since: SEEDED_WINDOW.since };
 export const cases: Case[] = [
   // ── /devices ─────────────────────────────────────────────────────────────
   {
-    id: "devices: both seeded devices, newest first",
+    id: "devices: legacy shape and last-seen order remain unchanged",
     path: "/api/enterprise/v1/devices",
     expectStatus: 200,
     expect: (b) => {
       if (b.count !== EXPECTED.devices) throw new Error(`count=${b.count}`);
-      if (b.devices.length !== b.count) throw new Error("count disagrees with devices.length");
+      if (b.devices.length !== b.count)
+        throw new Error("count disagrees with devices.length");
+      if ("next_cursor" in b)
+        throw new Error("legacy response grew next_cursor");
       const ids = b.devices.map((d: any) => d.device_id).sort();
-      if (JSON.stringify(ids) !== JSON.stringify([...EXPECTED.deviceIds].sort())) {
+      if (
+        JSON.stringify(ids) !== JSON.stringify([...EXPECTED.deviceIds].sort())
+      ) {
         throw new Error(`device_ids=${JSON.stringify(ids)}`);
       }
-      // Ordering is part of the contract: last_seen DESC on both, so bob (hour
-      // 10) precedes alice (hour 09) even though the two implementations derive
-      // last_seen from different sources (DEV-LIVENESS).
       if (b.devices[0].device_id !== "dev-bob") {
-        throw new Error(`expected dev-bob first, got ${b.devices[0].device_id}`);
+        throw new Error(
+          `expected dev-bob first, got ${b.devices[0].device_id}`,
+        );
       }
       // Labels come from the wire format on the gateway and from the
       // enterprise_devices row hosted; the fixtures make them agree.
-      const byId = Object.fromEntries(b.devices.map((d: any) => [d.device_id, d]));
-      if (byId["dev-alice"].label !== "alice-mbp") throw new Error("alice label");
-      if (byId["dev-bob"].label !== "bob-thinkpad") throw new Error("bob label");
+      const byId = Object.fromEntries(
+        b.devices.map((d: any) => [d.device_id, d]),
+      );
+      if (byId["dev-alice"].label !== "alice-mbp")
+        throw new Error("alice label");
+      if (byId["dev-bob"].label !== "bob-thinkpad")
+        throw new Error("bob label");
     },
     expectHosted: {
       why: "DEV-PLATFORM",
       assert: (b) => {
         const alice = b.devices.find((d: any) => d.device_id === "dev-alice");
-        if (alice.platform !== "macos") throw new Error(`platform=${alice.platform}`);
+        if (alice.platform !== "macos")
+          throw new Error(`platform=${alice.platform}`);
       },
     },
     expectGateway: {
@@ -88,10 +97,49 @@ export const cases: Case[] = [
       assert: (b) => {
         for (const d of b.devices) {
           if (d.platform !== null || d.app_version !== null) {
-            throw new Error(`gateway must report null platform/app_version, got ${JSON.stringify(d)}`);
+            throw new Error(
+              `gateway must report null platform/app_version, got ${JSON.stringify(d)}`,
+            );
           }
         }
       },
+    },
+  },
+  {
+    id: "devices: member email is hosted identity and nullable on the gateway",
+    path: "/api/enterprise/v1/devices",
+    expectStatus: 200,
+    expectHosted: {
+      why: "DEV-MEMBER-EMAIL",
+      assert: (b) => {
+        const alice = b.devices.find((d: any) => d.device_id === "dev-alice");
+        if (alice.member_email !== "alice@conformance.test") {
+          throw new Error(`member_email=${alice.member_email}`);
+        }
+      },
+    },
+    expectGateway: {
+      why: "DEV-MEMBER-EMAIL",
+      assert: (b) => {
+        for (const d of b.devices) {
+          if (d.member_email !== null) {
+            throw new Error(
+              `gateway must report null member_email, got ${JSON.stringify(d)}`,
+            );
+          }
+        }
+      },
+    },
+  },
+  {
+    id: "devices: limit=1 returns a continuation cursor",
+    path: "/api/enterprise/v1/devices",
+    query: { pagination: "keyset", limit: "1" },
+    expectStatus: 200,
+    expect: (b) => {
+      if (b.count !== 1) throw new Error(`limit ignored: ${b.count}`);
+      if (b.next_cursor === null)
+        throw new Error("second device was silently truncated");
     },
   },
 
@@ -103,10 +151,16 @@ export const cases: Case[] = [
     expectStatus: 200,
     expect: (b) => {
       if (b.query !== "roadmap") throw new Error(`query echoed as ${b.query}`);
-      if (b.result_count !== b.results.length) throw new Error("result_count disagrees");
-      if (b.result_count === 0) throw new Error("no results — the window or the corpus is wrong");
-      if (b.window_hours !== 24) throw new Error(`window_hours=${b.window_hours}`);
-      if (b.device_id !== null || b.app_name !== null) throw new Error("unfiltered echo");
+      if (b.result_count !== b.results.length)
+        throw new Error("result_count disagrees");
+      if ("next_cursor" in b)
+        throw new Error("legacy response grew next_cursor");
+      if (b.result_count === 0)
+        throw new Error("no results — the window or the corpus is wrong");
+      if (b.window_hours !== 24)
+        throw new Error(`window_hours=${b.window_hours}`);
+      if (b.device_id !== null || b.app_name !== null)
+        throw new Error("unfiltered echo");
       const devices = new Set<string>(b.results.map((r: any) => r.device_id));
       for (const id of EXPECTED.deviceIds) {
         if (!devices.has(id)) {
@@ -116,41 +170,61 @@ export const cases: Case[] = [
       const kinds = new Set<string>(b.results.map((r: any) => r.kind));
       for (const k of ["frame", "parsed", "audio", "memory"]) {
         if (!kinds.has(k)) {
-          throw new Error(`missing kind ${k} in ${Array.from(kinds).join(", ")}`);
+          throw new Error(
+            `missing kind ${k} in ${Array.from(kinds).join(", ")}`,
+          );
         }
       }
-      // Every result must be INSIDE the requested window on both targets, even
-      // though the two derive the window differently (objects vs. records).
+      // Every result must be INSIDE the requested window on both targets. The
+      // fixture includes an old record in an in-window hosted object so this
+      // assertion catches object-time-only filtering.
       for (const r of b.results) {
         if (!(r.t >= "2026-07-22" && r.t <= "2026-07-23")) {
           throw new Error(`result outside the window: ${r.t}`);
         }
       }
+      const ts = b.results.map((r: any) => r.t);
+      if (JSON.stringify(ts) !== JSON.stringify([...ts].sort().reverse())) {
+        throw new Error(
+          `search results must be newest-first: ${JSON.stringify(ts)}`,
+        );
+      }
     },
     expectHosted: {
       why: "SEARCH-ALGORITHM",
       assert: (b) => {
-        if (b.bytes_scanned <= 0) throw new Error("hosted must report a real byte count");
-        if (b.objects_scanned <= 0) throw new Error("hosted must report scanned objects");
+        if (b.bytes_scanned <= 0)
+          throw new Error("hosted must report a real byte count");
+        if (b.objects_scanned <= 0)
+          throw new Error("hosted must report scanned objects");
       },
     },
     expectGateway: {
       why: "SEARCH-ALGORITHM",
       assert: (b) => {
-        if (b.bytes_scanned !== 0 || b.objects_scanned !== 0 || b.truncated !== false) {
+        if (
+          b.bytes_scanned !== 0 ||
+          b.objects_scanned !== 0 ||
+          b.truncated !== false
+        ) {
           throw new Error(
             "the gateway has no byte-budget scan to describe, so these must be " +
-              `honestly 0/0/false — got ${b.bytes_scanned}/${b.objects_scanned}/${b.truncated}`
+              `honestly 0/0/false — got ${b.bytes_scanned}/${b.objects_scanned}/${b.truncated}`,
           );
         }
-        // The gateway sorts results newest-first and the hosted API does not
-        // (SEARCH-ORDER). Pinned here so the gateway's guarantee, which is the
-        // stronger of the two, cannot silently regress.
-        const ts = b.results.map((r: any) => r.t);
-        if (JSON.stringify(ts) !== JSON.stringify([...ts].sort().reverse())) {
-          throw new Error(`the gateway must sort newest-first: ${JSON.stringify(ts)}`);
-        }
       },
+    },
+  },
+  {
+    id: "search: limit=1 returns a continuation cursor",
+    path: "/api/enterprise/v1/search",
+    query: { q: "roadmap", ...W, pagination: "keyset", limit: "1" },
+    expectStatus: 200,
+    expect: (b) => {
+      if (b.result_count !== 1)
+        throw new Error(`limit ignored: ${b.result_count}`);
+      if (b.next_cursor === null)
+        throw new Error("matching records were silently truncated");
     },
   },
   {
@@ -160,9 +234,11 @@ export const cases: Case[] = [
     expectStatus: 200,
     expect: (b) => {
       if (b.device_id !== "dev-alice") throw new Error(`echo=${b.device_id}`);
-      if (b.result_count === 0) throw new Error("device filter returned nothing");
+      if (b.result_count === 0)
+        throw new Error("device filter returned nothing");
       for (const r of b.results) {
-        if (r.device_id !== "dev-alice") throw new Error(`leaked ${r.device_id}`);
+        if (r.device_id !== "dev-alice")
+          throw new Error(`leaked ${r.device_id}`);
       }
     },
   },
@@ -172,7 +248,8 @@ export const cases: Case[] = [
     query: { q: "roadmap", since: "2020-01-01", until: "2020-01-02" },
     expectStatus: 200,
     expect: (b) => {
-      if (b.result_count !== 0 || b.results.length !== 0) throw new Error("expected empty");
+      if (b.result_count !== 0 || b.results.length !== 0)
+        throw new Error("expected empty");
     },
   },
   {
@@ -183,10 +260,11 @@ export const cases: Case[] = [
     expect: (b) => {
       if (b.window_hours !== 24) {
         throw new Error(
-          `a bare date must be UTC midnight on both, giving a 24h window; got ${b.window_hours}`
+          `a bare date must be UTC midnight on both, giving a 24h window; got ${b.window_hours}`,
         );
       }
-      if (b.result_count === 0) throw new Error("the July-22 window must contain the corpus");
+      if (b.result_count === 0)
+        throw new Error("the July-22 window must contain the corpus");
     },
   },
   {
@@ -216,13 +294,20 @@ export const cases: Case[] = [
     expectStatus: 200,
     expect: (b) => {
       if (b.kind !== "all") throw new Error(`kind echoed as ${b.kind}`);
-      if (b.record_count !== b.records.length) throw new Error("record_count disagrees");
+      if (b.record_count !== b.records.length)
+        throw new Error("record_count disagrees");
       if (b.record_count !== EXPECTED.recordsAllKinds) {
-        throw new Error(`expected ${EXPECTED.recordsAllKinds} records, got ${b.record_count}`);
+        throw new Error(
+          `expected ${EXPECTED.recordsAllKinds} records, got ${b.record_count}`,
+        );
       }
+      if ("next_cursor" in b)
+        throw new Error("legacy response grew next_cursor");
       const ts = b.records.map((r: any) => r.t);
       if (JSON.stringify(ts) !== JSON.stringify([...ts].sort())) {
-        throw new Error(`records must be ascending by t: ${JSON.stringify(ts)}`);
+        throw new Error(
+          `records must be ascending by t: ${JSON.stringify(ts)}`,
+        );
       }
     },
   },
@@ -232,7 +317,8 @@ export const cases: Case[] = [
     query: { kind: "memory", ...W },
     expectStatus: 200,
     expect: (b) => {
-      if (b.record_count !== EXPECTED.memories) throw new Error(`count=${b.record_count}`);
+      if (b.record_count !== EXPECTED.memories)
+        throw new Error(`count=${b.record_count}`);
       for (const r of b.records) {
         if (r.kind !== "memory") throw new Error(`leaked kind ${r.kind}`);
         if (!r.content?.includes("gateway ships this quarter")) {
@@ -240,7 +326,9 @@ export const cases: Case[] = [
         }
         if (r.memory_id !== 1) throw new Error(`memory_id=${r.memory_id}`);
         if (r.importance !== 0.8) throw new Error(`importance=${r.importance}`);
-        if (JSON.stringify(r.tags) !== JSON.stringify(["decision", "roadmap"])) {
+        if (
+          JSON.stringify(r.tags) !== JSON.stringify(["decision", "roadmap"])
+        ) {
           throw new Error(`tags=${JSON.stringify(r.tags)}`);
         }
       }
@@ -253,7 +341,8 @@ export const cases: Case[] = [
     expectStatus: 200,
     expect: (b) => {
       if (b.kind !== "parsed") throw new Error(`kind=${b.kind}`);
-      if (b.record_count !== EXPECTED.parsed) throw new Error(`count=${b.record_count}`);
+      if (b.record_count !== EXPECTED.parsed)
+        throw new Error(`count=${b.record_count}`);
       for (const r of b.records) {
         if (r.kind !== "parsed") throw new Error(`leaked kind ${r.kind}`);
         if (r.app !== "Slack" || !r.text?.includes("structured update")) {
@@ -268,8 +357,10 @@ export const cases: Case[] = [
     query: { kind: "nonsense", ...W },
     expectStatus: 200,
     expect: (b) => {
-      if (b.kind !== "nonsense") throw new Error("the kind must still be echoed");
-      if (b.record_count !== 0) throw new Error(`expected empty, got ${b.record_count}`);
+      if (b.kind !== "nonsense")
+        throw new Error("the kind must still be echoed");
+      if (b.record_count !== 0)
+        throw new Error(`expected empty, got ${b.record_count}`);
     },
   },
   {
@@ -281,16 +372,20 @@ export const cases: Case[] = [
     // It is a case anyway because it pins the SHAPE of the empty answer, which
     // is what a consumer of the documented divergence relies on.
     expect: (b) => {
-      if (b.record_count !== 0) throw new Error(`expected empty, got ${b.record_count}`);
+      if (b.record_count !== 0)
+        throw new Error(`expected empty, got ${b.record_count}`);
     },
   },
   {
     id: "records: limit is respected",
     path: "/api/enterprise/v1/records",
-    query: { ...W, limit: "3" },
+    query: { ...W, pagination: "keyset", limit: "3" },
     expectStatus: 200,
     expect: (b) => {
-      if (b.record_count !== 3) throw new Error(`limit ignored: ${b.record_count}`);
+      if (b.record_count !== 3)
+        throw new Error(`limit ignored: ${b.record_count}`);
+      if (b.next_cursor === null)
+        throw new Error("remaining records were silently truncated");
     },
   },
 
@@ -301,8 +396,10 @@ export const cases: Case[] = [
     query: FILES_W,
     expectStatus: 200,
     expect: (b) => {
-      if (b.count !== b.files.length) throw new Error("count disagrees with files.length");
-      if (b.count !== EXPECTED.batchObjects) throw new Error(`count=${b.count}`);
+      if (b.count !== b.files.length)
+        throw new Error("count disagrees with files.length");
+      if (b.count !== EXPECTED.batchObjects)
+        throw new Error(`count=${b.count}`);
       for (const f of b.files) {
         if (!f.key.startsWith(`enterprise-telemetry/${LICENSE_ID}/`)) {
           throw new Error(`key escapes the org prefix: ${f.key}`);
@@ -320,7 +417,8 @@ export const cases: Case[] = [
     expectStatus: 200,
     expect: (b) => {
       if (b.count !== 1) throw new Error(`page_size ignored: ${b.count}`);
-      if (b.next_cursor === null) throw new Error("more objects exist, so next_cursor must be set");
+      if (b.next_cursor === null)
+        throw new Error("more objects exist, so next_cursor must be set");
     },
   },
   {
@@ -330,7 +428,8 @@ export const cases: Case[] = [
     expectStatus: 200,
     expect: (b) => {
       // This is THE case: 1 item hosted, 100 on the gateway, before the fix.
-      if (b.count !== 1) throw new Error(`expected the clamp to 1, got ${b.count}`);
+      if (b.count !== 1)
+        throw new Error(`expected the clamp to 1, got ${b.count}`);
     },
   },
   {
@@ -349,7 +448,8 @@ export const cases: Case[] = [
     expectStatus: 200,
     expect: (b) => {
       if (b.device_id !== "dev-alice") throw new Error(`echo=${b.device_id}`);
-      if (b.count !== 1) throw new Error(`expected 1 alice object, got ${b.count}`);
+      if (b.count !== 1)
+        throw new Error(`expected 1 alice object, got ${b.count}`);
       if (b.files[0].device_id !== "dev-alice") throw new Error("wrong device");
     },
   },
@@ -396,10 +496,16 @@ export const cases: Case[] = [
       if (b.device !== "org") throw new Error(`device=${b.device}`);
       if (b.count !== b.rollups.length) throw new Error("count disagrees");
       if (b.count !== EXPECTED.rollups) throw new Error(`count=${b.count}`);
+      if ("next_cursor" in b)
+        throw new Error("legacy response grew next_cursor");
       const r = b.rollups[0];
       if (r.day !== "2026-07-22") throw new Error(`day=${r.day}`);
-      if (r.data.records !== 12) throw new Error(`data passed through wrong: ${JSON.stringify(r.data)}`);
-      if (JSON.stringify(r.data.devices) !== JSON.stringify(["dev-alice", "dev-bob"])) {
+      if (r.data.records !== 12)
+        throw new Error(`data passed through wrong: ${JSON.stringify(r.data)}`);
+      if (
+        JSON.stringify(r.data.devices) !==
+        JSON.stringify(["dev-alice", "dev-bob"])
+      ) {
         throw new Error(`data.devices=${JSON.stringify(r.data.devices)}`);
       }
     },
@@ -411,7 +517,8 @@ export const cases: Case[] = [
     expectStatus: 200,
     expect: (b) => {
       if (b.count !== 0) throw new Error(`expected empty, got ${b.count}`);
-      if (b.from !== "2020-01-01" || b.to !== "2020-01-02") throw new Error("bounds not echoed");
+      if (b.from !== "2020-01-01" || b.to !== "2020-01-02")
+        throw new Error("bounds not echoed");
     },
   },
   {
@@ -425,7 +532,8 @@ export const cases: Case[] = [
       // because the intuitive expectation ("dev___etc") is wrong, and because a
       // surviving ".." only fails to be traversal since the value is a storage
       // key prefix rather than a filesystem path.
-      if (b.device !== "dev_.._etc") throw new Error(`sanitized to ${b.device}`);
+      if (b.device !== "dev_.._etc")
+        throw new Error(`sanitized to ${b.device}`);
     },
   },
   {
@@ -447,7 +555,8 @@ export const cases: Case[] = [
     expectStatus: 200,
     expect: (b) => {
       if (b.kind !== "sop") throw new Error(`kind=${b.kind}`);
-      if (b.count !== b.entries.length) throw new Error("count disagrees with entries");
+      if (b.count !== b.entries.length)
+        throw new Error("count disagrees with entries");
       if (b.count !== 1) throw new Error(`count=${b.count}`);
     },
   },
@@ -458,7 +567,8 @@ export const cases: Case[] = [
     targets: ["hosted"],
     expectStatus: 400,
     expect: (b) => {
-      if (!b.error?.includes("invalid kind")) throw new Error(`error=${b.error}`);
+      if (!b.error?.includes("invalid kind"))
+        throw new Error(`error=${b.error}`);
       // Every v1 400 carries a machine code. This one did not until the spec
       // declared BadRequest for it and the suite refused to validate the body —
       // which is the whole point of writing the contract down first.

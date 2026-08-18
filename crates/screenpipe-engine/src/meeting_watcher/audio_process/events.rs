@@ -5,56 +5,13 @@
 
 use super::*;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct CalendarEventSignal {
-    pub title: String,
-    pub start: String,
-    pub end: String,
-    #[serde(default)]
-    pub attendees: Vec<String>,
-    #[serde(default)]
-    pub is_all_day: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct MeetingAutoEndRequest {
-    pub(crate) meeting_id: i64,
-    #[serde(default)]
-    pub(crate) reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct DetectorStopSignal {
-    pub meeting_id: i64,
-    pub app: String,
-}
-
-pub(crate) fn find_overlapping_calendar_event(
-    events: &[CalendarEventSignal],
-) -> (Option<String>, Option<Vec<String>>) {
-    let now = Utc::now();
-    for cal_event in events {
-        if let (Ok(start), Ok(end)) = (
-            DateTime::parse_from_rfc3339(&cal_event.start),
-            DateTime::parse_from_rfc3339(&cal_event.end),
-        ) {
-            let start_utc = start.with_timezone(&Utc);
-            let end_utc = end.with_timezone(&Utc);
-            if start_utc <= now && end_utc >= now {
-                return (
-                    Some(cal_event.title.clone()),
-                    if cal_event.attendees.is_empty() {
-                        None
-                    } else {
-                        Some(cal_event.attendees.clone())
-                    },
-                );
-            }
-        }
-    }
-    (None, None)
-}
+// These signals and the calendar matcher are shared with the ui_scan watcher.
+// They used to be duplicated here, and the two copies drifting is how a single
+// calendar event ended up owning two meetings — keep exactly one definition.
+pub(crate) use crate::meeting_watcher::shared::calendar::{
+    resolve_calendar_binding, CalendarBinding, CalendarEventSignal, DetectorStopSignal,
+    MeetingAutoEndRequest,
+};
 
 /// Apply an explicit `detector_stop_tracking` signal: when it targets the live
 /// meeting, suppress that session and move the detector to idle.

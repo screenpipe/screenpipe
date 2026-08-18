@@ -56,8 +56,6 @@ pub struct ServerCore {
     /// Local API auth key — exposed to the frontend via Tauri command so
     /// localFetch can inject it synchronously (no async store race).
     pub local_api_key: Option<String>,
-    /// Runtime free-plan retention guard shared with the local HTTP API.
-    pub enforce_free_plan_retention: Arc<std::sync::atomic::AtomicBool>,
     /// Shutdown signal for the redaction reconciliation workers. Fired
     /// from `shutdown()` so the workers exit before the tokio runtime
     /// tears down — otherwise their in-flight sqlx queries (which use
@@ -214,7 +212,7 @@ async fn identify_port_holder(port: u16) -> Option<String> {
         // netstat -ano → parse lines matching our exact port in LISTENING state.
         // We filter in Rust rather than piping through findstr because
         // `findstr :<port>` matches substrings (e.g. :3030 matches :30300).
-        let mut netstat = tokio::process::Command::new("netstat");
+        let mut netstat = screenpipe_core::no_window_command_async("netstat");
         netstat.args(["-ano"]).kill_on_drop(true);
         let output = tokio::time::timeout(PORT_HOLDER_LOOKUP_TIMEOUT, netstat.output())
             .await
@@ -224,7 +222,7 @@ async fn identify_port_holder(port: u16) -> Option<String> {
         let pid = parse_windows_listener_pid(&stdout, port)?;
 
         let pid_filter = format!("PID eq {}", pid);
-        let mut tasklist = tokio::process::Command::new("tasklist");
+        let mut tasklist = screenpipe_core::no_window_command_async("tasklist");
         tasklist
             .args(["/FI", pid_filter.as_str(), "/FO", "CSV", "/NH"])
             .kill_on_drop(true);
@@ -552,11 +550,6 @@ impl ServerCore {
         server.manual_meeting = Some(manual_meeting.clone());
         server.api_auth = config.api_auth;
         server.api_auth_key = config.api_auth_key.clone();
-        server.enforce_free_plan_retention.store(
-            config.enforce_free_plan_retention,
-            std::sync::atomic::Ordering::SeqCst,
-        );
-        let enforce_free_plan_retention = server.enforce_free_plan_retention.clone();
         // Cloud JWT for /v1/chat/completions proxy. config.user_id carries
         // the Clerk JWT (despite the name — see line 96 where the same value
         // is used as the cloud transcription bearer). Pi's bash deliberately
@@ -1370,7 +1363,6 @@ impl ServerCore {
             data_path,
             port: config.port,
             local_api_key: config.api_auth_key.clone(),
-            enforce_free_plan_retention,
             redact_shutdown,
             oauth_refresher: oauth_refresher_handle,
             external_memory_sync: external_memory_sync_handle,

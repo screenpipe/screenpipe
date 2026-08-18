@@ -31,8 +31,32 @@ for Rust/TS/JS/Swift, `#` for Python:
 
 ## Tooling
 
-`bun` for JS/TS, never npm or pnpm. `cargo` for Rust. `bun test`, `cargo test`.
-Check CI after pushing.
+`bun` for JS/TS, never npm or pnpm. `cargo` for Rust. Check CI after pushing.
+
+Scope test runs; the workspace is ~490k lines. `cargo test -p <crate>`, or
+`cargo test --workspace --exclude screenpipe-rfdetr-mlx` as CI does. Frontend is
+`cd apps/screenpipe-app-tauri && bun run test`.
+
+`src-tauri` is excluded from the workspace and has no CI test job, so root
+`cargo test` never compiles it. Test it explicitly with `--manifest-path`, after
+`bun scripts/pre_build.js` (its `build.rs` panics without the sidecars). That
+build also rewrites tracked `src-tauri/gen/schemas/`; `git checkout --` it.
+
+## Hot paths
+
+Capture and encode per frame (`screenpipe-screen`, `-capture`, `-a11y`), audio
+device callbacks (`screenpipe-audio`), and SQLite writes (`screenpipe-db` via
+`-sqlite-coordinator`) run continuously on every user's machine. No per-frame
+allocation, no blocking a callback, no second DB writer. A regression there is a
+battery or data-loss bug; say so in the PR and measure it. Each crate's `//!`
+header has the specifics.
+
+## Specs in docs/
+
+Trust the banner under the title, not the prose: several specs are hundreds of
+commits stale. Specs declare `<!-- doc-covers: ... -->` and `<!-- doc-verified:
+<sha> -->`; `bun scripts/check-doc-freshness.ts` scores drift and CI requires
+both markers.
 
 ## Testing
 

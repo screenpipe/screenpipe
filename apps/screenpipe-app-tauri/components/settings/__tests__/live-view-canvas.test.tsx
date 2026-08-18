@@ -653,12 +653,18 @@ describe("LiveViewCanvas", () => {
       expect(eventMocks.listeners.has("native-magnify")).toBe(true),
     );
 
+    // AppKit's magnification delta means "scale by 1 + delta". A single
+    // trackpad frame must move the canvas by that much and no more.
     act(() => {
       eventMocks.listeners.get("native-magnify")?.({ payload: 0.1 });
     });
-    expect(screen.getByText("165%")).toBeTruthy();
+    expect(screen.getByText("110%")).toBeTruthy();
     act(() => {
       eventMocks.listeners.get("native-magnify")?.({ payload: -0.1 });
+    });
+    expect(screen.getByText("99%")).toBeTruthy();
+    act(() => {
+      eventMocks.listeners.get("native-magnify")?.({ payload: 1 / 0.99 - 1 });
     });
     expect(screen.getByText("100%")).toBeTruthy();
 
@@ -714,7 +720,112 @@ describe("LiveViewCanvas", () => {
     });
 
     expect(cancelAnimationFrame).toHaveBeenCalledWith(77);
-    expect(screen.getByText("165%")).toBeTruthy();
+    expect(screen.getByText("110%")).toBeTruthy();
+  });
+
+  it("keeps a realistic pinch burst inside the usable zoom range", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    render(<CanvasHarness />);
+    const surface = screen.getByTestId("live-view-canvas-surface");
+    fireEvent.pointerEnter(surface, { clientX: 500, clientY: 350 });
+    openCanvasTools();
+    await waitFor(() =>
+      expect(eventMocks.listeners.has("native-magnify")).toBe(true),
+    );
+
+    // macOS delivers a magnify callback per displayed frame. Twelve frames of
+    // an ordinary pinch used to compound to the 250% ceiling under
+    // Math.exp(m * 5); the gesture must stay controllable instead.
+    act(() => {
+      for (let frame = 0; frame < 12; frame += 1) {
+        eventMocks.listeners.get("native-magnify")?.({ payload: 0.02 });
+      }
+    });
+    expect(screen.queryByText("250%")).toBeNull();
+    expect(screen.getByText("127%")).toBeTruthy();
+
+    // And the same fingers reversing bring it back down, not to the floor.
+    act(() => {
+      for (let frame = 0; frame < 12; frame += 1) {
+        eventMocks.listeners.get("native-magnify")?.({ payload: -0.02 });
+      }
+    });
+    expect(screen.queryByText("25%")).toBeNull();
+    expect(screen.getByText("100%")).toBeTruthy();
+  });
+
+  it("stops browser pinch zoom once native magnify owns the gesture", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    render(<CanvasHarness />);
+    const surface = screen.getByTestId("live-view-canvas-surface");
+    const pane = surface.querySelector<HTMLElement>(".react-flow__pane");
+    expect(pane).toBeTruthy();
+    fireEvent.pointerEnter(surface, { clientX: 500, clientY: 350 });
+    openCanvasTools();
+    await waitFor(() =>
+      expect(eventMocks.listeners.has("native-magnify")).toBe(true),
+    );
+
+    // Before the recognizer speaks up, WebKit's synthesized ctrl+wheel is the
+    // only pinch signal this canvas has, so React Flow must still zoom on it.
+    fireEvent.wheel(pane!, {
+      ctrlKey: true,
+      deltaY: -100,
+      clientX: 500,
+      clientY: 350,
+    });
+    expect(screen.queryByText("100%")).toBeNull();
+
+    act(() => {
+      eventMocks.listeners.get("native-magnify")?.({ payload: 0.1 });
+    });
+    const afterNativePinch = screen.getByTestId(
+      "canvas-zoom-reset",
+    ).textContent;
+
+    // One pinch, one zoom: the duplicate ctrl+wheel for those same fingers is
+    // swallowed instead of compounding on top of the native step.
+    fireEvent.wheel(pane!, {
+      ctrlKey: true,
+      deltaY: -100,
+      clientX: 500,
+      clientY: 350,
+    });
+    expect(screen.getByTestId("canvas-zoom-reset").textContent).toBe(
+      afterNativePinch,
+    );
+
+    // Plain two-finger scrolling still pans rather than being swallowed.
+    fireEvent.wheel(pane!, { deltaY: -100, clientX: 500, clientY: 350 });
+    expect(screen.getByTestId("canvas-zoom-reset").textContent).toBe(
+      afterNativePinch,
+    );
+  });
+
+  it("does not persist a pinch that is already pinned at a zoom limit", async () => {
+    const onPersist = vi.fn();
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    render(<CanvasHarness onPersist={onPersist} />);
+    const surface = screen.getByTestId("live-view-canvas-surface");
+    fireEvent.pointerEnter(surface, { clientX: 500, clientY: 350 });
+    openCanvasTools();
+    for (let index = 0; index < 20; index += 1) {
+      fireEvent.click(screen.getByLabelText("zoom out"));
+    }
+    expect(screen.getByText("25%")).toBeTruthy();
+    onPersist.mockClear();
+    await waitFor(() =>
+      expect(eventMocks.listeners.has("native-magnify")).toBe(true),
+    );
+
+    act(() => {
+      for (let frame = 0; frame < 5; frame += 1) {
+        eventMocks.listeners.get("native-magnify")?.({ payload: -0.05 });
+      }
+    });
+    expect(screen.getByText("25%")).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    expect(onPersist).not.toHaveBeenCalled();
   });
 
   it("ignores app-wide native pinches outside the focused canvas", async () => {

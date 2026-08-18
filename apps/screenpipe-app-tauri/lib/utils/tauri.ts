@@ -315,6 +315,21 @@ async copyFrameToClipboard(frameId: number) : Promise<Result<null, string>> {
 }
 },
 /**
+ * Copy rich text to the system clipboard: HTML plus a plain-text alternative
+ * on the same clipboard write. Pasting into Gmail, Notion, Slack, or Docs keeps
+ * headings, bold, and lists; plain-text targets get `text` instead. Used by the
+ * meeting summary share actions so a summary lands formatted, not as raw
+ * markdown.
+ */
+async copyRichTextToClipboard(html: string, text: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("copy_rich_text_to_clipboard", { html, text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Copy arbitrary text to the system clipboard (native API, works in Tauri webview).
  * Use this instead of navigator.clipboard.writeText() which fails after async operations.
  */
@@ -971,6 +986,17 @@ async listImportedSkills() : Promise<Result<ImportedSkill[], string>> {
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * List schedules owned by native agent harnesses without mutating them.
+ */
+async listProviderAutomations() : Promise<Result<ProviderAutomation[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_provider_automations") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async livetextAnalyze(imagePath: string, frameId: string, x: number, y: number, w: number, h: number) : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("livetext_analyze", { imagePath, frameId, x, y, w, h }) };
@@ -1078,6 +1104,31 @@ async lockSync() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async nativeTimelineClose() : Promise<boolean> {
+    return await TAURI_INVOKE("native_timeline_close");
+},
+async nativeTimelineHide() : Promise<boolean> {
+    return await TAURI_INVOKE("native_timeline_hide");
+},
+/**
+ * Whether the native timeline can be used on this platform and build.
+ */
+async nativeTimelineIsAvailable() : Promise<boolean> {
+    return await TAURI_INVOKE("native_timeline_is_available");
+},
+/**
+ * Move the native timeline's playhead. Prefers `frame_id` when both are given,
+ * matching the webview's deep-link precedence.
+ */
+async nativeTimelineNavigate(timestamp: string | null, frameId: string | null) : Promise<boolean> {
+    return await TAURI_INVOKE("native_timeline_navigate", { timestamp, frameId });
+},
+/**
+ * Open the native timeline window.
+ */
+async nativeTimelineShow(port: number, apiKey: string | null, embedded: boolean | null) : Promise<boolean> {
+    return await TAURI_INVOKE("native_timeline_show", { port, apiKey, embedded });
+},
 /**
  * Cancel any in-flight OAuth flow(s) for the given integration.
  * Dropping the stored sender makes the awaiting `oauth_connect` call fail fast
@@ -1169,9 +1220,9 @@ async openGoogleCalendarAuthWindow(authUrl: string) : Promise<Result<null, strin
  * taught onboarding to show one; every other login surface silently opened a
  * browser asking for a code nothing displayed.
  */
-async openLoginWindow(freshSession: boolean | null) : Promise<Result<string, string>> {
+async openLoginWindow(freshSession: boolean | null, authMode: LoginMode | null) : Promise<Result<string, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("open_login_window", { freshSession }) };
+    return { status: "ok", data: await TAURI_INVOKE("open_login_window", { freshSession, authMode }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1199,9 +1250,9 @@ async openPipeWindow(port: number, title: string) : Promise<Result<null, string>
     else return { status: "error", error: e  as any };
 }
 },
-async openSearchWindow(query: string | null) : Promise<Result<null, string>> {
+async openSearchWindow(query: string | null, timelineOrigin: string | null) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("open_search_window", { query }) };
+    return { status: "ok", data: await TAURI_INVOKE("open_search_window", { query, timelineOrigin }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1357,6 +1408,18 @@ async piAbortActive(sessionId: string | null) : Promise<Result<null, string>> {
  */
 async piAcpAgentDownloadPending(agentId: string) : Promise<boolean> {
     return await TAURI_INVOKE("pi_acp_agent_download_pending", { agentId });
+},
+/**
+ * Install a supported binary ACP agent after the user clicks Install, then
+ * return a fresh status so the UI only unblocks once the CLI is resolvable.
+ */
+async piAcpAgentInstall(agentId: string) : Promise<Result<AcpAgentInstallStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_acp_agent_install", { agentId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 async piAcpAgentInstallStatus(agentId: string) : Promise<AcpAgentInstallStatus> {
     return await TAURI_INVOKE("pi_acp_agent_install_status", { agentId });
@@ -2102,13 +2165,15 @@ async scanDeviceSkills() : Promise<Result<DeviceSkill[], string>> {
 }
 },
 /**
- * Navigate from Search to a timestamp on the Main timeline.
- * Shows Main, emits the navigation event from the app handle (not a webview),
- * then closes the Search window.
+ * Navigate from Search to the timeline that opened it.
+ *
+ * Native Swift timelines are addressed by their host-window label. Searches
+ * opened elsewhere retain the legacy React event so non-macOS and older
+ * surfaces continue to work.
  */
-async searchNavigateToTimeline(timestamp: string, frameId: number | null, searchTerms: string[] | null, searchResultsJson: string | null, searchQuery: string | null) : Promise<Result<null, string>> {
+async searchNavigateToTimeline(timestamp: string, frameId: number | null, searchTerms: string[] | null, searchResultsJson: string | null, searchQuery: string | null, timelineOrigin: string | null) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("search_navigate_to_timeline", { timestamp, frameId, searchTerms, searchResultsJson, searchQuery }) };
+    return { status: "ok", data: await TAURI_INVOKE("search_navigate_to_timeline", { timestamp, frameId, searchTerms, searchResultsJson, searchQuery, timelineOrigin }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2256,8 +2321,8 @@ async setEnhancedAiSuggestions(enabled: boolean, token: string) : Promise<Result
 /**
  * Called by the frontend after fetching the enterprise policy.
  */
-async setEnterprisePolicy(hiddenSections: string[]) : Promise<void> {
-    await TAURI_INVOKE("set_enterprise_policy", { hiddenSections });
+async setEnterprisePolicy(hiddenSections: string[], enforceAutoStart: boolean) : Promise<void> {
+    await TAURI_INVOKE("set_enterprise_policy", { hiddenSections, enforceAutoStart });
 },
 async setKeepAwake(enabled: boolean) : Promise<Result<null, string>> {
     try {
@@ -2278,6 +2343,18 @@ async setNativeTheme(theme: string) : Promise<Result<null, string>> {
 async setOnboardingStep(step: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_onboarding_step", { step }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Pin the webview overlay after a drag. The native macOS panel persists the
+ * same two values over the FFI action channel, which the webview cannot use.
+ */
+async setShortcutOverlayAnchor(anchor: string, display: string | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_shortcut_overlay_anchor", { anchor, display }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2413,6 +2490,14 @@ async showWindow(window: ShowRewindWindow) : Promise<Result<null, string>> {
 async showWindowActivated(window: ShowRewindWindow) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("show_window_activated", { window }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async snoozeShortcutReminderForHour() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("snooze_shortcut_reminder_for_hour") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2718,7 +2803,7 @@ useScreenpipeCloud?: boolean | null }
  * via the bundled bun and are always available. The preset editor uses this to
  * gate saving and to show an install prompt instead of a cryptic spawn error.
  */
-export type AcpAgentInstallStatus = { requiresInstall: boolean; installed: boolean; command: string | null; installUrl: string | null }
+export type AcpAgentInstallStatus = { requiresInstall: boolean; installed: boolean; command: string | null; installUrl: string | null; canInstallAutomatically: boolean }
 export type AcpAgentPresetConfig = { id: string; command?: string | null; args?: string[];
 /**
  * Keys with empty values inherit from the desktop process environment.
@@ -2900,6 +2985,7 @@ export type JobEvent = { kind: "started"; jobId: string; label: string; message:
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }
 export type LogFile = { name: string; path: string; modified_at: number }
+export type LoginMode = "sign-in" | "sign-up"
 /**
  * Stable low-disk safety values shared with the settings UI.
  *
@@ -2944,7 +3030,12 @@ downloaded: boolean;
 auth_required: boolean }
 export type PiBackend = "acp"
 export type PiCheckResult = { available: boolean; path: string | null }
-export type PiExtensionPackage = { source: string; scope: string; filtered: boolean; installed: boolean }
+export type PiExtensionPackage = { source: string; scope: string; filtered: boolean; installed: boolean;
+/**
+ * True only after Screenpipe validates the installed package's portable
+ * ACP MCP manifest and its entrypoint stays inside the package directory.
+ */
+acpCompatible: boolean }
 /**
  * Image content for Pi RPC protocol (pi-ai ImageContent format)
  */
@@ -3037,6 +3128,23 @@ preview: string;
  * label in the UI ("queued 4s ago").
  */
 queuedAtMs: number }
+export type ProviderAutomation = {
+/**
+ * Stable registry key. It always includes the provider namespace.
+ */
+key: string; provider: string; nativeId: string; name: string;
+/**
+ * Provider-native schedule (RRULE for Codex, cron for Claude).
+ */
+schedule: string; scheduleLabel: string | null; status: string;
+/**
+ * `local`, `provider_durable`, or `session`.
+ */
+executionScope: string;
+/**
+ * Read-only until the provider exposes a supported lifecycle API.
+ */
+manageability: string; lifecycleNote: string; updatedAtMs: number | null }
 /**
  * A skill offered by the curated registry. Installing one downloads its folder
  * (the directory containing `SKILL.md`) from a public GitHub repo into the
@@ -3393,10 +3501,10 @@ captureOnClipboard?: boolean | null;
 /**
  * Override `UiRecorderConfig::capture_scroll`.
  * None = engine default (false). When true, scroll wheel events are
- * recorded into `ui_events` so the `ScrollBurstTracker` can fire a
- * `ScrollStop` trigger at burst-end and link the last scroll row to
- * the resulting frame. Off by default — wheel ticks fire at ~60Hz
- * and inflate the table fast.
+ * recorded into `ui_events` so the `ScrollBurstTracker` can retain every
+ * correlation ID, fire a `ScrollStop` trigger at burst-end, and link every
+ * persisted scroll row in the settled burst to the resulting frame. Off by
+ * default — wheel ticks fire at ~60Hz and inflate the table fast.
  */
 captureScroll?: boolean | null;
 /**
@@ -3678,11 +3786,35 @@ listenOnLan?: boolean }) &
  * that the Rust struct doesn't know about. Without this, `save()` would
  * serialize only known fields and silently wipe frontend-only data.
  */
-({ [key in string]: null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue } }) & { aiPresets: AIPreset[]; isLoading: boolean; devMode: boolean; ocrEngine: string; dataDir: string; embeddedLLM: EmbeddedLLM; autoStartEnabled: boolean; platform: string; disabledShortcuts: string[]; user: User; showScreenpipeShortcut: string; startRecordingShortcut: string; stopRecordingShortcut: string; startAudioShortcut: string; stopAudioShortcut: string; showChatShortcut: string; searchShortcut: string; lockVaultShortcut?: string; showShortcutOverlay?: boolean;
+({ [key in string]: null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue } }) & { aiPresets: AIPreset[]; isLoading: boolean; devMode: boolean; ocrEngine: string; dataDir: string; embeddedLLM: EmbeddedLLM; autoStartEnabled: boolean; platform: string; disabledShortcuts: string[]; user: User; showScreenpipeShortcut: string; startRecordingShortcut: string; stopRecordingShortcut: string; startAudioShortcut: string; stopAudioShortcut: string; showChatShortcut: string; searchShortcut: string; lockVaultShortcut?: string;
 /**
  * Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
  */
 shortcutOverlaySize?: string;
+/**
+ * The user's persistent choice for the shortcut reminder. Recording-health
+ * incidents may still reveal their own temporary recovery surface.
+ */
+showShortcutOverlay?: boolean;
+/**
+ * Unix timestamp until which the user asked to hide the shortcut reminder.
+ */
+shortcutOverlaySnoozedUntil?: number | null;
+/**
+ * Compatibility capability written by the desktop remote-control registry.
+ * Consumer visibility is controlled by `show_shortcut_overlay` above.
+ */
+allowHidingShortcutOverlay?: boolean;
+/**
+ * Where the user dragged the overlay: one of top/bottom x left/center/right.
+ */
+shortcutOverlayAnchor?: string;
+/**
+ * Display the overlay was pinned to, as a stable per-display UUID. Empty
+ * until the user drags it, and ignored when that display is not attached,
+ * so the pill stays put instead of following the cursor between monitors.
+ */
+shortcutOverlayDisplay?: string;
 /**
  * Unique device ID for AI usage tracking (generated on first launch)
  */

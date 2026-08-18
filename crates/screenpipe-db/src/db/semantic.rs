@@ -1232,7 +1232,7 @@ fn encode_source_nodes(nodes: &[NodeId]) -> Vec<u8> {
 }
 
 fn decode_source_nodes(encoded: &[u8]) -> Result<Vec<NodeId>, sqlx::Error> {
-    if encoded.len() % std::mem::size_of::<u32>() != 0 {
+    if !encoded.len().is_multiple_of(std::mem::size_of::<u32>()) {
         return Err(sqlx::Error::Protocol(
             "invalid stored semantic source-node blob".to_string(),
         ));

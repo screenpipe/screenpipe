@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
+use screenpipe_core::Language;
 use tokio::{
     sync::{mpsc, RwLock},
     task::JoinHandle,
@@ -73,7 +74,7 @@ async fn run_stream(
 ) -> Result<()> {
     // Bias the local live transcriber toward this meeting's keyterms (user
     // vocabulary + calendar attendee names) by seeding the session vocabulary.
-    let mut session = selected_engine_session(&engine_ref, &config.keyterms).await?;
+    let mut session = selected_engine_session(&engine_ref, &config).await?;
     let model = selected_engine_model(&session);
     let mut buffer = LiveChunkBuffer::default();
     let mut resampler: Option<StreamResampler> = None;
@@ -120,7 +121,7 @@ async fn run_stream(
 
 async fn selected_engine_session(
     engine_ref: &Arc<RwLock<Option<TranscriptionEngine>>>,
-    keyterms: &[String],
+    config: &MeetingStreamingConfig,
 ) -> Result<TranscriptionSession> {
     let engine = engine_ref
         .read()
@@ -134,7 +135,27 @@ async fn selected_engine_session(
         ));
     }
 
-    engine.create_session_with_keyterms(keyterms)
+    let mut session = engine.create_session_with_keyterms(&config.keyterms)?;
+    // The cloud live path forces the configured language; the local path must
+    // too, or Whisper auto-detects per short chunk and garbles non-english
+    // speech into the wrong script (issue #5650).
+    if let Some(language) = forced_language(config.language.as_deref()) {
+        session.set_language(language);
+    }
+    Ok(session)
+}
+
+fn forced_language(language: Option<&str>) -> Option<Language> {
+    let code = language.map(str::trim).filter(|s| !s.is_empty())?;
+    match code.parse::<Language>() {
+        Ok(language) => Some(language),
+        Err(err) => {
+            warn!(
+                "meeting streaming: ignoring unknown live transcription language {code:?}: {err}"
+            );
+            None
+        }
+    }
 }
 
 fn selected_engine_model(session: &TranscriptionSession) -> Option<String> {
@@ -349,5 +370,14 @@ mod tests {
     fn stereo_frames_downmix_to_mono() {
         let mono = downmix_to_mono(&[1.0, -1.0, 0.25, 0.75], 2);
         assert_eq!(mono, vec![0.0, 0.5]);
+    }
+
+    #[test]
+    fn forced_language_resolves_configured_language() {
+        assert_eq!(forced_language(Some("ru")), Some(Language::Russian));
+        assert_eq!(forced_language(Some("russian")), Some(Language::Russian));
+        assert_eq!(forced_language(Some("  ")), None);
+        assert_eq!(forced_language(None), None);
+        assert_eq!(forced_language(Some("klingon")), None);
     }
 }

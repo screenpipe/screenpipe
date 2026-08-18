@@ -63,9 +63,7 @@ const ShortcutSection = () => {
       );
 
       try { await commands.refreshTrayMenu(); } catch (_) {}
-      if (settings.showShortcutOverlay) {
-        try { await commands.showShortcutReminder(defaults.showScreenpipeShortcut); } catch (_) {}
-      }
+      try { await commands.showShortcutReminder(defaults.showScreenpipeShortcut); } catch (_) {}
 
       toast({
         title: "shortcuts restored",

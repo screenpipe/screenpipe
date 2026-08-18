@@ -1,5 +1,11 @@
 # Event-Driven Capture — Architecture Spec
 
+<!-- doc-covers: crates/screenpipe-engine/src/event_driven_capture.rs -->
+<!-- doc-verified: 8c70b4b18 -->
+> **Historical.** Last verified against 8c70b4b18 (2026-02-20). `crates/screenpipe-engine/src/event_driven_capture.rs` has moved a long way
+> since; read this for original intent only. Names, signatures, and thresholds are
+> probably wrong. The code wins. Run `bun scripts/check-doc-freshness.ts` for current drift.
+
 > **Status**: Draft
 > **Date**: 2026-02-20
 

@@ -272,6 +272,20 @@ private class LiveTextInstance {
         return _appliedFrameId
     }
 
+    /// Retire an analysis that is still applied after the displayed pixels have
+    /// advanced to another frame. Pending analysis is deliberately preserved:
+    /// it may still be valid when its own frame becomes visible again.
+    func retireApplied(ifDifferentFrom frameId: String) -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard let appliedId = _appliedFrameId else { return false }
+        guard !appliedId.isEmpty, !frameId.isEmpty, appliedId != frameId else {
+            return false
+        }
+        _appliedFrameId = nil
+        return true
+    }
+
     /// Remember which terms to highlight and which frame they belong to.
     /// Survives hide/show cycles (e.g. the search modal opening) so the hit
     /// comes back with the overlay instead of being lost.
@@ -413,6 +427,11 @@ public func ltInit(_ window: UnsafePointer<CChar>?, _ windowPtr: UInt64) -> Int3
             // Focus stealing is managed by mainThreadPreservingFocus() and by
             // hiding the overlay when the search modal is open.
             overlay.preferredInteractionTypes = [.textSelection]
+            // Text is directly selectable without Apple's supplementary
+            // Live Text button. Keep its highlight mode off so the image is
+            // never dimmed behind recognized text.
+            overlay.setSupplementaryInterfaceHidden(true, animated: false)
+            overlay.selectableItemsHighlighted = false
             overlay.isHidden = true
             overlay.frame = NSRect.zero
             overlay.autoresizingMask = [] // we manage position manually
@@ -585,6 +604,8 @@ public func ltUpdatePosition(
         // computes hit regions against the correct geometry — and only when
         // the analysis belongs to the frame being positioned.
         let pending = inst.takePending(matching: frameIdStr)
+        let retiredStaleAnalysis = pending == nil
+            && inst.retireApplied(ifDifferentFrom: frameIdStr)
         // Search hits belong to one frame. Re-derive the selection on every
         // apply: the terms for this frame if the search matched here, otherwise
         // an explicit empty selection so the previous frame's highlight cannot
@@ -595,8 +616,15 @@ public func ltUpdatePosition(
             MainActor.assumeIsolated {
                 overlay.frame = NSRect(x: x, y: appKitY, width: w, height: h)
                 if let analysis = pending {
+                    // A newer position update may have retired this result while
+                    // this main-queue block was waiting to run.
+                    guard frameIdStr.isEmpty || inst.appliedFrameId() == frameIdStr else {
+                        return
+                    }
                     overlay.analysis = analysis
                     overlay.preferredInteractionTypes = [.textSelection]
+                    overlay.setSupplementaryInterfaceHidden(true, animated: false)
+                    overlay.selectableItemsHighlighted = false
                     overlay.isHidden = false
                     if #available(macOS 14.0, *) {
                         if terms.isEmpty {
@@ -605,6 +633,15 @@ public func ltUpdatePosition(
                             _ = applyHighlightTerms(overlay, terms)
                         }
                     }
+                } else if retiredStaleAnalysis && inst.appliedFrameId() == nil {
+                    // Keep the native NSView mounted, but remove every stale hit
+                    // region until analysis for the displayed frame lands.
+                    if #available(macOS 14.0, *) {
+                        overlay.selectedRanges = []
+                    }
+                    overlay.preferredInteractionTypes = []
+                    overlay.isHidden = true
+                    overlay.analysis = nil
                 }
             }
         }

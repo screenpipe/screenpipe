@@ -1,5 +1,9 @@
 # Org data unification spec
 
+<!-- doc-covers: crates/screenpipe-team-memory -->
+<!-- doc-verified: 8c0d11e2f -->
+> **Current.** Last verified against 8c0d11e2f (2026-06-12).
+
 Status: proposal. Spans two repos: `screenpipe` (desktop/engine, this repo) and
 `website-screenpipe` (cloud control plane + runner).
 

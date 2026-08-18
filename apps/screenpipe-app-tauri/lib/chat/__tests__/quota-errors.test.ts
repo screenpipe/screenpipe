@@ -11,6 +11,7 @@ import {
   buildHostedBusyFinalMessage,
   buildHostedBusyMessage,
   buildHostedBusyRetryMessage,
+  buildModelNotAllowedMessage,
   classifyQuotaError,
   buildRateLimitMessage,
   parseRateLimitWaitSeconds,
@@ -95,7 +96,7 @@ describe("buildDailyLimitMessage", () => {
       '{"error":{"code":"hosted_ai_allowance_exceeded"},"allowance":{"lane":"auto","plan":"basic","managed_by":"cloudflare"}}',
     );
     expect(message).toBe(
-      "Your hosted AI usage limit is reached. Switch to Auto.",
+      "Your AI usage limit is reached. Switch to Auto.",
     );
     expect(message).not.toContain("explicit");
     expect(message).not.toMatch(/\$\d/);
@@ -106,7 +107,7 @@ describe("buildDailyLimitMessage", () => {
       '{"error":{"code":"hosted_ai_allowance_exceeded"},"allowance":{"lane":"explicit","plan":"business","managed_by":"cloudflare"},"required_plan":"business_max","upgrade_url":"https://screenpipe.com/account/billing?target_plan=pro_max&interval=month"}',
     );
     expect(message).toBe(
-      "Your hosted AI usage limit is reached. Switch to Auto or upgrade.",
+      "Your AI usage limit is reached. Switch to Auto or upgrade.",
     );
     expect(message).not.toContain("explicit");
   });
@@ -120,7 +121,7 @@ describe("buildDailyLimitMessage", () => {
 
   it("shows the daily free message wall without immediate retry copy", () => {
     const message = buildDailyLimitMessage("free_chat_limit_exceeded");
-    expect(message).toContain("2 free hosted AI messages");
+    expect(message).toContain("2 free AI messages");
     expect(message).toContain("tomorrow");
     expect(message).toContain("Claude");
     expect(message).toContain("Codex");
@@ -245,7 +246,7 @@ describe("buildDailyLimitMessage", () => {
     });
     expect(parseQuotaUpgradeAction(error)?.requiredPlan).toBe("business_max");
     expect(buildDailyLimitMessage(error)).toBe(
-      "Your hosted AI usage limit is reached. Switch to Auto or upgrade.",
+      "Your AI usage limit is reached. Switch to Auto or upgrade.",
     );
   });
 
@@ -378,7 +379,7 @@ describe("presentQuotaError", () => {
     );
     expect(presented.kind).toBe("daily");
     expect(presented.message).toBe(
-      "Your hosted AI usage limit is reached. Switch to Auto.",
+      "Your AI usage limit is reached. Switch to Auto.",
     );
     expect(presented.message).not.toContain("explicit");
   });
@@ -446,4 +447,74 @@ describe("presentQuotaError", () => {
     expect(msg).toContain("temporarily rate-limited");
   });
 
+});
+
+describe("buildModelNotAllowedMessage", () => {
+  // The real 403 that made a Business account read "upgrade to Business":
+  // required_plan and upgrade_url are both null because no plan unlocks a
+  // model id that does not exist.
+  const GATEWAY_403 = JSON.stringify({
+    error: "model_not_allowed",
+    message:
+      'Model "codex-acp" is not available through screenpipe cloud. Choose another model or use your own provider key.',
+    plan: "business",
+    required_plan: null,
+    upgrade_url: null,
+    byok_supported: true,
+  });
+
+  it("never sells a plan the gateway did not ask for", () => {
+    const msg = buildModelNotAllowedMessage(GATEWAY_403);
+    expect(msg).not.toMatch(/upgrade/i);
+    expect(msg).not.toMatch(/business/i);
+  });
+
+  it("names the rejected model and the ways out", () => {
+    const msg = buildModelNotAllowedMessage(GATEWAY_403);
+    expect(msg).toContain('"codex-acp" isn\'t available');
+    expect(msg).toContain("Switch to Auto");
+    expect(msg).toContain("Settings → AI presets");
+  });
+
+  it("survives an escaped body and a body with no model name", () => {
+    expect(buildModelNotAllowedMessage(JSON.stringify(`403 ${GATEWAY_403}`))).toContain(
+      '"codex-acp" isn\'t available',
+    );
+    expect(
+      buildModelNotAllowedMessage('{"error":"model_not_allowed"}'),
+    ).toContain("This model isn't available");
+  });
+
+  it("offers the upgrade only when the gateway supplies a validated one", () => {
+    const msg = buildModelNotAllowedMessage(
+      JSON.stringify({
+        error: "model_not_allowed",
+        message: 'Model "claude-opus-5" is not available through screenpipe cloud.',
+        required_plan: "business",
+        upgrade_url: "https://screenpi.pe/account/billing",
+      }),
+    );
+    expect(msg).toBe(
+      "This model needs the Business plan. Switch to Auto to keep going, or upgrade.",
+    );
+  });
+
+  it("ignores an upgrade url that is not screenpipe billing", () => {
+    const msg = buildModelNotAllowedMessage(
+      JSON.stringify({
+        error: "model_not_allowed",
+        required_plan: "business",
+        upgrade_url: "https://evil.example.com/account/billing",
+      }),
+    );
+    expect(msg).not.toMatch(/upgrade/i);
+  });
+
+  it("caps a hostile model name instead of pasting it into the transcript", () => {
+    const msg = buildModelNotAllowedMessage(
+      `{"message":"Model \\"${"x".repeat(500)}\\" is not available"}`,
+    );
+    expect(msg).toContain("This model isn't available");
+    expect(msg.length).toBeLessThan(300);
+  });
 });

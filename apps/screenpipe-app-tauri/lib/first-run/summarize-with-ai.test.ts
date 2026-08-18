@@ -63,6 +63,71 @@ describe("buildActivityFacts", () => {
     ).toContain("audio_transcripts: 9");
   });
 
+  // The regression this file exists to prevent. A summary built only from app
+  // names and window titles reads like a template no matter which model writes
+  // it, which is indistinguishable from AI being switched off — the reported
+  // symptom. Excerpts are the only field carrying what the work actually was.
+  it("gives the model what was on screen and said, not just the containers", () => {
+    const facts = buildActivityFacts(
+      {
+        ...activity,
+        snippets: [
+          {
+            source: "screen",
+            text: "Allowing notifications lets Meet alert you about calls",
+            app_name: "Arc",
+          },
+          {
+            source: "audio",
+            text: "Or what are the conditions we need to show this?",
+            app_name: null,
+          },
+        ],
+      },
+      3 * 60_000,
+    );
+    expect(facts).toContain("excerpts:");
+    expect(facts).toContain("[screen, Arc] Allowing notifications lets Meet");
+    expect(facts).toContain("[heard] Or what are the conditions");
+  });
+
+  it("names the page when the container is a browser", () => {
+    const facts = buildActivityFacts(
+      {
+        ...activity,
+        windows: [
+          {
+            app_name: "Arc",
+            window_name: "Meet",
+            browser_url: "https://meet.google.com/abc-defg-hij",
+            minutes: 5,
+          },
+        ],
+      },
+      60_000,
+    );
+    expect(facts).toContain("meet.google.com/abc-defg-hij");
+  });
+
+  it("bounds excerpts so one noisy window cannot flood the prompt", () => {
+    const facts = buildActivityFacts(
+      {
+        ...activity,
+        snippets: Array.from({ length: 40 }, (_, i) => ({
+          source: "screen",
+          text: `${"x".repeat(900)} ${i}`,
+          app_name: "Arc",
+        })),
+      },
+      60_000,
+    );
+    const excerptLines = facts
+      .split("\n")
+      .filter((line) => line.startsWith("- [screen"));
+    expect(excerptLines).toHaveLength(6);
+    for (const line of excerptLines) expect(line.length).toBeLessThan(280);
+  });
+
   it("omits sections it has no data for", () => {
     const facts = buildActivityFacts(
       { data_status: "ok", total_frames: 3 },

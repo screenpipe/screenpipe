@@ -181,6 +181,8 @@ commits: `28e5c247`
 - [ ] **Music detection thresholds** — With "filter music" enabled, play various types of music. Verify that music is correctly detected and filtered, and that non-music speech is still captured.
 - [ ] **Audio reconciliation FK constraint loop** — Verify that audio reconciliation does not enter an infinite retry loop on foreign key constraints. (`e9e2dc252`)
 - [ ] **Skip reconciliation when transcription disabled** — Disable audio transcription in settings. Verify that audio reconciliation is skipped. (`ceb77559d`)
+- [ ] **read-pool pressure never costs a transcription** — Put the read pool under load (open the timeline, run a broad search, run several pipes) while audio is being transcribed. Verify transcriptions still land: no insert may fail in its pre-read phase. Logs may say "cross-device dedup check unavailable"; that is the intended fail-open — a duplicate cross-device transcription is acceptable, losing the recording is not. (`SCREENPIPE-CLI-SN`)
+- [ ] **a batch rollback is not reported as a crashed worker** — When one write in a batch fails, the others are rolled back with it. Verify those log "was rolled back with its batch … retrying", not "attempted to communicate with a crashed background worker". Nothing crashed and their write was never attempted. (`SCREENPIPE-CLI-SN`)
 - [ ] **dead System Audio auto-reconnect** — Simulate a dead system audio stream. Verify it auto-reconnects and resumes capture. (`0f287761d`)
 - [ ] **SCK System Audio dead-display recovery (clamshell)** — Mid-call, close the MacBook lid with an external display attached → remote-participant (System Audio) audio resumes within ~1 min via auto re-anchor, mic unaffected. AND: leave the machine idle (nothing playing) for 10 min with stable displays → NO System Audio rebuild/churn (guards the reverted output recv-timeout `0f287761d` / `357e4dfcc`). Watchdog: `core::sck_output_watchdog` (#3901).
 - [ ] **per-device audio toggle** — In the tray menu, verify you can toggle recording for individual audio devices. (`3ee3defcb`)
@@ -338,6 +340,8 @@ commits: `eea0c865`, `cc09de61`, `e61501da`, `d25191d7`, `60096fb9`
 - [ ] **Audio chunk timestamps** — `start_time` and `end_time` are correctly set for reconciled and retranscribed audio chunks in the database.
 - [ ] **SCREENPIPE_DATA_DIR usage** — Set the `SCREENPIPE_DATA_DIR` environment variable. Verify the app uses this directory for all its data storage. (`d5f30db71`)
 - [ ] **DB pool starvation prevention** — Simulate high database load (e.g., rapid screen activity, many pipes running) and monitor logs. Verify no "database is locked" errors or signs of DB pool starvation.
+- [ ] **write stalls name their own cause** — Run `screenpipe db compact` (or any long `VACUUM`) while capture is active. Logs must say "another writer held the SQLite write lock", NOT "pool timed out"; the UI-event recorder must log this at `warn`, not `error`, so a routine VACUUM does not raise a Sentry issue. Starving the write pool instead must say "no write-pool connection became available". The two must never share a message. (`SCREENPIPE-CLI-SQ`)
+- [ ] **stuck write coordinator recovers** — A process-wide SQLite write permit that is never released must not wedge writes forever. Verify a sustained contention run (past `CONTENTION_PERSISTENT_AFTER_WALL`) marks the write path degraded *and* requests an engine restart, while a normal multi-minute maintenance hold does not. (`SCREENPIPE-CLI-SQ`)
 - [ ] **DB write coalescing queue** — verify high-frequency captures (e.g. 10 FPS) don't lock the UI or cause write errors. (`c23768f41`)
 - [ ] **Multi-byte window titles in suggestions** — Interact with suggestions for windows that have multi-byte (e.g., Unicode, emoji) characters in their titles. Verify no char boundary panics.
 - [ ] **no concurrent reconciliation issues** — Verify that concurrent reconciliation processes do not cause issues during heavy load or sync operations. (`1d436bc3`)
@@ -518,6 +522,7 @@ commits: `eea0c865`, `fe9060db`, `c99c3967`, `aeaa446b`, `5a219688`, `caae1ebc`,
 - [ ] **Windows Defender** — app not blocked by default security.
 - [ ] **Windows default mode** — On Windows, the app should default to window mode on first launch.
 - [ ] **Windows taskbar icon** — The app should display a taskbar icon on Windows.
+- [ ] **Enterprise enforced auto-start enrollment** — In an installed Windows enterprise build, set `lockedSettings.autoStartEnabled = "true"`, disable Screenpipe in Task Manager Startup apps, and verify both the HKCU `Run` command (including `--autostart`) and `StartupApproved\Run` return to enabled within two seconds. Sign out/in and confirm Screenpipe starts in the background. Remove the policy, disable startup again, wait at least two reconciliation intervals, and verify it remains disabled.
 - [ ] **Windows login window resets stale OAuth navigation** — Click login, choose GitHub or Google, leave the provider flow open, then click login in Screenpipe again. The existing "sign in to screenpipe" window must return to the Screenpipe login page instead of showing the stale provider page or a blank document.
 - [ ] **Windows audio transcription accuracy** — On Windows, verify improved audio transcription accuracy due to native Silero VAD frame size and lower speech threshold.
 - [ ] **Windows multi-line pipe prompts** — Multi-line pipe prompts should be preserved on Windows.
@@ -845,6 +850,9 @@ run section 4 completely.
 ### before merging AI changes
 run section 10.
 
+### before merging updater / tray-update changes
+run section 32, and run `bun run test:e2e:packaged-updater:macos` (macOS).
+
 ## known limitations (not bugs)
 
 - tray icon on notched MacBooks can end up behind the notch if menu bar is crowded. Cmd+drag to reposition. dock menu is the fallback.
@@ -958,3 +966,15 @@ commits: `c6a73b17e`, `945b687ec`
 - [ ] **Persistent background chats** — Verify that chats continue to stream in the background even when navigating away from the chat view. (`0060ae9e5`, `ec5e80992`)
 - [ ] **Inline history in overlay** — Verify that inline history is restored in the overlay window. (`15b419ec7`)
 - [ ] **Notification URL actions** — Open a URL action from a native macOS notification when the overlay is not mounted. (`7fdcd2054`)
+
+### 32. Updates (tray "Restart to update")
+
+commits: 2026-08-11 tray-update-ux
+
+- [ ] **Tray restart while signed out** — On a signed-out / entitlement-gated install (engine never starts, boot phase `idle`), stage an update and click the tray "Restart to update". It MUST proceed and relaunch — before this fix the click silently no-oped forever (MacBook Air report).
+- [ ] **Tray click feedback** — Clicking "Restart to update" immediately changes the menu item to "Installing update…"; a deferred/failed restart shows a native notification instead of doing nothing.
+- [ ] **Fast install (no blackout)** — The exit-path install uses the pre-extracted rename path (log: `installed via pre-extracted fast path`). Old→new blackout is a few seconds, not 10–40s.
+- [ ] **Failed-install detection** — If an update quits but doesn't apply, the next boot shows "Update didn't apply — click to retry" (marker in `~/.screenpipe/update-attempt.json`, consumed once).
+- [ ] **No-update click safety** — Clicking the menu item with nothing staged runs a check and must NOT restart the app.
+
+Automated: `bun run test:e2e:packaged-updater:macos` drives all of the above against two real signed release-local builds (macOS only). Rust unit coverage: `cargo test --features e2e staged_update:: updates::tests` (pre-extract fast path, rollback, fallback, idle gate, marker classification).

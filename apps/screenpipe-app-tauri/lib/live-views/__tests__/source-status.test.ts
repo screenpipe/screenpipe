@@ -45,8 +45,11 @@ describe("liveViewSourceStatus", () => {
 
   it("stays unknown rather than guessing when the task list is unavailable", () => {
     expect(liveViewSourceStatus("activity-enrichment", [])).toBe("unknown");
-    expect(liveViewSourceStatus(null, SNAPSHOTS)).toBe("unknown");
-    expect(liveViewSourceStatus(undefined, SNAPSHOTS)).toBe("unknown");
+  });
+
+  it("separates an unconfigured block from an unavailable task list", () => {
+    expect(liveViewSourceStatus(null, SNAPSHOTS)).toBe("unconfigured");
+    expect(liveViewSourceStatus(undefined, SNAPSHOTS)).toBe("unconfigured");
   });
 });
 

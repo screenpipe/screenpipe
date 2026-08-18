@@ -194,4 +194,19 @@ describe("LiveViewCard range and freshness", () => {
       screen.getByTestId("overview-card-updated-process-steps"),
     ).toHaveTextContent(/^updated .* · artifact #42 · v1$/);
   });
+
+  it("marks an unconfigured block as unable to refresh", () => {
+    render(<LiveViewCard slot={{ ...listSlot, binding: null, value: null }} />);
+
+    expect(screen.getByText("No scheduled task connected")).toBeTruthy();
+    expect(
+      screen.getByTestId("overview-card-source-status-process-steps"),
+    ).toHaveTextContent("not configured");
+    expect(
+      screen.getByTestId("overview-card-source-status-process-steps"),
+    ).toHaveAttribute(
+      "title",
+      "This block is not connected to a scheduled task, so refresh cannot update it.",
+    );
+  });
 });

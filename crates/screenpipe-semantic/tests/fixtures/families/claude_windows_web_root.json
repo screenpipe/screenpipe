@@ -1,0 +1,22 @@
+{
+  "app": {
+    "platform": "windows",
+    "app_id": null,
+    "executable": "claude.exe",
+    "display_name": "claude.exe",
+    "version": null,
+    "browser_url": null
+  },
+  "nodes": [
+    { "parent": null, "role": "Button", "classes": ["WinCaptionButton"], "text": "Minimize" },
+    {
+      "parent": null,
+      "role": "Document",
+      "identifier": "RootWebArea",
+      "description": "document",
+      "text": "file:///C:/ProgramData/ExampleDesktop/app-1.0.0/resources/app.asar/.vite/renderer/main_window/index.html"
+    },
+    { "parent": 1, "role": "Button", "classes": ["inline-flex"], "text": "Collapse sidebar" },
+    { "parent": 1, "role": "Button", "classes": ["df-pill"], "text": "Home" }
+  ]
+}

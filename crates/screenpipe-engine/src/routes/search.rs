@@ -47,9 +47,7 @@ impl<S: Send + Sync> FromRequestParts<S> for OptionalPipePerms {
 impl oasgen::OaParameter for OptionalPipePerms {}
 
 use chrono::{DateTime, Datelike, Local, Timelike, Utc};
-use screenpipe_db::{
-    ContentType, DatabaseManager, Order, SearchResult, SemanticContextQuery, SemanticFrameContext,
-};
+use screenpipe_db::{ContentType, Order, SearchResult, SemanticContextQuery, SemanticFrameContext};
 use screenpipe_semantic::{IdentityQuality, SemanticKind};
 
 use futures::stream::{self, StreamExt};
@@ -559,6 +557,26 @@ fn capture_direct_api_search_value(client: &ExplicitApiClient, result_count: usi
     }
 }
 
+fn parsed_parser_profiles(content_items: &[ContentItem]) -> Vec<String> {
+    let mut parser_ids = Vec::new();
+    for item in content_items {
+        let ContentItem::Parsed(content) = item else {
+            continue;
+        };
+        if parser_ids
+            .iter()
+            .any(|parser_id| parser_id == &content.parser_id)
+        {
+            continue;
+        }
+        parser_ids.push(content.parser_id.clone());
+        if parser_ids.len() == 16 {
+            break;
+        }
+    }
+    parser_ids
+}
+
 /// Middle-truncate a string to at most `max_chars` characters.
 /// Keeps the first half and last half, inserting a marker in between.
 /// Safe on UTF-8 char boundaries.
@@ -625,6 +643,7 @@ pub fn search_result_to_content_item(
             focused: ocr.focused,
             device_name: ocr.device_name.clone(),
             text_source: ocr.text_source.clone(),
+            event_source: ocr.capture_trigger.clone(),
         }),
         SearchResult::Audio(audio) => {
             let transcription = truncate(audio.transcription.clone());
@@ -662,6 +681,7 @@ pub fn search_result_to_content_item(
             offset_index: ui.offset_index,
             frame_name: ui.frame_name.clone(),
             browser_url: ui.browser_url.clone(),
+            event_source: ui.capture_trigger.clone(),
         }),
         SearchResult::Input(input) => ContentItem::Input(InputContent {
             id: input.id,
@@ -1375,15 +1395,26 @@ pub(crate) async fn search(
 
     debug!("search completed: found {} results", total);
 
+    let response_non_empty = !content_items.is_empty();
+    let parsed_parser_profiles = if parsed_search {
+        parsed_parser_profiles(&content_items)
+    } else {
+        Vec::new()
+    };
+
     // Track search analytics
     analytics::capture_event_nonblocking(
         "search_performed",
         serde_json::json!({
             "query_length": query.q.as_ref().map(|q| q.len()).unwrap_or(0),
             "content_type": format!("{:?}", query.content_type),
+            "request_source": api_client.source_label(),
             "has_date_filter": query.start_time.is_some() || query.end_time.is_some(),
             "has_app_filter": query.app_name.is_some(),
             "result_count": total,
+            "non_empty": response_non_empty,
+            "parsed_non_empty": parsed_search && response_non_empty,
+            "parsed_parser_profiles": parsed_parser_profiles,
             "limit": query.pagination.limit,
             "offset": query.pagination.offset,
         }),
@@ -1439,21 +1470,17 @@ pub(crate) async fn keyword_search_handler(
     State(state): State<Arc<AppState>>,
 ) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
     if query.group {
-        // Lightweight query: skips text/text_json columns (no OCR blob reads,
-        // no JSON parsing). max_per_app=30 ensures app diversity via ROW_NUMBER.
-        // FTS subquery capped at 5000 to limit scan. Typically <200ms.
-        let matches = state
+        let groups = state
             .db
-            .search_for_grouping(
+            .search_grouped_matches(
                 &query.query,
-                500,
-                0,
+                query.limit,
+                query.offset,
                 query.start_time,
                 query.end_time,
                 query.fuzzy_match,
                 query.order,
                 query.app_names,
-                Some(30),
             )
             .await
             .map_err(|e| {
@@ -1463,14 +1490,11 @@ pub(crate) async fn keyword_search_handler(
                 )
             })?;
 
-        let filtered: Vec<_> = matches
+        let filtered: Vec<_> = groups
             .into_iter()
-            .filter(|m| !is_screenpipe_app(&m.app_name))
+            .filter(|group| !is_screenpipe_app(&group.representative.app_name))
             .collect();
-
-        let groups = DatabaseManager::cluster_search_matches(filtered, 120);
-
-        Ok(JsonResponse(json!(groups)))
+        Ok(JsonResponse(json!(filtered)))
     } else {
         let matches = state
             .db
@@ -1702,6 +1726,7 @@ mod tests {
             focused: None,
             device_name: "test-device".to_string(),
             text_source: Some("ocr".to_string()),
+            event_source: None,
         }
     }
 
@@ -1717,6 +1742,7 @@ mod tests {
             offset_index: 0,
             frame_name: None,
             browser_url: None,
+            event_source: None,
         }
     }
 
@@ -1831,6 +1857,7 @@ mod tests {
                 focused: Some(true),
                 device_name: "test-device".to_string(),
                 text_source: Some("ocr".to_string()),
+                capture_trigger: Some("typing_pause".to_string()),
             })
         };
 
@@ -1839,12 +1866,35 @@ mod tests {
             None,
         );
         let lightweight_projection = search_result_to_content_item(&make_result(""), None);
+        let full_json = serde_json::to_value(full_projection).unwrap();
+        let lightweight_json = serde_json::to_value(lightweight_projection).unwrap();
 
         assert_eq!(
-            serde_json::to_value(full_projection).unwrap(),
-            serde_json::to_value(lightweight_projection).unwrap(),
+            full_json, lightweight_json,
             "the HTTP search shape must not expose OCR bounding-box JSON"
         );
+        assert_eq!(full_json["content"]["event_source"], "typing_pause");
+    }
+
+    #[test]
+    fn accessibility_event_source_is_observable_in_search_response() {
+        let result = SearchResult::UI(screenpipe_db::UiContent {
+            id: 42,
+            text: "visible text".to_string(),
+            timestamp: Utc::now(),
+            app_name: "test".to_string(),
+            window_name: "test window".to_string(),
+            initial_traversal_at: None,
+            file_path: "frame.jpg".to_string(),
+            offset_index: 0,
+            frame_name: Some("display-1".to_string()),
+            browser_url: None,
+            capture_trigger: Some("visual_change".to_string()),
+        });
+
+        let json = serde_json::to_value(search_result_to_content_item(&result, None)).unwrap();
+
+        assert_eq!(json["content"]["event_source"], "visual_change");
     }
 
     #[test]

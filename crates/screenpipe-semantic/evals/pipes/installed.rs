@@ -269,6 +269,7 @@ impl AgentExecutor for SandboxedPiExecutor {
         shared_pid: Option<SharedPid>,
         line_tx: tokio::sync::mpsc::UnboundedSender<String>,
         _continue_session: bool,
+        _thinking_level: Option<&str>,
         pipe_system_prompt: Option<&str>,
         _mcp_server_allowlist: Option<&[String]>,
         _session_owner: Option<&str>,

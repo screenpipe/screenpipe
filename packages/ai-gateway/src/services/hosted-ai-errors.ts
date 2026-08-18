@@ -40,7 +40,7 @@ export function modelNotAllowedResponse(auth: AuthResult, model: string): Respon
 		error: 'model_not_allowed',
 		message: requiredPlan
 			? `Model "${model}" requires ${requiredPlan === 'basic' ? 'Basic' : 'Business'}. Choose an included model or upgrade.`
-			: `Model "${model}" is not available through hosted AI. Choose another model or use your own provider key.`,
+			: `Model "${model}" is not available through screenpipe cloud. Choose another model or use your own provider key.`,
 		plan: currentPlan ?? 'unknown',
 		required_plan: requiredPlan,
 		allowed_models: allowedModels,
@@ -64,7 +64,7 @@ export function paidHostedAiRouteError(auth: AuthResult): Response | null {
 			? 'authentication_required'
 			: 'free_plan_alternate_hosted_ai_disabled',
 		message: auth.tier === 'anonymous'
-			? 'Sign in to use screenpipe hosted AI.'
+			? 'Sign in to use screenpipe AI.'
 			: 'The daily two-message free allowance is available in screenpipe chat. Use your own Claude, Codex, Ollama, or provider credentials for unlimited local/BYOK use.',
 	});
 }
@@ -72,7 +72,7 @@ export function paidHostedAiRouteError(auth: AuthResult): Response | null {
 export function internalServerErrorResponse(errorId: string): Response {
 	return addCorsHeaders(createErrorResponse(500, JSON.stringify({
 		error: 'internal_error',
-		message: 'The hosted AI request failed unexpectedly. Try again shortly.',
+		message: 'The AI request failed unexpectedly. Try again shortly.',
 		request_id: errorId,
 	})));
 }

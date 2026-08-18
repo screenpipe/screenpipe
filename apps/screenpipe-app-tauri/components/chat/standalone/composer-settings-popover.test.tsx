@@ -67,10 +67,22 @@ describe("composer settings control", () => {
     render(<ThinkingLevelSelector sessionId={SESSION} />);
     const pi = screen.getByTestId("thinking-level-trigger");
 
-    // Same shell, so identical layout classes: height, gap, padding, the width
-    // cap that keeps a long model name from pushing the send button around.
+    // Same shell, so identical layout classes: height, padding, the width cap
+    // that keeps a long model name from pushing the send button around.
     expect(pi.className).toBe(acpClass);
-    expect(acpClass).toContain("max-w-[160px]");
+    expect(acpClass).toContain("max-w-[190px]");
+  });
+
+  // Claude and Codex both name the model in plain text. A glyph in front of a
+  // value that already names itself is a second thing to parse in a row that
+  // already holds four controls.
+  it("names the value with no leading glyph on either trigger", () => {
+    renderAcp();
+    expect(screen.getByTestId("acp-config-trigger").querySelector("svg")).toBeNull();
+    cleanup();
+
+    render(<ThinkingLevelSelector sessionId={SESSION} />);
+    expect(screen.getByTestId("thinking-level-trigger").querySelector("svg")).toBeNull();
   });
 
   it("names the active value on both triggers", () => {

@@ -221,6 +221,7 @@ function SortableRow({
             data-testid={`nav-${item.id}`}
             data-announcement-anchor={`sidebar-${item.id}`}
             onClick={() => onSelect(item.id)}
+            aria-current={isActive ? "page" : undefined}
             className={cn(
               rowClassName(isActive, isTranslucent),
               isDragging ? "cursor-grabbing" : "cursor-pointer",
@@ -368,6 +369,7 @@ export function SidebarNavList({
             data-testid={`nav-${item.id}`}
             data-announcement-anchor={`sidebar-${item.id}`}
             onClick={() => onSelect(item.id)}
+            aria-current={activeId === item.id ? "page" : undefined}
             className={rowClassName(activeId === item.id, isTranslucent)}
           >
             <div

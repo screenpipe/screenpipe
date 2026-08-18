@@ -878,7 +878,8 @@ fn create_dynamic_menu(
 ) -> Result<tauri::menu::Menu<Wry>> {
     let mut menu_builder = MenuBuilder::new(app);
 
-    // During onboarding: show minimal menu (version + skip + quit)
+    // During onboarding: show only version and quit. Setup cannot be bypassed
+    // from the tray.
     if !data.onboarding_completed && !data.app_ui_hidden {
         menu_builder = menu_builder
             .item(
@@ -893,8 +894,6 @@ fn create_dynamic_menu(
                 .enabled(false)
                 .build(app)?,
             )
-            .item(&PredefinedMenuItem::separator(app)?)
-            .item(&MenuItemBuilder::with_id("skip_onboarding", "Skip onboarding").build(app)?)
             .item(&PredefinedMenuItem::separator(app)?)
             .item(&MenuItemBuilder::with_id("quit", "Quit screenpipe").build(app)?);
 
@@ -1266,7 +1265,9 @@ fn setup_tray_click_handlers(main_tray: &TrayIcon) -> Result<()> {
                         let app_inner = app.clone();
                         let _ = app.run_on_main_thread(move || {
                             crate::headless::wake_from_tray(&app_inner);
-                            let _ = ShowRewindWindow::Home { page: None }.show(&app_inner);
+                            // Showing Onboarding is the app-entry gate: it focuses
+                            // setup while incomplete and routes to Home once complete.
+                            let _ = ShowRewindWindow::Onboarding.show(&app_inner);
                         });
                     });
                 }
@@ -1293,7 +1294,6 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                 | "settings"
                 | "upgrade"
                 | "onboarding"
-                | "skip_onboarding"
         )
     {
         info!(
@@ -1659,19 +1659,11 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                     });
                 } else {
                     // For production builds, run the authenticated update flow.
-                    tauri::async_runtime::spawn(async move {
-                        let state = app.state::<std::sync::Arc<crate::updates::UpdatesManager>>();
-                        if state.has_update_installed().await {
-                            // apply via the same backend path as the banner instead
-                            // of round-tripping through the frontend.
-                            if let Err(e) = crate::updates::restart_for_update(app.clone(), None).await
-                            {
-                                tracing::error!("tray menu: restart for update failed: {}", e);
-                            }
-                        } else if let Err(e) = state.check_for_updates(true, true).await {
-                            tracing::error!("tray menu: check for updates failed: {}", e);
-                        }
-                    });
+                    // The whole flow — including surfacing deferred/failed
+                    // outcomes, which the old inline handler silently
+                    // discarded — lives in updates::trigger_update_now so the
+                    // packaged e2e driver exercises the identical path.
+                    tauri::async_runtime::spawn(crate::updates::trigger_update_now(app));
                 }
             });
         }
@@ -1704,22 +1696,6 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                 let _ = app
                     .opener()
                     .open_url("https://cal.com/team/screenpipe/chat", None::<&str>);
-            });
-        }
-        "skip_onboarding" => {
-            let app = app_handle.clone();
-            let _ = app_handle.run_on_main_thread(move || {
-                crate::headless::wake_from_tray(&app);
-                info!("skip onboarding requested from tray menu");
-                let _ = OnboardingStore::update(&app, |onboarding| {
-                    onboarding.complete();
-                });
-                // Close onboarding window if open
-                if let Some(win) = app.get_webview_window("onboarding") {
-                    let _ = win.close();
-                }
-                // Show the main window
-                show_main_window(app.clone());
             });
         }
         "onboarding" => {

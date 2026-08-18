@@ -1,0 +1,43 @@
+{
+  "app": {
+    "platform": "windows",
+    "app_id": null,
+    "executable": "ms-teams.exe",
+    "display_name": "ms-teams.exe",
+    "version": null,
+    "browser_url": null
+  },
+  "nodes": [
+    { "parent": null, "role": "Text", "classes": ["fui-Divider", "___440kcd0"], "text": "Wednesday, April 3, 2024" },
+    {
+      "parent": null,
+      "role": "Text",
+      "identifier": "control-message-1712569584667",
+      "classes": ["fui-Primitive", "___unfo430"],
+      "text": "Dana Lopez shipped the parser eval"
+    },
+    { "parent": 1, "role": "Button", "classes": ["___87nhvx0"], "text": "Dana Lopez" },
+    { "parent": 2, "role": "Button", "classes": ["fui-StyledText"], "text": "Dana Lopez" },
+    { "parent": 1, "role": "Text", "text": "shipped the parser eval" },
+    {
+      "parent": null,
+      "role": "Text",
+      "identifier": "control-message-1712569635624",
+      "classes": ["fui-Primitive", "___unfo430"],
+      "text": "Wei Chen numbers are in the doc"
+    },
+    { "parent": 5, "role": "Button", "classes": ["___87nhvx0"], "text": "Wei Chen" },
+    { "parent": 5, "role": "Text", "text": "numbers are in the doc" },
+    {
+      "parent": null,
+      "role": "Text",
+      "identifier": "control-message-1713176293601",
+      "classes": ["fui-Primitive", "___unfo430"],
+      "text": "Missed call: on 4/15/2024 9:02 AM"
+    },
+    { "parent": 8, "role": "Text", "text": "4/15/2024 9:02 AM" },
+    { "parent": 8, "role": "Text", "text": "Missed call:" },
+    { "parent": null, "role": "Edit", "identifier": "new-message-9ad08a2f", "text": "Type a message" },
+    { "parent": null, "role": "Button", "classes": ["ui-toolbar__item"], "text": "Format" }
+  ]
+}

@@ -30,10 +30,21 @@ export type ChatComposerAuthorship =
   | "template_unmodified"
   | "template_edited";
 
+export type ChatComposerOrigin =
+  "user_input" | "home_card" | "post_chat_suggestion";
+
+export type ChatSuggestionAuthorship = "unmodified" | "edited";
+export type ChatSuggestionSource = "activity" | "connection";
+export type ChatSuggestionPosition = 1 | 2 | 3;
+
 export type ChatSendOptions = {
   entrySource?: ChatEntrySource;
   entryCard?: ChatEntryCard;
   composerAuthorship?: ChatComposerAuthorship;
+  composerOrigin?: ChatComposerOrigin;
+  suggestionAuthorship?: ChatSuggestionAuthorship;
+  suggestionSource?: ChatSuggestionSource;
+  suggestionPosition?: ChatSuggestionPosition;
 };
 
 // Per-message attachment metadata. The extracted text lives inside the message
@@ -83,6 +94,16 @@ export type ContentBlock =
   | { type: "text"; text: string }
   | { type: "tool"; toolCall: ToolCall }
   | { type: "thinking"; text: string; isThinking: boolean; durationMs?: number }
+  // ACP agent plan. Replaced in place on every update — ACP resends the whole
+  // plan each time it changes, so at most one of these exists per message.
+  | {
+      type: "plan";
+      entries: Array<{
+        content: string;
+        status: "pending" | "in_progress" | "completed";
+        priority?: string;
+      }>;
+    }
   | {
       type: "agent_action";
       actionKind: "permission" | "auth";

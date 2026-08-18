@@ -16,6 +16,7 @@ export const searchIndex: SettingsField[] = [
   { label: "sync scheduled tasks across devices", keywords: ["scheduled sync", "pipe sync", "sync"] },
   { label: "memories sync across devices", keywords: ["memories sync", "sync", "facts"] },
   { label: "connection sync across devices", keywords: ["connection sync", "sync", "slack", "notion"] },
+  { label: "restart remote sync", keywords: ["reset sync", "older key", "new device", "decryption"] },
 ];
 import { Button } from "@/components/ui/button";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -30,7 +31,6 @@ import { toast } from "@/components/ui/use-toast";
 import { commands } from "@/lib/utils/tauri";
 import { openExternalUrl } from "@/lib/open-external-url";
 import {
-  getBusinessCapacityUpgrade,
   planDisplayName,
   isSignedInCloudSubscriber,
   type AppUser,
@@ -64,7 +64,12 @@ import {
 import {
   AccountPlanOptions,
   accountPlanForEntitlement,
+  type PlanPurchase,
 } from "./account-plan-options";
+import {
+  isLegacySyncKeyMismatch,
+  SyncKeyRecovery,
+} from "./sync-key-recovery";
 
 const ACCOUNT_URL = screenpipeWebUrl("/account", "https://screenpipe.com");
 const BILLING_URL = screenpipeWebUrl("/account/billing", "https://screenpipe.com");
@@ -138,6 +143,7 @@ export function AccountSection() {
   const [pipeSyncing, setPipeSyncing] = useState(false);
   const [memoriesSyncing, setMemoriesSyncing] = useState(false);
   const [connectionsSyncing, setConnectionsSyncing] = useState(false);
+  const [showSyncKeyRecovery, setShowSyncKeyRecovery] = useState(false);
   const [checkoutBusy, setCheckoutBusy] = useState(false);
   const [upgradeSource, setUpgradeSource] = useState("app-account-section");
   const upgradeCardRef = useRef<HTMLDivElement>(null);
@@ -155,21 +161,30 @@ export function AccountSection() {
   const hasExistingSubscription =
     hasExistingStripeSubscriptionPlan(subscriptionPlan) &&
     !hasExpiringProfilePlan;
-  const capacityUpgrade =
-    process.env.NEXT_PUBLIC_BUSINESS_POWER_PLANS_ENABLED === "true"
-      ? getBusinessCapacityUpgrade(subscriptionPlan)
-      : null;
-
-  const openCapacityUpgrade = async () => {
-    if (!capacityUpgrade) return;
+  /** Capacity levels change an existing subscription, so they are proration on
+   *  the web billing page rather than a new in-app checkout. */
+  const openCapacityBilling = async (
+    targetPlan: Extract<PlanPurchase, { kind: "billing" }>["targetPlan"],
+  ) => {
     const billingUrl = new URL(BILLING_URL);
-    billingUrl.searchParams.set("target_plan", capacityUpgrade.targetPlan);
+    billingUrl.searchParams.set("target_plan", targetPlan);
     billingUrl.searchParams.set("interval", "month");
     posthog.capture("desktop_business_capacity_upgrade_opened", {
       current_plan: subscriptionPlan,
-      target_plan: capacityUpgrade.targetPlan,
+      target_plan: targetPlan,
     });
     await openExternalUrl(billingUrl.toString());
+  };
+
+  const selectPlan = (purchase: PlanPurchase) => {
+    if (purchase.kind === "billing") {
+      void openCapacityBilling(purchase.targetPlan);
+      return;
+    }
+    void handleCheckout({
+      ...defaultUpgradeSelection("account-plan-options"),
+      plan: purchase.plan,
+    });
   };
 
   useEffect(() => {
@@ -322,7 +337,7 @@ export function AccountSection() {
         offer_version: selection.offerVersion,
         pricing_experiment_variant: selection.experimentVariant,
       });
-      await commands.openLoginWindow(null);
+      await commands.openLoginWindow(null, null);
       return;
     }
 
@@ -455,6 +470,17 @@ export function AccountSection() {
   // in src-tauri/src/tray.rs.
   const { isManagedDeployment } = useManagedPolicy();
 
+  const reportSyncFailure = (error: unknown) => {
+    if (isLegacySyncKeyMismatch(error)) {
+      setShowSyncKeyRecovery(true);
+    }
+    toast({
+      title: "sync failed",
+      description: syncErrorDescription(error),
+      variant: "destructive",
+    });
+  };
+
   return (
     <div className="space-y-6">
       {/* Header + login status */}
@@ -501,7 +527,7 @@ export function AccountSection() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => commands.openLoginWindow(null)}
+              onClick={() => commands.openLoginWindow(null, null)}
             >
               login <ExternalLinkIcon className="w-3.5 h-3.5 ml-1.5" />
             </Button>
@@ -552,39 +578,9 @@ export function AccountSection() {
               entitlementPlan={subscriptionPlan}
               fallbackTo={hasExpiringProfilePlan ? "free" : undefined}
               busy={checkoutBusy}
-              onChoose={(plan) =>
-                handleCheckout({
-                  ...defaultUpgradeSelection("account-plan-options"),
-                  plan,
-                })
-              }
+              onSelect={selectPlan}
             />
           </div>
-
-          {capacityUpgrade && (
-            <div
-              className="mt-4 flex items-center justify-between gap-4 rounded-lg border border-border/60 bg-muted/20 px-3.5 py-3"
-              data-testid="account-capacity-upgrade"
-            >
-              <div className="min-w-0">
-                <p className="text-sm font-medium">need more AI capacity?</p>
-                <p className="text-xs text-muted-foreground">
-                  {capacityUpgrade.name} adds higher query and request-rate
-                  limits for ${capacityUpgrade.monthlyPrice}/month.
-                </p>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="shrink-0"
-                data-testid="account-capacity-upgrade-button"
-                onClick={openCapacityUpgrade}
-              >
-                view {capacityUpgrade.name.replace("Business ", "")}
-                <ExternalLinkIcon className="ml-1.5 h-3.5 w-3.5" />
-              </Button>
-            </div>
-          )}
 
           {/* Pipe sync */}
           <div className="mt-4 pt-4 border-t border-border/50">
@@ -632,11 +628,7 @@ export function AccountSection() {
                         await syncFetchOrThrow("/sync/pipes/push", { method: "POST" });
                         toast({ title: "scheduled tasks synced" });
                       } catch (e) {
-                        toast({
-                          title: "sync failed",
-                          description: syncErrorDescription(e),
-                          variant: "destructive",
-                        });
+                        reportSyncFailure(e);
                       } finally {
                         setPipeSyncing(false);
                       }
@@ -697,11 +689,7 @@ export function AccountSection() {
                         await syncFetchOrThrow("/sync/memories/push", { method: "POST" });
                         toast({ title: "memories synced" });
                       } catch (e) {
-                        toast({
-                          title: "sync failed",
-                          description: syncErrorDescription(e),
-                          variant: "destructive",
-                        });
+                        reportSyncFailure(e);
                       } finally {
                         setMemoriesSyncing(false);
                       }
@@ -765,11 +753,7 @@ export function AccountSection() {
                         await syncFetchOrThrow("/sync/connections/push", { method: "POST" });
                         toast({ title: "connections synced" });
                       } catch (e) {
-                        toast({
-                          title: "sync failed",
-                          description: syncErrorDescription(e),
-                          variant: "destructive",
-                        });
+                        reportSyncFailure(e);
                       } finally {
                         setConnectionsSyncing(false);
                       }
@@ -783,6 +767,10 @@ export function AccountSection() {
             </div>
           </div>
           </Card>
+          <SyncKeyRecovery
+            visible={showSyncKeyRecovery}
+            onRecovered={() => setShowSyncKeyRecovery(false)}
+          />
           {hasExpiringProfilePlan && (
             <div ref={upgradeCardRef}>
               <BusinessUpgradeCard
@@ -808,7 +796,7 @@ export function AccountSection() {
             <Button
               className="w-full max-w-xs bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150"
               size="lg"
-              onClick={() => commands.openLoginWindow(null)}
+              onClick={() => commands.openLoginWindow(null, null)}
             >
               Log in
               <ExternalLinkIcon className="w-4 h-4 ml-2" />
@@ -874,12 +862,7 @@ export function AccountSection() {
                   entitlementPlan={subscriptionPlan}
                   fallbackTo={hasExpiringProfilePlan ? "free" : undefined}
                   busy={checkoutBusy}
-                  onChoose={(plan) =>
-                    handleCheckout({
-                      ...defaultUpgradeSelection("account-plan-options"),
-                      plan,
-                    })
-                  }
+                  onSelect={selectPlan}
                 />
               </div>
             </Card>
@@ -901,12 +884,7 @@ export function AccountSection() {
                 <AccountPlanOptions
                   current="free"
                   busy={checkoutBusy}
-                  onChoose={(plan) =>
-                    handleCheckout({
-                      ...defaultUpgradeSelection("account-plan-options"),
-                      plan,
-                    })
-                  }
+                  onSelect={selectPlan}
                 />
               </div>
             </Card>

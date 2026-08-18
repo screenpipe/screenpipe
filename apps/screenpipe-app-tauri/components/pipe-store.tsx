@@ -311,6 +311,26 @@ function normalizePipe(raw: any): any {
   };
 }
 
+function getPipeStoreList(data: unknown): any[] {
+  if (Array.isArray(data)) return data;
+  if (!data || typeof data !== "object") {
+    throw new Error("invalid pipe store response");
+  }
+
+  const payload = data as { data?: unknown; pipes?: unknown; error?: unknown };
+  if (payload.error) {
+    throw new Error(
+      typeof payload.error === "string" ? payload.error : "pipe store request failed"
+    );
+  }
+
+  const list = payload.data ?? payload.pipes;
+  if (!Array.isArray(list)) {
+    throw new Error("invalid pipe store response");
+  }
+  return list;
+}
+
 export function PipeStoreView() {
   // Track installed pipe count to auto-switch to Discover for new users
   const [installedCount, setInstalledCount] = useState<number | null>(null);
@@ -410,6 +430,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
   // Browse state
   const [pipes, setPipes] = useState<StorePipe[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
 
@@ -540,6 +561,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     if (debouncedQuery) params.set("q", debouncedQuery);
     if (sort) params.set("sort", sort);
     const cacheKey = `pipes/store?${params}`;
+    setLoadError(false);
 
     // Show cached data immediately if available
     const cached = apiCache.getStale<any[]>(cacheKey);
@@ -555,21 +577,22 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     }
 
     // Fetch fresh data in background (10s timeout to avoid infinite skeletons)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10_000);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10_000);
       const res = await localFetch(`/pipes/store?${params}`, { signal: controller.signal });
-      clearTimeout(timeoutId);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      const list = data.data || data.pipes || (Array.isArray(data) ? data : []);
+      const list = getPipeStoreList(data);
       const normalized = list.map(normalizePipe);
       apiCache.set(cacheKey, normalized, 5 * 60_000); // 5 min TTL
       setPipes(normalized);
     } catch (err) {
       console.error("failed to fetch pipe store:", err);
+      setLoadError(true);
       if (!cached) setPipes([]);
     } finally {
+      clearTimeout(timeoutId);
       setLoading(false);
     }
   }, [debouncedQuery, sort]);
@@ -1012,6 +1035,25 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
             </Card>
           ))}
         </div>
+      ) : loadError && pipes.length === 0 ? (
+        <Card>
+          <CardContent className="py-12 text-center text-muted-foreground">
+            <AlertTriangle className="mx-auto mb-3 h-5 w-5" />
+            <p className="text-sm text-foreground">couldn&apos;t load scheduled tasks</p>
+            <p className="mt-1.5 text-xs">the task catalog is temporarily unavailable</p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-4"
+              onClick={() => {
+                apiCache.invalidatePrefix("pipes/store");
+                void fetchPipes();
+              }}
+            >
+              TRY AGAIN
+            </Button>
+          </CardContent>
+        </Card>
       ) : pipes.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">

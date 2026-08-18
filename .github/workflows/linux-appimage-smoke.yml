@@ -6,6 +6,8 @@ name: Linux AppImage Smoke
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "11 10 * * *"
   pull_request:
     branches: [main]
     paths:
@@ -18,12 +20,12 @@ on:
       - ".github/workflows/release-app.yml"
       - ".github/workflows/release-enterprise.yml"
       - "apps/screenpipe-app-tauri/scripts/pre_build.js"
-      - "apps/screenpipe-app-tauri/src-tauri/**"
       - "apps/screenpipe-app-tauri/package.json"
       - "apps/screenpipe-app-tauri/bun.lock"
-      - "crates/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
+      - "apps/screenpipe-app-tauri/src-tauri/Cargo.toml"
+      - "apps/screenpipe-app-tauri/src-tauri/Cargo.lock"
+      - "apps/screenpipe-app-tauri/src-tauri/build.rs"
+      - "apps/screenpipe-app-tauri/src-tauri/tauri*.conf.json"
 
 concurrency:
   group: linux-appimage-smoke-${{ github.ref }}

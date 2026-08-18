@@ -80,10 +80,29 @@ x-divergences:
       Neither field is in the wire format, so the gateway has no source for
       them. Typed `[string, "null"]` on both rather than omitted, so a consumer
       writes one branch instead of two.
+  DEV-MEMBER-EMAIL:
+    id: DEV-MEMBER-EMAIL
+    operations: ["GET /devices"]
+    fields: ["devices[].member_email"]
+    hosted: >-
+      enterprise_devices.member_email from the latest device heartbeat: the
+      verified account email when member-authenticated, otherwise null.
+    gateway: always null
+    rationale: >-
+      The customer-run gateway reads telemetry batches from object storage and
+      has no account-identity channel. Keeping the field required and nullable
+      gives consumers one stable response shape without inventing identity.
   SEARCH-ALGORITHM:
     id: SEARCH-ALGORITHM
     operations: ["GET /search"]
-    fields: ["results", "records_scanned", "bytes_scanned", "objects_scanned", "truncated"]
+    fields:
+      [
+        "results",
+        "records_scanned",
+        "bytes_scanned",
+        "objects_scanned",
+        "truncated",
+      ]
     hosted: >-
       case-insensitive SUBSTRING match over a 256KB byte budget. `q=oadma`
       matches "roadmap". The three counters describe that scan and `truncated`
@@ -97,26 +116,6 @@ x-divergences:
       Ingest-once is the gateway's reason to exist; throwing away the index to
       emulate a substring scan over blobs would make it slower AND worse. The
       counters are honestly zero rather than fabricated.
-  SEARCH-ORDER:
-    id: SEARCH-ORDER
-    operations: ["GET /search"]
-    fields: ["results"]
-    hosted: >-
-      results come back in SCAN order: objects newest-first, but lines in file
-      order within each object. So a single object's frame/parsed/audio/ui/memory rows
-      appear in the order the device wrote them, not by timestamp.
-    gateway: >-
-      results are sorted by `t` DESCENDING before truncation.
-    rationale: >-
-      NOT ruled on — found by this suite, not by the SCR-288 audit, and recorded
-      rather than silently converged because changing hosted result ordering is a
-      consumer-visible behavior change that needs an owner. The gateway's
-      guarantee is the stronger one and is pinned by the suite so it cannot
-      regress; the shared assertion is the weaker property both hold (every
-      result is inside the requested window). `/records` is NOT affected — both
-      sort ascending by `t` there.
-      TODO(owner): decide whether hosted /search should sort. If yes this entry
-      goes away and the assertion moves into the shared `expect`.
   SNAPSHOT-KIND:
     id: SNAPSHOT-KIND
     operations: ["GET /records"]
@@ -139,8 +138,8 @@ x-divergences:
       a page can come back count:0 with a non-null next_cursor. The cursor is
       the storage backend's continuation token.
     gateway: >-
-      time-filters the whole listing then applies skip/take, so `count` is exact
-      and `next_cursor` is a decimal offset.
+      time-filters the whole listing then applies a stable object-key keyset, so
+      `count` is exact and inserts before the cursor do not shift later pages.
     rationale: >-
       Cursors are OPAQUE by contract and are not interchangeable across targets.
       A client must treat next_cursor as a token from the same target and must
@@ -193,13 +192,21 @@ paths:
       operationId: listDevices
       summary: List the devices enrolled under the bearer's organization
       x-scope: read:devices
-      x-divergence: [DEV-LIVENESS, DEV-PLATFORM, TIMESTAMP-SERIALIZATION]
+      x-divergence:
+        [DEV-LIVENESS, DEV-PLATFORM, DEV-MEMBER-EMAIL, TIMESTAMP-SERIALIZATION]
+      parameters:
+        - $ref: "#/components/parameters/Pagination"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
-          description: The organization's devices, most recently seen first
+          description: >-
+            Devices in legacy last-seen order by default, or stable device-id
+            order when pagination=keyset.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DeviceList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "500": { $ref: "#/components/responses/ServerError" }
@@ -209,7 +216,7 @@ paths:
       operationId: searchRecords
       summary: Search telemetry records
       x-scope: read:search
-      x-divergence: [SEARCH-ALGORITHM, SEARCH-ORDER]
+      x-divergence: [SEARCH-ALGORITHM]
       parameters:
         - $ref: "#/components/parameters/Q"
         - $ref: "#/components/parameters/DeviceId"
@@ -217,7 +224,9 @@ paths:
         - $ref: "#/components/parameters/Since"
         - $ref: "#/components/parameters/Until"
         - $ref: "#/components/parameters/SinceHoursAgo"
+        - $ref: "#/components/parameters/Pagination"
         - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
           description: Matching records, newest first
@@ -251,7 +260,9 @@ paths:
         - $ref: "#/components/parameters/Since"
         - $ref: "#/components/parameters/Until"
         - $ref: "#/components/parameters/SinceHoursAgo"
+        - $ref: "#/components/parameters/Pagination"
         - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
           description: Records in the window, oldest first
@@ -389,6 +400,8 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 35, minimum: 1, maximum: 100 }
+        - $ref: "#/components/parameters/Pagination"
+        - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
           description: Rollups in range, newest day first
@@ -444,35 +457,14 @@ paths:
         "502": { $ref: "#/components/responses/ServerError" }
 
   /api/enterprise/v1/pipes:
-    get:
-      operationId: listManagedPipes
-      summary: List the organization's currently deployed managed pipes
-      description: >-
-        HOSTED ONLY — returns the current control-plane state so an agent can
-        inspect versions before previewing an edit. The gateway answers
-        `501 {error, code:"not_served_by_gateway"}`.
-      x-scope: write:pipes
-      x-targets: [hosted]
-      responses:
-        "200":
-          description: Current managed Pipe definitions, newest first
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ManagedPipeList" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "501": { $ref: "#/components/responses/NotServedByGateway" }
-        "500": { $ref: "#/components/responses/ServerError" }
     post:
       operationId: pushPipe
-      summary: Preview or deploy a managed pipe for the organization
+      summary: Create or update a managed pipe for the organization's fleet
       description: >-
         HOSTED ONLY — pipe management is a control-plane concern. The gateway
         answers `501 {error, code:"not_served_by_gateway"}` for every method.
-        Send `dry_run:true` to review the exact version, changed fields, and
-        execution scope without writing. Deploy that reviewed state with
-        `dry_run:false` and its `expected_version`; stale edits fail with 409.
-        A `write:pipes` token is ADMIN AUTHORITY over the selected targets.
+        A `write:pipes` token is ADMIN AUTHORITY: every licensed device installs
+        what it pushes with no device-side login.
       x-scope: write:pipes
       x-targets: [hosted]
       requestBody:
@@ -482,12 +474,12 @@ paths:
             schema: { $ref: "#/components/schemas/PipePush" }
       responses:
         "200":
-          description: Preview receipt, unchanged state, or updated deployment request
+          description: An existing pipe was updated and its version bumped
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PipePushResult" }
         "201":
-          description: A new deployment was requested at version 1
+          description: A new pipe was created at version 1
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PipePushResult" }
@@ -497,11 +489,6 @@ paths:
         "400": { $ref: "#/components/responses/InvalidBody" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "409":
-          description: The Pipe changed after the caller inspected or previewed it
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PipeVersionConflict" }
         "501": { $ref: "#/components/responses/NotServedByGateway" }
         "500": { $ref: "#/components/responses/ServerError" }
 
@@ -609,6 +596,24 @@ components:
       in: query
       required: false
       schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+    Pagination:
+      name: pagination
+      in: query
+      required: false
+      schema: { type: string, enum: [keyset] }
+      description: >-
+        Set to `keyset` to opt into pagination and receive `next_cursor`.
+        Omit it for the legacy response shape and ordering.
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema: { type: string }
+      description: >-
+        OPAQUE continuation token from a previous response's `next_cursor`.
+        Pass it back unchanged with the same filters; clients must not construct it.
+        Search, records, devices, and rollups require `pagination=keyset` and
+        use keyset state tied to a frozen scan boundary.
 
   responses:
     BadRequest:
@@ -732,7 +737,12 @@ components:
         app: { type: [string, "null"] }
         window: { type: [string, "null"] }
         url: { type: [string, "null"] }
-        text: { type: [string, "null"], description: Frame OCR / accessibility text, or parsed-app projection text }
+        text:
+          {
+            type: [string, "null"],
+            description: Frame OCR / accessibility text,
+            or parsed-app projection text,
+          }
         transcription: { type: [string, "null"] }
         speaker: { type: [string, "null"] }
         content: { type: [string, "null"], description: 'kind:"memory" only' }
@@ -747,12 +757,36 @@ components:
     Device:
       type: object
       additionalProperties: false
-      required: [device_id, label, platform, app_version, last_seen, enrolled_at]
+      required:
+        [
+          device_id,
+          label,
+          member_email,
+          platform,
+          app_version,
+          last_seen,
+          enrolled_at,
+        ]
       properties:
         device_id: { type: string }
-        label: { type: string, description: Hostname when known, else the device id }
-        platform: { type: [string, "null"], description: Always null on the gateway (DEV-PLATFORM) }
-        app_version: { type: [string, "null"], description: Always null on the gateway (DEV-PLATFORM) }
+        label:
+          { type: string, description: Hostname when known, else the device id }
+        member_email:
+          type: [string, "null"]
+          format: email
+          description: >-
+            Verified account email carried by the latest member-authenticated
+            heartbeat; always null on the gateway (DEV-MEMBER-EMAIL).
+        platform:
+          {
+            type: [string, "null"],
+            description: Always null on the gateway (DEV-PLATFORM),
+          }
+        app_version:
+          {
+            type: [string, "null"],
+            description: Always null on the gateway (DEV-PLATFORM),
+          }
         last_seen:
           type: [string, "null"]
           format: date-time
@@ -771,6 +805,9 @@ components:
         devices:
           type: array
           items: { $ref: "#/components/schemas/Device" }
+        next_cursor:
+          type: [string, "null"]
+          description: Present only with pagination=keyset; null on the final page.
 
     SearchResult:
       type: object
@@ -790,15 +827,39 @@ components:
         query: { type: string }
         device_id: { type: [string, "null"] }
         app_name: { type: [string, "null"] }
-        window_hours: { type: number, minimum: 0 }
+        window_hours:
+          type: number
+          minimum: 0
+          description: Effective response window; use the `since_hours_ago` query parameter to request a relative window.
         records_scanned: { type: integer, minimum: 0 }
-        bytes_scanned: { type: integer, minimum: 0, description: Always 0 on the gateway (SEARCH-ALGORITHM) }
-        objects_scanned: { type: integer, minimum: 0, description: Always 0 on the gateway (SEARCH-ALGORITHM) }
-        truncated: { type: boolean, description: Always false on the gateway (SEARCH-ALGORITHM) }
+        bytes_scanned:
+          {
+            type: integer,
+            minimum: 0,
+            description: Always 0 on the gateway (SEARCH-ALGORITHM),
+          }
+        objects_scanned:
+          {
+            type: integer,
+            minimum: 0,
+            description: Always 0 on the gateway (SEARCH-ALGORITHM),
+          }
+        truncated:
+          {
+            type: boolean,
+            description: Always false on the gateway (SEARCH-ALGORITHM),
+          }
         result_count: { type: integer, minimum: 0 }
         results:
           type: array
           items: { $ref: "#/components/schemas/RecordSummary" }
+        next_cursor:
+          type: [string, "null"]
+          description: >-
+            Present only with pagination=keyset. Mutation-safe token for more matches
+            in the frozen scan window. A null
+            cursor with truncated:true means the byte budget, not pagination, ended
+            the scan; narrow the query or time window.
 
     RecordList:
       type: object
@@ -814,8 +875,16 @@ components:
         - records
       properties:
         device_id: { type: [string, "null"] }
-        kind: { type: string, description: Echoed back lower-cased, including an unrecognized one }
-        window_hours: { type: number, minimum: 0 }
+        kind:
+          {
+            type: string,
+            description: Echoed back lower-cased,
+            including an unrecognized one,
+          }
+        window_hours:
+          type: number
+          minimum: 0
+          description: Effective response window; use the `since_hours_ago` query parameter to request a relative window.
         bytes_scanned: { type: integer, minimum: 0 }
         objects_scanned: { type: integer, minimum: 0 }
         truncated: { type: boolean }
@@ -823,6 +892,13 @@ components:
         records:
           type: array
           items: { $ref: "#/components/schemas/RecordSummary" }
+        next_cursor:
+          type: [string, "null"]
+          description: >-
+            Present only with pagination=keyset. Mutation-safe token for more records
+            in the frozen scan window. A null
+            cursor with truncated:true means the byte budget, not pagination, ended
+            the scan; narrow the time window.
 
     FileEntry:
       type: object
@@ -830,12 +906,21 @@ components:
       required: [key, size, last_modified, device_id]
       properties:
         key: { type: string }
-        size: { type: [integer, "null"], minimum: 0, description: Nullable on the gateway (FILES-NULLABILITY) }
+        size:
+          {
+            type: [integer, "null"],
+            minimum: 0,
+            description: Nullable on the gateway (FILES-NULLABILITY),
+          }
         last_modified:
           type: [string, "null"]
           format: date-time
           description: Nullable on the gateway (FILES-NULLABILITY)
-        device_id: { type: string, description: '"unknown" when the key has no device segment' }
+        device_id:
+          {
+            type: string,
+            description: '"unknown" when the key has no device segment',
+          }
 
     FileList:
       type: object
@@ -843,7 +928,10 @@ components:
       required: [device_id, window_hours, count, files, next_cursor]
       properties:
         device_id: { type: [string, "null"] }
-        window_hours: { type: number, minimum: 0 }
+        window_hours:
+          type: number
+          minimum: 0
+          description: Effective response window; use the `since_hours_ago` query parameter to request a relative window.
         count: { type: integer, minimum: 0 }
         files:
           type: array
@@ -881,6 +969,9 @@ components:
         rollups:
           type: array
           items: { $ref: "#/components/schemas/Rollup" }
+        next_cursor:
+          type: [string, "null"]
+          description: Present only with pagination=keyset; null on the final page.
 
     ManifestEntry:
       type: object
@@ -900,7 +991,8 @@ components:
         - key
       properties:
         artifact_id: { type: string }
-        kind: { type: string, enum: [sop, skill, memory, chart, trajectory, intel] }
+        kind:
+          { type: string, enum: [sop, skill, memory, chart, trajectory, intel] }
         type: { type: string }
         title: { type: string }
         status: { type: string }
@@ -942,7 +1034,12 @@ components:
       additionalProperties: false
       required: [name, prompt_body]
       properties:
-        name: { type: string, pattern: "^[a-zA-Z0-9][a-zA-Z0-9_-]*$", maxLength: 100 }
+        name:
+          {
+            type: string,
+            pattern: "^[a-zA-Z0-9][a-zA-Z0-9_-]*$",
+            maxLength: 100,
+          }
         prompt_body: { type: string, maxLength: 262144 }
         display_name: { type: string }
         schedule: { type: string, default: every 30m }
@@ -951,85 +1048,21 @@ components:
         target_value: { type: array, items: { type: string } }
         ai_preset_id: { type: string }
         enabled: { type: boolean, default: true }
-        dry_run: { type: boolean, default: false }
-        expected_version: { type: integer, minimum: 0 }
-
-    ManagedPipeDesiredState:
-      type: object
-      additionalProperties: false
-      required:
-        [name, display_name, prompt_body, schedule, timeout, target_type,
-         target_value, ai_preset_id, enabled, version]
-      properties:
-        name: { type: string }
-        display_name: { type: string }
-        prompt_body: { type: string }
-        schedule: { type: string }
-        timeout: { type: integer, minimum: 5, maximum: 3600 }
-        target_type: { type: string, enum: [all, member_list, device_list] }
-        target_value: { type: array, items: { type: string } }
-        ai_preset_id: { type: string }
-        enabled: { type: boolean }
-        version: { type: integer, minimum: 1 }
-
-    ManagedPipe:
-      type: object
-      additionalProperties: false
-      required:
-        [id, name, display_name, prompt_body, schedule, timeout, target_type,
-         target_value, ai_preset_id, enabled, version, created_at, updated_at]
-      properties:
-        id: { type: string, format: uuid }
-        name: { type: string }
-        display_name: { type: string }
-        prompt_body: { type: string }
-        schedule: { type: string }
-        timeout: { type: [integer, "null"], minimum: 5, maximum: 3600 }
-        target_type: { type: string, enum: [all, member_list, device_list] }
-        target_value: { type: [array, "null"], items: { type: string } }
-        ai_preset_id: { type: [string, "null"] }
-        enabled: { type: boolean }
-        version: { type: integer, minimum: 1 }
-        created_at: { type: string, format: date-time }
-        updated_at: { type: string, format: date-time }
-
-    ManagedPipeList:
-      type: object
-      additionalProperties: false
-      required: [pipes]
-      properties:
-        pipes:
-          type: array
-          items: { $ref: "#/components/schemas/ManagedPipe" }
 
     PipePushResult:
       type: object
       additionalProperties: false
-      required:
-        [action, current_version, next_version, changed_fields,
-         execution_scope, pipe, note]
+      required: [action, pipe, note]
       properties:
-        action:
-          type: string
-          enum: [would_create, would_update, no_change, created, updated, unchanged]
-        current_version: { type: integer, minimum: 0 }
-        next_version: { type: integer, minimum: 1 }
-        changed_fields:
-          type: array
-          items:
-            type: string
-            enum:
-              [display_name, prompt_body, schedule, timeout, target_type,
-               target_value, ai_preset_id, enabled]
-        execution_scope: { type: string, enum: [cloud, devices, cloud-and-devices] }
+        action: { type: string, enum: [created, updated] }
         note: { type: string }
-        pipe: { $ref: "#/components/schemas/ManagedPipeDesiredState" }
-
-    PipeVersionConflict:
-      type: object
-      additionalProperties: false
-      required: [error, code, current_version]
-      properties:
-        error: { type: string }
-        code: { type: string, const: version_conflict }
-        current_version: { type: integer, minimum: 0 }
+        pipe:
+          type: object
+          additionalProperties: false
+          required: [name, display_name, schedule, enabled, version]
+          properties:
+            name: { type: string }
+            display_name: { type: string }
+            schedule: { type: string }
+            enabled: { type: boolean }
+            version: { type: integer, minimum: 1 }

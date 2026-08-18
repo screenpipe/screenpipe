@@ -31,6 +31,10 @@ import {
 } from "@/lib/chat-storage";
 import { cn } from "@/lib/utils";
 import {
+  readLastSettingsSection,
+  resolveSettingsSection,
+} from "@/lib/settings-sections";
+import {
   DEFAULT_SIDEBAR_NAV_LAYOUT,
   moveSidebarNavItem,
   normalizeSidebarNavLayout,
@@ -42,6 +46,7 @@ import {
   type SidebarNavId,
 } from "@/lib/utils/sidebar-nav-layout";
 import { SidebarNavList } from "@/components/sidebar-nav-list";
+import { CommandPalette } from "@/components/command-palette";
 import { useToast } from "@/components/ui/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { AppSidebar, useSidebarContext } from "@/components/app-sidebar";
@@ -61,6 +66,10 @@ import { mountPipeRunRecorder } from "@/lib/events/pipe-run-recorder";
 import { mountPipeWatchWriter } from "@/lib/events/pipe-watch-writer";
 import { RecordingStatus, type RecordingDevice } from "@/components/recording-status";
 import Timeline from "@/components/rewind/timeline";
+import {
+  NativeTimeline,
+  NativeTimelineBridge,
+} from "@/components/rewind/native-timeline";
 import { useQueryState } from "nuqs";
 import { listen } from "@tauri-apps/api/event";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -114,12 +123,12 @@ const ALL_SECTIONS = [
   "artifacts", // backwards compat → maps to "brain"
 ];
 
-// Settings sections that should redirect to /settings
-const SETTINGS_SECTIONS = new Set<string>([
-  "account", "recording", "ai", "general", "display", "shortcuts", "notifications",
-  "privacy", "storage", "team", "referral", "usage", "speakers",
-  "disk-usage", "cloud-archive", "cloud-sync", // backwards compat → maps to "storage"
-]);
+// Settings sections that should redirect to /settings. Sourced from
+// lib/settings-sections so this cannot drift again — the hand-maintained copy
+// that lived here had already lost `audio`, `ai-settings` and `permissions`,
+// so deep links to those three fell through to the home sidebar and did
+// nothing. `resolveSettingsSection` also follows the legacy storage aliases.
+const isSettingsRoute = (value: string) => resolveSettingsSection(value) !== null;
 
 function HomeContent() {
   const router = useRouter();
@@ -135,7 +144,7 @@ function HomeContent() {
       if (value === "memories") return "brain"; // backwards compat — renamed to brain
       if (value === "artifacts") return "brain"; // backwards compat — artifacts merged into brain
       // Settings sections redirect to /settings page
-      if (SETTINGS_SECTIONS.has(value)) return value; // handled by redirect effect below
+      if (isSettingsRoute(value)) return value; // handled by redirect effect below
       return ALL_SECTIONS.includes(value) ? value : "home";
     },
     serialize: (value) => value,
@@ -259,11 +268,9 @@ function HomeContent() {
 
   // Redirect settings sections to the standalone settings page
   useEffect(() => {
-    if (SETTINGS_SECTIONS.has(activeSection)) {
-      const section = activeSection === "disk-usage" || activeSection === "cloud-archive" || activeSection === "cloud-sync"
-        ? "storage"
-        : activeSection;
-      router.push(`/settings?section=${section}`);
+    const settingsSection = resolveSettingsSection(activeSection);
+    if (settingsSection) {
+      router.push(`/settings?section=${settingsSection}`);
     }
   }, [activeSection, router]);
 
@@ -740,7 +747,7 @@ function HomeContent() {
     };
   }, []);
 
-  const toggleMeeting = useCallback(async (seed?: { title?: string; attendees?: string; resumeMeetingId?: number }) => {
+  const toggleMeeting = useCallback(async (seed?: { title?: string; attendees?: string; resumeMeetingId?: number; calendarEventId?: string }) => {
     setMeetingLoading(true);
     try {
       if (meetingState.active) {
@@ -798,6 +805,9 @@ function HomeContent() {
         if (seed?.resumeMeetingId) body.id = seed.resumeMeetingId;
         if (seed?.title) body.title = seed.title;
         if (seed?.attendees) body.attendees = seed.attendees;
+        // Claim the event so it cannot also name a later meeting.
+        if (seed?.calendarEventId)
+          body.calendar_event_id = seed.calendarEventId;
         const res = await localFetch("/meetings/start", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -866,7 +876,11 @@ function HomeContent() {
     setActiveSection("home");
   });
 
-  const openSettings = useCallback((section: string = "general") => {
+  // No explicit section means "just open Settings" — reopen wherever the user
+  // last was. This entry point defaulted to `general` (auto-start, auto-update,
+  // reset onboarding), which is how that page collected 2,628 of its 3,223
+  // views as forced landings while ranking 9th of 16 on deliberate clicks.
+  const openSettings = useCallback((section: string = readLastSettingsSection()) => {
     const chatId = activeSection === "home" ? useChatStore.getState().currentId : null;
     const fromParam = chatId ? `home:${chatId}` : activeSection;
     router.push(`/settings?section=${section}&from=${fromParam}`);
@@ -879,7 +893,7 @@ function HomeContent() {
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      const section = detail?.section ?? "general";
+      const section = detail?.section ?? readLastSettingsSection();
       // connections is a top-level main-sidebar section now, not in settings
       if (section === "connections") {
         setConnectionFocusRequest({
@@ -925,7 +939,9 @@ function HomeContent() {
         // to chat (the redirect effect also resets activeSection to "home"). This
         // avoids a flash of the disabled placeholder on reload.
         if (settings.disableTimeline) return null;
-        return <Timeline embedded />;
+        // The native window replaces the React timeline where it can run; the
+        // webview one stays as the fallback for hosts without it.
+        return <NativeTimeline fallback={<Timeline embedded />} />;
       case "brain":
         return <BrainSection />;
       case "pipes":
@@ -981,10 +997,10 @@ function HomeContent() {
     // Each click allocates a new session id (empty rows are not reused — that
     // felt like opening an old recent).
     home: { label: "Chat", icon: <Plus className="h-3.5 w-3.5" /> },
-    brain: { label: "Brain", icon: <Brain className="h-3.5 w-3.5" /> },
     meetings: { label: "Meetings", icon: <CalendarClock className="h-3.5 w-3.5" /> },
-    pipes: { label: "Scheduled", icon: <TimerReset className="h-3.5 w-3.5" /> },
     timeline: { label: "Timeline", icon: <MonitorPlay className="h-3.5 w-3.5" /> },
+    brain: { label: "Brain", icon: <Brain className="h-3.5 w-3.5" /> },
+    pipes: { label: "Scheduled", icon: <TimerReset className="h-3.5 w-3.5" /> },
     connections: { label: "Connections", icon: <Plug className="h-3.5 w-3.5" /> },
   };
 
@@ -1066,10 +1082,9 @@ function HomeContent() {
     const url = new URL(event.payload.url, window.location.origin);
     const section = url.searchParams.get("section");
     if (!section) return;
-    if (SETTINGS_SECTIONS.has(section)) {
-      const mapped = section === "disk-usage" || section === "cloud-archive" || section === "cloud-sync"
-        ? "storage" : section;
-      router.push(`/settings?section=${mapped}`);
+    const settingsSection = resolveSettingsSection(section);
+    if (settingsSection) {
+      router.push(`/settings?section=${settingsSection}`);
     } else {
       const mapped = section === "feedback" ? "help" : section;
       if (ALL_SECTIONS.includes(mapped)) {
@@ -1096,6 +1111,45 @@ function HomeContent() {
     <>
       {/* Drag region — always absolute so it works with full-bleed translucent layout */}
       <div className="absolute top-0 left-0 right-0 h-8 z-10" data-tauri-drag-region />
+
+      {/* ⌘K command palette — a second door to actions the sidebar, toolbar,
+          and global shortcuts already own. Each row prints its shortcut, so
+          palette use teaches the direct key. Home window only: the settings
+          page binds its own ⌘K for search focus while mounted. */}
+      {/* Routes actions the native timeline window cannot perform itself. */}
+      <NativeTimelineBridge />
+
+      <CommandPalette
+        deps={{
+          openSearch: () => {
+            void commands.showWindow({ Search: { query: null } });
+          },
+          openTimelineOverlay: () => {
+            void commands.showWindow("Main");
+          },
+          newChat: () => {
+            void setActiveSection("home");
+            startNewChat();
+            void emit("chat-focus-input", {});
+          },
+          pauseRecording: () => {
+            void pauseRecording();
+          },
+          resumeRecording: () => {
+            void resumeRecording();
+          },
+          goToSection: (id) => {
+            void setActiveSection(id);
+          },
+          toggleSidebar,
+          openSettings,
+          sections: availableSidebarIds.map((id) => ({
+            id,
+            label: SIDEBAR_SECTION_DEFS[id].label,
+          })),
+          timelineDisabled: settings.disableTimeline ?? false,
+        }}
+      />
 
           {/* Sidebar */}
           <TooltipProvider delayDuration={0}>
@@ -1138,7 +1192,7 @@ function HomeContent() {
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-xs">
-                {sidebarCollapsed ? "expand sidebar" : "collapse sidebar"} <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">⌘B</kbd>
+                {sidebarCollapsed ? "expand sidebar" : "collapse sidebar"} <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]" suppressHydrationWarning>{isMac ? "⌘B" : "Ctrl+B"}</kbd>
               </TooltipContent>
             </Tooltip>
 
@@ -1309,7 +1363,7 @@ function HomeContent() {
                 <button
                   data-testid="nav-settings"
                   data-announcement-anchor="sidebar-settings"
-                  onClick={() => openSettings("general")}
+                  onClick={() => openSettings()}
                   className={cn(
                     "flex min-w-0 flex-1 items-center space-x-2.5 rounded-lg px-2.5 py-1.5 text-left transition-all duration-150 group",
                     isTranslucent

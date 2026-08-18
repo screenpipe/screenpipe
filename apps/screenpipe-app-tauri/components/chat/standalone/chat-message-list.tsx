@@ -16,11 +16,9 @@ import {
   chatTelemetryContextForResponse,
 } from "@/lib/chat/response-feedback";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
-import {
-  GridDissolveLoader,
-  MessageContent,
-  type LoaderPhase,
-} from "@/components/chat/standalone/message-content";
+import { MessageContent } from "@/components/chat/standalone/message-content";
+import { TurnStatus } from "@/components/chat/standalone/turn-status";
+import type { TurnSignals } from "@/lib/chat/turn-phase";
 import {
   buildCollapsedSteerRenderItems,
   hasAssistantTextBody,
@@ -574,67 +572,49 @@ export function ChatMessageList({
           const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
           const blocks = lastAssistant?.contentBlocks;
           // A pending permission/sign-in card already states the turn is blocked
-          // on the user ("needs your approval"); a generic "analyzing…" loader
-          // below it is both redundant and wrong (the agent is waiting, not
-          // working). The active turn's tool group shows "Waiting for your
-          // approval" instead.
+          // on the user ("needs your approval"); a generic status row below it
+          // is both redundant and wrong (the agent is waiting, not working).
           if (lastAssistant && isPendingAgentActionMessage(lastAssistant)) return null;
           // Once a tool group exists, it owns the live status and completion
-          // receipt. A second generic loader makes completed work look like it
-          // is still running and adds technical-looking visual noise.
+          // receipt. A second status row makes completed work look like it is
+          // still running and adds technical-looking visual noise.
           if (blocks?.some((block) => block.type === "tool")) return null;
-          let loaderPhase: LoaderPhase = "analyzing";
-          let toolName: string | undefined;
 
-          // An ACP agent that is still installing or starting has produced no
-          // blocks yet, so the generic pulse would sit there saying nothing
-          // through a wait that can run minutes on a cold npx fetch. Name the
-          // agent and count the seconds instead.
+          // One row, one phase. The ACP boot label is a phase of this row
+          // rather than a second loader mounted beside it: a cold npx fetch can
+          // run minutes, and the user should see the agent named and counting
+          // in the same place the rest of the turn reports from.
           const boot = acpBoot ?? null;
-          if (boot && !(blocks && blocks.length > 0)) {
-            return (
-              <motion.div
-                data-testid="chat-acp-boot-loader"
-                initial={false}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.15 }}
-                className="w-fit self-start px-2 py-1"
-              >
-                <GridDissolveLoader phase="analyzing" label={boot} />
-              </motion.div>
-            );
-          }
-
+          const booting = Boolean(boot) && !(blocks && blocks.length > 0);
+          let streaming = false;
           if (blocks && blocks.length > 0) {
             const lastBlock = blocks[blocks.length - 1];
-            if (lastBlock.type === "tool" && lastBlock.toolCall.isRunning) {
-              loaderPhase = "tool";
-              toolName = lastBlock.toolCall.toolName;
-            } else if (lastBlock.type === "text" && lastBlock.text) {
-              loaderPhase = "streaming";
-            }
+            if (lastBlock.type === "text" && lastBlock.text) streaming = true;
           }
+
+          const signals: TurnSignals = {
+            active: true,
+            booting,
+            bootLabel: boot,
+            streaming,
+          };
 
           return (
             <motion.div
-              data-testid="chat-active-turn-loader"
+              key="turn-status"
               // A sibling WKWebView can be background-throttled while it
-              // hydrates this turn. Starting at opacity 0 makes the loader
-              // stay invisible until WebKit schedules the entrance frame.
-              // Liveness feedback must be visible immediately in every view.
+              // hydrates this turn. Starting at opacity 0 would keep the row
+              // invisible until WebKit schedules the entrance frame. Liveness
+              // feedback must be visible immediately in every view.
               initial={false}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.15 }}
-              className={cn(
-                "w-fit self-start",
-                loaderPhase === "streaming" || loaderPhase === "analyzing"
-                  ? "px-2 py-1"
-                  : "px-3 py-2 border border-border/50"
-              )}
+              className="w-fit self-start px-2 py-1"
             >
-              <GridDissolveLoader
-                phase={loaderPhase}
-                toolName={toolName}
+              <TurnStatus
+                signals={signals}
+                turnKey={lastAssistant?.id ?? "pending-turn"}
+                startedAt={lastAssistant?.timestamp ?? null}
               />
             </motion.div>
           );

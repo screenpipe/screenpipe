@@ -110,4 +110,45 @@ describe('local AI gateway harness', () => {
 		expect(harness.outboundRequests).toHaveLength(0);
 		harness.assertNoUnexpectedOutboundRequests();
 	});
+
+	test('runs simultaneous total and frontier rules through the real Worker', async () => {
+		const harness = await startHarness({
+			cloudflareSpendRules: true,
+			providerReply: 'pooled frontier integration ok',
+		});
+
+		const usage = await harness.fetch('/usage');
+		expect(usage.status).toBe(200);
+		expect(await usage.json()).toMatchObject({
+			cost_limit_reached: false,
+			hosted_ai: {
+				allowances: [
+					{ lane: 'combined', used_percent: 50, remaining_percent: 50 },
+					{ lane: 'frontier', used_percent: 100, remaining_percent: 0 },
+				],
+				frontier_models: expect.arrayContaining(['gpt-5.6-sol', 'claude-opus-5']),
+			},
+		});
+
+		const completion = await harness.fetch('/chat/completions', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				model: 'gpt-5.6-sol',
+				stream: false,
+				messages: [{ role: 'user', content: 'frontier metadata integration' }],
+				max_tokens: 16,
+			}),
+		});
+		expect(completion.status).toBe(200);
+
+		const gatewayRequest = harness.outboundRequests.find((request) =>
+			request.url.endsWith('/openai/chat/completions'),
+		);
+		expect(gatewayRequest).toBeDefined();
+		const metadata = JSON.parse(gatewayRequest?.headers['cf-aig-metadata'] ?? '{}');
+		expect(Object.keys(metadata).sort()).toEqual(['lane', 'plan', 'trial', 'user_id', 'workload']);
+		expect(metadata).toMatchObject({ plan: 'internal', lane: 'frontier', workload: 'interactive' });
+		harness.assertNoUnexpectedOutboundRequests();
+	});
 });

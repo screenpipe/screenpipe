@@ -11,7 +11,11 @@ const SECTIONS = [
   { id: 'pipes', label: 'Scheduled', sectionTestId: 'section-pipes', urlMatch: /section=pipes/ },
   { id: 'timeline', label: 'Timeline', sectionTestId: 'section-timeline', urlMatch: /section=timeline/ },
   { id: 'help', label: 'Help', sectionTestId: 'section-help', urlMatch: /section=help/ },
-  { id: 'settings', label: 'Settings', sectionTestId: 'section-settings-general', urlMatch: null },
+  // Settings reopens whichever section was last visited
+  // (openSettings() -> readLastSettingsSection()), so assert on a
+  // section-independent marker. This walkthrough only proves the nav item
+  // lands on Settings, not that any particular panel rendered.
+  { id: 'settings', label: 'Settings', sectionTestId: 'settings-back-to-app', urlMatch: null },
 ];
 
 describe('Home window', () => {

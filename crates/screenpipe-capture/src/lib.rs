@@ -17,8 +17,10 @@
 
 pub mod ocr_gate;
 pub mod paired_capture;
+pub mod tree_walker_worker;
 
 pub use ocr_gate::{OcrDecision, OcrGate};
 pub use paired_capture::{
     ocr_semaphore, paired_capture, walk_accessibility_tree, CaptureContext, PairedCaptureResult,
 };
+pub use tree_walker_worker::TreeWalkerWorker;

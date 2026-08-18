@@ -13,8 +13,6 @@ import React, {
 import {
   ArrowDown,
   AlertTriangle,
-  Check,
-  Copy,
   Loader2,
   Play,
   Search,
@@ -23,11 +21,11 @@ import {
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
-import { commands } from "@/lib/utils/tauri";
 import { Button } from "@/components/ui/button";
 import { MediaComponent } from "@/components/rewind/media";
 import { SpeakerAssignPopover } from "@/components/speaker-assign-popover";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
+import { usePlatform } from "@/lib/hooks/use-platform";
 import type { LiveCaptureState } from "@/lib/utils/live-capture-state";
 import {
   fetchMeetingAudio,
@@ -303,13 +301,13 @@ export function TranscriptPanel({
   headerActions,
   captureState,
 }: TranscriptPanelProps) {
+  const { isMac } = usePlatform();
   const [chunks, setChunks] = useState<MeetingAudioChunk[]>([]);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const [copied, setCopied] = useState(false);
   const [liveBlocks, setLiveBlocks] = useState<LiveTranscriptBlock[]>([]);
   const [liveStatus, setLiveStatus] = useState<LiveStreamingStatus | null>(
     null,
@@ -655,23 +653,6 @@ export function TranscriptPanel({
     [visibleLiveSpeakerBlocks],
   );
 
-  // Plain-text dump of the whole transcript (not the filtered view) for
-  // clipboard. Each block becomes a "[hh:mm] name\ntext" paragraph.
-  const handleCopy = async () => {
-    if (displayBlocks.length === 0) return;
-    const text = displayBlocks
-      .map((b) => `[${formatClock(b.startMs)}] ${b.speakerName}\n${b.text}`)
-      .join("\n\n");
-    try {
-      await commands.copyTextToClipboard(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard API can fail under unsupported permissions — silently
-      // skip; the button just won't flip to the check icon.
-    }
-  };
-
   // Search filter — case-insensitive substring match. Keep the matched block
   // count visible so empty results aren't confusing.
   const filteredBlocks = useMemo(() => {
@@ -981,7 +962,7 @@ export function TranscriptPanel({
                     "h-7 w-7 p-0",
                     searchOpen && "bg-accent text-accent-foreground",
                   )}
-                  title={searchOpen ? "hide search" : "search transcript (⌘F)"}
+                  title={searchOpen ? "hide search" : `search transcript (${isMac ? "⌘F" : "Ctrl+F"})`}
                   aria-label={
                     searchOpen ? "hide transcript search" : "search transcript"
                   }
@@ -990,21 +971,9 @@ export function TranscriptPanel({
                   <Search className="h-3.5 w-3.5" />
                 </Button>
               )}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleCopy}
-                disabled={displayBlocks.length === 0}
-                className="h-7 w-7 p-0"
-                title={copied ? "copied" : "copy transcript"}
-                aria-label={copied ? "transcript copied" : "copy transcript"}
-              >
-                {copied ? (
-                  <Check className="h-3.5 w-3.5" />
-                ) : (
-                  <Copy className="h-3.5 w-3.5" />
-                )}
-              </Button>
+              {/* Copying the transcript lives on the meeting share control, one
+                  rule above this header. A second copy icon here sat ~40px
+                  under it with no label saying which scope it had. */}
               {!isSurface && (
                 <Button
                   variant="ghost"

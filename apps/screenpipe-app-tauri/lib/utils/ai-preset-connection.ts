@@ -54,6 +54,7 @@ const headersForPreset = (
   if (preset.provider === "anthropic") {
     if (preset.apiKey) headers["x-api-key"] = preset.apiKey;
     headers["anthropic-version"] = "2023-06-01";
+    headers["anthropic-dangerous-direct-browser-access"] = "true";
   } else if (preset.apiKey) {
     headers.Authorization = `Bearer ${preset.apiKey}`;
   }
@@ -78,11 +79,15 @@ export async function testAiPresetConnection(
   const isAnthropic = preset.provider === "anthropic";
   const startedAt = performance.now();
 
+  // `stream: false` is explicit on both shapes: the reply is read with
+  // response.json(), and some compatible gateways stream by default when the
+  // field is omitted.
   let body = isAnthropic
     ? {
         model: preset.model || "",
         messages: [{ role: "user", content: "say hi" }],
         max_tokens: 50,
+        stream: false,
       }
     : buildChatTestBody(preset.model || "", "say hi", 50, "max_tokens");
 

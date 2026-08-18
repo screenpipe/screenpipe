@@ -294,10 +294,10 @@ fn elements_outline_text(elements: &[ElementResponse], total: i64) -> String {
     let mut by_frame: std::collections::HashMap<i64, Vec<&ElementResponse>> =
         std::collections::HashMap::new();
     for e in kept.iter().copied() {
-        if !by_frame.contains_key(&e.frame_id) {
+        by_frame.entry(e.frame_id).or_insert_with(|| {
             frame_order.push(e.frame_id);
-            by_frame.insert(e.frame_id, Vec::new());
-        }
+            Vec::new()
+        });
         by_frame.get_mut(&e.frame_id).unwrap().push(e);
     }
 

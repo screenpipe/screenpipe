@@ -8,6 +8,7 @@ import {
   installedPiPackageSourceSet,
   normalizePiPackageSource,
   PI_EXTENSION_CATALOG,
+  PORTABLE_AGENT_EXTENSION_CATALOG,
   registryQueryForPiExtensions,
   searchPiExtensionRegistry,
 } from "@/lib/pi-extension-catalog";
@@ -25,6 +26,13 @@ describe("Pi extension catalog", () => {
         "npm:@eko24ive/pi-ask",
       ]),
     );
+  });
+
+  it("keeps provider-neutral middleware capabilities separate from Pi packages", () => {
+    expect(PORTABLE_AGENT_EXTENSION_CATALOG.map((item) => item.id)).toEqual(
+      expect.arrayContaining(["screen-history", "web-search", "connections", "artifacts"]),
+    );
+    expect(PI_EXTENSION_CATALOG.every((item) => item.compatibility === "pi-only")).toBe(true);
   });
 
   it("normalizes npm sources for installed-source matching", () => {
@@ -85,9 +93,33 @@ describe("Pi extension catalog", () => {
     expect(result.items.map((item) => item.source)).toEqual(["npm:@piotr-oles/pi-reflag"]);
     expect(result.items[0].name).toBe("Reflag");
     expect(result.items[0].publishedAt).toBe("2026-07-17T16:00:00.000Z");
+    expect(result.items[0].compatibility).toBe("pi-only");
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("size=250"),
       expect.any(Object),
     );
+  });
+
+  it("recognizes packages that opt into the portable ACP MCP contract", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        total: 1,
+        objects: [
+          {
+            package: {
+              name: "pi-portable-tool",
+              description: "A Pi package with an ACP MCP entrypoint.",
+              keywords: ["pi-package", "screenpipe-acp"],
+            },
+          },
+        ],
+      }),
+    }));
+
+    const result = await searchPiExtensionRegistry("portable");
+
+    expect(result.items[0].compatibility).toBe("all-agents");
+    expect(result.items[0].compatibilityVerified).toBe(false);
   });
 });

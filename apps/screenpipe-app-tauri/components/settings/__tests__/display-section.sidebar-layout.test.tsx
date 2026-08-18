@@ -41,36 +41,36 @@ describe("DisplaySection sidebar layout", () => {
 
   afterEach(() => cleanup());
 
-  it("shows meetings out of the sidebar by default", () => {
-    render(<DisplaySection />);
-    expect(screen.getByTestId("meetings-in-sidebar")).toHaveAttribute(
-      "data-state",
-      "unchecked",
-    );
-    expect(screen.getByText("Compact icon next to search")).toBeInTheDocument();
-  });
-
-  it("moves meetings into the sidebar", () => {
-    render(<DisplaySection />);
-    fireEvent.click(screen.getByTestId("meetings-in-sidebar"));
-    const patch = mocks.updateSettings.mock.calls[0][0];
-    expect(patch.sidebarNavLayout.hidden).not.toContain("meetings");
-  });
-
-  it("moves meetings back out to the chrome strip", () => {
-    mocks.settings = {
-      ...mocks.settings,
-      sidebarNavLayout: { ...DEFAULT_SIDEBAR_NAV_LAYOUT, hidden: [] },
-    };
+  it("shows meetings in the sidebar by default", () => {
     render(<DisplaySection />);
     expect(screen.getByTestId("meetings-in-sidebar")).toHaveAttribute(
       "data-state",
       "checked",
     );
+    expect(screen.getByText("Labelled row in the sidebar")).toBeInTheDocument();
+  });
+
+  it("moves meetings out to the chrome strip", () => {
+    render(<DisplaySection />);
+    fireEvent.click(screen.getByTestId("meetings-in-sidebar"));
+    const patch = mocks.updateSettings.mock.calls[0][0];
+    expect(patch.sidebarNavLayout.hidden).toContain("meetings");
+  });
+
+  it("moves meetings back into the sidebar", () => {
+    mocks.settings = {
+      ...mocks.settings,
+      sidebarNavLayout: { ...DEFAULT_SIDEBAR_NAV_LAYOUT, hidden: ["meetings"] },
+    };
+    render(<DisplaySection />);
+    expect(screen.getByTestId("meetings-in-sidebar")).toHaveAttribute(
+      "data-state",
+      "unchecked",
+    );
     fireEvent.click(screen.getByTestId("meetings-in-sidebar"));
     expect(
       mocks.updateSettings.mock.calls[0][0].sidebarNavLayout.hidden,
-    ).toContain("meetings");
+    ).not.toContain("meetings");
   });
 
   // The reset escape hatch only appears once the layout actually drifted, so a
@@ -82,7 +82,7 @@ describe("DisplaySection sidebar layout", () => {
 
     mocks.settings = {
       ...mocks.settings,
-      sidebarNavLayout: { ...DEFAULT_SIDEBAR_NAV_LAYOUT, hidden: [] },
+      sidebarNavLayout: { ...DEFAULT_SIDEBAR_NAV_LAYOUT, hidden: ["meetings"] },
     };
     render(<DisplaySection />);
     fireEvent.click(screen.getByTestId("reset-sidebar-layout"));

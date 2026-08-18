@@ -68,6 +68,19 @@ export type AnnouncementPosition =
   | CardPosition
   | BubblePosition;
 
+/** Which channel an announcement arrived on.
+ *
+ *  `remote` is the PostHog `app-announcement` flag: authenticated, audited,
+ *  first-party, and changed by a named human in a dashboard.
+ *
+ *  `local` is a `POST /notify` push. The control server rejects foreign
+ *  `Origin`/`Host`, but a headerless same-user process (a pipe, an agent, a
+ *  plain curl) is accepted by design — loopback bind is not an authorization
+ *  boundary. A local push also carries no provenance, so it renders exactly
+ *  like a first-party announcement. Destinations that start a privileged flow
+ *  are therefore remote-only. */
+export type AnnouncementSource = "remote" | "local";
+
 export interface AnnouncementCta {
   /** button label. shown UPPERCASE by the host per brand. */
   label: string;
@@ -76,6 +89,13 @@ export interface AnnouncementCta {
   /** internal app route (e.g. "/settings?section=account"). takes precedence
    *  over `url` when both are set. */
   route?: string;
+  /** Store slug. Opens the normal install dialog for that pipe — the same
+   *  consent surface as a `screenpipe://install-pipe` deep link, showing
+   *  permissions and required connections before anything is written. A
+   *  remote payload can name a Store slug and nothing else: it cannot supply
+   *  an install URL, cannot install silently, and cannot enable a pipe.
+   *  Takes precedence over `route` and `url` when several are set. */
+  pipe?: string;
 }
 
 export interface Announcement {
@@ -250,7 +270,20 @@ export function safeAnnouncementExternalUrl(raw: unknown): string | null {
   }
 }
 
-function normalizeCta(raw: unknown): AnnouncementCta | undefined {
+/** Store slugs are lowercase kebab identifiers. Narrower than `IDENTIFIER` on
+ *  purpose: the value is interpolated into a `registry:<slug>` source, so no
+ *  dots, colons, slashes or uppercase. */
+const PIPE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
+
+export function safeAnnouncementPipeSlug(raw: unknown): string | null {
+  const value = boundedString(raw, 80);
+  return value && PIPE_SLUG.test(value) ? value : null;
+}
+
+function normalizeCta(
+  raw: unknown,
+  source: AnnouncementSource,
+): AnnouncementCta | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const r = raw as Record<string, unknown>;
   const label = boundedString(r.label, 40);
@@ -258,10 +291,16 @@ function normalizeCta(raw: unknown): AnnouncementCta | undefined {
   const cta: AnnouncementCta = { label };
   const url = safeAnnouncementExternalUrl(r.url);
   const route = safeInternalRoute(r.route);
+  // `pipe` opens the installer, so it is remote-only. A local push carries no
+  // provenance and renders identically to a first-party announcement, which
+  // would make it a convincing way to talk someone into installing something.
+  // A local caller can still route to the Store page and let the user choose.
+  const pipe = source === "remote" ? safeAnnouncementPipeSlug(r.pipe) : null;
   if (url) cta.url = url;
   if (route) cta.route = route;
-  // a cta with neither destination is a dead button — drop it.
-  if (!cta.url && !cta.route) return undefined;
+  if (pipe) cta.pipe = pipe;
+  // a cta with no destination is a dead button — drop it.
+  if (!cta.url && !cta.route && !cta.pipe) return undefined;
   return cta;
 }
 
@@ -347,8 +386,14 @@ export function sanitizeSurveyAnswers(
  * Validate + normalize an untrusted payload (PostHog JSON, preview blob) into a
  * fully-defaulted `Announcement`, or `null` if it isn't a usable announcement.
  * Never throws — bad remote data must not crash the app.
+ *
+ * `source` narrows the contract by channel, it does not widen it. See
+ * `AnnouncementSource`.
  */
-export function parseAnnouncement(raw: unknown): Announcement | null {
+export function parseAnnouncement(
+  raw: unknown,
+  source: AnnouncementSource = "remote",
+): Announcement | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
 
@@ -385,7 +430,7 @@ export function parseAnnouncement(raw: unknown): Announcement | null {
     announcement.dismissible = true;
   }
 
-  const cta = normalizeCta(r.cta);
+  const cta = normalizeCta(r.cta, source);
   if (cta) announcement.cta = cta;
   const survey = normalizeSurvey(r.survey);
   if (r.survey !== undefined && !survey) return null;

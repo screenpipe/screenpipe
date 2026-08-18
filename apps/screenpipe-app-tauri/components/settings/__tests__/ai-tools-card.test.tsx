@@ -16,6 +16,7 @@ const libMocks = vi.hoisted(() => ({
   disconnectAiTool: vi.fn(),
   isOpenclawMcpInstalled: vi.fn(async () => false),
   isHermesMcpInstalled: vi.fn(async () => false),
+  isRunnerMcpInstalled: vi.fn(async () => false),
   isWindsurfMcpInstalled: vi.fn(async () => false),
 }));
 
@@ -41,6 +42,7 @@ vi.mock("@/lib/ai-tools-mcp", () => ({
     cursor: "Cursor",
     openclaw: "OpenClaw",
     hermes: "Hermes",
+    runner: "Runner",
     windsurf: "Windsurf (Devin Desktop)",
   },
   SKILLS_TARGET: { claude: "claude", codex: "codex" },
@@ -101,5 +103,15 @@ describe("AiToolsCard", () => {
       expect(libMocks.disconnectAiTool).toHaveBeenCalledWith("claude");
       expect(libMocks.disconnectAiTool).toHaveBeenCalledWith("codex");
     });
+  });
+
+  it("shows Runner's required local-server step after configuration", async () => {
+    libMocks.detectAiTools.mockResolvedValue(["runner"]);
+    libMocks.isRunnerMcpInstalled.mockResolvedValue(true);
+
+    render(<AiToolsCard />);
+    fireEvent.click(await screen.findByRole("button", { name: /manage/i }));
+
+    expect(await screen.findByText(/enable Settings > Workspace > Local MCP Servers/i)).toBeTruthy();
   });
 });

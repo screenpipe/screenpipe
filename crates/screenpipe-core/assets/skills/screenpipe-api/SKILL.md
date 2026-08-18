@@ -9,6 +9,8 @@ After completing a complex Screenpipe query, always delegate reusable procedural
 
 Local REST API at `http://localhost:3030`.
 
+**Prefer this over the CLI for reads.** A `curl` against the local API returns in ~0.02s; a `screenpipe` CLI call costs ~0.15s at best and ~4s when it has to resolve `screenpipe@latest` from npm. Reach for the CLI only for state changes it uniquely owns (`pipe enable`, `connection set`).
+
 ## Authentication
 
 **If screenpipe MCP tools are available in your session, prefer them** — same data, no key or network handling. Some agent sandboxes (e.g. Codex) block all shell network access including localhost, so curl can never work there.
@@ -33,9 +35,20 @@ No-auth endpoints: `/health`, `/ws/health`, `/audio/device/status`, `/connection
 
 ## Context Window Protection
 
-Responses can be large. Write curl output to a file (`-o /tmp/sp.json`), check size (`wc -c`), and if over ~5KB read only the first 50-100 lines / extract with `jq`. Never dump full large responses into context.
+Responses can be large. Write curl output to a file (`-o /tmp/sp.json`), check size (`wc -c`), and if over ~5KB read only the first 50-100 lines. Never dump full large responses into context.
 
-Cut tokens at the source on list endpoints (`/search`, `/elements`): add `&format=csv` (or `tsv`) for a columnar table (column names written once instead of per-row keys — ~70% cheaper on uniform rows like elements), and `&fields=a,b,c` for only the columns you need (dotted paths like `content.text`). Text-heavy `ocr`/`audio` barely benefit — use `fields` + `max_content_length` there instead.
+**Only assume `curl`, `wc`, `head`, `grep`, `sed` and `bun` exist.** `jq` is *not* installed on every machine — stock macOS and the bundled Windows bash both lack it. To pull fields out of JSON, either ask the API for flat rows (`format=csv`, below) and read them with `head`, or use bun, which always ships with screenpipe:
+
+```bash
+bun -e 'const d=await Bun.file("/tmp/sp.json").json(); for (const r of d.data.slice(0,20)) console.log(r.type, r.content.app_name??"", (r.content.text??r.content.transcription??"").slice(0,120))'
+```
+
+Use `jq` only after confirming it exists (`command -v jq`).
+
+Cut tokens at the source on list endpoints (`/search`, `/elements`). Two independent knobs, both shown in the examples below — copy them:
+
+- **`&fields=a,b,c`** — always set it. Dotted paths (`content.text`, `content.app_name`). Applies to every content type, including text-heavy `ocr`/`audio`, where you should also set `max_content_length`.
+- **`&format=csv`** (or `tsv`) — columnar table, column names written once instead of per-row keys. ~70% cheaper on *uniform* rows, so use it on `/elements` and on single-`content_type` `/search` calls. Skip it on mixed `content_type=all`, where rows have different shapes and CSV gains little.
 
 ---
 
@@ -64,17 +77,19 @@ Use when `/activity-summary` says `ok` but you need verbatim quotes, media paths
 ```bash
 curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
   -H "X-Screenpipe-Client: api" \
-  "http://localhost:3030/search?q=QUERY&content_type=all&limit=10&start_time=1h%20ago"
+  -o /tmp/sp.json \
+  "http://localhost:3030/search?q=QUERY&content_type=all&limit=10&start_time=1h%20ago&fields=type,content.app_name,content.text,content.transcription,content.timestamp"
+wc -c /tmp/sp.json && head -c 2000 /tmp/sp.json
 ```
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `q` | No | Keywords. Avoid for audio — transcriptions are noisy, `q` over-filters. |
 | `content_type` | No | `all` (default), `accessibility`, `audio`, `input`, `ocr`, `memory`, `parsed`. Use `parsed` for compact app-specific messages, emails, tasks, documents, and code review. Parsed capture is experimental, may be empty when disabled/unsupported, and is not included in `all`. Screen text is primarily the accessibility tree; OCR is the fallback for apps without it (videos, games, remote desktops). |
-| `limit` | No | Default 20. Keep ≤20 to protect context. |
+| `limit` | No | Default 20. Must be 1-20 — never pass a larger value; page with `offset` instead. |
 | `offset` | No | Pagination. Default 0. |
-| `start_time` | **Yes** | ISO 8601 or relative (`16h ago`, `2d ago`, `30m ago`). |
-| `end_time` | No | Defaults to now (`now`, `1h ago`). |
+| `start_time` | **Yes** | ISO 8601, relative (`16h ago`, `2d ago`, `30m ago`), or local calendar literal (`today`, `yesterday`, `YYYY-MM-DD`). |
+| `end_time` | No | Same forms as `start_time`; defaults to `now`. |
 | `app_name` | No | Substring, e.g. "Google Chrome", "Slack". |
 | `window_name` | No | Window title substring. |
 | `frame_id` | No | With `content_type=parsed`, return parsed data attached to one frame. |
@@ -87,7 +102,19 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
 | `format` | No | `json` (default), `csv`, `tsv`/`table`. CSV is lossless; TSV collapses newlines. |
 | `fields` | No | Column allowlist of dotted paths, e.g. `type,content.app_name,content.text`. |
 
-**Critical rules:** always include `start_time` (unbounded queries timeout) · "recent" = 30 min, "today" = since midnight, "yesterday" = yesterday's range · if `/search` is empty, fall back to `/activity-summary` and check `data_status` before saying "no data" · on timeout, narrow the range.
+**Calendar ranges are local:** `today`, `yesterday`, and bare `YYYY-MM-DD` dates mean the user's LOCAL calendar days in their timezone, not UTC days or rolling 24-hour ranges. Pass calendar literals directly to the API (`start_time=today&end_time=now`, `start_time=yesterday&end_time=today`). Never calculate midnight with `date -u` or append `T00:00:00Z`.
+
+**Other critical rules:** always include `start_time` (unbounded queries timeout) · "recent" = 30 min · if `/search` is empty, fall back to `/activity-summary` and check `data_status` before saying "no data" · on timeout, narrow the range. · always pass `fields=` with only the columns you need · always keep `limit` between 1 and 20 · always write the response to a file with `-o` and read it with `head`, never straight to stdout · "recent" = 30 min, "today" = since midnight, "yesterday" = yesterday's range · if `/search` is empty, fall back to `/activity-summary` and check `data_status` before saying "no data" · on timeout, narrow the range.
+
+Single `content_type` means uniform rows, so add `format=csv` too:
+
+```bash
+curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
+  -H "X-Screenpipe-Client: api" \
+  -o /tmp/sp.csv \
+  "http://localhost:3030/search?content_type=ocr&limit=20&start_time=2h%20ago&format=csv&fields=content.timestamp,content.app_name,content.text"
+head -20 /tmp/sp.csv
+```
 
 **Tags** link people/projects/topics across screen, audio, and memories under one namespace (`person:ada`, `project:atlas`, `topic:pricing`). Add to a frame/audio: `POST /tags/vision/{frame_id}` or `POST /tags/audio/{chunk_id}` body `{"tags":["person:ada"]}`; to a memory: `tags` in `POST /memories`. Retrieve: `GET /search?tags=person:ada&start_time=30d%20ago` (add `content_type=memory` for memories). Frames are pruned by retention — tag a **memory** for durable links (memories carry `created_at` + a `frame_id` back to the moment). `include_related=true` returns co-occurring tags grouped by namespace, replacing 2-3 follow-up calls.
 

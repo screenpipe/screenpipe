@@ -19,6 +19,7 @@ use screenpipe_a11y::tree::TreeWalkerConfig;
 use screenpipe_a11y::ActivityFeed;
 use screenpipe_capture::ocr_gate::OcrGate;
 use screenpipe_capture::paired_capture::{paired_capture, CaptureContext, PairedCaptureResult};
+use screenpipe_capture::TreeWalkerWorker;
 use screenpipe_core::window_pattern::{self, WindowPattern};
 use screenpipe_db::DatabaseManager;
 use screenpipe_screen::capture_screenshot_by_window::WindowFilters;
@@ -43,6 +44,7 @@ use tracing::{debug, error, info, warn};
 const CAPTURE_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 #[cfg(not(target_os = "macos"))]
 const CAPTURE_OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
+const TREE_WALK_WORKER_TIMEOUT: Duration = Duration::from_secs(12);
 const WARM_VISUAL_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const WARM_FOCUS_BACKSTOP_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -249,6 +251,7 @@ pub(crate) struct CaptureParams<'a> {
     pub device_name: &'a str,
     pub snapshot_writer: &'a SnapshotWriter,
     pub tree_walker_config: &'a TreeWalkerConfig,
+    pub tree_walker: &'a TreeWalkerWorker,
     pub window_filters: WindowFilters,
     pub ignored_patterns: Vec<WindowPattern>,
     pub use_pii_removal: bool,
@@ -301,23 +304,23 @@ pub enum CaptureTrigger {
     Manual,
 }
 
-/// A trigger plus the `correlation_id` of the originating `ui_events` row,
-/// if any. The recorder assigns the correlation id when forwarding events
-/// that warrant a capture; the capture loop accumulates them across
-/// debounced triggers and reports the full set back through the frame
-/// linker once the resulting frame lands. Internally-generated triggers
-/// (Idle, VisualChange, Manual) leave `correlation_id` as `None`.
+/// A trigger plus the correlation IDs of its originating `ui_events` rows.
+/// Most recorder events carry one ID; a settled scroll burst carries every
+/// row ID atomically so a bounded broadcast channel cannot lose part of the
+/// burst. The capture loop accumulates IDs across debounced triggers and
+/// reports the full set back through the frame linker once the resulting
+/// frame lands. Internally-generated triggers carry an empty vector.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CaptureTriggerMsg {
     pub trigger: CaptureTrigger,
-    pub correlation_id: Option<crate::frame_linker::CorrelationId>,
+    pub correlation_ids: Vec<crate::frame_linker::CorrelationId>,
 }
 
 impl CaptureTriggerMsg {
     pub fn new(trigger: CaptureTrigger) -> Self {
         Self {
             trigger,
-            correlation_id: None,
+            correlation_ids: Vec::new(),
         }
     }
     pub fn with_correlation(
@@ -326,7 +329,17 @@ impl CaptureTriggerMsg {
     ) -> Self {
         Self {
             trigger,
-            correlation_id: Some(id),
+            correlation_ids: vec![id],
+        }
+    }
+
+    pub fn with_correlations(
+        trigger: CaptureTrigger,
+        correlation_ids: Vec<crate::frame_linker::CorrelationId>,
+    ) -> Self {
+        Self {
+            trigger,
+            correlation_ids,
         }
     }
 }
@@ -360,11 +373,7 @@ fn drain_pending_corr_ids(
     let mut out = Vec::new();
     loop {
         match trigger_rx.try_recv() {
-            Ok(msg) => {
-                if let Some(corr) = msg.correlation_id {
-                    out.push(corr);
-                }
-            }
+            Ok(msg) => out.extend(msg.correlation_ids),
             Err(broadcast::error::TryRecvError::Empty)
             | Err(broadcast::error::TryRecvError::Closed) => break,
             Err(broadcast::error::TryRecvError::Lagged(_)) => {
@@ -402,9 +411,7 @@ where
     let mut trigger: Option<CaptureTrigger> = None;
     let mut correlation_ids = Vec::new();
     for msg in msgs {
-        if let Some(corr) = msg.correlation_id {
-            correlation_ids.push(corr);
-        }
+        correlation_ids.extend(msg.correlation_ids);
         let candidate_priority = trigger_reduce_priority(&msg.trigger);
         let current_priority = trigger.as_ref().map(trigger_reduce_priority).unwrap_or(0);
         if trigger.is_none() || candidate_priority >= current_priority {
@@ -678,8 +685,9 @@ pub type TriggerReceiver = broadcast::Receiver<CaptureTriggerMsg>;
 
 /// Broadcast buffer for capture triggers. Sized to absorb a typing
 /// burst (Arc/Claude routinely emit 100+ Text/Click events in <200ms)
-/// while one monitor is mid-screenshot (250-800ms blocking). At 32B per
-/// `CaptureTriggerMsg` this is ~128KB total. Smaller buffers cause
+/// while one monitor is mid-screenshot (250-800ms blocking). The buffer
+/// remains modest for ordinary one-ID messages, while batched scroll IDs stay
+/// atomic within one slot. Smaller buffers cause
 /// `broadcast::error::RecvError::Lagged`, which drops correlation_ids
 /// permanently — the `ui_events` rows then stay `frame_id = NULL`.
 pub const TRIGGER_CHANNEL_BUFFER: usize = 4096;
@@ -867,6 +875,20 @@ fn record_loop_stage(
     monitor.record_loop_stage(stage);
 }
 
+/// Publish whether this loop is taking screenshots, and if not why, so
+/// `/health` can tell an intentional pixel pause apart from a capture failure
+/// (#5808). Both inputs are process-global (a config flag and the active power
+/// profile), so every monitor's loop writes the same value and last-writer-wins
+/// on the aggregate is correct.
+fn record_screenshot_capture_state(
+    aggregate: &screenpipe_screen::PipelineMetrics,
+    monitor: &screenpipe_screen::PipelineMetrics,
+    state: screenpipe_screen::ScreenshotCaptureState,
+) {
+    aggregate.record_screenshot_capture_state(state);
+    monitor.record_screenshot_capture_state(state);
+}
+
 fn record_persisted_capture(
     aggregate: &screenpipe_screen::PipelineMetrics,
     monitor: &screenpipe_screen::PipelineMetrics,
@@ -876,6 +898,32 @@ fn record_persisted_capture(
     aggregate.record_db_write(duration);
     monitor.record_capture();
     monitor.record_db_write(duration);
+}
+
+/// Record the mutually exclusive live OCR cache outcomes carried by a
+/// successfully persisted capture result.
+fn record_ocr_result_metrics(
+    vision_metrics: &screenpipe_screen::PipelineMetrics,
+    result: &PairedCaptureResult,
+) {
+    debug_assert!(
+        !(result.ocr_cache_hit && result.ocr_duration_ms.is_some()),
+        "a capture cannot both reuse cached OCR and execute OCR"
+    );
+
+    if result.ocr_cache_hit {
+        vision_metrics.record_ocr_cache_hit();
+    }
+    match (result.ocr_duration_ms, result.ocr_was_empty) {
+        (Some(ocr_ms), true) => {
+            vision_metrics.record_ocr(Duration::from_millis(ocr_ms));
+            vision_metrics.record_ocr_empty();
+        }
+        (Some(ocr_ms), false) => {
+            vision_metrics.record_ocr(Duration::from_millis(ocr_ms));
+        }
+        (None, _) => {}
+    }
 }
 
 fn record_capture_skip(
@@ -926,6 +974,13 @@ pub(crate) async fn event_driven_capture_loop(
 
     let screenshots_disabled_by_config = config.disable_screenshots;
     let mut screenshot_disabled = screenshots_disabled_by_config;
+    // Publish the effective state so /health can name an intentional pixel
+    // pause instead of blaming Screen Recording permission for it (#5808).
+    record_screenshot_capture_state(
+        &vision_metrics,
+        &monitor_liveness,
+        screenpipe_screen::ScreenshotCaptureState::resolve(screenshots_disabled_by_config, false),
+    );
     let mut visual_check_enabled = config.visual_check_interval_ms > 0 && !screenshot_disabled;
     let mut visual_check_interval = Duration::from_millis(config.visual_check_interval_ms);
     let mut visual_change_threshold = config.visual_change_threshold;
@@ -1028,6 +1083,8 @@ pub(crate) async fn event_driven_capture_loop(
     // (slides, screen-share, demos) bypass AX-hash dedup during meetings even
     // when no HD session is running. Stays false when no controller is wired.
     let mut in_meeting = false;
+    let tree_walker =
+        TreeWalkerWorker::spawn(format!("monitor-{monitor_id}"), tree_walker_config.clone())?;
 
     let capture_params = CaptureParams {
         db: &db,
@@ -1036,6 +1093,7 @@ pub(crate) async fn event_driven_capture_loop(
         device_name: &device_name,
         snapshot_writer: &snapshot_writer,
         tree_walker_config: &tree_walker_config,
+        tree_walker: &tree_walker,
         window_filters: WindowFilters::new(
             &tree_walker_config.ignored_windows,
             &tree_walker_config.included_windows,
@@ -1102,13 +1160,7 @@ pub(crate) async fn event_driven_capture_loop(
                         &monitor_liveness,
                         Duration::from_millis(result.duration_ms),
                     );
-                    // OCR metrics: record once per OCR run (each run = cache miss).
-                    if let Some(ocr_ms) = result.ocr_duration_ms {
-                        vision_metrics.record_ocr(Duration::from_millis(ocr_ms), 0, 1);
-                        if result.ocr_was_empty {
-                            vision_metrics.record_ocr_empty();
-                        }
-                    }
+                    record_ocr_result_metrics(&vision_metrics, result);
                     if let Some(ref cache) = hot_frame_cache {
                         push_to_hot_cache(cache, result, &device_name, &CaptureTrigger::Manual)
                             .await;
@@ -1466,6 +1518,14 @@ pub(crate) async fn event_driven_capture_loop(
                 visual_check_interval = Duration::from_millis(profile.visual_check_interval_ms);
                 visual_change_threshold = profile.visual_change_threshold;
                 screenshot_disabled = screenshots_disabled_by_config || profile.screenshot_disabled;
+                record_screenshot_capture_state(
+                    &vision_metrics,
+                    &monitor_liveness,
+                    screenpipe_screen::ScreenshotCaptureState::resolve(
+                        screenshots_disabled_by_config,
+                        profile.screenshot_disabled,
+                    ),
+                );
                 visual_check_enabled = profile.visual_check_interval_ms > 0 && !screenshot_disabled;
                 if visual_check_enabled && frame_comparer.is_none() {
                     frame_comparer =
@@ -1548,55 +1608,69 @@ pub(crate) async fn event_driven_capture_loop(
                 tokio::time::sleep(poll_interval).await;
             }
         } else {
-            // Block on `recv()` for the FIRST trigger so an idle channel
-            // doesn't burn CPU (matches the upstream "reduce idle
-            // wakeups" change). Once a message arrives, drain the rest
-            // via `try_recv` so that bursts of triggers coalesce into
-            // one capture, with every correlation_id reaching the
-            // linker. The reducer then collapses (kind, corr_ids) and
-            // filters out skipped kinds (Clipboard/KeyPress with their
-            // respective gates off).
+            // Drain without parking this long-lived capture task inside
+            // `broadcast::Receiver::recv()`. Production traces showed this
+            // task repeatedly failing to resume from that receiver wait even
+            // though its 250ms timeout had elapsed; the heartbeat then froze
+            // for minutes while the rest of the runtime stayed healthy.
+            //
+            // Preserve the same 250ms idle cadence and CPU cost with a plain
+            // timer sleep. Triggers remain buffered by the broadcast channel
+            // and are drained on wake, adding at most the same poll interval
+            // already budgeted for checkpoint promotion and idle capture.
+            // This removes the receiver-waker/cancellation path without adding
+            // a retry threshold, watchdog timer, or other recovery heuristic.
             let mut drained: Vec<CaptureTriggerMsg> = Vec::new();
             let mut lagged_force_manual = false;
             let mut closed_now = false;
 
+            // Preserve immediate handling for an already-buffered trigger.
+            // Sleep only when the channel is empty; anything arriving during
+            // that sleep remains buffered for the drain below.
             record_loop_stage(
                 &vision_metrics,
                 &monitor_liveness,
-                screenpipe_screen::CaptureLoopStage::TriggerWait,
+                screenpipe_screen::CaptureLoopStage::TriggerDrain,
             );
-            match tokio::time::timeout(poll_interval, trigger_rx.recv()).await {
-                Ok(Ok(msg)) => drained.push(msg),
-                Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
+            match trigger_rx.try_recv() {
+                Ok(msg) => drained.push(msg),
+                Err(broadcast::error::TryRecvError::Empty) => {
+                    record_loop_stage(
+                        &vision_metrics,
+                        &monitor_liveness,
+                        screenpipe_screen::CaptureLoopStage::TriggerWait,
+                    );
+                    tokio::time::sleep(poll_interval).await;
+                }
+                Err(broadcast::error::TryRecvError::Lagged(n)) => {
                     debug!(
                         "trigger channel lagged by {} messages on monitor {}",
                         n, monitor_id
                     );
-                    // Missed broadcast msgs — their correlation_ids are
-                    // gone forever and those ui_events rows will stay
-                    // frame_id=NULL. Bump the lagged counter so the
-                    // periodic linker WARN shows this slice of loss.
                     report_triggers_dropped(
                         linker_tx.as_ref(),
                         Vec::new(),
                         crate::frame_linker::DropReason::Lagged,
                     );
-                    let _ = n;
-                    // Fall back to Manual below if nothing else wins.
                     lagged_force_manual = true;
                 }
-                Ok(Err(broadcast::error::RecvError::Closed)) => {
+                Err(broadcast::error::TryRecvError::Closed) => {
                     warn!(
                         "trigger channel closed for monitor {}, continuing with polling-only mode",
                         monitor_id
                     );
                     closed_now = true;
                 }
-                Err(_elapsed) => {
-                    // No trigger this poll_interval — fall through to
-                    // poll_activity below.
-                }
             }
+
+            // Anything past this point is synchronous channel/gate work.
+            // Re-marking here keeps the watchdog's "frozen in <stage>"
+            // message honest.
+            record_loop_stage(
+                &vision_metrics,
+                &monitor_liveness,
+                screenpipe_screen::CaptureLoopStage::TriggerDrain,
+            );
 
             // Drain any remaining triggers that piled up while we were
             // waiting on the first one.
@@ -1885,13 +1959,10 @@ pub(crate) async fn event_driven_capture_loop(
                         screenshot_disabled,
                         hd_active,
                         in_meeting,
-                        // Meeting-OCR-gate scope (#5054): only the monitor
-                        // hosting the focused window is gated; Active is also
-                        // the controller's safe fallback when focus is unknown.
-                        matches!(
-                            focus_controller.state_for_monitor(&monitor),
-                            crate::focus_aware_controller::CaptureState::Active
-                        ),
+                        // AX pairing requires confirmed focus ownership.
+                        // CaptureState::Active is broader: it also covers
+                        // hysteresis and unknown/stale focus fallbacks.
+                        focus_controller.hosts_focus_for_monitor(&monitor),
                     ),
                 )
                 .await;
@@ -1956,15 +2027,7 @@ pub(crate) async fn event_driven_capture_loop(
                                 &monitor_liveness,
                                 Duration::from_millis(result.duration_ms),
                             );
-                            // OCR metrics: record once per OCR run. Each run is a
-                            // cache miss (no OCR result cache exists). `ocr_duration_ms`
-                            // is Some only when OCR actually ran for this frame.
-                            if let Some(ocr_ms) = result.ocr_duration_ms {
-                                vision_metrics.record_ocr(Duration::from_millis(ocr_ms), 0, 1);
-                                if result.ocr_was_empty {
-                                    vision_metrics.record_ocr_empty();
-                                }
-                            }
+                            record_ocr_result_metrics(&vision_metrics, result);
                             // OCR-gate telemetry (#5054/#5060): decision counters
                             // (skip / crop_ocr — the fast-path ratio) plus the
                             // per-capture detect+hash latency.
@@ -2286,7 +2349,7 @@ fn resolve_capture_metadata_with_policy(
     Option<String>,
     Option<String>,
 ) {
-    let (mut app_name, mut window_name, browser_url, document_path) = match tree_snapshot {
+    let (mut app_name, mut window_name, mut browser_url, mut document_path) = match tree_snapshot {
         Some(snap) => (
             Some(snap.app_name.clone()),
             Some(snap.window_name.clone()),
@@ -2323,9 +2386,15 @@ fn resolve_capture_metadata_with_policy(
         } if !trigger_app_name.is_empty() => {
             if app_name.as_deref() != Some(trigger_app_name.as_str()) {
                 debug!(
-                    "focused app mismatch on app_switch: trigger='{}', tree={:?}; using trigger value",
+                    "focused app mismatch on app_switch: trigger='{}', tree={:?}; using trigger value and dropping stale window context",
                     trigger_app_name, app_name
                 );
+                // App-switch events typically do not carry the new window
+                // title. Keeping the previous tree's title, URL, or document
+                // path would create a metadata pair that never existed.
+                window_name = None;
+                browser_url = None;
+                document_path = None;
             }
             app_name = Some(trigger_app_name.clone());
         }
@@ -2345,6 +2414,30 @@ fn resolve_capture_metadata_with_policy(
     }
 
     (app_name, window_name, browser_url, document_path)
+}
+
+/// Final privacy gate for captures that reached metadata resolution without a
+/// conclusive tree-walk skip. Keep this decision in one place so every value
+/// that can reach `paired_capture` is covered by the same policy. Built-in
+/// incognito matching is limited to the focus-owning monitor; manual patterns
+/// preserve their existing all-monitor behavior.
+fn resolved_window_matches_privacy_filters(
+    ignore_incognito_windows: bool,
+    resolved_window_hosts_focus: bool,
+    ignored_patterns: &[WindowPattern],
+    app_name: Option<&str>,
+    window_name: Option<&str>,
+) -> bool {
+    if resolved_window_hosts_focus
+        && ignore_incognito_windows
+        && window_name.is_some_and(screenpipe_a11y::incognito::is_title_private)
+    {
+        return true;
+    }
+
+    let app_name = app_name.unwrap_or_default().to_lowercase();
+    let window_name = window_name.unwrap_or_default().to_lowercase();
+    window_pattern::matches_any(ignored_patterns, &app_name, &window_name)
 }
 
 /// Rate-limit OCR-heavy apps. Two groups:
@@ -2765,30 +2858,38 @@ async fn do_capture(
     // the name directly; for all other triggers (visual change, idle, manual)
     // we do a lightweight platform query. This ensures the walk budget applies
     // to ALL captures, not just app switches.
-    let lightweight_focused_metadata = match trigger {
-        CaptureTrigger::AppSwitch { .. } => None,
-        _ => match tokio::time::timeout(
-            Duration::from_secs(1),
-            tokio::task::spawn_blocking(get_focused_metadata_lightweight),
-        )
-        .await
-        {
-            Ok(Ok(metadata)) => metadata,
-            Ok(Err(err)) => {
-                debug!("focused metadata lookup task failed: {}", err);
-                None
-            }
-            Err(_) => {
-                debug!("focused metadata lookup timed out");
-                None
-            }
-        },
+    let lightweight_focused_metadata = if monitor_hosts_focus {
+        match trigger {
+            CaptureTrigger::AppSwitch { .. } => None,
+            _ => match tokio::time::timeout(
+                Duration::from_secs(1),
+                tokio::task::spawn_blocking(get_focused_metadata_lightweight),
+            )
+            .await
+            {
+                Ok(Ok(metadata)) => metadata,
+                Ok(Err(err)) => {
+                    debug!("focused metadata lookup task failed: {}", err);
+                    None
+                }
+                Err(_) => {
+                    debug!("focused metadata lookup timed out");
+                    None
+                }
+            },
+        }
+    } else {
+        None
     };
-    let trigger_app = match trigger {
-        CaptureTrigger::AppSwitch { app_name, .. } => Some(app_name.clone()),
-        _ => lightweight_focused_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.app_name.clone()),
+    let trigger_app = if monitor_hosts_focus {
+        match trigger {
+            CaptureTrigger::AppSwitch { app_name, .. } => Some(app_name.clone()),
+            _ => lightweight_focused_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.app_name.clone()),
+        }
+    } else {
+        None
     };
 
     // Terminal OCR rate-limit: wezterm/alacritty/kitty/hyper/warp all bypass AX
@@ -2848,10 +2949,20 @@ async fn do_capture(
         config.walk_timeout_override = Some(decision.timeout);
     }
 
-    let tree_walk_result = tokio::task::spawn_blocking(move || {
-        screenpipe_capture::paired_capture::walk_accessibility_tree(&config)
-    })
-    .await?;
+    // The AX walker returns the one globally focused window. Walking it for a
+    // different monitor would both waste work and pair unrelated pixels with
+    // that window's tree, identity, and dedup hash. Non-focused monitors use
+    // the screenshot/OCR path below instead.
+    let tree_walk_result = if monitor_hosts_focus {
+        Some(
+            params
+                .tree_walker
+                .walk_with_timeout(config, TREE_WALK_WORKER_TIMEOUT)
+                .await?,
+        )
+    } else {
+        None
+    };
 
     // If the window was skipped (incognito/private browsing or user filter),
     // bail out entirely — don't OCR the screenshot.
@@ -2862,8 +2973,8 @@ async fn do_capture(
     // hash matches the previous frame under the same dedup gate used below);
     // NotFound → error. Skipped windows are intentionally NOT counted as walk
     // attempts — they're user/incognito filters, not real walks.
-    match tree_walk_result {
-        TreeWalkResult::Found(ref snap) => {
+    match tree_walk_result.as_ref() {
+        Some(TreeWalkResult::Found(snap)) => {
             walk_budget.record_walk(&snap.app_name, snap.walk_duration, snap.truncated);
             if snap.walk_duration > std::time::Duration::from_millis(100) {
                 let next = walk_budget.should_walk(&snap.app_name);
@@ -2922,16 +3033,16 @@ async fn do_capture(
                 crate::ui_recorder::record_tree_walk(outcome);
             }
         }
-        TreeWalkResult::NotFound => {
+        Some(TreeWalkResult::NotFound) => {
             crate::ui_recorder::record_tree_walk(crate::ui_recorder::TreeWalkOutcome::Error);
         }
         // Skipped: user filter / incognito — not a walk attempt, don't count.
-        TreeWalkResult::Skipped(_) => {}
+        Some(TreeWalkResult::Skipped(_)) | None => {}
     }
 
     let tree_snapshot = match tree_walk_result {
-        TreeWalkResult::Found(snap) => Some(snap),
-        TreeWalkResult::Skipped(reason) => {
+        Some(TreeWalkResult::Found(snap)) => Some(snap),
+        Some(TreeWalkResult::Skipped(reason)) => {
             debug!(
                 "skipping capture: window filtered ({}) on monitor {}",
                 reason, params.monitor_id
@@ -2943,7 +3054,7 @@ async fn do_capture(
                 corrupt: None,
             });
         }
-        TreeWalkResult::NotFound => None,
+        Some(TreeWalkResult::NotFound) | None => None,
     };
 
     // Safety net: when the tree walk returned NotFound (AX failure, budget skip,
@@ -3050,30 +3161,33 @@ async fn do_capture(
         });
     }
 
-    // Final ignored-window gate: check resolved metadata (app + window) against
-    // ignored patterns. This catches edge cases where the tree walk succeeded but
-    // didn't return Skipped (e.g. the trigger carried the app name, not the tree).
-    // Uses full `window_pattern` semantics, so scoped `App::Title` patterns fire
-    // here even though earlier app-only gates intentionally skipped them. Reuses
-    // the patterns parsed above.
-    {
+    // Final privacy gate: apply title-based incognito detection and ignored-window
+    // patterns to resolved metadata. This catches edge cases where the tree walk
+    // returned no verdict while focus ownership remained confirmed (for example,
+    // a WindowFocus trigger still supplied the window title). Uses full
+    // `window_pattern` semantics, so scoped `App::Title` patterns still fire here.
+    if resolved_window_matches_privacy_filters(
+        params.tree_walker_config.ignore_incognito_windows,
+        monitor_hosts_focus,
+        &params.ignored_patterns,
+        app_name_owned.as_deref(),
+        window_name_owned.as_deref(),
+    ) {
         let check_app = app_name_owned.as_deref().unwrap_or_default().to_lowercase();
         let check_win = window_name_owned
             .as_deref()
             .unwrap_or_default()
             .to_lowercase();
-        if window_pattern::matches_any(&params.ignored_patterns, &check_app, &check_win) {
-            debug!(
-                "skipping capture: resolved app='{}' / window='{}' matches ignored pattern on monitor {}",
-                check_app, check_win, params.monitor_id
-            );
-            return Ok(CaptureOutput {
-                result: None,
-                image,
-                elements_deduped: false,
-                corrupt: None,
-            });
-        }
+        debug!(
+            "skipping capture: resolved app='{}' / window='{}' matches privacy filter on monitor {}",
+            check_app, check_win, params.monitor_id
+        );
+        return Ok(CaptureOutput {
+            result: None,
+            image,
+            elements_deduped: false,
+            corrupt: None,
+        });
     }
 
     // DRM content detection: check if the focused app/URL is a streaming service.
@@ -3504,6 +3618,48 @@ fn is_frame_corrupt(image: &image::DynamicImage) -> bool {
 mod tests {
     use super::*;
 
+    fn ocr_metrics_result(
+        ocr_cache_hit: bool,
+        ocr_duration_ms: Option<u64>,
+        ocr_was_empty: bool,
+    ) -> PairedCaptureResult {
+        PairedCaptureResult {
+            frame_id: 1,
+            snapshot_path: String::new(),
+            accessibility_text: None,
+            text_source: None,
+            capture_trigger: "test".to_string(),
+            captured_at: Utc::now(),
+            duration_ms: 1,
+            ocr_duration_ms,
+            ocr_was_empty,
+            ocr_cache_hit,
+            ocr_gate_decision: None,
+            ocr_gate_detect_duration: None,
+            app_name: None,
+            window_name: None,
+            browser_url: None,
+            content_hash: None,
+        }
+    }
+
+    #[test]
+    fn capture_result_metrics_distinguish_hits_runs_and_noops() {
+        let metrics = screenpipe_screen::PipelineMetrics::new();
+
+        record_ocr_result_metrics(&metrics, &ocr_metrics_result(true, None, false));
+        record_ocr_result_metrics(&metrics, &ocr_metrics_result(false, Some(10), false));
+        record_ocr_result_metrics(&metrics, &ocr_metrics_result(false, Some(30), true));
+        record_ocr_result_metrics(&metrics, &ocr_metrics_result(false, None, false));
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.ocr_cache_hits, 1);
+        assert_eq!(snapshot.ocr_cache_misses, 2);
+        assert_eq!(snapshot.ocr_completed, 2);
+        assert_eq!(snapshot.ocr_empty, 1);
+        assert!((snapshot.avg_ocr_latency_ms - 20.0).abs() < 1e-6);
+    }
+
     #[test]
     fn capture_loop_silent_seed_requires_exact_token() {
         assert!(seed_list_has_capture_loop_silent(
@@ -3801,6 +3957,118 @@ mod tests {
 
         assert_eq!(app_name.as_deref(), Some("Telegram"));
         assert_eq!(window_name.as_deref(), Some("Fresh Title"));
+    }
+
+    #[test]
+    fn incognito_setting_filters_resolved_title_when_tree_walk_is_unavailable() {
+        let trigger = CaptureTrigger::WindowFocus {
+            window_name: "Private search - Google Chrome (Incognito)".into(),
+            target: None,
+        };
+        let (app_name, window_name, _, _) = resolve_capture_metadata(None, &trigger, None);
+
+        assert!(
+            resolved_window_matches_privacy_filters(
+                true,
+                true,
+                &[],
+                app_name.as_deref(),
+                window_name.as_deref(),
+            ),
+            "ignoreIncognitoWindows must still reject an Incognito title when the AX tree walk is unavailable"
+        );
+    }
+
+    #[test]
+    fn resolved_incognito_fallback_respects_toggle_and_preserves_other_filters() {
+        let normal_title = "Private API docs - Google Chrome";
+        let private_title = "Private search - Google Chrome (Incognito)";
+
+        assert!(!resolved_window_matches_privacy_filters(
+            true,
+            true,
+            &[],
+            Some("Google Chrome"),
+            Some(normal_title),
+        ));
+        assert!(!resolved_window_matches_privacy_filters(
+            false,
+            true,
+            &[],
+            Some("Google Chrome"),
+            Some(private_title),
+        ));
+
+        let manual_patterns = WindowPattern::parse_list(&["Private API docs".to_string()]);
+        assert!(resolved_window_matches_privacy_filters(
+            false,
+            false,
+            &manual_patterns,
+            Some("Google Chrome"),
+            Some(normal_title),
+        ));
+        assert!(!resolved_window_matches_privacy_filters(
+            true,
+            false,
+            &[],
+            Some("Google Chrome"),
+            Some(private_title),
+        ));
+        assert!(!resolved_window_matches_privacy_filters(
+            true,
+            true,
+            &[],
+            Some("Google Chrome"),
+            None,
+        ));
+
+        let app_patterns = WindowPattern::parse_list(&["Google Chrome".to_string()]);
+        assert!(resolved_window_matches_privacy_filters(
+            true,
+            false,
+            &app_patterns,
+            Some("Google Chrome"),
+            None,
+        ));
+    }
+
+    #[test]
+    fn resolve_capture_metadata_drops_stale_window_context_on_app_switch() {
+        let snapshot = screenpipe_a11y::tree::TreeSnapshot {
+            app_name: "TextEdit".into(),
+            app_id: Some("com.apple.TextEdit".into()),
+            executable: None,
+            app_version: None,
+            window_name: "M1_B.txt".into(),
+            text_content: "visible text".into(),
+            nodes: Vec::new(),
+            semantic_nodes: Vec::new(),
+            browser_url: Some("https://stale.example".into()),
+            document_path: Some("/tmp/M1_B.txt".into()),
+            timestamp: Utc::now(),
+            node_count: 0,
+            walk_duration: Duration::from_millis(1),
+            content_hash: 0,
+            simhash: 0,
+            truncated: false,
+            truncation_reason: screenpipe_a11y::tree::TruncationReason::None,
+            max_depth_reached: 0,
+            window_bounds: None,
+        };
+
+        let (app_name, window_name, browser_url, document_path) = resolve_capture_metadata(
+            Some(&snapshot),
+            &CaptureTrigger::AppSwitch {
+                app_name: "Finder".into(),
+                target: None,
+            },
+            None,
+        );
+
+        assert_eq!(app_name.as_deref(), Some("Finder"));
+        assert_eq!(window_name, None);
+        assert_eq!(browser_url, None);
+        assert_eq!(document_path, None);
     }
 
     #[test]
@@ -4338,9 +4606,9 @@ mod tests {
         let m1 = rx1.try_recv().unwrap();
         let m2 = rx2.try_recv().unwrap();
         assert!(matches!(m1.trigger, CaptureTrigger::Click { x: 10, y: 20 }));
-        assert_eq!(m1.correlation_id, Some(42));
+        assert_eq!(m1.correlation_ids, vec![42]);
         assert!(matches!(m2.trigger, CaptureTrigger::Click { x: 10, y: 20 }));
-        assert_eq!(m2.correlation_id, Some(42));
+        assert_eq!(m2.correlation_ids, vec![42]);
     }
 
     #[test]
@@ -4367,6 +4635,37 @@ mod tests {
         assert!(matches!(trigger, Some(CaptureTrigger::WindowFocus { .. })));
         // All three corr ids accumulate.
         assert_eq!(corrs, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn reduce_drained_scroll_stop_message_collects_all_corr_ids() {
+        let drained = [CaptureTriggerMsg::with_correlations(
+            CaptureTrigger::ScrollStop,
+            vec![1, 2, 3],
+        )];
+
+        let (trigger, corrs) = reduce_drained_triggers(drained, false, false);
+
+        assert_eq!(trigger, Some(CaptureTrigger::ScrollStop));
+        assert_eq!(corrs, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn reduce_drained_scroll_stop_survives_a_capped_burst_batch() {
+        // The recorder caps a burst at SCROLL_BURST_MAX_CORR_IDS (512) and
+        // ships the survivors in one message. That whole batch must reduce
+        // to a single ScrollStop with every id intact, otherwise the cap
+        // would just move the loss from the tracker into the reducer.
+        let ids: Vec<crate::frame_linker::CorrelationId> = (1..=512).collect();
+        let drained = [CaptureTriggerMsg::with_correlations(
+            CaptureTrigger::ScrollStop,
+            ids.clone(),
+        )];
+
+        let (trigger, corrs) = reduce_drained_triggers(drained, false, false);
+
+        assert_eq!(trigger, Some(CaptureTrigger::ScrollStop));
+        assert_eq!(corrs, ids);
     }
 
     #[test]

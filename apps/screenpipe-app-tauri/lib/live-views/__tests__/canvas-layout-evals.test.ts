@@ -6,11 +6,13 @@ import { describe, expect, it } from "vitest";
 import {
   CANVAS_MAX_ZOOM,
   CANVAS_MIN_ZOOM,
+  MAX_NATIVE_MAGNIFY_STEP,
   canvasArrowGeometry,
   canvasDocumentBounds,
   canvasWorldPoint,
   clampCanvasZoom,
   createCanvasBlockLayout,
+  nativeMagnifyZoomFactor,
   createCanvasDocument,
   createTemplateCanvasDocument,
   reconcileCanvasDocument,
@@ -335,6 +337,50 @@ describe("Live View Canvas layout evals", () => {
     expect(clampCanvasZoom(0)).toBe(CANVAS_MIN_ZOOM);
     expect(clampCanvasZoom(99)).toBe(CANVAS_MAX_ZOOM);
     expect(clampCanvasZoom(1.25)).toBe(1.25);
+  });
+
+  it("maps a native magnification delta to its AppKit scale factor", () => {
+    // AppKit: the gesture's resulting scale is 1 + magnification.
+    expect(nativeMagnifyZoomFactor(0)).toBe(1);
+    expect(nativeMagnifyZoomFactor(0.1)).toBeCloseTo(1.1, 10);
+    expect(nativeMagnifyZoomFactor(-0.1)).toBeCloseTo(0.9, 10);
+    expect(nativeMagnifyZoomFactor(0.02)).toBeCloseTo(1.02, 10);
+  });
+
+  it("keeps a single pinch frame far away from the zoom limits", () => {
+    // The old Math.exp(m * 5) mapping turned one 0.1 frame into 1.65x, so a
+    // normal multi-frame pinch slammed straight into a zoom limit.
+    expect(nativeMagnifyZoomFactor(0.1)).toBeLessThan(Math.exp(0.1 * 5));
+    // Ten typical trackpad frames must stay inside the usable zoom range.
+    const burst = Array.from({ length: 10 }).reduce<number>(
+      (zoom) => clampCanvasZoom(zoom * nativeMagnifyZoomFactor(0.02)),
+      1,
+    );
+    expect(burst).toBeGreaterThan(1);
+    expect(burst).toBeLessThan(CANVAS_MAX_ZOOM);
+  });
+
+  it("bounds a coalesced or hostile magnification payload", () => {
+    expect(nativeMagnifyZoomFactor(50)).toBe(MAX_NATIVE_MAGNIFY_STEP);
+    expect(nativeMagnifyZoomFactor(-50)).toBe(1 / MAX_NATIVE_MAGNIFY_STEP);
+    // -1 would otherwise collapse the viewport to zoom 0.
+    expect(nativeMagnifyZoomFactor(-1)).toBeGreaterThan(0);
+    expect(nativeMagnifyZoomFactor(Number.NaN)).toBe(1);
+    expect(nativeMagnifyZoomFactor(Number.POSITIVE_INFINITY)).toBe(1);
+  });
+
+  it("returns a pinch and its exact unpinch to the starting zoom", () => {
+    const deltas = [0.03, 0.05, 0.02, 0.04];
+    const pinched = deltas.reduce(
+      (zoom, delta) => zoom * nativeMagnifyZoomFactor(delta),
+      1,
+    );
+    const restored = deltas.reduce(
+      (zoom, delta) => zoom / nativeMagnifyZoomFactor(delta),
+      pinched,
+    );
+    expect(pinched).toBeGreaterThan(1);
+    expect(restored).toBeCloseTo(1, 10);
   });
 
   it("includes notes and strokes in fit-to-canvas bounds", () => {

@@ -1941,7 +1941,10 @@ async fn main() -> anyhow::Result<()> {
                 ..Default::default()
             };
             info!("starting pi session secret-scrub worker (--redact-agent-session-secrets)");
-            let _ =
+            // Detached on purpose: `spawn()` already handed the task to tokio,
+            // and dropping the JoinHandle does not cancel it. Named so clippy
+            // does not read this as a future that never gets polled.
+            let _scrub_worker =
                 Worker::new_with_writer(db.pool.clone(), db.coordinated_writer(), placeholder, cfg)
                     .spawn();
         }

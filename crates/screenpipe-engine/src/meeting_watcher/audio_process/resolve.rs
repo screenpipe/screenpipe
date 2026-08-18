@@ -658,9 +658,9 @@ pub(crate) fn platform_name_for_profile(
         "WhatsApp".to_string()
     } else if has_pattern("web.telegram.org") {
         "Telegram".to_string()
-    } else if ids.macos_app_names.iter().any(|n| *n == "facetime") {
+    } else if ids.macos_app_names.contains(&"facetime") {
         "FaceTime".to_string()
-    } else if ids.macos_app_names.iter().any(|n| *n == "signal") {
+    } else if ids.macos_app_names.contains(&"signal") {
         "Signal".to_string()
     } else if let Some(name) = ids.macos_app_names.first() {
         title_case_ascii(name)

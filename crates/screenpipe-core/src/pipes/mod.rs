@@ -10,6 +10,7 @@
 //! parses configs, runs the scheduler, and delegates execution to an
 //! [`AgentExecutor`].
 
+mod builtin_migrations;
 pub mod connection_triggers;
 pub mod connections;
 pub mod favorites;
@@ -23,6 +24,7 @@ use crate::agents::{
     pi::{pi_event_protocol_error, pi_package_enabled, PiExecutor},
     AgentExecutor, ExecutionHandle, SharedPid, STOP_REQUESTED_PID,
 };
+use crate::pipes::builtin_migrations::migrate_builtin_pipe_text;
 use crate::pipes::connections::parse_mcp_connection_id;
 use crate::pipes::mcp_access::McpSessionAccessRegistry;
 use anyhow::{anyhow, Result};
@@ -266,6 +268,10 @@ pub struct PipeConfig {
     /// LLM provider override.  Default: none (uses screenpipe cloud).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// Reasoning effort used for every run. Background automation defaults to
+    /// low so recurring work does not inherit Pi's more expensive chat default.
+    #[serde(default, skip_serializing_if = "is_default_effort")]
+    pub effort: PipeEffort,
     /// AI preset id(s) from `~/.screenpipe/store.bin` → `settings.aiPresets`.
     /// When set, overrides `model` and `provider` at runtime.
     /// Accepts a single string or an array of strings for fallback.
@@ -376,6 +382,35 @@ pub struct PipeConfig {
     /// Catches any extra fields from front-matter (backwards compat).
     #[serde(default, flatten, skip_serializing_if = "HashMap::is_empty")]
     pub config: HashMap<String, serde_json::Value>,
+}
+
+/// Cross-provider reasoning effort exposed by Pipes.
+///
+/// Keep this deliberately smaller than Pi's full thinking-level vocabulary:
+/// low/medium/high form a portable UI vocabulary across hosted and BYOK
+/// providers. Individual models may still clamp or ignore an unsupported level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PipeEffort {
+    Low,
+    Medium,
+    High,
+}
+
+impl PipeEffort {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+}
+
+impl Default for PipeEffort {
+    fn default() -> Self {
+        Self::Low
+    }
 }
 
 /// How often a structured schedule repeats. The unit of `ScheduleConfig.interval`.
@@ -601,6 +636,9 @@ fn is_default_agent(s: &String) -> bool {
 }
 fn is_default_model(s: &String) -> bool {
     s == "auto" || s == "claude-haiku-4-5" || s == "claude-haiku-4-5@20251001"
+}
+fn is_default_effort(effort: &PipeEffort) -> bool {
+    *effort == PipeEffort::Low
 }
 fn is_false(b: &bool) -> bool {
     !b
@@ -2944,7 +2982,7 @@ impl PipeManager {
                         if path
                             .file_name()
                             .and_then(|n| n.to_str())
-                            .map_or(false, |n| n.starts_with('.'))
+                            .is_some_and(|n| n.starts_with('.'))
                         {
                             continue;
                         }
@@ -2952,7 +2990,7 @@ impl PipeManager {
                         if !path
                             .extension()
                             .and_then(|e| e.to_str())
-                            .map_or(false, is_user_facing_artifact_ext)
+                            .is_some_and(is_user_facing_artifact_ext)
                         {
                             continue;
                         }
@@ -3666,6 +3704,7 @@ impl PipeManager {
                     Some(shared_pid.clone()),
                     line_tx,
                     history_enabled,
+                    Some(config.effort.as_str()),
                     Some(&pipe_system_prompt),
                     mcp_allowlist_arg(&mcp_server_allowlist),
                     // Owner tag: must match the frontend's pipeSessionId()
@@ -4217,6 +4256,7 @@ impl PipeManager {
                     Some(shared_pid.clone()),
                     line_tx,
                     history_enabled,
+                    Some(config.effort.as_str()),
                     Some(&pipe_system_prompt),
                     mcp_allowlist_arg(&mcp_server_allowlist),
                     // Owner tag: must match the frontend's pipeSessionId()
@@ -4582,6 +4622,14 @@ impl PipeManager {
                         config.provider = Some(s.to_string());
                     }
                 }
+                "effort" => {
+                    config.effort = serde_json::from_value(v.clone()).map_err(|_| {
+                        anyhow!(
+                            "invalid effort for '{}': expected low, medium, or high",
+                            name
+                        )
+                    })?;
+                }
                 "preset" => {
                     config.preset = preset_fallback::parse_preset_list(v);
                 }
@@ -4854,7 +4902,7 @@ impl PipeManager {
 
         let (mut config, body) = parse_frontmatter(source_md)?;
 
-        // Preserve user's enabled state, schedule, preset, and connections from current config
+        // Preserve user's enabled state, schedule, preset, effort, and connections from current config
         let current_path = dest_dir.join("pipe.md");
         if let Ok(current_content) = std::fs::read_to_string(&current_path) {
             // Backup existing pipe.md before overwriting
@@ -4866,6 +4914,7 @@ impl PipeManager {
             if let Ok((current_config, _)) = parse_frontmatter(&current_content) {
                 config.enabled = current_config.enabled;
                 config.preset = current_config.preset.clone();
+                config.effort = current_config.effort;
                 config.schedule = current_config.schedule.clone();
                 config.connections = current_config.connections.clone();
             }
@@ -5834,6 +5883,7 @@ impl PipeManager {
                     let store_ref = store.clone();
                     let token_registry_ref = token_registry.clone();
                     let mcp_session_access_ref = mcp_session_access.clone();
+                    let effort = config.effort;
                     let pipe_timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
                     let semaphore = execution_semaphore.clone();
                     let event_sem = event_semaphore.clone();
@@ -6027,6 +6077,7 @@ impl PipeManager {
                                 Some(shared_pid.clone()),
                                 line_tx,
                                 history_enabled,
+                                Some(effort.as_str()),
                                 Some(&pipe_system_prompt),
                                 mcp_allowlist_arg(&mcp_server_allowlist),
                                 // Owner tag — must match pipeSessionId() on the
@@ -6611,116 +6662,6 @@ pub fn parse_frontmatter(content: &str) -> Result<(PipeConfig, String)> {
     Ok((config, body))
 }
 
-/// Surgically repair known-broken fragments in an already-installed builtin
-/// `pipe.md` without clobbering the user's other edits. `install_builtin_pipes`
-/// only writes when the file is absent, so a stale local copy never picks up a
-/// bundled fix on its own. Rather than overwrite the whole file (which would
-/// throw away user customization), we replace just the specific broken fragment.
-///
-/// Returns the rewritten content only when a migration actually applied, so the
-/// caller can skip the disk write otherwise. Idempotent: running it on
-/// already-fixed content is a no-op.
-fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<String> {
-    if name == "automate-my-work" {
-        let replacement = BUNDLED_BUILTIN_PIPES
-            .iter()
-            .find_map(|(builtin_name, content)| (*builtin_name == name).then_some(*content))?;
-        return replace_prompt_body_when_hash_matches(
-            original,
-            replacement,
-            AUTOMATE_MY_WORK_LEGACY_PROMPT_HASHES,
-        );
-    }
-
-    // (old, new) fragment swaps per builtin pipe.
-    let replacements: &[(&str, &str)] = match name {
-        // the meeting-summary pipe shipped instructions to PATCH
-        // /meetings/:id, but the server only registers PUT (see
-        // screenpipe-engine server.rs) — so every save 404'd. fix already
-        // installed local copies. PR #4247.
-        "meeting-summary" => &[
-            (
-                "-X PATCH \"http://localhost:3030/meetings/",
-                "-X PUT \"http://localhost:3030/meetings/",
-            ),
-            // the pipe picked "the most recent meeting", which is the wrong one
-            // whenever two meetings end close together. the scheduler now names
-            // the meeting in .trigger-context.json — point installed copies at
-            // it, since install_builtin_pipes never overwrites them. #5481.
-            (
-                "step 1 — find the meeting that just ended:",
-                concat!(
-                    "step 1 — find the meeting that just ended. when the scheduler woke you for an event ",
-                    "it wrote `./.trigger-context.json` in this pipe's folder; read it first and use the ",
-                    "meeting id it names:\n",
-                    "\n",
-                    "  cat ./.trigger-context.json   # {\"event\": \"meeting_ended\", \"key\": \"<MEETING_ID>\", ...}\n",
-                    "\n",
-                    "  curl -s -H \"Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY\" \\\n",
-                    "    \"http://localhost:3030/meetings/<MEETING_ID>\"\n",
-                    "\n",
-                    "only if that file is missing (a manual run) fall back to the most recent row:",
-                ),
-            ),
-            (
-                "the most recent row is the one that just ended. capture its",
-                "either way, capture the meeting's",
-            ),
-            // A maintainer-only synchronization note was accidentally shipped
-            // inside the runtime prompt. Agents interpreted it as work to do
-            // and recursively searched the user's home or ~/.screenpipe for
-            // app source, pegging a CPU core after meetings. Replace it in
-            // already-installed copies with an explicit bounded-work rule.
-            (
-                "keep the wording of this prompt in sync with `buildMeetingSummarizeInstructions` in `apps/screenpipe-app-tauri/lib/utils/meeting-context.ts` (used by the in-app \"summarize with AI\" button) — the two surfaces should produce the same behavior.",
-                "the instructions below are complete. screenpipe API search is required: use the meeting id and exact meeting time window with the named local HTTP endpoints below. do not inspect app source or recursively search the filesystem; never run recursive `find` or `grep` over the user's home or `~/.screenpipe`.",
-            ),
-            // Clarify the first bounded-work migration: the pipe must search
-            // Screenpipe through the meeting-scoped API. Only recursive
-            // filesystem/source discovery is prohibited.
-            (
-                "the instructions below are complete. do not inspect app source or search outside this pipe folder. never run recursive `find` or `grep` over the user's home or `~/.screenpipe`; use only the named local files and bounded HTTP endpoints below.",
-                "the instructions below are complete. screenpipe API search is required: use the meeting id and exact meeting time window with the named local HTTP endpoints below. do not inspect app source or recursively search the filesystem; never run recursive `find` or `grep` over the user's home or `~/.screenpipe`.",
-            ),
-        ],
-        _ => return None,
-    };
-
-    let mut updated = original.to_string();
-    for (old, new) in replacements {
-        updated = updated.replace(old, new);
-    }
-
-    (updated != original).then_some(updated)
-}
-
-/// Replace only the instruction body of a known built-in prompt version.
-/// Frontmatter and the self-improving memory section stay untouched. Any user
-/// edit inside the instruction body changes the hash and opts out of migration.
-fn replace_prompt_body_when_hash_matches(
-    original: &str,
-    replacement: &str,
-    legacy_hashes: &[&str],
-) -> Option<String> {
-    let original_prompt_start = original.find("<role>")?;
-    let replacement_prompt_start = replacement.find("<role>")?;
-    let original_prompt = &original[original_prompt_start..];
-    let original_hash = simple_hash(original_prompt);
-    if !legacy_hashes.contains(&original_hash.as_str()) {
-        return None;
-    }
-
-    let prefix = original[..original_prompt_start].replace(
-        "description: \"Find genuinely new, low-risk automations tailored to your workflow\"",
-        "description: \"Find one repeated workflow and propose a testable automation\"",
-    );
-    Some(format!(
-        "{}{}",
-        prefix,
-        &replacement[replacement_prompt_start..]
-    ))
-}
-
 /// Atomic file write: write to a temp file in the same directory, then rename.
 /// On Unix, rename is atomic. On Windows, this avoids the partial-write window
 /// where a concurrent reader (e.g. the scheduler) sees a truncated file.
@@ -6878,7 +6819,7 @@ fn render_prompt_with_port(
     let header = format!(
         r#"Default run lookback: {start_time} to {end_time}
 Structured output targets may declare an authoritative time range that overrides this default for that target.
-Date: {date}
+Run date: {date}
 Timezone: {timezone} (UTC{tz_offset})
 Pipe name: {}
 "#,
@@ -7706,7 +7647,7 @@ fn should_run_config(cfg: &ScheduleConfig, last_run: DateTime<Utc>) -> bool {
     }
     match next_fire(cfg, search_from) {
         // Don't fire a slot past the effective end (e.g. beyond the Nth run).
-        Some(next) => now >= next && end.map_or(true, |e| next <= e),
+        Some(next) => now >= next && end.is_none_or(|e| next <= e),
         None => false,
     }
 }
@@ -8734,147 +8675,6 @@ mod tests {
     }
 
     #[test]
-    fn migrate_builtin_pipe_fixes_stale_patch_verb() {
-        // a stale local meeting-summary copy with the old PATCH verb gets
-        // surgically rewritten to PUT, leaving surrounding text untouched.
-        let stale = "do stuff\n  curl -s -X PATCH \"http://localhost:3030/meetings/<MEETING_ID>\" \\\n    -d '{}'\nmore stuff";
-        let fixed = migrate_builtin_pipe_text("meeting-summary", stale)
-            .expect("stale PATCH content should migrate");
-        assert!(fixed.contains("-X PUT \"http://localhost:3030/meetings/"));
-        assert!(!fixed.contains("-X PATCH"));
-        assert!(fixed.starts_with("do stuff"));
-        assert!(fixed.ends_with("more stuff"));
-
-        // idempotent: already-PUT content is a no-op (no rewrite, no churn).
-        assert!(migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
-
-        // other builtins and unrelated content are left alone.
-        assert!(migrate_builtin_pipe_text("day-recap", stale).is_none());
-        assert!(migrate_builtin_pipe_text("meeting-summary", "no api calls here").is_none());
-    }
-
-    /// #5481: installed copies still say "pick the most recent meeting", which is
-    /// wrong when two meetings end together. They must be pointed at the trigger
-    /// file, since install_builtin_pipes never overwrites an existing pipe.md.
-    #[test]
-    fn migrate_builtin_pipe_points_meeting_summary_at_trigger_context() {
-        let stale = concat!(
-            "read the screenpipe skill first.\n",
-            "\n",
-            "step 1 — find the meeting that just ended:\n",
-            "\n",
-            "  curl -s \"http://localhost:3030/meetings?limit=1\"\n",
-            "\n",
-            "the most recent row is the one that just ended. capture its `id` and `note`.\n",
-            "\n",
-            "step 2 — summarize it.",
-        );
-
-        let fixed = migrate_builtin_pipe_text("meeting-summary", stale)
-            .expect("stale most-recent-meeting content should migrate");
-        assert!(fixed.contains(".trigger-context.json"));
-        assert!(fixed.contains("/meetings/<MEETING_ID>"));
-        assert!(!fixed.contains("the most recent row is the one that just ended"));
-
-        // the manual-run fallback and the surrounding steps survive.
-        assert!(fixed.contains("http://localhost:3030/meetings?limit=1"));
-        assert!(fixed.starts_with("read the screenpipe skill first."));
-        assert!(fixed.ends_with("step 2 — summarize it."));
-
-        // idempotent: running it again is a no-op.
-        assert!(migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
-    }
-
-    #[test]
-    fn migrate_builtin_pipe_removes_source_search_instruction() {
-        let stale = concat!(
-            "a meeting just ended.\n\n",
-            "keep the wording of this prompt in sync with `buildMeetingSummarizeInstructions` in ",
-            "`apps/screenpipe-app-tauri/lib/utils/meeting-context.ts` (used by the in-app ",
-            "\"summarize with AI\" button) — the two surfaces should produce the same behavior.\n\n",
-            "read the screenpipe skill first.\n",
-        );
-
-        let fixed = migrate_builtin_pipe_text("meeting-summary", stale)
-            .expect("source-search instruction should migrate");
-        assert!(!fixed.contains("buildMeetingSummarizeInstructions"));
-        assert!(fixed.contains("screenpipe API search is required"));
-        assert!(fixed.contains("never run recursive `find` or `grep`"));
-        assert!(fixed.ends_with("read the screenpipe skill first.\n"));
-        assert!(migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
-    }
-
-    /// The shipped prompt must already be in its migrated form, or every fresh
-    /// install would be rewritten on the next startup.
-    #[test]
-    fn bundled_meeting_summary_needs_no_migration() {
-        let bundled = BUNDLED_BUILTIN_PIPES
-            .iter()
-            .find_map(|(name, content)| (*name == "meeting-summary").then_some(*content))
-            .expect("meeting-summary is bundled");
-        assert!(migrate_builtin_pipe_text("meeting-summary", bundled).is_none());
-        let (config, body) = parse_frontmatter(bundled).expect("bundled prompt should parse");
-        assert_eq!(config.timeout, Some(600));
-        assert!(!body.contains("buildMeetingSummarizeInstructions"));
-        assert!(body.contains("screenpipe API search is required"));
-        assert!(body.contains("never run recursive `find` or `grep`"));
-    }
-
-    #[test]
-    fn migrate_builtin_pipe_replaces_only_a_known_prompt_body() {
-        let stale = concat!(
-            "---\nschedule: manual\n",
-            "description: \"Find genuinely new, low-risk automations tailored to your workflow\"\n",
-            "---\n\n# memory\n- user lesson\n\n",
-            "<role>\nlegacy automation instructions\n</role>\n",
-        );
-        let replacement = concat!(
-            "---\nschedule: manual\n---\n\n",
-            "<role>\nnew evidence-first instructions\n</role>\n",
-        );
-        let prompt_start = stale.find("<role>").unwrap();
-        let legacy_hash = simple_hash(&stale[prompt_start..]);
-
-        let fixed =
-            replace_prompt_body_when_hash_matches(stale, replacement, &[legacy_hash.as_str()])
-                .expect("known legacy prompt should migrate");
-
-        assert!(fixed.contains("# memory\n- user lesson"));
-        assert!(fixed.contains(
-            "description: \"Find one repeated workflow and propose a testable automation\""
-        ));
-        assert!(fixed.contains("new evidence-first instructions"));
-        assert!(!fixed.contains("legacy automation instructions"));
-        assert!(replace_prompt_body_when_hash_matches(
-            &fixed,
-            replacement,
-            &[legacy_hash.as_str()],
-        )
-        .is_none());
-
-        let customized = stale.replace(
-            "legacy automation instructions",
-            "legacy automation instructions with my customization",
-        );
-        assert!(replace_prompt_body_when_hash_matches(
-            &customized,
-            replacement,
-            &[legacy_hash.as_str()],
-        )
-        .is_none());
-    }
-
-    #[test]
-    fn current_automate_my_work_builtin_does_not_migrate_again() {
-        let current = BUNDLED_BUILTIN_PIPES
-            .iter()
-            .find_map(|(name, content)| (*name == "automate-my-work").then_some(*content))
-            .unwrap();
-
-        assert!(migrate_builtin_pipe_text("automate-my-work", current).is_none());
-    }
-
-    #[test]
     fn pipe_completed_helpers_match_exact_pipe_event() {
         assert!(is_pipe_completed_event("pipe_completed:daily-summary"));
         assert_eq!(
@@ -9512,8 +9312,56 @@ mod tests {
         let (config, _) = parse_frontmatter(content).unwrap();
         assert_eq!(config.agent, "pi");
         assert_eq!(config.model, "auto");
+        assert_eq!(config.effort, PipeEffort::Low);
         assert!(config.enabled);
         assert!(config.provider.is_none());
+    }
+
+    #[test]
+    fn test_parse_frontmatter_reasoning_effort() {
+        let content = "---\nschedule: manual\neffort: high\n---\n\nBody";
+        let (config, _) = parse_frontmatter(content).unwrap();
+        assert_eq!(config.effort, PipeEffort::High);
+    }
+
+    #[tokio::test]
+    async fn pipe_effort_update_persists_and_rejects_invalid_values() {
+        let installed = tempfile::tempdir().unwrap();
+        let pipes_dir = installed.path().join("pipes");
+        std::fs::create_dir_all(&pipes_dir).unwrap();
+
+        let manager = PipeManager::new(pipes_dir.clone(), HashMap::new(), None, 0);
+        manager.install_builtin_pipes().unwrap();
+        manager.load_pipes().await.unwrap();
+        manager
+            .update_config(
+                "day-recap",
+                HashMap::from([("effort".to_string(), serde_json::json!("high"))]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            manager.get_pipe("day-recap").await.unwrap().config.effort,
+            PipeEffort::High
+        );
+        assert!(std::fs::read_to_string(pipes_dir.join("day-recap/pipe.md"))
+            .unwrap()
+            .contains("effort: high"));
+
+        let error = manager
+            .update_config(
+                "day-recap",
+                HashMap::from([("effort".to_string(), serde_json::json!("maximum"))]),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("expected low, medium, or high"));
+        assert_eq!(
+            manager.get_pipe("day-recap").await.unwrap().config.effort,
+            PipeEffort::High
+        );
     }
 
     #[test]
@@ -9592,6 +9440,7 @@ mod tests {
             agent: "pi".to_string(),
             model: "claude-haiku-4-5".to_string(),
             provider: None,
+            effort: PipeEffort::Low,
             preset: vec!["default".to_string()],
             permissions: PipePermissionsConfig::default(),
             schedule_config: None,
@@ -9613,8 +9462,19 @@ mod tests {
         assert_eq!(parsed.schedule, "every 1h");
         assert_eq!(parsed.preset, vec!["default".to_string()]);
         assert_eq!(parsed_body, body);
+        assert!(!serialized.contains("effort:"));
         // Name should be empty after serialize (skip_serializing_if)
         assert!(parsed.name.is_empty());
+    }
+
+    #[test]
+    fn test_serialize_preserves_non_default_effort() {
+        let content = "---\nschedule: every 1h\neffort: medium\n---\n\nBody";
+        let (config, body) = parse_frontmatter(content).unwrap();
+        let serialized = serialize_pipe(&config, &body).unwrap();
+        assert!(serialized.contains("effort: medium"));
+        let (reparsed, _) = parse_frontmatter(&serialized).unwrap();
+        assert_eq!(reparsed.effort, PipeEffort::Medium);
     }
 
     #[test]
@@ -10316,6 +10176,7 @@ mod tests {
             agent: "pi".to_string(),
             model: "claude-haiku-4-5".to_string(),
             provider: None,
+            effort: PipeEffort::Low,
             preset: vec!["default".to_string()],
             permissions: PipePermissionsConfig::default(),
             schedule_config: Some(cfg_every_30m),
@@ -10475,6 +10336,7 @@ mod tests {
             agent: "pi".to_string(),
             model: "test-model".to_string(),
             provider: None,
+            effort: PipeEffort::Low,
             preset: vec![],
             permissions: PipePermissionsConfig::default(),
             schedule_config: None,
@@ -10494,6 +10356,8 @@ mod tests {
         // User prompt contains a default lookback and the "Execute" instruction.
         assert!(prompt.contains("Default run lookback:"));
         assert!(prompt.contains("authoritative time range"));
+        assert!(prompt.contains("Run date:"));
+        assert!(!prompt.contains("\nDate:"));
         assert!(prompt.contains("Do the work described above now."));
         // Port / body go into system prompt, not user prompt
         let sys = render_pipe_system_prompt("body text", 3031, None, None, None, false);
@@ -10511,6 +10375,7 @@ mod tests {
             agent: "pi".to_string(),
             model: "test-model".to_string(),
             provider: None,
+            effort: PipeEffort::Low,
             preset: vec![],
             permissions: PipePermissionsConfig::default(),
             schedule_config: None,
@@ -10539,6 +10404,7 @@ mod tests {
             agent: "pi".to_string(),
             model: "test-model".to_string(),
             provider: None,
+            effort: PipeEffort::Low,
             preset: vec![],
             permissions: PipePermissionsConfig::default(),
             schedule_config: None,
@@ -10576,6 +10442,7 @@ mod tests {
             agent: "pi".to_string(),
             model: "test-model".to_string(),
             provider: None,
+            effort: PipeEffort::Low,
             preset: vec![],
             permissions: PipePermissionsConfig::default(),
             schedule_config: None,
@@ -10701,6 +10568,7 @@ mod tests {
                 agent: "pi".to_string(),
                 model: "test".to_string(),
                 provider: None,
+                effort: PipeEffort::Low,
                 preset: vec![],
                 permissions: PipePermissionsConfig::default(),
                 schedule_config: None,

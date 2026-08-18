@@ -23,6 +23,7 @@ import type { MeetingStatusResponse } from "@/lib/utils/meeting-state";
 import type { MeetingRecord } from "@/lib/utils/meeting-format";
 import {
   attendeesToString,
+  calendarBindingKey,
   fetchUpcomingCalendarEvents,
   fetchUpcomingCalendarSnapshot,
   findOverlappingEvent,
@@ -45,6 +46,7 @@ interface MeetingNotesSectionProps {
     title?: string;
     attendees?: string;
     resumeMeetingId?: number;
+    calendarEventId?: string;
   }) => Promise<MeetingRecord | void> | MeetingRecord | void;
   captureDevices?: LiveCaptureDevice[];
   onCaptureDevicesRefresh?: () => void | Promise<void>;
@@ -408,9 +410,13 @@ export function MeetingNotesSection({
           : meeting.attendees || "",
       };
       try {
+        // The server claims the event for this meeting before applying these
+        // fields. If another meeting already owns it, they are dropped — one
+        // calendar event describes one meeting.
         const body: Record<string, string> = {
           title: next.title,
           attendees: next.attendees,
+          calendar_event_id: calendarBindingKey(overlap),
         };
         const res = await localFetch(`/meetings/${meeting.id}`, {
           method: "PUT",
@@ -418,13 +424,19 @@ export function MeetingNotesSection({
           body: JSON.stringify(body),
         });
         if (res.ok) {
+          // Take the row the server actually stored — it drops the calendar
+          // fields when another meeting already owns this event.
+          const saved = (await res.json()) as {
+            title?: string | null;
+            attendees?: string | null;
+          };
           setMeetings((prev) =>
             prev.map((m) =>
               m.id === meeting.id
                 ? {
                     ...m,
-                    title: next.title || null,
-                    attendees: next.attendees || null,
+                    title: saved.title ?? null,
+                    attendees: saved.attendees ?? null,
                   }
                 : m,
             ),
@@ -437,7 +449,11 @@ export function MeetingNotesSection({
   }, [meetings, meetingState.activeMeetingId]);
 
   const handleStart = useCallback(
-    async (seed?: { title?: string; attendees?: string }) => {
+    async (seed?: {
+      title?: string;
+      attendees?: string;
+      calendarEventId?: string;
+    }) => {
       if (meetingState.active) return;
       intendingToFocusRef.current = true;
       try {
@@ -488,6 +504,7 @@ export function MeetingNotesSection({
       await handleStart({
         title: event.title,
         attendees: attendeesToString(event.attendees),
+        calendarEventId: calendarBindingKey(event),
       });
     },
     [handleStart],

@@ -134,11 +134,10 @@ impl CompactionEncoder {
                     "max" => "19",
                     _ => "28",
                 };
-                // -bf 0 is load-bearing on every hardware arm: frame lookup
-                // assumes PTS == index/fps (extract_frame_from_video seeks by
-                // offset_index/fps), and driver-default B-frames delay PTS by
-                // the reorder depth — every extraction would return a
-                // neighboring frame instead of the requested one.
+                // Keep random-access decode work and encoder buffering
+                // predictable. Frame lookup now selects decoded ordinals, so it
+                // does not depend on PTS, and independent screenshots gain
+                // little compression value from B-frame reordering.
                 svec([
                     "-vcodec",
                     "hevc_nvenc",
@@ -467,10 +466,9 @@ mod tests {
 
     #[test]
     fn hardware_arms_disable_bframes() {
-        // B-frames shift PTS; frame lookup assumes PTS == index/fps, so a
-        // driver-default B-frame depth would make every extraction return a
-        // neighboring frame. AMF has no HEVC B-frame support; the other
-        // hardware arms must pin -bf 0 explicitly.
+        // Bound random-access decode dependencies and avoid reorder buffering.
+        // AMF has no HEVC B-frame support; the other hardware arms must pin
+        // -bf 0 explicitly.
         for enc in [
             CompactionEncoder::HevcVideoToolbox,
             CompactionEncoder::HevcNvenc,

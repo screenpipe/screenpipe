@@ -287,16 +287,16 @@ function buildGenericProviderErrorMessage(
 
   if (isHostedScreenpipeProvider(provider)) {
     if (normalized.includes("free_chat_limit_exceeded")) {
-      return "You've used today's 2 free hosted AI messages. Try again tomorrow, upgrade, or switch your AI preset to Ollama, Claude, Codex, or your own provider key.";
+      return "You've used today's 2 free AI messages. Try again tomorrow, upgrade, or switch your AI preset to Ollama, Claude, Codex, or your own provider key.";
     }
     if (normalized.includes("free_chat_turn_request_limit_exceeded")) {
       return "This free message reached its 8-step agent limit. Upgrade for longer agent runs, or switch your AI preset to your own provider.";
     }
     if (normalized.includes("free_plan_hosted_background_disabled")) {
-      return "Hosted AI for background scheduled tasks requires a paid plan. You can still run this scheduled task with Ollama or your own provider key.";
+      return "screenpipe cloud AI for background scheduled tasks requires a paid plan. You can still run this scheduled task with Ollama or your own provider key.";
     }
     if (normalized.includes("free_chat_client_update_required")) {
-      return "Update screenpipe to use your 2 daily free hosted AI messages.";
+      return "Update screenpipe to use your 2 daily free AI messages.";
     }
     if (normalized.includes("not allowed")) {
       return `Model is restricted on your current plan. Please switch to a free model or upgrade your account.`;
@@ -309,6 +309,10 @@ function buildGenericProviderErrorMessage(
     ) {
       return `You are currently rate-limited or the service is temporarily unavailable. Please wait a moment before trying again, or upgrade your plan for higher limits.`;
     }
+  }
+
+  if (normalized.includes("codex error: the usage limit has been reached")) {
+    return "The AI provider usage limit has been reached. Wait for it to reset, or switch your AI preset or provider.";
   }
 
   if (

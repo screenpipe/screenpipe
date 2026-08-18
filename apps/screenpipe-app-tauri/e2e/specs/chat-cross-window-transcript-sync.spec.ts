@@ -167,9 +167,12 @@ async function loadConversationInForeground(
 }
 
 async function expectActiveEmptyState(): Promise<void> {
-  const state = await $('[data-testid="chat-empty-active-turn"]');
+  // A window hydrating someone else's in-flight turn has no transcript yet. It
+  // reports the turn with the same single status row every other surface uses,
+  // rather than a differently shaped centered card.
+  const state = await $('[data-testid="chat-turn-status"]');
   await state.waitForDisplayed({ timeout: t(10_000) });
-  expect(await state.getText()).toContain("Working on your message");
+  expect(await state.getText()).toContain("analyzing");
   expect(await $('[aria-label="stop reply"]').isDisplayed()).toBe(true);
 }
 
@@ -180,11 +183,7 @@ async function expectCompletedTranscript(): Promise<void> {
   await assistantMessage.waitForDisplayed({ timeout: t(15_000) });
   expect(await userMessage.getText()).toContain(USER_MARKER);
   expect(await assistantMessage.getText()).toContain(ASSISTANT_MARKER);
-  await $('[data-testid="chat-empty-active-turn"]').waitForExist({
-    reverse: true,
-    timeout: t(10_000),
-  });
-  await $('[data-testid="chat-active-turn-loader"]').waitForExist({
+  await $('[data-testid="chat-turn-status"]').waitForExist({
     reverse: true,
     timeout: t(10_000),
   });
@@ -198,7 +197,7 @@ async function expectSynchronizedActiveTurn(): Promise<void> {
   const userMessages = await $$('[data-testid="chat-message-user"]');
   expect(userMessages).toHaveLength(1);
   expect(await userMessages[0].getText()).toContain(USER_MARKER);
-  await $('[data-testid="chat-active-turn-loader"]').waitForDisplayed({
+  await $('[data-testid="chat-turn-status"]').waitForDisplayed({
     timeout: t(10_000),
   });
   expect(await $('[aria-label="stop reply"]').isDisplayed()).toBe(true);

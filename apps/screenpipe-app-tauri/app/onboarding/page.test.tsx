@@ -22,7 +22,17 @@ const mocks = vi.hoisted(() => ({
   completeOnboarding: vi.fn(async () => undefined),
   capture: vi.fn(),
   isSettingLocked: vi.fn((_key: string) => false),
-  settings: { deviceTier: "low" as string | null | undefined },
+  settings: {
+    deviceTier: "low" as string | null | undefined,
+    user: null as null | {
+      cloud_subscribed?: boolean;
+      has_payment_method?: boolean;
+      entitlement_source?: string;
+      // Plan selection needs a token to open checkout, so page.tsx keeps the
+      // slide out of visibleOrder. Seed it wherever a signed-in user is intended.
+      token?: string;
+    },
+  },
   isSettingsLoaded: true,
 }));
 
@@ -99,6 +109,14 @@ vi.mock("@/components/onboarding/engine-startup", () => ({
     </div>
   ),
 }));
+vi.mock("@/components/onboarding/plan-selection-step", () => ({
+  default: ({ handleNextSlide }: { handleNextSlide: () => void }) => (
+    <div>
+      <span>plan selection</span>
+      <button onClick={handleNextSlide}>continue free plan</button>
+    </div>
+  ),
+}));
 vi.mock("@/lib/utils/tauri", () => ({
   commands: {
     setOnboardingStep: mocks.setOnboardingStep,
@@ -114,6 +132,7 @@ import OnboardingPage from "./page";
 describe("enterprise onboarding authentication", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.replaceState({}, "", "/onboarding");
     mocks.enterprisePolicy = {
       isManagedDeployment: true,
       isManagedDeploymentResolved: true,
@@ -126,6 +145,7 @@ describe("enterprise onboarding authentication", () => {
     mocks.applyEnterpriseUiVisibility.mockResolvedValue(false);
     mocks.isSettingLocked.mockImplementation(() => false);
     mocks.settings.deviceTier = "low";
+    mocks.settings.user = null;
     mocks.isSettingsLoaded = true;
   });
 
@@ -163,6 +183,24 @@ describe("enterprise onboarding authentication", () => {
       funnel_version: "onboarding_ui_v2",
       step: "started",
     });
+  });
+
+  it("restores the plan controller after hosted checkout returns", async () => {
+    window.history.replaceState({}, "", "/onboarding?checkout=complete");
+    mocks.enterprisePolicy.isManagedDeployment = false;
+    mocks.settings.user = {
+      token: "token-1",
+      cloud_subscribed: true,
+      has_payment_method: true,
+    };
+    onboardingData.currentStep = "engine";
+
+    render(<OnboardingPage />);
+
+    expect(screen.getByText("plan selection")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("plan"),
+    );
   });
 
   it("leaves login completion analytics to the login gate", async () => {
@@ -218,20 +256,46 @@ describe("enterprise onboarding authentication", () => {
     render(<OnboardingPage />);
 
     await waitFor(() =>
-      expect(mocks.setWindowSize).toHaveBeenCalledWith("Onboarding", 500, 620),
+      expect(mocks.setWindowSize).toHaveBeenCalledWith("Onboarding", 500, 680),
     );
     expect(screen.getByTestId("onboarding-scroll-region")).toHaveClass(
       "overflow-y-auto",
     );
   });
 
-  // The engine slide is the last one: setup no longer asks for a goal or
-  // builds a dashboard, so finishing it completes onboarding outright.
-  it("completes onboarding from the engine slide instead of advancing", async () => {
+  // Per-slide sizes made the window jump on every step and blew up to 760x720
+  // on the payment slide. One size, applied once, for the whole flow.
+  it("sizes the window once instead of resizing per slide", async () => {
+    mocks.enterprisePolicy.isManagedDeployment = false;
+    mocks.settings.user = {
+      has_payment_method: false,
+      entitlement_source: "none",
+      token: "tok",
+    };
     onboardingData.currentStep = "engine";
 
     render(<OnboardingPage />);
-    fireEvent.click(await screen.findByRole("button", { name: "finish engine" }));
+    await waitFor(() =>
+      expect(mocks.setWindowSize).toHaveBeenCalledWith("Onboarding", 500, 680),
+    );
+
+    // Advancing onto the payment slide, the step that used to widen the window
+    // to 760x720, must not resize it again.
+    fireEvent.click(
+      await screen.findByRole("button", { name: "finish engine" }),
+    );
+    expect(await screen.findByText("plan selection")).toBeInTheDocument();
+
+    expect(mocks.setWindowSize).toHaveBeenCalledTimes(1);
+  });
+
+  it("managed onboarding completes from engine without consumer pricing", async () => {
+    onboardingData.currentStep = "engine";
+
+    render(<OnboardingPage />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "finish engine" }),
+    );
 
     await waitFor(() =>
       expect(mocks.completeOnboarding).toHaveBeenCalledWith({
@@ -239,6 +303,162 @@ describe("enterprise onboarding authentication", () => {
       }),
     );
     expect(screen.queryByText("connect apps")).not.toBeInTheDocument();
+  });
+
+  it("shows plan selection last for a new free consumer account", async () => {
+    mocks.enterprisePolicy.isManagedDeployment = false;
+    mocks.settings.user = {
+      has_payment_method: false,
+      entitlement_source: "none",
+      token: "tok",
+    };
+    onboardingData.currentStep = "engine";
+
+    render(<OnboardingPage />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "finish engine" }),
+    );
+
+    expect(await screen.findByText("plan selection")).toBeInTheDocument();
+    expect(mocks.completeOnboarding).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "continue free plan" }));
+    await waitFor(() =>
+      expect(mocks.completeOnboarding).toHaveBeenCalledWith({
+        method: "setup_finished",
+      }),
+    );
+  });
+
+  // Regression: "plan" is the last slide, so showing it to a user who skipped
+  // sign-in trapped onboarding forever — the real PlanSelectionStep can neither
+  // load checkout without a token, and
+  // handleNextSlide never reaches completeOnboarding while a next slide exists.
+  // The mock below always advances, which is why only the desktop E2E
+  // (onboarding-background-ai-tools) caught it. Keep this asserting completion.
+  it("finishes setup without plan selection when the user is signed out", async () => {
+    mocks.enterprisePolicy.isManagedDeployment = false;
+    mocks.settings.user = null;
+    onboardingData.currentStep = "engine";
+
+    render(<OnboardingPage />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "finish engine" }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.completeOnboarding).toHaveBeenCalledWith({
+        method: "setup_finished",
+      }),
+    );
+    expect(screen.queryByText("plan selection")).not.toBeInTheDocument();
+  });
+
+  it("does not restore managed onboarding onto consumer pricing", async () => {
+    onboardingData.currentStep = "plan";
+
+    render(<OnboardingPage />);
+
+    expect(await screen.findByText("engine")).toBeInTheDocument();
+    expect(screen.queryByText("plan selection")).not.toBeInTheDocument();
+  });
+
+  // Regression: acquisition asks which marketing channel the user arrived from.
+  // A managed deployment has no such channel — an administrator pushed the
+  // install — so asking both lengthens an IT rollout and files those installs
+  // under a channel they never came from. It shipped unfiltered and stayed that
+  // way for over a week, because the only check that objected was a desktop E2E
+  // nobody could read through the other red jobs.
+  it("does not ask managed onboarding where it heard about screenpipe", async () => {
+    mocks.enterprisePolicy.isManagedAuthenticated = true;
+
+    render(<OnboardingPage />);
+
+    await waitFor(() =>
+      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("permissions"),
+    );
+    expect(mocks.setOnboardingStep).not.toHaveBeenCalledWith("acquisition");
+  });
+
+  // A device that saved mid-acquisition on an older build still has to grant
+  // permissions, so it resumes there rather than skipping ahead to the engine.
+  it("resumes a managed install saved on acquisition at permissions", async () => {
+    onboardingData.currentStep = "acquisition";
+
+    render(<OnboardingPage />);
+
+    expect(
+      await screen.findByRole("button", { name: "finish permissions" }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not collect payment from an existing cardless trial", async () => {
+    mocks.enterprisePolicy.isManagedDeployment = false;
+    mocks.settings.user = {
+      cloud_subscribed: true,
+      has_payment_method: false,
+      entitlement_source: "manual",
+      token: "tok",
+    };
+    onboardingData.currentStep = "engine";
+
+    render(<OnboardingPage />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "finish engine" }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.completeOnboarding).toHaveBeenCalledWith({
+        method: "setup_finished",
+      }),
+    );
+    expect(screen.queryByText("plan selection")).not.toBeInTheDocument();
+  });
+
+  it("marks checkout as required while keeping funnel keys stable", async () => {
+    mocks.enterprisePolicy.isManagedDeployment = false;
+    mocks.settings.user = {
+      has_payment_method: false,
+      entitlement_source: "none",
+      token: "tok",
+    };
+    onboardingData.currentStep = "engine";
+
+    render(<OnboardingPage />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "finish engine" }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.capture).toHaveBeenCalledWith(
+        "onboarding_step_reached",
+        expect.objectContaining({
+          card_ask_arm: "required",
+          card_ask_placement_active: true,
+        }),
+      ),
+    );
+  });
+
+  it("does not collect payment when the account already has a payment method", async () => {
+    mocks.enterprisePolicy.isManagedDeployment = false;
+    mocks.settings.user = {
+      cloud_subscribed: true,
+      has_payment_method: true,
+    };
+    onboardingData.currentStep = "engine";
+
+    render(<OnboardingPage />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "finish engine" }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.completeOnboarding).toHaveBeenCalledWith({
+        method: "setup_finished",
+      }),
+    );
+    expect(screen.queryByText("plan selection")).not.toBeInTheDocument();
   });
 
   it.each(["connect-apps", "integrations", "connections", "first-dashboard"])(
@@ -253,6 +473,10 @@ describe("enterprise onboarding authentication", () => {
     },
   );
 
+  // The point of this one is that a verified credential advances at all. It
+  // asserted "acquisition" for as long as the managed flow asked which
+  // marketing channel the device came from, so the destination was wrong and
+  // the unit test agreed with it. Only the desktop E2E objected.
   it("advances after either enterprise credential is verified", async () => {
     mocks.enterprisePolicy.authenticationState = "authenticated";
     mocks.enterprisePolicy.isManagedAuthenticated = true;
@@ -260,7 +484,7 @@ describe("enterprise onboarding authentication", () => {
     render(<OnboardingPage />);
 
     await waitFor(() =>
-      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("acquisition"),
+      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("permissions"),
     );
   });
 
