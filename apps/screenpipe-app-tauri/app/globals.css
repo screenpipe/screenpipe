@@ -288,6 +288,10 @@
   /* Prevent intermittent scrollbars on Windows overlay — html/body should never scroll,
      inner containers handle their own scrolling with scrollbar-hide */
   html, body {
+    height: 100%;
+    width: 100%;
+    min-height: 100%;
+    position: relative;
     overflow: hidden;
     -ms-overflow-style: none;
     scrollbar-width: none;

@@ -47,6 +47,12 @@ export function applyRootZoom(factor: number): void {
   if (typeof document === "undefined") return;
   const clamped = clampAppZoom(factor);
   document.documentElement.style.zoom = String(clamped);
+  document.documentElement.style.height = "100%";
+  document.documentElement.style.width = "100%";
+  if (document.body) {
+    document.body.style.height = "100%";
+    document.body.style.width = "100%";
+  }
   try {
     localStorage.setItem(STORAGE_KEY, String(clamped));
   } catch {}
@@ -155,6 +161,20 @@ export function AppZoomProvider({ children }: { children: React.ReactNode }) {
       unlisten?.();
     };
   }, [zoomIn, zoomOut, resetZoom]);
+
+  // Ensure layout reflow on window resize / maximize
+  useEffect(() => {
+    const handleResize = () => {
+      if (typeof document !== "undefined" && document.documentElement) {
+        const currentZoom = document.documentElement.style.zoom;
+        if (currentZoom) {
+          document.documentElement.style.zoom = currentZoom;
+        }
+      }
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   return (
     <AppZoomContext.Provider

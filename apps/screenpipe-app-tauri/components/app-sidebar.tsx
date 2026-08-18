@@ -128,7 +128,7 @@ export function AppSidebarLayout({ children }: { children: React.ReactNode }) {
     <SidebarShellContext.Provider value={{ container, setSlot }}>
       <div
         className={cn(
-          "flex h-screen min-h-0 overflow-hidden",
+          "flex h-full w-full min-h-0 overflow-hidden",
           isTranslucent ? "bg-transparent" : "bg-background",
         )}
       >

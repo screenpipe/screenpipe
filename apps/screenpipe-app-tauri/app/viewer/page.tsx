@@ -129,7 +129,7 @@ export default function ViewerPage() {
     isMacPlatform() && !isFullscreen ? "pl-[78px]" : "pl-3";
 
   return (
-    <div className="flex flex-col h-screen bg-background text-foreground font-mono">
+    <div className="flex flex-col h-full bg-background text-foreground font-mono">
       <header
         className={
           "flex items-center gap-2 pr-3 h-10 border-b border-border " +

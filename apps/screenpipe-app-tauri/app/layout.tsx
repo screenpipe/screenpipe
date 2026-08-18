@@ -32,6 +32,7 @@ import {
   markSearchOpenedFromChatSurface,
   openChatConversationInCurrentChatSurface,
 } from "@/lib/chat-utils";
+import { cn } from "@/lib/utils";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -243,7 +244,7 @@ export default function RootLayout({
   }, []);
 
   return (
-    <html lang="en" suppressHydrationWarning className={usesTransparentWindowBackground ? "bg-transparent" : ""}>
+    <html lang="en" suppressHydrationWarning className={cn("h-full w-full overflow-hidden", usesTransparentWindowBackground ? "bg-transparent" : "")}>
       <head>
         <script
           dangerouslySetInnerHTML={{
@@ -271,6 +272,16 @@ export default function RootLayout({
                   }
                 } catch (e) {}
 
+                try {
+                  var savedZoom = localStorage.getItem('screenpipe-app-zoom');
+                  if (savedZoom) {
+                    var parsedZoom = parseFloat(savedZoom);
+                    if (!isNaN(parsedZoom) && parsedZoom >= 0.75 && parsedZoom <= 1.75) {
+                      document.documentElement.style.zoom = String(parsedZoom);
+                    }
+                  }
+                } catch (e) {}
+
                 // Crash recovery: if React fails to render, the page stays blank.
                 // After 8s, if <body> has no visible children, reload once.
                 var RELOAD_KEY = '__sp_crash_reload';
@@ -290,7 +301,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className={`${inter.className} scrollbar-hide ${usesTransparentWindowBackground ? "bg-transparent" : ""}`}>
+      <body className={cn(inter.className, "h-full w-full overflow-hidden scrollbar-hide", usesTransparentWindowBackground ? "bg-transparent" : "")}>
         {/* Providers sits INSIDE <body> so the body element is present in
             both the static export and the first client render. With Providers
             wrapping <body>, gating Providers' children on a post-mount flag

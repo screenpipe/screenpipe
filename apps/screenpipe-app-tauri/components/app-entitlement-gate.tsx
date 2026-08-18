@@ -80,7 +80,7 @@ function EntitlementShell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="min-h-screen w-full bg-background text-foreground flex items-center justify-center px-6">
+    <div className="min-h-full h-full w-full bg-background text-foreground flex items-center justify-center px-6">
       <div className="w-full max-w-[440px] border border-border bg-background px-8 py-7 shadow-sm">
         <div className="mb-7">
           <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">

@@ -477,14 +477,14 @@ export default function OnboardingPage() {
 
   if (isLoading || !isSettingsLoaded || !isManagedDeploymentResolved) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-background">
+      <div className="flex items-center justify-center min-h-full h-full w-full bg-background">
         <div className="w-6 h-6 border border-foreground border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col w-full h-screen overflow-hidden bg-background">
+    <div className="flex flex-col w-full h-full overflow-hidden bg-background">
       {/* Drag region */}
       <div className="w-full bg-background p-3" data-tauri-drag-region />
 

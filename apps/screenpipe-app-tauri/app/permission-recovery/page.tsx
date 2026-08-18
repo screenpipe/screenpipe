@@ -313,7 +313,7 @@ export default function PermissionRecoveryPage() {
   }, [micStatus, accessibilityStatus, screenStatus, keychainStatus]);
 
   return (
-    <div className="flex flex-col w-full h-screen overflow-hidden bg-background">
+    <div className="flex flex-col w-full h-full overflow-hidden bg-background">
       <div className="w-full h-8 shrink-0" data-tauri-drag-region />
 
       <div className="flex-1 flex flex-col items-center justify-center px-8 pb-6">
