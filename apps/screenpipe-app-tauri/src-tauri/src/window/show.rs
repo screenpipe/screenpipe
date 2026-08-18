@@ -1915,11 +1915,13 @@ impl ShowRewindWindow {
         Ok(window)
     }
 
-    /// Pre-warm the floating search window at startup: create it hidden and
+    /// Pre-warm the floating search window at startup on platforms where
+    /// hidden transparent webviews stay hidden: create it hidden and
     /// unfocused so the FIRST user-triggered open reuses this warm webview
     /// (instant) instead of cold-booting Next.js for several seconds (the
     /// "search bar frozen ~10s before you can type" bug). No-op if the window
     /// already exists or the UI is suppressed (enterprise hidden mode).
+    #[cfg(not(target_os = "windows"))]
     pub fn prewarm_search(app: &AppHandle) -> tauri::Result<()> {
         if crate::enterprise_policy::is_app_ui_hidden() {
             return Ok(());

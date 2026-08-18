@@ -50,6 +50,7 @@ import {
   type ActivityHistoryCoverage,
 } from "@/lib/activity-history-persistence";
 import { localFetch } from "@/lib/api";
+import { presentQuotaError } from "@/lib/chat/quota-errors";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import { runDailySummaryWithPi } from "@/lib/daily-summary-pi";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -60,6 +61,7 @@ import type { AIPreset } from "@/lib/utils/tauri";
 
 type RangePreset = "today" | "24h" | "7d" | "custom";
 type GenerationSource = "empty_state" | "refresh";
+const ACTIVITY_GENERATION_TIMEOUT_MS = 120_000;
 type ActivitySummaryResponse = {
   data_status: string;
   total_active_minutes: number;
@@ -90,6 +92,21 @@ type ActivityLedgerArtifactInterval = {
 type ActivityLedgerArtifactsResponse = {
   intervals?: ActivityLedgerArtifactInterval[];
 };
+
+function noActivityMessage(dataStatus: string): string {
+  switch (dataStatus) {
+    case "not_recording":
+      return "No recorded activity is available yet. Start recording, then try again.";
+    case "no_capture_in_range":
+      return "No recorded activity was found in this range. Choose another range and try again.";
+    case "empty_but_recording":
+      return "Recording is active, but this range does not have enough activity yet. Keep working for a moment, then try again.";
+    case "unknown":
+      return "Activity data is not ready yet. Check recording status, then try again.";
+    default:
+      return "There is not enough recorded activity in this range to generate a history yet.";
+  }
+}
 type ActivityArtifact = ActivityHistoryEvidence & {
   browser_url?: string | null;
 };
@@ -822,6 +839,11 @@ export function ActivityLedger({
     historyLoadingRef.current = true;
     setHistoryLoading(true);
     setHistoryError("");
+    let timedOut = false;
+    const timeout = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, ACTIVITY_GENERATION_TIMEOUT_MS);
     try {
       const [summaryResponse, meetingsResponse] = await Promise.all([
         localFetch(buildActivitySummaryPath(generationRange), {
@@ -864,11 +886,15 @@ export function ActivityLedger({
           persisted.entries.length > 0 ? { entries: persisted.entries } : null,
         );
         setHistoryCoverage(persisted.coverage);
+        setHistoryError(
+          noActivityMessage(generationSummary?.data_status ?? "unknown"),
+        );
         posthog.capture("activity_generation_completed", {
           range: preset,
           source,
           outcome: "no_activity",
           activity_count: 0,
+          data_status: generationSummary?.data_status ?? "unknown",
         });
         return;
       }
@@ -970,15 +996,26 @@ export function ActivityLedger({
         outcome: "generated",
         activity_count: next.entries.length,
       });
-    } catch {
-      if (controller.signal.aborted) return;
-      setHistoryError("History could not be updated. Try again.");
+    } catch (reason) {
+      if (controller.signal.aborted && !timedOut) return;
+      const rawError = reason instanceof Error ? reason.message : String(reason);
+      const quota = presentQuotaError(rawError);
+      const friendlyError = timedOut
+        ? "Activity generation took too long and was stopped. Try again."
+        : rawError.toLowerCase().includes("hosted_ai_allowance_exceeded")
+          ? "This AI preset has no usage left. Choose a different AI preset, then try again."
+          : quota.kind !== "none"
+            ? quota.message
+            : "History could not be updated. Try again.";
+      setHistoryError(friendlyError);
       posthog.capture("activity_generation_failed", {
         range: preset,
         source,
+        error_kind: timedOut ? "timeout" : quota.kind,
       });
     } finally {
-      if (!controller.signal.aborted) {
+      window.clearTimeout(timeout);
+      if (historyAbortRef.current === controller) {
         historyLoadingRef.current = false;
         setHistoryLoading(false);
       }
@@ -1070,17 +1107,9 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
       className="flex h-full min-h-0 flex-col bg-background"
       data-testid="activity-ledger"
     >
-      <header className="shrink-0 border-b border-border px-6 pb-5 pt-10">
+      <header className="shrink-0 border-b border-border px-6 pb-4 pt-9">
         <div className="mx-auto max-w-4xl">
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h1 className="font-sans text-2xl font-medium tracking-tight">
-                Activity
-              </h1>
-              <p className="mt-1 text-sm text-muted-foreground">
-            An encrypted record of what you worked on.
-              </p>
-            </div>
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <div className="flex items-center gap-2">
               <Select
                 value={preset}
@@ -1308,15 +1337,17 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                   Generate activities
                 </h2>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                  {historyError ||
-                    "Turn this range into a private activity history when you’re ready."}
+                  <span role={historyError ? "alert" : undefined}>
+                    {historyError ||
+                      "Turn this range into a private activity history when you’re ready."}
+                  </span>
                 </p>
                 <Button
                   size="sm"
                   className="mt-5 h-10 px-5 uppercase tracking-wide"
                   onClick={() => regenerateSelectedRange("empty_state")}
                 >
-                  Generate activities
+                  {historyError ? "Try again" : "Generate activities"}
                 </Button>
               </div>
             </div>

@@ -187,6 +187,42 @@ struct TimelinePerformanceTests {
             )
             exit(1)
         }
+
+        // Lane identity is computed from the full loaded window once, then
+        // clipped for each viewport. Exercise a deliberately fragmented day
+        // so stabilizing colours cannot reintroduce O(frames) work per scroll.
+        var fragmented = fixtureFrames()
+        for index in fragmented.indices {
+            fragmented[index].devices[0].metadata.appName = "Synthetic \(index % 20)"
+        }
+        let groupingModel = TimelineViewModel(
+            config: TimelineAPIConfig(host: "127.0.0.1", port: 0, apiKey: nil)
+        )
+        groupingModel.injectForTesting(frames: fragmented)
+        var groupingChecksum = 0
+        let coldGroupingMs = elapsedMilliseconds {
+            groupingChecksum += groupingModel.appGroups.count
+        }
+        let scrollGroupingMs = elapsedMilliseconds {
+            for iteration in 0..<500 {
+                groupingModel.currentIndex = (iteration * 5) % fragmented.count
+                groupingChecksum += groupingModel.appGroups.count
+            }
+        }
+        print(
+            String(
+                format: "timeline performance: cold_grouping_ms=%.3f repeated_grouping_ms=%.3f iterations=500 checksum=%d",
+                coldGroupingMs,
+                scrollGroupingMs,
+                groupingChecksum
+            )
+        )
+        guard coldGroupingMs < 100, scrollGroupingMs < 100 else {
+            FileHandle.standardError.write(
+                "FAIL stable lane grouping exceeded 100 ms\n".data(using: .utf8)!
+            )
+            exit(1)
+        }
         model.stop()
     }
 }

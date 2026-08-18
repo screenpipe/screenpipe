@@ -68,6 +68,15 @@ enum TimelineAppTaxonomy {
         ]),
     ]
 
+    /// App names repeat for thousands of consecutive frames. Taxonomy uses
+    /// fuzzy bidirectional substring checks, so memoizing the small distinct
+    /// name set avoids re-running the keyword matrix during lane grouping.
+    private static let categoryCache: NSCache<NSString, NSString> = {
+        let cache = NSCache<NSString, NSString>()
+        cache.countLimit = 2_000
+        return cache
+    }()
+
     /// `String.prototype.includes`: an empty needle always matches, where
     /// Swift's `contains` returns false. That difference decides the category of
     /// an empty app name, so it is reproduced rather than tidied away.
@@ -79,11 +88,18 @@ enum TimelineAppTaxonomy {
     /// order: browser, dev, communication, media, productivity.
     static func category(for appName: String) -> AppCategory {
         let lower = appName.lowercased()
+        let key = lower as NSString
+        if let cached = categoryCache.object(forKey: key),
+           let category = AppCategory(rawValue: cached as String) {
+            return category
+        }
         for (category, apps) in categories {
             for app in apps where jsIncludes(lower, app) || jsIncludes(app, lower) {
+                categoryCache.setObject(category.rawValue as NSString, forKey: key)
                 return category
             }
         }
+        categoryCache.setObject(AppCategory.other.rawValue as NSString, forKey: key)
         return .other
     }
 
@@ -663,6 +679,58 @@ enum TimelineGrouping {
         return groups
     }
 
+    /// Clip already-computed full-window groups to the visible viewport.
+    /// Group identity, domain evidence and colour stay anchored to the entire
+    /// run instead of being re-derived from whichever fragment is on screen.
+    static func visibleGroups(
+        from groups: [TimelineAppGroup],
+        in range: Range<Int>
+    ) -> [TimelineAppGroup] {
+        guard !range.isEmpty, !groups.isEmpty else { return [] }
+
+        // Groups are ordered and non-overlapping. Seek to the first possible
+        // overlap instead of walking a full day for every scroll tick.
+        var lowerBound = 0
+        var upperBound = groups.count
+        while lowerBound < upperBound {
+            let middle = lowerBound + (upperBound - lowerBound) / 2
+            let last = groups[middle].frameIndices.last ?? -1
+            if last < range.lowerBound {
+                lowerBound = middle + 1
+            } else {
+                upperBound = middle
+            }
+        }
+
+        var result: [TimelineAppGroup] = []
+        var groupIndex = lowerBound
+        while groupIndex < groups.count {
+            let group = groups[groupIndex]
+            guard let first = group.frameIndices.first,
+                  let last = group.frameIndices.last,
+                  first < range.upperBound else { break }
+            guard last >= range.lowerBound else {
+                groupIndex += 1
+                continue
+            }
+            let lower = max(first, range.lowerBound)
+            let upper = min(last + 1, range.upperBound)
+            guard lower < upper else {
+                groupIndex += 1
+                continue
+            }
+
+            var visible = group
+            // Group indices are contiguous because a group flushes at every
+            // app, domain or day boundary.
+            visible.frameIndices = Array(lower..<upper)
+            if lower != first { visible.dayBoundaryLabel = nil }
+            result.append(visible)
+            groupIndex += 1
+        }
+        return result
+    }
+
     /// Segment colour: the top site for a browser run, the app name otherwise.
     static func barColor(for group: TimelineAppGroup) -> TimelineHSL {
         TimelineColors.barColor(for: group.topDomains.first ?? group.appName)
@@ -935,11 +1003,17 @@ enum TimelineNavigation {
     }
 
     /// Closest frame to a wall-clock instant, used by search and deep links.
-    static func indexNearest(_ target: Date, in frames: [StreamTimeSeriesResponse]) -> Int? {
+    static func indexNearest(
+        _ target: Date,
+        in frames: [StreamTimeSeriesResponse],
+        sameLocalDay: Bool = false
+    ) -> Int? {
         var best: Int?
         var bestDelta = Double.greatestFiniteMagnitude
+        let calendar = Calendar.current
         for (i, frame) in frames.enumerated() {
             guard let d = TimelineFrames.date(of: frame) else { continue }
+            if sameLocalDay, !calendar.isDate(d, inSameDayAs: target) { continue }
             let delta = abs(d.timeIntervalSince(target))
             if delta < bestDelta {
                 bestDelta = delta

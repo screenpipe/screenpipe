@@ -262,6 +262,13 @@ final class TimelineViewModel: ObservableObject {
     /// for an explicit day change: treating it as a session-long history made
     /// scrolling from yesterday back into an already visited today a no-op.
     private var requestedDays = Set<String>()
+    /// Adjacent-day data is backfill, not a live-edge update. Preserve the
+    /// exact moment under the playhead while the neighbouring day is merged.
+    private var pendingAdjacentAnchor: (frameId: String?, timestamp: Date)?
+    /// Explicit day arrows/calendar target the beginning of that day, matching
+    /// the web Timeline. The request is ascending so its first batch contains
+    /// the midnight-side frame and later batches preserve that exact anchor.
+    private var pendingDayAnchor: Date?
     private var tagFetchInFlight = Set<String>()
     private var navigationGeneration = 0
     private var pendingSearchNavigation: (frameId: String?, timestamp: Date)?
@@ -292,6 +299,8 @@ final class TimelineViewModel: ObservableObject {
     private var cachedFacetsKey: String = ""
     private var cachedMatching: [Int]??
     private var cachedMatchingKey: String = ""
+    private var cachedAllGroups: [TimelineAppGroup] = []
+    private var cachedAllGroupsGeneration = -1
     private var cachedGroups: [TimelineAppGroup] = []
     private var cachedGroupsKey: String = ""
     private var lastAdjacentLoad = Date.distantPast
@@ -348,6 +357,8 @@ final class TimelineViewModel: ObservableObject {
         playbackTimer = nil
         meetingDetectionWorkItem = nil
         meetingDetectionDirtySince = nil
+        pendingAdjacentAnchor = nil
+        pendingDayAnchor = nil
         isLoadingImage = false
     }
 
@@ -389,6 +400,8 @@ final class TimelineViewModel: ObservableObject {
         currentImage = nil
         currentImageFrameId = nil
         pendingSearchNavigation = searchToResume
+        pendingAdjacentAnchor = nil
+        pendingDayAnchor = nil
         preferredFrameId = searchToResume?.frameId
         imageLoadToken &+= 1
         isLoadingImage = false
@@ -467,11 +480,11 @@ final class TimelineViewModel: ObservableObject {
 
     // MARK: Requests
 
-    func requestDay(_ date: Date) {
+    func requestDay(_ date: Date, order: String = "descending") {
         let key = TimelineDateNavigation.dayKey(date)
         let range = TimelineDateNavigation.dayRange(for: date)
         requestedDays.insert(key)
-        stream.request(FrameStreamRequest(start: range.start, end: range.end))
+        stream.request(FrameStreamRequest(start: range.start, end: range.end, order: order))
     }
 
     /// Search can return an exact frame that falls outside the day's capped
@@ -525,7 +538,27 @@ final class TimelineViewModel: ObservableObject {
         let result = TimelineMerge.merge(existing: frames, incoming: incoming)
         let previousDisplayFrameId = displayFrameId
         frames = result.frames
-        currentIndex = TimelineLiveEdge.shiftIndex(currentIndex, newFramesAtFront: result.newAtFront)
+        if let anchor = pendingAdjacentAnchor {
+            let anchoredIndex = anchor.frameId.flatMap {
+                TimelineNavigation.index(ofFrameId: $0, in: frames)
+            } ?? TimelineNavigation.indexNearest(anchor.timestamp, in: frames)
+            if let anchoredIndex { currentIndex = anchoredIndex }
+            pendingAdjacentAnchor = nil
+        } else if let anchor = pendingDayAnchor {
+            if let anchoredIndex = TimelineNavigation.indexNearest(
+                anchor,
+                in: frames,
+                sameLocalDay: true
+            ) {
+                currentIndex = anchoredIndex
+                pendingDayAnchor = nil
+            }
+        } else {
+            currentIndex = TimelineLiveEdge.shiftIndex(
+                currentIndex,
+                newFramesAtFront: result.newAtFront
+            )
+        }
         var resolvedPendingSearch = false
         if let pending = pendingSearchNavigation {
             if let frameId = pending.frameId,
@@ -691,6 +724,11 @@ final class TimelineViewModel: ObservableObject {
         guard !requestedDays.contains(key) else { return }
         // Never request past today.
         if !nearOldest, target > Date() { return }
+        let playheadFrameId = currentFrame?.devices.first?.frameId
+        pendingAdjacentAnchor = (
+            frameId: playheadFrameId,
+            timestamp: currentTimestamp ?? anchor
+        )
         lastAdjacentLoad = Date()
         requestDay(target)
     }
@@ -718,7 +756,11 @@ final class TimelineViewModel: ObservableObject {
         let v = viewport
         let key = "\(framesGeneration)|\(v.start)|\(v.end)"
         if key == cachedGroupsKey { return cachedGroups }
-        let groups = TimelineGrouping.groups(for: visibleFrames, indexOffset: v.start)
+        if cachedAllGroupsGeneration != framesGeneration {
+            cachedAllGroups = TimelineGrouping.groups(for: frames)
+            cachedAllGroupsGeneration = framesGeneration
+        }
+        let groups = TimelineGrouping.visibleGroups(from: cachedAllGroups, in: v.range)
         cachedGroups = groups
         cachedGroupsKey = key
         return groups
@@ -1061,6 +1103,8 @@ final class TimelineViewModel: ObservableObject {
         isNavigating = false
         currentDate = Date()
         currentIndex = 0
+        pendingAdjacentAnchor = nil
+        pendingDayAnchor = nil
         requestedDays.removeAll()
         requestDay(currentDate)
         loadCurrentImage()
@@ -1080,6 +1124,8 @@ final class TimelineViewModel: ObservableObject {
         resetFilters()
         currentDate = date
         currentIndex = 0
+        pendingAdjacentAnchor = nil
+        pendingDayAnchor = Calendar.current.startOfDay(for: date)
         requestedDays.removeAll()
         frames = []
         // Retain the last decoded pixels as a non-interactive transition
@@ -1087,7 +1133,7 @@ final class TimelineViewModel: ObservableObject {
         // pixels cannot be mistaken for the new playhead or copied as its text.
         preferredFrameId = nil
         isLoading = true
-        requestDay(date)
+        requestDay(date, order: "ascending")
         // Never leave the spinner up forever if the day query stalls.
         DispatchQueue.main.asyncAfter(deadline: .now() + TimelineDateNavigation.navigationTimeout) { [weak self] in
             guard let self, self.navigationGeneration == generation else { return }

@@ -615,6 +615,15 @@ describe("ActivityLedger", () => {
     );
   });
 
+  it("keeps the controls but removes the redundant page heading", async () => {
+    render(<ActivityLedger />);
+
+    await screen.findByRole("button", { name: "Generate activities" });
+    expect(screen.queryByRole("heading", { name: "Activity" })).toBeNull();
+    expect(screen.getByLabelText("Time range")).toBeVisible();
+    expect(screen.getByLabelText("AI preset")).toBeVisible();
+  });
+
   it("generates through click time when capture starts after Activity opens", async () => {
     let summaryCalls = 0;
     mocks.localFetch.mockImplementation((path: string) =>
@@ -713,7 +722,7 @@ describe("ActivityLedger", () => {
     );
   });
 
-  it("bypasses Enhanced AI without exposing ledger rows on AI failure", async () => {
+  it("shows the exhausted AI preset instead of a generic failure", async () => {
     mocks.settings.enhancedAI = false;
     mocks.runDailySummaryWithPi.mockRejectedValue(
       new Error("hosted_ai_allowance_exceeded"),
@@ -723,9 +732,13 @@ describe("ActivityLedger", () => {
 
     await generateActivities();
 
-    expect(
-      await screen.findByText("History could not be updated. Try again."),
-    ).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This AI preset has no usage left. Choose a different AI preset, then try again.",
+    );
+    expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
+    expect(document.body.textContent).not.toContain(
+      "hosted_ai_allowance_exceeded",
+    );
     expect(mocks.runDailySummaryWithPi).toHaveBeenCalledWith(
       expect.objectContaining({ sessionPrefix: "activity-history" }),
     );
@@ -737,8 +750,74 @@ describe("ActivityLedger", () => {
     ).toBeNull();
     expect(mocks.posthogCapture).toHaveBeenCalledWith(
       "activity_generation_failed",
-      { range: "today", source: "empty_state" },
+      {
+        range: "today",
+        source: "empty_state",
+        error_kind: "daily",
+      },
     );
+  });
+
+  it("explains an empty recording range instead of silently returning", async () => {
+    mocks.localFetch.mockImplementation((path: string) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () =>
+          path.startsWith("/meetings?")
+            ? []
+            : path.startsWith("/activity-ledger?")
+              ? { intervals: [] }
+              : {
+                  data_status: "empty_but_recording",
+                  total_active_minutes: 0,
+                },
+      }),
+    );
+
+    render(<ActivityLedger />);
+    await generateActivities();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Recording is active, but this range does not have enough activity yet.",
+    );
+    expect(mocks.runDailySummaryWithPi).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
+  });
+
+  it("stops a stalled generation and replaces the spinner with an error", async () => {
+    mocks.runDailySummaryWithPi.mockImplementation(
+      ({ signal }: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              const error = new Error("aborted");
+              error.name = "AbortError";
+              reject(error);
+            },
+            { once: true },
+          );
+        }),
+    );
+
+    render(<ActivityLedger />);
+    await generateActivities();
+    expect(
+      await screen.findByText("Understanding what you worked on…"),
+    ).toBeVisible();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Activity generation took too long and was stopped.",
+    );
+    expect(
+      screen.queryByText("Understanding what you worked on…"),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
   });
 
   it("tracks page reach and the activity generation funnel", async () => {

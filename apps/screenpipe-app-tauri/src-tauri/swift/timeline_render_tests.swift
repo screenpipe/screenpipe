@@ -626,6 +626,81 @@ private func testDateNavigation() {
 }
 
 @MainActor
+private func testAdjacentDayLoadPreservesPlayhead() {
+    let calendar = Calendar.current
+    let today = calendar.startOfDay(for: Date())
+    let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
+    let yesterdayEnd = today.addingTimeInterval(-1)
+    let model = offlineModel()
+    model.setHealthForTesting(HealthStatus(status: "healthy", frameStatus: "ok"))
+    model.changeDate(to: yesterday)
+    model.injectForTesting(frames: fixtureFrames(count: 1_000, base: yesterdayEnd))
+
+    // Explicit day navigation starts near midnight. Move to yesterday's newest
+    // edge as a user scrolling across the day boundary would.
+    model.setIndex(0)
+    let heldFrameId = model.currentFrame?.devices.first?.frameId
+    let heldTimestamp = model.currentTimestamp
+    expect(model.hasRequestedDayForTesting(today), "today is requested at yesterday's newest edge")
+
+    // Simulate the first batch from today arriving hours after midnight. The
+    // old live-edge rule jumped straight to this batch's newest frame.
+    var todayFrames = fixtureFrames(count: 100, base: today.addingTimeInterval(4 * 3_600))
+    for index in todayFrames.indices {
+        todayFrames[index].devices[0].frameId = "today-\(index)"
+    }
+    model.injectForTesting(frames: todayFrames)
+    expectEqual(
+        model.currentFrame?.devices.first?.frameId,
+        heldFrameId,
+        "adjacent-day merge keeps the frame under the playhead"
+    )
+    expectEqual(model.currentTimestamp, heldTimestamp, "adjacent-day merge keeps its timestamp")
+}
+
+@MainActor
+private func testExplicitDayNavigationStartsAtDayBoundary() {
+    let calendar = Calendar.current
+    let today = calendar.startOfDay(for: Date())
+    let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
+    let model = populatedModel()
+    model.changeDate(to: yesterday)
+
+    // A day's batch is newest-first in model storage. Explicit date controls
+    // should still select the frame nearest midnight, as the web Timeline does.
+    let frames = fixtureFrames(count: 480, base: yesterday.addingTimeInterval(4 * 3_600))
+    let expected = frames.last?.timestamp
+    model.injectForTesting(frames: frames)
+    expectEqual(
+        model.currentFrame?.timestamp,
+        expected,
+        "previous/next day navigation lands near the target day's beginning"
+    )
+}
+
+@MainActor
+private func testLaneColorIsStableAcrossViewport() {
+    var frames = fixtureFrames(count: 1_000)
+    for index in frames.indices {
+        frames[index].devices[0].metadata.appName = "Google Chrome"
+        frames[index].devices[0].metadata.browserUrl = nil
+    }
+    frames[0].devices[0].metadata.browserUrl = "https://example.com/work"
+
+    let model = offlineModel()
+    model.setHealthForTesting(HealthStatus(status: "healthy", frameStatus: "ok"))
+    model.injectForTesting(frames: frames)
+    let liveColor = model.appGroups.first.map(TimelineGrouping.barColor)
+    let liveDomain = model.appGroups.first?.topDomains.first
+
+    model.setIndex(500)
+    let historyColor = model.appGroups.first.map(TimelineGrouping.barColor)
+    let historyDomain = model.appGroups.first?.topDomains.first
+    expectEqual(historyDomain, liveDomain, "the browser lane keeps its full-run domain while scrolling")
+    expectEqual(historyColor, liveColor, "the same browser lane keeps the same color while scrolling")
+}
+
+@MainActor
 private func testConnectionFailurePresentation() {
     expect(
         !TimelineViewModel.shouldSurfaceConnectionFailure(
@@ -967,6 +1042,9 @@ struct TimelineRenderTests {
                 ("selection and filters", testSelectionAndFilters),
                 ("live edge", testLiveEdgeFollowing),
                 ("date navigation", testDateNavigation),
+                ("adjacent day anchor", testAdjacentDayLoadPreservesPlayhead),
+                ("explicit day boundary", testExplicitDayNavigationStartsAtDayBoundary),
+                ("stable lane color", testLaneColorIsStableAcrossViewport),
                 ("connection failure presentation", testConnectionFailurePresentation),
                 ("playback", testPlayback),
                 ("search review", { testSearchReview(shots: shots) }),

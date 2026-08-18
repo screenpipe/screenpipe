@@ -254,6 +254,77 @@ describe("runDailySummaryWithPi", () => {
     expect(mocks.piPrompt).toHaveBeenCalledTimes(2);
   });
 
+  it("preserves a terminal provider error from message_end", async () => {
+    let handler: ((envelope: any) => void) | null = null;
+    mocks.registerForeground.mockImplementation((_sessionId, nextHandler) => {
+      handler = nextHandler;
+      return vi.fn();
+    });
+    mocks.piPrompt.mockImplementation(async () => {
+      queueMicrotask(() => {
+        handler?.({
+          event: {
+            type: "message_end",
+            message: {
+              role: "assistant",
+              stopReason: "error",
+              errorMessage:
+                'HTTP 429 {"error":{"code":"hosted_ai_allowance_exceeded"}}',
+              content: [],
+            },
+          },
+        });
+      });
+      return { status: "ok", data: null };
+    });
+
+    await expect(
+      runDailySummaryWithPi({
+        date: new Date(2026, 7, 18),
+        range: { start: "start", end: "end" },
+        preset: PRESET,
+        userToken: "user-token",
+      }),
+    ).rejects.toThrow("hosted_ai_allowance_exceeded");
+    expect(mocks.piPrompt).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a terminal provider error carried only by agent_end", async () => {
+    let handler: ((envelope: any) => void) | null = null;
+    mocks.registerForeground.mockImplementation((_sessionId, nextHandler) => {
+      handler = nextHandler;
+      return vi.fn();
+    });
+    mocks.piPrompt.mockImplementation(async () => {
+      queueMicrotask(() => {
+        handler?.({
+          event: {
+            type: "agent_end",
+            messages: [
+              {
+                role: "assistant",
+                stopReason: "error",
+                errorMessage: "rate_limit_exceeded",
+                content: [],
+              },
+            ],
+          },
+        });
+      });
+      return { status: "ok", data: null };
+    });
+
+    await expect(
+      runDailySummaryWithPi({
+        date: new Date(2026, 7, 18),
+        range: { start: "start", end: "end" },
+        preset: PRESET,
+        userToken: "user-token",
+      }),
+    ).rejects.toThrow("rate_limit_exceeded");
+    expect(mocks.piPrompt).toHaveBeenCalledOnce();
+  });
+
   it("stops the Pi session when the request is aborted", async () => {
     mocks.registerForeground.mockReturnValue(vi.fn());
     mocks.piPrompt.mockResolvedValue({ status: "ok", data: null });

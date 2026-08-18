@@ -83,6 +83,35 @@ function finalAssistantText(envelope: AgentEventEnvelope): string {
   return "";
 }
 
+type TerminalAssistantMessage = {
+  role?: string;
+  stopReason?: string;
+  errorMessage?: string;
+  error?: string;
+  content?: unknown;
+};
+
+function terminalAssistantError(
+  message: TerminalAssistantMessage | undefined,
+): string | null {
+  if (message?.role !== "assistant" || message.stopReason !== "error") {
+    return null;
+  }
+  const error = message.errorMessage || message.error;
+  return typeof error === "string" && error.trim() ? error : "AI request failed";
+}
+
+function finalAssistantError(envelope: AgentEventEnvelope): string | null {
+  const messages = Array.isArray(envelope.event.messages)
+    ? envelope.event.messages
+    : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const error = terminalAssistantError(messages[index]);
+    if (error) return error;
+  }
+  return null;
+}
+
 function abortError(): Error {
   const error = new Error("daily summary generation aborted");
   error.name = "AbortError";
@@ -129,10 +158,20 @@ export async function runDailySummaryWithPi(
   const handler = (envelope: AgentEventEnvelope) => {
     const event = envelope.event;
     if (event.type === "message_end" && event.message?.role === "assistant") {
+      const terminalError = terminalAssistantError(event.message);
+      if (terminalError && event.willRetry !== true) {
+        fail(new Error(terminalError));
+        return;
+      }
       const candidate = contentText(event.message.content).trim();
       if (candidate) lastAssistant = candidate;
     }
     if (event.type === "agent_end") {
+      const terminalError = finalAssistantError(envelope);
+      if (terminalError) {
+        fail(new Error(terminalError));
+        return;
+      }
       const finalText = finalAssistantText(envelope) || lastAssistant;
       if (finalText) {
         settle(finalText);
