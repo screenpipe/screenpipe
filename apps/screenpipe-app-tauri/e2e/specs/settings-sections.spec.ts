@@ -163,7 +163,7 @@ describe('Settings sections', () => {
     await navDisplay.waitForExist({ timeout: 8_000 });
     await navDisplay.click();
 
-    const toggle = await $('[data-testid="show-overlay-in-screen-recording-toggle"]');
+    const toggle = await $('[data-testid="hide-overlay-in-screen-recording-toggle"]');
     await toggle.waitForExist({ timeout: 5_000 });
 
     const initial = await invokeOrThrow<{
@@ -173,7 +173,7 @@ describe('Settings sections', () => {
       e2eBypass: boolean;
       windowLabels: string[];
     }>('get_app_screen_capture_protection');
-    expect(initial.requestedHidden).toBe(true);
+    expect(initial.requestedHidden).toBe(false);
     // Content protection is a macOS/Windows capability (capture_protection.rs
     // gates platform_supported on exactly those two). Linux has no equivalent,
     // so asserting support unconditionally fails there on a platform gap rather
@@ -193,13 +193,13 @@ describe('Settings sections', () => {
       await toggle.click();
       await browser.waitUntil(
         async () =>
-          !(await invokeOrThrow<{ requestedHidden: boolean }>(
+          (await invokeOrThrow<{ requestedHidden: boolean }>(
             'get_app_screen_capture_protection',
           )).requestedHidden,
         {
           timeout: t(8_000),
           interval: 100,
-          timeoutMsg: 'overlay capture opt-in did not persist',
+          timeoutMsg: 'overlay capture protection did not persist',
         },
       );
       expect(await toggle.getAttribute('data-state')).toBe('checked');
@@ -207,13 +207,13 @@ describe('Settings sections', () => {
       await toggle.click();
       await browser.waitUntil(
         async () =>
-          (await invokeOrThrow<{ requestedHidden: boolean }>(
+          !(await invokeOrThrow<{ requestedHidden: boolean }>(
             'get_app_screen_capture_protection',
           )).requestedHidden,
         {
           timeout: t(8_000),
           interval: 100,
-          timeoutMsg: 'overlay capture opt-out did not persist',
+          timeoutMsg: 'overlay capture visibility did not persist',
         },
       );
       expect(await toggle.getAttribute('data-state')).toBe('unchecked');
@@ -224,7 +224,7 @@ describe('Settings sections', () => {
       const status = await invokeOrThrow<{ requestedHidden: boolean }>(
         'get_app_screen_capture_protection',
       );
-      if (!status.requestedHidden) {
+      if (status.requestedHidden) {
         await toggle.click();
       }
     }

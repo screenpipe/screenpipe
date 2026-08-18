@@ -32,6 +32,7 @@ import {
 } from "../../helpers/search.js";
 import {
   authHeaders,
+  fetchJson,
   getLocalApiConfig,
   postJson,
 } from "../../helpers/api-utils.js";
@@ -45,8 +46,61 @@ interface NativeTimelineSearchState {
   currentTimestamp?: string;
   searchQuery?: string;
   activeResultIndex?: number;
+  activeResultFrameId?: string;
+  activeResultTimestamp?: string;
+  highlightCount?: number;
   searchFrameIds: string[];
   loadedFrameIds: string[];
+}
+
+interface FlatKeywordSearchMatch {
+  frame_id: number;
+  timestamp: string;
+  text_positions: Array<{
+    text: string;
+    confidence: number;
+    bounds: { left: number; top: number; width: number; height: number };
+  }>;
+}
+
+async function flatKeywordSearch(query: string): Promise<FlatKeywordSearchMatch[]> {
+  const api = await getLocalApiConfig();
+  const params = new URLSearchParams({
+    query,
+    group: "false",
+    limit: "20",
+    order: "descending",
+  });
+  const response = await fetchJson(
+    `http://127.0.0.1:${api.port}/search/keyword?${params}`,
+    authHeaders(api.key),
+  );
+  if (!response.ok || !Array.isArray(response.body)) {
+    throw new Error(
+      `flat keyword search failed: status=${response.status} body=${response.text}`,
+    );
+  }
+  return response.body as FlatKeywordSearchMatch[];
+}
+
+async function controlNativeTimelineSearch(
+  windowLabel: string,
+  action: "older" | "newer" | "escape" | `select:${number}`,
+): Promise<boolean> {
+  const caller = await browser.getWindowHandle();
+  const handles = await browser.getWindowHandles();
+  const probeHost = handles.includes("home") ? "home" : caller;
+  if (caller !== probeHost) await browser.switchToWindow(probeHost);
+  try {
+    return await invokeOrThrow<boolean>(
+      "plugin:e2e|native_timeline_search_control",
+      { windowLabel, action },
+    );
+  } finally {
+    if (caller !== probeHost && (await browser.getWindowHandles()).includes(caller)) {
+      await browser.switchToWindow(caller);
+    }
+  }
 }
 
 async function nativeTimelineSearchState(
@@ -574,6 +628,8 @@ describe("Search bugs over seeded data (reproduces #4645)", function () {
     if (!nativeAvailable) this.skip();
 
     await openHomeWindow();
+    await invokeOrThrow("hide_main_window");
+    expect(await invokeOrThrow<boolean>("plugin:e2e|main_overlay_visible")).toBe(false);
     const timelineNav = await $('[data-testid="nav-timeline"]');
     await timelineNav.waitForExist({ timeout: t(15_000) });
     await timelineNav.click();
@@ -634,6 +690,197 @@ describe("Search bugs over seeded data (reproduces #4645)", function () {
         timeoutMsg: `Home native Timeline did not jump to frame ${expectedFrameId}`,
       },
     );
+    expect(await invokeOrThrow<boolean>("plugin:e2e|main_overlay_visible")).toBe(false);
+  });
+
+  it("clicks a standalone Search thumbnail and opens the overlay native Timeline at that exact frame", async function () {
+    const nativeAvailable = await invokeOrThrow<boolean>("native_timeline_is_available");
+    if (!nativeAvailable) this.skip();
+
+    await openHomeWindow();
+    await invokeOrThrow("open_search_window", {
+      query: null,
+      timelineOrigin: null,
+    });
+    await browser.waitUntil(
+      async () => (await browser.getWindowHandles()).includes("search"),
+      { timeout: t(20_000), timeoutMsg: "standalone Search window did not open" },
+    );
+    await browser.switchToWindow("search");
+
+    // This is the production path used by the global Search button: unlike a
+    // Search launched from inside Timeline, it has no timelineOrigin. The old
+    // fallback opened the overlay at its live edge and sent only a React event,
+    // which the native AppKit Timeline never receives.
+    const searchQuery = "vector";
+    const searchResult = await readySearchThumbnail(searchQuery);
+    await $(searchResult.selector).click();
+    const expectedFrameId = searchResult.frameId;
+
+    const overlayLabel = await browser.waitUntil(
+      async () => {
+        const handles = await browser.getWindowHandles();
+        return handles.find((handle) => handle === "main" || handle === "main-window") ?? false;
+      },
+      {
+        timeout: t(20_000),
+        interval: 200,
+        timeoutMsg: "standalone Search did not open the overlay Timeline",
+      },
+    );
+    await browser.switchToWindow(overlayLabel as string);
+    await browser.waitUntil(
+      async () => {
+        const state = await nativeTimelineSearchState(overlayLabel as string);
+        return state?.attached === true &&
+          state.currentFrameId === expectedFrameId &&
+          state.displayedFrameId === expectedFrameId &&
+          state.loadedImageFrameId === expectedFrameId &&
+          Math.abs(
+            new Date(state.currentTimestamp ?? 0).getTime() -
+              new Date(searchResult.timestamp).getTime(),
+          ) < 2 &&
+          state.searchQuery === searchQuery &&
+          state.searchFrameIds.includes(expectedFrameId);
+      },
+      {
+        timeout: t(30_000),
+        interval: 200,
+        timeoutMsg: `standalone Search did not move the native Timeline to frame ${expectedFrameId}`,
+      },
+    );
+  });
+
+  it("steps exact native Search results, survives retries, highlights, and dismisses review before overlay", async function () {
+    const nativeAvailable = await invokeOrThrow<boolean>("native_timeline_is_available");
+    if (!nativeAvailable) this.skip();
+
+    await openHomeWindow();
+    const searchResults = (await flatKeywordSearch("vector")).slice(0, 5);
+    expect(searchResults.length).toBeGreaterThan(2);
+    expect(searchResults.every((result) => result.text_positions.length > 0)).toBe(true);
+
+    const initialResult = searchResults[0];
+    await invokeOrThrow("search_navigate_to_timeline", {
+      timestamp: initialResult.timestamp,
+      frameId: initialResult.frame_id,
+      searchTerms: ["vector"],
+      searchResultsJson: JSON.stringify(searchResults),
+      searchQuery: "vector",
+      timelineOrigin: null,
+    });
+
+    const overlayLabel = await browser.waitUntil(
+      async () => {
+        const handles = await browser.getWindowHandles();
+        return handles.find((handle) => handle === "main" || handle === "main-window") ?? false;
+      },
+      {
+        timeout: t(20_000),
+        interval: 200,
+        timeoutMsg: "production Search navigation did not open the overlay Timeline",
+      },
+    );
+    await browser.switchToWindow(overlayLabel as string);
+    await browser.waitUntil(
+      async () => {
+        const state = await nativeTimelineSearchState(overlayLabel as string);
+        return state?.activeResultIndex === 0 &&
+          state.activeResultFrameId === String(initialResult.frame_id) &&
+          state.activeResultFrameId === state.currentFrameId &&
+          state.activeResultFrameId === state.displayedFrameId &&
+          state.activeResultFrameId === state.loadedImageFrameId &&
+          state.searchFrameIds.length === searchResults.length &&
+          (state.highlightCount ?? 0) > 0;
+      },
+      {
+        timeout: t(30_000),
+        interval: 200,
+        timeoutMsg: "production Search navigation did not load and highlight the exact first frame",
+      },
+    );
+
+    expect(await controlNativeTimelineSearch(overlayLabel as string, "older")).toBe(true);
+    await browser.waitUntil(
+      async () => {
+        const state = await nativeTimelineSearchState(overlayLabel as string);
+        return state?.activeResultIndex === 1 &&
+          state.activeResultFrameId === state.currentFrameId &&
+          state.activeResultFrameId === state.displayedFrameId &&
+          state.activeResultFrameId === state.loadedImageFrameId &&
+          (state.highlightCount ?? 0) > 0;
+      },
+      {
+        timeout: t(30_000),
+        interval: 200,
+        timeoutMsg: "older result did not load and highlight its exact native frame",
+      },
+    );
+
+    // Search sends delayed attachment retries. A retry used to reset the pill
+    // to result 1 after the user had already clicked an arrow.
+    await browser.pause(1_200);
+    expect((await nativeTimelineSearchState(overlayLabel as string))?.activeResultIndex).toBe(1);
+
+    const lastIndex = searchResults.length - 1;
+    expect(
+      await controlNativeTimelineSearch(overlayLabel as string, `select:${lastIndex}`),
+    ).toBe(true);
+    await browser.waitUntil(
+      async () => {
+        const state = await nativeTimelineSearchState(overlayLabel as string);
+        return state?.activeResultIndex === lastIndex &&
+          state.activeResultFrameId === state.displayedFrameId &&
+          state.activeResultFrameId === state.loadedImageFrameId;
+      },
+      {
+        timeout: t(30_000),
+        interval: 200,
+        timeoutMsg: "search strip selection did not load its exact native frame",
+      },
+    );
+
+    expect(await controlNativeTimelineSearch(overlayLabel as string, "escape")).toBe(true);
+    await browser.waitUntil(
+      async () => {
+        const state = await nativeTimelineSearchState(overlayLabel as string);
+        return state?.attached === true && state.searchFrameIds.length === 0;
+      },
+      {
+        timeout: t(10_000),
+        interval: 100,
+        timeoutMsg: "Escape did not dismiss search review while keeping overlay Timeline open",
+      },
+    );
+    expect((await browser.getWindowHandles())).toContain(overlayLabel as string);
+
+    // Dismiss immediately after a fresh production hand-off. Its four delayed
+    // attachment retries must not resurrect the review after Escape.
+    await invokeOrThrow("search_navigate_to_timeline", {
+      timestamp: initialResult.timestamp,
+      frameId: initialResult.frame_id,
+      searchTerms: ["vector"],
+      searchResultsJson: JSON.stringify(searchResults),
+      searchQuery: "vector",
+      timelineOrigin: overlayLabel,
+    });
+    await browser.waitUntil(
+      async () =>
+        (await nativeTimelineSearchState(overlayLabel as string))?.searchFrameIds.length ===
+        searchResults.length,
+      {
+        timeout: t(10_000),
+        interval: 100,
+        timeoutMsg: "fresh production hand-off did not restore search review",
+      },
+    );
+    expect(await controlNativeTimelineSearch(overlayLabel as string, "escape")).toBe(true);
+    await browser.pause(1_200);
+    expect(
+      (await nativeTimelineSearchState(overlayLabel as string))?.searchFrameIds.length,
+    ).toBe(0);
+    expect((await browser.getWindowHandles())).toContain(overlayLabel as string);
+    await invokeOrThrow("hide_main_window");
   });
 
   it("clicks a real Search thumbnail and restores the overlay native Timeline at that exact frame", async function () {

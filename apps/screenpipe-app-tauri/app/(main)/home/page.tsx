@@ -108,10 +108,7 @@ import {
 import { PlanExpirationNotice } from "@/components/plan-expiration-notice";
 import type { AppUser } from "@/lib/app-entitlement";
 import { ONBOARDING_BRAIN_HANDOFF_EVENT } from "@/lib/live-views/onboarding-activation";
-import {
-  ActivityLedger,
-  preloadActivityHistory,
-} from "@/components/activity-ledger";
+import { ActivityLedger } from "@/components/activity-ledger";
 
 type MainSection = "home" | "timeline" | "activity" | "brain" | "pipes" | "connections" | "meetings" | "help";
 type ConnectionFocusRequest = {
@@ -1356,14 +1353,6 @@ function HomeContent() {
                   // The "home" slot is the New Chat affordance — clicking it
                   // (from any view) always spawns a new chat session.
                   if (id === "home") startNewChat();
-                }}
-                onIntent={(id) => {
-                  if (id === "activity") {
-                    void preloadActivityHistory().catch(() => {
-                      // Activity performs the same read and surfaces its own
-                      // fallback if the encrypted store is unavailable.
-                    });
-                  }
                 }}
                 onMove={(id, toIndex) =>
                   persistSidebarLayout(

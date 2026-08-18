@@ -305,6 +305,15 @@ struct HealthStatus: Codable, Equatable {
 /// The server mixes fractional-second and whole-second ISO 8601, with and
 /// without an explicit zone. One parser so every call site agrees.
 enum TimelineTime {
+    /// Frame timestamps are immutable and recur throughout scrubber, subtitle,
+    /// audio and meeting calculations. NSCache is thread-safe and bounded, so
+    /// repeated view passes do not repeatedly enter Foundation's ICU parser.
+    private static let parsedDates: NSCache<NSString, NSDate> = {
+        let cache = NSCache<NSString, NSDate>()
+        cache.countLimit = 20_000
+        return cache
+    }()
+
     private static let withFraction: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -344,12 +353,99 @@ enum TimelineTime {
 
     static func parse(_ value: String) -> Date? {
         if value.isEmpty { return nil }
-        if let d = withFraction.date(from: value) { return d }
-        if let d = withoutFraction.date(from: value) { return d }
-        if let d = naive.date(from: value) { return d }
-        if let d = naiveMillis.date(from: value) { return d }
-        if let d = naiveSeconds.date(from: value) { return d }
-        return nil
+        let key = value as NSString
+        if let cached = parsedDates.object(forKey: key) { return cached as Date }
+        let parsed = parseRFC3339(value)
+            ?? withFraction.date(from: value)
+            ?? withoutFraction.date(from: value)
+            ?? naive.date(from: value)
+            ?? naiveMillis.date(from: value)
+            ?? naiveSeconds.date(from: value)
+        if let parsed { parsedDates.setObject(parsed as NSDate, forKey: key) }
+        return parsed
+    }
+
+    /// Allocation-light parser for the server's hot RFC3339 shapes. It covers
+    /// fractional or whole seconds, Z, numeric offsets and the legacy naive
+    /// UTC form; unusual inputs retain the formatter fallback above.
+    private static func parseRFC3339(_ value: String) -> Date? {
+        let bytes = Array(value.utf8)
+        guard bytes.count >= 19,
+              bytes[4] == 45, bytes[7] == 45,
+              bytes[10] == 84 || bytes[10] == 116,
+              bytes[13] == 58, bytes[16] == 58 else { return nil }
+
+        func number(_ range: Range<Int>) -> Int? {
+            var result = 0
+            for index in range {
+                let byte = bytes[index]
+                guard byte >= 48, byte <= 57 else { return nil }
+                result = result * 10 + Int(byte - 48)
+            }
+            return result
+        }
+
+        guard var year = number(0..<4),
+              let month = number(5..<7),
+              let day = number(8..<10),
+              let hour = number(11..<13),
+              let minute = number(14..<16),
+              let second = number(17..<19),
+              year >= 1, month >= 1, month <= 12,
+              hour <= 23, minute <= 59, second <= 59 else { return nil }
+
+        let leap = year.isMultiple(of: 4)
+            && (!year.isMultiple(of: 100) || year.isMultiple(of: 400))
+        let monthDays = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        guard day >= 1, day <= monthDays[month - 1] else { return nil }
+
+        var cursor = 19
+        var fraction = 0.0
+        if cursor < bytes.count, bytes[cursor] == 46 {
+            cursor += 1
+            var scale = 0.1
+            var digits = 0
+            while cursor < bytes.count, bytes[cursor] >= 48, bytes[cursor] <= 57 {
+                if digits < 9 {
+                    fraction += Double(bytes[cursor] - 48) * scale
+                    scale *= 0.1
+                }
+                digits += 1
+                cursor += 1
+            }
+            guard digits > 0 else { return nil }
+        }
+
+        var offsetSeconds = 0
+        if cursor < bytes.count {
+            if bytes[cursor] == 90 || bytes[cursor] == 122 {
+                cursor += 1
+            } else if bytes[cursor] == 43 || bytes[cursor] == 45 {
+                let sign = bytes[cursor] == 43 ? 1 : -1
+                guard cursor + 6 == bytes.count,
+                      bytes[cursor + 3] == 58,
+                      let offsetHour = number((cursor + 1)..<(cursor + 3)),
+                      let offsetMinute = number((cursor + 4)..<(cursor + 6)),
+                      offsetHour <= 23, offsetMinute <= 59 else { return nil }
+                offsetSeconds = sign * (offsetHour * 3_600 + offsetMinute * 60)
+                cursor += 6
+            } else {
+                return nil
+            }
+        }
+        guard cursor == bytes.count else { return nil }
+
+        // Howard Hinnant's civil-date conversion, shifted to Unix epoch days.
+        year -= month <= 2 ? 1 : 0
+        let era = year / 400
+        let yearOfEra = year - era * 400
+        let adjustedMonth = month + (month > 2 ? -3 : 9)
+        let dayOfYear = (153 * adjustedMonth + 2) / 5 + day - 1
+        let dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear
+        let days = era * 146_097 + dayOfEra - 719_468
+        let seconds = Double(days * 86_400 + hour * 3_600 + minute * 60 + second - offsetSeconds)
+            + fraction
+        return Date(timeIntervalSince1970: seconds)
     }
 
     /// UTC ISO 8601 with milliseconds, the shape the server's query params want.

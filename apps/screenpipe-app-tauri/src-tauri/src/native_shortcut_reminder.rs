@@ -60,6 +60,7 @@ mod ffi {
         pub fn shortcut_is_available() -> c_int;
         pub fn shortcut_show(json: *const c_char) -> c_int;
         pub fn shortcut_hide() -> c_int;
+        pub fn shortcut_set_capture_protected(protected: c_int) -> c_int;
         pub fn shortcut_show_notification(json: *const c_char) -> c_int;
         pub fn shortcut_set_meeting_active(active: c_int);
         pub fn shortcut_set_meeting_stop_result(succeeded: c_int);
@@ -112,6 +113,12 @@ mod ffi {
             super::NATIVE_REMINDER_VISIBLE.store(false, Ordering::SeqCst);
         }
         hidden
+    }
+
+    pub fn set_capture_protected(protected: bool) {
+        unsafe {
+            shortcut_set_capture_protected(if protected { 1 } else { 0 });
+        }
     }
 
     /// Render a notification attached to the pill. False when the pill is not
@@ -216,6 +223,7 @@ mod ffi {
     pub fn hide() -> bool {
         false
     }
+    pub fn set_capture_protected(_protected: bool) {}
     pub fn show_notification(_json: &str) -> bool {
         false
     }

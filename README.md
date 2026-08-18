@@ -14,8 +14,8 @@
 
 
 
-<p align="center">screenpipe remembers how you actually work</p>
-<p align="center">It captures what you see, say, and do, locally, 24/7, then turns real work into searchable memory, SOPs, and automations for AI agents.</p>
+<p align="center">Screenpipe remembers how you actually work</p>
+<p align="center">Record your screen continuously locally and provide context to your agents (Claude, Codex, Openclaw, Hermes, Runner...)</p>
 
 
 
@@ -76,6 +76,7 @@ screenpipe turns your computer into a personal AI that knows everything you've d
 - **search with ai** - find anything using natural language
 - **100% local** - your data lives on your machine only
 - **source-available** - inspect, modify, audit ([LICENSE.md](LICENSE.md))
+  **company brain** - share knowledge with your team without turning it into surveillance
 
 <p align="center">
    <a href ="https://screenpi.pe">

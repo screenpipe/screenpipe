@@ -123,6 +123,11 @@ import { useQueryState } from "nuqs";
 import { parseEnterpriseManagedVersion } from "@/lib/hooks/use-enterprise-pipes";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import {
+  clearPendingPipeDeepLink,
+  OPEN_PIPE_DEEPLINK_EVENT,
+  readPendingPipeDeepLink,
+} from "@/lib/external-deeplink";
+import {
   deleteConversationFile,
   loadConversationFile,
   saveConversationFile,
@@ -2294,6 +2299,40 @@ export function PipesSection() {
     if (expanded === name) return;
     toggleExpand(name);
   };
+
+  // A public deep link may select an installed pipe for review, but never run
+  // or mutate it. localStorage covers a cold mount; the event covers a Pipes
+  // view that was already open when the link arrived.
+  useEffect(() => {
+    const openInstalledPipe = (pipeName: string) => {
+      if (!isSafePipeName(pipeName)) return;
+      if (!pipes.some((pipe) => pipe.config.name === pipeName)) {
+        if (!loading && pipesApiBase !== null) clearPendingPipeDeepLink();
+        return;
+      }
+      clearPendingPipeDeepLink();
+      setCreating(false);
+      if (expanded !== pipeName) {
+        setExpanded(pipeName);
+        expandedRef.current = pipeName;
+        fetchLogs(pipeName);
+        fetchExecutions(pipeName);
+      }
+    };
+
+    const pending = readPendingPipeDeepLink();
+    if (pending) openInstalledPipe(pending);
+
+    const unlisten = listen<{ pipeName?: string }>(
+      OPEN_PIPE_DEEPLINK_EVENT,
+      (event) => {
+        if (event.payload?.pipeName) openInstalledPipe(event.payload.pipeName);
+      },
+    );
+    return () => {
+      void unlisten.then((stop) => stop());
+    };
+  }, [expanded, loading, pipes, pipesApiBase]);
 
   const savePipeContent = useCallback(async (name: string, content: string) => {
     const pipe = pipes.find((candidate) => candidate.config.name === name);

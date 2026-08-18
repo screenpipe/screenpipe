@@ -5,21 +5,16 @@
 /**
  * Meeting-summary recovery regression.
  *
- * Exercises the user-visible half of the resume/retranscribe bug with a real
- * isolated desktop and local meeting API. The summary execution response is
- * intercepted so the test is deterministic and never spends hosted-AI quota.
- * Manual reruns must remain in the meeting workspace and use the same tracked
- * background execution contract as automatic summaries.
+ * Exercises Stop -> Resume -> Stop through the real isolated desktop and local
+ * meeting API. Summary status is deterministic so every user-visible phase can
+ * be asserted and captured without hosted-AI quota.
  */
 
-import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
 import {
   authHeaders,
   getLocalApiConfig,
   type LocalApiConfig,
 } from "../helpers/api-utils.js";
-import { E2E_DATA_DIR } from "../helpers/app-launcher.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import { invokeOrThrow } from "../helpers/tauri.js";
 import {
@@ -33,63 +28,49 @@ const TITLE = `e2e summary recovery ${Date.now()}`;
 const FIXTURE_END_MS = Date.now() - 60_000;
 const FIXTURE_START = new Date(FIXTURE_END_MS - 30 * 60_000).toISOString();
 const FIXTURE_END = new Date(FIXTURE_END_MS).toISOString();
-const SUMMARY_STARTED = new Date(FIXTURE_END_MS + 1_000).toISOString();
 const EARLY_TRANSCRIPT_MARKER = "E2E-MEETING-EARLY-SEGMENT-R7K2";
 const LATE_TRANSCRIPT_MARKER = "E2E-MEETING-LATE-SEGMENT-P9M4";
-const TRANSCRIPT_CALLS_KEY = "e2eMeetingSummaryTranscriptCalls";
-const CHATS_DIR = join(E2E_DATA_DIR, "chats");
 
-interface StoredChatMessage {
-  role?: string;
-  content?: string;
+interface SummaryStatusFixture {
+  state: "off" | "idle" | "pending" | "running" | "ready" | "failed";
+  auto_summary_enabled: boolean;
+  execution_id?: number | null;
+  execution_status?: string | null;
+  error_type?: string | null;
+  error_message?: string | null;
 }
 
-function summaryMarkerChats(): Array<{
-  name: string;
-  userContent: string;
-}> {
-  let names: string[];
-  try {
-    names = readdirSync(CHATS_DIR);
-  } catch {
-    return [];
-  }
-
-  return names.flatMap((name) => {
-    if (!name.endsWith(".json")) return [];
-    try {
-      const raw = readFileSync(join(CHATS_DIR, name), "utf8");
-      if (
-        !raw.includes(EARLY_TRANSCRIPT_MARKER) ||
-        !raw.includes(LATE_TRANSCRIPT_MARKER)
-      ) {
-        return [];
+async function setSummaryStatusFixture(
+  status: SummaryStatusFixture,
+): Promise<void> {
+  await browser.execute((nextStatus: SummaryStatusFixture) => {
+    (
+      window as typeof window & {
+        __meetingSummaryRecoverySummaryStatus?: SummaryStatusFixture;
       }
-      const conversation = JSON.parse(raw) as {
-        messages?: StoredChatMessage[];
-      };
-      const userContent =
-        conversation.messages?.find(
-          (message) =>
-            message.role === "user" &&
-            message.content?.includes(EARLY_TRANSCRIPT_MARKER) &&
-            message.content?.includes(LATE_TRANSCRIPT_MARKER),
-        )?.content ?? "";
-      return userContent ? [{ name, userContent }] : [];
-    } catch {
-      return [];
-    }
-  });
+    ).__meetingSummaryRecoverySummaryStatus = nextStatus;
+  }, status);
 }
 
-function cleanupSummaryMarkerChats(): void {
-  for (const { name } of summaryMarkerChats()) {
-    try {
-      rmSync(join(CHATS_DIR, name));
-    } catch {
-      // A concurrent atomic replacement can make the old name disappear.
-    }
-  }
+async function waitForVisibleCopy(
+  copy: string,
+  timeout = 15_000,
+): Promise<void> {
+  await browser.waitUntil(
+    async () =>
+      await browser.execute(
+        (expected: string) =>
+          document.body.innerText
+            .toLowerCase()
+            .includes(expected.toLowerCase()),
+        copy,
+      ),
+    {
+      timeout: t(timeout),
+      interval: 200,
+      timeoutMsg: `visible copy did not appear: ${copy}`,
+    },
+  );
 }
 
 async function apiRequest<T>(
@@ -194,12 +175,31 @@ describe("meeting summary recovery controls", function () {
 
   let cfg: LocalApiConfig;
   let meetingId = 0;
+  let summaryPipeWasEnabled = true;
+  let summaryPipeConfigured = false;
 
   before(async () => {
     await waitForAppReady();
     cfg = await getLocalApiConfig();
     await ensureLocalApi(cfg);
-    cleanupSummaryMarkerChats();
+    const pipe = await apiRequest<{
+      data?: { config?: { enabled?: boolean } };
+    }>(cfg, "/pipes/meeting-summary");
+    summaryPipeWasEnabled = pipe.data?.config?.enabled !== false;
+    const disabled = await apiRequest<{ success?: boolean; error?: string }>(
+      cfg,
+      "/pipes/meeting-summary/enable",
+      {
+        method: "POST",
+        body: JSON.stringify({ enabled: false }),
+      },
+    );
+    if (disabled.success !== true) {
+      throw new Error(
+        `failed to disable isolated summary pipe: ${disabled.error}`,
+      );
+    }
+    summaryPipeConfigured = true;
 
     const started = await apiRequest<{ id: number }>(cfg, "/meetings/start", {
       method: "POST",
@@ -242,14 +242,28 @@ describe("meeting summary recovery controls", function () {
         const original = (
           window as typeof window & {
             __meetingSummaryRecoveryFetch?: typeof window.fetch;
-            __meetingSummaryRecoveryRetranscribeCalls?: number;
+            __meetingSummaryRecoverySummaryStatus?: SummaryStatusFixture;
+            __meetingSummaryRecoveryHoldStart?: boolean;
+            __meetingSummaryRecoveryHoldStop?: boolean;
+            __meetingSummaryRecoveryReleaseStart?: () => void;
+            __meetingSummaryRecoveryReleaseStop?: () => void;
           }
         ).__meetingSummaryRecoveryFetch;
         if (original) window.fetch = original;
-        sessionStorage.removeItem("e2eMeetingSummaryTranscriptCalls");
+        const ownedWindow = window as typeof window & Record<string, unknown>;
+        delete ownedWindow.__meetingSummaryRecoverySummaryStatus;
+        delete ownedWindow.__meetingSummaryRecoveryHoldStart;
+        delete ownedWindow.__meetingSummaryRecoveryHoldStop;
+        delete ownedWindow.__meetingSummaryRecoveryReleaseStart;
+        delete ownedWindow.__meetingSummaryRecoveryReleaseStop;
       })
       .catch(() => undefined);
-    cleanupSummaryMarkerChats();
+    if (summaryPipeConfigured) {
+      await apiRequest(cfg, "/pipes/meeting-summary/enable", {
+        method: "POST",
+        body: JSON.stringify({ enabled: summaryPipeWasEnabled }),
+      }).catch(() => undefined);
+    }
     if (meetingId) {
       await apiRequest(cfg, `/meetings/${meetingId}`, {
         method: "DELETE",
@@ -257,7 +271,7 @@ describe("meeting summary recovery controls", function () {
     }
   });
 
-  it("keeps retranscribe in the footer and lets a completed summary run again", async () => {
+  it("keeps recovery controls and one coherent state through stop and resume", async () => {
     const meetingsNav = await waitForTestId("nav-meetings", 25_000);
     if ((await meetingsNav.getAttribute("aria-current")) === "page") {
       // The preceding meeting-note spec can leave this shared app process on
@@ -293,99 +307,62 @@ describe("meeting summary recovery controls", function () {
     await browser.execute(
       (
         targetMeetingId: number,
-        startedAt: string,
         earlyCapturedAt: string,
         lateCapturedAt: string,
         earlyMarker: string,
         lateMarker: string,
-        transcriptCallsKey: string,
       ) => {
         const ownedWindow = window as typeof window & {
           __meetingSummaryRecoveryFetch?: typeof window.fetch;
-          __meetingSummaryRecoveryRetranscribeCalls?: number;
-          __meetingSummaryRecoveryRunBody?: unknown;
+          __meetingSummaryRecoverySummaryStatus?: SummaryStatusFixture;
+          __meetingSummaryRecoveryHoldStart?: boolean;
+          __meetingSummaryRecoveryHoldStop?: boolean;
+          __meetingSummaryRecoveryReleaseStart?: () => void;
+          __meetingSummaryRecoveryReleaseStop?: () => void;
         };
         const original = window.fetch.bind(window);
-        let transcriptReplacedAt: string | null = null;
-        let manualSummaryStartedAt: string | null = null;
-        let manualSummaryPolls = 0;
         ownedWindow.__meetingSummaryRecoveryFetch = original;
-        ownedWindow.__meetingSummaryRecoveryRetranscribeCalls = 0;
-        sessionStorage.setItem(transcriptCallsKey, "0");
         window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
           const url = String(input);
-          if (
-            url.includes("/pipes/meeting-summary/run") &&
-            init?.method === "POST"
-          ) {
-            manualSummaryStartedAt = new Date().toISOString();
-            manualSummaryPolls = 0;
-            ownedWindow.__meetingSummaryRecoveryRunBody = JSON.parse(
-              String(init.body ?? "{}"),
-            );
+          if (url.includes(`/meetings/${targetMeetingId}/summary-status`)) {
+            const fallbackStatus: SummaryStatusFixture = {
+              state: "ready",
+              auto_summary_enabled: true,
+              execution_id: 987654,
+              execution_status: "completed",
+            };
             return Promise.resolve(
-              Response.json({ success: true, execution_id: 987655 }),
-            );
-          }
-          if (url.includes("/pipes/meeting-summary/executions?")) {
-            const manualExecution = manualSummaryStartedAt
-              ? {
-                  id: 987655,
-                  status: manualSummaryPolls++ === 0 ? "running" : "completed",
-                  started_at: manualSummaryStartedAt,
-                  trigger_event: "meeting_ended",
-                  trigger_key: String(targetMeetingId),
-                }
-              : null;
-            return Promise.resolve(
-              new Response(
-                JSON.stringify({
-                  data: [
-                    ...(manualExecution ? [manualExecution] : []),
-                    {
-                      id: 987654,
-                      status: "completed",
-                      started_at: startedAt,
-                      trigger_event: "meeting_ended",
-                      trigger_key: String(targetMeetingId),
-                    },
-                  ],
-                }),
-                {
-                  status: 200,
-                  headers: { "Content-Type": "application/json" },
-                },
+              Response.json(
+                ownedWindow.__meetingSummaryRecoverySummaryStatus ??
+                  fallbackStatus,
               ),
             );
           }
           if (
-            url.includes(`/meetings/${targetMeetingId}/retranscribe`) &&
-            init?.method === "POST"
+            url.includes("/meetings/start") &&
+            init?.method === "POST" &&
+            ownedWindow.__meetingSummaryRecoveryHoldStart
           ) {
-            const transcriptUpdatedAt = new Date().toISOString();
-            transcriptReplacedAt = transcriptUpdatedAt;
-            ownedWindow.__meetingSummaryRecoveryRetranscribeCalls =
-              (ownedWindow.__meetingSummaryRecoveryRetranscribeCalls ?? 0) + 1;
-            return Promise.resolve(
-              new Response(
-                JSON.stringify({
-                  meeting_id: targetMeetingId,
-                  batches_processed: 1,
-                  transcript_updated_at: transcriptUpdatedAt,
-                  summary_refresh_event_emitted: false,
-                }),
-                {
-                  status: 200,
-                  headers: { "Content-Type": "application/json" },
-                },
-              ),
-            );
+            return new Promise<Response>((resolve, reject) => {
+              ownedWindow.__meetingSummaryRecoveryReleaseStart = () => {
+                ownedWindow.__meetingSummaryRecoveryHoldStart = false;
+                void original(input, init).then(resolve, reject);
+              };
+            });
+          }
+          if (
+            url.includes("/meetings/stop") &&
+            init?.method === "POST" &&
+            ownedWindow.__meetingSummaryRecoveryHoldStop
+          ) {
+            return new Promise<Response>((resolve, reject) => {
+              ownedWindow.__meetingSummaryRecoveryReleaseStop = () => {
+                ownedWindow.__meetingSummaryRecoveryHoldStop = false;
+                void original(input, init).then(resolve, reject);
+              };
+            });
           }
           if (url.includes(`/meetings/${targetMeetingId}/transcript`)) {
-            const calls = Number(
-              sessionStorage.getItem(transcriptCallsKey) ?? 0,
-            );
-            sessionStorage.setItem(transcriptCallsKey, String(calls + 1));
             const segment = (
               id: number,
               transcript: string,
@@ -406,7 +383,7 @@ describe("meeting summary recovery controls", function () {
               speakerName: "speaker",
               transcript,
               capturedAt,
-              createdAt: transcriptReplacedAt ?? capturedAt,
+              createdAt: capturedAt,
             });
             return Promise.resolve(
               new Response(
@@ -444,12 +421,10 @@ describe("meeting summary recovery controls", function () {
         };
       },
       meetingId,
-      SUMMARY_STARTED,
       new Date(Date.parse(FIXTURE_START) + 10_000).toISOString(),
       new Date(Date.parse(FIXTURE_END) - 10_000).toISOString(),
       EARLY_TRANSCRIPT_MARKER,
       LATE_TRANSCRIPT_MARKER,
-      TRANSCRIPT_CALLS_KEY,
     );
 
     const row = await $(
@@ -457,164 +432,161 @@ describe("meeting summary recovery controls", function () {
     );
     await row.waitForExist({ timeout: t(25_000) });
     await row.click();
+    await waitForTestId("note-editor", 20_000);
     // The start and direct-update fixture operations intentionally avoid a
     // real stop event. Synchronize the already-verified idle backend state
     // through the same event Home consumes after a native meeting toggle so a
     // delayed start notification cannot leave this saved row looking live.
+    // Wait for that delayed notification first; clearing before it arrives
+    // lets its 10-second optimistic grace window immediately overwrite idle.
+    await waitForVisibleCopy("ongoing", 10_000).catch(() => undefined);
     await syncMeetingIdleState();
-    await waitForTestId("note-editor", 20_000);
-
-    const retranscribe = await $(
-      'button[aria-label="retranscribe saved audio"]',
-    );
-    await retranscribe.waitForDisplayed({ timeout: t(15_000) });
-    expect(await retranscribe.isEnabled()).toBe(true);
-
-    const rerun = await $('button[aria-label="summarize again"]');
-    await rerun.waitForDisplayed({ timeout: t(15_000) });
-    expect(await rerun.isEnabled()).toBe(true);
-
     await browser.waitUntil(
-      async () => {
-        const openDialog = await $('[role="alertdialog"]');
-        if (await openDialog.isDisplayed().catch(() => false)) return true;
-        try {
-          const currentRetranscribe = await $(
-            'button[aria-label="retranscribe saved audio"]',
-          );
-          if (!(await currentRetranscribe.isEnabled())) return false;
-          await currentRetranscribe.click();
-          await browser.pause(100);
-          return await (
-            await $('[role="alertdialog"]')
-          )
-            .isDisplayed()
-            .catch(() => false);
-        } catch {
-          // The meeting status refresh can replace the control between lookup
-          // and click on WebKit. Retry with a fresh element handle.
-          return false;
+      async () =>
+        !(await browser.execute(() =>
+          document.body.innerText.toLowerCase().includes("ongoing"),
+        )),
+      {
+        timeout: t(10_000),
+        interval: 100,
+        timeoutMsg: "meeting workspace did not reconcile to the saved row",
+      },
+    );
+
+    // Visual state contract. These screenshots are intentionally generated
+    // from the real desktop shell and isolated local API, while only the
+    // summary execution response is deterministic. Together they prove that
+    // one flow never presents two contradictory states.
+    const notesTab = await $(
+      '[role="tab"][aria-controls="meeting-panel-notes"]',
+    );
+    await notesTab.click();
+    await setSummaryStatusFixture({
+      state: "pending",
+      auto_summary_enabled: true,
+    });
+    await waitForVisibleCopy(
+      "Finishing the transcript before the summary starts",
+      20_000,
+    );
+    await saveScreenshot("meeting-summary-01-saved-finalizing");
+
+    const showTranscript = await $("button=show transcript");
+    await showTranscript.click();
+    await browser.waitUntil(
+      async () =>
+        (await $(
+          '[role="tab"][aria-controls="meeting-panel-transcript"]',
+        ).getAttribute("aria-selected")) === "true",
+      {
+        timeout: t(10_000),
+        interval: 100,
+        timeoutMsg: "transcript tab did not open from saved receipt",
+      },
+    );
+    await saveScreenshot("meeting-summary-02-finalizing-transcript");
+    await notesTab.click();
+
+    await browser.execute(() => {
+      (
+        window as typeof window & {
+          __meetingSummaryRecoveryHoldStart?: boolean;
         }
-      },
-      {
-        timeout: t(10_000),
-        interval: 250,
-        timeoutMsg: "retranscribe confirmation did not open",
-      },
-    );
-    const dialog = await $('[role="alertdialog"]');
-    const dialogCopy = (await dialog.getText()).toLowerCase();
-    expect(dialogCopy).toContain("rebuild the transcript from saved audio");
-    expect(dialogCopy).toContain("replaces the current transcript");
-    await dialog.$("button=retranscribe").click();
+      ).__meetingSummaryRecoveryHoldStart = true;
+    });
+    await $("button=resume recording").click();
+    await waitForVisibleCopy("resuming meeting");
+    expect(
+      await $("[data-testid=meeting-summary-transition]").isExisting(),
+    ).toBe(false);
+    await saveScreenshot("meeting-summary-03-resume-pending");
 
-    await browser.waitUntil(
-      async () =>
-        (await browser.execute(
-          () =>
-            (
-              window as typeof window & {
-                __meetingSummaryRecoveryRetranscribeCalls?: number;
-              }
-            ).__meetingSummaryRecoveryRetranscribeCalls ?? 0,
-        )) === 1,
-      {
-        timeout: t(10_000),
-        interval: 100,
-        timeoutMsg: "retranscribe confirmation did not POST to the meeting API",
-      },
-    );
-    await browser.waitUntil(
-      async () =>
-        await browser.execute(() =>
-          Array.from(document.querySelectorAll('[data-state="open"]')).some(
-            (element) =>
-              element.textContent
-                ?.toLowerCase()
-                .includes("transcript refreshed"),
-          ),
-        ),
-      {
-        timeout: t(10_000),
-        interval: 100,
-        timeoutMsg: "successful retranscription toast did not appear",
-      },
-    );
-    const toastText = await browser.execute(() =>
-      Array.from(document.querySelectorAll('[data-state="open"]'))
-        .map((element) => element.textContent ?? "")
-        .join(" "),
-    );
-    expect(toastText.toLowerCase()).toContain(
-      "use summarize again to update the note",
-    );
-    await browser.waitUntil(
-      async () =>
-        (await $("footer").getText()).toLowerCase().includes("meeting saved"),
-      {
-        timeout: t(15_000),
-        interval: 250,
-        timeoutMsg:
-          "failed summary-refresh dispatch still promised an automatic summary",
-      },
-    );
+    await browser.execute(() => {
+      (
+        window as typeof window & {
+          __meetingSummaryRecoveryReleaseStart?: () => void;
+        }
+      ).__meetingSummaryRecoveryReleaseStart?.();
+    });
+    const stopAndSummarize = await $('button[aria-label="stop and summarize"]');
+    await stopAndSummarize.waitForDisplayed({ timeout: t(15_000) });
+    await waitForVisibleCopy("notes and transcript save automatically");
+    expect(
+      await $("[data-testid=meeting-summary-transition]").isExisting(),
+    ).toBe(false);
+    await saveScreenshot("meeting-summary-04-resumed-live");
 
-    const screenshot = await saveScreenshot(
-      "meeting-summary-recovery-controls",
+    await browser.execute(() => {
+      (
+        window as typeof window & {
+          __meetingSummaryRecoveryHoldStop?: boolean;
+        }
+      ).__meetingSummaryRecoveryHoldStop = true;
+    });
+    await stopAndSummarize.click();
+    await waitForVisibleCopy("stopping…");
+    await saveScreenshot("meeting-summary-05-stop-pending");
+    // Install the next authoritative answer before releasing the real stop.
+    // Otherwise the isolated scheduler can fail its no-key run before the
+    // note's first post-stop status poll, racing the visual state under test.
+    await setSummaryStatusFixture({
+      state: "running",
+      auto_summary_enabled: true,
+      execution_id: 987656,
+      execution_status: "running",
+    });
+    await browser.execute(() => {
+      (
+        window as typeof window & {
+          __meetingSummaryRecoveryReleaseStop?: () => void;
+        }
+      ).__meetingSummaryRecoveryReleaseStop?.();
+    });
+    const refreshedNotesTab = await $(
+      '[role="tab"][aria-controls="meeting-panel-notes"]',
     );
-    expect(existsSync(screenshot)).toBe(true);
+    await refreshedNotesTab.click();
+    await waitForVisibleCopy("writing summary", 20_000);
+    await waitForVisibleCopy("The draft appears in Summary");
+    await saveScreenshot("meeting-summary-06-writing-notes");
 
-    const transcriptCallsBeforeSummary = await browser.execute(
-      (key: string) => Number(sessionStorage.getItem(key) ?? 0),
-      TRANSCRIPT_CALLS_KEY,
+    await $("button=view summary").click();
+    const writingSummarySurface = await $(
+      "[data-testid=meeting-summary-surface]",
     );
-    const refreshedRerun = await $('button[aria-label="summarize again"]');
-    await refreshedRerun.waitForDisplayed({ timeout: t(15_000) });
-    const meetingUrl = await browser.getUrl();
-    await refreshedRerun.click();
-    await browser.waitUntil(
-      async () => {
-        const selectedTab = await $('[role="tab"][aria-selected="true"]');
-        return (await selectedTab.getText()).toLowerCase().includes("summary");
-      },
-      {
-        timeout: t(10_000),
-        interval: 100,
-        timeoutMsg: "manual summary did not stay in the meeting Summary tab",
-      },
+    await writingSummarySurface.waitForDisplayed({ timeout: t(10_000) });
+    await waitForVisibleCopy("writing summary");
+    // This fixture starts with a partial summary. Keep the real draft visible
+    // while the replacement is written; the empty placeholder is covered by
+    // the focused workspace test.
+    await waitForVisibleCopy("Earlier partial summary.");
+    await saveScreenshot("meeting-summary-07-writing-summary");
+
+    await setSummaryStatusFixture({
+      state: "ready",
+      auto_summary_enabled: true,
+      execution_id: 987656,
+      execution_status: "completed",
+    });
+    const summaryTab = await $(
+      '[role="tab"][aria-controls="meeting-panel-summary"]',
     );
-    expect(await browser.getUrl()).toBe(meetingUrl);
-    expect(await browser.getUrl()).toContain("section=meetings");
-    const runBody = await browser.execute(
-      () =>
-        (
-          window as typeof window & {
-            __meetingSummaryRecoveryRunBody?: unknown;
-          }
-        ).__meetingSummaryRecoveryRunBody,
+    await summaryTab.click();
+    await waitForVisibleCopy("saved to this meeting note");
+    await saveScreenshot("meeting-summary-08-ready");
+
+    await setSummaryStatusFixture({
+      state: "failed",
+      auto_summary_enabled: true,
+      execution_id: 987657,
+      execution_status: "failed",
+      error_type: "unknown",
+      error_message: "summary service unavailable",
+    });
+    await waitForVisibleCopy(
+      "Your meeting and transcript are safe. Retry when you're ready.",
+      20_000,
     );
-    // meeting_end round-trips through the backend, which serialises UTC as
-    // "+00:00" where the fixture's toISOString() writes "Z". Same instant,
-    // different spelling, so compare the instant: pinning the string fails on
-    // the serialiser rather than on the rerun payload being right. The key
-    // checks stay, so an extra or renamed field still fails here.
-    const summaryRun = runBody as {
-      meeting_summary: { meeting_id: number; meeting_end: string };
-    };
-    expect(Object.keys(summaryRun)).toEqual(["meeting_summary"]);
-    expect(Object.keys(summaryRun.meeting_summary).sort()).toEqual([
-      "meeting_end",
-      "meeting_id",
-    ]);
-    expect(summaryRun.meeting_summary.meeting_id).toBe(meetingId);
-    expect(Date.parse(summaryRun.meeting_summary.meeting_end)).toBe(
-      Date.parse(FIXTURE_END),
-    );
-    const transcriptCallsAfterSummary = await browser.execute(
-      (key: string) => Number(sessionStorage.getItem(key) ?? 0),
-      TRANSCRIPT_CALLS_KEY,
-    );
-    expect(transcriptCallsAfterSummary).toBe(transcriptCallsBeforeSummary);
-    expect(summaryMarkerChats()).toHaveLength(0);
+    await saveScreenshot("meeting-summary-09-failed");
   });
 });

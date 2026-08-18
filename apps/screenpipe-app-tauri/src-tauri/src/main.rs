@@ -1697,22 +1697,24 @@ async fn main() {
             // Pre-warm the floating search window (hidden, unfocused) so the
             // FIRST search-shortcut press reuses a warm webview instead of
             // cold-booting Next.js for ~5s (the "search frozen ~10s before you
-            // can type" bug). Cross-platform: create_search_window builds it
-            // hidden and never shows/activates it when unfocused, so there's no
-            // blink or focus-steal. Guarded like the chat pre-create above.
-            if onboarding_store.is_completed && !app_ui_hidden && !headless_startup {
-                let app_handle_search = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    // Stagger after the chat pre-create (3s) so the two hidden
-                    // webviews don't cold-boot at the same instant as the main
-                    // window.
-                    tokio::time::sleep(tokio::time::Duration::from_secs(4)).await;
-                    if app_handle_search.get_webview_window("search").is_none() {
-                        if let Err(e) = ShowRewindWindow::prewarm_search(&app_handle_search) {
-                            warn!("failed to pre-warm search window: {}", e);
+            // can type" bug). WebView2 can paint hidden transparent
+            // always-on-top windows during startup, so skip this on Windows.
+            #[cfg(not(target_os = "windows"))]
+            {
+                if onboarding_store.is_completed && !app_ui_hidden && !headless_startup {
+                    let app_handle_search = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        // Stagger after the chat pre-create (3s) so the two hidden
+                        // webviews don't cold-boot at the same instant as the main
+                        // window.
+                        tokio::time::sleep(tokio::time::Duration::from_secs(4)).await;
+                        if app_handle_search.get_webview_window("search").is_none() {
+                            if let Err(e) = ShowRewindWindow::prewarm_search(&app_handle_search) {
+                                warn!("failed to pre-warm search window: {}", e);
+                            }
                         }
-                    }
-                });
+                    });
+                }
             }
 
             // Pi is NOT auto-started at boot — it starts lazily when the user opens

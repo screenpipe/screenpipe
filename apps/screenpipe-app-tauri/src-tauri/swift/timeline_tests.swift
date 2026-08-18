@@ -1045,7 +1045,15 @@ private func testAudio() {
 // MARK: - Search
 
 private func testSearchReview() {
-    var review = TimelineSearchReview(query: "invoice", frameIds: ["1", "2", "3"], activeIndex: 0, terms: ["invoice"])
+    let base = Date(timeIntervalSince1970: 1_700_000_000)
+    let results = ["1", "2", "3"].enumerated().map { index, frameId in
+        TimelineSearchResult(
+            frameId: frameId,
+            timestamp: base.addingTimeInterval(Double(index)),
+            textPositions: []
+        )
+    }
+    var review = TimelineSearchReview(query: "invoice", results: results, activeIndex: 0, terms: ["invoice"])
     expect(review.isFirst, "index 0 is the newest match")
     expect(!review.isLast, "index 0 is not the last match")
     review.step(1)
@@ -1068,6 +1076,14 @@ private func testSearchReview() {
     expectEqual(TimelineSearchStrip.resultIndex(atX: 0, count: 3), 2, "clicking the left edge selects the oldest")
     expectEqual(TimelineSearchStrip.resultIndex(atX: -50, count: 3), 2, "clicks clamp on the left")
     expectEqual(TimelineSearchStrip.resultIndex(atX: 9999, count: 3), 0, "clicks clamp on the right")
+
+    let projected = TimelineSearchHighlightLayout.rect(
+        for: TimelineSearchTextBounds(left: 0.25, top: 0.5, width: 0.2, height: 0.1),
+        imageSize: CGSize(width: 1_600, height: 900),
+        viewport: CGRect(x: 0, y: 0, width: 800, height: 600)
+    )
+    expectEqual(projected, CGRect(x: 200, y: 300, width: 160, height: 45),
+                "search highlight follows the aspect-fit screenshot geometry")
 }
 
 // MARK: - Date navigation

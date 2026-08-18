@@ -25,6 +25,9 @@ mod ffi {
         pub fn timeline_close() -> c_int;
         pub fn timeline_navigate(json: *const c_char) -> c_int;
         pub fn timeline_search_state(label: *const c_char) -> *mut c_char;
+        #[cfg(feature = "e2e")]
+        pub fn timeline_search_control(label: *const c_char, action: *const c_char) -> c_int;
+        pub fn timeline_dismiss_search_review(label: *const c_char) -> c_int;
         pub fn timeline_free_string(value: *mut c_char);
         pub fn timeline_set_action_callback(cb: Option<extern "C" fn(*const c_char)>);
     }
@@ -79,6 +82,24 @@ mod ffi {
         serde_json::from_str(&raw).ok()
     }
 
+    #[cfg(feature = "e2e")]
+    pub fn search_control(window_label: &str, action: &str) -> bool {
+        let Ok(label) = CString::new(window_label) else {
+            return false;
+        };
+        let Ok(action) = CString::new(action) else {
+            return false;
+        };
+        unsafe { timeline_search_control(label.as_ptr(), action.as_ptr()) == 1 }
+    }
+
+    pub fn dismiss_search_review(window_label: &str) -> bool {
+        let Ok(label) = CString::new(window_label) else {
+            return false;
+        };
+        unsafe { timeline_dismiss_search_review(label.as_ptr()) == 1 }
+    }
+
     pub fn set_action_callback(cb: extern "C" fn(*const c_char)) {
         unsafe { timeline_set_action_callback(Some(cb)) }
     }
@@ -108,6 +129,13 @@ mod ffi {
     }
     pub fn search_state(_window_label: &str) -> Option<serde_json::Value> {
         None
+    }
+    #[cfg(feature = "e2e")]
+    pub fn search_control(_window_label: &str, _action: &str) -> bool {
+        false
+    }
+    pub fn dismiss_search_review(_window_label: &str) -> bool {
+        false
     }
     pub fn set_action_callback(_cb: extern "C" fn(*const std::os::raw::c_char)) {}
 }
@@ -287,7 +315,7 @@ pub fn navigate_to_frame(frame_id: &str) -> bool {
     ffi::navigate(&serde_json::json!({ "frameId": frame_id }).to_string())
 }
 
-fn search_result_frame_ids(search_results_json: Option<&str>) -> Vec<String> {
+fn search_results(search_results_json: Option<&str>) -> Vec<serde_json::Value> {
     let Some(raw) = search_results_json else {
         return Vec::new();
     };
@@ -295,14 +323,23 @@ fn search_result_frame_ids(search_results_json: Option<&str>) -> Vec<String> {
         return Vec::new();
     };
     results
-        .iter()
+        .into_iter()
         .filter_map(|result| {
             let id = result.get("frame_id")?;
-            if let Some(number) = id.as_i64() {
-                Some(number.to_string())
+            let frame_id = if let Some(number) = id.as_i64() {
+                number.to_string()
             } else {
-                id.as_str().map(ToOwned::to_owned)
-            }
+                id.as_str()?.to_owned()
+            };
+            let timestamp = result.get("timestamp")?.as_str()?;
+            Some(serde_json::json!({
+                "frameId": frame_id,
+                "timestamp": timestamp,
+                "textPositions": result
+                    .get("text_positions")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!([])),
+            }))
         })
         .collect()
 }
@@ -314,14 +351,22 @@ fn search_navigation_payload(
     search_terms: Option<&[String]>,
     search_results_json: Option<&str>,
     search_query: Option<&str>,
+    navigation_id: &str,
 ) -> String {
+    let search_results = search_results(search_results_json);
+    let search_frame_ids: Vec<&str> = search_results
+        .iter()
+        .filter_map(|result| result.get("frameId")?.as_str())
+        .collect();
     serde_json::json!({
         "timestamp": timestamp,
         "frameId": frame_id.map(|id| id.to_string()),
         "windowLabel": window_label,
         "searchTerms": search_terms.unwrap_or_default(),
-        "searchFrameIds": search_result_frame_ids(search_results_json),
+        "searchFrameIds": search_frame_ids,
+        "searchResults": search_results,
         "searchQuery": search_query,
+        "navigationId": navigation_id,
     })
     .to_string()
 }
@@ -335,6 +380,7 @@ pub fn navigate_to_search_result(
     search_terms: Option<&[String]>,
     search_results_json: Option<&str>,
     search_query: Option<&str>,
+    navigation_id: &str,
 ) -> bool {
     ffi::navigate(&search_navigation_payload(
         timestamp,
@@ -343,6 +389,7 @@ pub fn navigate_to_search_result(
         search_terms,
         search_results_json,
         search_query,
+        navigation_id,
     ))
 }
 
@@ -350,6 +397,19 @@ pub fn navigate_to_search_result(
 /// webviews do not expose a command that calls this function.
 pub fn search_state(window_label: &str) -> Option<serde_json::Value> {
     ffi::search_state(window_label)
+}
+
+/// Drive the same search-review actions as the native pill. Only the
+/// feature-gated E2E plugin calls this entry point.
+#[cfg(feature = "e2e")]
+pub fn search_control(window_label: &str, action: &str) -> bool {
+    ffi::search_control(window_label, action)
+}
+
+/// Escape gets first refusal from the native review before the React host is
+/// allowed to close the overlay.
+pub fn dismiss_search_review(window_label: &str) -> bool {
+    ffi::dismiss_search_review(window_label)
 }
 
 pub fn set_action_callback(cb: extern "C" fn(*const std::os::raw::c_char)) {
@@ -414,16 +474,28 @@ mod tests {
             Some(42),
             "home",
             Some(&terms),
-            Some(r#"[{"frame_id":41},{"frame_id":42}]"#),
+            Some(
+                r#"[{"frame_id":41,"timestamp":"2026-08-17T13:04:00Z","text_positions":[]},{"frame_id":42,"timestamp":"2026-08-17T13:05:00Z","text_positions":[{"text":"swift","confidence":0.98,"bounds":{"left":0.2,"top":0.3,"width":0.1,"height":0.04}}]}]"#,
+            ),
             Some("swift timeline"),
+            "navigation-42",
         );
         let value: serde_json::Value = serde_json::from_str(&payload).unwrap();
 
         assert_eq!(value["windowLabel"], "home");
         assert_eq!(value["frameId"], "42");
         assert_eq!(value["searchFrameIds"], serde_json::json!(["41", "42"]));
-        assert_eq!(value["searchTerms"], serde_json::json!(["swift", "timeline"]));
+        assert_eq!(value["searchResults"][1]["frameId"], "42");
+        assert_eq!(
+            value["searchResults"][1]["textPositions"][0]["text"],
+            "swift"
+        );
+        assert_eq!(
+            value["searchTerms"],
+            serde_json::json!(["swift", "timeline"])
+        );
         assert_eq!(value["searchQuery"], "swift timeline");
+        assert_eq!(value["navigationId"], "navigation-42");
     }
 
     #[test]

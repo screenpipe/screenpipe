@@ -27,7 +27,12 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import posthog from "posthog-js";
 
 import { commands } from "@/lib/utils/tauri";
-import { getApiKey, getApiPort, localFetch } from "@/lib/api";
+import {
+  ensureApiReady,
+  getApiKey,
+  getApiPort,
+  localFetch,
+} from "@/lib/api";
 import { TimelineDailySummary } from "@/components/rewind/timeline/daily-summary";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
@@ -294,6 +299,11 @@ export function NativeTimeline({
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [available, setAvailable] = useState<boolean | null>(null);
+  // `getApiPort()` is intentionally synchronous, but its value starts at the
+  // production default until `get_local_api_config` resolves. Attaching during
+  // that gap permanently pointed Swift at 3030 in isolated dev/E2E builds,
+  // even after the webview learned the real port.
+  const [apiReady, setApiReady] = useState(false);
   // Null while the first attach is in flight. A failed attach leaves a
   // transparent hole where the timeline should be, which reads as a blank
   // screen, so the React one takes over instead.
@@ -364,6 +374,16 @@ export function NativeTimeline({
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    void ensureApiReady().then(() => {
+      if (!cancelled) setApiReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     const navigation = nativePendingNavigation;
     if (available !== true || attached !== true || !navigation) return;
 
@@ -413,7 +433,7 @@ export function NativeTimeline({
   }, [attached, available, nativePendingNavigation, setPendingNavigation]);
 
   useEffect(() => {
-    if (!available) return;
+    if (!available || !apiReady) return;
     const host = hostRef.current;
     if (!host) return;
 
@@ -492,13 +512,15 @@ export function NativeTimeline({
       // whatever the user navigated to.
       void emit("native-timeline-detach", detachPayload);
     };
-  }, [available, closeOnEscape, transparentHost]);
+  }, [apiReady, available, closeOnEscape, transparentHost]);
 
   // Never render nothing. Returning null while the availability check was in
   // flight left the overlay window white, and a check that never resolves left
   // it white for good — the React timeline is the honest thing to show until
   // the native one has actually taken over.
-  if (available !== true || attached === false) return <>{fallback}</>;
+  if (available !== true || !apiReady || attached === false) {
+    return <>{fallback}</>;
+  }
 
   // The in-app section uses black to match the native canvas while it attaches.
   // The fullscreen overlay must stay transparent when the native child yields

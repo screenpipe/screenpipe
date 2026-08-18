@@ -224,8 +224,8 @@ impl DatabaseManager {
             r#"WITH sampled AS (
                    SELECT MIN(id) AS id
                    FROM frames
-                   WHERE julianday(timestamp) >= julianday(?1)
-                     AND julianday(timestamp) < julianday(?2)
+                   WHERE timestamp >= ?1
+                     AND timestamp < ?2
                      AND COALESCE(focused, 1) = 1
                      AND (COALESCE(app_name, '') != '' OR COALESCE(window_name, '') != '')
                    GROUP BY
@@ -289,8 +289,8 @@ impl DatabaseManager {
                       4 AS attention_rank
                FROM ui_events u
                LEFT JOIN frames f ON f.id = u.frame_id
-               WHERE julianday(u.timestamp) >= julianday(?1)
-                 AND julianday(u.timestamp) < julianday(?2)
+               WHERE u.timestamp >= ?1
+                 AND u.timestamp < ?2
                  AND u.event_type IN ('click', 'text', 'clipboard', 'app_switch', 'window_focus')
                ORDER BY u.timestamp, u.id"#,
         )
@@ -311,8 +311,8 @@ impl DatabaseManager {
                       a.is_input_device, 1 AS attention_rank
                FROM audio_transcriptions a
                LEFT JOIN speakers s ON s.id = a.speaker_id
-               WHERE julianday(a.timestamp) >= julianday(?1)
-                 AND julianday(a.timestamp) < julianday(?2)
+               WHERE a.timestamp >= ?1
+                 AND a.timestamp < ?2
                  AND length(trim(a.transcription)) >= 8
                ORDER BY a.timestamp, a.id"#,
         )
@@ -376,9 +376,9 @@ impl DatabaseManager {
         sqlx::query(
             "DELETE FROM activity_actions WHERE interval_id IN (\
                  SELECT id FROM activity_intervals \
-                 WHERE producer = ?1 AND julianday(start_at) < julianday(?2) \
-                   AND julianday(end_at) > julianday(?2)) \
-             AND julianday(occurred_at) >= julianday(?2)",
+                 WHERE producer = ?1 AND start_at < ?2 \
+                   AND end_at > ?2) \
+             AND occurred_at >= ?2",
         )
         .bind(producer)
         .bind(&range_start_text)
@@ -387,9 +387,9 @@ impl DatabaseManager {
         sqlx::query(
             "DELETE FROM activity_evidence WHERE interval_id IN (\
                  SELECT id FROM activity_intervals \
-                 WHERE producer = ?1 AND julianday(start_at) < julianday(?2) \
-                   AND julianday(end_at) > julianday(?2)) \
-             AND julianday(occurred_at) >= julianday(?2)",
+                 WHERE producer = ?1 AND start_at < ?2 \
+                   AND end_at > ?2) \
+             AND occurred_at >= ?2",
         )
         .bind(producer)
         .bind(&range_start_text)
@@ -398,8 +398,8 @@ impl DatabaseManager {
         sqlx::query(
             "UPDATE activity_intervals SET end_at = ?2, state = 'final', \
                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
-             WHERE producer = ?1 AND julianday(start_at) < julianday(?2) \
-               AND julianday(end_at) > julianday(?2)",
+             WHERE producer = ?1 AND start_at < ?2 \
+               AND end_at > ?2",
         )
         .bind(producer)
         .bind(&range_start_text)
@@ -407,7 +407,7 @@ impl DatabaseManager {
         .await?;
         sqlx::query(
             "DELETE FROM activity_intervals \
-             WHERE producer = ?1 AND julianday(start_at) >= julianday(?2)",
+             WHERE producer = ?1 AND start_at >= ?2",
         )
         .bind(producer)
         .bind(&range_start_text)
@@ -453,8 +453,8 @@ impl DatabaseManager {
                 sqlx::query_scalar::<_, i64>(
                     "SELECT id FROM activity_intervals \
                      WHERE producer = ?1 AND task_id = ?2 \
-                       AND julianday(end_at) = julianday(?3) \
-                       AND julianday(start_at) < julianday(?3) \
+                       AND end_at = ?3 \
+                       AND start_at < ?3 \
                      ORDER BY start_at DESC, id DESC LIMIT 1",
                 )
                 .bind(producer)
@@ -592,8 +592,8 @@ impl DatabaseManager {
                FROM activity_intervals i
                JOIN activity_tasks t ON t.id = i.task_id
                LEFT JOIN activity_tasks parent ON parent.id = t.parent_task_id
-               WHERE julianday(i.end_at) > julianday(?1)
-                 AND julianday(i.start_at) < julianday(?2)
+               WHERE i.end_at > ?1
+                 AND i.start_at < ?2
                ORDER BY i.start_at, i.end_at, i.id"#,
         )
         .bind(&start)
@@ -612,8 +612,8 @@ impl DatabaseManager {
                           a.summary, a.app_name, a.confidence, a.source_type, a.source_id
                    FROM activity_actions a
                    JOIN activity_intervals i ON i.id = a.interval_id
-                   WHERE julianday(i.end_at) > julianday(?1)
-                     AND julianday(i.start_at) < julianday(?2)
+                   WHERE i.end_at > ?1
+                     AND i.start_at < ?2
                    ORDER BY a.occurred_at, a.id"#,
             )
             .bind(&start)
@@ -660,8 +660,8 @@ impl DatabaseManager {
                    LEFT JOIN ui_events event
                      ON e.source_type = 'ui_event' AND event.id = e.source_id
                    LEFT JOIN frames event_frame ON event_frame.id = event.frame_id
-                   WHERE julianday(i.end_at) > julianday(?1)
-                     AND julianday(i.start_at) < julianday(?2)
+                   WHERE i.end_at > ?1
+                     AND i.start_at < ?2
                    ORDER BY e.occurred_at, e.id"#,
             )
             .bind(&start)
@@ -785,6 +785,17 @@ mod tests {
 
     fn at(value: &str) -> DateTime<Utc> {
         value.parse().unwrap()
+    }
+
+    async fn explain(db: &DatabaseManager, sql: &str) -> Vec<String> {
+        let statement = format!("EXPLAIN QUERY PLAN {sql}");
+        sqlx::query_as::<_, (i64, i64, i64, String)>(sqlx::AssertSqlSafe(statement))
+            .fetch_all(&db.pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.3)
+            .collect()
     }
 
     fn drafts(source_id: i64) -> (Vec<ActivityTaskDraft>, Vec<ActivityIntervalDraft>) {
@@ -939,6 +950,55 @@ mod tests {
         assert_eq!(rows[1].event_type.as_deref(), Some("click"));
         assert_eq!(rows[2].source_type, "audio");
         assert_eq!(rows[2].is_input_device, Some(true));
+    }
+
+    #[tokio::test]
+    async fn activity_ledger_hot_ranges_seek_timestamp_indexes() {
+        let (db, _dir) = test_db().await;
+        let cases = [
+            (
+                "frames",
+                "SELECT MIN(id) FROM frames \
+                 WHERE timestamp >= '2026-08-17T09:00:00+00:00' \
+                   AND timestamp < '2026-08-17T10:00:00+00:00' \
+                 GROUP BY CAST(((julianday(timestamp) - 2440587.5) * 86400.0) / 10 AS INTEGER)",
+            ),
+            (
+                "ui_events",
+                "SELECT id FROM ui_events \
+                 WHERE timestamp >= '2026-08-17T09:00:00+00:00' \
+                   AND timestamp < '2026-08-17T10:00:00+00:00'",
+            ),
+            (
+                "audio_transcriptions",
+                "SELECT id FROM audio_transcriptions \
+                 WHERE timestamp >= '2026-08-17T09:00:00+00:00' \
+                   AND timestamp < '2026-08-17T10:00:00+00:00'",
+            ),
+            (
+                "activity_intervals",
+                "SELECT id FROM activity_intervals \
+                 WHERE producer = 'deterministic-v1' \
+                   AND start_at >= '2026-08-17T09:00:00+00:00'",
+            ),
+        ];
+
+        for (table, sql) in cases {
+            let plan = explain(&db, sql).await;
+            assert!(
+                plan.iter()
+                    .any(|line| line.contains(&format!("SEARCH {table}"))),
+                "{table} range did not use an index:\n{}",
+                plan.join("\n")
+            );
+            assert!(
+                !plan
+                    .iter()
+                    .any(|line| line.contains(&format!("SCAN {table}"))),
+                "{table} range performed a full scan:\n{}",
+                plan.join("\n")
+            );
+        }
     }
 
     #[tokio::test]

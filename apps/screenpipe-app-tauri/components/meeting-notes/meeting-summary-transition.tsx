@@ -5,7 +5,7 @@
 
 import React from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { FileText } from "lucide-react";
+import { Check, FileText, Loader2, Play, Sparkles } from "lucide-react";
 
 export type MeetingSummaryTransitionPhase = "finalizing" | "writing" | null;
 
@@ -13,60 +13,87 @@ interface MeetingSummaryTransitionProps {
   phase: MeetingSummaryTransitionPhase;
   transcriptOpen: boolean;
   onTranscriptToggle: () => void;
+  onResume?: () => void;
+  onOpenSummary?: () => void;
 }
 
-const SUMMARY_BLOCKS = [
-  { heading: "w-28", lines: ["w-full", "w-4/5"] },
-  { heading: "w-36", lines: ["w-11/12", "w-3/4"] },
-  { heading: "w-24", lines: ["w-5/6", "w-2/3"] },
-] as const;
-
 /**
- * Keeps the user's note in place while the event-triggered summary is running,
- * then sketches the destination below it one block at a time. The source
- * transcript remains an explicit, usable surface throughout the transition.
+ * Keeps lifecycle feedback at one stable edge of the note. Summary generation
+ * belongs to the Summary tab, so this receipt points there instead of drawing
+ * a fake document after an arbitrarily long note.
  */
 export function MeetingSummaryTransition({
   phase,
   transcriptOpen,
   onTranscriptToggle,
+  onResume,
+  onOpenSummary,
 }: MeetingSummaryTransitionProps) {
   const reduceMotion = useReducedMotion();
-  const label =
-    phase === "finalizing" ? "finalizing transcript" : "writing summary";
+  const label = phase === "finalizing" ? "meeting saved" : "writing summary";
+  const detail =
+    phase === "finalizing"
+      ? "Your notes are saved. Finishing the transcript before the summary starts."
+      : "Your notes and transcript are safe. The draft appears in Summary as it is written.";
+
+  // Capture and resume replace the summary transition immediately. Letting
+  // AnimatePresence hold the old card for its exit frame briefly recreates
+  // the exact contradiction this component exists to prevent.
+  if (!phase) return null;
 
   return (
     <AnimatePresence initial={false} mode="wait">
-      {phase && (
-        <motion.section
-          key={phase}
-          role="status"
-          aria-live="polite"
-          aria-label={label}
-          data-testid="meeting-summary-transition"
-          initial={reduceMotion ? false : { opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={reduceMotion ? undefined : { opacity: 0, y: -6 }}
-          transition={{ duration: reduceMotion ? 0 : 0.15 }}
-          className="relative mt-9 overflow-hidden border-l border-foreground/45 py-1 pl-5 pr-1"
-        >
-          <div className="mb-6 flex items-center justify-between gap-4">
-            <div className="flex min-w-0 items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-              <motion.span
-                aria-hidden="true"
-                className="block h-2 w-2 shrink-0 bg-foreground"
-                animate={
-                  reduceMotion ? undefined : { opacity: [0.65, 1, 0.65] }
-                }
-                transition={{
-                  duration: 1.4,
-                  repeat: reduceMotion ? 0 : Infinity,
-                  ease: "easeInOut",
-                }}
-              />
+      <motion.section
+        key={phase}
+        role="status"
+        aria-live="polite"
+        aria-label={label}
+        data-testid="meeting-summary-transition"
+        initial={reduceMotion ? false : { opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={reduceMotion ? undefined : { opacity: 0, y: -6 }}
+        transition={{ duration: reduceMotion ? 0 : 0.15 }}
+        className="mb-7 border-b border-border pb-5"
+      >
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+              {phase === "finalizing" ? (
+                <Check className="h-3 w-3" aria-hidden="true" />
+              ) : (
+                <Loader2
+                  className="h-3 w-3 animate-spin motion-reduce:animate-none"
+                  aria-hidden="true"
+                />
+              )}
               <span>{label}</span>
             </div>
+            <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+              {detail}
+            </p>
+          </div>
 
+          <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+            {phase === "finalizing" && onResume ? (
+              <button
+                type="button"
+                onClick={onResume}
+                className="inline-flex h-8 shrink-0 items-center gap-2 border border-foreground bg-foreground px-3 font-mono text-[10px] uppercase tracking-[0.12em] text-background transition-colors duration-150 hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              >
+                <Play className="h-3 w-3" aria-hidden="true" />
+                resume recording
+              </button>
+            ) : null}
+            {phase === "writing" && onOpenSummary ? (
+              <button
+                type="button"
+                onClick={onOpenSummary}
+                className="inline-flex h-8 shrink-0 items-center gap-2 border border-foreground bg-foreground px-3 font-mono text-[10px] uppercase tracking-[0.12em] text-background transition-colors duration-150 hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              >
+                <Sparkles className="h-3 w-3" aria-hidden="true" />
+                view summary
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={onTranscriptToggle}
@@ -77,56 +104,8 @@ export function MeetingSummaryTransition({
               {transcriptOpen ? "hide transcript" : "show transcript"}
             </button>
           </div>
-
-          <div aria-hidden="true" className="relative max-w-2xl space-y-6 pb-2">
-            {SUMMARY_BLOCKS.map((block, blockIndex) => (
-              <motion.div
-                key={block.heading}
-                data-testid="meeting-summary-draft-block"
-                initial={reduceMotion ? false : { opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{
-                  duration: reduceMotion ? 0 : 0.5,
-                  delay: reduceMotion ? 0 : blockIndex * 0.12,
-                  ease: [0.22, 1, 0.36, 1],
-                }}
-                className="space-y-2"
-              >
-                <div
-                  className={`h-2 border border-foreground/20 bg-foreground/10 ${block.heading}`}
-                />
-                {block.lines.map((width, lineIndex) => (
-                  <motion.div
-                    key={width}
-                    className={`h-px origin-left bg-foreground/25 ${width}`}
-                    animate={
-                      reduceMotion
-                        ? undefined
-                        : { scaleX: [0.86, 1, 0.86], opacity: [0.55, 1, 0.55] }
-                    }
-                    transition={{
-                      duration: 2.2,
-                      delay: blockIndex * 0.18 + lineIndex * 0.1,
-                      repeat: reduceMotion ? 0 : Infinity,
-                      ease: "easeInOut",
-                    }}
-                  />
-                ))}
-              </motion.div>
-            ))}
-
-            <motion.div
-              className="absolute -left-5 top-0 h-7 w-px bg-foreground"
-              animate={reduceMotion ? undefined : { y: [0, 104, 0] }}
-              transition={{
-                duration: 3.2,
-                repeat: reduceMotion ? 0 : Infinity,
-                ease: "easeInOut",
-              }}
-            />
-          </div>
-        </motion.section>
-      )}
+        </div>
+      </motion.section>
     </AnimatePresence>
   );
 }

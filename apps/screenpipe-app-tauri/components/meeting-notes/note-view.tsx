@@ -142,6 +142,7 @@ import {
   meetingSummaryFailure,
   meetingSummaryFailureCopy,
   meetingSummaryLifecycleFromStatus,
+  meetingSummaryPresentation,
   summaryLifecycleIsWorking,
   SUMMARY_ACTIVE_POLL_MS,
   SUMMARY_IDLE_POLL_MS,
@@ -311,7 +312,11 @@ export function NoteView({
   const rootRef = useRef<HTMLDivElement>(null);
   const [isDraggingImage, setIsDraggingImage] = useState(false);
   const canSummarizeMeeting =
-    !isLive && !stopping && !savingBeforeStop && Boolean(meeting.meeting_end);
+    !isLive &&
+    !resuming &&
+    !stopping &&
+    !savingBeforeStop &&
+    Boolean(meeting.meeting_end);
   const shareArtifact = useMemo(
     () =>
       createMeetingShareArtifact({
@@ -346,20 +351,25 @@ export function NoteView({
   }, [oneTapSend, toast]);
 
   const summaryPipeSlug = settings.meetingSummaryPipeSlug || "meeting-summary";
-  const summaryWorking =
-    summarizing ||
-    summaryLifecycle.kind === "finalizing" ||
-    summaryLifecycle.kind === "queued" ||
-    summaryLifecycle.kind === "running";
+  const summaryPresentation = meetingSummaryPresentation({
+    isLive,
+    resuming,
+    meetingEnded: Boolean(meeting.meeting_end),
+    summarizing,
+    lifecycle: summaryLifecycle,
+  });
+  const visibleSummaryLifecycle = summaryPresentation.lifecycle;
+  const summaryWorking = summaryPresentation.working;
   const retranscriptionSummaryRefreshWorking =
     transcriptRefreshRequested === true &&
     !summarizing &&
-    (summaryLifecycle.kind === "finalizing" ||
-      summaryLifecycle.kind === "queued" ||
-      summaryLifecycle.kind === "running");
+    (visibleSummaryLifecycle.kind === "finalizing" ||
+      visibleSummaryLifecycle.kind === "queued" ||
+      visibleSummaryLifecycle.kind === "running");
   const summaryExecutionId =
-    summaryLifecycle.kind === "queued" || summaryLifecycle.kind === "running"
-      ? summaryLifecycle.execution.id
+    visibleSummaryLifecycle.kind === "queued" ||
+    visibleSummaryLifecycle.kind === "running"
+      ? visibleSummaryLifecycle.execution.id
       : null;
   const summaryExecutionIdRef = useRef<number | null>(summaryExecutionId);
   summaryExecutionIdRef.current = summaryExecutionId;
@@ -371,6 +381,14 @@ export function NoteView({
     executionId: number;
     markdown: string;
   } | null>(null);
+  useEffect(() => {
+    if (!isLive) return;
+    // A resumed meeting starts a new end generation. Forget presentation
+    // state retained from the prior stop so it cannot flash again when this
+    // generation eventually ends and the first fresh status poll is pending.
+    setSummaryLifecycle({ kind: "idle" });
+    setRenderedSummaryStream(null);
+  }, [isLive, meeting.id]);
   const streamedSummary =
     summaryExecutionId != null &&
     renderedSummaryStream?.pipeSlug === summaryPipeSlug &&
@@ -1466,16 +1484,20 @@ export function NoteView({
         detail: "notes and transcript save automatically",
       };
     }
-    if (summaryLifecycle.kind === "finalizing") {
+    if (resuming) {
       return {
-        title: "finalizing transcript",
-        detail: "your meeting is saved · summary will start automatically",
+        title: "resuming meeting",
+        detail: "reopening this note for live capture",
       };
     }
-    if (
-      summaryLifecycle.kind === "queued" ||
-      summaryLifecycle.kind === "running"
-    ) {
+    if (summaryPresentation.transitionPhase === "finalizing") {
+      return {
+        title: "meeting saved",
+        detail:
+          "finishing the transcript before summary · you can safely leave",
+      };
+    }
+    if (summaryWorking) {
       return {
         title: retranscriptionSummaryRefreshWorking
           ? "refreshing summary"
@@ -1485,16 +1507,16 @@ export function NoteView({
           : "you can leave · it appears here live and saves when finished",
       };
     }
-    if (summaryLifecycle.kind === "completed") {
+    if (visibleSummaryLifecycle.kind === "completed") {
       return {
         title: "summary ready",
         detail: "saved to this meeting note",
       };
     }
-    if (summaryLifecycle.kind === "failed") {
+    if (visibleSummaryLifecycle.kind === "failed") {
       return {
         title: "summary needs attention",
-        detail: meetingSummaryFailure(summaryLifecycle.execution).copy,
+        detail: meetingSummaryFailure(visibleSummaryLifecycle.execution).copy,
       };
     }
     return {
@@ -1506,18 +1528,23 @@ export function NoteView({
     };
   })();
   const summaryUpgrade =
-    summaryLifecycle.kind === "failed"
-      ? meetingSummaryFailure(summaryLifecycle.execution).upgrade
+    visibleSummaryLifecycle.kind === "failed"
+      ? meetingSummaryFailure(visibleSummaryLifecycle.execution).upgrade
       : null;
-  // Whether the footer has anything to report. A finished meeting that is not
-  // recording, summarizing or failing has no news, and the badge plus detail
-  // line collapse to a single quiet caption.
-  // summaryWorking already covers finalizing, queued and running.
+  // Notes and Summary now own their summary lifecycle in the reading area.
+  // Repeating the same state in the footer made the page look like two jobs
+  // were running. Transcript still gets the global footer because it has no
+  // local summary surface of its own.
+  const summaryLifecycleInActivePanel =
+    (summaryWorking && activeTab !== "transcript") ||
+    (visibleSummaryLifecycle.kind === "failed" && activeTab === "summary");
   const footerHasNews =
-    isLive ||
-    summaryWorking ||
-    hasSaveStatus ||
-    summaryLifecycle.kind === "failed";
+    !summaryLifecycleInActivePanel &&
+    (isLive ||
+      resuming ||
+      summaryWorking ||
+      hasSaveStatus ||
+      visibleSummaryLifecycle.kind === "failed");
   // The footer exists to report something. A finished meeting that is not
   // recording, summarizing, failing or saving has nothing to report, and its
   // resting caption ("meeting saved") was pure reassurance, so the whole bar
@@ -1533,43 +1560,48 @@ export function NoteView({
       : "summarizing meeting"
     : !canSummarizeMeeting
       ? "summary unavailable"
-      : summaryLifecycle.kind === "completed" ||
+      : visibleSummaryLifecycle.kind === "completed" ||
           (transcriptRefreshRequested !== null &&
             (transcriptRefreshRequested === false ||
               autoSummaryEnabled !== true))
         ? "summarize again"
-        : summaryLifecycle.kind === "failed"
+        : visibleSummaryLifecycle.kind === "failed"
           ? "retry summary"
           : "summarize meeting";
   const stopActionLabel =
     stopping || savingBeforeStop
       ? "stopping meeting"
-      : autoSummaryEnabled === false
-        ? "stop meeting"
-        : "stop and summarize";
-  const summaryTransitionPhase = summaryWorking
-    ? summaryLifecycle.kind === "finalizing"
-      ? "finalizing"
-      : "writing"
-    : null;
+      : autoSummaryEnabled === true
+        ? "stop and summarize"
+        : "stop meeting";
+  const stopButtonLabel =
+    stopping || savingBeforeStop
+      ? "stopping…"
+      : autoSummaryEnabled === true
+        ? "stop & summarize"
+        : "stop";
+  const summaryTransitionPhase = summaryPresentation.transitionPhase;
   // Share only what is finished and on disk. A half-streamed summary would put
   // a truncated one in someone's inbox.
   const canShareSummary =
-    Boolean(extractMeetingSummary(note)) && !summaryWorking;
+    Boolean(extractMeetingSummary(note)) &&
+    !isLive &&
+    !resuming &&
+    !summaryWorking;
   // A dot on a tab means "this needs you". A summary that finished normally
   // does not, and leaving the dot lit forever on every summarized meeting is
   // what teaches people to stop reading dots. Only in-flight work and failures
   // earn one.
   const summaryTabState = summaryWorking
     ? "working"
-    : summaryLifecycle.kind === "failed"
+    : visibleSummaryLifecycle.kind === "failed"
       ? "attention"
       : null;
   const summarySurfaceState = summaryWorking
     ? "working"
-    : summaryLifecycle.kind === "completed"
+    : visibleSummaryLifecycle.kind === "completed"
       ? "ready"
-      : summaryLifecycle.kind === "failed"
+      : visibleSummaryLifecycle.kind === "failed"
         ? "attention"
         : "idle";
 
@@ -1582,7 +1614,7 @@ export function NoteView({
   // One menu with labelled groups means "it is in the menu" is a complete
   // instruction. Summarize loses its square here but keeps the prominent
   // button inside the summary tab, next to the output it produces.
-  const meetingMenuGroups: MeetingMenuGroup[] = isLive
+  const meetingMenuGroups: MeetingMenuGroup[] = isLive || resuming
     ? []
     : [
         {
@@ -1593,8 +1625,8 @@ export function NoteView({
               label: summaryActionLabel,
               icon: summaryWorking
                 ? Loader2
-                : summaryLifecycle.kind === "completed" ||
-                    summaryLifecycle.kind === "failed"
+                : visibleSummaryLifecycle.kind === "completed" ||
+                    visibleSummaryLifecycle.kind === "failed"
                   ? RefreshCw
                   : Sparkles,
               onSelect: () => handleSummaryAction(),
@@ -1842,6 +1874,13 @@ export function NoteView({
           )}
         >
           <div className={cn(MEETING_SHELL_CLASS, "pb-16 pt-8 sm:pt-10")}>
+            <MeetingSummaryTransition
+              phase={summaryTransitionPhase}
+              transcriptOpen={transcriptOpen}
+              onTranscriptToggle={() => setTranscriptOpen((open) => !open)}
+              onResume={() => void onResume()}
+              onOpenSummary={() => setActiveTab("summary")}
+            />
             <NoteEditor
               ref={noteEditorRef}
               key={meeting.id}
@@ -1857,11 +1896,6 @@ export function NoteView({
                   ? "[&_.ProseMirror]:!min-h-0"
                   : "[&_.ProseMirror]:min-h-[45vh]",
               )}
-            />
-            <MeetingSummaryTransition
-              phase={summaryTransitionPhase}
-              transcriptOpen={transcriptOpen}
-              onTranscriptToggle={() => setTranscriptOpen((open) => !open)}
             />
           </div>
         </section>
@@ -1972,12 +2006,13 @@ export function NoteView({
                   isLive && captureState?.severity === "warning"
                     ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
                     : isLive ||
-                        summaryLifecycle.kind === "finalizing" ||
-                        summaryLifecycle.kind === "queued" ||
-                        summaryLifecycle.kind === "running" ||
-                        summaryLifecycle.kind === "completed"
+                        resuming ||
+                        visibleSummaryLifecycle.kind === "finalizing" ||
+                        visibleSummaryLifecycle.kind === "queued" ||
+                        visibleSummaryLifecycle.kind === "running" ||
+                        visibleSummaryLifecycle.kind === "completed"
                       ? "border-foreground bg-foreground text-background"
-                      : summaryLifecycle.kind === "failed"
+                      : visibleSummaryLifecycle.kind === "failed"
                         ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
                         : "bg-muted text-muted-foreground",
                 )}
@@ -1992,11 +2027,15 @@ export function NoteView({
                       maxAudioDeviceLevel(audioStatusDevices),
                     )}
                   />
+                ) : resuming ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : visibleSummaryLifecycle.kind === "finalizing" ? (
+                  <Check className="h-4 w-4" />
                 ) : summaryWorking ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
-                ) : summaryLifecycle.kind === "completed" ? (
+                ) : visibleSummaryLifecycle.kind === "completed" ? (
                   <Sparkles className="h-4 w-4" />
-                ) : summaryLifecycle.kind === "failed" ? (
+                ) : visibleSummaryLifecycle.kind === "failed" ? (
                   <AlertTriangle className="h-4 w-4" />
                 ) : (
                   <Check className="h-4 w-4" />
@@ -2067,13 +2106,14 @@ export function NoteView({
                       onClick={() => void handleStopClick()}
                       disabled={stopping || savingBeforeStop}
                       aria-label={stopActionLabel}
-                      className="h-9 w-9 rounded-none p-0 disabled:border-border disabled:bg-muted/40 disabled:text-muted-foreground disabled:opacity-100"
+                      className="h-9 gap-2 rounded-none px-3 font-mono text-[10px] uppercase tracking-[0.1em] disabled:border-border disabled:bg-muted/40 disabled:text-muted-foreground disabled:opacity-100"
                     >
                       {stopping || savingBeforeStop ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       ) : (
                         <Square className="h-3.5 w-3.5" />
                       )}
+                      <span>{stopButtonLabel}</span>
                     </Button>
                   </MeetingControlTooltip>
                 )}

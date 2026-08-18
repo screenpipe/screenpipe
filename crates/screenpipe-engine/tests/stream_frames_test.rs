@@ -22,7 +22,7 @@ struct StreamTimeSeriesResponse {
 mod tests {
     use super::*;
     use screenpipe_audio::audio_manager::AudioManagerBuilder;
-    use screenpipe_db::{DatabaseManager, OcrEngine};
+    use screenpipe_db::{AudioDevice, DatabaseManager, DeviceType, FrameWindowData, OcrEngine};
     use screenpipe_engine::SCServer;
     use std::{net::SocketAddr, sync::Arc};
 
@@ -164,6 +164,118 @@ mod tests {
         assert_eq!(received_frames.len(), display_limit);
         assert_eq!(first, end);
         assert_eq!(last, start);
+    }
+
+    #[tokio::test]
+    async fn test_large_production_stream_is_split_for_native_clients() {
+        let (url, db, server_handle) = setup_stream_test_server().await;
+        let device_name = "large-native-stream-monitor";
+        db.insert_video_chunk("large-native-stream.mp4", device_name)
+            .await
+            .unwrap();
+
+        let start = DateTime::parse_from_rfc3339("2026-06-29T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let total_frames = 24usize;
+        let seeded_frames: Vec<_> = (0..total_frames)
+            .map(|idx| {
+                (
+                    start + Duration::seconds(idx as i64),
+                    idx as i64,
+                    vec![FrameWindowData {
+                        app_name: Some("Large Capture".to_string()),
+                        window_name: Some(format!("Large window {idx}")),
+                        browser_url: None,
+                        focused: true,
+                        text: format!("native timeline frame {idx}"),
+                        text_json: "[]".to_string(),
+                    }],
+                )
+            })
+            .collect();
+        db.insert_multi_frames_with_ocr_batch(
+            device_name,
+            &seeded_frames,
+            Arc::new(OcrEngine::Tesseract),
+        )
+        .await
+        .unwrap();
+        let audio_chunk_id = db
+            .insert_audio_chunk("large-native-stream.wav", Some(start))
+            .await
+            .unwrap();
+        db.insert_audio_transcription(
+            audio_chunk_id,
+            &"spoken words ".repeat(350_000),
+            0,
+            "e2e",
+            &AudioDevice {
+                name: "large-native-stream-microphone".to_string(),
+                device_type: DeviceType::Input,
+            },
+            None,
+            Some(0.0),
+            Some(total_frames as f64),
+            Some(start),
+        )
+        .await
+        .unwrap();
+
+        let end = start + Duration::seconds(total_frames as i64 - 1);
+        let (ws_stream, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .expect("websocket should connect");
+        let (mut write, mut read) = ws_stream.split();
+        write
+            .send(Message::Text(
+                serde_json::to_string(&StreamFramesLimitedRequest {
+                    start_time: start.to_rfc3339(),
+                    end_time: end.to_rfc3339(),
+                    order: "descending".to_string(),
+                    limit: total_frames,
+                })
+                .unwrap(),
+            ))
+            .await
+            .expect("request should send");
+
+        let (received_frames, message_sizes) = timeout(std::time::Duration::from_secs(30), async {
+            let mut received = Vec::with_capacity(total_frames);
+            let mut sizes = Vec::new();
+            while received.len() < total_frames {
+                let msg = read
+                    .next()
+                    .await
+                    .expect("websocket should stay open")
+                    .expect("message should read");
+                let Message::Text(text) = msg else {
+                    continue;
+                };
+                if text == "\"keep-alive-text\"" {
+                    continue;
+                }
+                sizes.push(text.len());
+                let mut batch: Vec<StreamTimeSeriesResponse> =
+                    serde_json::from_str(&text).expect("response batch should parse");
+                received.append(&mut batch);
+            }
+            (received, sizes)
+        })
+        .await
+        .expect("large production stream should remain connected");
+
+        server_handle.abort();
+
+        assert_eq!(received_frames.len(), total_frames);
+        assert!(
+            message_sizes.len() > 1,
+            "a >64 MiB logical response must use multiple WebSocket messages"
+        );
+        assert!(
+            message_sizes.iter().all(|size| *size <= 8 * 1024 * 1024),
+            "every message must fit the native client's bounded receive window"
+        );
     }
 
     /// TEST 1: Reproduce the main issue - new frames after initial fetch are not pushed

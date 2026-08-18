@@ -196,16 +196,24 @@ export function areRemoteAnnouncementsDisabled(
   hostname: string | undefined = typeof window !== "undefined"
     ? window.location.hostname
     : undefined,
+  protocol: string | undefined = typeof window !== "undefined"
+    ? window.location.protocol
+    : undefined,
 ): boolean {
   const isLocalDevHost =
     hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  // Tauri's production origin is `tauri://localhost` on macOS. Only browser
+  // origins on a loopback host are local dev; treating the hostname alone as
+  // dev disables every remote announcement in the production macOS app.
+  const isLocalBrowserDevHost =
+    isLocalDevHost && (protocol === "http:" || protocol === "https:");
 
   return (
     env.TAURI_ENV_DEBUG === "true" ||
     env.NODE_ENV === "development" ||
     env.NEXT_PUBLIC_SCREENPIPE_E2E === "true" ||
     env.NEXT_PUBLIC_SCREENPIPE_DISABLE_REMOTE_ANNOUNCEMENTS === "true" ||
-    (env.NODE_ENV !== "test" && isLocalDevHost)
+    (env.NODE_ENV !== "test" && isLocalBrowserDevHost)
   );
 }
 

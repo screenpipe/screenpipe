@@ -57,6 +57,7 @@ actor FrameImageLoader {
     }
 
     func image(for frame: StreamTimeSeriesResponse, deviceIndex: Int = 0) async -> NSImage? {
+        guard !Task.isCancelled else { return nil }
         guard frame.devices.indices.contains(deviceIndex) else { return nil }
         let device = frame.devices[deviceIndex]
         let key = "\(device.frameId)@\(frame.timestamp)"
@@ -66,15 +67,15 @@ actor FrameImageLoader {
         switch FrameImageSource.resolve(for: frame, deviceIndex: deviceIndex) {
         case .snapshot(let url):
             image = NSImage(contentsOf: url)
-            if image == nil, !device.frameId.isEmpty {
+            if image == nil, !Task.isCancelled, !device.frameId.isEmpty {
                 image = await httpImage(frameId: device.frameId)
             }
         case .videoChunk(let url, let offset, let fps):
-            if !isChunkFailed(url.path) {
+            if !Task.isCancelled, !isChunkFailed(url.path) {
                 image = await videoFrame(url: url, offsetIndex: offset, fps: fps)
-                if image == nil { markChunkFailed(url.path) }
+                if image == nil, !Task.isCancelled { markChunkFailed(url.path) }
             }
-            if image == nil, !device.frameId.isEmpty {
+            if image == nil, !Task.isCancelled, !device.frameId.isEmpty {
                 image = await httpImage(frameId: device.frameId)
             }
         case .http(let frameId):
@@ -83,6 +84,7 @@ actor FrameImageLoader {
             image = nil
         }
 
+        guard !Task.isCancelled else { return nil }
         if let image { store(image, for: key) }
         return image
     }
@@ -114,8 +116,14 @@ actor FrameImageLoader {
         generator.requestedTimeToleranceBefore = .zero
         generator.requestedTimeToleranceAfter = .zero
         let time = CMTime(seconds: max(0, target), preferredTimescale: 600)
-        guard let cgImage = try? await generator.image(at: time).image else { return nil }
-        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+        return await withTaskCancellationHandler {
+            guard !Task.isCancelled,
+                  let cgImage = try? await generator.image(at: time).image,
+                  !Task.isCancelled else { return nil }
+            return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+        } onCancel: {
+            generator.cancelAllCGImageGeneration()
+        }
     }
 
     /// Trust the server's fps when the implied seek lands inside the clip;
@@ -194,7 +202,11 @@ final class TimelineViewModel: ObservableObject {
     @Published private(set) var imageUnavailable = false
 
     // Chrome
-    @Published var zoom = TimelineZoomState()
+    @Published var zoom = TimelineZoomState() {
+        didSet {
+            if isStarted, zoom.zoom != zoom.target { startZoomTimerIfNeeded() }
+        }
+    }
     @Published var filters = TimelineFilters()
     @Published var selection: TimelineSelection?
     @Published var searchReview: TimelineSearchReview?
@@ -214,31 +226,58 @@ final class TimelineViewModel: ObservableObject {
     @Published var playbackSpeed: Double = 1
     @Published private(set) var mutedDevices: Set<String> = []
 
-    let config: TimelineAPIConfig
-    private let rest: TimelineRESTClient
-    private let stream: FrameStreamClient
-    private let images: FrameImageLoader
+    private(set) var config: TimelineAPIConfig
+    private var rest: TimelineRESTClient
+    private var stream: FrameStreamClient
+    private var images: FrameImageLoader
 
     /// Exposed so the hover preview can fetch thumbnails through the same
     /// cache and failed-chunk memory the canvas uses.
     var imageLoader: FrameImageLoader { images }
 
     private var pendingBatch: [StreamTimeSeriesResponse] = []
+    /// Rust retries one handoff while an attached child is mounting. Treat
+    /// those retries as delivery attempts, not fresh user clicks, or they reset
+    /// a quick arrow/strip interaction back to the original result.
+    private var lastSearchNavigationId: String?
     private var flushTimer: Timer?
     private var healthTimer: Timer?
     private var zoomTimer: Timer?
     private var playbackTimer: Timer?
+    /// Meeting detection is derived from transcript-bearing frames and can be
+    /// coalesced independently of the 500 ms frame-paint flush. Initial day
+    /// loading arrives in many batches; recomputing the whole day for every
+    /// batch was the largest remaining Timeline CPU consumer.
+    private var meetingDetectionWorkItem: DispatchWorkItem?
+    private var meetingDetectionDirtySince: Date?
+    private(set) var meetingDetectionPasses = 0
     private var playbackStart: Date?
     private var playbackWallStart: Date?
     private let audioPlayer = TimelineAudioPlayer()
     private var actionWindowLabel: String?
     private var imageLoadToken = 0
+    private var imageLoadTask: Task<Void, Never>?
+    /// Days represented by the current merged frame window, including an
+    /// adjacent request that is still in flight. This is deliberately reset
+    /// for an explicit day change: treating it as a session-long history made
+    /// scrolling from yesterday back into an already visited today a no-op.
     private var requestedDays = Set<String>()
+    /// Adjacent-day data is backfill, not a live-edge update. Preserve the
+    /// exact moment under the playhead while the neighbouring day is merged.
+    private var pendingAdjacentAnchor: (frameId: String?, timestamp: Date)?
+    /// Explicit day arrows/calendar target the beginning of that day, matching
+    /// the web Timeline. The request is ascending so its first batch contains
+    /// the midnight-side frame and later batches preserve that exact anchor.
+    private var pendingDayAnchor: Date?
     private var tagFetchInFlight = Set<String>()
     private var navigationGeneration = 0
     private var pendingSearchNavigation: (frameId: String?, timestamp: Date)?
     private var externalNavigationGeneration = 0
     private var externalNavigationHasSelectedTarget = false
+    private var isStarted = false
+    private var apiGeneration = 0
+    private var cachedNearbyAudioKey = ""
+    private var cachedNearbyAudio = TimelineNearbyAudioSnapshot()
 
     /// Native actions must return to the webview that owns this model. Looking
     /// up the current key window is racy because the fullscreen overlay is a
@@ -260,6 +299,8 @@ final class TimelineViewModel: ObservableObject {
     private var cachedFacetsKey: String = ""
     private var cachedMatching: [Int]??
     private var cachedMatchingKey: String = ""
+    private var cachedAllGroups: [TimelineAppGroup] = []
+    private var cachedAllGroupsGeneration = -1
     private var cachedGroups: [TimelineAppGroup] = []
     private var cachedGroupsKey: String = ""
     private var lastAdjacentLoad = Date.distantPast
@@ -279,15 +320,17 @@ final class TimelineViewModel: ObservableObject {
     // MARK: Lifecycle
 
     func start() {
+        guard !isStarted else { return }
+        isStarted = true
         // Offline means no socket, no polling and no request — otherwise the
         // transport's failure would mask the state under test.
         guard !config.isOffline else {
-            startZoomTimer()
+            if zoom.zoom != zoom.target { startZoomTimerIfNeeded() }
             return
         }
         stream.connect()
         startFlushTimer()
-        startZoomTimer()
+        if zoom.zoom != zoom.target { startZoomTimerIfNeeded() }
         refreshHealth()
         healthTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshHealth() }
@@ -297,16 +340,87 @@ final class TimelineViewModel: ObservableObject {
     }
 
     func stop() {
+        isStarted = false
         stream.disconnect()
         audioPlayer.releaseAll()
         flushTimer?.invalidate()
         healthTimer?.invalidate()
         zoomTimer?.invalidate()
         playbackTimer?.invalidate()
+        meetingDetectionWorkItem?.cancel()
+        imageLoadTask?.cancel()
+        imageLoadTask = nil
+        imageLoadToken &+= 1
         flushTimer = nil
         healthTimer = nil
         zoomTimer = nil
         playbackTimer = nil
+        meetingDetectionWorkItem = nil
+        meetingDetectionDirtySince = nil
+        pendingAdjacentAnchor = nil
+        pendingDayAnchor = nil
+        isLoadingImage = false
+    }
+
+    /// Rebind an already-mounted native timeline to the API configuration the
+    /// webview has just resolved. Placement repeats as the host resizes, so a
+    /// child created during startup can first receive the default port and
+    /// later receive the real isolated/custom port. Keeping the original
+    /// transport made that correction a no-op and left a permanent connection
+    /// error over an otherwise healthy app.
+    @discardableResult
+    func updateAPIConfig(_ updated: TimelineAPIConfig) -> Bool {
+        guard updated != config else { return false }
+
+        let searchToResume = pendingSearchNavigation ?? searchReview?.activeResult.map {
+            (frameId: Optional($0.frameId), timestamp: $0.timestamp)
+        }
+        let shouldRestart = isStarted
+        stop()
+        apiGeneration &+= 1
+        config = updated
+        rest = TimelineRESTClient(config: updated)
+        stream = FrameStreamClient(config: updated)
+        stream.delegate = self
+        images = FrameImageLoader(rest: rest)
+
+        // Never mix frames, tags, health, or decoded pixels from two local API
+        // instances. Search-review intent is deliberately retained so a click
+        // made during the startup race still resolves on the corrected server.
+        pendingBatch = []
+        frames = []
+        health = nil
+        meetings = []
+        earliestRecording = nil
+        daysWithData = []
+        tagsByFrameId = [:]
+        requestedDays = []
+        tagFetchInFlight = []
+        currentIndex = 0
+        currentImage = nil
+        currentImageFrameId = nil
+        pendingSearchNavigation = searchToResume
+        pendingAdjacentAnchor = nil
+        pendingDayAnchor = nil
+        preferredFrameId = searchToResume?.frameId
+        imageLoadToken &+= 1
+        isLoadingImage = false
+        imageUnavailable = false
+        connectionError = nil
+        isLoading = true
+        isNavigating = false
+        isPlaying = false
+        playbackStart = nil
+        playbackWallStart = nil
+        lastAdjacentLoad = .distantPast
+
+        if shouldRestart {
+            start()
+            if let pendingSearchNavigation {
+                requestSearchWindow(around: pendingSearchNavigation.timestamp)
+            }
+        }
+        return true
     }
 
     private func startFlushTimer() {
@@ -318,26 +432,59 @@ final class TimelineViewModel: ObservableObject {
         flushTimer = timer
     }
 
-    /// Smooth zoom runs at display cadence, matching the webview's rAF chase.
-    private func startZoomTimer() {
-        zoomTimer?.invalidate()
+    /// Smooth zoom runs at display cadence only while the target is moving.
+    /// A permanent 60 Hz timer made an idle or hidden Timeline wake the main
+    /// thread continuously and rebuild SwiftUI bodies for no visible change.
+    private func startZoomTimerIfNeeded() {
+        guard zoomTimer == nil, zoom.zoom != zoom.target else { return }
         let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                if self.zoom.zoom != self.zoom.target { self.zoom.step() }
+                guard self.zoom.zoom != self.zoom.target else {
+                    self.zoomTimer?.invalidate()
+                    self.zoomTimer = nil
+                    return
+                }
+                self.zoom.step()
+                if self.zoom.zoom == self.zoom.target {
+                    self.zoomTimer?.invalidate()
+                    self.zoomTimer = nil
+                }
             }
         }
         RunLoop.main.add(timer, forMode: .common)
         zoomTimer = timer
     }
 
+    /// Coalesce transcript batches while guaranteeing that a continuously
+    /// recording timeline refreshes its meeting bands at least every 5 s.
+    private func scheduleMeetingDetection() {
+        let now = Date()
+        let dirtySince = meetingDetectionDirtySince ?? now
+        meetingDetectionDirtySince = dirtySince
+        meetingDetectionWorkItem?.cancel()
+
+        let debounceDeadline = now.addingTimeInterval(0.75)
+        let maximumDeadline = dirtySince.addingTimeInterval(5)
+        let delay = max(0, min(debounceDeadline, maximumDeadline).timeIntervalSince(now))
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.meetingDetectionWorkItem = nil
+            self.meetingDetectionDirtySince = nil
+            self.meetingDetectionPasses &+= 1
+            self.meetings = TimelineMeetingDetection.detect(frames: self.frames)
+        }
+        meetingDetectionWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
     // MARK: Requests
 
-    func requestDay(_ date: Date) {
+    func requestDay(_ date: Date, order: String = "descending") {
         let key = TimelineDateNavigation.dayKey(date)
         let range = TimelineDateNavigation.dayRange(for: date)
         requestedDays.insert(key)
-        stream.request(FrameStreamRequest(start: range.start, end: range.end))
+        stream.request(FrameStreamRequest(start: range.start, end: range.end, order: order))
     }
 
     /// Search can return an exact frame that falls outside the day's capped
@@ -357,17 +504,25 @@ final class TimelineViewModel: ObservableObject {
     }
 
     private func refreshHealth() {
-        Task { [weak self] in
+        let generation = apiGeneration
+        let rest = self.rest
+        Task { [weak self, rest] in
             guard let self else { return }
-            let value = try? await self.rest.health()
-            await MainActor.run { self.health = value }
+            let value = try? await rest.health()
+            await MainActor.run {
+                guard generation == self.apiGeneration else { return }
+                self.health = value
+            }
         }
     }
 
     private func loadCalendarBounds() async {
+        let generation = apiGeneration
+        let rest = self.rest
         let earliest = try? await rest.earliestRecordingDate()
         let days = try? await rest.daysWithData()
         await MainActor.run {
+            guard generation == self.apiGeneration else { return }
             self.earliestRecording = earliest ?? self.earliestRecording
             if let days { self.daysWithData = days }
         }
@@ -383,7 +538,27 @@ final class TimelineViewModel: ObservableObject {
         let result = TimelineMerge.merge(existing: frames, incoming: incoming)
         let previousDisplayFrameId = displayFrameId
         frames = result.frames
-        currentIndex = TimelineLiveEdge.shiftIndex(currentIndex, newFramesAtFront: result.newAtFront)
+        if let anchor = pendingAdjacentAnchor {
+            let anchoredIndex = anchor.frameId.flatMap {
+                TimelineNavigation.index(ofFrameId: $0, in: frames)
+            } ?? TimelineNavigation.indexNearest(anchor.timestamp, in: frames)
+            if let anchoredIndex { currentIndex = anchoredIndex }
+            pendingAdjacentAnchor = nil
+        } else if let anchor = pendingDayAnchor {
+            if let anchoredIndex = TimelineNavigation.indexNearest(
+                anchor,
+                in: frames,
+                sameLocalDay: true
+            ) {
+                currentIndex = anchoredIndex
+                pendingDayAnchor = nil
+            }
+        } else {
+            currentIndex = TimelineLiveEdge.shiftIndex(
+                currentIndex,
+                newFramesAtFront: result.newAtFront
+            )
+        }
         var resolvedPendingSearch = false
         if let pending = pendingSearchNavigation {
             if let frameId = pending.frameId,
@@ -400,7 +575,9 @@ final class TimelineViewModel: ObservableObject {
                 resolvedPendingSearch = true
             }
         }
-        meetings = TimelineMeetingDetection.detect(frames: frames)
+        if incoming.contains(where: TimelineFrames.hasAudio) {
+            scheduleMeetingDetection()
+        }
         isLoading = false
         // A completed day batch is the navigation acknowledgement. Without
         // clearing this flag here, both day arrows stay disabled until the
@@ -443,9 +620,11 @@ final class TimelineViewModel: ObservableObject {
         for offset in stride(from: 0, to: ids.count, by: 400) {
             let batch = Array(ids[offset..<min(offset + 400, ids.count)])
             batch.forEach { tagFetchInFlight.insert($0) }
+            let generation = apiGeneration
             Task { [rest] in
                 let fetched = (try? await rest.tags(frameIds: batch)) ?? [:]
                 await MainActor.run {
+                    guard generation == self.apiGeneration else { return }
                     for id in batch {
                         // Record the empty case too, so an untagged frame is not
                         // re-requested on every scroll tick.
@@ -545,6 +724,11 @@ final class TimelineViewModel: ObservableObject {
         guard !requestedDays.contains(key) else { return }
         // Never request past today.
         if !nearOldest, target > Date() { return }
+        let playheadFrameId = currentFrame?.devices.first?.frameId
+        pendingAdjacentAnchor = (
+            frameId: playheadFrameId,
+            timestamp: currentTimestamp ?? anchor
+        )
         lastAdjacentLoad = Date()
         requestDay(target)
     }
@@ -572,7 +756,11 @@ final class TimelineViewModel: ObservableObject {
         let v = viewport
         let key = "\(framesGeneration)|\(v.start)|\(v.end)"
         if key == cachedGroupsKey { return cachedGroups }
-        let groups = TimelineGrouping.groups(for: visibleFrames, indexOffset: v.start)
+        if cachedAllGroupsGeneration != framesGeneration {
+            cachedAllGroups = TimelineGrouping.groups(for: frames)
+            cachedAllGroupsGeneration = framesGeneration
+        }
+        let groups = TimelineGrouping.visibleGroups(from: cachedAllGroups, in: v.range)
         cachedGroups = groups
         cachedGroupsKey = key
         return groups
@@ -657,9 +845,22 @@ final class TimelineViewModel: ObservableObject {
         return Set(meeting.frameIndexRange)
     }
 
-    var hasAudioNearby: Bool {
-        !nearbyAudioSegments.isEmpty
+    private var nearbyAudioSnapshot: TimelineNearbyAudioSnapshot {
+        let key = "\(framesGeneration)|\(currentIndex)"
+        if key != cachedNearbyAudioKey {
+            cachedNearbyAudio = TimelineNearbyAudioSnapshot.build(
+                frames: frames,
+                currentIndex: currentIndex
+            )
+            cachedNearbyAudioKey = key
+        }
+        return cachedNearbyAudio
     }
+
+    var hasAudioNearby: Bool { nearbyAudioSnapshot.hasAudio }
+    var nearbyAudioSegments: [AudioSegment] { nearbyAudioSnapshot.segments }
+    var nearbyAudioDevices: [String] { nearbyAudioSnapshot.devices }
+    var nearbyAudioInputByDevice: [String: Bool] { nearbyAudioSnapshot.inputByDevice }
 
     /// Distinct facet values inside the current viewport, which is what the
     /// left rail lists.
@@ -721,7 +922,7 @@ final class TimelineViewModel: ObservableObject {
             }
         }
         frames = updated
-        meetings = TimelineMeetingDetection.detect(frames: frames)
+        scheduleMeetingDetection()
     }
 
     // MARK: Playhead
@@ -809,6 +1010,7 @@ final class TimelineViewModel: ObservableObject {
             return
         }
         let targetFrameId = frame.devices[deviceIndex].frameId
+        imageLoadTask?.cancel()
         imageLoadToken += 1
         let token = imageLoadToken
         isLoadingImage = true
@@ -816,10 +1018,19 @@ final class TimelineViewModel: ObservableObject {
         // The previous pixels may stay cached, but they are no longer allowed
         // to render as if they belonged to this playhead position.
         currentImageFrameId = nil
-        Task { [images] in
+        let task = Task { [weak self, images] in
+            // Coalesce bursts from held arrow keys and repeated clicks. Search
+            // and single-step navigation still begin within one display frame.
+            do {
+                try await Task.sleep(nanoseconds: 16_000_000)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
             let image = await images.image(for: frame, deviceIndex: deviceIndex)
+            guard !Task.isCancelled else { return }
             await MainActor.run {
-                guard token == self.imageLoadToken else { return }
+                guard let self, token == self.imageLoadToken else { return }
                 if let image {
                     self.currentImage = image
                     self.currentImageFrameId = targetFrameId
@@ -833,8 +1044,10 @@ final class TimelineViewModel: ObservableObject {
                 if externalNavigationGeneration == self.externalNavigationGeneration {
                     self.finishExternalNavigation()
                 }
+                self.imageLoadTask = nil
             }
         }
+        imageLoadTask = task
     }
 
     private func finishExternalNavigation(reloadCurrentFrame: Bool = false) {
@@ -890,6 +1103,9 @@ final class TimelineViewModel: ObservableObject {
         isNavigating = false
         currentDate = Date()
         currentIndex = 0
+        pendingAdjacentAnchor = nil
+        pendingDayAnchor = nil
+        requestedDays.removeAll()
         requestDay(currentDate)
         loadCurrentImage()
     }
@@ -908,12 +1124,16 @@ final class TimelineViewModel: ObservableObject {
         resetFilters()
         currentDate = date
         currentIndex = 0
+        pendingAdjacentAnchor = nil
+        pendingDayAnchor = Calendar.current.startOfDay(for: date)
+        requestedDays.removeAll()
         frames = []
-        currentImage = nil
-        currentImageFrameId = nil
+        // Retain the last decoded pixels as a non-interactive transition
+        // surface while the target day arrives. `frames` is empty, so those
+        // pixels cannot be mistaken for the new playhead or copied as its text.
         preferredFrameId = nil
         isLoading = true
-        requestDay(date)
+        requestDay(date, order: "ascending")
         // Never leave the spinner up forever if the day query stalls.
         DispatchQueue.main.asyncAfter(deadline: .now() + TimelineDateNavigation.navigationTimeout) { [weak self] in
             guard let self, self.navigationGeneration == generation else { return }
@@ -1078,18 +1298,19 @@ final class TimelineViewModel: ObservableObject {
 
     func enterSearchReview(
         query: String,
-        frameIds: [String],
+        results: [TimelineSearchResult],
         terms: [String],
         activeFrameId: String? = nil
     ) {
-        let activeIndex = activeFrameId.flatMap { frameIds.firstIndex(of: $0) } ?? 0
+        let activeIndex = activeFrameId.flatMap {
+            frameId in results.firstIndex { $0.frameId == frameId }
+        } ?? 0
         searchReview = TimelineSearchReview(
             query: query,
-            frameIds: frameIds,
+            results: results,
             activeIndex: activeIndex,
             terms: terms
         )
-        jumpToSearchResult(activeIndex)
     }
 
     /// Search may target a frame that belongs to another day or is not in the
@@ -1099,17 +1320,38 @@ final class TimelineViewModel: ObservableObject {
         timestamp: Date,
         frameId: String?,
         query: String?,
-        frameIds: [String],
-        terms: [String]
+        results: [TimelineSearchResult],
+        terms: [String],
+        navigationId: String?
     ) {
-        if let query, !query.isEmpty, !frameIds.isEmpty {
+        if let navigationId, navigationId == lastSearchNavigationId { return }
+        lastSearchNavigationId = navigationId
+
+        if let query, !query.isEmpty, !results.isEmpty {
             enterSearchReview(
                 query: query,
-                frameIds: frameIds,
+                results: results,
                 terms: terms,
                 activeFrameId: frameId
             )
         }
+
+        let selectedResult = frameId.flatMap { selectedFrameId in
+            results.first { $0.frameId == selectedFrameId }
+        } ?? TimelineSearchResult(
+            frameId: frameId ?? "",
+            timestamp: timestamp,
+            textPositions: []
+        )
+        navigateToSearchResult(selectedResult, fallbackFrameId: frameId)
+    }
+
+    private func navigateToSearchResult(
+        _ result: TimelineSearchResult,
+        fallbackFrameId: String? = nil
+    ) {
+        let frameId = result.frameId.isEmpty ? fallbackFrameId : result.frameId
+        let timestamp = result.timestamp
 
         if let frameId,
            let index = TimelineNavigation.index(ofFrameId: frameId, in: frames) {
@@ -1149,14 +1391,11 @@ final class TimelineViewModel: ObservableObject {
     }
 
     func jumpToSearchResult(_ index: Int) {
-        guard let review = searchReview, review.frameIds.indices.contains(index) else { return }
+        guard let review = searchReview, review.results.indices.contains(index) else { return }
         var updated = review
         updated.activeIndex = index
         searchReview = updated
-        let frameId = review.frameIds[index]
-        if let frameIndex = TimelineNavigation.index(ofFrameId: frameId, in: frames) {
-            selectSearchFrame(frameId, at: frameIndex)
-        }
+        navigateToSearchResult(review.results[index])
     }
 
     private func selectSearchFrame(_ frameId: String, at index: Int) {
@@ -1173,6 +1412,12 @@ final class TimelineViewModel: ObservableObject {
     func exitSearchReview() {
         searchReview = nil
         pendingSearchNavigation = nil
+    }
+
+    var activeSearchHighlightPositions: [TimelineSearchTextPosition] {
+        guard let result = searchReview?.activeResult,
+              result.frameId == displayFrameId else { return [] }
+        return result.textPositions.filter { $0.bounds.isVisible }
     }
 
     // MARK: Test seam
@@ -1193,6 +1438,12 @@ final class TimelineViewModel: ObservableObject {
         connectionError = message
         isLoading = false
     }
+
+    var isRunningForTesting: Bool { isStarted }
+    var hasActiveZoomTimerForTesting: Bool { zoomTimer != nil }
+    func hasRequestedDayForTesting(_ date: Date) -> Bool {
+        requestedDays.contains(TimelineDateNavigation.dayKey(date))
+    }
 }
 
 // MARK: - Stream delegate
@@ -1208,7 +1459,7 @@ extension TimelineViewModel: FrameStreamClientDelegate {
     nonisolated func frameStream(didReceive audioUpdate: AudioUpdate) {
         Task { @MainActor in
             self.frames = TimelineMerge.applyAudioUpdate(audioUpdate, to: self.frames)
-            self.meetings = TimelineMeetingDetection.detect(frames: self.frames)
+            self.scheduleMeetingDetection()
         }
     }
 

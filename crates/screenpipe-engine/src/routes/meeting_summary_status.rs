@@ -96,6 +96,12 @@ fn state_for_execution(status: &str) -> SummaryState {
 
 /// Decide what the note should show. Pure, so every branch is unit tested.
 pub fn resolve_summary_state(inputs: &SummaryStatusInputs<'_>) -> SummaryState {
+    // Reopening the row starts a new end generation. Any execution or claim
+    // still visible belongs to an older stop and must not make a live meeting
+    // look as though it is being summarized while capture is active.
+    if inputs.meeting_end.is_none() {
+        return SummaryState::Idle;
+    }
     // Facts before policy. `Summarize again` runs through the same trigger, so
     // a real run must report its real state even when the automatic trigger is
     // off. `auto_summary_enabled` is reported separately for the copy that
@@ -105,10 +111,6 @@ pub fn resolve_summary_state(inputs: &SummaryStatusInputs<'_>) -> SummaryState {
     }
     if !inputs.auto_summary_enabled {
         return SummaryState::Off;
-    }
-    // A live meeting has no summary input yet; the trigger fires on end.
-    if inputs.meeting_end.is_none() {
-        return SummaryState::Idle;
     }
     // The scheduler committed to a run before it could create the row.
     if inputs.claimed {
@@ -176,6 +178,25 @@ mod tests {
         i.meeting_end = None;
         i.latest_input_at = None;
         assert_eq!(resolve_summary_state(&i), SummaryState::Idle);
+    }
+
+    #[test]
+    fn a_reopened_live_meeting_hides_prior_generation_execution() {
+        for status in ["queued", "running", "completed", "failed"] {
+            let execution = ExecutionSnapshot {
+                id: 7,
+                status: status.into(),
+            };
+            let mut i = inputs(Some(&execution));
+            i.meeting_end = None;
+            i.latest_input_at = None;
+            i.claimed = true;
+            assert_eq!(
+                resolve_summary_state(&i),
+                SummaryState::Idle,
+                "stale {status} execution must not override live capture"
+            );
+        }
     }
 
     #[test]

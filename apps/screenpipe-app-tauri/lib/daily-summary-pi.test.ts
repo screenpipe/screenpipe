@@ -176,6 +176,155 @@ describe("runDailySummaryWithPi", () => {
     );
   });
 
+  it("continues once when tools finish without a final assistant response", async () => {
+    let handler: ((envelope: any) => void) | null = null;
+    mocks.registerForeground.mockImplementation((_sessionId, nextHandler) => {
+      handler = nextHandler;
+      return vi.fn();
+    });
+    mocks.piPrompt
+      .mockImplementationOnce(async () => {
+        queueMicrotask(() => {
+          handler?.({
+            event: {
+              type: "agent_end",
+              messages: [
+                { role: "assistant", content: [{ type: "toolCall" }] },
+                { role: "toolResult", content: "source evidence" },
+              ],
+            },
+          });
+        });
+        return { status: "ok", data: null };
+      })
+      .mockImplementationOnce(async () => {
+        queueMicrotask(() => {
+          handler?.({
+            event: {
+              type: "agent_end",
+              messages: [
+                {
+                  role: "assistant",
+                  content: [{ type: "text", text: "Recovered summary" }],
+                },
+              ],
+            },
+          });
+        });
+        return { status: "ok", data: null };
+      });
+
+    await expect(
+      runDailySummaryWithPi({
+        date: new Date(2026, 7, 18),
+        range: { start: "start", end: "end" },
+        preset: PRESET,
+        userToken: "user-token",
+      }),
+    ).resolves.toBe("Recovered summary");
+
+    expect(mocks.piPrompt).toHaveBeenCalledTimes(2);
+    expect(mocks.piPrompt).toHaveBeenLastCalledWith(
+      expect.stringContaining("daily-summary"),
+      expect.stringContaining("without a final response"),
+      null,
+      null,
+    );
+  });
+
+  it("fails after a second empty terminal response", async () => {
+    let handler: ((envelope: any) => void) | null = null;
+    mocks.registerForeground.mockImplementation((_sessionId, nextHandler) => {
+      handler = nextHandler;
+      return vi.fn();
+    });
+    mocks.piPrompt.mockImplementation(async () => {
+      queueMicrotask(() => handler?.({ event: { type: "agent_end" } }));
+      return { status: "ok", data: null };
+    });
+
+    await expect(
+      runDailySummaryWithPi({
+        date: new Date(2026, 7, 18),
+        range: { start: "start", end: "end" },
+        preset: PRESET,
+        userToken: "user-token",
+      }),
+    ).rejects.toThrow("AI returned an empty daily summary");
+    expect(mocks.piPrompt).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves a terminal provider error from message_end", async () => {
+    let handler: ((envelope: any) => void) | null = null;
+    mocks.registerForeground.mockImplementation((_sessionId, nextHandler) => {
+      handler = nextHandler;
+      return vi.fn();
+    });
+    mocks.piPrompt.mockImplementation(async () => {
+      queueMicrotask(() => {
+        handler?.({
+          event: {
+            type: "message_end",
+            message: {
+              role: "assistant",
+              stopReason: "error",
+              errorMessage:
+                'HTTP 429 {"error":{"code":"hosted_ai_allowance_exceeded"}}',
+              content: [],
+            },
+          },
+        });
+      });
+      return { status: "ok", data: null };
+    });
+
+    await expect(
+      runDailySummaryWithPi({
+        date: new Date(2026, 7, 18),
+        range: { start: "start", end: "end" },
+        preset: PRESET,
+        userToken: "user-token",
+      }),
+    ).rejects.toThrow("hosted_ai_allowance_exceeded");
+    expect(mocks.piPrompt).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a terminal provider error carried only by agent_end", async () => {
+    let handler: ((envelope: any) => void) | null = null;
+    mocks.registerForeground.mockImplementation((_sessionId, nextHandler) => {
+      handler = nextHandler;
+      return vi.fn();
+    });
+    mocks.piPrompt.mockImplementation(async () => {
+      queueMicrotask(() => {
+        handler?.({
+          event: {
+            type: "agent_end",
+            messages: [
+              {
+                role: "assistant",
+                stopReason: "error",
+                errorMessage: "rate_limit_exceeded",
+                content: [],
+              },
+            ],
+          },
+        });
+      });
+      return { status: "ok", data: null };
+    });
+
+    await expect(
+      runDailySummaryWithPi({
+        date: new Date(2026, 7, 18),
+        range: { start: "start", end: "end" },
+        preset: PRESET,
+        userToken: "user-token",
+      }),
+    ).rejects.toThrow("rate_limit_exceeded");
+    expect(mocks.piPrompt).toHaveBeenCalledOnce();
+  });
+
   it("stops the Pi session when the request is aborted", async () => {
     mocks.registerForeground.mockReturnValue(vi.fn());
     mocks.piPrompt.mockResolvedValue({ status: "ok", data: null });

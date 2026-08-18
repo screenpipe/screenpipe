@@ -67,6 +67,10 @@ echo "==> building timeline core tests"
 compile "$out_dir/core-tests" "${core_sources[@]}" "$swift_dir/timeline_tests.swift"
 "$out_dir/core-tests"
 
+echo "==> building timeline performance tests"
+compile "$out_dir/performance-tests" "${app_sources[@]}" "$swift_dir/timeline_performance_tests.swift"
+"$out_dir/performance-tests"
+
 echo "==> building timeline parity tests"
 compile "$out_dir/parity-tests" "${core_sources[@]}" "$swift_dir/timeline_parity_tests.swift"
 if command -v bun >/dev/null 2>&1; then

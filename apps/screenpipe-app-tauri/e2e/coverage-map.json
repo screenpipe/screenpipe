@@ -1730,7 +1730,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Seeds an ended meeting through the isolated API and verifies persistent saved-audio retranscription, its replacement warning, and completed-summary rerun without launching hosted AI."
+      "notes": "Runs an ended meeting through real Stop -> Resume -> Stop transitions in the isolated desktop, holds both mutations to prove their pending receipts, reconciles a delayed stale started event, and captures saved-finalizing, transcript, resumed-live, the anchored Notes receipt, the Summary draft surface, ready, and failed states without launching hosted AI."
     },
     {
       "spec": "meeting-workspace-tabs.spec.ts",

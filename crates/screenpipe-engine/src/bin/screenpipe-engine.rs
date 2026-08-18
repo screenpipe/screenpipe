@@ -997,14 +997,6 @@ async fn main() -> anyhow::Result<()> {
 
     let (shutdown_tx, _) = broadcast::channel::<()>(1);
 
-    // Build the local activity ledger from already-durable capture rows. This
-    // worker is downstream of capture and joins the shared SQLite coordinator;
-    // it cannot block a frame or audio callback.
-    screenpipe_engine::activity_ledger::start_activity_ledger_worker(
-        db.clone(),
-        Some(shutdown_tx.subscribe()),
-    );
-
     // Reset schedule pause flag before (optionally) starting the monitor.
     // Ensures a clean state on every startup.
     screenpipe_engine::schedule_monitor::reset_schedule_paused();

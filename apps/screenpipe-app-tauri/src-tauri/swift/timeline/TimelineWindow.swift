@@ -345,8 +345,9 @@ struct TimelineSearchNavigationRequest: Equatable {
     var timestamp: Date
     var frameId: String?
     var query: String?
-    var frameIds: [String]
+    var results: [TimelineSearchResult]
     var terms: [String]
+    var navigationId: String?
 
     @MainActor
     func apply(to model: TimelineViewModel) {
@@ -354,8 +355,9 @@ struct TimelineSearchNavigationRequest: Equatable {
             timestamp: timestamp,
             frameId: frameId,
             query: query,
-            frameIds: frameIds,
-            terms: terms
+            results: results,
+            terms: terms,
+            navigationId: navigationId
         )
     }
 }
@@ -387,6 +389,10 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
     /// addressed model exists. Keep the newest click per host until attach.
     private static var pendingSearchNavigation: [String: TimelineSearchNavigationRequest] = [:]
 
+    private static func navigationLabelKey(_ label: String) -> String {
+        label == "main-window" ? "main" : label
+    }
+
     static func controller(forHost pointer: Int) -> TimelineWindowController {
         if let existing = attachedControllers[pointer] { return existing }
         let created = TimelineWindowController()
@@ -395,7 +401,7 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
     }
 
     static func releaseController(forHost pointer: Int) {
-        attachedControllers.removeValue(forKey: pointer)?.detach()
+        attachedControllers.removeValue(forKey: pointer)?.close()
     }
 
     /// Route native actions back to the webview that owns the key timeline.
@@ -403,7 +409,13 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
     /// action opens panels in the wrong window (or both windows).
     static func activeHostWindowLabel() -> String? {
         guard let keyWindow = NSApp.keyWindow else { return nil }
-        return attachedControllers.values.first { $0.window === keyWindow }?.hostWindowLabel
+        return hostWindowLabel(containing: keyWindow)
+    }
+
+    static func hostWindowLabel(containing keyWindow: NSWindow) -> String? {
+        attachedControllers.values.first { controller in
+            controller.window === keyWindow || controller.window?.parent === keyWindow
+        }?.hostWindowLabel
     }
 
     /// Deep links arrive without a host pointer. Prefer the timeline attached
@@ -427,8 +439,13 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
     /// controller, and whichever attached last is not necessarily the source.
     static func model(forWindowLabel label: String?) -> TimelineViewModel? {
         guard let label else { return activeNavigationModel() }
+        let aliases = label == "main" || label == "main-window"
+            ? Set(["main", "main-window"])
+            : Set([label])
         return attachedControllers.values
-            .first { $0.hostWindowLabel == label }?
+            .first { controller in
+                controller.hostWindowLabel.map(aliases.contains) ?? false
+            }?
             .currentModel
     }
 
@@ -446,8 +463,32 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
             return true
         }
         guard let windowLabel, !windowLabel.isEmpty else { return false }
-        pendingSearchNavigation[windowLabel] = request
+        pendingSearchNavigation[navigationLabelKey(windowLabel)] = request
         return false
+    }
+
+    /// Native pill actions share one model entry point with the feature-gated
+    /// E2E driver, so arrows, strip clicks and Escape cannot drift apart.
+    @discardableResult
+    static func controlSearchReview(forWindowLabel label: String, action: String) -> Bool {
+        guard let model = model(forWindowLabel: label), model.searchReview != nil else {
+            return false
+        }
+        switch action {
+        case "older": model.stepSearchResult(1)
+        case "newer": model.stepSearchResult(-1)
+        case "escape": model.exitSearchReview()
+        default:
+            guard action.hasPrefix("select:"),
+                  let index = Int(action.dropFirst("select:".count)) else { return false }
+            model.jumpToSearchResult(index)
+        }
+        return true
+    }
+
+    @discardableResult
+    static func dismissSearchReview(forWindowLabel label: String) -> Bool {
+        controlSearchReview(forWindowLabel: label, action: "escape")
     }
 
     private static func deliverPendingSearchNavigation(
@@ -455,7 +496,9 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
         windowLabel: String?
     ) {
         guard let windowLabel,
-              let request = pendingSearchNavigation.removeValue(forKey: windowLabel) else { return }
+              let request = pendingSearchNavigation.removeValue(
+                forKey: navigationLabelKey(windowLabel)
+              ) else { return }
         request.apply(to: model)
     }
 
@@ -506,12 +549,12 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
         guard let model = model(forWindowLabel: label) else {
             return [
                 "attached": false,
-                "queued": pendingSearchNavigation[label] != nil
+                "queued": pendingSearchNavigation[navigationLabelKey(label)] != nil
             ]
         }
         var state: [String: Any] = [
             "attached": true,
-            "queued": pendingSearchNavigation[label] != nil,
+            "queued": pendingSearchNavigation[navigationLabelKey(label)] != nil,
             "searchFrameIds": model.searchReview?.frameIds ?? [],
             "loadedFrameIds": model.frames.flatMap { $0.devices.map(\.frameId) }
         ]
@@ -530,6 +573,9 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
         if let review = model.searchReview {
             state["searchQuery"] = review.query
             state["activeResultIndex"] = review.activeIndex
+            state["activeResultFrameId"] = review.activeResult?.frameId
+            state["activeResultTimestamp"] = review.activeResult.map { TimelineTime.iso($0.timestamp) }
+            state["highlightCount"] = model.activeSearchHighlightPositions.count
         }
         return state
     }
@@ -607,6 +653,8 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
     @discardableResult
     func show(config: TimelineAPIConfig = .fromEnvironment(), embedded: Bool = false) -> Bool {
         if let window {
+            model?.updateAPIConfig(config)
+            model?.start()
             window.makeKeyAndOrderFront(nil)
             return true
         }
@@ -620,6 +668,7 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
             frame: defaultFrame(),
             borderless: false
         )
+        model?.start()
         window?.makeKeyAndOrderFront(nil)
         return true
     }
@@ -721,8 +770,11 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
                 frame: target,
                 borderless: true
             )
+        } else {
+            model?.updateAPIConfig(config)
         }
         guard let window, let model else { return false }
+        model.start()
         model.setActionWindowLabel(hostWindowLabel)
         Self.deliverPendingSearchNavigation(to: model, windowLabel: hostWindowLabel)
         originChrome.setActivityReturnVisible(showActivityReturn)
@@ -826,6 +878,7 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
     /// standalone without leaving a detached child behind.
     func detach() {
         focusLossGeneration &+= 1
+        model?.stop()
         removeParentObservers()
         hostWindowNumber = nil
         hostPointer = nil
@@ -838,6 +891,7 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
     }
 
     func hide() {
+        model?.stop()
         if hostWindowNumber != nil {
             detach()
             return
@@ -854,7 +908,10 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
         attachedUnderlay = false
         removeKeyMonitor()
         model?.stop()
-        window?.close()
+        if let window {
+            window.parent?.removeChildWindow(window)
+            window.close()
+        }
         window = nil
         model = nil
     }
@@ -1070,6 +1127,47 @@ public func timeline_close() -> Int32 {
 
 /// Deep links and search hand-off. `windowLabel` addresses an attached Home or
 /// overlay timeline; absent labels retain the standalone/deep-link behavior.
+private func timelineJSONText(_ value: Any?) -> String? {
+    if let value = value as? String { return value }
+    if let value = value as? NSNumber { return value.stringValue }
+    return nil
+}
+
+private func timelineJSONDouble(_ value: Any?) -> Double? {
+    if let value = value as? NSNumber { return value.doubleValue }
+    if let value = value as? String { return Double(value) }
+    return nil
+}
+
+private func timelineSearchResults(_ value: Any?) -> [TimelineSearchResult] {
+    guard let values = value as? [[String: Any]] else { return [] }
+    return values.compactMap { result -> TimelineSearchResult? in
+        guard let frameId = timelineJSONText(result["frameId"]),
+              let rawTimestamp = result["timestamp"] as? String,
+              let timestamp = TimelineTime.parse(rawTimestamp) else { return nil }
+        let positions = (result["textPositions"] as? [[String: Any]] ?? []).compactMap {
+            position -> TimelineSearchTextPosition? in
+            guard let bounds = position["bounds"] as? [String: Any],
+                  let left = timelineJSONDouble(bounds["left"]),
+                  let top = timelineJSONDouble(bounds["top"]),
+                  let width = timelineJSONDouble(bounds["width"]),
+                  let height = timelineJSONDouble(bounds["height"]) else { return nil }
+            return TimelineSearchTextPosition(
+                text: position["text"] as? String ?? "",
+                confidence: timelineJSONDouble(position["confidence"]) ?? 0,
+                bounds: TimelineSearchTextBounds(
+                    left: left, top: top, width: width, height: height
+                )
+            )
+        }
+        return TimelineSearchResult(
+            frameId: frameId,
+            timestamp: timestamp,
+            textPositions: positions
+        )
+    }
+}
+
 @_cdecl("timeline_navigate")
 public func timeline_navigate(_ json: UnsafePointer<CChar>?) -> Int32 {
     guard #available(macOS 13.0, *), let json,
@@ -1085,13 +1183,22 @@ public func timeline_navigate(_ json: UnsafePointer<CChar>?) -> Int32 {
         if let windowLabel,
            let rawTimestamp,
            let timestamp = TimelineTime.parse(rawTimestamp) {
+            var results = timelineSearchResults(obj["searchResults"])
+            // Older Rust callers sent only ids. Keep the hand-off functional,
+            // though current callers always include each result's own time.
+            if results.isEmpty {
+                results = (obj["searchFrameIds"] as? [String] ?? []).map {
+                    TimelineSearchResult(frameId: $0, timestamp: timestamp, textPositions: [])
+                }
+            }
             TimelineWindowController.routeSearchNavigation(
                 TimelineSearchNavigationRequest(
                     timestamp: timestamp,
                     frameId: frameId,
                     query: obj["searchQuery"] as? String,
-                    frameIds: obj["searchFrameIds"] as? [String] ?? [],
-                    terms: obj["searchTerms"] as? [String] ?? []
+                    results: results,
+                    terms: obj["searchTerms"] as? [String] ?? [],
+                    navigationId: obj["navigationId"] as? String
                 ),
                 windowLabel: windowLabel
             )
@@ -1129,6 +1236,43 @@ public func timeline_search_state(_ label: UnsafePointer<CChar>?) -> UnsafeMutab
         DispatchQueue.main.sync { MainActor.assumeIsolated { read() } }
     }
     return json.flatMap { value in value.withCString { strdup($0) } }
+}
+
+@_cdecl("timeline_search_control")
+public func timeline_search_control(
+    _ label: UnsafePointer<CChar>?, _ action: UnsafePointer<CChar>?
+) -> Int32 {
+    guard #available(macOS 13.0, *), let label, let action,
+          let windowLabel = String(validatingUTF8: label),
+          let command = String(validatingUTF8: action) else { return 0 }
+    var handled = false
+    @MainActor func run() {
+        handled = TimelineWindowController.controlSearchReview(
+            forWindowLabel: windowLabel, action: command
+        )
+    }
+    if Thread.isMainThread {
+        MainActor.assumeIsolated { run() }
+    } else {
+        DispatchQueue.main.sync { MainActor.assumeIsolated { run() } }
+    }
+    return handled ? 1 : 0
+}
+
+@_cdecl("timeline_dismiss_search_review")
+public func timeline_dismiss_search_review(_ label: UnsafePointer<CChar>?) -> Int32 {
+    guard #available(macOS 13.0, *), let label,
+          let windowLabel = String(validatingUTF8: label) else { return 0 }
+    var handled = false
+    @MainActor func run() {
+        handled = TimelineWindowController.dismissSearchReview(forWindowLabel: windowLabel)
+    }
+    if Thread.isMainThread {
+        MainActor.assumeIsolated { run() }
+    } else {
+        DispatchQueue.main.sync { MainActor.assumeIsolated { run() } }
+    }
+    return handled ? 1 : 0
 }
 
 @_cdecl("timeline_free_string")

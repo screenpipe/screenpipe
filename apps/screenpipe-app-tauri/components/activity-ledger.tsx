@@ -12,11 +12,11 @@ import React, {
 } from "react";
 import { emit } from "@tauri-apps/api/event";
 import { useRouter } from "next/navigation";
+import posthog from "posthog-js";
 import {
   AppWindow,
   AudioLines,
   Loader2,
-  MessageCircleMore,
   RefreshCw,
   Users,
 } from "lucide-react";
@@ -43,26 +43,25 @@ import {
   type ActivityReviewMeeting,
 } from "@/lib/activity-review-prompt";
 import {
-  clearPersistedActivityHistory,
   loadPersistedActivityHistory,
   mergeActivityHistoryCoverage,
   mergeActivityHistoryDocuments,
-  nextActivityHistoryRange,
-  preloadPersistedActivityHistory,
   reconcilePersistedActivityHistory,
   type ActivityHistoryCoverage,
 } from "@/lib/activity-history-persistence";
 import { localFetch } from "@/lib/api";
+import { presentQuotaError } from "@/lib/chat/quota-errors";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import { runDailySummaryWithPi } from "@/lib/daily-summary-pi";
-import { appIconUrl } from "@/lib/first-run/recent-activity";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
+import { getAppServerBaseUrl } from "@/lib/notifications/app-server";
 import { cn } from "@/lib/utils";
-import { pickPipePreset } from "@/lib/utils/pick-pipe-preset";
 import type { AIPreset } from "@/lib/utils/tauri";
 
 type RangePreset = "today" | "24h" | "7d" | "custom";
+type GenerationSource = "empty_state" | "refresh";
+const ACTIVITY_GENERATION_TIMEOUT_MS = 120_000;
 type ActivitySummaryResponse = {
   data_status: string;
   total_active_minutes: number;
@@ -93,6 +92,21 @@ type ActivityLedgerArtifactInterval = {
 type ActivityLedgerArtifactsResponse = {
   intervals?: ActivityLedgerArtifactInterval[];
 };
+
+function noActivityMessage(dataStatus: string): string {
+  switch (dataStatus) {
+    case "not_recording":
+      return "No recorded activity is available yet. Start recording, then try again.";
+    case "no_capture_in_range":
+      return "No recorded activity was found in this range. Choose another range and try again.";
+    case "empty_but_recording":
+      return "Recording is active, but this range does not have enough activity yet. Keep working for a moment, then try again.";
+    case "unknown":
+      return "Activity data is not ready yet. Check recording status, then try again.";
+    default:
+      return "There is not enough recorded activity in this range to generate a history yet.";
+  }
+}
 type ActivityArtifact = ActivityHistoryEvidence & {
   browser_url?: string | null;
 };
@@ -141,10 +155,6 @@ function readStoredDateInput(key: string, fallback: string): string {
   return stored && Number.isFinite(new Date(stored).getTime())
     ? stored
     : fallback;
-}
-
-export function preloadActivityHistory(): Promise<unknown> {
-  return preloadPersistedActivityHistory(ACTIVITY_REVIEW_PROMPT_VERSION);
 }
 
 function startOfLocalDay(value: Date): Date {
@@ -483,7 +493,20 @@ export function artifactsForHistoryEntry(
 
 function EvidenceArtifactIcon({ evidence }: { evidence: ActivityArtifact }) {
   const [iconFailed, setIconFailed] = useState(false);
+  const [appServerBaseUrl, setAppServerBaseUrl] = useState<string | null>(null);
   const domain = siteDomain(evidence.browser_url);
+
+  useEffect(() => {
+    if (!evidence.app_name || domain) return;
+    let active = true;
+    void getAppServerBaseUrl().then((baseUrl) => {
+      if (active) setAppServerBaseUrl(baseUrl);
+    });
+    return () => {
+      active = false;
+    };
+  }, [domain, evidence.app_name]);
+
   if (evidence.kind === "meeting") {
     return <Users className="h-4 w-4" aria-hidden="true" />;
   }
@@ -497,10 +520,10 @@ function EvidenceArtifactIcon({ evidence }: { evidence: ActivityArtifact }) {
       />
     );
   }
-  if (evidence.app_name && !iconFailed) {
+  if (evidence.app_name && appServerBaseUrl && !iconFailed) {
     return (
       <img
-        src={appIconUrl(evidence.app_name)}
+        src={`${appServerBaseUrl}/app-icon?name=${encodeURIComponent(evidence.app_name)}`}
         alt=""
         className="h-full w-full object-contain"
         onError={() => setIconFailed(true)}
@@ -576,8 +599,9 @@ export function ActivityLedger({
     (state) => state.setPendingNavigation,
   );
   const initialNow = useMemo(() => new Date(), []);
-  const [anchor, setAnchor] = useState(initialNow);
+  const anchor = initialNow;
   const [preset, setPreset] = useState<RangePreset>(readStoredRangePreset);
+  const initialPresetRef = useRef(preset);
   const [customStart, setCustomStart] = useState(() =>
     readStoredDateInput(
       ACTIVITY_CUSTOM_START_STORAGE_KEY,
@@ -608,6 +632,9 @@ export function ActivityLedger({
   const [historyError, setHistoryError] = useState("");
   const historyAbortRef = useRef<AbortController | null>(null);
   const historyLoadingRef = useRef(false);
+  const [selectedReviewPresetId, setSelectedReviewPresetId] = useState<
+    string | null
+  >(null);
   const { settings } = useSettings();
 
   const range = useMemo(
@@ -615,16 +642,32 @@ export function ActivityLedger({
     [anchor, customEnd, customStart, preset],
   );
   const invalidRange = !range || range.start >= range.end;
-  const reviewPreset = useMemo(
+  const reviewPresets = useMemo(
     () =>
-      pickPipePreset((settings?.aiPresets ?? []) as AIPreset[]) ??
-      DEFAULT_ACTIVITY_REVIEW_PRESET,
+      ((settings?.aiPresets ?? []) as AIPreset[]).filter(
+        (candidate) => candidate.provider !== "acp",
+      ),
     [settings?.aiPresets],
   );
-  const pendingHistoryRange = useMemo(
-    () => (range ? nextActivityHistoryRange(range, historyCoverage) : null),
-    [historyCoverage, range],
+  const selectableReviewPresets = useMemo(
+    () =>
+      reviewPresets.length > 0
+        ? reviewPresets
+        : [DEFAULT_ACTIVITY_REVIEW_PRESET],
+    [reviewPresets],
   );
+  const reviewPreset = useMemo(
+    () =>
+      selectableReviewPresets.find(
+        (candidate) => candidate.id === selectedReviewPresetId,
+      ) ??
+      selectableReviewPresets.find((candidate) => candidate.defaultPreset) ??
+      selectableReviewPresets[0],
+    [selectableReviewPresets, selectedReviewPresetId],
+  );
+  useEffect(() => {
+    posthog.capture("activity_viewed", { range: initialPresetRef.current });
+  }, []);
 
   useEffect(() => {
     window.localStorage.setItem(ACTIVITY_RANGE_STORAGE_KEY, preset);
@@ -732,8 +775,6 @@ export function ActivityLedger({
     historyLoadingRef.current = false;
     setHistoryLoading(false);
     setHistoryError("");
-    setHistory(null);
-    setHistoryCoverage([]);
     setCacheReady(false);
     if (!range) return;
     let cancelled = false;
@@ -777,41 +818,55 @@ export function ActivityLedger({
       });
     return () => {
       cancelled = true;
-      historyAbortRef.current?.abort();
+      // History generation must outlive this page so its result is persisted
+      // even when the user navigates elsewhere while Pi is still working.
     };
   }, [preset, range]);
 
-  const generateHistory = useCallback(async () => {
+  const generateHistory = useCallback(async (
+    generationRange: TimeRange,
+    source: GenerationSource,
+    viewRange: TimeRange = range!,
+  ) => {
     if (!range || historyLoadingRef.current) return;
-    const generationRange = nextActivityHistoryRange(range, historyCoverage);
-    if (!generationRange) return;
+    posthog.capture("activity_generation_started", {
+      range: preset,
+      source,
+    });
     historyAbortRef.current?.abort();
     const controller = new AbortController();
     historyAbortRef.current = controller;
     historyLoadingRef.current = true;
     setHistoryLoading(true);
     setHistoryError("");
+    let timedOut = false;
+    const timeout = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, ACTIVITY_GENERATION_TIMEOUT_MS);
     try {
-      const generationMeetings = meetings.filter(
-        (meeting) =>
-          new Date(meeting.end_at).getTime() >
-            generationRange.start.getTime() &&
-          new Date(meeting.start_at).getTime() < generationRange.end.getTime(),
-      );
-      let generationSummary = summary;
-      if (
-        generationRange.start.getTime() !== range.start.getTime() ||
-        generationRange.end.getTime() !== range.end.getTime()
-      ) {
-        const response = await localFetch(
-          buildActivitySummaryPath(generationRange),
-          { signal: controller.signal },
-        );
-        if (!response.ok) {
-          throw new Error(`Activity request failed (${response.status}).`);
-        }
-        generationSummary = (await response.json()) as ActivitySummaryResponse;
+      const [summaryResponse, meetingsResponse] = await Promise.all([
+        localFetch(buildActivitySummaryPath(generationRange), {
+          signal: controller.signal,
+        }),
+        localFetch(buildActivityMeetingsPath(generationRange), {
+          signal: controller.signal,
+        }),
+      ]);
+      if (!summaryResponse.ok) {
+        throw new Error(`Activity request failed (${summaryResponse.status}).`);
       }
+      if (!meetingsResponse.ok) {
+        throw new Error(`Meeting request failed (${meetingsResponse.status}).`);
+      }
+      const [generationSummary, meetingRecords] = await Promise.all([
+        summaryResponse.json() as Promise<ActivitySummaryResponse>,
+        meetingsResponse.json() as Promise<MeetingResponse[]>,
+      ]);
+      const generationMeetings = meetingAnchors(
+        meetingRecords,
+        generationRange,
+      );
       const reviewRange = {
         start: generationRange.start.toISOString(),
         end: generationRange.end.toISOString(),
@@ -825,12 +880,22 @@ export function ActivityLedger({
           ACTIVITY_REVIEW_PROMPT_VERSION,
           generationRange,
           { entries: [] },
-          range,
+          viewRange,
         );
         setHistory(
           persisted.entries.length > 0 ? { entries: persisted.entries } : null,
         );
         setHistoryCoverage(persisted.coverage);
+        setHistoryError(
+          noActivityMessage(generationSummary?.data_status ?? "unknown"),
+        );
+        posthog.capture("activity_generation_completed", {
+          range: preset,
+          source,
+          outcome: "no_activity",
+          activity_count: 0,
+          data_status: generationSummary?.data_status ?? "unknown",
+        });
         return;
       }
       const raw = await runDailySummaryWithPi({
@@ -857,36 +922,40 @@ export function ActivityLedger({
       );
       let missingMeetings = missingRequiredMeetingIds(next, generationMeetings);
       if (next.entries.length < minimumEntries || missingMeetings.length > 0) {
-        const repairedRaw = await runDailySummaryWithPi({
-          date: generationRange.start,
-          range: {
-            start: generationRange.start.toISOString(),
-            end: generationRange.end.toISOString(),
-          },
-          preset: reviewPreset,
-          userToken: settings.user?.token ?? null,
-          signal: controller.signal,
-          sessionPrefix: "activity-history-repair",
-          systemPrompt: ACTIVITY_REVIEW_AGENT_SYSTEM_PROMPT,
-          prompt: buildActivityReviewRepairPrompt(
-            reviewRange,
+        try {
+          const repairedRaw = await runDailySummaryWithPi({
+            date: generationRange.start,
+            range: {
+              start: generationRange.start.toISOString(),
+              end: generationRange.end.toISOString(),
+            },
+            preset: reviewPreset,
+            userToken: settings.user?.token ?? null,
+            signal: controller.signal,
+            sessionPrefix: "activity-history-repair",
+            systemPrompt: ACTIVITY_REVIEW_AGENT_SYSTEM_PROMPT,
+            prompt: buildActivityReviewRepairPrompt(
+              reviewRange,
+              generationMeetings,
+              next,
+              minimumEntries,
+              missingMeetings,
+            ),
+          });
+          const repaired = parseActivityHistoryResponse(
+            repairedRaw,
+            generationRange,
             generationMeetings,
-            next,
-            minimumEntries,
-            missingMeetings,
-          ),
-        });
-        next = parseActivityHistoryResponse(
-          repairedRaw,
-          generationRange,
-          generationMeetings,
-        );
-        missingMeetings = missingRequiredMeetingIds(next, generationMeetings);
-      }
-      if (next.entries.length < minimumEntries) {
-        throw new Error(
-          "History is still resolving this range. Try again in a moment.",
-        );
+          );
+          // Never discard a valid, source-backed first pass merely because a
+          // best-effort repair returned fewer usable rows.
+          if (repaired.entries.length >= next.entries.length) next = repaired;
+          missingMeetings = missingRequiredMeetingIds(next, generationMeetings);
+        } catch (reason) {
+          if (controller.signal.aborted) throw reason;
+          // The first pass is already structurally validated and cited. Keep
+          // it instead of turning a coverage-quality miss into a blank page.
+        }
       }
       if (missingMeetings.length > 0) {
         throw new Error(
@@ -899,7 +968,7 @@ export function ActivityLedger({
           ACTIVITY_REVIEW_PROMPT_VERSION,
           generationRange,
           next,
-          range,
+          viewRange,
         );
       } catch {
         persisted = {
@@ -921,87 +990,58 @@ export function ActivityLedger({
         persisted.entries.length > 0 ? { entries: persisted.entries } : null,
       );
       setHistoryCoverage(persisted.coverage);
-    } catch {
-      if (controller.signal.aborted) return;
-      setHistoryError("History could not be updated. Try again.");
+      posthog.capture("activity_generation_completed", {
+        range: preset,
+        source,
+        outcome: "generated",
+        activity_count: next.entries.length,
+      });
+    } catch (reason) {
+      if (controller.signal.aborted && !timedOut) return;
+      const rawError = reason instanceof Error ? reason.message : String(reason);
+      const quota = presentQuotaError(rawError);
+      const friendlyError = timedOut
+        ? "Activity generation took too long and was stopped. Try again."
+        : rawError.toLowerCase().includes("hosted_ai_allowance_exceeded")
+          ? "This AI preset has no usage left. Choose a different AI preset, then try again."
+          : quota.kind !== "none"
+            ? quota.message
+            : "History could not be updated. Try again.";
+      setHistoryError(friendlyError);
+      posthog.capture("activity_generation_failed", {
+        range: preset,
+        source,
+        error_kind: timedOut ? "timeout" : quota.kind,
+      });
     } finally {
-      if (!controller.signal.aborted) {
+      window.clearTimeout(timeout);
+      if (historyAbortRef.current === controller) {
         historyLoadingRef.current = false;
         setHistoryLoading(false);
       }
     }
   }, [
-    meetings,
     preset,
     range,
     reviewPreset,
     settings,
-    summary,
     history,
     historyCoverage,
   ]);
 
-  useEffect(() => {
-    if (
-      !cacheReady ||
-      loading ||
-      error ||
-      summary?.data_status !== "ok" ||
-      !pendingHistoryRange ||
-      historyError
-    ) {
-      return;
-    }
-    void generateHistory();
-  }, [
-    cacheReady,
-    error,
-    generateHistory,
-    history,
-    historyError,
-    loading,
-    summary?.data_status,
-    pendingHistoryRange,
-  ]);
-
-  const refresh = async () => {
-    historyAbortRef.current?.abort();
-    if (range) {
-      try {
-        await clearPersistedActivityHistory(
-          ACTIVITY_REVIEW_PROMPT_VERSION,
-          range,
-        );
-        window.localStorage.removeItem(historyCacheKey(range, preset));
-      } catch {
-        // Regeneration still works in memory without store access.
-      }
-    }
-    setHistory(null);
-    setHistoryCoverage([]);
-    setHistoryError("");
-    setAnchor(new Date());
-    if (preset === "custom") setCustomEnd(toLocalInputValue(new Date()));
-  };
-
-  const askAboutHistory = () => {
-    if (!range) return;
-    const context = [
-      `Computer history range: ${range.start.toISOString()} to ${range.end.toISOString()}`,
-      history
-        ? `Activities:\n${history.entries.map(compactEntryContext).join("\n\n")}`
-        : "",
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-    void showChatWithPrefill({
-      context,
-      prompt: "What was I working on, and what should I pick up next?",
-      source: "activity-history",
-    });
-  };
+  const regenerateSelectedRange = useCallback((source: GenerationSource) => {
+    const clickedRange = rangeForPreset(
+      preset,
+      new Date(),
+      customStart,
+      customEnd,
+    );
+    if (!clickedRange) return;
+    void generateHistory(clickedRange, source, clickedRange);
+  }, [customEnd, customStart, generateHistory, preset]);
 
   const makeSkill = (entry: ActivityHistoryEntry) => {
+    posthog.capture("activity_skill_clicked");
     void showChatWithPrefill({
       context: compactEntryContext(entry),
       displayLabel: `Make a skill from “${entry.title}”`,
@@ -1012,9 +1052,26 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
     });
   };
 
+  const askAboutActivity = (entry: ActivityHistoryEntry) => {
+    posthog.capture("activity_chat_clicked");
+    void showChatWithPrefill({
+      context: compactEntryContext(entry),
+      displayLabel: `Ask about “${entry.title}”`,
+      prompt: "Tell me more about this activity.",
+      source: "activity-history-chat",
+    });
+  };
+
   const openEvidence = useCallback(
     (evidence: ActivityArtifact) => {
       onOpenArtifact?.();
+      posthog.capture("activity_evidence_opened", {
+        evidence_kind: evidence.kind,
+        destination:
+          evidence.kind === "meeting" && evidence.meeting_id
+            ? "meetings"
+            : "timeline",
+      });
       if (
         evidence.kind === "meeting" &&
         evidence.meeting_id &&
@@ -1050,21 +1107,19 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
       className="flex h-full min-h-0 flex-col bg-background"
       data-testid="activity-ledger"
     >
-      <header className="shrink-0 border-b border-border px-6 pb-5 pt-10">
+      <header className="shrink-0 border-b border-border px-6 pb-4 pt-9">
         <div className="mx-auto max-w-4xl">
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h1 className="font-sans text-3xl font-medium tracking-tight">
-                history
-              </h1>
-              <p className="mt-1 text-sm text-muted-foreground">
-                A clear record of what you worked on.
-              </p>
-            </div>
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <div className="flex items-center gap-2">
               <Select
                 value={preset}
-                onValueChange={(value) => setPreset(value as RangePreset)}
+                onValueChange={(value) => {
+                  const nextPreset = value as RangePreset;
+                  setPreset(nextPreset);
+                  posthog.capture("activity_range_changed", {
+                    range: nextPreset,
+                  });
+                }}
               >
                 <SelectTrigger
                   className="h-9 w-[150px] rounded-none text-xs"
@@ -1083,15 +1138,31 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                   ))}
                 </SelectContent>
               </Select>
-              <Button variant="outline" size="sm" onClick={askAboutHistory}>
-                <MessageCircleMore className="mr-2 h-3.5 w-3.5" />
-                Ask
-              </Button>
+              <Select
+                value={reviewPreset.id}
+                onValueChange={setSelectedReviewPresetId}
+              >
+                <SelectTrigger
+                  className="h-9 w-[190px] max-w-[36vw] text-xs"
+                  aria-label="AI preset"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  {selectableReviewPresets.map((candidate) => (
+                    <SelectItem key={candidate.id} value={candidate.id}>
+                      {candidate.id} · {candidate.model || "default"}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => void refresh()}
-                disabled={loading || historyLoading}
+                onClick={() => regenerateSelectedRange("refresh")}
+                disabled={
+                  loading || historyLoading || !cacheReady || invalidRange
+                }
                 aria-label="Refresh history"
               >
                 <RefreshCw
@@ -1226,6 +1297,15 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                           >
                             Make skill
                           </button>
+                          <span aria-hidden="true">·</span>
+                          <button
+                            type="button"
+                            onClick={() => askAboutActivity(entry)}
+                            className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
+                            aria-label={`Chat about ${entry.title}`}
+                          >
+                            Chat
+                          </button>
                         </div>
                       </div>
                     </article>
@@ -1240,28 +1320,36 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
             </div>
           ) : error ? (
             <p className="text-sm text-muted-foreground">{error}</p>
-          ) : summary?.data_status !== "ok" ? (
-            <p className="text-sm text-muted-foreground">
-              There is not enough captured activity in this range yet.
-            </p>
+          ) : !cacheReady ? (
+            <div className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading generated activities…
+            </div>
           ) : historyLoading && !history ? (
             <div className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
               Understanding what you worked on…
             </div>
           ) : (
-            <div className="py-12 text-center">
-              <p className="text-sm text-muted-foreground">
-                {historyError || "Your history is ready to be understood."}
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                className="mt-4"
-                onClick={() => void generateHistory()}
-              >
-                Build history
-              </Button>
+            <div className="flex min-h-[320px] items-center justify-center py-12 text-center">
+              <div className="max-w-sm">
+                <h2 className="font-sans text-xl font-medium tracking-tight">
+                  Generate activities
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  <span role={historyError ? "alert" : undefined}>
+                    {historyError ||
+                      "Turn this range into a private activity history when you’re ready."}
+                  </span>
+                </p>
+                <Button
+                  size="sm"
+                  className="mt-5 h-10 px-5 uppercase tracking-wide"
+                  onClick={() => regenerateSelectedRange("empty_state")}
+                >
+                  {historyError ? "Try again" : "Generate activities"}
+                </Button>
+              </div>
             </div>
           )}
         </div>

@@ -1028,10 +1028,15 @@ pub struct SettingsStore {
     /// "window" (normal resizable window with title bar).
     #[serde(rename = "overlayMode", default = "default_overlay_mode")]
     pub overlay_mode: String,
-    /// Allow screen recording apps to capture the overlay.
-    /// Disabled by default so the overlay doesn't appear in screenpipe's own recordings.
+    /// Legacy inverse overlay preference, retained only for settings-file compatibility.
+    /// New capture behavior is controlled by `hide_overlay_in_screen_recording` below.
     #[serde(rename = "showOverlayInScreenRecording", default)]
     pub show_overlay_in_screen_recording: bool,
+
+    /// Hide only overlay windows from screen recordings and screen sharing.
+    /// New and upgraded installs default to visible until the user opts out.
+    #[serde(rename = "hideOverlayInScreenRecording", default)]
+    pub hide_overlay_in_screen_recording: bool,
 
     /// Legacy global capture-protection preference. Retained for settings-file
     /// compatibility; capture protection is now controlled only by the overlay
@@ -1610,6 +1615,7 @@ Rules:
             #[cfg(not(target_os = "macos"))]
             overlay_mode: "window".to_string(),
             show_overlay_in_screen_recording: false,
+            hide_overlay_in_screen_recording: false,
             hide_app_in_screen_share: true,
             chat_always_on_top: true,
             show_restart_notifications: false,

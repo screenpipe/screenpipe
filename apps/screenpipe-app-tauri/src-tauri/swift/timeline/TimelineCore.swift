@@ -14,6 +14,7 @@
 // segment for the same app are the same colour.
 
 import Foundation
+import CoreGraphics
 
 // MARK: - JS number semantics
 
@@ -67,6 +68,15 @@ enum TimelineAppTaxonomy {
         ]),
     ]
 
+    /// App names repeat for thousands of consecutive frames. Taxonomy uses
+    /// fuzzy bidirectional substring checks, so memoizing the small distinct
+    /// name set avoids re-running the keyword matrix during lane grouping.
+    private static let categoryCache: NSCache<NSString, NSString> = {
+        let cache = NSCache<NSString, NSString>()
+        cache.countLimit = 2_000
+        return cache
+    }()
+
     /// `String.prototype.includes`: an empty needle always matches, where
     /// Swift's `contains` returns false. That difference decides the category of
     /// an empty app name, so it is reproduced rather than tidied away.
@@ -78,11 +88,18 @@ enum TimelineAppTaxonomy {
     /// order: browser, dev, communication, media, productivity.
     static func category(for appName: String) -> AppCategory {
         let lower = appName.lowercased()
+        let key = lower as NSString
+        if let cached = categoryCache.object(forKey: key),
+           let category = AppCategory(rawValue: cached as String) {
+            return category
+        }
         for (category, apps) in categories {
             for app in apps where jsIncludes(lower, app) || jsIncludes(app, lower) {
+                categoryCache.setObject(category.rawValue as NSString, forKey: key)
                 return category
             }
         }
+        categoryCache.setObject(AppCategory.other.rawValue as NSString, forKey: key)
         return .other
     }
 
@@ -662,6 +679,58 @@ enum TimelineGrouping {
         return groups
     }
 
+    /// Clip already-computed full-window groups to the visible viewport.
+    /// Group identity, domain evidence and colour stay anchored to the entire
+    /// run instead of being re-derived from whichever fragment is on screen.
+    static func visibleGroups(
+        from groups: [TimelineAppGroup],
+        in range: Range<Int>
+    ) -> [TimelineAppGroup] {
+        guard !range.isEmpty, !groups.isEmpty else { return [] }
+
+        // Groups are ordered and non-overlapping. Seek to the first possible
+        // overlap instead of walking a full day for every scroll tick.
+        var lowerBound = 0
+        var upperBound = groups.count
+        while lowerBound < upperBound {
+            let middle = lowerBound + (upperBound - lowerBound) / 2
+            let last = groups[middle].frameIndices.last ?? -1
+            if last < range.lowerBound {
+                lowerBound = middle + 1
+            } else {
+                upperBound = middle
+            }
+        }
+
+        var result: [TimelineAppGroup] = []
+        var groupIndex = lowerBound
+        while groupIndex < groups.count {
+            let group = groups[groupIndex]
+            guard let first = group.frameIndices.first,
+                  let last = group.frameIndices.last,
+                  first < range.upperBound else { break }
+            guard last >= range.lowerBound else {
+                groupIndex += 1
+                continue
+            }
+            let lower = max(first, range.lowerBound)
+            let upper = min(last + 1, range.upperBound)
+            guard lower < upper else {
+                groupIndex += 1
+                continue
+            }
+
+            var visible = group
+            // Group indices are contiguous because a group flushes at every
+            // app, domain or day boundary.
+            visible.frameIndices = Array(lower..<upper)
+            if lower != first { visible.dayBoundaryLabel = nil }
+            result.append(visible)
+            groupIndex += 1
+        }
+        return result
+    }
+
     /// Segment colour: the top site for a browser run, the app name otherwise.
     static func barColor(for group: TimelineAppGroup) -> TimelineHSL {
         TimelineColors.barColor(for: group.topDomains.first ?? group.appName)
@@ -934,11 +1003,17 @@ enum TimelineNavigation {
     }
 
     /// Closest frame to a wall-clock instant, used by search and deep links.
-    static func indexNearest(_ target: Date, in frames: [StreamTimeSeriesResponse]) -> Int? {
+    static func indexNearest(
+        _ target: Date,
+        in frames: [StreamTimeSeriesResponse],
+        sameLocalDay: Bool = false
+    ) -> Int? {
         var best: Int?
         var bestDelta = Double.greatestFiniteMagnitude
+        let calendar = Calendar.current
         for (i, frame) in frames.enumerated() {
             guard let d = TimelineFrames.date(of: frame) else { continue }
+            if sameLocalDay, !calendar.isDate(d, inSameDayAs: target) { continue }
             let delta = abs(d.timeIntervalSince(target))
             if delta < bestDelta {
                 bestDelta = delta
@@ -1107,22 +1182,36 @@ enum TimelineMeetingDetection {
         entries.sort { $0.date < $1.date }
 
         // Exact chunk+text duplicates, then near-duplicate cross-device pairs.
+        // `entries` is chronological, so only the trailing `dedupeWindow` can
+        // possibly match. The old `last(where:)` searched the entire history
+        // for every entry and then searched it again to replace the winner,
+        // turning a full day of transcripts into quadratic work.
         var seenExact = Set<String>()
         var deduped: [Entry] = []
         for entry in entries {
             let key = "\(entry.audio.audioChunkId):\(entry.audio.transcription)"
             if seenExact.contains(key) { continue }
             seenExact.insert(key)
-            if let last = deduped.last(where: {
-                abs($0.date.timeIntervalSince(entry.date)) <= dedupeWindow
-                    && $0.audio.isInput != entry.audio.isInput
-                    && textSimilarity($0.audio.transcription, entry.audio.transcription) >= dedupeSimilarity
-            }) {
+            var duplicateIndex: Int?
+            if !deduped.isEmpty {
+                for index in stride(from: deduped.count - 1, through: 0, by: -1) {
+                    let candidate = deduped[index]
+                    if entry.date.timeIntervalSince(candidate.date) > dedupeWindow { break }
+                    if candidate.audio.isInput != entry.audio.isInput
+                        && textSimilarity(
+                            candidate.audio.transcription,
+                            entry.audio.transcription
+                        ) >= dedupeSimilarity {
+                        duplicateIndex = index
+                        break
+                    }
+                }
+            }
+            if let duplicateIndex {
+                let last = deduped[duplicateIndex]
                 // Prefer the input-device copy.
                 if last.audio.isInput { continue }
-                if let idx = deduped.firstIndex(where: { $0.audio.audioChunkId == last.audio.audioChunkId }) {
-                    deduped[idx] = entry
-                }
+                deduped[duplicateIndex] = entry
                 continue
             }
             deduped.append(entry)
@@ -1130,12 +1219,15 @@ enum TimelineMeetingDetection {
 
         var meetings: [TimelineMeeting] = []
         var cluster: [Entry] = []
+        var clusterSpeech = 0.0
 
         func flush() {
-            defer { cluster = [] }
+            defer {
+                cluster = []
+                clusterSpeech = 0
+            }
             guard cluster.count >= minEntries else { return }
-            let speech = cluster.reduce(0.0) { $0 + $1.audio.durationSecs }
-            guard speech >= minSpeechSeconds else { return }
+            guard clusterSpeech >= minSpeechSeconds else { return }
             let speakerKeys = Set(cluster.map { $0.speakerKey })
             guard speakerKeys.count >= minSpeakers else { return }
 
@@ -1156,7 +1248,7 @@ enum TimelineMeetingDetection {
                 end: end,
                 speakers: names,
                 entryCount: cluster.count,
-                totalSpeechSeconds: speech,
+                totalSpeechSeconds: clusterSpeech,
                 frameIndexRange: lower...upper
             ))
         }
@@ -1164,15 +1256,17 @@ enum TimelineMeetingDetection {
         for entry in deduped {
             guard let last = cluster.last else {
                 cluster = [entry]
+                clusterSpeech = entry.audio.durationSecs
                 continue
             }
-            let speech = cluster.reduce(0.0) { $0 + $1.audio.durationSecs }
-            let threshold = (cluster.count >= 5 || speech >= 120) ? extendedGap : baseGap
+            let threshold = (cluster.count >= 5 || clusterSpeech >= 120) ? extendedGap : baseGap
             if entry.date.timeIntervalSince(last.date) > threshold {
                 flush()
                 cluster = [entry]
+                clusterSpeech = entry.audio.durationSecs
             } else {
                 cluster.append(entry)
+                clusterSpeech += entry.audio.durationSecs
             }
         }
         flush()
@@ -1339,6 +1433,13 @@ enum TimelineAudio {
     static let preloadBehind: TimeInterval = 5
     static let maxCachedSegments = 20
 
+    private static let utcCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }()
+
     static func nextSpeed(after current: Double) -> Double {
         guard let i = speeds.firstIndex(of: current) else { return speeds[0] }
         return speeds[(i + 1) % speeds.count]
@@ -1363,16 +1464,39 @@ enum TimelineAudio {
     /// Recording start parsed from `..._YYYY-MM-DD_HH-MM-SS.ext`, read as UTC.
     static func recordingStart(fromFilename path: String) -> Date? {
         let name = (path as NSString).lastPathComponent
-        let pattern = #"_(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})\.\w+$"#
-        guard let regex = try? NSRegularExpression(pattern: pattern),
-              let match = regex.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)),
-              match.numberOfRanges == 5 else { return nil }
-        func part(_ i: Int) -> String {
-            guard let r = Range(match.range(at: i), in: name) else { return "" }
-            return String(name[r])
+        let stem = (name as NSString).deletingPathExtension
+        let stemBytes = Array(stem.utf8)
+        guard stemBytes.count >= 20, stemBytes[stemBytes.count - 20] == 95 else { return nil }
+        let bytes = Array(stemBytes.suffix(19))
+        guard
+              bytes[4] == 45, bytes[7] == 45, bytes[10] == 95,
+              bytes[13] == 45, bytes[16] == 45 else { return nil }
+
+        func number(_ range: Range<Int>) -> Int? {
+            var value = 0
+            for index in range {
+                let byte = bytes[index]
+                guard byte >= 48, byte <= 57 else { return nil }
+                value = value * 10 + Int(byte - 48)
+            }
+            return value
         }
-        let stamp = "\(part(1))T\(part(2)):\(part(3)):\(part(4))Z"
-        return TimelineTime.parse(stamp)
+
+        guard let year = number(0..<4),
+              let month = number(5..<7),
+              let day = number(8..<10),
+              let hour = number(11..<13),
+              let minute = number(14..<16),
+              let second = number(17..<19) else { return nil }
+        return utcCalendar.date(from: DateComponents(
+            timeZone: TimeZone(secondsFromGMT: 0),
+            year: year,
+            month: month,
+            day: day,
+            hour: hour,
+            minute: minute,
+            second: second
+        ))
     }
 
     /// Master clock: `start + elapsedWall * speed`.
@@ -1406,14 +1530,73 @@ enum TimelineSelectionTagState: Equatable {
 
 // MARK: - Search review
 
+struct TimelineSearchTextBounds: Equatable {
+    var left: Double
+    var top: Double
+    var width: Double
+    var height: Double
+
+    var isVisible: Bool {
+        left >= 0 && top >= 0 && width > 0 && height > 0
+            && left + width <= 1.001 && top + height <= 1.001
+    }
+}
+
+struct TimelineSearchTextPosition: Equatable {
+    var text: String
+    var confidence: Double
+    var bounds: TimelineSearchTextBounds
+}
+
+/// Everything required to revisit one Search hit. Frame id alone works only
+/// while that hit happens to be in the currently loaded day; arrows and strip
+/// clicks need the timestamp as well so they can request another day/window.
+struct TimelineSearchResult: Equatable {
+    var frameId: String
+    var timestamp: Date
+    var textPositions: [TimelineSearchTextPosition]
+}
+
+enum TimelineSearchHighlightLayout {
+    /// Search bounds are normalized to the source screenshot and originate at
+    /// its top-left. Project them into the same aspect-fit rectangle used by
+    /// Live Text so the yellow mark stays on the selected words after resize.
+    static func rect(
+        for bounds: TimelineSearchTextBounds,
+        imageSize: CGSize,
+        viewport: CGRect
+    ) -> CGRect {
+        guard bounds.isVisible, imageSize.width > 0, imageSize.height > 0,
+              viewport.width > 0, viewport.height > 0 else { return .zero }
+        let scale = min(viewport.width / imageSize.width, viewport.height / imageSize.height)
+        let fittedSize = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+        let fitted = CGRect(
+            x: viewport.midX - fittedSize.width / 2,
+            y: viewport.midY - fittedSize.height / 2,
+            width: fittedSize.width,
+            height: fittedSize.height
+        )
+        return CGRect(
+            x: fitted.minX + CGFloat(bounds.left) * fitted.width,
+            y: fitted.minY + CGFloat(bounds.top) * fitted.height,
+            width: CGFloat(bounds.width) * fitted.width,
+            height: CGFloat(bounds.height) * fitted.height
+        )
+    }
+}
+
 /// The bottom pill's model while reviewing search results.
 struct TimelineSearchReview: Equatable {
     var query: String
-    var frameIds: [String]
+    var results: [TimelineSearchResult]
     var activeIndex: Int
     var terms: [String]
 
-    var count: Int { frameIds.count }
+    var frameIds: [String] { results.map(\.frameId) }
+    var activeResult: TimelineSearchResult? {
+        results.indices.contains(activeIndex) ? results[activeIndex] : nil
+    }
+    var count: Int { results.count }
     var isFirst: Bool { activeIndex <= 0 }
     var isLast: Bool { activeIndex >= count - 1 }
 

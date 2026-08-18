@@ -25,6 +25,7 @@ import { localFetch } from "@/lib/api";
 import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
 import { settingsSectionFromDeepLink } from "@/lib/utils/settings-deep-link";
 import posthog from "posthog-js";
+import { handleExternalDeepLink } from "@/lib/external-deeplink";
 
 const DEEPLINK_RECENT_TTL_MS = 1_000;
 const activeDeepLinks = new Set<string>();
@@ -338,6 +339,10 @@ export function DeeplinkHandler() {
       //   screenpipe://chat/<conversationId>?message=<messageId>
       //   screenpipe://chat?conversation=<conversationId>&message=<messageId>
       if (parsedUrl.host === "chat" || parsedUrl.pathname?.startsWith("/chat/")) {
+        // Public prompt links may only prefill an editable composer. They can
+        // never inject hidden context or auto-send a model request.
+        if (await handleExternalDeepLink(parsedUrl)) return;
+
         const pathId =
           parsedUrl.host === "chat"
             ? parsedUrl.pathname.replace(/^\/+/, "").split("/")[0]
@@ -354,6 +359,13 @@ export function DeeplinkHandler() {
             ...(messageId ? { focusMessageId: decodeURIComponent(messageId) } : {}),
           });
         }
+      }
+
+      // Public pipe links only navigate to an already-installed pipe. Install,
+      // enable, edit, and run remain explicit in-app actions.
+      if (parsedUrl.host === "pipe") {
+        await handleExternalDeepLink(parsedUrl);
+        return;
       }
 
       // Handle in-app file viewer: screenpipe://view?path=<encoded-path>

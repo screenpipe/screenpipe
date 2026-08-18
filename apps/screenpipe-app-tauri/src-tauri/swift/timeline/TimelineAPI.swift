@@ -15,7 +15,7 @@ import Foundation
 
 // MARK: - Configuration
 
-struct TimelineAPIConfig {
+struct TimelineAPIConfig: Equatable {
     var host: String
     var port: Int
     var apiKey: String?
@@ -226,12 +226,17 @@ final class FrameStreamClient: NSObject {
     private let session: URLSession
     private var task: URLSessionWebSocketTask?
     private var reconnectAttempt = 0
+    private var reconnectWorkItem: DispatchWorkItem?
     private var lastMessageAt = Date.distantPast
     private var livenessTimer: Timer?
     private var pendingRequest: FrameStreamRequest?
     private var stopped = true
 
     weak var delegate: FrameStreamClientDelegate?
+
+    /// Monotonic connection attempts, useful for proving repeated lifecycle
+    /// events do not create parallel sockets.
+    private(set) var connectionGeneration = 0
 
     private(set) var state: State = .idle {
         didSet {
@@ -250,13 +255,17 @@ final class FrameStreamClient: NSObject {
     var isOpen: Bool { state == .open }
 
     func connect() {
+        guard stopped else { return }
         stopped = false
+        reconnectAttempt = 0
         openSocket()
         startLiveness()
     }
 
     func disconnect() {
         stopped = true
+        reconnectWorkItem?.cancel()
+        reconnectWorkItem = nil
         livenessTimer?.invalidate()
         livenessTimer = nil
         task?.cancel(with: .goingAway, reason: nil)
@@ -280,6 +289,10 @@ final class FrameStreamClient: NSObject {
 
     private func openSocket() {
         guard !stopped else { return }
+        reconnectWorkItem?.cancel()
+        reconnectWorkItem = nil
+        task?.cancel(with: .goingAway, reason: nil)
+        connectionGeneration &+= 1
         state = reconnectAttempt == 0 ? .connecting : .reconnecting(attempt: reconnectAttempt)
 
         var comps = URLComponents(url: config.websocketBase.appendingPathComponent("stream/frames"),
@@ -304,27 +317,46 @@ final class FrameStreamClient: NSObject {
 
     private func receiveLoop(_ socket: URLSessionWebSocketTask) {
         socket.receive { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .failure(let error):
-                guard !self.stopped else { return }
-                self.delegate?.frameStream(didFail: error.localizedDescription)
-                self.scheduleReconnect()
-            case .success(let message):
-                self.lastMessageAt = Date()
-                self.reconnectAttempt = 0
-                switch message {
-                case .string(let text):
-                    self.handle(text: text)
-                case .data(let data):
-                    if let text = String(data: data, encoding: .utf8) {
-                        self.handle(text: text)
-                    }
-                @unknown default:
-                    break
-                }
-                self.receiveLoop(socket)
+            DispatchQueue.main.async {
+                self?.handleReceive(result, from: socket)
             }
+        }
+    }
+
+    private func handleReceive(
+        _ result: Result<URLSessionWebSocketTask.Message, Error>,
+        from socket: URLSessionWebSocketTask
+    ) {
+        // A cancelled/replaced socket may deliver its completion after the new
+        // one is open. Ignoring it prevents stale callbacks from spawning a
+        // second reconnect chain and leaking parallel full-day streams.
+        guard !stopped, task === socket else { return }
+        switch result {
+        case .failure(let error):
+            let nsError = error as NSError
+            NSLog(
+                "[native-timeline] frame stream receive failed domain=%@ code=%ld description=%@ reason=%@",
+                nsError.domain,
+                nsError.code,
+                nsError.localizedDescription,
+                nsError.localizedFailureReason ?? "none"
+            )
+            delegate?.frameStream(didFail: error.localizedDescription)
+            scheduleReconnect()
+        case .success(let message):
+            lastMessageAt = Date()
+            reconnectAttempt = 0
+            switch message {
+            case .string(let text):
+                handle(text: text)
+            case .data(let data):
+                if let text = String(data: data, encoding: .utf8) {
+                    handle(text: text)
+                }
+            @unknown default:
+                break
+            }
+            receiveLoop(socket)
         }
     }
 
@@ -336,19 +368,30 @@ final class FrameStreamClient: NSObject {
             delegate?.frameStream(didReceive: update)
         case .some(.serverError(let message)):
             delegate?.frameStream(didFail: message)
-        case .some(.keepAlive), .none:
+        case .some(.keepAlive):
             break
+        case .none:
+            NSLog(
+                "[native-timeline] ignored undecodable frame stream message bytes=%ld",
+                text.utf8.count
+            )
         }
     }
 
     private func scheduleReconnect() {
-        guard !stopped else { return }
+        guard !stopped, reconnectWorkItem == nil else { return }
         let delay = TimelineBackoff.reconnectDelay(attempt: reconnectAttempt)
         reconnectAttempt += 1
         state = .reconnecting(attempt: reconnectAttempt)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            self?.openSocket()
+        task?.cancel(with: .goingAway, reason: nil)
+        task = nil
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.reconnectWorkItem = nil
+            self.openSocket()
         }
+        reconnectWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     private func startLiveness() {

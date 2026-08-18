@@ -41,7 +41,7 @@ commits that broke this area: `0752ea59`, `d89c5f14`, `4a64fd1a`, `fa591d6e`, `8
 - [ ] **escape closes overlay** — press Escape while overlay is visible. it hides.
 - [ ] **no space jump on show** — showing the overlay should NOT cause a space transition animation (`6d44af13`, `d74d0665`).
 - [ ] **no space jump on hide** — hiding the overlay should NOT switch you to a different space.
-- [ ] **screen recording visibility setting** — toggle "show in screen recording" in settings. overlay should appear/disappear from screen recordings accordingly (`206107ba`).
+- [ ] **screen recording visibility setting** — toggle "Hide from screen recordings" in settings. The overlay is visible in recordings by default and disappears only while the setting is enabled (`206107ba`).
 - [ ] **search panel focus** — open search, keyboard focus is in search input immediately (`2315a39c`, `1f2681e3`).
 - [ ] **ghost clicks after hide** — hide overlay via `order_out`. clicking where overlay was should NOT trigger overlay buttons (`32e1a962`).
 - [ ] **pinch-to-zoom works** — pinch gesture on trackpad zooms timeline without needing to click first (`d99444a7`, `523a629e`).
@@ -54,7 +54,7 @@ commits that broke this area: `0752ea59`, `d89c5f14`, `4a64fd1a`, `fa591d6e`, `8
 - [ ] **space monitor doesn't race with show** — show overlay via shortcut. the `activateIgnoringOtherApps` call must not trigger space monitor's hide callback.
 - [ ] **Chat streaming UX** — Verify that chat streaming uses a state-aware grid dissolve loader for a smooth user experience.
 - [ ] **chat always-on-top toggle** — Toggle the "chat always-on-top" setting and verify that the chat window behaves as expected (e.g., stays on top of other applications when enabled). (`b6c363e5`)
-- [ ] **overlay hidden in OBS when screen recording toggle is off** — Verify that the overlay is NOT visible in OBS (or other screen capture tools) when the "show in screen recording" toggle is off. (`87d107a29`)
+- [ ] **overlay hidden in OBS when capture protection is enabled** — Verify that the overlay is NOT visible in OBS (or other screen capture tools) when "Hide from screen recordings" is enabled, and is visible when disabled. (`87d107a29`)
 - [ ] **resizable shortcut overlay** — Change shortcut overlay size (small/medium/large) in settings and verify it updates correctly on all spaces. (`1e1e17171`)
 - [ ] **overlay resize support for webview fallback** — Verify that the overlay can be resized even when using the webview fallback. (`d095f5994`)
 - [ ] **text selection not blocked by URL overlays** — On URL-heavy pages, verify that text selection is not blocked by clickable URL overlays. (`eb9e65b4`)

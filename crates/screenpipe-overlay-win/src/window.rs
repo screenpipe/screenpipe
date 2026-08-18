@@ -45,11 +45,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
     DispatchMessageW, GetCursorPos, GetMessageW, GetWindowLongPtrW, GetWindowRect, KillTimer,
-    LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassExW, SetTimer, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, TrackPopupMenu, TranslateMessage, UpdateLayeredWindow, CS_HREDRAW,
-    CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST, IDC_ARROW, MF_SEPARATOR, MF_STRING, MSG,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOWNOACTIVATE, TPM_RETURNCMD,
-    TPM_RIGHTALIGN, TPM_TOPALIGN, ULW_ALPHA, WINDOWPOS, WM_APP, WM_DESTROY, WM_DISPLAYCHANGE,
+    LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassExW, SetTimer,
+    SetWindowDisplayAffinity, SetWindowLongPtrW, SetWindowPos, ShowWindow, TrackPopupMenu,
+    TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST,
+    IDC_ARROW, MF_SEPARATOR, MF_STRING, MSG, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE,
+    SW_SHOWNOACTIVATE, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_TOPALIGN, ULW_ALPHA,
+    WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WINDOWPOS, WM_APP, WM_DESTROY, WM_DISPLAYCHANGE,
     WM_DPICHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP,
     WM_SETTINGCHANGE, WM_TIMER, WM_WINDOWPOSCHANGING, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
@@ -141,6 +142,7 @@ enum Cmd {
     DismissNotification,
     Show,
     Hide,
+    SetCaptureProtected(bool),
     Quit,
 }
 
@@ -205,6 +207,9 @@ impl Overlay {
     }
     pub fn hide(&self) {
         self.send(Cmd::Hide);
+    }
+    pub fn set_capture_protected(&self, protected: bool) {
+        self.send(Cmd::SetCaptureProtected(protected));
     }
     pub fn quit(&self) {
         self.send(Cmd::Quit);
@@ -278,6 +283,7 @@ struct Ctx {
     dragging: bool,
     drag_offset: (i32, i32),
     animating: bool,
+    capture_protected: bool,
     /// The dimmed sheet and its landing targets. Built the first time the pill
     /// is dragged and kept for the process' life, hidden between drags.
     stage: Option<Stage>,
@@ -355,6 +361,7 @@ fn run_message_loop(
             dragging: false,
             drag_offset: (0, 0),
             animating: false,
+            capture_protected: false,
             stage: None,
         });
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(ctx) as isize);
@@ -662,6 +669,12 @@ fn show_stage(pill: HWND, ctx: &mut Ctx) {
             );
             match hwnd {
                 Ok(hwnd) => {
+                    let affinity = if ctx.capture_protected {
+                        WDA_EXCLUDEFROMCAPTURE
+                    } else {
+                        WDA_NONE
+                    };
+                    let _ = SetWindowDisplayAffinity(hwnd, affinity);
                     ctx.stage = Some(Stage {
                         hwnd,
                         dib: None,
@@ -1120,6 +1133,20 @@ fn drain_commands(hwnd: HWND) -> (bool, bool) {
                 ctx.state.pressed_control = None;
                 ctx.state.notification = None;
                 rearm_dismiss = true;
+            }
+            Cmd::SetCaptureProtected(protected) => {
+                ctx.capture_protected = protected;
+                let affinity = if protected {
+                    WDA_EXCLUDEFROMCAPTURE
+                } else {
+                    WDA_NONE
+                };
+                unsafe {
+                    let _ = SetWindowDisplayAffinity(hwnd, affinity);
+                    if let Some(stage) = ctx.stage.as_ref() {
+                        let _ = SetWindowDisplayAffinity(stage.hwnd, affinity);
+                    }
+                }
             }
             Cmd::Quit => quit = true,
         }

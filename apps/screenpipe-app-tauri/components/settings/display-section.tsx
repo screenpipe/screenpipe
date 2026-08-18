@@ -36,7 +36,7 @@ export const searchIndex: SettingsField[] = [
   { label: "Shortcut Reminder", keywords: ["overlay", "pill", "pin", "drag", "position"] },
   { label: "Timeline / rewind", keywords: ["rewind", "timeline", "backend"] },
   { label: "Overlay Size" },
-  { label: "Show Overlay in Screen Recording", keywords: ["capture", "obs", "screen share"] },
+  { label: "Hide from screen recordings", keywords: ["capture", "obs", "screen share", "overlay"] },
   { label: "Sidebar translucency", keywords: ["vibrancy", "translucent"] },
   { label: "Meetings in Sidebar", keywords: ["meeting", "meetings", "sidebar", "toolbar", "nav", "navigation", "icon", "reorder", "customize"] },
 ];
@@ -327,31 +327,31 @@ export function DisplaySection() {
                 <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
                   <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                    Show Overlay in Screen Recording
-                    <HelpTooltip text="When enabled, the screenpipe overlay can appear in OBS or Screen Studio. Other screenpipe windows are always capturable." />
+                    Hide from screen recordings
+                    <HelpTooltip text="When enabled, only the screenpipe overlay is hidden from OBS, Screen Studio, screenshots, and screen sharing. Other screenpipe windows remain visible." />
                   </h3>
                   <p className="text-xs text-muted-foreground">
-                    Let OBS or Screen Studio capture the overlay
+                    Hide the overlay from OBS, Screen Studio, and screen sharing
                   </p>
                 </div>
               </div>
               <Switch
-                data-testid="show-overlay-in-screen-recording-toggle"
-                checked={settings?.showOverlayInScreenRecording ?? false}
-                onCheckedChange={async (checked) => {
+                data-testid="hide-overlay-in-screen-recording-toggle"
+                checked={settings?.hideOverlayInScreenRecording ?? false}
+                onCheckedChange={async (hidden) => {
                   try {
-                    await updateSettings({ showOverlayInScreenRecording: checked });
-                    const result = await commands.setAppScreenCaptureProtection(!checked);
+                    await updateSettings({ hideOverlayInScreenRecording: hidden });
+                    const result = await commands.setAppScreenCaptureProtection(hidden);
                     if (result.status === "error") {
                       throw new Error(result.error);
                     }
                     await commands.resetMainWindow().catch(() => {});
                     toast({
-                      title: checked ? "overlay visible to screen recorders" : "overlay hidden from screen recorders",
+                      title: hidden ? "overlay hidden from screen recordings" : "overlay visible in screen recordings",
                       description: "press the shortcut to open the overlay with the new setting.",
                     });
                   } catch (error) {
-                    await updateSettings({ showOverlayInScreenRecording: !checked });
+                    await updateSettings({ hideOverlayInScreenRecording: !hidden });
                     toast({
                       title: "could not update overlay capture visibility",
                       description: error instanceof Error ? error.message : String(error),

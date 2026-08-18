@@ -973,13 +973,6 @@ impl ServerCore {
             }
         };
 
-        // The owner-held task is aborted during ServerCore::shutdown before
-        // the shared database pools close. Ledger work only reads durable rows
-        // and submits coordinated writes, so capture hot paths stay untouched.
-        owned_tasks.push(
-            screenpipe_engine::activity_ledger::start_activity_ledger_worker(db.clone(), None),
-        );
-
         let vision_manager_handle = server.vision_manager.clone();
 
         // Start serving in background. The Router state owns a `db` clone +

@@ -116,6 +116,15 @@ pub async fn get_activity_ledger(
     if query.end_time - query.start_time > Duration::days(31) {
         return Err(bad_request("activity ledger ranges are limited to 31 days"));
     }
+    crate::activity_ledger::reconcile_range(&state.db, query.start_time, query.end_time)
+        .await
+        .map_err(|error| {
+            error!(%error, "activity ledger generation failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                JsonResponse(json!({"error": "activity ledger generation failed"})),
+            )
+        })?;
     let include_actions = query.depth == ActivityLedgerDepth::Action;
     let include_evidence = include_actions || query.include_artifacts;
     let records = state

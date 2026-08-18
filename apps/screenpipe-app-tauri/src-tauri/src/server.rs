@@ -584,7 +584,7 @@ async fn get_app_icon_handler(
                         HeaderValue::from_static("public, max-age=60"),
                     ),
                 ];
-                return (StatusCode::NOT_FOUND, headers, Bytes::new());
+                return (StatusCode::NO_CONTENT, headers, Bytes::new());
             }
         }
     }
@@ -618,7 +618,7 @@ async fn get_app_icon_handler(
                         HeaderValue::from_static("public, max-age=60"),
                     ),
                 ];
-                (StatusCode::NOT_FOUND, headers, Bytes::new())
+                (StatusCode::NO_CONTENT, headers, Bytes::new())
             }
         }
     }
@@ -632,7 +632,7 @@ async fn get_app_icon_handler(
                 HeaderValue::from_static("public, max-age=60"),
             ),
         ];
-        (StatusCode::NOT_FOUND, headers, Bytes::new())
+        (StatusCode::NO_CONTENT, headers, Bytes::new())
     }
 }
 

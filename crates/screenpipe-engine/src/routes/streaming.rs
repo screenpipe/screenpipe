@@ -47,6 +47,11 @@ pub struct StreamFramesRequest {
 const MAX_STREAM_FRAME_LIMIT: usize = 10_000;
 const DEFAULT_STREAM_FRAME_LIMIT: usize = MAX_STREAM_FRAME_LIMIT;
 const STREAM_BATCH_CAPACITY: usize = 100;
+/// Safari/Chromium accept very large WebSocket messages, but native clients
+/// commonly enforce a much smaller receive ceiling. Production transcript and
+/// screen-text payloads can make 100 otherwise-small timeline rows exceed that
+/// ceiling, so the wire batch must be bounded by encoded bytes as well as rows.
+const MAX_STREAM_BATCH_BYTES: usize = 8 * 1024 * 1024;
 const STREAM_BATCH_FLUSH_DELAY: Duration = Duration::from_millis(100);
 
 fn stream_frame_limit(requested: Option<usize>) -> usize {
@@ -828,14 +833,52 @@ async fn send_batch(
     sender: &mut futures::stream::SplitSink<WebSocket, Message>,
     buffer: &mut Vec<StreamTimeSeriesResponse>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    for json in encode_stream_batches(buffer, MAX_STREAM_BATCH_BYTES)? {
+        sender.send(Message::Text(json)).await?;
+    }
+    Ok(())
+}
+
+/// Serialize buffered rows into independently decodable JSON arrays while
+/// keeping each WebSocket message below `max_bytes` whenever one row itself
+/// fits. The caller owns retrying the request if the socket closes mid-send.
+fn encode_stream_batches(
+    buffer: &mut Vec<StreamTimeSeriesResponse>,
+    max_bytes: usize,
+) -> Result<Vec<String>, serde_json::Error> {
     if buffer.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
-    let json = serde_json::to_string(&buffer)?;
-    sender.send(Message::Text(json)).await?;
-    buffer.clear();
-    Ok(())
+    let rows = std::mem::take(buffer);
+    let mut messages = Vec::new();
+    let mut message = String::from("[");
+    let mut row_count = 0usize;
+
+    for row in rows {
+        let encoded = serde_json::to_string(&row)?;
+        let separator_bytes = usize::from(row_count > 0);
+        let next_size = message.len() + separator_bytes + encoded.len() + 1;
+        if row_count > 0 && next_size > max_bytes {
+            message.push(']');
+            messages.push(message);
+            message = String::from("[");
+            row_count = 0;
+        }
+
+        if row_count > 0 {
+            message.push(',');
+        }
+        message.push_str(&encoded);
+        row_count += 1;
+    }
+
+    if row_count > 0 {
+        message.push(']');
+        messages.push(message);
+    }
+
+    Ok(messages)
 }
 
 #[cfg(test)]
@@ -886,6 +929,54 @@ mod tests {
             timestamp: chrono::Utc::now(),
             devices: Vec::new(),
         }
+    }
+
+    #[test]
+    fn websocket_batches_are_split_by_encoded_size() {
+        let mut responses = Vec::new();
+        for frame_id in 0..24 {
+            let mut response = StreamTimeSeriesResponse::from(create_time_series_frame(
+                create_test_frame_data(1, 0),
+            ));
+            response.devices[0].frame_id = frame_id;
+            // `text` and its legacy `ocr_text` alias are both sent today. This
+            // deliberately makes the original 100-row batch larger than a
+            // native WebSocket receive ceiling without needing private data.
+            let payload = "x".repeat(512 * 1024);
+            response.devices[0].metadata.text = payload.clone();
+            response.devices[0].metadata.ocr_text = payload;
+            responses.push(response);
+        }
+
+        let messages = encode_stream_batches(&mut responses, MAX_STREAM_BATCH_BYTES).unwrap();
+        assert!(
+            responses.is_empty(),
+            "encoded rows must drain the pending buffer"
+        );
+        assert!(
+            messages.len() > 1,
+            "oversized production batch must be split"
+        );
+        assert!(
+            messages
+                .iter()
+                .all(|message| message.len() <= MAX_STREAM_BATCH_BYTES),
+            "every multi-row WebSocket message must fit the native receive ceiling"
+        );
+        let decoded_rows: usize = messages
+            .iter()
+            .map(|message| {
+                serde_json::from_str::<serde_json::Value>(message)
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .len()
+            })
+            .sum();
+        assert_eq!(
+            decoded_rows, 24,
+            "splitting must not drop or duplicate rows"
+        );
     }
 
     /// TEST: Demonstrate and verify the audio duplication bug is fixed

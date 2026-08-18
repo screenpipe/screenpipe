@@ -2167,9 +2167,9 @@ async scanDeviceSkills() : Promise<Result<DeviceSkill[], string>> {
 /**
  * Navigate from Search to the timeline that opened it.
  *
- * Native Swift timelines are addressed by their host-window label. Searches
- * opened elsewhere retain the legacy React event so non-macOS and older
- * surfaces continue to work.
+ * Native Swift timelines are addressed by their host-window label. Global
+ * Search defaults to the overlay's `main` label on macOS; non-macOS surfaces
+ * retain the legacy React event.
  */
 async searchNavigateToTimeline(timestamp: string, frameId: number | null, searchTerms: string[] | null, searchResultsJson: string | null, searchQuery: string | null, timelineOrigin: string | null) : Promise<Result<null, string>> {
     try {
@@ -3850,13 +3850,19 @@ remoteLogCollectionUserId?: string | null;
  */
 overlayMode?: string;
 /**
- * Allow screen recording apps to capture the overlay.
- * Disabled by default so the overlay doesn't appear in screenpipe's own recordings.
+ * Legacy inverse overlay preference, retained only for settings-file compatibility.
+ * New capture behavior is controlled by `hide_overlay_in_screen_recording` below.
  */
 showOverlayInScreenRecording?: boolean;
 /**
- * Hide screenpipe windows from screenshots and screen-sharing viewers
- * while keeping them visible and interactive on the user's own display.
+ * Hide only overlay windows from screen recordings and screen sharing.
+ * New and upgraded installs default to visible until the user opts out.
+ */
+hideOverlayInScreenRecording?: boolean;
+/**
+ * Legacy global capture-protection preference. Retained for settings-file
+ * compatibility; capture protection is now controlled only by the overlay
+ * preference above.
  */
 hideAppInScreenShare?: boolean;
 /**

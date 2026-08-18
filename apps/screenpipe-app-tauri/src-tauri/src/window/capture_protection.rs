@@ -38,7 +38,7 @@ pub(crate) fn should_protect_window(
     if e2e_mode {
         return false;
     }
-    is_overlay_window(label) && !settings.show_overlay_in_screen_recording
+    is_overlay_window(label) && settings.hide_overlay_in_screen_recording
 }
 
 pub(crate) fn overlay_is_capturable(settings: &SettingsStore) -> bool {
@@ -112,7 +112,11 @@ pub fn set_app_screen_capture_protection(
         .ok()
         .flatten()
         .unwrap_or_default();
-    settings.show_overlay_in_screen_recording = !hidden;
+    settings.hide_overlay_in_screen_recording = hidden;
+
+    crate::native_shortcut_reminder::set_capture_protected(
+        hidden && !crate::config::is_e2e_mode(),
+    );
 
     let mut errors = Vec::new();
     for window in app_handle.webview_windows().values() {
@@ -132,11 +136,11 @@ pub fn set_app_screen_capture_protection(
 pub fn get_app_screen_capture_protection(
     app_handle: AppHandle,
 ) -> ScreenCaptureProtectionStatus {
-    let requested_hidden = !SettingsStore::get(&app_handle)
+    let requested_hidden = SettingsStore::get(&app_handle)
         .ok()
         .flatten()
         .unwrap_or_default()
-        .show_overlay_in_screen_recording;
+        .hide_overlay_in_screen_recording;
     status(&app_handle, requested_hidden)
 }
 
@@ -151,14 +155,15 @@ mod tests {
         assert!(settings.hide_app_in_screen_share);
         assert!(!should_protect_window(&settings, "home", false));
         assert!(!should_protect_window(&settings, "settings", false));
-        assert!(should_protect_window(&settings, "main", false));
-        assert!(should_protect_window(&settings, "chat", false));
-        assert!(should_protect_window(&settings, "shortcut-reminder", false));
+        assert!(!should_protect_window(&settings, "main", false));
+        assert!(!should_protect_window(&settings, "chat", false));
+        assert!(!should_protect_window(&settings, "shortcut-reminder", false));
         assert!(!should_protect_window(&settings, "notification-panel", false));
 
         let mut settings = settings;
-        settings.show_overlay_in_screen_recording = true;
-        assert!(!should_protect_window(&settings, "main-window", false));
+        settings.hide_overlay_in_screen_recording = true;
+        assert!(should_protect_window(&settings, "main-window", false));
+        assert!(should_protect_window(&settings, "chat", false));
     }
 
     #[test]

@@ -35,6 +35,7 @@ use crate::native_shortcut_reminder::MeetingOverlayPanelState;
 static NATIVE: OnceLock<Native> = OnceLock::new();
 static ACTION_CB: Mutex<Option<extern "C" fn(*const c_char)>> = Mutex::new(None);
 static VISIBLE: AtomicBool = AtomicBool::new(false);
+static CAPTURE_PROTECTED: AtomicBool = AtomicBool::new(false);
 static METRICS_FEED_STARTED: AtomicBool = AtomicBool::new(false);
 static MEETING_FEED_STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -100,6 +101,8 @@ pub fn show(json: Option<&str>) -> bool {
         warn!("native overlay unavailable, falling back to webview");
         return false;
     };
+    n.overlay
+        .set_capture_protected(CAPTURE_PROTECTED.load(Ordering::SeqCst));
 
     let payload: serde_json::Value = json
         .and_then(|j| serde_json::from_str(j).ok())
@@ -155,6 +158,13 @@ pub fn hide() -> bool {
     n.overlay.hide();
     VISIBLE.store(false, Ordering::SeqCst);
     true
+}
+
+pub fn set_capture_protected(protected: bool) {
+    CAPTURE_PROTECTED.store(protected, Ordering::SeqCst);
+    if let Some(n) = native() {
+        n.overlay.set_capture_protected(protected);
+    }
 }
 
 /// Render a notification as an extension of the pill, or refuse it so the caller

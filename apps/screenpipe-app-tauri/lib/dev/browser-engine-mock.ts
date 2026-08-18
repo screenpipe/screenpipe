@@ -252,6 +252,8 @@ function mockActivitySummary() {
   const { start, end } = mockMeetingWindow();
   const span = end.getTime() - start.getTime();
   return {
+    data_status: "ok",
+    total_active_minutes: 20,
     apps: [
       {
         name: "Google Chrome",

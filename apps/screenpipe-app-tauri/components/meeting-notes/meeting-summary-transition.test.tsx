@@ -13,37 +13,60 @@ afterEach(cleanup);
 describe("MeetingSummaryTransition", () => {
   it("keeps the transcript reachable while the last words are finalized", () => {
     const onTranscriptToggle = vi.fn();
+    const onResume = vi.fn();
     render(
       <MeetingSummaryTransition
         phase="finalizing"
         transcriptOpen={false}
         onTranscriptToggle={onTranscriptToggle}
+        onResume={onResume}
       />,
     );
 
-    expect(screen.getByRole("status")).toHaveAccessibleName(
-      "finalizing transcript",
-    );
+    expect(screen.getByRole("status")).toHaveAccessibleName("meeting saved");
+    expect(
+      screen.getByText(
+        "Your notes are saved. Finishing the transcript before the summary starts.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("meeting-summary-draft-block"),
+    ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "show transcript" }));
     expect(onTranscriptToggle).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "resume recording" }));
+    expect(onResume).toHaveBeenCalledOnce();
   });
 
-  it("draws the summary in blocks without replacing transcript access", () => {
+  it("points to the real summary surface without drawing fake content", () => {
+    const onOpenSummary = vi.fn();
     render(
       <MeetingSummaryTransition
         phase="writing"
         transcriptOpen
         onTranscriptToggle={vi.fn()}
+        onOpenSummary={onOpenSummary}
       />,
     );
 
     expect(screen.getByRole("status")).toHaveAccessibleName("writing summary");
-    expect(screen.getAllByTestId("meeting-summary-draft-block")).toHaveLength(
-      3,
-    );
+    expect(
+      screen.getByText(
+        "Your notes and transcript are safe. The draft appears in Summary as it is written.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.queryByTestId("meeting-summary-draft-block"),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "view summary" }));
+    expect(onOpenSummary).toHaveBeenCalledOnce();
     expect(
       screen.getByRole("button", { name: "hide transcript" }),
     ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.queryByRole("button", { name: "resume recording" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveClass("mb-7", "border-b", "pb-5");
   });
 
   it("leaves no placeholder behind outside an active transition", () => {

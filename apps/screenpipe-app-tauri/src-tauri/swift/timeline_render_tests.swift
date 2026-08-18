@@ -145,6 +145,14 @@ private func stats(_ rep: NSBitmapImageRep) -> RenderStats {
     )
 }
 
+private func firstSubview<T: NSView>(of type: T.Type, in root: NSView) -> T? {
+    if let match = root as? T { return match }
+    for child in root.subviews {
+        if let match = firstSubview(of: type, in: child) { return match }
+    }
+    return nil
+}
+
 @MainActor
 private func write(_ rep: NSBitmapImageRep, to directory: String, name: String) {
     guard let data = rep.representation(using: .png, properties: [:]) else { return }
@@ -248,6 +256,42 @@ private func testFrameImageFitsEmbeddedViewport() {
     expect((right?.greenComponent ?? 0) > 0.7,
            "the embedded viewport must keep the capture's right edge visible")
 
+    let highlight = TimelineSearchTextPosition(
+        text: "invoice",
+        confidence: 0.99,
+        bounds: TimelineSearchTextBounds(left: 0.45, top: 0.45, width: 0.1, height: 0.1)
+    )
+    let highlightedHost = NSHostingView(
+        rootView: TimelineFrameImageView(image: image, searchHighlights: [highlight])
+    )
+    highlightedHost.frame = CGRect(x: 0, y: 0, width: 320, height: 240)
+    highlightedHost.layoutSubtreeIfNeeded()
+    RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    highlightedHost.layoutSubtreeIfNeeded()
+    if let liveText = firstSubview(of: TimelineLiveTextContainer.self, in: highlightedHost) {
+        expectEqual(liveText.displayedSearchHighlights, [highlight],
+                    "the Live Text surface receives the active highlight")
+        expectEqual(liveText.searchHighlightView.positions, [highlight],
+                    "the topmost AppKit highlight receives the verified geometry")
+        expect(liveText.searchHighlightView.superview === liveText,
+               "the search highlight is mounted in the Live Text hierarchy")
+        liveText.searchHighlightView.needsDisplay = true
+        liveText.searchHighlightView.displayIfNeeded()
+        if let markRep = liveText.searchHighlightView.bitmapImageRepForCachingDisplay(
+            in: liveText.searchHighlightView.bounds
+        ) {
+            liveText.searchHighlightView.cacheDisplay(
+                in: liveText.searchHighlightView.bounds, to: markRep
+            )
+            let mark = markRep.colorAt(x: markRep.pixelsWide / 2, y: markRep.pixelsHigh / 2)
+            expect((mark?.redComponent ?? 0) > 0.15 && (mark?.greenComponent ?? 0) > 0.15,
+                   "the topmost AppKit search overlay paints yellow pixels")
+        } else {
+            failures.append("the AppKit search overlay could not be inspected")
+        }
+    } else {
+        failures.append("the highlighted Live Text surface did not mount")
+    }
     let container = TimelineLiveTextContainer(frame: CGRect(x: 0, y: 0, width: 866, height: 850))
     container.imageView.image = image
     container.layoutSubtreeIfNeeded()
@@ -541,11 +585,17 @@ private func testDateNavigation() {
     let model = populatedModel()
     let today = Calendar.current.startOfDay(for: Date())
     expect(model.isAtToday, "starts on today")
+    model.requestDay(today)
+    expect(model.hasRequestedDayForTesting(today), "today starts in the loaded-day window")
 
     model.jumpDay(-1)
     expect(!model.isAtToday, "previous day leaves today")
     expect(model.frames.isEmpty, "changing date clears the previous day's frames")
     expect(model.isNavigating, "day navigation stays guarded while its batch is pending")
+    expect(
+        !model.hasRequestedDayForTesting(today),
+        "explicit previous-day navigation forgets today's stale request marker"
+    )
 
     // A slow or empty older day has no batch to acknowledge the request. The
     // forward arrow must still return to today instead of staying disabled for
@@ -561,13 +611,93 @@ private func testDateNavigation() {
     expect(!model.isNavigating, "the requested day batch acknowledges navigation")
 
     model.jumpDay(-1)
-    model.injectForTesting(frames: fixtureFrames(count: 4, base: model.currentDate))
+    model.injectForTesting(frames: fixtureFrames(count: 1_000, base: model.currentDate))
+    model.loadAdjacentDayIfNeeded()
+    expect(
+        model.hasRequestedDayForTesting(today),
+        "scrolling at yesterday's newest edge requests today again"
+    )
     model.jumpDay(1)
     expect(model.isAtToday, "next day also works after the previous day loads")
 
     model.jumpToNow()
     expect(Calendar.current.isDate(model.currentDate, inSameDayAs: today), "jump to now returns to today")
     expectEqual(model.currentIndex, 0, "jump to now returns to the live edge")
+}
+
+@MainActor
+private func testAdjacentDayLoadPreservesPlayhead() {
+    let calendar = Calendar.current
+    let today = calendar.startOfDay(for: Date())
+    let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
+    let yesterdayEnd = today.addingTimeInterval(-1)
+    let model = offlineModel()
+    model.setHealthForTesting(HealthStatus(status: "healthy", frameStatus: "ok"))
+    model.changeDate(to: yesterday)
+    model.injectForTesting(frames: fixtureFrames(count: 1_000, base: yesterdayEnd))
+
+    // Explicit day navigation starts near midnight. Move to yesterday's newest
+    // edge as a user scrolling across the day boundary would.
+    model.setIndex(0)
+    let heldFrameId = model.currentFrame?.devices.first?.frameId
+    let heldTimestamp = model.currentTimestamp
+    expect(model.hasRequestedDayForTesting(today), "today is requested at yesterday's newest edge")
+
+    // Simulate the first batch from today arriving hours after midnight. The
+    // old live-edge rule jumped straight to this batch's newest frame.
+    var todayFrames = fixtureFrames(count: 100, base: today.addingTimeInterval(4 * 3_600))
+    for index in todayFrames.indices {
+        todayFrames[index].devices[0].frameId = "today-\(index)"
+    }
+    model.injectForTesting(frames: todayFrames)
+    expectEqual(
+        model.currentFrame?.devices.first?.frameId,
+        heldFrameId,
+        "adjacent-day merge keeps the frame under the playhead"
+    )
+    expectEqual(model.currentTimestamp, heldTimestamp, "adjacent-day merge keeps its timestamp")
+}
+
+@MainActor
+private func testExplicitDayNavigationStartsAtDayBoundary() {
+    let calendar = Calendar.current
+    let today = calendar.startOfDay(for: Date())
+    let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
+    let model = populatedModel()
+    model.changeDate(to: yesterday)
+
+    // A day's batch is newest-first in model storage. Explicit date controls
+    // should still select the frame nearest midnight, as the web Timeline does.
+    let frames = fixtureFrames(count: 480, base: yesterday.addingTimeInterval(4 * 3_600))
+    let expected = frames.last?.timestamp
+    model.injectForTesting(frames: frames)
+    expectEqual(
+        model.currentFrame?.timestamp,
+        expected,
+        "previous/next day navigation lands near the target day's beginning"
+    )
+}
+
+@MainActor
+private func testLaneColorIsStableAcrossViewport() {
+    var frames = fixtureFrames(count: 1_000)
+    for index in frames.indices {
+        frames[index].devices[0].metadata.appName = "Google Chrome"
+        frames[index].devices[0].metadata.browserUrl = nil
+    }
+    frames[0].devices[0].metadata.browserUrl = "https://example.com/work"
+
+    let model = offlineModel()
+    model.setHealthForTesting(HealthStatus(status: "healthy", frameStatus: "ok"))
+    model.injectForTesting(frames: frames)
+    let liveColor = model.appGroups.first.map(TimelineGrouping.barColor)
+    let liveDomain = model.appGroups.first?.topDomains.first
+
+    model.setIndex(500)
+    let historyColor = model.appGroups.first.map(TimelineGrouping.barColor)
+    let historyDomain = model.appGroups.first?.topDomains.first
+    expectEqual(historyDomain, liveDomain, "the browser lane keeps its full-run domain while scrolling")
+    expectEqual(historyColor, liveColor, "the same browser lane keeps the same color while scrolling")
 }
 
 @MainActor
@@ -630,7 +760,14 @@ private func testPlayback() {
 private func testSearchReview(shots: String) {
     let model = populatedModel()
     let ids = (0..<5).map { String(500_000 + $0 * 7) }
-    model.enterSearchReview(query: "invoice", frameIds: ids, terms: ["invoice"])
+    let results = ids.enumerated().map { index, frameId in
+        TimelineSearchResult(
+            frameId: frameId,
+            timestamp: TimelineFrames.date(of: model.frames[index * 7]) ?? Date(),
+            textPositions: []
+        )
+    }
+    model.enterSearchReview(query: "invoice", results: results, terms: ["invoice"])
     expect(model.searchReview != nil, "search review is entered")
     expectEqual(model.searchReview?.count, 5, "review holds every result")
     expectEqual(model.currentIndex, 0, "review starts on the newest match")
@@ -905,6 +1042,9 @@ struct TimelineRenderTests {
                 ("selection and filters", testSelectionAndFilters),
                 ("live edge", testLiveEdgeFollowing),
                 ("date navigation", testDateNavigation),
+                ("adjacent day anchor", testAdjacentDayLoadPreservesPlayhead),
+                ("explicit day boundary", testExplicitDayNavigationStartsAtDayBoundary),
+                ("stable lane color", testLaneColorIsStableAcrossViewport),
                 ("connection failure presentation", testConnectionFailurePresentation),
                 ("playback", testPlayback),
                 ("search review", { testSearchReview(shots: shots) }),

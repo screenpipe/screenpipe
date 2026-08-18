@@ -520,11 +520,19 @@ pub(crate) async fn get_meeting_summary_status_handler(
         (None, end) => end,
     };
 
-    let found = latest_summary_execution(&state.db, &pipe, id, latest_input_at).await;
-    let claimed = if found.is_some() {
-        false
+    // A reopened row is a new live generation. Do not attach an execution
+    // from the prior stop to an idle response: clients should receive one
+    // coherent state, and the stale run remains queryable in Pipe history.
+    let (found, claimed) = if meeting_end.is_some() {
+        let found = latest_summary_execution(&state.db, &pipe, id, latest_input_at).await;
+        let claimed = if found.is_some() {
+            false
+        } else {
+            summary_run_claimed(&state.db, &pipe, id, latest_input_at).await
+        };
+        (found, claimed)
     } else {
-        summary_run_claimed(&state.db, &pipe, id, latest_input_at).await
+        (None, false)
     };
 
     let execution = found.as_ref().map(|(snapshot, _, _)| snapshot);

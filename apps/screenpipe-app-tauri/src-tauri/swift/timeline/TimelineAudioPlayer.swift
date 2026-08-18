@@ -27,6 +27,12 @@ struct AudioSegment: Equatable {
 
     var end: Date { recordingStart.addingTimeInterval(duration) }
 
+    static func identity(audio: AudioData) -> String? {
+        let path = audio.audioFilePath.trimmingCharacters(in: .whitespaces)
+        guard !path.isEmpty else { return nil }
+        return "\(path)#\(audio.audioChunkId)"
+    }
+
     /// The filename timestamp is authoritative. Older/imported chunks without
     /// one fall back to the frame timestamp minus the transcription offset.
     init?(audio: AudioData, frameDate: Date) {
@@ -39,6 +45,45 @@ struct AudioSegment: Equatable {
         self.recordingStart = TimelineAudio.recordingStart(fromFilename: path)
             ?? frameDate.addingTimeInterval(-max(audio.startOffset, 0))
         self.duration = max(audio.durationSecs, 0)
+    }
+}
+
+struct TimelineNearbyAudioSnapshot {
+    var segments: [AudioSegment] = []
+    var devices: [String] = []
+    var inputByDevice: [String: Bool] = [:]
+
+    var hasAudio: Bool { !segments.isEmpty }
+
+    static func build(frames: [StreamTimeSeriesResponse], currentIndex: Int) -> Self {
+        guard frames.indices.contains(currentIndex) else { return Self() }
+        let lower = max(0, currentIndex - TimelineAudio.nearbyIndexRadius)
+        let upper = min(frames.count - 1, currentIndex + TimelineAudio.nearbyIndexRadius)
+        guard lower <= upper else { return Self() }
+
+        var seenSegments = Set<String>()
+        var seenDevices = Set<String>()
+        var snapshot = Self()
+        for index in lower...upper {
+            var frameDate: Date?
+            for audio in TimelineFrames.allAudio(frames[index]) {
+                // Stream rows commonly repeat the same audio chunk. Deduplicate
+                // before parsing its filename or constructing a segment.
+                guard let identity = AudioSegment.identity(audio: audio),
+                      !seenSegments.contains(identity) else { continue }
+                if frameDate == nil { frameDate = TimelineFrames.date(of: frames[index]) }
+                guard let date = frameDate,
+                      let segment = AudioSegment(audio: audio, frameDate: date) else { continue }
+                seenSegments.insert(identity)
+                snapshot.segments.append(segment)
+                if !segment.deviceName.isEmpty,
+                   seenDevices.insert(segment.deviceName).inserted {
+                    snapshot.devices.append(segment.deviceName)
+                    snapshot.inputByDevice[segment.deviceName] = segment.isInput
+                }
+            }
+        }
+        return snapshot
     }
 }
 
@@ -166,40 +211,5 @@ final class TimelineAudioPlayer {
             players[key]?.stop()
             players[key] = nil
         }
-    }
-}
-
-extension TimelineViewModel {
-    /// Every audio file near the playhead, positioned on the wall clock.
-    var nearbyAudioSegments: [AudioSegment] {
-        guard frames.indices.contains(currentIndex) else { return [] }
-        let lower = max(0, currentIndex - TimelineAudio.nearbyIndexRadius)
-        let upper = min(frames.count - 1, currentIndex + TimelineAudio.nearbyIndexRadius)
-        guard lower <= upper else { return [] }
-
-        var seen = Set<String>()
-        var out: [AudioSegment] = []
-        for i in lower...upper {
-            guard let date = TimelineFrames.date(of: frames[i]) else { continue }
-            for audio in TimelineFrames.allAudio(frames[i]) {
-                if let segment = AudioSegment(audio: audio, frameDate: date) {
-                    let key = "\(segment.path)#\(segment.chunkId)"
-                    guard seen.insert(key).inserted else { continue }
-                    out.append(segment)
-                }
-            }
-        }
-        return out
-    }
-
-    /// Distinct capture devices with audio near the playhead, which is what the
-    /// per-device mute buttons are built from.
-    var nearbyAudioDevices: [String] {
-        var seen = Set<String>()
-        var out: [String] = []
-        for segment in nearbyAudioSegments where !segment.deviceName.isEmpty {
-            if seen.insert(segment.deviceName).inserted { out.append(segment.deviceName) }
-        }
-        return out
     }
 }

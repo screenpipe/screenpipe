@@ -80,7 +80,9 @@ export function meetingSummaryLifecycleFromStatus(
 
   switch (status.state) {
     case "running":
-      return execution ? { kind: "running", execution } : { kind: "finalizing" };
+      return execution
+        ? { kind: "running", execution }
+        : { kind: "finalizing" };
     case "ready":
       return execution ? { kind: "completed", execution } : { kind: "idle" };
     case "failed":
@@ -103,6 +105,54 @@ export function summaryLifecycleIsWorking(
     lifecycle.kind === "queued" ||
     lifecycle.kind === "running"
   );
+}
+
+export interface MeetingSummaryPresentation {
+  lifecycle: MeetingSummaryLifecycle;
+  working: boolean;
+  transitionPhase: "finalizing" | "writing" | null;
+}
+
+/**
+ * Resolve the one summary state the meeting workspace is allowed to render.
+ *
+ * A stop followed by an immediate resume can leave the previous end
+ * generation pending in the scheduler while the same meeting row is live
+ * again. Capture owns the surface in that state: showing the stale summary
+ * transition at the same time made the note say both "finalizing" and
+ * "transcribing", and also made the editor read-only during the call.
+ */
+export function meetingSummaryPresentation({
+  isLive,
+  resuming,
+  meetingEnded,
+  summarizing,
+  lifecycle,
+}: {
+  isLive: boolean;
+  resuming: boolean;
+  meetingEnded: boolean;
+  summarizing: boolean;
+  lifecycle: MeetingSummaryLifecycle;
+}): MeetingSummaryPresentation {
+  if (isLive || resuming || !meetingEnded) {
+    return {
+      lifecycle: { kind: "idle" },
+      working: false,
+      transitionPhase: null,
+    };
+  }
+
+  const working = summarizing || summaryLifecycleIsWorking(lifecycle);
+  if (!working) {
+    return { lifecycle, working: false, transitionPhase: null };
+  }
+
+  return {
+    lifecycle,
+    working: true,
+    transitionPhase: lifecycle.kind === "finalizing" ? "finalizing" : "writing",
+  };
 }
 
 export function latestSummaryInputAt(
@@ -144,9 +194,7 @@ export function meetingSummaryFailure(
   const errorMessage = execution.error_message ?? "";
   const kind =
     RUST_ERROR_TYPE_MAP[(execution.error_type ?? "").trim().toLowerCase()] ??
-    parsePipeError(
-      `${execution.error_type ?? ""} ${errorMessage}`.trim(),
-    ).type;
+    parsePipeError(`${execution.error_type ?? ""} ${errorMessage}`.trim()).type;
   const upgrade = parseQuotaUpgradeAction(errorMessage);
 
   switch (kind) {

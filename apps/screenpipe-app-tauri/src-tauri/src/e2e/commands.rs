@@ -262,6 +262,14 @@ fn native_timeline_search_state(window_label: String) -> Option<serde_json::Valu
     crate::native_timeline::search_state(&window_label)
 }
 
+/// E2E-only control for the production native search-review model. SwiftUI's
+/// AppKit child is outside WebDriver's DOM, so this invokes the same model
+/// methods wired to the pill arrows, strip and Escape button.
+#[command]
+fn native_timeline_search_control(window_label: String, action: String) -> bool {
+    crate::native_timeline::search_control(&window_label, &action)
+}
+
 /// E2E helper: enter or leave the native chip. AppKit does not deliver a
 /// synthetic hover to a nonactivating panel, so this calls the same controller
 /// entry point the `.activeAlways` tracking area uses.
@@ -720,6 +728,7 @@ pub(super) fn plugin() -> TauriPlugin<Wry> {
             active_meeting_id,
             native_meeting_overlay_state,
             native_timeline_search_state,
+            native_timeline_search_control,
             native_shortcut_set_hovering,
             native_toggle_meeting_pin,
             emit_meeting_overlay_transcript,

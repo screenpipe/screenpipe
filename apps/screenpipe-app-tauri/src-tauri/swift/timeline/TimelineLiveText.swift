@@ -27,8 +27,37 @@ import VisionKit
 #endif
 
 @MainActor
+final class TimelineSearchHighlightView: NSView {
+    var imageSize: CGSize = .zero { didSet { needsDisplay = true } }
+    var positions: [TimelineSearchTextPosition] = [] { didSet { needsDisplay = true } }
+
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        for position in positions {
+            let rect = TimelineSearchHighlightLayout.rect(
+                for: position.bounds, imageSize: imageSize, viewport: bounds
+            )
+            guard !rect.isEmpty else { continue }
+            let expanded = rect.insetBy(dx: -1.5, dy: -1)
+            NSColor.systemYellow.withAlphaComponent(0.34).setFill()
+            NSBezierPath(roundedRect: expanded, xRadius: 2, yRadius: 2).fill()
+            NSColor.systemYellow.withAlphaComponent(0.95).setStroke()
+            let border = NSBezierPath(roundedRect: expanded, xRadius: 2, yRadius: 2)
+            border.lineWidth = 1.5
+            border.stroke()
+        }
+    }
+}
+
+@MainActor
 final class TimelineLiveTextContainer: NSView {
     let imageView = NSImageView()
+    let searchHighlightView = TimelineSearchHighlightView()
+    var sourceImage: NSImage?
+    var displayedSearchHighlights: [TimelineSearchTextPosition] = []
 
     #if canImport(VisionKit)
     var analysisOverlay: Any?
@@ -47,6 +76,11 @@ final class TimelineLiveTextContainer: NSView {
 
     required init?(coder: NSCoder) { nil }
 
+    func installSearchHighlightView(above sibling: NSView?) {
+        searchHighlightView.removeFromSuperview()
+        addSubview(searchHighlightView, positioned: .above, relativeTo: sibling ?? imageView)
+    }
+
     static func aspectFitRect(imageSize: CGSize, inside bounds: CGRect) -> CGRect {
         guard imageSize.width > 0, imageSize.height > 0,
               bounds.width > 0, bounds.height > 0 else { return .zero }
@@ -64,6 +98,8 @@ final class TimelineLiveTextContainer: NSView {
         super.layout()
         let fitted = Self.aspectFitRect(imageSize: imageView.image?.size ?? .zero, inside: bounds)
         imageView.frame = fitted
+        searchHighlightView.frame = bounds
+        searchHighlightView.imageSize = sourceImage?.size ?? imageView.image?.size ?? .zero
         #if canImport(VisionKit)
         if #available(macOS 13.0, *),
            let overlay = analysisOverlay as? ImageAnalysisOverlayView {
@@ -79,10 +115,14 @@ final class TimelineLiveTextContainer: NSView {
 /// frame still renders — just without selection.
 struct TimelineLiveTextImage: NSViewRepresentable {
     let image: NSImage
+    var searchHighlights: [TimelineSearchTextPosition] = []
 
     func makeNSView(context: Context) -> TimelineLiveTextContainer {
         let container = TimelineLiveTextContainer()
+        container.sourceImage = image
+        container.displayedSearchHighlights = searchHighlights
         container.imageView.image = image
+        container.searchHighlightView.positions = searchHighlights
 
         #if canImport(VisionKit)
         if #available(macOS 13.0, *) {
@@ -95,8 +135,13 @@ struct TimelineLiveTextImage: NSViewRepresentable {
             container.addSubview(overlay)
             container.analysisOverlay = overlay
             context.coordinator.overlay = overlay
+            container.installSearchHighlightView(above: overlay)
         }
         #endif
+
+        if container.searchHighlightView.superview == nil {
+            container.installSearchHighlightView(above: nil)
+        }
 
         container.needsLayout = true
         container.layoutSubtreeIfNeeded()
@@ -105,11 +150,19 @@ struct TimelineLiveTextImage: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: TimelineLiveTextContainer, context: Context) {
-        guard nsView.imageView.image !== image else { return }
-        nsView.imageView.image = image
-        nsView.needsLayout = true
-        nsView.layoutSubtreeIfNeeded()
-        context.coordinator.analyze(image)
+        let sourceChanged = nsView.sourceImage !== image
+        let highlightsChanged = nsView.displayedSearchHighlights != searchHighlights
+        nsView.searchHighlightView.positions = searchHighlights
+        if sourceChanged || highlightsChanged {
+            nsView.sourceImage = image
+            nsView.displayedSearchHighlights = searchHighlights
+            nsView.imageView.image = image
+            nsView.needsLayout = true
+            nsView.layoutSubtreeIfNeeded()
+        }
+        if sourceChanged {
+            context.coordinator.analyze(image)
+        }
     }
 
     /// The viewport owns sizing. Falling back to `NSImageView.fittingSize`

@@ -752,6 +752,121 @@ private func testNavigationTargetsAttachedController() {
     expectEqual(model.currentIndex, 12, "embedded timeline deep link index")
 
     TimelineWindowController.releaseController(forHost: hostKey)
+    expect(!model.isRunningForTesting,
+           "releasing an attached Timeline must stop its socket and timers")
+    host.close()
+    pump(0.2)
+}
+
+@MainActor
+private func testIdleAndHiddenLifecycle(model: TimelineViewModel) {
+    expect(model.isRunningForTesting, "a visible Timeline must be running")
+    expect(!model.hasActiveZoomTimerForTesting,
+           "an idle Timeline must not keep a 60 Hz zoom timer alive")
+
+    model.zoom.zoomIn()
+    expect(model.hasActiveZoomTimerForTesting,
+           "changing the zoom target starts display-cadence animation")
+    pump(1.5)
+    expect(!model.hasActiveZoomTimerForTesting,
+           "the zoom timer stops after reaching its target")
+
+    TimelineWindowController.shared.hide()
+    pump(0.1)
+    expect(!model.isRunningForTesting,
+           "hiding the Timeline must stop its socket, polling and timers")
+
+    _ = TimelineWindowController.shared.show(
+        config: TimelineAPIConfig(host: "127.0.0.1", port: 0, apiKey: nil),
+        embedded: false
+    )
+    pump(0.1)
+    expect(model.isRunningForTesting,
+           "showing a hidden Timeline must resume exactly one lifecycle")
+}
+
+/// The webview can mount before `get_local_api_config` resolves. Its first
+/// placement then carries port 3030 and a later resize carries the actual
+/// isolated/custom port. Reusing the child must update the live model instead
+/// of leaving its original socket stuck on the stale endpoint.
+@MainActor
+private func testAttachedControllerRebindsChangedAPIConfig() {
+    // First reproduce the exact 3030 -> isolated-port transition without
+    // starting either socket. This proves the model accepts the correction,
+    // rather than silently retaining the construction-time endpoint.
+    let staleConfig = TimelineAPIConfig(host: "127.0.0.1", port: 3030, apiKey: "stale")
+    let isolatedConfig = TimelineAPIConfig(host: "127.0.0.1", port: 3130, apiKey: "corrected")
+    let coldModel = TimelineViewModel(config: staleConfig)
+    coldModel.setErrorForTesting("Could not connect to the server")
+    expect(coldModel.updateAPIConfig(isolatedConfig),
+           "the cold model must accept a corrected isolated port")
+    expectEqual(coldModel.config, isolatedConfig, "corrected cold-model API config")
+    expect(coldModel.connectionError == nil,
+           "the corrected cold model must discard its stale connection error")
+
+    let host = NSWindow(
+        contentRect: NSRect(x: 170, y: 170, width: 760, height: 540),
+        styleMask: [.titled], backing: .buffered, defer: false
+    )
+    host.makeKeyAndOrderFront(nil)
+    let pointer = Int(bitPattern: Unmanaged.passUnretained(host).toOpaque())
+    let controller = TimelineWindowController.controller(forHost: pointer)
+    let rect = NSRect(x: 0, y: 0, width: 760, height: 540)
+
+    // The attached half stays offline so this regression never contacts the
+    // user's running production or development API during the test.
+    let initial = TimelineAPIConfig(host: "127.0.0.1", port: 0, apiKey: "stale")
+    expect(controller.attach(
+        config: initial,
+        hostWindowNumber: host.windowNumber,
+        rect: rect,
+        hostPointer: pointer,
+        hostWindowLabel: "stale-port-host"
+    ), "the stale-port fixture must attach")
+    guard let model = controller.currentModel else {
+        failures.append("the stale-port fixture has no model")
+        TimelineWindowController.releaseController(forHost: pointer)
+        host.close()
+        return
+    }
+    model.injectForTesting(frames: fixtureFrames(count: 4))
+    model.setErrorForTesting("Could not connect to the server")
+
+    let target = Date().addingTimeInterval(-120)
+    model.navigateToSearchResult(
+        timestamp: target,
+        frameId: "990001",
+        query: "stale port",
+        results: [TimelineSearchResult(
+            frameId: "990001",
+            timestamp: target,
+            textPositions: []
+        )],
+        terms: ["stale", "port"],
+        navigationId: "stale-port-click"
+    )
+
+    let corrected = TimelineAPIConfig(host: "127.0.0.1", port: 0, apiKey: "corrected")
+    expect(controller.attach(
+        config: corrected,
+        hostWindowNumber: host.windowNumber,
+        rect: rect,
+        hostPointer: pointer,
+        hostWindowLabel: "stale-port-host"
+    ), "the corrected placement must reattach")
+    pump(0.1)
+
+    expect(controller.currentModel === model,
+           "API correction must keep the model rendered by the existing SwiftUI tree")
+    expectEqual(model.config, corrected, "corrected native API config")
+    expect(model.connectionError == nil,
+           "a stale connection error must clear when the native transport is rebound")
+    expect(model.frames.isEmpty,
+           "frames from the stale API instance must not leak into the corrected endpoint")
+    expectEqual(model.searchReview?.query, "stale port",
+                "API correction must retain the active Search review")
+
+    TimelineWindowController.releaseController(forHost: pointer)
     host.close()
     pump(0.2)
 }
@@ -790,12 +905,25 @@ private func testSearchNavigationWaitsForExactFrame(model: TimelineViewModel) {
     clickedDevice.frameId = "900002"
     targetFrames[2].devices.append(clickedDevice)
 
+    let highlight = TimelineSearchTextPosition(
+        text: "exact",
+        confidence: 0.99,
+        bounds: TimelineSearchTextBounds(left: 0.2, top: 0.3, width: 0.15, height: 0.05)
+    )
+    let results = targetFrames.enumerated().map { index, frame in
+        TimelineSearchResult(
+            frameId: index == 2 ? "900002" : String(900_000 + index),
+            timestamp: TimelineFrames.date(of: frame) ?? targetDate,
+            textPositions: index == 2 ? [highlight] : []
+        )
+    }
     model.navigateToSearchResult(
         timestamp: targetDate.addingTimeInterval(-60),
         frameId: "900002",
         query: "exact frame",
-        frameIds: ["900000", "900001", "900002", "900003"],
-        terms: ["exact", "frame"]
+        results: results,
+        terms: ["exact", "frame"],
+        navigationId: "search-click-1"
     )
     expect(model.frames.isEmpty, "a result on another day must request that day")
 
@@ -807,6 +935,41 @@ private func testSearchNavigationWaitsForExactFrame(model: TimelineViewModel) {
     expectEqual(model.displayFrameId, "900002", "search renders the clicked monitor frame")
     expectEqual(model.displayDeviceIndex, 1, "search renders the clicked device within the row")
     expectEqual(model.searchReview?.activeIndex, 2, "search review starts on the clicked result")
+    expectEqual(model.activeSearchHighlightPositions, [highlight],
+                "the clicked frame exposes its verified yellow highlight")
+
+    model.stepSearchResult(1)
+    expectEqual(model.searchReview?.activeIndex, 3, "the older arrow advances the result")
+    expectEqual(model.displayFrameId, "900003", "the older arrow selects its exact frame")
+
+    // Rust retries while a restored host attaches. The repeated hand-off must
+    // not undo a user's arrow or strip click after the first delivery.
+    model.navigateToSearchResult(
+        timestamp: targetDate.addingTimeInterval(-60),
+        frameId: "900002",
+        query: "exact frame",
+        results: results,
+        terms: ["exact", "frame"],
+        navigationId: "search-click-1"
+    )
+    expectEqual(model.searchReview?.activeIndex, 3, "a retry does not reset the chosen result")
+    expectEqual(model.displayFrameId, "900003", "a retry does not reset the chosen frame")
+
+    let handler = TimelineKeyHandler(model: model, embedded: false, closeOnEscape: true)
+    _ = handler.handle(TimelineKeyEvent(keyCode: TimelineKeyEvent.escape))
+    expect(model.searchReview == nil, "Escape dismisses the search review before the overlay")
+    expect(!TimelineActionBridge.shared.drainEmitted().contains("close_window"),
+           "dismissing search review does not close the overlay")
+
+    model.navigateToSearchResult(
+        timestamp: targetDate.addingTimeInterval(-60),
+        frameId: "900002",
+        query: "exact frame",
+        results: results,
+        terms: ["exact", "frame"],
+        navigationId: "search-click-1"
+    )
+    expect(model.searchReview == nil, "a delayed retry cannot reopen dismissed search review")
 }
 
 /// Home and the overlay keep independent attached controllers. A routed Search
@@ -829,6 +992,11 @@ private func testSearchNavigationTargetsHostLabel() {
         hostWindowLabel: "home"
     )
     expect(attached, "the labelled timeline fixture must attach")
+    expectEqual(
+        TimelineWindowController.hostWindowLabel(containing: host),
+        "home",
+        "embedded Search actions retain Home when the Tauri parent is key"
+    )
     expect(
         TimelineWindowController.model(forWindowLabel: "home") === controller.currentModel,
         "Search must resolve the model owned by its Home host"
@@ -855,13 +1023,26 @@ private func testSearchClickQueuedUntilHostAttaches() {
     for index in targetFrames.indices {
         targetFrames[index].devices[0].frameId = String(910_000 + index)
     }
+    let searchResults: [[String: Any]] = targetFrames.enumerated().map { index, frame in
+        [
+            "frameId": String(910_000 + index),
+            "timestamp": frame.timestamp,
+            "textPositions": index == 2 ? [[
+                "text": "queued",
+                "confidence": 0.98,
+                "bounds": ["left": 0.25, "top": 0.4, "width": 0.2, "height": 0.05]
+            ]] : []
+        ]
+    }
     let payload: [String: Any] = [
         "timestamp": ISO8601DateFormatter().string(from: targetDate),
         "frameId": "910002",
         "windowLabel": label,
         "searchQuery": "queued exact frame",
         "searchFrameIds": ["910000", "910001", "910002", "910003"],
-        "searchTerms": ["queued", "exact", "frame"]
+        "searchResults": searchResults,
+        "searchTerms": ["queued", "exact", "frame"],
+        "navigationId": "queued-click-1"
     ]
     let data = try! JSONSerialization.data(withJSONObject: payload)
     let json = String(data: data, encoding: .utf8)!
@@ -902,6 +1083,8 @@ private func testSearchClickQueuedUntilHostAttaches() {
         "910002",
         "queued Search click reaches its exact native frame after attach"
     )
+    expectEqual(model.activeSearchHighlightPositions.count, 1,
+                "queued Search JSON retains its verified highlight geometry")
 
     TimelineWindowController.releaseController(forHost: pointer)
     host.close()
@@ -932,6 +1115,7 @@ private func runTests() {
     }
 
     let groups: [(String, () -> Void)] = [
+        ("idle and hidden lifecycle", { testIdleAndHiddenLifecycle(model: model) }),
         ("no overlay swallows hit tests", { testNoOverlaySwallowsHitTests(window: window) }),
         ("control bar buttons respond",
          { testControlBarButtonsRespond(window: window, model: model) }),
@@ -947,6 +1131,8 @@ private func runTests() {
         ("icons", testIcons),
         ("icon chip renders", { testIconChipRenders(shots: shots) }),
         ("deep links target attached host", testNavigationTargetsAttachedController),
+        ("attached controller rebinds changed API config",
+         testAttachedControllerRebindsChangedAPIConfig),
         ("external navigation hides stale frames", { testExternalNavigationLoading(model: model) }),
         ("Activity return chrome", { testActivityReturnChrome() }),
         // Last: it re-parents and re-styles the shared window.

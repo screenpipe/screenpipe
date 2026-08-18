@@ -531,6 +531,7 @@ const E2E_COMMANDS: &[&str] = &[
     "active_meeting_id",
     "native_meeting_overlay_state",
     "native_timeline_search_state",
+    "native_timeline_search_control",
     "native_shortcut_set_hovering",
     "native_toggle_meeting_pin",
     "emit_meeting_overlay_transcript",

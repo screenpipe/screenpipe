@@ -6,6 +6,7 @@
 import React from "react";
 import { MemoizedReactMarkdown } from "@/components/markdown";
 import { cn } from "@/lib/utils";
+import { Loader2 } from "lucide-react";
 
 export type MeetingWorkspaceTab = "notes" | "transcript" | "summary";
 
@@ -190,10 +191,22 @@ export function MeetingSummarySurface({
     >
       <div className={cn(MEETING_SHELL_CLASS, "py-8 sm:py-10")}>
         <div className="mb-8 flex items-start justify-between gap-5 border-b border-border pb-5">
-          <div className="min-w-0">
-            <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-              meeting summary
-            </p>
+          <div
+            className="min-w-0"
+            role={state === "working" ? "status" : undefined}
+            aria-live={state === "working" ? "polite" : undefined}
+          >
+            <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+              {state === "working" && (
+                <Loader2
+                  className="h-3 w-3 animate-spin motion-reduce:animate-none"
+                  aria-hidden="true"
+                />
+              )}
+              <span>
+                {state === "working" ? "writing summary" : "meeting summary"}
+              </span>
+            </div>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
               {detail}
             </p>
@@ -226,47 +239,29 @@ export function MeetingSummarySurface({
           className={cn(MEETING_READING_COLUMN_CLASS, "select-text")}
         >
           {summary ? (
-            <>
-              {state === "working" && (
-                <p
-                  role="status"
-                  className="mb-5 border-l border-foreground pl-3 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground"
-                >
-                  {isStreaming ? "writing summary" : "refreshing summary"}
-                </p>
+            <div aria-busy={isStreaming}>
+              <MemoizedReactMarkdown className="prose prose-sm max-w-none break-words text-foreground dark:prose-invert prose-headings:font-mono prose-headings:text-xs prose-headings:uppercase prose-headings:tracking-[0.12em] prose-p:leading-7 prose-li:leading-7 [&>*:first-child]:mt-0">
+                {summary}
+              </MemoizedReactMarkdown>
+              {isStreaming && (
+                <span
+                  aria-hidden="true"
+                  data-testid="meeting-summary-stream-cursor"
+                  className="mt-1 block h-4 w-px animate-pulse bg-foreground"
+                />
               )}
-              <div aria-busy={isStreaming}>
-                <MemoizedReactMarkdown className="prose prose-sm max-w-none break-words text-foreground dark:prose-invert prose-headings:font-mono prose-headings:text-xs prose-headings:uppercase prose-headings:tracking-[0.12em] prose-p:leading-7 prose-li:leading-7 [&>*:first-child]:mt-0">
-                  {summary}
-                </MemoizedReactMarkdown>
-                {isStreaming && (
-                  <span
-                    aria-hidden="true"
-                    data-testid="meeting-summary-stream-cursor"
-                    className="mt-1 block h-4 w-px animate-pulse bg-foreground"
-                  />
-                )}
-              </div>
-            </>
+            </div>
           ) : state === "working" ? (
-            <div role="status" className="border-l border-foreground pl-5">
-              <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                writing summary
+            <div
+              data-testid="meeting-summary-writing-placeholder"
+              className="min-h-64 py-2"
+            >
+              <p className="text-sm font-medium text-foreground">
+                Draft will appear here
               </p>
-              <div aria-hidden className="mt-7 space-y-7">
-                {["w-2/3", "w-5/6", "w-3/4"].map((width) => (
-                  <div key={width} className="space-y-3">
-                    <div
-                      className={cn(
-                        "h-2 animate-pulse bg-foreground/20",
-                        width,
-                      )}
-                    />
-                    <div className="h-px w-full bg-border" />
-                    <div className="h-px w-4/5 bg-border" />
-                  </div>
-                ))}
-              </div>
+              <p className="mt-2 max-w-lg text-sm leading-6 text-muted-foreground">
+                The first section replaces this message as soon as it is ready.
+              </p>
             </div>
           ) : (
             <div className="border-l border-border py-2 pl-5">

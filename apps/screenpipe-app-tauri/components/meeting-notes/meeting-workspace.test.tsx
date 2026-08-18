@@ -46,7 +46,9 @@ describe("secondary control treatment", () => {
   it("still resolves to full contrast on pointer and keyboard intent", () => {
     expect(MEETING_QUIET_CONTROL_CLASS).toMatch(/\btext-muted-foreground\b/);
     expect(MEETING_QUIET_CONTROL_CLASS).toMatch(/hover:text-foreground/);
-    expect(MEETING_QUIET_CONTROL_CLASS).toMatch(/focus-visible:text-foreground/);
+    expect(MEETING_QUIET_CONTROL_CLASS).toMatch(
+      /focus-visible:text-foreground/,
+    );
   });
 
   it("keeps the app's square geometry", () => {
@@ -282,10 +284,32 @@ describe("meeting summary surface", () => {
     );
 
     expect(screen.getByText("Existing decision.")).toBeVisible();
-    expect(screen.getByRole("status")).toHaveTextContent("refreshing summary");
+    expect(screen.getByRole("status")).toHaveTextContent("writing summary");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "writing an updated summary",
+    );
   });
 
-  it("replaces the skeleton with the real summary as it streams", () => {
+  it("uses one calm placeholder before the first real section arrives", () => {
+    render(
+      <MeetingSummarySurface
+        note="notes only"
+        state="working"
+        detail="you can leave while this is written"
+        onGenerate={vi.fn()}
+        canGenerate
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("writing summary");
+    expect(screen.getByText("Draft will appear here")).toBeVisible();
+    expect(
+      screen.getByTestId("meeting-summary-writing-placeholder"),
+    ).toHaveClass("min-h-64");
+    expect(document.querySelectorAll(".animate-pulse")).toHaveLength(0);
+  });
+
+  it("replaces the placeholder with the real summary as it streams", () => {
     render(
       <MeetingSummarySurface
         note={"## Summary\nEarlier summary."}

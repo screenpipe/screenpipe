@@ -2352,9 +2352,9 @@ mod search_navigation_origin_tests {
 
 /// Navigate from Search to the timeline that opened it.
 ///
-/// Native Swift timelines are addressed by their host-window label. Searches
-/// opened elsewhere retain the legacy React event so non-macOS and older
-/// surfaces continue to work.
+/// Native Swift timelines are addressed by their host-window label. Global
+/// Search defaults to the overlay's `main` label on macOS; non-macOS surfaces
+/// retain the legacy React event.
 #[tauri::command]
 #[specta::specta]
 pub async fn search_navigate_to_timeline(
@@ -2369,52 +2369,62 @@ pub async fn search_navigate_to_timeline(
     let timeline_origin = validated_timeline_origin(timeline_origin.as_deref())?;
 
     #[cfg(target_os = "macos")]
-    if let Some(origin) = timeline_origin {
-        if crate::native_timeline::is_available() {
-            match origin {
-                "home" => ShowRewindWindow::Home { page: None }
-                    .show(&app_handle)
-                    .map_err(|e| e.to_string())?,
-                "main" | "main-window" => ShowRewindWindow::Main
-                    .show(&app_handle)
-                    .map_err(|e| e.to_string())?,
-                _ => unreachable!("timeline origin was validated"),
-            };
+    if crate::native_timeline::is_available() {
+        // Global Search has no timeline origin. On macOS its destination is
+        // still the native Timeline attached to the overlay, not the hidden
+        // React fallback inside that overlay. The old origin-less branch only
+        // emitted `search-navigate-to-timestamp`, so the visible native child
+        // opened at the live edge and never received the clicked frame.
+        let origin = timeline_origin.unwrap_or("main");
+        match origin {
+            "home" => ShowRewindWindow::Home { page: None }
+                .show(&app_handle)
+                .map_err(|e| e.to_string())?,
+            "main" | "main-window" => ShowRewindWindow::Main
+                .show(&app_handle)
+                .map_err(|e| e.to_string())?,
+            _ => unreachable!("timeline origin was validated"),
+        };
 
-            // The source timeline normally remains attached while Search is
-            // visible. Retry as well so a restored overlay can finish mounting
-            // its native child before the hand-off arrives.
-            let _ = crate::native_timeline::navigate_to_search_result(
-                &timestamp,
-                frame_id,
-                origin,
-                search_terms.as_deref(),
-                search_results_json.as_deref(),
-                search_query.as_deref(),
-            );
+        // The source timeline normally remains attached while Search is
+        // visible. Retry as well so a restored or newly-created overlay can
+        // finish mounting its native child before the hand-off arrives. Every
+        // retry keeps the same id: Swift accepts the first delivery and ignores
+        // the rest, so a delayed retry cannot reset an arrow/strip selection.
+        let navigation_id = uuid::Uuid::new_v4().to_string();
+        let _ = crate::native_timeline::navigate_to_search_result(
+            &timestamp,
+            frame_id,
+            origin,
+            search_terms.as_deref(),
+            search_results_json.as_deref(),
+            search_query.as_deref(),
+            &navigation_id,
+        );
 
-            let app = app_handle.clone();
-            let timestamp_retry = timestamp.clone();
-            let origin_retry = origin.to_string();
-            let search_terms_retry = search_terms.clone();
-            let search_results_retry = search_results_json.clone();
-            let search_query_retry = search_query.clone();
-            tokio::spawn(async move {
-                for _ in 0..4 {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-                    let _ = crate::native_timeline::navigate_to_search_result(
-                        &timestamp_retry,
-                        frame_id,
-                        &origin_retry,
-                        search_terms_retry.as_deref(),
-                        search_results_retry.as_deref(),
-                        search_query_retry.as_deref(),
-                    );
-                }
-                let _ = ShowRewindWindow::Search { query: None }.close(&app);
-            });
-            return Ok(());
-        }
+        let app = app_handle.clone();
+        let timestamp_retry = timestamp.clone();
+        let origin_retry = origin.to_string();
+        let search_terms_retry = search_terms.clone();
+        let search_results_retry = search_results_json.clone();
+        let search_query_retry = search_query.clone();
+        let navigation_id_retry = navigation_id.clone();
+        tokio::spawn(async move {
+            for _ in 0..4 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                let _ = crate::native_timeline::navigate_to_search_result(
+                    &timestamp_retry,
+                    frame_id,
+                    &origin_retry,
+                    search_terms_retry.as_deref(),
+                    search_results_retry.as_deref(),
+                    search_query_retry.as_deref(),
+                    &navigation_id_retry,
+                );
+            }
+            let _ = ShowRewindWindow::Search { query: None }.close(&app);
+        });
+        return Ok(());
     }
 
     // Show the Main timeline
@@ -3156,6 +3166,9 @@ pub(crate) async fn show_shortcut_reminder_impl(
 
         if native_shortcut_reminder::is_available() {
             info!("using the native shortcut reminder");
+            native_shortcut_reminder::set_capture_protected(!crate::window::overlay_is_capturable(
+                &store,
+            ));
             use crate::recording::RecordingState;
             use std::time::Duration;
 
@@ -4090,6 +4103,11 @@ fn register_window_shortcuts_inner(app_handle: tauri::AppHandle) -> Result<(), S
                     for label in [RewindWindowId::Main.label(), "main-window"] {
                         if let Some(w) = app.get_webview_window(label) {
                             if w.is_visible().unwrap_or(false) {
+                                #[cfg(target_os = "macos")]
+                                if crate::native_timeline::dismiss_search_review(label) {
+                                    delivered = true;
+                                    break;
+                                }
                                 let _ = app.emit_to(label, "escape-pressed", ());
                                 delivered = true;
                                 break;

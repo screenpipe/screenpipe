@@ -108,6 +108,27 @@ fn assistant_text_delta(event: &Value) -> Option<&str> {
     assistant_event.get("delta").and_then(|d| d.as_str())
 }
 
+fn agent_end_has_assistant_text(event: &Value) -> bool {
+    event
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
+        .filter_map(|message| message.get("content"))
+        .any(|content| match content {
+            Value::String(text) => !text.trim().is_empty(),
+            Value::Array(parts) => parts.iter().any(|part| {
+                part.get("type").and_then(Value::as_str) == Some("text")
+                    && part
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| !text.trim().is_empty())
+            }),
+            _ => false,
+        })
+}
+
 fn set_assistant_text_delta(event: &mut Value, delta: String) {
     if let Some(assistant_event) = event
         .get_mut("assistantMessageEvent")
@@ -3359,6 +3380,30 @@ pub async fn pi_start_inner(
                 sync_queue_state_from_event(qs, event);
             }
 
+            if let Some(event) = parsed.as_ref() {
+                if event_type.as_deref() == Some("error")
+                    && sid_clone.contains("activity-history")
+                {
+                    error!(
+                        "Pi provider error (session {}): {}",
+                        sid_clone,
+                        event
+                            .get("errorMessage")
+                            .or_else(|| event.get("finalError"))
+                            .or_else(|| event.get("message"))
+                            .unwrap_or(event)
+                    );
+                } else if event_type.as_deref() == Some("agent_end")
+                    && sid_clone.contains("activity-history")
+                    && !agent_end_has_assistant_text(event)
+                {
+                    error!(
+                        "Activity generation ended without a final assistant response (session {})",
+                        sid_clone
+                    );
+                }
+            }
+
             match parsed {
                 Some(event) => {
                     // Route RPC responses to waiting callers (legacy path, kept for compat)
@@ -5664,6 +5709,26 @@ mod tests {
             super::event_tool_call_ids(&tool_end),
             vec!["tool-1".to_string()]
         );
+    }
+
+    #[test]
+    fn detects_agent_end_without_final_assistant_text() {
+        let tool_only = json!({
+            "type": "agent_end",
+            "messages": [
+                { "role": "assistant", "content": [{ "type": "toolCall", "name": "bash" }] },
+                { "role": "toolResult", "content": [{ "type": "text", "text": "done" }] }
+            ]
+        });
+        assert!(!super::agent_end_has_assistant_text(&tool_only));
+
+        let completed = json!({
+            "type": "agent_end",
+            "messages": [
+                { "role": "assistant", "content": [{ "type": "text", "text": "final json" }] }
+            ]
+        });
+        assert!(super::agent_end_has_assistant_text(&completed));
     }
 
     #[test]

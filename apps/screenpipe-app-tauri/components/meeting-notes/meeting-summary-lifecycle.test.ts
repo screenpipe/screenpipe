@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   latestSummaryInputAt,
+  meetingSummaryPresentation,
   meetingSummaryFailure,
   meetingSummaryFailureCopy,
   meetingSummaryLifecycleFromStatus,
@@ -37,17 +38,24 @@ describe("meeting summary lifecycle", () => {
       meetingSummaryLifecycleFromStatus(
         status({ state: "running", execution_id: 12 }),
       ),
-    ).toEqual({ kind: "running", execution: { ...execution, error_type: null, error_message: null } });
+    ).toEqual({
+      kind: "running",
+      execution: { ...execution, error_type: null, error_message: null },
+    });
 
     expect(
       meetingSummaryLifecycleFromStatus(
-        status({ state: "ready", execution_id: 12, execution_status: "completed" }),
+        status({
+          state: "ready",
+          execution_id: 12,
+          execution_status: "completed",
+        }),
       ).kind,
     ).toBe("completed");
 
-    expect(
-      meetingSummaryLifecycleFromStatus(status({ state: "off" })),
-    ).toEqual({ kind: "idle" });
+    expect(meetingSummaryLifecycleFromStatus(status({ state: "off" }))).toEqual(
+      { kind: "idle" },
+    );
   });
 
   /// The scheduler claims a run before it can create the execution row, so
@@ -61,7 +69,11 @@ describe("meeting summary lifecycle", () => {
   it("shows queued once the run has a row", () => {
     expect(
       meetingSummaryLifecycleFromStatus(
-        status({ state: "pending", execution_id: 12, execution_status: "queued" }),
+        status({
+          state: "pending",
+          execution_id: 12,
+          execution_status: "queued",
+        }),
       ).kind,
     ).toBe("queued");
   });
@@ -83,6 +95,123 @@ describe("meeting summary lifecycle", () => {
         ),
       ).toBe(false);
     }
+  });
+
+  it("lets live capture win over every stale summary state", () => {
+    const lifecycles = [
+      { kind: "finalizing" },
+      { kind: "queued", execution },
+      { kind: "running", execution },
+      { kind: "completed", execution },
+      { kind: "failed", execution },
+    ] as const;
+
+    for (const lifecycle of lifecycles) {
+      expect(
+        meetingSummaryPresentation({
+          isLive: true,
+          resuming: false,
+          meetingEnded: false,
+          summarizing: false,
+          lifecycle,
+        }),
+      ).toEqual({
+        lifecycle: { kind: "idle" },
+        working: false,
+        transitionPhase: null,
+      });
+    }
+  });
+
+  it("suppresses a stale finalizing state while resume is in flight", () => {
+    expect(
+      meetingSummaryPresentation({
+        isLive: false,
+        resuming: true,
+        meetingEnded: true,
+        summarizing: false,
+        lifecycle: { kind: "finalizing" },
+      }),
+    ).toEqual({
+      lifecycle: { kind: "idle" },
+      working: false,
+      transitionPhase: null,
+    });
+  });
+
+  it("requires a persisted meeting end before showing summary work", () => {
+    expect(
+      meetingSummaryPresentation({
+        isLive: false,
+        resuming: false,
+        meetingEnded: false,
+        summarizing: false,
+        lifecycle: { kind: "running", execution },
+      }),
+    ).toEqual({
+      lifecycle: { kind: "idle" },
+      working: false,
+      transitionPhase: null,
+    });
+  });
+
+  it("distinguishes transcript finalization from summary writing after stop", () => {
+    expect(
+      meetingSummaryPresentation({
+        isLive: false,
+        resuming: false,
+        meetingEnded: true,
+        summarizing: false,
+        lifecycle: { kind: "finalizing" },
+      }),
+    ).toEqual({
+      lifecycle: { kind: "finalizing" },
+      working: true,
+      transitionPhase: "finalizing",
+    });
+    expect(
+      meetingSummaryPresentation({
+        isLive: false,
+        resuming: false,
+        meetingEnded: true,
+        summarizing: false,
+        lifecycle: { kind: "queued", execution },
+      }),
+    ).toEqual({
+      lifecycle: { kind: "queued", execution },
+      working: true,
+      transitionPhase: "writing",
+    });
+    expect(
+      meetingSummaryPresentation({
+        isLive: false,
+        resuming: false,
+        meetingEnded: true,
+        summarizing: true,
+        lifecycle: { kind: "idle" },
+      }),
+    ).toEqual({
+      lifecycle: { kind: "idle" },
+      working: true,
+      transitionPhase: "writing",
+    });
+  });
+
+  it("preserves terminal summary state after a stable stop", () => {
+    const completed = { kind: "completed", execution } as const;
+    expect(
+      meetingSummaryPresentation({
+        isLive: false,
+        resuming: false,
+        meetingEnded: true,
+        summarizing: false,
+        lifecycle: completed,
+      }),
+    ).toEqual({
+      lifecycle: completed,
+      working: false,
+      transitionPhase: null,
+    });
   });
 
   it("does not claim a terminal state it cannot explain or retry", () => {

@@ -360,8 +360,9 @@ export type Settings = SettingsStore & {
 	powerMode?: "auto" | "performance" | "battery_saver";
 	/** Show restart notifications when audio/vision capture stalls (default: false for now) */
 	showRestartNotifications?: boolean;
-	/** @deprecated Retained for settings compatibility; overlay capture visibility
-	 * is controlled by showOverlayInScreenRecording. */
+	/** Hide only overlay windows from screen recordings and sharing. Default false. */
+	hideOverlayInScreenRecording?: boolean;
+	/** @deprecated Retained for settings compatibility. */
 	hideAppInScreenShare?: boolean;
 	/** Pause all screen capture when a DRM-protected streaming app (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware Horizon) is focused — they blank their windows during screen recording */
 	pauseOnDrmContent?: boolean;
@@ -770,6 +771,7 @@ let DEFAULT_SETTINGS: Settings = {
 			},
 			overlayMode: "fullscreen",
 			showOverlayInScreenRecording: false,
+			hideOverlayInScreenRecording: false,
 			hideAppInScreenShare: true,
 			disableTimeline: false,
 			firstRunGuideDone: false,

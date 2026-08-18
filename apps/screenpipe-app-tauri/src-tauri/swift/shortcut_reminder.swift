@@ -1546,6 +1546,21 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
     private var metricsWsUrl = "ws://127.0.0.1:3030/ws/metrics"
     private var eventsWsUrl = "ws://127.0.0.1:3030/ws/meeting-overlay"
     private var isVisible = false
+    private var captureProtected = false
+
+    private var overlaySharingType: NSWindow.SharingType {
+        captureProtected ? .none : .readOnly
+    }
+
+    func setCaptureProtected(_ protected: Bool) {
+        let apply = { [self] in
+            captureProtected = protected
+            for panel in [panel, disclosurePanel, transcriptPanel, dragStagePanel, notificationPanel] {
+                panel?.sharingType = overlaySharingType
+            }
+        }
+        if Thread.isMainThread { apply() } else { DispatchQueue.main.sync(execute: apply) }
+    }
 
     /// Where the pill is pinned. Rust supplies the persisted value on show and
     /// stores whatever the user drags it to.
@@ -2115,7 +2130,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         p.isMovableByWindowBackground = false
         p.acceptsMouseMovedEvents = true
         p.isReleasedWhenClosed = false
-        p.sharingType = .readOnly
+        p.sharingType = overlaySharingType
         p.delegate = self
 
         let tracking = ReminderTrackingView(frame: NSRect(x: 0, y: 0, width: Int(w), height: Int(h)))
@@ -2257,7 +2272,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
             disclosure.hidesOnDeactivate = false
             disclosure.ignoresMouseEvents = true
             disclosure.isReleasedWhenClosed = false
-            disclosure.sharingType = .readOnly
+            disclosure.sharingType = overlaySharingType
             disclosurePanel = disclosure
         }
 
@@ -2402,7 +2417,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         preview.hidesOnDeactivate = false
         preview.acceptsMouseMovedEvents = true
         preview.isReleasedWhenClosed = false
-        preview.sharingType = .readOnly
+        preview.sharingType = overlaySharingType
 
         let tracking = ReminderTrackingView(
             frame: NSRect(x: 0, y: 0, width: Int(w), height: Int(h))
@@ -2852,7 +2867,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         stage.hasShadow = false
         stage.hidesOnDeactivate = false
         stage.isReleasedWhenClosed = false
-        stage.sharingType = .readOnly
+        stage.sharingType = overlaySharingType
         // Never take the drag away from the pill.
         stage.ignoresMouseEvents = true
 
@@ -3006,7 +3021,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         toast.hidesOnDeactivate = false
         toast.acceptsMouseMovedEvents = true
         toast.isReleasedWhenClosed = false
-        toast.sharingType = .readOnly
+        toast.sharingType = overlaySharingType
 
         let tracking = ReminderTrackingView(
             frame: NSRect(x: 0, y: 0, width: Int(w), height: Int(h))
@@ -3616,6 +3631,15 @@ public func shortcutShow(_ jsonPtr: UnsafePointer<CChar>?) -> Int32 {
 public func shortcutHide() -> Int32 {
     if #available(macOS 13.0, *) {
         ShortcutReminderController.shared.hide()
+        return 0
+    }
+    return -2
+}
+
+@_cdecl("shortcut_set_capture_protected")
+public func shortcutSetCaptureProtected(_ protected: Int32) -> Int32 {
+    if #available(macOS 13.0, *) {
+        ShortcutReminderController.shared.setCaptureProtected(protected != 0)
         return 0
     }
     return -2

@@ -150,12 +150,16 @@ struct TimelineFrameCanvas: View {
             case .hasFrames:
                 frameContent
             case .loading:
-                TimelineStatusCard(
-                    systemImage: "hourglass",
-                    title: "Loading Timeline",
-                    message: "Fetching your recorded frames...",
-                    showsSpinner: true
-                )
+                if let image = model.currentImage {
+                    TimelineLoadingFrameTransition(image: image)
+                } else {
+                    TimelineStatusCard(
+                        systemImage: "hourglass",
+                        title: "Loading Timeline",
+                        message: "Fetching your recorded frames...",
+                        showsSpinner: true
+                    )
+                }
             case .recordingOff:
                 TimelineRecordingOffCard(model: model)
             case .buildingMemory:
@@ -174,29 +178,61 @@ struct TimelineFrameCanvas: View {
 
     @ViewBuilder
     private var frameContent: some View {
-        if let frame = model.displayFrame, TimelineFrames.hasVisual(frame) {
-            if let image = model.currentImage,
-               model.currentImageFrameId == model.displayFrameId {
-                // Not `Image(nsImage:)`: the point of a recorded frame is to
-                // read it and take the text out, which needs VisionKit sitting
-                // on the pixels.
-                // GeometryReader cuts the AppKit image view's native pixel
-                // size out of SwiftUI's ideal-size negotiation. The screenshot
-                // scales into the timeline viewport instead of leaving the
-                // 1920x1080 root clipped inside a narrower embedded pane.
-                TimelineFrameImageView(image: image)
-            } else if model.imageUnavailable {
-                TimelineImageUnavailableCard(model: model)
+        Group {
+            if let frame = model.displayFrame, TimelineFrames.hasVisual(frame) {
+                if let image = model.currentImage,
+                   model.currentImageFrameId == model.displayFrameId {
+                    // Not `Image(nsImage:)`: the point of a recorded frame is to
+                    // read it and take the text out, which needs VisionKit sitting
+                    // on the pixels.
+                    // GeometryReader cuts the AppKit image view's native pixel
+                    // size out of SwiftUI's ideal-size negotiation. The screenshot
+                    // scales into the timeline viewport instead of leaving the
+                    // 1920x1080 root clipped inside a narrower embedded pane.
+                    TimelineFrameImageView(
+                        image: image,
+                        searchHighlights: model.activeSearchHighlightPositions
+                    )
+                    .id(model.currentImageFrameId)
+                    .transition(.opacity)
+                } else if model.imageUnavailable {
+                    TimelineImageUnavailableCard(model: model)
+                } else if let image = model.currentImage {
+                    TimelineLoadingFrameTransition(image: image)
+                } else {
+                    ProgressView().controlSize(.large)
+                }
+            } else if model.displayFrame != nil {
+                TimelineScreenshotPausedCard(model: model)
+            } else if model.currentFrame == nil {
+                TimelineNoFrameCard(model: model)
             } else {
-                ProgressView().controlSize(.large)
+                TimelineScreenshotPausedCard(model: model)
             }
-        } else if model.displayFrame != nil {
-            TimelineScreenshotPausedCard(model: model)
-        } else if model.currentFrame == nil {
-            TimelineNoFrameCard(model: model)
-        } else {
-            TimelineScreenshotPausedCard(model: model)
         }
+        .animation(.easeOut(duration: 0.16), value: model.currentImageFrameId)
+    }
+}
+
+/// Keeps the previous capture visible during a scrub/day fetch instead of
+/// flashing a centered spinner between every pair of decoded frames. This is
+/// a plain, non-interactive image so stale Live Text can never be selected.
+struct TimelineLoadingFrameTransition: View {
+    let image: NSImage
+
+    var body: some View {
+        GeometryReader { viewport in
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(width: viewport.size.width, height: viewport.size.height)
+                .background(Color.black)
+                .opacity(0.72)
+                .overlay(Color.black.opacity(0.12))
+        }
+        .clipped()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
@@ -204,11 +240,12 @@ struct TimelineFrameCanvas: View {
 /// named view makes the native-resolution regression directly render-testable.
 struct TimelineFrameImageView: View {
     let image: NSImage
+    var searchHighlights: [TimelineSearchTextPosition] = []
 
     var body: some View {
         GeometryReader { viewport in
-            TimelineLiveTextImage(image: image)
-                .frame(width: viewport.size.width, height: viewport.size.height)
+            TimelineLiveTextImage(image: image, searchHighlights: searchHighlights)
+            .frame(width: viewport.size.width, height: viewport.size.height)
         }
         .clipped()
     }
@@ -491,7 +528,7 @@ struct TimelineControlBar: View {
                 ForEach(devices, id: \.self) { device in
                     TimelineMuteButton(
                         device: device,
-                        isInput: model.nearbyAudioSegments.first { $0.deviceName == device }?.isInput ?? true,
+                        isInput: model.nearbyAudioInputByDevice[device] ?? true,
                         isMuted: model.mutedDevices.contains(device)
                     ) {
                         model.toggleMute(device: device)
