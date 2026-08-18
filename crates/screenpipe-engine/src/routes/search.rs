@@ -557,6 +557,26 @@ fn capture_direct_api_search_value(client: &ExplicitApiClient, result_count: usi
     }
 }
 
+fn parsed_parser_profiles(content_items: &[ContentItem]) -> Vec<String> {
+    let mut parser_ids = Vec::new();
+    for item in content_items {
+        let ContentItem::Parsed(content) = item else {
+            continue;
+        };
+        if parser_ids
+            .iter()
+            .any(|parser_id| parser_id == &content.parser_id)
+        {
+            continue;
+        }
+        parser_ids.push(content.parser_id.clone());
+        if parser_ids.len() == 16 {
+            break;
+        }
+    }
+    parser_ids
+}
+
 /// Middle-truncate a string to at most `max_chars` characters.
 /// Keeps the first half and last half, inserting a marker in between.
 /// Safe on UTF-8 char boundaries.
@@ -1375,15 +1395,26 @@ pub(crate) async fn search(
 
     debug!("search completed: found {} results", total);
 
+    let response_non_empty = !content_items.is_empty();
+    let parsed_parser_profiles = if parsed_search {
+        parsed_parser_profiles(&content_items)
+    } else {
+        Vec::new()
+    };
+
     // Track search analytics
     analytics::capture_event_nonblocking(
         "search_performed",
         serde_json::json!({
             "query_length": query.q.as_ref().map(|q| q.len()).unwrap_or(0),
             "content_type": format!("{:?}", query.content_type),
+            "request_source": api_client.source_label(),
             "has_date_filter": query.start_time.is_some() || query.end_time.is_some(),
             "has_app_filter": query.app_name.is_some(),
             "result_count": total,
+            "non_empty": response_non_empty,
+            "parsed_non_empty": parsed_search && response_non_empty,
+            "parsed_parser_profiles": parsed_parser_profiles,
             "limit": query.pagination.limit,
             "offset": query.pagination.offset,
         }),

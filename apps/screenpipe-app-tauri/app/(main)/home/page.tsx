@@ -997,10 +997,10 @@ function HomeContent() {
     // Each click allocates a new session id (empty rows are not reused — that
     // felt like opening an old recent).
     home: { label: "Chat", icon: <Plus className="h-3.5 w-3.5" /> },
-    brain: { label: "Brain", icon: <Brain className="h-3.5 w-3.5" /> },
     meetings: { label: "Meetings", icon: <CalendarClock className="h-3.5 w-3.5" /> },
-    pipes: { label: "Scheduled", icon: <TimerReset className="h-3.5 w-3.5" /> },
     timeline: { label: "Timeline", icon: <MonitorPlay className="h-3.5 w-3.5" /> },
+    brain: { label: "Brain", icon: <Brain className="h-3.5 w-3.5" /> },
+    pipes: { label: "Scheduled", icon: <TimerReset className="h-3.5 w-3.5" /> },
     connections: { label: "Connections", icon: <Plug className="h-3.5 w-3.5" /> },
   };
 

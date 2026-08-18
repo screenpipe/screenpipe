@@ -50,14 +50,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST, IDC_ARROW, MF_SEPARATOR, MF_STRING, MSG,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOWNOACTIVATE, TPM_RETURNCMD,
     TPM_RIGHTALIGN, TPM_TOPALIGN, ULW_ALPHA, WINDOWPOS, WM_APP, WM_DESTROY, WM_DISPLAYCHANGE,
-    WM_DPICHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETTINGCHANGE, WM_TIMER,
-    WM_WINDOWPOSCHANGING, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    WM_DPICHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_SETTINGCHANGE, WM_TIMER, WM_WINDOWPOSCHANGING, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 use crate::actions::{
-    action_for, anchor_action, settings_menu_action, SETTINGS_MENU_HIDE_HOUR,
-    SETTINGS_MENU_OPEN_SETTINGS,
+    action_for, anchor_action, brand_context_menu_action, BRAND_CONTEXT_MENU_HIDE_HOUR,
+    BRAND_CONTEXT_MENU_OPEN_SETTINGS,
 };
 use crate::anim::Equalizer;
 use crate::drag_stage;
@@ -87,16 +87,16 @@ const HOVER_POLL_MS: u32 = 90;
 /// Pointer travel before a press on the pill becomes a drag rather than a click.
 const DRAG_THRESHOLD: f32 = 4.0;
 
-/// Show the same two-choice native menu as the macOS overlay. Returning the
-/// selected app action keeps menu presentation inside the Win32 window while
+/// Show the same two-choice brand context menu as the macOS overlay. Returning
+/// the selected app action keeps presentation inside the Win32 window while
 /// preserving the cross-platform callback contract.
-unsafe fn show_settings_menu(hwnd: HWND) -> Option<String> {
+unsafe fn show_brand_context_menu(hwnd: HWND) -> Option<String> {
     let menu = CreatePopupMenu().ok()?;
     let result = (|| {
         AppendMenuW(
             menu,
             MF_STRING,
-            SETTINGS_MENU_HIDE_HOUR,
+            BRAND_CONTEXT_MENU_HIDE_HOUR,
             w!("Hide for 1 hour"),
         )
         .ok()?;
@@ -104,7 +104,7 @@ unsafe fn show_settings_menu(hwnd: HWND) -> Option<String> {
         AppendMenuW(
             menu,
             MF_STRING,
-            SETTINGS_MENU_OPEN_SETTINGS,
+            BRAND_CONTEXT_MENU_OPEN_SETTINGS,
             w!("Settings..."),
         )
         .ok()?;
@@ -120,7 +120,7 @@ unsafe fn show_settings_menu(hwnd: HWND) -> Option<String> {
             hwnd,
             None,
         );
-        settings_menu_action(command.0 as usize)
+        brand_context_menu_action(command.0 as usize)
     })();
     let _ = DestroyMenu(menu);
     result
@@ -1323,11 +1323,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                         // Only fire when the release lands on the same control
                         // the press did — dragging off a button cancels it.
                         if ctx.layout.hit_test(x, y) == Some(pressed) {
-                            action = if pressed == Control::Settings {
-                                show_settings_menu(hwnd)
-                            } else {
-                                action_for(&ctx.state, pressed)
-                            };
+                            action = action_for(&ctx.state, pressed);
                             // Pinning is the overlay's own state, so it is applied
                             // here rather than reported and echoed back.
                             if pressed == Control::TranscriptPin {
@@ -1351,6 +1347,22 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 }
                 arm_dismiss_timer(hwnd);
                 apply_state(hwnd);
+                fire(hwnd, action);
+                LRESULT(0)
+            }
+
+            WM_RBUTTONDOWN => LRESULT(0),
+
+            WM_RBUTTONUP => {
+                let (x, y) = mouse_dip(hwnd, lparam);
+                let is_brand = ctx_of(hwnd)
+                    .is_some_and(|ctx| ctx.layout.hit_test(x, y) == Some(Control::Brand));
+                let action = if is_brand {
+                    show_brand_context_menu(hwnd)
+                } else {
+                    None
+                };
+                arm_dismiss_timer(hwnd);
                 fire(hwnd, action);
                 LRESULT(0)
             }

@@ -342,6 +342,58 @@ describe("ConnectedShareDialog", () => {
     ).toBe(false);
   });
 
+  it("makes unchanged versus Chat processing an explicit choice", async () => {
+    mocks.localFetch.mockImplementation(async (path: string) => {
+      if (path === "/connections") {
+        return jsonResponse({
+          data: [
+            { id: "slack", connected: true },
+            { id: "notion", connected: true, mcp: true },
+          ],
+        });
+      }
+      if (path === "/connections/slack/instances") {
+        return jsonResponse({ instances: [] });
+      }
+      if (path.startsWith("/connections/slack/conversations")) {
+        return jsonResponse({ channels: [] });
+      }
+      throw new Error(`unexpected request: ${path}`);
+    });
+
+    render(
+      <ConnectedShareDialog open onOpenChange={vi.fn()} artifact={artifact} />,
+    );
+
+    const unchanged = await screen.findByTestId(
+      "connected-share-mode-unchanged",
+    );
+    const chat = screen.getByTestId("connected-share-mode-chat");
+    expect(unchanged).toHaveAttribute("aria-pressed", "true");
+    expect(chat).toHaveAttribute("aria-pressed", "false");
+    expect(unchanged).toHaveTextContent("no new AI processing");
+
+    fireEvent.click(chat);
+    await waitFor(() => expect(chat).toHaveAttribute("aria-pressed", "true"));
+    expect(
+      await screen.findByTestId("connected-share-destination"),
+    ).toHaveTextContent("Notion");
+    expect(screen.getByTestId("connected-share-confirm")).toHaveTextContent(
+      "prepare Notion in Chat",
+    );
+
+    fireEvent.click(unchanged);
+    await waitFor(() =>
+      expect(unchanged).toHaveAttribute("aria-pressed", "true"),
+    );
+    expect(screen.getByTestId("connected-share-destination")).toHaveTextContent(
+      "Slack",
+    );
+    expect(screen.getByTestId("connected-share-confirm")).toHaveTextContent(
+      "send to Slack",
+    );
+  });
+
   // A failed check used to resolve to the clipboard, so the dialog quietly
   // offered a local write under a button that says send. It now says it could
   // not check and offers retry, and nothing is sendable until it succeeds.

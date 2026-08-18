@@ -62,6 +62,8 @@ final class ThumbnailLoader: ObservableObject {
 struct TimelineHoverPreview: View {
     let frame: StreamTimeSeriesResponse
     let carriedURL: String?
+    let carriedAppName: String?
+    let carriedDomain: String?
     @ObservedObject var loader: ThumbnailLoader
 
     var body: some View {
@@ -125,20 +127,25 @@ struct TimelineHoverPreview: View {
 
     /// True when `label` resolved to a site rather than an app name.
     private var isBrowserLabel: Bool {
-        let app = TimelineFrames.appName(of: frame)
+        let app = effectiveAppName
         guard TimelineAppTaxonomy.category(for: app) == .browser else { return false }
         let url = TimelineFrames.browserURL(of: frame) ?? carriedURL ?? ""
-        return TimelineURL.domain(from: url) != nil
+        return TimelineURL.domain(from: url) != nil || carriedDomain != nil
     }
 
     /// A browser bar is identified by its site; everything else by its app.
     private var label: String {
-        let app = TimelineFrames.appName(of: frame)
+        let app = effectiveAppName
         if TimelineAppTaxonomy.category(for: app) == .browser {
             let url = TimelineFrames.browserURL(of: frame) ?? carriedURL ?? ""
-            if let domain = TimelineURL.domain(from: url) { return domain }
+            if let domain = TimelineURL.domain(from: url) ?? carriedDomain { return domain }
         }
         return app
+    }
+
+    private var effectiveAppName: String {
+        let raw = TimelineFrames.appName(of: frame)
+        return TimelineHoverMetadata.effectiveAppName(raw: raw, carried: carriedAppName)
     }
 
     private var windowName: String {
@@ -187,24 +194,24 @@ struct TimelineTranscriptPanel: View {
                 .font(.system(size: 11, weight: .semibold))
             Spacer()
             Button {
-                TimelineActionBridge.shared.emit("copy_transcript")
+                model.emitAction("copy_transcript")
             } label: {
                 Image(systemName: "doc.on.doc").font(.system(size: 11))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TimelinePlainButtonStyle())
             .help("copy transcript")
             Button {
-                TimelineActionBridge.shared.emit("summarize_transcript")
+                model.emitAction("summarize_transcript")
             } label: {
                 Image(systemName: "sparkles").font(.system(size: 11))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TimelinePlainButtonStyle())
             .disabled(entries.isEmpty)
             .help(entries.isEmpty ? "no transcription to summarize" : "summarize")
             Button { model.showAudioTranscript = false } label: {
                 Image(systemName: "xmark").font(.system(size: 11))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TimelinePlainButtonStyle())
             .help("close")
         }
         .foregroundStyle(TimelineTheme.foreground)
@@ -261,6 +268,7 @@ struct TimelineTranscriptPanel: View {
                                  : TimelineTheme.foreground.opacity(0.04))
             )
             .onTapGesture { model.setIndex(entry.frameIndex) }
+            .timelinePointerCursor()
             if !entry.isInput { Spacer(minLength: 40) }
         }
     }
@@ -351,7 +359,7 @@ struct TimelineAppContextPopover: View {
                 Button { model.activePopoverGroupIndex = nil } label: {
                     Image(systemName: "xmark").font(.system(size: 10))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TimelinePlainButtonStyle())
             }
 
             row("clock", timeSummary)

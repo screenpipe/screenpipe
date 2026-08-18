@@ -9,6 +9,7 @@ mod editor;
 mod families;
 mod native_macos;
 mod obsidian;
+mod persisted_web;
 
 pub use catalog::{builtin_app_profiles, AppFamily, BuiltinAppProfile};
 pub use chatgpt::ChatGptParser;

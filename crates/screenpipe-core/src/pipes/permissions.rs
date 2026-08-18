@@ -952,6 +952,7 @@ mod tests {
             agent: "pi".to_string(),
             model: "claude-haiku-4-5".to_string(),
             provider: None,
+            effort: crate::pipes::PipeEffort::Low,
             preset: vec![],
             permissions: PipePermissionsConfig::default(),
             connections: vec![],
@@ -982,6 +983,7 @@ mod tests {
             agent: "pi".to_string(),
             model: "claude-haiku-4-5".to_string(),
             provider: None,
+            effort: crate::pipes::PipeEffort::Low,
             preset: vec![],
             permissions: PipePermissionsConfig::Preset("reader".to_string()),
             connections: vec![],
@@ -1012,6 +1014,7 @@ mod tests {
             agent: "pi".to_string(),
             model: "claude-haiku-4-5".to_string(),
             provider: None,
+            effort: crate::pipes::PipeEffort::Low,
             preset: vec![],
             permissions: PipePermissionsConfig::Rules {
                 allow: vec![

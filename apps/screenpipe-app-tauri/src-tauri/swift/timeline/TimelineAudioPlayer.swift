@@ -27,8 +27,8 @@ struct AudioSegment: Equatable {
 
     var end: Date { recordingStart.addingTimeInterval(duration) }
 
-    /// Nil when the filename has no timestamp, because without one the segment
-    /// cannot be placed against the timeline and playing it would desync.
+    /// The filename timestamp is authoritative. Older/imported chunks without
+    /// one fall back to the frame timestamp minus the transcription offset.
     init?(audio: AudioData, frameDate: Date) {
         let path = audio.audioFilePath.trimmingCharacters(in: .whitespaces)
         guard !path.isEmpty else { return nil }
@@ -36,7 +36,8 @@ struct AudioSegment: Equatable {
         self.deviceName = audio.deviceName
         self.isInput = audio.isInput
         self.chunkId = audio.audioChunkId
-        self.recordingStart = TimelineAudio.recordingStart(fromFilename: path) ?? frameDate
+        self.recordingStart = TimelineAudio.recordingStart(fromFilename: path)
+            ?? frameDate.addingTimeInterval(-max(audio.startOffset, 0))
         self.duration = max(audio.durationSecs, 0)
     }
 }
@@ -77,11 +78,19 @@ final class TimelineAudioPlayer {
         var active = Set<String>()
         for segment in segments {
             let key = playerKey(segment)
+            let offset = clock.timeIntervalSince(segment.recordingStart)
+            let player = (offset >= -TimelineAudio.preloadAhead
+                && offset <= TimelineAudio.nearbyTimeWindow)
+                ? preload(segment, key: key)
+                : players[key]
+            let duration = TimelineAudio.effectiveDuration(
+                reported: segment.duration,
+                decoded: player?.duration
+            )
             if TimelineAudio.isSegmentActive(
-                clock: clock, recordingStart: segment.recordingStart, duration: segment.duration
+                clock: clock, recordingStart: segment.recordingStart, duration: duration
             ) {
                 active.insert(key)
-                let offset = clock.timeIntervalSince(segment.recordingStart)
                 play(segment, at: offset, key: key)
             } else if TimelineAudio.shouldPreload(clock: clock, recordingStart: segment.recordingStart) {
                 preload(segment, key: key)
@@ -168,13 +177,14 @@ extension TimelineViewModel {
         let upper = min(frames.count - 1, currentIndex + TimelineAudio.nearbyIndexRadius)
         guard lower <= upper else { return [] }
 
-        var seen = Set<Int64>()
+        var seen = Set<String>()
         var out: [AudioSegment] = []
         for i in lower...upper {
             guard let date = TimelineFrames.date(of: frames[i]) else { continue }
             for audio in TimelineFrames.allAudio(frames[i]) {
-                guard seen.insert(audio.audioChunkId).inserted else { continue }
                 if let segment = AudioSegment(audio: audio, frameDate: date) {
+                    let key = "\(segment.path)#\(segment.chunkId)"
+                    guard seen.insert(key).inserted else { continue }
                     out.append(segment)
                 }
             }

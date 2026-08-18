@@ -7,7 +7,7 @@ members = ["wer-dump-helper"]
 
 [package]
 name = "screenpipe-app"
-version = "2.6.38"
+version = "2.6.42"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -66,6 +66,7 @@ tauri-plugin-permission-flow = { git = "https://github.com/EzraEllette/permissio
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+toml = "0.8"
 base64 = "0.22"
 bytes = "1"
 plist = "1"

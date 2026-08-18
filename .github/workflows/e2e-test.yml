@@ -25,10 +25,10 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
-  # See ci.yml — cancel superseded PR runs, while main pushes use a
-  # per-commit group so newer merges do not wait behind stale E2E runs.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  # Only the newest push or PR revision can describe the current tree.
+  # Keep scheduled/manual runs separate via event_name.
+  cancel-in-progress: true
 
 jobs:
   changes:

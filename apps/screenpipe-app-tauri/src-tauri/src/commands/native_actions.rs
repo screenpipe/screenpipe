@@ -198,7 +198,7 @@ fn native_timeline_action_callback_inner(action_ptr: *const std::os::raw::c_char
             emit_timeline_event(&app, target.as_deref(), "timeline-open-search", ());
         }
         TimelineAction::OpenDailySummary { date } => {
-            emit_timeline_event(&app, target.as_deref(), "timeline-open-daily-summary", date);
+            emit_timeline_daily_summary(&app, target.as_deref(), date);
         }
         TimelineAction::OpenChat => {
             emit_timeline_event(&app, target.as_deref(), "timeline-open-chat", ());
@@ -217,6 +217,14 @@ fn native_timeline_action_callback_inner(action_ptr: *const std::os::raw::c_char
                 &app,
                 target.as_deref(),
                 "timeline-ask-ai-selection",
+                selection,
+            );
+        }
+        TimelineAction::ExportVideoSelection { selection } => {
+            emit_timeline_event(
+                &app,
+                target.as_deref(),
+                "timeline-export-video-selection",
                 selection,
             );
         }
@@ -248,6 +256,54 @@ fn emit_timeline_event<T: serde::Serialize + Clone>(
         }
     } else if let Err(error) = app.emit(event, payload) {
         tracing::warn!(%error, %event, "failed to broadcast native timeline action");
+    }
+}
+
+fn resolve_timeline_event_target<F>(
+    explicit_label: Option<&str>,
+    mut window_state: F,
+) -> Option<String>
+where
+    F: FnMut(&str) -> Option<bool>,
+{
+    if let Some(label) = explicit_label.filter(|label| !label.is_empty()) {
+        return Some(label.to_string());
+    }
+
+    // A legacy native callback has no host label. Prefer the visible overlay:
+    // it is the only surface the user can be clicking while it covers Home.
+    for label in ["main", "main-window", "home"] {
+        if window_state(label) == Some(true) {
+            return Some(label.to_string());
+        }
+    }
+
+    // If every surface is hidden, still choose exactly one loaded webview.
+    // Broadcasting leaves a Daily Summary open in both windows, which appears
+    // in Home as soon as the user dismisses the overlay.
+    for label in ["home", "main", "main-window"] {
+        if window_state(label).is_some() {
+            return Some(label.to_string());
+        }
+    }
+    None
+}
+
+fn emit_timeline_daily_summary(app: &tauri::AppHandle, window_label: Option<&str>, date: String) {
+    let target = resolve_timeline_event_target(window_label, |label| {
+        app.get_webview_window(label)
+            .map(|window| window.is_visible().unwrap_or(false))
+    });
+    let Some(label) = target else {
+        tracing::warn!("dropped native daily summary action without a timeline host");
+        return;
+    };
+    let payload = serde_json::json!({
+        "date": date,
+        "windowLabel": label,
+    });
+    if let Err(error) = app.emit_to(&label, "timeline-open-daily-summary", payload) {
+        tracing::warn!(%error, %label, "failed to route native daily summary action");
     }
 }
 
@@ -1078,7 +1134,8 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
 mod tests {
     use super::{
         native_overlay_meeting_note_id, notification_copy_value, notification_source_url,
-        parse_meeting_deeplink, parse_overlay_anchor, SHORTCUT_OVERLAY_ANCHORS,
+        parse_meeting_deeplink, parse_overlay_anchor, resolve_timeline_event_target,
+        SHORTCUT_OVERLAY_ANCHORS,
     };
     use serde_json::json;
 
@@ -1100,6 +1157,34 @@ mod tests {
         assert_eq!(parse_overlay_anchor("set_overlay_anchor:"), None);
         assert_eq!(parse_overlay_anchor("set_overlay_anchor:top-left "), None);
         assert_eq!(parse_overlay_anchor("open_timeline"), None);
+    }
+
+    #[test]
+    fn legacy_timeline_events_choose_one_visible_surface() {
+        let state = |label: &str| match label {
+            "main" => Some(true),
+            "home" => Some(true),
+            _ => None,
+        };
+        assert_eq!(
+            resolve_timeline_event_target(None, state),
+            Some("main".to_string()),
+        );
+
+        let hidden_overlay = |label: &str| match label {
+            "main" => Some(false),
+            "home" => Some(true),
+            _ => None,
+        };
+        assert_eq!(
+            resolve_timeline_event_target(None, hidden_overlay),
+            Some("home".to_string()),
+        );
+
+        assert_eq!(
+            resolve_timeline_event_target(Some("home"), |_| None),
+            Some("home".to_string()),
+        );
     }
 
     #[test]

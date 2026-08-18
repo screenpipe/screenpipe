@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildNativeSelectionChatPrefill,
+  nativeTimelineOcclusionMode,
+  parseTimelineDailySummaryRequest,
   parseTimelineDay,
 } from "./native-timeline";
 
@@ -17,6 +19,24 @@ describe("native timeline bridge payloads", () => {
     expect(parsed?.getMonth()).toBe(7);
     expect(parsed?.getDate()).toBe(16);
     expect(parseTimelineDay("2026-02-30")).toBeNull();
+  });
+
+  it("keeps a daily summary request in the native timeline window that produced it", () => {
+    expect(
+      parseTimelineDailySummaryRequest(
+        { date: "2026-08-16", windowLabel: "main" },
+        "main"
+      )
+    ).not.toBeNull();
+    expect(
+      parseTimelineDailySummaryRequest(
+        { date: "2026-08-16", windowLabel: "main" },
+        "home"
+      )
+    ).toBeNull();
+    expect(
+      parseTimelineDailySummaryRequest("2026-08-16", "main")
+    ).not.toBeNull();
   });
 
   it("turns native selection context into the existing chat prefill shape", () => {
@@ -56,5 +76,11 @@ describe("native timeline bridge payloads", () => {
         end: "2026-08-16T22:00:00.000Z",
       })
     ).toBeNull();
+  });
+
+  it("keeps DOM panels above a transparent overlay without hiding the timeline", () => {
+    expect(nativeTimelineOcclusionMode(true, true)).toBe("underlay");
+    expect(nativeTimelineOcclusionMode(false, true)).toBe("detached");
+    expect(nativeTimelineOcclusionMode(true, false)).toBe("above");
   });
 });

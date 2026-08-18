@@ -12,6 +12,8 @@ import type {
 	ImageBlockParam,
 	Message as AnthropicMessage,
 	ContentBlockParam,
+	MessageCreateParamsNonStreaming,
+	MessageCreateParamsStreaming,
 } from '@anthropic-ai/sdk/resources';
 
 function nonEmptyText(value: unknown): string | null {
@@ -58,6 +60,9 @@ function anthropicStopReasonToOpenAI(reason: unknown): string {
 type AnthropicToolWithCache = AnthropicTool & {
 	cache_control?: { type: 'ephemeral'; ttl?: string };
 };
+
+type AnthropicEffort = 'low' | 'medium' | 'high' | 'xhigh';
+type AnthropicReasoningOptions = { output_config?: { effort: AnthropicEffort } };
 
 export class AnthropicProvider implements AIProvider {
 	supportsTools = true;
@@ -180,17 +185,41 @@ export class AnthropicProvider implements AIProvider {
 			: body.temperature;
 	}
 
+	/** Translate the OpenAI-compatible effort field used by Pi into Claude's
+	 * output control without changing whether thinking is enabled. Older Claude
+	 * models reject this field, so preserve their previous behavior. */
+	private reasoningOptions(body: RequestBody): AnthropicReasoningOptions {
+		const requested = body.reasoning_effort;
+		const model = this.normalizeModel(body.model);
+		const supportsEffort = [
+			/^claude-(?:fable|mythos|opus|sonnet)-5(?:$|-)/,
+			/^claude-opus-4-(?:5|6|7|8)(?:$|-)/,
+			/^claude-sonnet-4-6(?:$|-)/,
+			/^claude-mythos-preview(?:$|-)/,
+		].some(pattern => pattern.test(model));
+		if (!requested || requested === 'none' || !supportsEffort) return {};
+		const effort: AnthropicEffort = requested === 'minimal' ? 'low' : requested;
+		return {
+			output_config: { effort },
+		};
+	}
+
 	async createCompletion(body: RequestBody): Promise<Response> {
 		const messages = this.withMessageCacheBreakpoint(this.formatMessages(body.messages));
 
-		const response = await this.client.messages.create({
+		const params: MessageCreateParamsNonStreaming & AnthropicReasoningOptions = {
 			messages,
 			model: this.normalizeModel(body.model),
 			max_tokens: body.max_tokens || 4096,
 			temperature: this.temperatureForModel(body),
 			system: this.buildSystemPrompt(body),
 			tools: body.tools ? this.formatTools(body.tools) : undefined,
-		}, this.requestHeaders ? { headers: this.requestHeaders } : undefined);
+			...this.reasoningOptions(body),
+		};
+		const response = await this.client.messages.create(
+			params,
+			this.requestHeaders ? { headers: this.requestHeaders } : undefined,
+		);
 
 		return new Response(JSON.stringify(this.formatResponse(response)), {
 			headers: { 'Content-Type': 'application/json' },
@@ -198,7 +227,7 @@ export class AnthropicProvider implements AIProvider {
 	}
 
 	async createStreamingCompletion(body: RequestBody): Promise<ReadableStream> {
-		const stream = await this.client.messages.create({
+		const params: MessageCreateParamsStreaming & AnthropicReasoningOptions = {
 			messages: this.withMessageCacheBreakpoint(this.formatMessages(body.messages)),
 			model: this.normalizeModel(body.model),
 			stream: true,
@@ -206,7 +235,12 @@ export class AnthropicProvider implements AIProvider {
 			temperature: this.temperatureForModel(body),
 			system: this.buildSystemPrompt(body),
 			tools: body.tools ? this.formatTools(body.tools) : undefined,
-		}, this.requestHeaders ? { headers: this.requestHeaders } : undefined);
+			...this.reasoningOptions(body),
+		};
+		const stream = await this.client.messages.create(
+			params,
+			this.requestHeaders ? { headers: this.requestHeaders } : undefined,
+		);
 
 		let cancelled = false;
 		return new ReadableStream({

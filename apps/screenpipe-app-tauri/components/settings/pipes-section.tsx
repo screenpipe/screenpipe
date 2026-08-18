@@ -53,6 +53,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { PipeTriggerPicker } from "./pipe-trigger-picker";
+import { ProviderAutomationsPanel } from "./provider-automations-panel";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Select,
@@ -142,7 +143,7 @@ import {
 } from "@/components/ui/dialog";
 import { PostInstallConnectionsModal } from "@/components/post-install-connections-modal";
 import posthog from "posthog-js";
-import { MemoizedReactMarkdown } from "@/components/markdown";
+import { MarkdownBlock } from "@/components/chat/markdown-block";
 import { useDeviceMonitor } from "@/lib/hooks/use-device-monitor";
 import { Monitor, Wifi, WifiOff, ScanSearch, Lock } from "lucide-react";
 import { requestPipeStop } from "@/lib/pipe-stop";
@@ -428,6 +429,8 @@ function buildForkPrompt(pipeName: string): string {
 // parsePipeError moved to @/lib/pipe-errors (shared with the global pipe-advisory
 // watcher so both surface the same friendly message). Imported at the top.
 
+type PipeEffort = "low" | "medium" | "high";
+
 interface PipeConfig {
   name: string;
   schedule: string;
@@ -438,6 +441,7 @@ interface PipeConfig {
   agent: string;
   model: string;
   provider?: string;
+  effort?: PipeEffort;
   preset?: string | string[];
   enterprise_managed?: boolean;
   history?: boolean;
@@ -1162,6 +1166,7 @@ export function PipesSection() {
     Record<string, "clearing" | "cleared" | "error">
   >({});
   const [refreshing, setRefreshing] = useState(false);
+  const [providerRefreshToken, setProviderRefreshToken] = useState(0);
   const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const pendingSaves = useRef<Record<string, string>>({});
   // Track in-flight config saves so runPipe can await them
@@ -1239,6 +1244,7 @@ export function PipesSection() {
 
   const apiBase = selectedDevice ? `http://${selectedDevice}` : getApiBaseUrl();
   const isRemote = !!selectedDevice;
+  const composioToken = isRemote ? undefined : settings.user?.token;
   currentApiBase.current = apiBase;
   const displayedPipes = pipesForApi(pipes, pipesApiBase, apiBase);
   const displayedLogs = pipesForApi(logs, logsApiBase, apiBase);
@@ -1409,10 +1415,14 @@ export function PipesSection() {
 
   const fetchConnections = useCallback(async () => {
     try {
-      const next = await fetchAvailablePipeConnections(apiBase, availableConnections);
+      const next = await fetchAvailablePipeConnections(
+        apiBase,
+        availableConnections,
+        composioToken
+      );
       setAvailableConnections(next);
     } catch { /* server may not be running */ }
-  }, [apiBase, availableConnections]);
+  }, [apiBase, availableConnections, composioToken]);
 
   const checkForUpdates = useCallback(async () => {
     try {
@@ -2523,6 +2533,7 @@ export function PipesSection() {
           <Button variant="outline" size="icon" className={`h-8 w-8 ${refreshing ? "pointer-events-none opacity-70" : ""}`} onClick={async () => {
             if (refreshing) return;
             setRefreshing(true);
+            setProviderRefreshToken((value) => value + 1);
             await Promise.all([
               fetchPipes(),
               new Promise((r) => setTimeout(r, 2000)),
@@ -2546,6 +2557,13 @@ export function PipesSection() {
             </Button>
           )}
         </div>
+      )}
+
+      {pipeTypeFilter === "local" && !selectMode && (
+        <ProviderAutomationsPanel
+          searchQuery={searchQuery}
+          refreshToken={providerRefreshToken}
+        />
       )}
 
       {pipeTypeFilter === "cloud" ? (
@@ -3349,7 +3367,11 @@ export function PipesSection() {
                             .map((p) => ({ name: p.config.name }))}
                           availableConnections={availableConnections}
                           refreshConnections={async () => {
-                            const next = await fetchAvailablePipeConnections(apiBase, availableConnections);
+                            const next = await fetchAvailablePipeConnections(
+                              apiBase,
+                              availableConnections,
+                              composioToken
+                            );
                             setAvailableConnections(next);
                             return next;
                           }}
@@ -3543,7 +3565,12 @@ export function PipesSection() {
                                 {exec.error_message && !pipeExecutionCompletedBeforeContinueError(exec) && <p className="text-xs text-muted-foreground">{exec.error_message}</p>}
                                 {pipeExecutionDisplayStatus(exec) === "completed" && exec.stdout && cleanPipeStdout(exec.stdout) && (
                                   <div>
-                                    <div className="text-xs text-muted-foreground max-h-96 overflow-y-auto scrollbar-hide"><MemoizedReactMarkdown className="prose prose-xs dark:prose-invert max-w-none break-words text-xs [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_p]:text-xs [&_li]:text-xs [&_code]:text-[10px]">{cleanPipeStdout(exec.stdout)}</MemoizedReactMarkdown></div>
+                                    <div className="text-xs text-muted-foreground max-h-96 overflow-y-auto scrollbar-hide [&_.prose]:text-xs [&_.prose]:max-w-none [&_.prose_h1]:text-sm [&_.prose_h2]:text-xs [&_.prose_h3]:text-xs [&_.prose_p]:text-xs [&_.prose_li]:text-xs [&_.prose_code]:text-[10px]">
+                                      <MarkdownBlock
+                                        text={cleanPipeStdout(exec.stdout)}
+                                        isUser={false}
+                                      />
+                                    </div>
                                   </div>
                                 )}
                                 {pipeExecutionDisplayStatus(exec) === "failed" && exec.stderr && !exec.error_message && (
@@ -3604,7 +3631,12 @@ export function PipesSection() {
                                     >
                                       {copiedExecId === -(i + 1) ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
                                     </button>
-                                    <div className="text-xs text-muted-foreground max-h-96 overflow-y-auto scrollbar-hide"><MemoizedReactMarkdown className="prose prose-xs dark:prose-invert max-w-none break-words text-xs [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_p]:text-xs [&_li]:text-xs [&_code]:text-[10px]">{cleanPipeStdout(log.stdout)}</MemoizedReactMarkdown></div>
+                                    <div className="text-xs text-muted-foreground max-h-96 overflow-y-auto scrollbar-hide [&_.prose]:text-xs [&_.prose]:max-w-none [&_.prose_h1]:text-sm [&_.prose_h2]:text-xs [&_.prose_h3]:text-xs [&_.prose_p]:text-xs [&_.prose_li]:text-xs [&_.prose_code]:text-[10px]">
+                                      <MarkdownBlock
+                                        text={cleanPipeStdout(log.stdout)}
+                                        isUser={false}
+                                      />
+                                    </div>
                                   </div>
                                 )}
                                 {!log.success && log.stderr && (
@@ -3624,7 +3656,7 @@ export function PipesSection() {
                       <div className="px-4 py-3">
                         <p className="text-sm font-medium">runtime</p>
                         <p className="mt-0.5 text-[11px] text-muted-foreground">
-                          control external notifications and execution limits.
+                          control reasoning, external notifications, and execution limits.
                         </p>
                       </div>
                       {/* Notification API permission */}
@@ -3639,6 +3671,54 @@ export function PipesSection() {
                           checked={!isNotificationsDenied(promptDrafts[pipe.config.name] ?? pipe.raw_content)}
                           onCheckedChange={(checked) => toggleNotifications(pipe.config.name, checked)}
                         />
+                      </div>
+
+                      {/* Reasoning effort */}
+                      <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_11rem] sm:items-center">
+                        <div>
+                          <Label className="text-xs font-medium">reasoning effort</Label>
+                          <p className="mt-0.5 text-[11px] text-muted-foreground">
+                            low uses fewer reasoning tokens. raise it only for tasks that need deeper analysis; unsupported models may ignore it.
+                          </p>
+                        </div>
+                        <Select
+                          disabled={enterpriseManaged}
+                          value={pipe.config.effort ?? "low"}
+                          onValueChange={(value) => {
+                            const pipeName = pipe.config.name;
+                            const effort = value as PipeEffort;
+                            setPipes((prev) =>
+                              prev.map((p) =>
+                                p.config.name === pipeName
+                                  ? { ...p, config: { ...p.config, effort } }
+                                  : p
+                              )
+                            );
+                            const savePromise = fetch(`${apiBase}/pipes/${encodeURIComponent(pipeName)}/config`, {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ effort }),
+                            }).then(() => {
+                              delete pendingConfigSaves.current[pipeName];
+                              fetchPipes();
+                            }).catch(() => {
+                              delete pendingConfigSaves.current[pipeName];
+                            });
+                            pendingConfigSaves.current[pipeName] = savePromise;
+                          }}
+                        >
+                          <SelectTrigger
+                            className="h-8 w-full text-xs"
+                            data-testid={`pipe-effort-select-${pipe.config.name}`}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="low">low (recommended)</SelectItem>
+                            <SelectItem value="medium">medium</SelectItem>
+                            <SelectItem value="high">high</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </div>
 
                       {/* Timeout */}
@@ -4094,7 +4174,8 @@ export function PipesSection() {
               try {
                 latestConnections = await fetchAvailablePipeConnections(
                   apiBase,
-                  availableConnections
+                  availableConnections,
+                  composioToken
                 );
               } catch {
                 // Fall back to current in-memory state if fetch fails.

@@ -8,9 +8,9 @@
 //! Borrows shared `Arc`s from `ServerCore` (DB, AudioManager, etc.)
 //! without taking ownership — the server stays alive across capture cycles.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use std::path::PathBuf;
 
 use screenpipe_audio::audio_manager::builder::AudioManagerOptions;
 use screenpipe_audio::core::device::resolve_audio_devices_for_capture;
@@ -155,14 +155,34 @@ impl CaptureSession {
                 None
             };
 
-            // A failed initial start() (e.g. 0 monitors while screen is locked at boot)
-            // is recoverable — the monitor watcher below retries on unlock/topology change.
-            // Don't propagate the error; keep the session alive so the watcher can run.
-            match vision_manager.start().await {
-                Ok(()) => info!("VisionManager started successfully"),
-                Err(e) => {
-                    warn!("VisionManager initial start failed ({e}); monitor watcher will retry");
-                    crate::health::set_recording_status(crate::health::RecordingStatus::Starting);
+            // Do not initialize ScreenCaptureKit while the login session is
+            // locked. A replacement process can launch while the lid is shut
+            // (for example after an auto-update); asking SCShareableContent for
+            // displays then can leave that process returning an empty display
+            // list even after the authoritative unlock notification arrives.
+            // The monitor watcher below waits on that notification and performs
+            // the first SCK call only after the session is unlocked.
+            #[cfg(target_os = "macos")]
+            let defer_vision_start = screenpipe_engine::sleep_monitor::screen_is_locked();
+            #[cfg(not(target_os = "macos"))]
+            let defer_vision_start = false;
+
+            if defer_vision_start {
+                info!("Screen locked at capture startup — deferring VisionManager until unlock");
+                crate::health::set_recording_status(crate::health::RecordingStatus::Starting);
+            } else {
+                // Other initial failures remain recoverable through the monitor
+                // watcher; keep the session alive so it can reconcile them.
+                match vision_manager.start().await {
+                    Ok(()) => info!("VisionManager started successfully"),
+                    Err(e) => {
+                        warn!(
+                            "VisionManager initial start failed ({e}); monitor watcher will retry"
+                        );
+                        crate::health::set_recording_status(
+                            crate::health::RecordingStatus::Starting,
+                        );
+                    }
                 }
             }
 

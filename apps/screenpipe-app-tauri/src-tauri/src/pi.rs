@@ -455,6 +455,9 @@ pub struct PiExtensionPackage {
     pub scope: String,
     pub filtered: bool,
     pub installed: bool,
+    /// True only after Screenpipe validates the installed package's portable
+    /// ACP MCP manifest and its entrypoint stays inside the package directory.
+    pub acp_compatible: bool,
 }
 
 /// RPC Response from Pi
@@ -4430,19 +4433,30 @@ pub struct AcpAgentInstallStatus {
     pub installed: bool,
     pub command: Option<String>,
     pub install_url: Option<String>,
+    pub can_install_automatically: bool,
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn pi_acp_agent_install_status(agent_id: String) -> AcpAgentInstallStatus {
-    let (requires_install, installed, command, install_url) =
+    let (requires_install, installed, command, install_url, can_install_automatically) =
         crate::acp_runtime::agent_install_status(&agent_id);
     AcpAgentInstallStatus {
         requires_install,
         installed,
         command,
         install_url,
+        can_install_automatically,
     }
+}
+
+/// Install a supported binary ACP agent after the user clicks Install, then
+/// return a fresh status so the UI only unblocks once the CLI is resolvable.
+#[tauri::command]
+#[specta::specta]
+pub async fn pi_acp_agent_install(agent_id: String) -> Result<AcpAgentInstallStatus, String> {
+    crate::acp_runtime::install_agent(&agent_id).await?;
+    Ok(pi_acp_agent_install_status(agent_id))
 }
 
 /// Whether launching this agent will trigger a first-run package install (a
@@ -4623,6 +4637,7 @@ fn pi_settings_packages(settings: &serde_json::Value) -> Vec<PiExtensionPackage>
 
             Some(PiExtensionPackage {
                 installed: pi_package_source_looks_installed(&source),
+                acp_compatible: crate::acp_extensions::package_source_is_portable(&source),
                 source,
                 scope: "user".to_string(),
                 filtered,
@@ -4662,7 +4677,7 @@ fn validate_pi_extension_package_source(source: &str) -> Result<String, String> 
     Err("Only npm: packages and GitHub package URLs can be installed from screenpipe".to_string())
 }
 
-fn npm_package_name_from_source(source: &str) -> Option<String> {
+pub(crate) fn npm_package_name_from_source(source: &str) -> Option<String> {
     let spec = source.strip_prefix("npm:")?.trim();
     if spec.is_empty() {
         return None;

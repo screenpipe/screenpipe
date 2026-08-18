@@ -1,0 +1,22 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "company.thebrowser.Browser",
+    "executable": "Arc",
+    "display_name": "Gmail",
+    "version": "1.0",
+    "browser_url": "https://mail.google.com/mail/u/0/#inbox/example"
+  },
+  "nodes": [
+    { "role": "AXWindow", "text": "Gmail", "depth": 0 },
+    { "role": "AXWebArea", "text": "Gmail", "depth": 1, "automation_id": "RootWebArea" },
+    { "role": "AXHeading", "text": "Release readiness", "depth": 2 },
+    { "role": "AXList", "text": "", "depth": 2 },
+    { "role": "AXHeading", "text": "Alice", "depth": 3 },
+    { "role": "AXStaticText", "text": "Alice", "depth": 4 },
+    { "role": "AXStaticText", "text": "Today at 10:20 AM", "depth": 4 },
+    { "role": "AXStaticText", "text": "Please review the signed build.", "depth": 4 },
+    { "role": "AXButton", "text": "Add reaction", "depth": 4 },
+    { "role": "AXButton", "text": "Reply", "depth": 4 }
+  ]
+}

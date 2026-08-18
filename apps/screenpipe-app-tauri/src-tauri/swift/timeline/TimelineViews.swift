@@ -97,9 +97,22 @@ struct TimelineRootView: View {
                 TimelineHoverPreview(
                     frame: model.frames[hovered],
                     carriedURL: nil,
+                    carriedAppName: model.appGroups.first {
+                        $0.frameIndices.contains(hovered)
+                    }?.appName,
+                    carriedDomain: model.appGroups.first {
+                        $0.frameIndices.contains(hovered)
+                    }?.topDomains.first,
                     loader: thumbnailLoader
                 )
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .padding(
+                    .leading,
+                    TimelineHoverLayout.previewLeadingX(
+                        cursorX: model.hoveredScrubberX ?? model.containerWidth / 2,
+                        containerWidth: model.containerWidth
+                    )
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                 .padding(.bottom, 120)
                 .allowsHitTesting(false)
                 .onAppear { loadHoverThumbnail(hovered) }
@@ -144,7 +157,7 @@ struct TimelineFrameCanvas: View {
                     showsSpinner: true
                 )
             case .recordingOff:
-                TimelineRecordingOffCard()
+                TimelineRecordingOffCard(model: model)
             case .buildingMemory:
                 TimelineBuildingMemoryCard()
             case .connectionError(let message):
@@ -234,6 +247,8 @@ struct TimelineStatusCard: View {
 /// Recording is off in settings — the one state that must never be confused
 /// with "still loading", because the fix is a settings change, not waiting.
 struct TimelineRecordingOffCard: View {
+    @ObservedObject var model: TimelineViewModel
+
     var body: some View {
         VStack(spacing: 12) {
             ZStack {
@@ -253,7 +268,7 @@ struct TimelineRecordingOffCard: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 320)
             Button("Open settings") {
-                TimelineActionBridge.shared.emit("open_recording_settings")
+                model.emitAction("open_recording_settings")
             }
             .buttonStyle(TimelineControlStyle())
         }
@@ -438,7 +453,9 @@ struct TimelineControlBar: View {
                 Image(systemName: "chevron.right")
             }
             .buttonStyle(TimelineControlStyle())
-            .disabled(model.isNavigating || model.isAtToday)
+            // Forward navigation is the escape hatch from a slow/empty older
+            // day, so it remains clickable while that request is pending.
+            .disabled(model.isAtToday)
             .help("Next day")
 
             Button { model.jumpToNow() } label: {
@@ -492,7 +509,7 @@ struct TimelineControlBar: View {
     private var dailySummaryAction: some View {
         Button {
             let date = model.currentTimestamp ?? model.currentDate
-            TimelineActionBridge.shared.emit(
+            model.emitAction(
                 "open_daily_summary:\(TimelineDateNavigation.dayKey(date))"
             )
         } label: {
@@ -509,7 +526,7 @@ struct TimelineControlBar: View {
     }
 
     private var searchAction: some View {
-        Button { TimelineActionBridge.shared.emit("open_search") } label: {
+        Button { model.emitAction("open_search") } label: {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                 Text("search")
@@ -521,7 +538,7 @@ struct TimelineControlBar: View {
     }
 
     private var chatAction: some View {
-        Button { TimelineActionBridge.shared.emit("open_chat") } label: {
+        Button { model.emitAction("open_chat") } label: {
             HStack(spacing: 6) {
                 Image(systemName: "bubble.left")
                 Text("chat")
@@ -555,7 +572,7 @@ struct TimelineMuteButton: View {
             }
             .frame(width: 24, height: 24)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TimelinePlainButtonStyle())
         .foregroundStyle(isMuted ? TimelineTheme.trace : TimelineTheme.foreground)
         .help(isMuted ? "unmute \(device)" : "mute \(device)")
     }
@@ -574,12 +591,12 @@ struct TimelineCalendarPopover: View {
         VStack(spacing: 8) {
             HStack {
                 Button { shiftMonth(-1) } label: { Image(systemName: "chevron.left") }
-                    .buttonStyle(.plain)
+                    .buttonStyle(TimelinePlainButtonStyle())
                 Spacer()
                 Text(monthLabel).font(.system(size: 12, weight: .semibold))
                 Spacer()
                 Button { shiftMonth(1) } label: { Image(systemName: "chevron.right") }
-                    .buttonStyle(.plain)
+                    .buttonStyle(TimelinePlainButtonStyle())
                     .disabled(isCurrentMonth)
             }
             LazyVGrid(columns: columns, spacing: 2) {
@@ -610,7 +627,7 @@ struct TimelineCalendarPopover: View {
                         .font(.system(size: 11, design: .monospaced))
                         .frame(width: 28, height: 24)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TimelinePlainButtonStyle())
                 .disabled(!enabled)
                 .opacity(enabled ? 1 : 0.25)
             } else {
@@ -706,7 +723,7 @@ struct TimelineFilterRail: View {
                     lineWidth: 1)
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TimelinePlainButtonStyle())
         .accessibilityLabel(model.showSubtitles ? "hide captions" : "show captions")
         .help(model.showSubtitles ? "Hide captions" : "Show captions")
     }
@@ -734,6 +751,7 @@ struct TimelineFilterRail: View {
                     ForEach(items.prefix(24), id: \.self) { item in
                         dot(item, isSelected: selected == item, anySelected: selected != nil)
                             .onTapGesture { model.applyFilter(keyPath, item) }
+                            .timelinePointerCursor()
                     }
                 }
                 .padding(.horizontal, 6)
@@ -787,6 +805,7 @@ struct TimelineFilterRail: View {
                                    height: model.filters.meetingId == meeting.id ? 8 : 6)
                             .help(meetingLabel(meeting))
                             .onTapGesture { model.selectMeeting(meeting) }
+                            .timelinePointerCursor()
                     }
                 }
                 .padding(.horizontal, 6)
@@ -814,13 +833,13 @@ struct TimelineFilterRail: View {
             if expanded == "zoom" {
                 HStack(spacing: 6) {
                     Button { model.zoom.zoomOut() } label: { Image(systemName: "minus.magnifyingglass") }
-                        .buttonStyle(.plain)
+                        .buttonStyle(TimelinePlainButtonStyle())
                         .foregroundStyle(TimelineTheme.foreground)
                     Text("\(Int((model.zoom.target * 100).rounded()))%")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(TimelineTheme.foreground)
                     Button { model.zoom.zoomIn() } label: { Image(systemName: "plus.magnifyingglass") }
-                        .buttonStyle(.plain)
+                        .buttonStyle(TimelinePlainButtonStyle())
                         .foregroundStyle(TimelineTheme.foreground)
                 }
                 .padding(.horizontal, 6)
@@ -836,6 +855,7 @@ struct TimelineFilterRail: View {
 
 struct TimelineSubtitleBar: View {
     @ObservedObject var model: TimelineViewModel
+    @State private var editingLine: SubtitleLine?
 
     var body: some View {
         let lines = model.subtitleLines
@@ -846,9 +866,17 @@ struct TimelineSubtitleBar: View {
                         Image(systemName: line.isInput ? "mic" : "speaker.wave.2")
                             .font(.system(size: 10))
                             .foregroundStyle(TimelineTheme.trace)
-                        Text(line.speaker)
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(TimelineTheme.foreground)
+                        if line.isInput {
+                            Text(line.speaker)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(TimelineTheme.foreground)
+                        } else {
+                            Button(line.speaker) { editingLine = line }
+                                .buttonStyle(TimelinePlainButtonStyle())
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(TimelineTheme.foreground)
+                                .help("Change speaker")
+                        }
                         if line.isPending {
                             HStack(spacing: 4) {
                                 ProgressView().controlSize(.mini)
@@ -876,6 +904,75 @@ struct TimelineSubtitleBar: View {
             .background(TimelineTheme.chromeBackground)
             .overlay(Rectangle().stroke(TimelineTheme.border, lineWidth: 1))
             .onTapGesture { model.showAudioTranscript.toggle() }
+            .popover(item: $editingLine) { line in
+                TimelineSpeakerEditor(model: model, line: line) {
+                    editingLine = nil
+                }
+            }
+        }
+    }
+}
+
+struct TimelineSpeakerEditor: View {
+    @ObservedObject var model: TimelineViewModel
+    let line: SubtitleLine
+    let onClose: () -> Void
+    @State private var name: String
+    @State private var isSaving = false
+    @State private var error: String?
+
+    init(model: TimelineViewModel, line: SubtitleLine, onClose: @escaping () -> Void) {
+        self.model = model
+        self.line = line
+        self.onClose = onClose
+        _name = State(initialValue: line.speaker)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("CHANGE SPEAKER")
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            TextField("speaker name", text: $name)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 8)
+                .frame(width: 220, height: 28)
+                .overlay(Rectangle().stroke(TimelineTheme.border, lineWidth: 1))
+                .onSubmit { save() }
+            if let error {
+                Text(error)
+                    .font(TimelineTheme.captionFont)
+                    .foregroundStyle(Color.red.opacity(0.85))
+            }
+            HStack(spacing: 6) {
+                Button("cancel", action: onClose)
+                    .buttonStyle(TimelineControlStyle())
+                Button {
+                    save()
+                } label: {
+                    if isSaving { ProgressView().controlSize(.mini) }
+                    else { Text("save") }
+                }
+                .buttonStyle(TimelineControlStyle(isActive: true))
+                .disabled(isSaving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(12)
+        .background(TimelineTheme.ink)
+        .foregroundStyle(TimelineTheme.foreground)
+    }
+
+    private func save() {
+        guard !isSaving else { return }
+        isSaving = true
+        error = nil
+        Task {
+            do {
+                try await model.reassignSpeaker(line, to: name)
+                onClose()
+            } catch {
+                self.error = "Could not update this speaker."
+                isSaving = false
+            }
         }
     }
 }
@@ -899,7 +996,7 @@ struct TimelineURLPill: View {
             .padding(.vertical, 4)
             .frame(maxWidth: 420)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TimelinePlainButtonStyle())
         .foregroundStyle(TimelineTheme.foreground.opacity(0.8))
         .background(Capsule().fill(Color.black.opacity(0.7)))
         .overlay(Capsule().stroke(TimelineTheme.border, lineWidth: 1))
@@ -920,7 +1017,7 @@ struct TimelineSearchPill: View {
                     .frame(maxWidth: 120)
 
                 Button { model.stepSearchResult(1) } label: { Image(systemName: "chevron.left") }
-                    .buttonStyle(.plain)
+                    .buttonStyle(TimelinePlainButtonStyle())
                     .disabled(review.isLast)
                     .help("older match (←)")
 
@@ -931,12 +1028,12 @@ struct TimelineSearchPill: View {
                     .monospacedDigit()
 
                 Button { model.stepSearchResult(-1) } label: { Image(systemName: "chevron.right") }
-                    .buttonStyle(.plain)
+                    .buttonStyle(TimelinePlainButtonStyle())
                     .disabled(review.isFirst)
                     .help("newer match (→)")
 
                 Button { model.exitSearchReview() } label: { Image(systemName: "xmark") }
-                    .buttonStyle(.plain)
+                    .buttonStyle(TimelinePlainButtonStyle())
                     .help("Exit search review (Esc)")
             }
             .foregroundStyle(TimelineTheme.foreground)
@@ -980,6 +1077,7 @@ struct TimelineSearchStripView: View {
             }
             .frame(width: TimelineSearchStrip.width, height: TimelineSearchStrip.height)
             .contentShape(Rectangle())
+            .timelinePointerCursor()
             .gesture(
                 DragGesture(minimumDistance: 0).onEnded { value in
                     onSelect(TimelineSearchStrip.resultIndex(atX: value.location.x, count: review.count))
@@ -1010,7 +1108,7 @@ struct TimelineTagToolbar: View {
                     .font(.system(size: 11, design: .monospaced))
                 Spacer()
                 Button { confirmingDelete.toggle() } label: { Image(systemName: "trash") }
-                    .buttonStyle(.plain)
+                    .buttonStyle(TimelinePlainButtonStyle())
                     .help("Delete this range")
             }
             .foregroundStyle(TimelineTheme.foreground)
@@ -1025,7 +1123,7 @@ struct TimelineTagToolbar: View {
                         Button("cancel") { confirmingDelete = false }
                             .buttonStyle(TimelineControlStyle())
                         Button("delete permanently") {
-                            TimelineActionBridge.shared.emit("delete_range")
+                            model.emitAction("delete_range")
                             confirmingDelete = false
                             model.clearSelection()
                         }
@@ -1035,12 +1133,39 @@ struct TimelineTagToolbar: View {
             } else {
                 HStack(spacing: 6) {
                     ForEach(quickTags, id: \.self) { tag in
-                        Button(tag) {
-                            model.applyTag(tag, add: true)
-                            TimelineActionBridge.shared.emit("apply_tag:\(tag)")
-                            model.clearSelection()
+                        let state = model.tagState(tag, in: selection)
+                        Button {
+                            let add = state != .all
+                            model.applyTag(tag, add: add)
+                            model.emitAction("apply_tag:\(tag)")
+                        } label: {
+                            HStack(spacing: 4) {
+                                if state == .all { Image(systemName: "checkmark") }
+                                else if state == .some { Image(systemName: "minus") }
+                                Text(tag)
+                            }
                         }
-                        .buttonStyle(TimelineControlStyle())
+                        .buttonStyle(TimelineControlStyle(isActive: state == .all))
+                        .help(state == .all ? "Remove \(tag) from selection" : "Add \(tag) to selection")
+                    }
+                }
+                let customSelectionTags = model.selectionTags.filter { !quickTags.contains($0) }
+                if !customSelectionTags.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(customSelectionTags, id: \.self) { tag in
+                                Button {
+                                    model.applyTag(tag, add: false)
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Text(tag)
+                                        Image(systemName: "xmark")
+                                    }
+                                }
+                                .buttonStyle(TimelineControlStyle(isActive: true))
+                                .help("Remove \(tag) from selection")
+                            }
+                        }
                     }
                 }
                 HStack(spacing: 6) {
@@ -1054,23 +1179,37 @@ struct TimelineTagToolbar: View {
                         let trimmed = customTag.trimmingCharacters(in: .whitespaces)
                         guard !trimmed.isEmpty else { return }
                         model.applyTag(trimmed, add: true)
-                        TimelineActionBridge.shared.emit("apply_tag:\(trimmed)")
+                        model.emitAction("apply_tag:\(trimmed)")
                         customTag = ""
-                        model.clearSelection()
                     }
                     .buttonStyle(TimelineControlStyle())
                 }
-                Button {
-                    if let action = model.askAISelectionAction() {
-                        TimelineActionBridge.shared.emit(action)
+                HStack(spacing: 6) {
+                    Button {
+                        if let action = model.askAISelectionAction() {
+                            model.emitAction(action)
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "sparkles")
+                            Text("ask ai")
+                        }
                     }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "sparkles")
-                        Text("ask ai")
+                    .buttonStyle(TimelineControlStyle())
+
+                    Button {
+                        if let action = model.exportVideoSelectionAction() {
+                            model.emitAction(action)
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "square.and.arrow.up")
+                            Text("export video")
+                        }
                     }
+                    .buttonStyle(TimelineControlStyle())
+                    .help("Export this selection as an MP4 with synced audio")
                 }
-                .buttonStyle(TimelineControlStyle())
             }
         }
         .padding(12)

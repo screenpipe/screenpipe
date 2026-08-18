@@ -75,12 +75,15 @@ export interface Tool {
 	};
 }
 
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
 export interface RequestBody {
 	model: string;
 	messages: Message[];
 	stream?: boolean;
 	tools?: any[];
 	temperature?: number;
+	reasoning_effort?: ReasoningEffort;
 	max_tokens?: number;
 	max_completion_tokens?: number;
 	tool_choice?: string | { type: 'function'; function: { name: string } };

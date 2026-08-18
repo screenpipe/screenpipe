@@ -242,9 +242,15 @@ Export screen recordings as video files:
 
 ### activity-summary
 Get a lightweight compressed activity overview for a time range:
-- App usage with active minutes and frame counts
-- Recent accessibility texts
-- Audio speaker summary
+- Authoritative total active minutes and server data status
+- Per-app active minutes and a bounded window/tab breakdown
+- Edited document paths plus an optional bounded parsed-context sample for identifying tasks
+- Recent accessibility text and audio context
+
+Use active-minute fields for duration. Edited paths, parsed rows, frames, text,
+and audio samples are supporting context only; their counts are not time.
+Parsed capture is experimental and may be disabled or unsupported; the base
+activity summary remains complete without it.
 
 ### list-meetings
 List detected meetings with id, duration, app, attendees, and note snippet. Pass `q` to filter by substring (title, attendees, notes) — `q` searches all meeting history, so omit the time range when looking for a person or topic. Follow up with `get-meeting` (optionally `include_transcript: true`) for the full note and speaker-attributed transcript.

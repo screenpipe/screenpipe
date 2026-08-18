@@ -220,5 +220,5 @@ fn messaging_parser_versions_invalidate_stale_parse_runs() {
         .collect::<Vec<_>>();
 
     assert!(versions.contains(&("app.macos.slack.content_list", "2")));
-    assert!(versions.contains(&("family.conversation", "2")));
+    assert!(versions.contains(&("family.conversation", "3")));
 }

@@ -167,6 +167,36 @@ describe("cross-window transcript sync", () => {
     });
   });
 
+  it("correlates a reviewed snapshot by its visible prompt instead of its model envelope", () => {
+    const payload = JSON.stringify({
+      kind: "screenpipe_share_context",
+      source: "meeting",
+      title: "Roadmap",
+      snapshot: "# Roadmap\n\nDecision: ship it.",
+    });
+    expect(
+      optimisticAssistantForUserEcho(
+        [
+          {
+            ...user,
+            content: `[Context from reviewed Screenpipe snapshot: ${payload}]\n\nShare this to Notion`,
+          },
+          {
+            id: "assistant-stable",
+            role: "assistant",
+            content: "Processing...",
+            timestamp: 2,
+          },
+        ],
+        "Share this to Notion",
+      ),
+    ).toEqual({
+      assistantMessageId: "assistant-stable",
+      streamingText: "",
+      contentBlocks: [],
+    });
+  });
+
   it("does not collapse a different or already-settled user turn", () => {
     expect(
       optimisticAssistantForUserEcho(

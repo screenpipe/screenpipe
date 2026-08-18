@@ -2317,9 +2317,36 @@ pub async fn ensure_webview_focus(_app_handle: tauri::AppHandle) -> Result<(), S
     Ok(())
 }
 
-/// Navigate from Search to a timestamp on the Main timeline.
-/// Shows Main, emits the navigation event from the app handle (not a webview),
-/// then closes the Search window.
+fn validated_timeline_origin(origin: Option<&str>) -> Result<Option<&str>, String> {
+    match origin {
+        None => Ok(None),
+        Some("home" | "main" | "main-window") => Ok(origin),
+        Some(other) => Err(format!("invalid timeline origin: {other}")),
+    }
+}
+
+#[cfg(test)]
+mod search_navigation_origin_tests {
+    use super::validated_timeline_origin;
+
+    #[test]
+    fn accepts_only_timeline_host_labels() {
+        assert_eq!(validated_timeline_origin(Some("home")).unwrap(), Some("home"));
+        assert_eq!(validated_timeline_origin(Some("main")).unwrap(), Some("main"));
+        assert_eq!(
+            validated_timeline_origin(Some("main-window")).unwrap(),
+            Some("main-window")
+        );
+        assert_eq!(validated_timeline_origin(None).unwrap(), None);
+        assert!(validated_timeline_origin(Some("search")).is_err());
+    }
+}
+
+/// Navigate from Search to the timeline that opened it.
+///
+/// Native Swift timelines are addressed by their host-window label. Searches
+/// opened elsewhere retain the legacy React event so non-macOS and older
+/// surfaces continue to work.
 #[tauri::command]
 #[specta::specta]
 pub async fn search_navigate_to_timeline(
@@ -2329,7 +2356,59 @@ pub async fn search_navigate_to_timeline(
     search_terms: Option<Vec<String>>,
     search_results_json: Option<String>,
     search_query: Option<String>,
+    timeline_origin: Option<String>,
 ) -> Result<(), String> {
+    let timeline_origin = validated_timeline_origin(timeline_origin.as_deref())?;
+
+    #[cfg(target_os = "macos")]
+    if let Some(origin) = timeline_origin {
+        if crate::native_timeline::is_available() {
+            match origin {
+                "home" => ShowRewindWindow::Home { page: None }
+                    .show(&app_handle)
+                    .map_err(|e| e.to_string())?,
+                "main" | "main-window" => ShowRewindWindow::Main
+                    .show(&app_handle)
+                    .map_err(|e| e.to_string())?,
+                _ => unreachable!("timeline origin was validated"),
+            };
+
+            // The source timeline normally remains attached while Search is
+            // visible. Retry as well so a restored overlay can finish mounting
+            // its native child before the hand-off arrives.
+            let _ = crate::native_timeline::navigate_to_search_result(
+                &timestamp,
+                frame_id,
+                origin,
+                search_terms.as_deref(),
+                search_results_json.as_deref(),
+                search_query.as_deref(),
+            );
+
+            let app = app_handle.clone();
+            let timestamp_retry = timestamp.clone();
+            let origin_retry = origin.to_string();
+            let search_terms_retry = search_terms.clone();
+            let search_results_retry = search_results_json.clone();
+            let search_query_retry = search_query.clone();
+            tokio::spawn(async move {
+                for _ in 0..4 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                    let _ = crate::native_timeline::navigate_to_search_result(
+                        &timestamp_retry,
+                        frame_id,
+                        &origin_retry,
+                        search_terms_retry.as_deref(),
+                        search_results_retry.as_deref(),
+                        search_query_retry.as_deref(),
+                    );
+                }
+                let _ = ShowRewindWindow::Search { query: None }.close(&app);
+            });
+            return Ok(());
+        }
+    }
+
     // Show the Main timeline
     ShowRewindWindow::Main
         .show(&app_handle)
@@ -2807,12 +2886,20 @@ pub async fn set_window_size(
 pub async fn open_search_window(
     app_handle: tauri::AppHandle,
     query: Option<String>,
+    timeline_origin: Option<String>,
 ) -> Result<(), String> {
-    ShowRewindWindow::Main
-        .close(&app_handle)
-        .map_err(|e| e.to_string())?;
+    let timeline_origin = validated_timeline_origin(timeline_origin.as_deref())?;
+    if timeline_origin.is_some() {
+        // Match `show_window(Search)`: hide the overlay without restoring the
+        // previous foreground app, so the Search panel can take focus cleanly.
+        hide_main_window(app_handle.clone());
+    } else {
+        ShowRewindWindow::Main
+            .close(&app_handle)
+            .map_err(|e| e.to_string())?;
+    }
     ShowRewindWindow::Search { query }
-        .show(&app_handle)
+        .show_with_search_origin(&app_handle, timeline_origin)
         .map_err(|e| e.to_string())?;
     Ok(())
 }

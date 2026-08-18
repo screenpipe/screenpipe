@@ -242,6 +242,16 @@ describe("stdio startup handshake", () => {
     expect(tools.some((tool) => tool.name === "semantic-context")).toBe(false);
   });
 
+  it("exposes bounded parsed task context on activity-summary", async () => {
+    const tools = await listToolsHandshake();
+    const activity = tools.find((tool) => tool.name === "activity-summary");
+    const properties = activity?.inputSchema?.properties;
+    expect(properties?.include_parsed_context?.default).toBe(false);
+    expect(properties?.parsed_context_limit?.default).toBe(10);
+    expect(properties?.parsed_context_limit?.minimum).toBe(1);
+    expect(properties?.parsed_context_limit?.maximum).toBe(20);
+  });
+
   it("advertises local-calendar literals for every normalized time field", async () => {
     const tools = await listToolsHandshake();
     const fieldsByTool = new Map<string, string[]>([

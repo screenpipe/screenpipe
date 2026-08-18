@@ -564,6 +564,72 @@ fn discord_requires_content_list_with_document_articles() {
 }
 
 #[test]
+fn discord_accepts_document_group_role_variant() {
+    let mut builder = SemanticTreeBuilder::new(TreeBudget::default());
+    let window = push(
+        &mut builder,
+        None,
+        "AXWindow",
+        Some("#release - Discord"),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    let list = push(
+        &mut builder,
+        Some(window),
+        "AXList",
+        None,
+        None,
+        None,
+        None,
+        Some("AXContentList"),
+        None,
+    );
+    let article = push(
+        &mut builder,
+        Some(list),
+        "AXGroup",
+        None,
+        None,
+        None,
+        None,
+        Some("AXDocument"),
+        None,
+    );
+    push(
+        &mut builder,
+        Some(article),
+        "AXStaticText",
+        Some("Dana"),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    push(
+        &mut builder,
+        Some(article),
+        "AXStaticText",
+        Some("Ship it today."),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    let tree = builder.finish();
+    let (parser, outcome) = parse("com.hnc.Discord", &tree);
+    assert_eq!(parser, "app.macos.discord.content_list");
+    let items = handled_items(outcome);
+    assert_eq!(items[1].actor.as_deref(), Some("Dana"));
+    assert_eq!(items[1].body.as_deref(), Some("Ship it today."));
+}
+
+#[test]
 fn calendar_requires_active_view_and_structured_description() {
     let mut builder = SemanticTreeBuilder::new(TreeBudget::default());
     let window = push(

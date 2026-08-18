@@ -15,7 +15,7 @@ routes = [
   { pattern = "api.screenpipe.com", zone_name = "screenpipe.com", custom_domain = true }
 ]
 
-# tail_consumers = [{service = "ai-gateway-tail"}]
+tail_consumers = [{service = "ai-gateway-tail"}]
 
 # Workers Logs
 # Docs: https://developers.cloudflare.com/workers/observability/logs/workers-logs/

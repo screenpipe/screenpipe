@@ -23,6 +23,8 @@ import {
   sanitizeCommand,
   presentToolActivity,
   presentToolActivityStatus,
+  presentMcpStartup,
+  redactMcpStartupDetail,
   mcpScreenpipeCommand,
 } from "../tool-presentation";
 
@@ -480,6 +482,63 @@ describe("MCP server startup diagnostics", () => {
     expect(
       presentToolActivity({ toolName: "mcp__acme__startup-check", args: {} }).completedLabel,
     ).toBe("Startup check");
+  });
+
+  it("maps the four ACP startup states", () => {
+    expect(
+      presentMcpStartup({
+        toolName: "mcp__screenpipe__startup",
+        isRunning: true,
+      }),
+    ).toEqual({ serverName: "screenpipe", state: "connecting" });
+    expect(
+      presentMcpStartup({ toolName: "mcp__linear__startup" }),
+    ).toEqual({ serverName: "Linear", state: "connected" });
+    expect(
+      presentMcpStartup({
+        toolName: "mcp__notion__startup",
+        isError: true,
+        result:
+          "[codex-acp forwarded startup error] MCP server `notion` failed to start: Not logged in. Run `codex mcp login notion`.",
+      }),
+    ).toEqual({
+      serverName: "Notion",
+      state: "auth-required",
+      detail: "Not logged in. Run `codex mcp login notion`.",
+    });
+    expect(
+      presentMcpStartup({
+        toolName: "mcp__n8n__startup",
+        isError: true,
+        result: "MCP server `n8n` failed to start: HTTP 404: No workspace here",
+      }),
+    ).toEqual({
+      serverName: "N8n",
+      state: "error",
+      detail: "HTTP 404: No workspace here",
+    });
+  });
+
+  it("does not treat a real MCP tool as a startup state", () => {
+    expect(
+      presentMcpStartup({ toolName: "mcp__notion__search", isError: true }),
+    ).toBeNull();
+  });
+
+  it("redacts bearer tokens and credential-shaped values", () => {
+    const detail = redactMcpStartupDetail(
+      'Authorization: Bearer abcdefghijklmnop== api_key=super-secret refresh_token: another-secret {"client_secret":"json-secret","token":"json-token"}',
+    );
+    expect(detail).toContain("Bearer …");
+    expect(detail).toContain("api_key=…");
+    expect(detail).toContain("refresh_token: …");
+    expect(detail).toContain('"client_secret":"…"');
+    expect(detail).toContain('"token":"…"');
+    expect(detail).not.toContain("abcdefghijklmnop");
+    expect(detail).not.toContain("super-secret");
+    expect(detail).not.toContain("another-secret");
+    expect(detail).not.toContain("json-secret");
+    expect(detail).not.toContain("json-token");
   });
 });
 

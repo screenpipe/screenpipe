@@ -19,14 +19,23 @@
 /** Canonical order — also the fallback for ids a stored layout never mentioned. */
 export const SIDEBAR_NAV_ORDER = [
   "home",
+  "meetings",
+  "timeline",
+  "brain",
+  "pipes",
+  "connections",
+] as const;
+
+export type SidebarNavId = (typeof SIDEBAR_NAV_ORDER)[number];
+
+const PREVIOUS_DEFAULT_SIDEBAR_NAV_ORDER = [
+  "home",
   "brain",
   "meetings",
   "pipes",
   "timeline",
   "connections",
-] as const;
-
-export type SidebarNavId = (typeof SIDEBAR_NAV_ORDER)[number];
+] as const satisfies readonly SidebarNavId[];
 
 export type SidebarNavLayout = {
   /** Ids in render order. May omit ids (they fall back to canonical position). */
@@ -79,10 +88,20 @@ export function normalizeSidebarNavLayout(
     return { order: [...SIDEBAR_NAV_ORDER], hidden };
   }
 
+  // Move installs that still have the previous shipped default to the new
+  // default. Any other stored order remains user-owned and untouched.
+  const hadPreviousDefaultOrder =
+    storedOrder.length === PREVIOUS_DEFAULT_SIDEBAR_NAV_ORDER.length &&
+    storedOrder.every(
+      (id, index) => id === PREVIOUS_DEFAULT_SIDEBAR_NAV_ORDER[index],
+    );
+
   // Splice missing ids back at their canonical position: walk the canonical
   // list and, for each id the user never ordered, insert it after the last
   // canonical predecessor that the stored order does contain.
-  const order = [...storedOrder];
+  const order = hadPreviousDefaultOrder
+    ? [...SIDEBAR_NAV_ORDER]
+    : [...storedOrder];
   for (const id of SIDEBAR_NAV_ORDER) {
     if (order.includes(id)) continue;
     const canonicalIndex = SIDEBAR_NAV_ORDER.indexOf(id);

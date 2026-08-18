@@ -82,6 +82,18 @@ struct AudioUpdate: Equatable {
     static let matchWindow: TimeInterval = 60
 }
 
+struct SpeakerReassignResponse: Decodable, Equatable {
+    var newSpeakerId: Int64
+    var newSpeakerName: String
+    var renamedWholeSpeaker: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case newSpeakerId = "new_speaker_id"
+        case newSpeakerName = "new_speaker_name"
+        case renamedWholeSpeaker = "renamed_whole_speaker"
+    }
+}
+
 /// What a single websocket text frame turned out to be.
 enum FrameStreamMessage: Equatable {
     case keepAlive
@@ -465,6 +477,28 @@ struct TimelineRESTClient {
         )
         _ = try await perform(req)
         return true
+    }
+
+    /// `POST /speakers/reassign` — the same intent-aware correction path used
+    /// by meetings: generic voices are named across matching lines, while an
+    /// existing named speaker correction stays scoped to the selected chunk.
+    func reassignSpeaker(audioChunkId: Int64, name: String) async throws -> SpeakerReassignResponse {
+        let body = try JSONSerialization.data(withJSONObject: [
+            "audio_chunk_id": audioChunkId,
+            "new_speaker_name": name,
+            "propagate_similar": true,
+            "scope": "auto",
+        ])
+        let req = authorized(
+            config.httpBase.appendingPathComponent("speakers/reassign"),
+            method: "POST",
+            body: body
+        )
+        let data = try await perform(req)
+        guard let response = try? JSONDecoder().decode(SpeakerReassignResponse.self, from: data) else {
+            throw RESTError.badPayload("speaker reassignment was not decodable")
+        }
+        return response
     }
 
     /// `POST /raw_sql` — the timeline's escape hatch for day/tag queries.

@@ -457,6 +457,39 @@ struct TimelineAppGroup: Equatable {
     var frameCount: Int { frameIndices.count }
 }
 
+enum TimelineHoverMetadata {
+    static func effectiveAppName(raw: String, carried: String?) -> String {
+        if raw == "Unknown", let carried, carried != "Unknown", !carried.isEmpty {
+            return carried
+        }
+        return raw
+    }
+}
+
+enum TimelineHoverLayout {
+    static let previewWidth: CGFloat = 272
+    static let edgeInset: CGFloat = 8
+
+    /// Keep the preview centred over the pointer while clamping its card to
+    /// the timeline edges. On a window narrower than the card, the honest best
+    /// placement is the left edge rather than a negative origin.
+    static func previewLeadingX(
+        cursorX: CGFloat,
+        containerWidth: CGFloat,
+        width: CGFloat = previewWidth,
+        inset: CGFloat = edgeInset
+    ) -> CGFloat {
+        let containerWidth = max(0, containerWidth)
+        let width = max(0, width)
+        let inset = max(0, inset)
+        guard containerWidth >= width + inset * 2 else { return 0 }
+        return min(
+            max(cursorX - width / 2, inset),
+            containerWidth - width - inset
+        )
+    }
+}
+
 enum TimelineGrouping {
     /// Bidirectional carry-forward of `browser_url`, so a browser run keeps its
     /// site through frames where the URL was not captured. Returns one entry per
@@ -1011,6 +1044,11 @@ struct TimelineAISelectionPayload: Codable, Equatable {
     var frameCount: Int
 }
 
+struct TimelineExportSelectionPayload: Codable, Equatable {
+    var start: String
+    var end: String
+}
+
 // MARK: - Meetings
 
 struct TimelineMeeting: Equatable, Identifiable {
@@ -1147,6 +1185,8 @@ enum TimelineMeetingDetection {
 
 struct SubtitleLine: Equatable, Identifiable {
     var id: String
+    var audioChunkId: Int64
+    var speakerId: Int64?
     var speaker: String
     var text: String
     var isInput: Bool
@@ -1275,6 +1315,8 @@ enum TimelineSubtitles {
         }
         return SubtitleLine(
             id: "\(item.audio.audioChunkId)-\(item.frameDate.timeIntervalSince1970)",
+            audioChunkId: item.audio.audioChunkId,
+            speakerId: item.audio.speakerId,
             speaker: speaker,
             text: text,
             isInput: item.audio.isInput,
@@ -1343,10 +1385,23 @@ enum TimelineAudio {
         clock >= recordingStart && clock <= recordingStart.addingTimeInterval(duration)
     }
 
+    /// The stream can report zero while a capture file is still being
+    /// finalized. Once AVFoundation opens it, its real duration is the source
+    /// of truth so Space does not silently skip an otherwise playable chunk.
+    static func effectiveDuration(reported: TimeInterval, decoded: TimeInterval?) -> TimeInterval {
+        max(max(reported, decoded ?? 0), 0)
+    }
+
     static func shouldPreload(clock: Date, recordingStart: Date) -> Bool {
         let delta = recordingStart.timeIntervalSince(clock)
         return delta >= -preloadBehind && delta <= preloadAhead
     }
+}
+
+enum TimelineSelectionTagState: Equatable {
+    case none
+    case some
+    case all
 }
 
 // MARK: - Search review

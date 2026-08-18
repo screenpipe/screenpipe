@@ -6,7 +6,7 @@
 import * as React from "react";
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Calendar, ChevronDown, ChevronRight, ChevronUp, KeyRound, Loader2, Plug, RefreshCw, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Check, Calendar, ChevronDown, ChevronRight, ChevronUp, KeyRound, Loader2, Plug, RefreshCw, ShieldCheck } from "lucide-react";
 import { SourceCitationFooter } from "@/components/chat/source-citation-footer";
 import { MarkdownBlock } from "@/components/chat/markdown-block";
 import { AskUserToolCard, isAskUserToolCall } from "@/components/chat/standalone/ask-user-tool-card";
@@ -21,7 +21,7 @@ import { cn } from "@/lib/utils";
 import type { Message, ToolCall, ContentBlock } from "@/lib/chat/types";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import type { InlineConnectStatus } from "@/lib/connections/inline-connect";
-import { formatDurationParts, formatStoppedWorkDuration, formatWorkDuration, hasAssistantToolWorkBody } from "@/lib/chat/message-rendering";
+import { formatDurationParts, formatStoppedWorkDuration, formatWorkDuration, hasAssistantTextBody, hasAssistantToolWorkBody } from "@/lib/chat/message-rendering";
 import {
   classifyCurl,
   endpointFamily,
@@ -37,7 +37,9 @@ import {
   firstExternalWebTarget,
   presentToolActivity,
   presentToolActivityStatus,
+  presentMcpStartup,
   mcpScreenpipeCommand,
+  type McpStartupPresentation,
   type WebTargetPresentation,
 } from "@/lib/chat/tool-presentation";
 import {
@@ -361,6 +363,137 @@ function RunningToolStatus({ toolCall }: { toolCall: ToolCall }) {
         {retryLabel && <span> · {retryLabel}</span>}
       </div>
       {outputTail && <div className="truncate text-foreground/30">{outputTail}</div>}
+    </div>
+  );
+}
+
+function mcpStartupSummary(entries: McpStartupPresentation[]): string {
+  const connected = entries.filter((entry) => entry.state === "connected").length;
+  const connecting = entries.filter((entry) => entry.state === "connecting").length;
+  const authRequired = entries.filter((entry) => entry.state === "auth-required").length;
+  const errors = entries.filter((entry) => entry.state === "error").length;
+  const attention = authRequired + errors;
+  const parts: string[] = [];
+
+  if (attention > 0) parts.push(`${attention} need attention`);
+  if (connecting > 0) parts.push(`${connecting} connecting`);
+  if (connected > 0) parts.push(`${connected} connected`);
+  return parts.join(" · ") || "No connection status";
+}
+
+function openMcpConnections() {
+  window.dispatchEvent(
+    new CustomEvent("open-settings", {
+      detail: { section: "connections", connectionId: null },
+    }),
+  );
+}
+
+function McpStartupStatusCard({ entries }: { entries: McpStartupPresentation[] }) {
+  const hasAttention = entries.some(
+    (entry) => entry.state === "auth-required" || entry.state === "error",
+  );
+  const hasConnecting = entries.some((entry) => entry.state === "connecting");
+  const [expanded, setExpanded] = useState(hasAttention || hasConnecting);
+
+  return (
+    <div
+      className="mb-3 overflow-hidden rounded-lg border border-border/70 bg-muted/20"
+      data-testid="mcp-startup-status"
+    >
+      <div className="flex min-w-0 items-center gap-2 px-3 py-2.5">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground"
+          onClick={() => setExpanded((value) => !value)}
+          aria-expanded={expanded}
+          data-testid="mcp-startup-toggle"
+        >
+          <Plug className="h-3.5 w-3.5 shrink-0 text-foreground/60" aria-hidden="true" />
+          <span className="min-w-0 flex-1">
+            <span className="block text-xs font-medium text-foreground/80">
+              MCP connections
+            </span>
+            <span className="block truncate text-[11px] text-foreground/45">
+              {mcpStartupSummary(entries)}
+            </span>
+          </span>
+          {expanded ? (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-foreground/35" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-foreground/35" />
+          )}
+        </button>
+        {hasAttention && (
+          <button
+            type="button"
+            onClick={openMcpConnections}
+            className="shrink-0 rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-foreground/70 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground"
+            data-testid="mcp-review-connections"
+          >
+            Review connections
+          </button>
+        )}
+      </div>
+
+      {expanded && (
+        <div className="border-t border-border/60 px-3 py-1" data-testid="mcp-startup-list">
+          {entries.map((entry) => {
+            const state = {
+              connected: {
+                label: "Connected",
+                icon: <Check className="h-3.5 w-3.5 text-emerald-500" aria-hidden="true" />,
+                color: "text-foreground/55",
+              },
+              connecting: {
+                label: "Connecting…",
+                icon: <Loader2 className="h-3.5 w-3.5 animate-spin text-foreground/45" aria-hidden="true" />,
+                color: "text-foreground/55",
+              },
+              "auth-required": {
+                label: "Sign in required",
+                icon: <KeyRound className="h-3.5 w-3.5 text-amber-500" aria-hidden="true" />,
+                color: "text-amber-600 dark:text-amber-400",
+              },
+              error: {
+                label: "Needs attention",
+                icon: <AlertTriangle className="h-3.5 w-3.5 text-destructive" aria-hidden="true" />,
+                color: "text-destructive",
+              },
+            }[entry.state];
+
+            return (
+              <div
+                key={`${entry.serverName}-${entry.state}`}
+                className="flex min-w-0 gap-2 border-b border-border/40 py-2 last:border-b-0"
+                data-testid={`mcp-startup-${entry.state}`}
+              >
+                <span className="mt-0.5 shrink-0">{state.icon}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex min-w-0 items-baseline justify-between gap-3">
+                    <span className="truncate text-xs font-medium text-foreground/75">
+                      {entry.serverName}
+                    </span>
+                    <span className={cn("shrink-0 text-[11px]", state.color)}>
+                      {state.label}
+                    </span>
+                  </span>
+                  {entry.detail && (
+                    <span className="mt-0.5 block break-words text-[11px] leading-relaxed text-foreground/45">
+                      {entry.detail}
+                    </span>
+                  )}
+                </span>
+              </div>
+            );
+          })}
+          {hasAttention && (
+            <div className="pb-1 pt-1.5 text-[10px] text-foreground/40">
+              Fix the connection, then start a new chat to reload its tools.
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1245,18 +1378,7 @@ function WorkSummaryText({
   );
 }
 
-function ToolCallGroup({
-  toolCalls,
-  defaultExpanded = false,
-  isGenerating = false,
-  waitingForApproval = false,
-  preferSummaryOverride = false,
-  summaryOverride,
-  workStartedAtMs,
-  hideSummary = false,
-  forceCollapsed = false,
-  onAskUserReply,
-}: {
+type ToolCallGroupProps = {
   toolCalls: ToolCall[];
   defaultExpanded?: boolean;
   isGenerating?: boolean;
@@ -1266,8 +1388,23 @@ function ToolCallGroup({
   workStartedAtMs?: number;
   hideSummary?: boolean;
   forceCollapsed?: boolean;
+  recoveredWithAnswer?: boolean;
   onAskUserReply?: (reply: string, displayLabel: string) => void | Promise<void>;
-}) {
+};
+
+function ToolActivityGroup({
+  toolCalls,
+  defaultExpanded = false,
+  isGenerating = false,
+  waitingForApproval = false,
+  preferSummaryOverride = false,
+  summaryOverride,
+  workStartedAtMs,
+  hideSummary = false,
+  forceCollapsed = false,
+  recoveredWithAnswer = false,
+  onAskUserReply,
+}: ToolCallGroupProps) {
   const [manualExpand, setManualExpand] = useState<boolean | null>(null);
   const [runningSummary, setRunningSummary] = useState("Working");
   const [completedLiveSummary, setCompletedLiveSummary] = useState<string | null>(null);
@@ -1384,7 +1521,7 @@ function ToolCallGroup({
               ) : (
                 <>
                   <WorkSummaryText text={summary || `${total} steps`} animateRunningDuration={false} />
-                  {hasError && (
+                  {hasError && !recoveredWithAnswer && (
                     <span className="ml-1.5 text-foreground/30">· {toolCalls.filter(tc => tc.isError).length} failed</span>
                   )}
                 </>
@@ -1463,6 +1600,25 @@ function ToolCallGroup({
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+function ToolCallGroup(props: ToolCallGroupProps) {
+  const startupEntries = props.toolCalls.flatMap((toolCall) => {
+    const entry = presentMcpStartup(toolCall);
+    return entry ? [entry] : [];
+  });
+  const activityToolCalls = props.toolCalls.filter(
+    (toolCall) => presentMcpStartup(toolCall) === null,
+  );
+
+  return (
+    <>
+      {startupEntries.length > 0 && <McpStartupStatusCard entries={startupEntries} />}
+      {activityToolCalls.length > 0 && (
+        <ToolActivityGroup {...props} toolCalls={activityToolCalls} />
+      )}
+    </>
   );
 }
 
@@ -1665,6 +1821,7 @@ export function MessageContent({
       ? "interrupted — app closed mid-task"
       : undefined;
     const workSummaryOverride = stoppedSummary || interruptedSummary;
+    const recoveredWithAnswer = !isGenerating && hasAssistantTextBody(message);
     return (
       <div className="space-y-2 min-w-0 w-full overflow-hidden">
         {displayGroups.map((group) => {
@@ -1738,6 +1895,7 @@ export function MessageContent({
                 workStartedAtMs={message.timestamp}
                 hideSummary={hideToolSummary}
                 forceCollapsed={forceCollapseTools}
+                recoveredWithAnswer={recoveredWithAnswer}
                 onAskUserReply={onAskUserReply}
               />
             );
@@ -1760,6 +1918,7 @@ export function MessageContent({
                 workStartedAtMs={message.timestamp}
                 hideSummary={hideToolSummary}
                 forceCollapsed={forceCollapseTools}
+                recoveredWithAnswer={recoveredWithAnswer}
                 onAskUserReply={onAskUserReply}
               />
             );

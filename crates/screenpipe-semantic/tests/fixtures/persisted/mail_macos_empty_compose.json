@@ -1,0 +1,15 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "com.apple.mail",
+    "executable": "Mail",
+    "display_name": "Mail",
+    "version": "16.0",
+    "browser_url": null
+  },
+  "nodes": [
+    { "role": "AXWindow", "text": "New Message", "depth": 0 },
+    { "role": "AXTextField", "text": "", "depth": 1, "automation_id": "Mail.toField" },
+    { "role": "AXWebArea", "text": "", "depth": 1 }
+  ]
+}

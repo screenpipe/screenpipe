@@ -450,14 +450,18 @@ impl PipelineMetrics {
         self.frames_skipped.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Record OCR completion with latency.
-    pub fn record_ocr(&self, latency: std::time::Duration, cache_hits: u64, cache_misses: u64) {
+    /// Record one OCR engine execution with latency. Every execution is one
+    /// live-cache miss; callers cannot supply synthetic cache deltas.
+    pub fn record_ocr(&self, latency: std::time::Duration) {
         self.ocr_completed.fetch_add(1, Ordering::Relaxed);
         self.ocr_total_latency_us
             .fetch_add(latency.as_micros() as u64, Ordering::Relaxed);
-        self.ocr_cache_hits.fetch_add(cache_hits, Ordering::Relaxed);
-        self.ocr_cache_misses
-            .fetch_add(cache_misses, Ordering::Relaxed);
+        self.ocr_cache_misses.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record reuse of one cached OCR payload without an OCR execution.
+    pub fn record_ocr_cache_hit(&self) {
+        self.ocr_cache_hits.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record that an OCR run produced (near-)empty text — an OCR-quality
@@ -1006,18 +1010,33 @@ mod tests {
     fn ocr_counters_track_completed_empty_and_latency() {
         let m = PipelineMetrics::new();
         // 3 OCR runs (each a cache miss), 1 of which yielded empty text.
-        m.record_ocr(Duration::from_millis(10), 0, 1);
-        m.record_ocr(Duration::from_millis(20), 0, 1);
-        m.record_ocr(Duration::from_millis(30), 0, 1);
+        m.record_ocr(Duration::from_millis(10));
+        m.record_ocr(Duration::from_millis(20));
+        m.record_ocr(Duration::from_millis(30));
         m.record_ocr_empty();
+        m.record_ocr_cache_hit();
+        m.record_ocr_cache_hit();
 
         let s = m.snapshot();
         assert_eq!(s.ocr_completed, 3);
         assert_eq!(s.ocr_cache_misses, 3);
-        assert_eq!(s.ocr_cache_hits, 0);
+        assert_eq!(s.ocr_cache_hits, 2);
         assert_eq!(s.ocr_empty, 1);
         // avg latency = (10 + 20 + 30) / 3 = 20ms
         assert!((s.avg_ocr_latency_ms - 20.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ocr_cache_hit_changes_only_the_hit_counter() {
+        let m = PipelineMetrics::new();
+        m.record_ocr_cache_hit();
+
+        let s = m.snapshot();
+        assert_eq!(s.ocr_cache_hits, 1);
+        assert_eq!(s.ocr_cache_misses, 0);
+        assert_eq!(s.ocr_completed, 0);
+        assert_eq!(s.ocr_empty, 0);
+        assert_eq!(s.avg_ocr_latency_ms, 0.0);
     }
 
     #[test]

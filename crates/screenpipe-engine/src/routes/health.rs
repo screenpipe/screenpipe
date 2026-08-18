@@ -737,6 +737,15 @@ pub struct PipelineHealthInfo {
     pub ocr_empty: u64,
 }
 
+fn ocr_cache_hit_rate(hits: u64, misses: u64) -> f64 {
+    let total = hits + misses;
+    if total == 0 {
+        0.0
+    } else {
+        hits as f64 / total as f64
+    }
+}
+
 #[derive(Serialize, OaSchema, Deserialize, Clone)]
 pub struct AudioPipelineHealthInfo {
     pub uptime_secs: f64,
@@ -1722,7 +1731,6 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
 
     // Build pipeline metrics from the snapshot already taken above
     let pipeline = if !state.vision_disabled {
-        let total_ocr_ops = vision_snap.ocr_cache_hits + vision_snap.ocr_cache_misses;
         Some(PipelineHealthInfo {
             uptime_secs: vision_snap.uptime_secs,
             frames_captured: vision_snap.frames_captured,
@@ -1747,11 +1755,10 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
             video_queue_depth: vision_snap.video_queue_depth,
             time_to_first_frame_ms: vision_snap.time_to_first_frame_ms,
             pipeline_stall_count: vision_snap.pipeline_stall_count,
-            ocr_cache_hit_rate: if total_ocr_ops > 0 {
-                vision_snap.ocr_cache_hits as f64 / total_ocr_ops as f64
-            } else {
-                0.0
-            },
+            ocr_cache_hit_rate: ocr_cache_hit_rate(
+                vision_snap.ocr_cache_hits,
+                vision_snap.ocr_cache_misses,
+            ),
             ocr_empty: vision_snap.ocr_empty,
         })
     } else {
@@ -2317,6 +2324,13 @@ mod vision_reason_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ocr_cache_rate_uses_measured_hits_and_misses() {
+        assert!((ocr_cache_hit_rate(2, 3) - 0.4).abs() < f64::EPSILON);
+        assert_eq!(ocr_cache_hit_rate(0, 0), 0.0);
+        assert_eq!(ocr_cache_hit_rate(1, 0), 1.0);
+    }
 
     #[test]
     fn transcription_mode_reports_configuration_not_activity() {

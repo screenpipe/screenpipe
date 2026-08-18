@@ -5,6 +5,7 @@
 use super::catalog::{
     contains_ascii_case_insensitive, manifest_for_family, profile_for, AppFamily, BuiltinAppProfile,
 };
+use super::persisted_web::{action_anchored_turns, parse_gmail as parse_persisted_gmail};
 use crate::{
     apply_message_identity, apply_message_time, is_message_time_label, AccessibilityAttribute,
     CapturedNodeFlags, IdentityQuality, MessageIdentityInput, MessageTimeContext, NodeId,
@@ -89,6 +90,8 @@ impl FamilyParser {
             priority,
         );
         if family == AppFamily::Conversation {
+            manifest.parser_version = "3".into();
+        } else if family == AppFamily::Mail {
             manifest.parser_version = "2".into();
         }
         Self { family, manifest }
@@ -167,6 +170,14 @@ fn parse_conversation(
     }
     if messages.is_empty() {
         messages = fluent_control_message_turns(tree);
+    }
+    if messages.is_empty() {
+        if let Some(chat_list) = fluent_chat_list(profile, tree) {
+            return chat_list;
+        }
+    }
+    if messages.is_empty() && profile.id == "discord" {
+        messages = action_anchored_turns(tree, &["Reply", "Add reaction"]);
     }
     if messages.is_empty() {
         return chromium_chat_list(profile, tree).unwrap_or_default();
@@ -312,7 +323,14 @@ fn parse_mail(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec<SemanticI
         messages.push((node, sender.to_owned(), body));
     }
     if messages.is_empty() {
-        return parse_mail_list_rows(profile, tree);
+        let rows = parse_mail_list_rows(profile, tree);
+        if !rows.is_empty() {
+            return rows;
+        }
+        if profile.id == "gmail" {
+            return parse_persisted_gmail(profile, tree);
+        }
+        return Vec::new();
     }
 
     let mut conversation = SemanticItem::new(
@@ -562,12 +580,12 @@ fn parse_windows_terminal(profile: &BuiltinAppProfile, tree: &SemanticTree) -> V
     vec![terminal]
 }
 
-/// Gmail's thread list through Chromium's UIA bridge on Windows: each
-/// conversation is a `DataItem` row carrying Gmail's long-stable class markers
-/// (`zA` row, `zE` unread) whose child cells are classed `yX` (sender),
-/// `a4W` (subject + snippet), and `xW` (date). AppKit and web-DOM trees never
-/// expose the `DataItem` control type, so this path abstains there. Tokens are
-/// matched with exact `has_class`, never substring signatures — 2-3 char
+/// Gmail's thread list through Chromium's UIA bridge: each conversation row
+/// carries Gmail's long-stable class markers (`zA` row, `zE` unread) whose
+/// child cells are classed `yX` (sender), `a4W` (subject + snippet), and `xW`
+/// (date). Windows publishes these rows as `DataItem`; macOS/AX and browser
+/// bridges can expose the same DOM row as a generic group/row/list item. Tokens
+/// are matched with exact `has_class`, never substring signatures -- 2-3 char
 /// tokens would collide with unrelated utility classes.
 fn parse_mail_list_rows(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec<SemanticItem> {
     let mut rows = Vec::new();
@@ -644,11 +662,16 @@ fn parse_mail_list_rows(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec
 }
 
 fn is_mail_list_row(tree: &SemanticTree, node: NodeId) -> bool {
-    tree.role(node)
-        .is_some_and(|role| role.eq_ignore_ascii_case("DataItem"))
+    tree.role(node).is_some_and(is_gmail_row_role)
         && tree.has_class(node, "zA")
         && tree.children(node).any(|cell| tree.has_class(cell, "yX"))
         && tree.children(node).any(|cell| tree.has_class(cell, "a4W"))
+}
+
+fn is_gmail_row_role(role: &str) -> bool {
+    ["DataItem", "AXGroup", "AXRow", "Group", "ListItem", "Row"]
+        .iter()
+        .any(|candidate| role.eq_ignore_ascii_case(candidate))
 }
 
 fn mail_row_cell_text<'a>(tree: &'a SemanticTree, row: NodeId, class: &str) -> Option<&'a str> {
@@ -877,6 +900,186 @@ fn fluent_message_sender<'a>(
                 .is_some_and(|prefix| prefix.eq_ignore_ascii_case(label)))
         .then_some(label)
     })
+}
+
+struct FluentChatListEntry {
+    node: NodeId,
+    title: String,
+    last_sender: Option<String>,
+    last_message: Option<String>,
+    last_active: Option<String>,
+    status: Option<String>,
+    chat_type: &'static str,
+}
+
+fn fluent_chat_list(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Option<Vec<SemanticItem>> {
+    if profile.id != "microsoftteams" || tree_any(tree, |node| is_fluent_message_anchor(tree, node))
+    {
+        return None;
+    }
+
+    let mut has_new_message_control = false;
+    let mut entries = Vec::new();
+    'roots: for root in tree.roots() {
+        for node in tree.descendants(root) {
+            if button_label(tree, node).is_some_and(|label| {
+                label
+                    .trim_start()
+                    .get(..11)
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("new message"))
+            }) {
+                has_new_message_control = true;
+                continue;
+            }
+            if !tree
+                .role(node)
+                .is_some_and(|role| role.eq_ignore_ascii_case("TreeItem"))
+            {
+                continue;
+            }
+            let Some(raw) = node_content(tree, node) else {
+                continue;
+            };
+            let Some(mut entry) = parse_fluent_chat_row(raw) else {
+                continue;
+            };
+            entry.node = node;
+            entries.push(entry);
+            if entries.len() == MAX_STRUCTURAL_CANDIDATES {
+                break 'roots;
+            }
+        }
+    }
+    if !has_new_message_control || entries.is_empty() {
+        return None;
+    }
+
+    let mut list = SemanticItem::new(
+        "chat-list",
+        SemanticKind::Conversation,
+        format!("{}:chat-list", profile.id),
+        IdentityQuality::Derived,
+    );
+    list.title = Some(profile.display_name.to_owned());
+    list.metadata
+        .insert("app".into(), profile.display_name.into());
+    list.metadata.insert("family".into(), "conversation".into());
+    list.metadata.insert("view".into(), "chat_list".into());
+    if let Some(parent) = tree.parent(entries[0].node) {
+        list.source_nodes.push(parent);
+    }
+
+    let mut items = Vec::with_capacity(entries.len() + 1);
+    items.push(list);
+    for (index, entry) in entries.into_iter().enumerate() {
+        let mut chat = SemanticItem::new(
+            format!("chat-{index}"),
+            SemanticKind::Conversation,
+            format!("{}:chat:{}", profile.id, key_component(&entry.title)),
+            IdentityQuality::Derived,
+        );
+        chat.parent_local_id = Some("chat-list".into());
+        chat.title = Some(entry.title);
+        chat.body = entry.last_message;
+        chat.metadata
+            .insert("chat_type".into(), entry.chat_type.into());
+        if let Some(sender) = entry.last_sender {
+            chat.metadata.insert("last_sender".into(), sender);
+        }
+        if let Some(last_active) = entry.last_active {
+            chat.metadata.insert("last_active".into(), last_active);
+        }
+        if let Some(status) = entry.status {
+            chat.status = Some(status);
+        }
+        chat.source_nodes.push(entry.node);
+        items.push(chat);
+    }
+    Some(items)
+}
+
+fn parse_fluent_chat_row(raw: &str) -> Option<FluentChatListEntry> {
+    let raw = raw.trim();
+    let (chat_type, row) = raw
+        .strip_prefix("Meeting chat ")
+        .map(|row| ("meeting", row))
+        .or_else(|| raw.strip_prefix("Chat ").map(|row| ("chat", row)))?;
+    let (title, detail) = row.split_once(" Last message ")?;
+    let title = title.trim();
+    if title.is_empty() || title.len() > 240 {
+        return None;
+    }
+
+    let mut detail = detail.trim();
+    let mut last_active = None;
+    if let Some((before, token)) = split_last_token(detail) {
+        if is_simple_slash_date(token) {
+            last_active = Some(token.to_owned());
+            detail = before.trim_end();
+        }
+    }
+
+    let mut status = None;
+    if let Some((before, token)) = split_last_token(detail) {
+        if matches!(token, "Muted" | "Unmuted" | "Unread") {
+            status = Some(token.to_ascii_lowercase());
+            detail = before.trim_end();
+        }
+    }
+
+    let (last_sender, last_message) = match detail.split_once(": ") {
+        Some((sender, message))
+            if !sender.trim().is_empty()
+                && sender.trim().len() <= 80
+                && !message.trim().is_empty() =>
+        {
+            (
+                Some(sender.trim().to_owned()),
+                Some(message.trim().to_owned()),
+            )
+        }
+        _ if !detail.is_empty() => (None, Some(detail.to_owned())),
+        _ => (None, None),
+    };
+
+    Some(FluentChatListEntry {
+        node: NodeId(0),
+        title: title.to_owned(),
+        last_sender,
+        last_message,
+        last_active,
+        status,
+        chat_type,
+    })
+}
+
+fn split_last_token(text: &str) -> Option<(&str, &str)> {
+    let text = text.trim_end();
+    let (before, token) = text.rsplit_once(' ')?;
+    let token = token.trim();
+    (!token.is_empty()).then_some((before, token))
+}
+
+fn is_simple_slash_date(token: &str) -> bool {
+    let mut parts = token.split('/');
+    let (Some(month), Some(day), Some(year), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    let (Ok(month), Ok(day), Ok(year)) = (
+        month.parse::<u32>(),
+        day.parse::<u32>(),
+        year.parse::<u32>(),
+    ) else {
+        return false;
+    };
+    (1..=12).contains(&month) && (1..=31).contains(&day) && (2000..=2100).contains(&year)
+}
+
+fn tree_any(tree: &SemanticTree, predicate: impl Fn(NodeId) -> bool) -> bool {
+    tree.roots()
+        .any(|root| tree.descendants(root).any(|node| predicate(node)))
 }
 
 /// `collect_text` starting below `root`. A Fluent message container is itself a

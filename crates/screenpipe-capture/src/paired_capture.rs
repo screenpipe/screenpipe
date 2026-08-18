@@ -16,7 +16,9 @@ use chrono::{DateTime, Utc};
 use image::{DynamicImage, GenericImageView};
 use once_cell::sync::Lazy;
 use regex::Regex;
-use screenpipe_a11y::tree::{create_tree_walker, TreeSnapshot, TreeWalkerConfig};
+use screenpipe_a11y::tree::{
+    create_tree_walker, TreeSnapshot, TreeWalkerConfig, TreeWalkerPlatform,
+};
 use screenpipe_core::pii_removal::remove_pii;
 use screenpipe_db::DatabaseManager;
 use screenpipe_screen::snapshot_writer::SnapshotWriter;
@@ -26,6 +28,8 @@ use screenpipe_screen::text_regions::{
 use screenpipe_screen::OcrGateDecision;
 
 use crate::ocr_gate::{OcrDecision, OcrGate};
+#[cfg(target_os = "windows")]
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -203,6 +207,9 @@ pub struct PairedCaptureResult {
     /// True when OCR ran but produced (near-)empty text — an OCR-quality
     /// failure proxy. False when OCR didn't run or returned usable text.
     pub ocr_was_empty: bool,
+    /// True only when this capture reused the live OCR gate's cached payload.
+    /// A gate skip with no detected text is not a cache hit.
+    pub ocr_cache_hit: bool,
     /// How the OCR gate resolved this capture — `Some` only when an OCR
     /// trigger fired AND a gate was wired (the engine loop).
     /// The capture loop feeds this to
@@ -474,6 +481,7 @@ pub async fn paired_capture(
     // The raw crop-relative OCR output, cached into the gate at the commit
     // point so pixel-identical future captures can reuse it without OCR.
     let mut ocr_cache_payload: Option<(String, String)> = None;
+    let mut ocr_cache_hit = false;
     let (ocr_text, ocr_text_json) = if ocr_ran {
         // Gated captures OCR the padded union of the detected text regions
         // (#5054: measured 4-5.5x cheaper than full-frame on sparse
@@ -550,6 +558,7 @@ pub async fn paired_capture(
         // that text (json already re-mapped to the current crop position)
         // at zero OCR cost. Matters for surfaces whose ONLY text source is
         // OCR — terminals, no-a11y apps.
+        ocr_cache_hit = true;
         (cached_text, cached_json)
     } else {
         (String::new(), "[]".to_string())
@@ -729,6 +738,7 @@ pub async fn paired_capture(
         duration_ms,
         ocr_duration_ms,
         ocr_was_empty,
+        ocr_cache_hit,
         ocr_gate_decision,
         ocr_gate_detect_duration,
         app_name: app_name.map(String::from),
@@ -743,8 +753,35 @@ pub async fn paired_capture(
 ///
 /// This is a blocking operation that should be spawned on a blocking thread.
 pub fn walk_accessibility_tree(config: &TreeWalkerConfig) -> screenpipe_a11y::tree::TreeWalkResult {
+    #[cfg(target_os = "windows")]
+    {
+        thread_local! {
+            static CACHED_TREE_WALKER: RefCell<Option<Box<dyn TreeWalkerPlatform>>> =
+                RefCell::new(None);
+        }
+
+        return CACHED_TREE_WALKER.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(create_tree_walker(config.clone()));
+            }
+            let walker = slot.as_mut().expect("cached walker initialized");
+            walker.update_config(config.clone());
+            run_accessibility_tree_walk(walker.as_ref())
+        });
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let walker = create_tree_walker(config.clone());
+        run_accessibility_tree_walk(walker.as_ref())
+    }
+}
+
+pub(crate) fn run_accessibility_tree_walk(
+    walker: &dyn TreeWalkerPlatform,
+) -> screenpipe_a11y::tree::TreeWalkResult {
     use screenpipe_a11y::tree::TreeWalkResult;
-    let walker = create_tree_walker(config.clone());
     match walker.walk_focused_window() {
         Ok(TreeWalkResult::Found(snapshot)) => {
             debug!(
@@ -1737,6 +1774,10 @@ mod tests {
             result.ocr_duration_ms.is_none(),
             "gate must skip OCR when no text regions are detected"
         );
+        assert!(
+            !result.ocr_cache_hit,
+            "a no-text gate skip has no cached OCR payload to reuse"
+        );
         // The frame is still stored with its accessibility text.
         assert_eq!(result.text_source.as_deref(), Some("accessibility"));
     }
@@ -1895,6 +1936,7 @@ mod tests {
             result.ocr_duration_ms.is_some(),
             "new text crop must run OCR"
         );
+        assert!(!result.ocr_cache_hit, "a real OCR run is a cache miss");
         // Gate telemetry travels out with the result for PipelineMetrics.
         assert_eq!(result.ocr_gate_decision, Some(OcrGateDecision::CropOcr));
         assert!(
@@ -1908,6 +1950,10 @@ mod tests {
         assert!(
             result2.ocr_duration_ms.is_none(),
             "unchanged text crop must not re-run OCR"
+        );
+        assert!(
+            result2.ocr_cache_hit,
+            "unchanged indexed text must reuse the cached OCR payload"
         );
         assert_eq!(result2.ocr_gate_decision, Some(OcrGateDecision::Skip));
         assert!(
@@ -2074,6 +2120,10 @@ mod tests {
         );
         assert_eq!(moved.ocr_gate_decision, Some(OcrGateDecision::Skip));
         assert!(
+            moved.ocr_cache_hit,
+            "moved identical content must reuse the remapped cached OCR payload"
+        );
+        assert!(
             moved.ocr_gate_detect_duration.is_some(),
             "detect ran (interval elapsed) and produced the skip"
         );
@@ -2133,6 +2183,10 @@ mod tests {
             retried.ocr_duration_ms.is_some(),
             "layout unpersisted by the failed insert must be retried"
         );
+        assert!(
+            !retried.ocr_cache_hit,
+            "retrying uncommitted OCR work is not a cache hit"
+        );
 
         // Now durably stored: the identical frame skips OCR.
         let settled = paired_capture(&ctx_ok, None, Some(&mut gate))
@@ -2141,6 +2195,10 @@ mod tests {
         assert!(
             settled.ocr_duration_ms.is_none(),
             "persisted layout must not re-OCR"
+        );
+        assert!(
+            settled.ocr_cache_hit,
+            "the settled identical frame must reuse the persisted OCR payload"
         );
     }
 

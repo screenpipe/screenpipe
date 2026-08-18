@@ -6,16 +6,32 @@ use axum::{extract::FromRequestParts, http::request::Parts};
 
 const CLIENT_HEADER: &str = "x-screenpipe-client";
 
-/// Explicit attribution for user-initiated direct API retrievals.
+/// Privacy-safe attribution for retrieval requests.
 ///
-/// Missing and unknown values stay unattributed. This prevents app requests,
-/// background Pipes, health checks, and arbitrary user-agent strings from
-/// entering the Repeat Value numerator as direct API use.
-pub struct ExplicitApiClient(bool);
+/// Only a tiny fixed enum is accepted from the client header. Missing and
+/// unknown values are grouped as app-originated requests so arbitrary
+/// user-agent strings never become analytics dimensions, and only the fixed
+/// `api` value enters the Repeat Value direct API numerator.
+pub struct ExplicitApiClient(RequestSource);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RequestSource {
+    App,
+    Mcp,
+    Api,
+}
 
 impl ExplicitApiClient {
     pub(crate) fn is_direct_api(&self) -> bool {
-        self.0
+        self.0 == RequestSource::Api
+    }
+
+    pub(crate) fn source_label(&self) -> &'static str {
+        match self.0 {
+            RequestSource::App => "app",
+            RequestSource::Mcp => "MCP",
+            RequestSource::Api => "API",
+        }
     }
 }
 
@@ -33,12 +49,21 @@ impl<S: Send + Sync> FromRequestParts<S> for ExplicitApiClient {
         'b: 'c,
     {
         Box::pin(async move {
-            let is_direct_api = parts
+            let source = parts
                 .headers
                 .get(CLIENT_HEADER)
                 .and_then(|value| value.to_str().ok())
-                .is_some_and(|value| value == "api");
-            Ok(Self(is_direct_api))
+                .map(|value| {
+                    if value.eq_ignore_ascii_case("api") {
+                        RequestSource::Api
+                    } else if value.eq_ignore_ascii_case("mcp") {
+                        RequestSource::Mcp
+                    } else {
+                        RequestSource::App
+                    }
+                })
+                .unwrap_or(RequestSource::App);
+            Ok(Self(source))
         })
     }
 }
@@ -65,9 +90,16 @@ mod tests {
     #[tokio::test]
     async fn accepts_only_the_fixed_direct_api_enum() {
         assert!(extract(Some("api")).await.is_direct_api());
+        assert_eq!(extract(Some("api")).await.source_label(), "API");
+        assert_eq!(extract(Some("mcp")).await.source_label(), "MCP");
         assert!(!extract(Some("claude-private-project"))
             .await
             .is_direct_api());
+        assert_eq!(
+            extract(Some("claude-private-project")).await.source_label(),
+            "app"
+        );
         assert!(!extract(None).await.is_direct_api());
+        assert_eq!(extract(None).await.source_label(), "app");
     }
 }

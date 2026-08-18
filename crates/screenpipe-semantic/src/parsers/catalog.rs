@@ -20,7 +20,7 @@ pub enum AppFamily {
 
 /// Public app identity and family membership for one built-in parser profile.
 ///
-/// The catalog describes 51 supported app targets using public app identities,
+/// The catalog describes 52 supported app targets using public app identities,
 /// URL patterns, and stable accessibility contracts.
 #[derive(Debug, Clone, Copy)]
 pub struct BuiltinAppProfile {
@@ -189,9 +189,9 @@ pub static BUILTIN_APP_PROFILES: &[BuiltinAppProfile] = &[
         &[C],
         &["com.hnc.Discord"],
         &["Discord", "Discord.exe", "discord"],
-        &[],
-        &[],
-        None,
+        &[r"^https://discord\.com/"],
+        &["discord.com/"],
+        Some("https://discord.com/channels/example/channel"),
     ),
     profile(
         "fantastical",
@@ -586,6 +586,16 @@ pub static BUILTIN_APP_PROFILES: &[BuiltinAppProfile] = &[
         &[E, D],
         &["com.apple.dt.Xcode"],
         &["Xcode"],
+        &[],
+        &[],
+        None,
+    ),
+    profile(
+        "zed",
+        "Zed",
+        &[E],
+        &["dev.zed.Zed"],
+        &["Zed", "zed"],
         &[],
         &[],
         None,

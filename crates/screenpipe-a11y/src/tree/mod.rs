@@ -585,6 +585,28 @@ impl TreeWalkerConfig {
         self.included_window_patterns = WindowPattern::parse_list(&self.included_windows);
     }
 
+    /// Compile window filters, reusing parsed patterns when raw strings did
+    /// not change between hot-path config refreshes.
+    pub fn compile_patterns_reusing(&mut self, previous: Option<&TreeWalkerConfig>) {
+        match previous {
+            Some(previous) if self.ignored_windows == previous.ignored_windows => {
+                self.ignored_window_patterns = previous.ignored_window_patterns.clone();
+            }
+            _ => {
+                self.ignored_window_patterns = WindowPattern::parse_list(&self.ignored_windows);
+            }
+        }
+
+        match previous {
+            Some(previous) if self.included_windows == previous.included_windows => {
+                self.included_window_patterns = previous.included_window_patterns.clone();
+            }
+            _ => {
+                self.included_window_patterns = WindowPattern::parse_list(&self.included_windows);
+            }
+        }
+    }
+
     /// Lazily resolve parsed ignore patterns for defensive direct construction.
     pub(crate) fn resolved_ignored(&self) -> Cow<'_, [WindowPattern]> {
         if self.ignored_window_patterns.is_empty() && !self.ignored_windows.is_empty() {
@@ -676,6 +698,12 @@ impl std::fmt::Display for SkipReason {
 pub trait TreeWalkerPlatform: Send {
     /// Walk the focused window's accessibility tree.
     fn walk_focused_window(&self) -> Result<TreeWalkResult>;
+
+    /// Refresh per-walk configuration while preserving platform state.
+    ///
+    /// Windows keeps COM/UIA cache objects on the walker thread, so callers
+    /// should update the config instead of recreating the walker in hot paths.
+    fn update_config(&mut self, _config: TreeWalkerConfig) {}
 }
 
 /// Evaluate app, title, and incognito filters without walking the focused
@@ -784,14 +812,17 @@ pub fn create_tree_walker(config: TreeWalkerConfig) -> Box<dyn TreeWalkerPlatfor
 /// platform walker) applies the filter uniformly across macOS/Windows/Linux.
 struct UrlFilteredWalker {
     inner: Box<dyn TreeWalkerPlatform>,
+    ignored_urls: Vec<String>,
     ignored_url_patterns: Vec<String>,
 }
 
 impl UrlFilteredWalker {
     fn new(inner: Box<dyn TreeWalkerPlatform>, ignored_urls: Vec<String>) -> Self {
+        let ignored_url_patterns = crate::url_filter::normalize_blocked_patterns(&ignored_urls);
         Self {
             inner,
-            ignored_url_patterns: crate::url_filter::normalize_blocked_patterns(&ignored_urls),
+            ignored_urls,
+            ignored_url_patterns,
         }
     }
 }
@@ -810,6 +841,15 @@ impl TreeWalkerPlatform for UrlFilteredWalker {
             }
         }
         Ok(result)
+    }
+
+    fn update_config(&mut self, config: TreeWalkerConfig) {
+        if self.ignored_urls != config.ignored_urls {
+            self.ignored_url_patterns =
+                crate::url_filter::normalize_blocked_patterns(&config.ignored_urls);
+            self.ignored_urls = config.ignored_urls.clone();
+        }
+        self.inner.update_config(config);
     }
 }
 

@@ -171,15 +171,82 @@ async function selectDashboard(viewId: string) {
 }
 
 async function waitForSettledShareDialog() {
-  await browser.pause(500);
-  expect(
-    (await browser.execute(() => {
-      const dialog = document.querySelector<HTMLElement>(
-        '[data-testid="connected-share-dialog"]',
-      );
-      return dialog?.dataset.state;
-    })) as string | undefined,
-  ).toBe("open");
+  await waitForTestId("connected-share-dialog", 10_000);
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute(() => {
+        const dialog = document.querySelector<HTMLElement>(
+          '[data-testid="connected-share-dialog"]',
+        );
+        return dialog?.dataset.state === "open";
+      })) as boolean,
+    {
+      timeout: t(10_000),
+      timeoutMsg: "connected sharing dialog did not enter its open state",
+    },
+  );
+  // The macOS E2E app is deliberately non-activating. WebKit can leave CSS
+  // entrance animations paused at their first frame in that state, which
+  // makes an open Radix dialog stay at opacity 0. Finish only the modal's
+  // animations so screenshots represent the activated app a person sees.
+  await browser.execute(() => {
+    document
+      .querySelectorAll<HTMLElement>(
+        '[data-testid="connected-share-dialog"], [data-modal-overlay]',
+      )
+      .forEach((element) => {
+        element.style.pointerEvents = "";
+        element.getAnimations().forEach((animation) => animation.finish());
+      });
+  });
+  await browser
+    .waitUntil(
+      async () =>
+        (await browser.execute(() => {
+          const content = document.querySelector<HTMLElement>(
+            '[data-testid="connected-share-dialog"]',
+          );
+          if (!content || content.dataset.state !== "open") return false;
+          const style = getComputedStyle(content);
+          const bounds = content.getBoundingClientRect();
+          return (
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            Number(style.opacity) > 0.99 &&
+            bounds.width > 0 &&
+            bounds.height > 0
+          );
+        })) as boolean,
+      {
+        timeout: t(10_000),
+        timeoutMsg: "connected sharing dialog did not finish painting",
+      },
+    )
+    .catch(async (error) => {
+      const paintState = await browser.execute(() => {
+        const content = document.querySelector<HTMLElement>(
+          '[data-testid="connected-share-dialog"]',
+        );
+        if (!content) return null;
+        const style = getComputedStyle(content);
+        const bounds = content.getBoundingClientRect();
+        return {
+          state: content.dataset.state,
+          display: style.display,
+          visibility: style.visibility,
+          opacity: style.opacity,
+          transform: style.transform,
+          bounds: {
+            x: bounds.x,
+            y: bounds.y,
+            width: bounds.width,
+            height: bounds.height,
+          },
+        };
+      });
+      console.error("Connected share dialog paint diagnostic", paintState);
+      throw error;
+    });
 }
 
 async function waitForShareDialogClosed() {
@@ -189,10 +256,26 @@ async function waitForShareDialogClosed() {
         const dialog = document.querySelector<HTMLElement>(
           '[data-testid="connected-share-dialog"]',
         );
-        return !dialog || dialog.dataset.state !== "open";
+        return !dialog || dialog.dataset.state === "closed";
       })) as boolean,
-    { timeout: t(10_000), timeoutMsg: "connected sharing dialog stayed open" },
+    {
+      timeout: t(10_000),
+      timeoutMsg: "connected sharing dialog did not enter its closed state",
+    },
   );
+  await browser.execute(() => {
+    document
+      .querySelectorAll<HTMLElement>(
+        '[data-testid="connected-share-dialog"], [data-modal-overlay]',
+      )
+      .forEach((element) => {
+        element.getAnimations().forEach((animation) => animation.finish());
+        // Radix normally unmounts after animationend. The same non-activating
+        // WebKit quirk can suppress that event, so ensure a closed test modal
+        // cannot intercept the next real click. Cleared again on open above.
+        element.style.pointerEvents = "none";
+      });
+  });
 }
 
 describe("connected snapshot sharing", function () {
@@ -387,36 +470,42 @@ describe("connected snapshot sharing", function () {
   });
 
   it("reviews disconnected, direct-send, receipt, Live View, and Chat-draft states", async () => {
-    // Load the meetings section by URL instead of clicking the nav item.
-    // `section` is a query param (useQueryState), so when a previous spec left
-    // Home on ?section=meetings the click is a no-op: MeetingNotesSection stays
-    // mounted with the list it fetched before this spec seeded its meeting, and
-    // it only refetches on mount, on search, or on visibilitychange. A full
-    // load guarantees a fresh fetch that includes the seeded meeting.
-    await browser.execute(() => {
-      window.location.href = "/home?section=meetings";
-    });
-    await waitForTestId("home-page", 25_000);
+    // Mount the meetings section after seeding so it fetches a fresh list. A
+    // full webview navigation here can outrun local API credential hydration
+    // and turn the first /meetings request into a misleading 403.
+    const meetingsNav = await waitForTestId("nav-meetings", 25_000);
+    await meetingsNav.click();
+    await browser.waitUntil(
+      async () => (await meetingsNav.getAttribute("aria-current")) === "page",
+      {
+        timeout: t(15_000),
+        timeoutMsg: "Meetings navigation did not become active",
+      },
+    );
     const meetingRow = await $(
       `//*[@role="button"][.//*[contains(text(), "${MEETING_TITLE}")]]`,
     );
-    await meetingRow.waitForExist({ timeout: t(25_000) }).catch(async (error) => {
-      const listText = (await browser
-        .execute(() => document.body?.innerText.slice(0, 2_000) ?? "")
-        .catch(() => "")) as string;
-      const seeded = await fetch(`${apiBase}/meetings?limit=5`, {
-        headers: apiHeaders,
-      })
-        .then((res) => res.text())
-        .then((body) => body.slice(0, 800))
-        .catch((fetchError) => String(fetchError));
-      console.error("Connected share meeting row diagnostic", {
-        listText,
-        seeded,
+    await meetingRow
+      .waitForExist({ timeout: t(25_000) })
+      .catch(async (error) => {
+        const listText = (await browser
+          .execute(() => document.body?.innerText.slice(0, 2_000) ?? "")
+          .catch(() => "")) as string;
+        const seeded = await fetch(`${apiBase}/meetings?limit=5`, {
+          headers: apiHeaders,
+        })
+          .then((res) => res.text())
+          .then((body) => body.slice(0, 800))
+          .catch((fetchError) => String(fetchError));
+        console.error("Connected share meeting row diagnostic", {
+          listText,
+          seeded,
+        });
+        await saveScreenshot("connected-share-meeting-row-missing").catch(
+          () => "",
+        );
+        throw error;
       });
-      await saveScreenshot("connected-share-meeting-row-missing").catch(() => "");
-      throw error;
-    });
     await meetingRow.click();
     await waitForTestId("note-editor", 20_000);
     // Sending is a named button on the meeting rule, beside copy. It spent one
@@ -429,11 +518,63 @@ describe("connected snapshot sharing", function () {
     };
     // Destinations live in one grouped menu on the dialog's first row.
     const openDestinationMenu = async () => {
-      const row = await waitForTestId("connected-share-destination", 10_000);
-      await row.click();
-      await browser.pause(t(250));
+      const row = await $(
+        '[data-testid="connected-share-dialog"][data-state="open"] [data-testid="connected-share-destination"]',
+      );
+      await row.waitForExist({ timeout: t(10_000) });
+      await browser.execute(() => {
+        const destination = document.querySelector<HTMLElement>(
+          '[data-testid="connected-share-dialog"][data-state="open"] [data-testid="connected-share-destination"]',
+        );
+        if (!destination) throw new Error("open destination row not found");
+        // Radix opens DropdownMenu on pointerdown. WebDriver's click in the
+        // non-activating macOS window can deliver only the trailing click.
+        destination.dispatchEvent(
+          new PointerEvent("pointerdown", {
+            bubbles: true,
+            button: 0,
+            pointerType: "mouse",
+          }),
+        );
+      });
+      await browser.waitUntil(
+        async () =>
+          (await browser.execute(
+            () => !!document.querySelector('[role="menu"][data-state="open"]'),
+          )) as boolean,
+        {
+          timeout: t(10_000),
+          timeoutMsg: "connected sharing destination menu did not open",
+        },
+      );
+      await browser.execute(() => {
+        document
+          .querySelectorAll<HTMLElement>('[role="menu"][data-state="open"]')
+          .forEach((menu) =>
+            menu.getAnimations().forEach((animation) => animation.finish()),
+          );
+      });
     };
-
+    const settleClosedDestinationMenu = async () => {
+      await browser.waitUntil(
+        async () =>
+          (await browser.execute(
+            () => !document.querySelector('[role="menu"][data-state="open"]'),
+          )) as boolean,
+        {
+          timeout: t(10_000),
+          timeoutMsg: "connected sharing destination menu stayed open",
+        },
+      );
+      await browser.execute(() => {
+        document
+          .querySelectorAll<HTMLElement>('[role="menu"][data-state="closed"]')
+          .forEach((menu) => {
+            menu.getAnimations().forEach((animation) => animation.finish());
+            menu.style.pointerEvents = "none";
+          });
+      });
+    };
     const shareCaret = await $(`[aria-label="more meeting actions"]`);
     await shareCaret.waitForExist({ timeout: t(10_000) });
     expect(
@@ -451,9 +592,7 @@ describe("connected snapshot sharing", function () {
     expect(disconnectedText).toContain(
       "Nothing runs or sends until you press send",
     );
-    expect(disconnectedText).toContain(
-      "Nothing is connected for sharing yet",
-    );
+    expect(disconnectedText).toContain("Nothing is connected for sharing yet");
     expect(await shareWrites()).toHaveLength(0);
     expect(
       existsSync(await saveScreenshot("connected-share-meeting-disconnected")),
@@ -469,28 +608,63 @@ describe("connected snapshot sharing", function () {
     await (await openShareMenu()).click();
     await waitForTestId("connected-share-dialog", 10_000);
     await waitForSettledShareDialog();
+    const unchangedMode = await waitForTestId(
+      "connected-share-mode-unchanged",
+      10_000,
+    );
+    const chatMode = await waitForTestId("connected-share-mode-chat", 10_000);
+    expect(await unchangedMode.getAttribute("aria-pressed")).toBe("true");
+    expect(await chatMode.getAttribute("aria-pressed")).toBe("false");
+    expect(
+      existsSync(await saveScreenshot("connected-share-meeting-modes")),
+    ).toBe(true);
+
     await openDestinationMenu();
     await waitForTestId("connected-share-destination-slack", 10_000);
-    await waitForTestId("connected-share-destination-chat-notion", 10_000);
     const connectedText = (await browser.execute(
       () => document.body?.innerText ?? "",
     )) as string;
-    // The one distinction that changes what happens is a menu heading now,
-    // not a 10px badge above lookalike tiles.
-    expect(connectedText).toContain("direct — no AI");
-    expect(connectedText).toContain("review with Chat — AI-assisted");
+    expect(connectedText).toContain("send unchanged");
+    expect(connectedText).toContain("no new AI processing");
     expect(await shareWrites()).toHaveLength(0);
     expect(
       existsSync(await saveScreenshot("connected-share-meeting-connected")),
     ).toBe(true);
 
+    // Chat processing is a visible mode, not a hidden property of the app.
+    // Switching it changes the eligible destinations without authorizing a
+    // write or running the model.
+    await browser.execute(() =>
+      document
+        .querySelector<HTMLElement>(
+          '[data-testid="connected-share-dialog"][data-state="open"] [data-testid="connected-share-mode-chat"]',
+        )
+        ?.click(),
+    );
+    expect(await chatMode.getAttribute("aria-pressed")).toBe("true");
+    await waitForTestId("connected-share-destination-chat-notion", 10_000);
+    expect(
+      existsSync(await saveScreenshot("connected-share-meeting-chat-mode")),
+    ).toBe(true);
+    await browser.execute(() =>
+      document
+        .querySelector<HTMLElement>(
+          '[data-testid="connected-share-dialog"][data-state="open"] [data-testid="connected-share-mode-unchanged"]',
+        )
+        ?.click(),
+    );
+
     // Opening the review can never send anything, whatever destination the row
     // reports. Pick Slack explicitly from the open menu.
-    const slackDestination = await waitForTestId(
-      "connected-share-destination-slack",
-      10_000,
+    await waitForTestId("connected-share-destination-slack", 10_000);
+    await browser.execute(() =>
+      document
+        .querySelector<HTMLElement>(
+          '[role="menu"][data-state="open"] [data-testid="connected-share-destination-slack"]',
+        )
+        ?.click(),
     );
-    await slackDestination.click();
+    await settleClosedDestinationMenu();
     const confirmSlack = await waitForTestId("connected-share-confirm", 10_000);
     await browser.waitUntil(
       async () => (await confirmSlack.getText()).includes("Slack"),
@@ -534,7 +708,7 @@ describe("connected snapshot sharing", function () {
     );
     await closeReceipt.click();
     await waitForShareDialogClosed();
-    const backToMeetings = await $(`[title="back to meetings"]`);
+    const backToMeetings = await $(`[aria-label="back to meetings"]`);
     await backToMeetings.waitForExist({ timeout: t(10_000) });
     await backToMeetings.click();
     const brainNav = await waitForTestId("nav-brain", 10_000);
@@ -548,17 +722,22 @@ describe("connected snapshot sharing", function () {
     const sendView = await waitForTestId("overview-send", 10_000);
     await sendView.click();
     await waitForTestId("connected-share-dialog", 10_000);
-    const openLiveViewDestinations = await waitForTestId(
-      "connected-share-destination",
+    await waitForSettledShareDialog();
+    const liveViewChatMode = await waitForTestId(
+      "connected-share-mode-chat",
       10_000,
     );
-    await openLiveViewDestinations.click();
-    await browser.pause(t(250));
-    const notion = await waitForTestId(
-      "connected-share-destination-chat-notion",
-      10_000,
+    await liveViewChatMode.click();
+    await openDestinationMenu();
+    await waitForTestId("connected-share-destination-chat-notion", 10_000);
+    await browser.execute(() =>
+      document
+        .querySelector<HTMLElement>(
+          '[role="menu"][data-state="open"] [data-testid="connected-share-destination-chat-notion"]',
+        )
+        ?.click(),
     );
-    await notion.click();
+    await settleClosedDestinationMenu();
     await waitForSettledShareDialog();
     const liveViewText = (await browser.execute(
       () => document.body?.innerText ?? "",
@@ -633,10 +812,13 @@ describe("connected snapshot sharing", function () {
         ),
       { timeout: t(20_000), timeoutMsg: "Chat draft was not prefilled" },
     );
-    // Wording per buildConnectedShareChatPrompt: Chat asks for the missing
-    // destination first, then takes a single approval before it creates.
+    // Chat discovers likely destinations read-only before asking the user to
+    // recall a page name, then takes a single approval before it creates.
     expect(String(await chatInput.getValue())).toContain(
-      "If the parent page or database is missing, ask for it first",
+      "do not ask an open-ended destination question first",
+    );
+    expect(String(await chatInput.getValue())).toContain(
+      "list recent and favorite pages",
     );
     expect(String(await chatInput.getValue())).toContain(
       "ask for approval exactly once",
@@ -656,5 +838,60 @@ describe("connected snapshot sharing", function () {
     expect(existsSync(await saveScreenshot("connected-share-chat-draft"))).toBe(
       true,
     );
+
+    // Deterministically exercise the optimistic post-Send representation. The
+    // live transport uses this exact envelope; no provider is needed to prove
+    // that Chat renders one attachment card + the readable prompt instead of a
+    // second raw-JSON user bubble.
+    await chatInput.setValue("");
+    await browser.execute(() => {
+      const label = Array.from(
+        document.querySelectorAll<HTMLElement>("div"),
+      ).find(
+        (element) =>
+          element.textContent?.trim() ===
+          "context from frozen Screenpipe snapshot",
+      );
+      label?.parentElement?.parentElement
+        ?.querySelector<HTMLButtonElement>("button")
+        ?.click();
+
+      const g = window as unknown as {
+        __e2eSeedUserMessage?: (sessionId: string, text: string) => void;
+      };
+      if (!g.__e2eSeedUserMessage) {
+        throw new Error("chat user-message E2E hook is unavailable");
+      }
+      const context = JSON.stringify({
+        kind: "screenpipe_share_context",
+        source: "live-view",
+        title: "Weekly product pulse",
+        snapshot:
+          "### Wins\n- Released the new meeting flow\n\n### Next actions\n- Finish sharing QA",
+      });
+      g.__e2eSeedUserMessage(
+        "e2e-connected-share-sent-attachment",
+        `[Context from reviewed Screenpipe snapshot: ${context}]\n\nHelp me share this reviewed snapshot to Notion.`,
+      );
+    });
+    await browser.waitUntil(
+      async () => {
+        const text = (await browser.execute(
+          () => document.body?.innerText ?? "",
+        )) as string;
+        return (
+          text.includes("frozen Screenpipe snapshot") &&
+          text.includes("Help me share this reviewed snapshot to Notion.") &&
+          !text.includes('"kind":"screenpipe_share_context"')
+        );
+      },
+      {
+        timeout: t(10_000),
+        timeoutMsg: "post-Send attachment card did not render cleanly",
+      },
+    );
+    expect(
+      existsSync(await saveScreenshot("connected-share-chat-sent-attachment")),
+    ).toBe(true);
   });
 });

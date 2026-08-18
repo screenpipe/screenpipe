@@ -51,6 +51,8 @@ const REQUIRED_PATHS = [
   "dist/cli.js", // bin: screenpipe-mcp
   "dist/http-server.js", // bin: screenpipe-mcp-http
   "dist/index.js", // main — the stdio server
+  "dist/activity-summary-tool.js", // bounded activity orchestration imported by dist/index.js
+  "dist/activity-summary-format.js", // authoritative time + bounded context formatter imported by dist/index.js
   "dist/time-normalization.js", // local-calendar literals imported by dist/index.js
   "dist/team-config.js", // the whole point of 0.19.0
   "dist/version.js", // single source of truth for the reported version
@@ -75,6 +77,11 @@ const REQUIRED_MARKERS = [
     file: "dist/index.js",
     marker: "--team-api-url",
     why: "the CLI flag override must survive compilation",
+  },
+  {
+    file: "dist/activity-summary-format.js",
+    marker: "Authoritative active time",
+    why: "activity summaries must preserve server-owned time instead of inferring it from capture counts",
   },
   {
     file: "dist/time-normalization.js",

@@ -16,8 +16,8 @@ use crate::state::{Anchor, Control, OverlayState};
 pub const NOTIFICATION_ACTION_PREFIX: &str = "notification_action:";
 pub const ANCHOR_PREFIX: &str = "set_overlay_anchor:";
 pub const MEETING_NOTE_PREFIX: &str = "open_meeting_note:";
-pub const SETTINGS_MENU_HIDE_HOUR: usize = 1;
-pub const SETTINGS_MENU_OPEN_SETTINGS: usize = 2;
+pub const BRAND_CONTEXT_MENU_HIDE_HOUR: usize = 1;
+pub const BRAND_CONTEXT_MENU_OPEN_SETTINGS: usize = 2;
 
 /// The action string for a control, or `None` when the control has nothing to
 /// report — either because it is a status cell rather than a button, or because
@@ -26,11 +26,9 @@ pub fn action_for(state: &OverlayState, control: Control) -> Option<String> {
     let fixed = match control {
         // Clicking the resting chip opens the timeline: the dock owns the other
         // destinations, but at rest the pill needs one obvious thing to do.
-        Control::Pill | Control::Timeline => "open_timeline",
+        Control::Pill | Control::Brand | Control::Timeline => "open_timeline",
         Control::Search => "open_search",
         Control::Chat => "open_chat",
-        // The native window owns the compact settings menu. Its selected item
-        // is translated by `settings_menu_action` below.
         Control::Settings => return None,
         Control::RestartRecording => "restart_recording",
         Control::DismissIncident => "dismiss_incident",
@@ -69,10 +67,10 @@ pub fn action_for(state: &OverlayState, control: Control) -> Option<String> {
 
 /// Translate the native settings-menu command id into the same app actions
 /// used by the macOS panel and web fallback.
-pub fn settings_menu_action(command: usize) -> Option<String> {
+pub fn brand_context_menu_action(command: usize) -> Option<String> {
     match command {
-        SETTINGS_MENU_HIDE_HOUR => Some("dismiss_hour".to_string()),
-        SETTINGS_MENU_OPEN_SETTINGS => Some("open_overlay_settings".to_string()),
+        BRAND_CONTEXT_MENU_HIDE_HOUR => Some("dismiss_hour".to_string()),
+        BRAND_CONTEXT_MENU_OPEN_SETTINGS => Some("open_overlay_settings".to_string()),
         _ => None,
     }
 }
@@ -116,6 +114,7 @@ mod tests {
         assert_eq!(action_for(&s, Control::Chat).unwrap(), "open_chat");
         assert_eq!(action_for(&s, Control::Timeline).unwrap(), "open_timeline");
         assert_eq!(action_for(&s, Control::Pill).unwrap(), "open_timeline");
+        assert_eq!(action_for(&s, Control::Brand).unwrap(), "open_timeline");
         assert_eq!(action_for(&s, Control::Settings), None);
         assert_eq!(
             action_for(&s, Control::RestartRecording).unwrap(),
@@ -124,16 +123,16 @@ mod tests {
     }
 
     #[test]
-    fn settings_menu_matches_the_other_native_overlay() {
+    fn brand_context_menu_matches_the_other_native_overlay() {
         assert_eq!(
-            settings_menu_action(SETTINGS_MENU_HIDE_HOUR).unwrap(),
+            brand_context_menu_action(BRAND_CONTEXT_MENU_HIDE_HOUR).unwrap(),
             "dismiss_hour"
         );
         assert_eq!(
-            settings_menu_action(SETTINGS_MENU_OPEN_SETTINGS).unwrap(),
+            brand_context_menu_action(BRAND_CONTEXT_MENU_OPEN_SETTINGS).unwrap(),
             "open_overlay_settings"
         );
-        assert_eq!(settings_menu_action(99), None);
+        assert_eq!(brand_context_menu_action(99), None);
     }
 
     #[test]

@@ -459,6 +459,20 @@ impl ShowRewindWindow {
     }
 
     pub fn show(&self, app: &AppHandle) -> tauri::Result<WebviewWindow> {
+        self.show_with_search_origin(app, None)
+    }
+
+    /// Show a window while preserving which native timeline launched Search.
+    ///
+    /// Search is a pre-warmed, reused webview, so the origin must travel in
+    /// both the first-load URL and the in-place `search-reset` event. Keeping
+    /// this outside `ShowRewindWindow` avoids changing the public window enum
+    /// for an option that only has meaning during a timeline hand-off.
+    pub fn show_with_search_origin(
+        &self,
+        app: &AppHandle,
+        search_origin: Option<&str>,
+    ) -> tauri::Result<WebviewWindow> {
         let id = self.id();
         let onboarding_store = OnboardingStore::get(app)
             .unwrap_or_else(|_| None)
@@ -550,7 +564,10 @@ impl ShowRewindWindow {
                 // optional prefill query (empty string when none).
                 let _ = window.emit(
                     "search-reset",
-                    serde_json::json!({ "query": self.metadata() }),
+                    serde_json::json!({
+                        "query": self.metadata(),
+                        "originWindowLabel": search_origin,
+                    }),
                 );
 
                 // Reposition to center of primary monitor
@@ -1598,7 +1615,7 @@ impl ShowRewindWindow {
                 // Build the floating search bar and bring it to front (focus=true).
                 // The hidden pre-warm path (prewarm_search) reuses the same builder
                 // with focus=false so startup doesn't steal focus.
-                Self::create_search_window(app, query.as_deref(), true)?
+                Self::create_search_window(app, query.as_deref(), search_origin, true)?
             }
             ShowRewindWindow::Onboarding => {
                 if onboarding_store.is_completed {
@@ -1785,11 +1802,17 @@ impl ShowRewindWindow {
     fn create_search_window(
         app: &AppHandle,
         query: Option<&str>,
+        search_origin: Option<&str>,
         focus: bool,
     ) -> tauri::Result<WebviewWindow> {
         let mut url = "/search".to_string();
         if let Some(q) = query {
             url.push_str(q);
+        }
+        if let Some(origin) = search_origin {
+            url.push(if url.contains('?') { '&' } else { '?' });
+            url.push_str("timelineOrigin=");
+            url.push_str(origin);
         }
 
         // Compact, centered, no chrome. Start thin (just the input row); JS
@@ -1911,7 +1934,7 @@ impl ShowRewindWindow {
         // and search effects suspended until the first `search-reset` event.
         // A hidden WKWebView otherwise continues rendering and issuing IPC as
         // if the search panel were visible.
-        let window = Self::create_search_window(app, Some("?prewarm=1"), false)?;
+        let window = Self::create_search_window(app, Some("?prewarm=1"), None, false)?;
         #[cfg(target_os = "macos")]
         setup_content_process_handler(&window);
         #[cfg(not(target_os = "macos"))]

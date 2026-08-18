@@ -204,6 +204,7 @@ pub struct OverlayState {
 #[serde(rename_all = "snake_case")]
 pub enum Control {
     Pill,
+    Brand,
     Search,
     Chat,
     Timeline,

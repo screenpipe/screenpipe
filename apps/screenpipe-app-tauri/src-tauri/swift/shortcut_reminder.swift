@@ -461,7 +461,7 @@ private let kBaseNotificationW: CGFloat = 340
 private let kBaseNotificationH: CGFloat = 34
 private let kRestingOpacity: Double = 0.50
 private let kAnimDur: Double = 0.2
-private let kDockControls = ["search", "chat", "timeline", "audio", "settings"]
+private let kDockControls = ["search", "chat", "timeline", "audio", "brand"]
 
 /// Convert configured shortcuts to one stable, readable macOS order.
 /// Settings historically stored both `Super+Control+…` and
@@ -781,6 +781,31 @@ func overlayHoverRect(
     )
 }
 
+func dockControl(
+    at point: NSPoint,
+    in bounds: NSRect,
+    expanded: Bool,
+    disclosureDown: Bool,
+    horizontal: OverlayHorizontal,
+    scale: CGFloat
+) -> (String, Int)? {
+    guard expanded else { return nil }
+    let dock = overlayHoverRect(
+        in: bounds,
+        expanded: true,
+        disclosureDown: disclosureDown,
+        horizontal: horizontal,
+        scale: scale
+    )
+    guard dock.contains(point) else { return nil }
+    let cellWidth = dock.width / CGFloat(kDockControls.count)
+    let index = min(
+        kDockControls.count - 1,
+        max(0, Int((point.x - dock.minX) / cellWidth))
+    )
+    return (kDockControls[index], index)
+}
+
 func disclosureContent(
     for control: String?,
     overlayShortcut: String,
@@ -789,6 +814,7 @@ func disclosureContent(
     metrics: OverlayMetrics
 ) -> (String, String?)? {
     switch control {
+    case "brand": return ("screenpipe", "right-click")
     case "timeline": return ("timeline", overlayShortcut)
     case "chat": return ("ask chat", chatShortcut)
     case "search": return ("search", searchShortcut)
@@ -1137,8 +1163,12 @@ struct ShortcutReminderView: View {
 
             Rectangle().fill(.white.opacity(0.28)).frame(width: 1).padding(.vertical, s(4))
 
-            DockIconButton(icon: "gearshape", active: metrics.hoveredControl == "settings", scale: scale) {
-                onAction("show_settings_menu")
+            DockAppIconButton(
+                active: metrics.hoveredControl == "brand",
+                meetingActive: metrics.meetingActive,
+                scale: scale
+            ) {
+                onAction("open_timeline")
             }
         }
         .frame(width: kBaseExpandedW * scale, height: kBaseDockH * scale)
@@ -1326,6 +1356,38 @@ private struct DockIconButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+@available(macOS 13.0, *)
+private struct DockAppIconButton: View {
+    let active: Bool
+    let meetingActive: Bool
+    let scale: CGFloat
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack(alignment: .topTrailing) {
+                if let appIcon = NSApp.applicationIconImage {
+                    Image(nsImage: appIcon)
+                        .resizable()
+                        .frame(width: 12 * scale, height: 12 * scale)
+                }
+                if meetingActive {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 4 * scale, height: 4 * scale)
+                        .offset(x: 2 * scale, y: -2 * scale)
+                }
+            }
+            .opacity(active ? 1 : 0.78)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(active ? Color.white.opacity(0.14) : Color.clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("screenpipe — right-click for options")
     }
 }
 
@@ -2114,23 +2176,39 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
             metrics.hoveredControl = nil
             return
         }
-        guard metrics.isHovering, let point = point else {
+        guard metrics.isHovering,
+              let point = point,
+              let bounds = trackingView?.bounds else {
             metrics.hoveredControl = nil
             return
         }
-        let cellWidth = (kBaseExpandedW * gOverlayScale) / CGFloat(kDockControls.count)
-        let dockHeight = kBaseDockH * gOverlayScale
-        let panelHeight = kBaseExpandedH * gOverlayScale
-        let pointerIsInDock = metrics.disclosureDown
-            ? point.y >= panelHeight - dockHeight
-            : point.y <= dockHeight
-        guard pointerIsInDock else { return }
-        let index = min(kDockControls.count - 1, max(0, Int(point.x / cellWidth)))
-        let control = kDockControls[index]
+        guard let (control, index) = dockControl(
+            at: point,
+            in: bounds,
+            expanded: metrics.isHovering || metrics.forceExpanded,
+            disclosureDown: metrics.disclosureDown,
+            horizontal: metrics.horizontal,
+            scale: gOverlayScale
+        ) else { return }
         if metrics.hoveredControl != control {
             metrics.hoveredControl = control
             showDisclosurePanel(for: control, index: index)
         }
+    }
+
+    private func showShortcutContextMenuIfNeeded(at point: NSPoint) -> Bool {
+        guard let bounds = trackingView?.bounds,
+              let (control, _) = dockControl(
+                  at: point,
+                  in: bounds,
+                  expanded: metrics.isHovering || metrics.forceExpanded,
+                  disclosureDown: metrics.disclosureDown,
+                  horizontal: metrics.horizontal,
+                  scale: gOverlayScale
+              ),
+              control == "brand" else { return false }
+        showShortcutContextMenu(at: point)
+        return true
     }
 
     private func refreshActiveDisclosure() {
@@ -2795,11 +2873,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
             metrics: metrics,
             scale: gOverlayScale,
             onAction: { [weak self] action in
-                if action == "show_settings_menu" {
-                    self?.showShortcutSettingsMenu()
-                } else {
-                    self?.sendAction(action)
-                }
+                self?.sendAction(action)
             }
         )
         let contentView = panel.contentView!
@@ -2839,6 +2913,9 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
                 // `endPillDrag` restores the card against the pill's new home
                 // and rides it in on the settle.
                 self?.endPillDrag()
+            }
+            hosting.onRightClick = { [weak self] point in
+                self?.showShortcutContextMenuIfNeeded(at: point) ?? false
             }
             hosting.frame = contentView.bounds
             hosting.autoresizingMask = [.width, .height]
@@ -3047,7 +3124,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
     /// with the durable choice kept in Settings. Using AppKit's menu avoids a
     /// second floating panel and inherits keyboard, screen-edge and VoiceOver
     /// behavior from macOS.
-    private func showShortcutSettingsMenu() {
+    private func showShortcutContextMenu(at point: NSPoint) {
         guard let contentView = panel?.contentView else { return }
         let menu = NSMenu(title: "shortcut reminder")
         menu.autoenablesItems = false
@@ -3073,7 +3150,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
 
         menu.popUp(
             positioning: nil,
-            at: NSPoint(x: contentView.bounds.maxX - 4, y: contentView.bounds.minY + 4),
+            at: point,
             in: contentView
         )
     }
@@ -3374,6 +3451,9 @@ private class DraggableHostingView<Content: View>: NSHostingView<Content> {
     var onDragStarted: (() -> Void)?
     /// Called once the user releases, so the controller can snap and persist.
     var onDragEnded: (() -> Void)?
+    /// Returns true when the click belonged to the expanded brand control and
+    /// the controller presented its native context menu.
+    var onRightClick: ((NSPoint) -> Bool)?
     /// Centre of the visible chip relative to the panel origin. Supplied by the
     /// controller because only it knows the current metrics; used to clamp the
     /// chip rather than the whole panel, most of which is empty space for the
@@ -3493,6 +3573,11 @@ private class DraggableHostingView<Content: View>: NSHostingView<Content> {
                 return event
             }
         }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        if onRightClick?(event.locationInWindow) == true { return }
+        super.rightMouseDown(with: event)
     }
 
     /// Keep the grabbed point of the panel pinned under the cursor, but never

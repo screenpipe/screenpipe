@@ -39,6 +39,7 @@ use tracing_oslog::OsLogger;
 use updates::start_update_check;
 use window::ShowRewindWindow;
 
+mod acp_extensions;
 mod acp_runtime;
 mod analytics;
 mod auth_session;
@@ -106,6 +107,7 @@ mod pi;
 mod pi_command_queue;
 mod power_awake;
 mod process_exit;
+mod provider_automations;
 mod recording;
 mod remote_support_logs;
 mod remote_sync_commands;
@@ -410,6 +412,7 @@ macro_rules! define_specta_builder {
             .typ::<enterprise_install_metadata::EnterpriseInstallMetadata>()
             .typ::<enterprise_host_identity::EnterpriseHostIdentity>()
             .typ::<chatgpt_oauth::ChatGptOAuthStatus>()
+            .typ::<provider_automations::ProviderAutomation>()
             .typ::<oauth::OAuthStatus>()
             .typ::<events::JobEvent>()
             .typ::<events::ExportEvent>()
@@ -423,6 +426,17 @@ macro_rules! define_specta_builder {
 
 #[tokio::main]
 async fn main() {
+    if acp_extensions::is_portable_mcp_mode() {
+        let exit_code = match acp_extensions::run_portable_mcp_mode() {
+            Ok(exit_code) => exit_code,
+            Err(error) => {
+                eprintln!("[acp-extension] {error}");
+                1
+            }
+        };
+        std::process::exit(exit_code);
+    }
+
     if acp_runtime::is_process_guard_mode() {
         let exit_code = match acp_runtime::run_process_guard() {
             Ok(exit_code) => exit_code,

@@ -4,8 +4,8 @@
 
 use super::catalog::{manifest_for_family, profile_for, AppFamily, BuiltinAppProfile};
 use crate::{
-    AccessibilityAttribute, IdentityQuality, NodeId, ParseContext, ParseOutcome, ParserManifest,
-    ProjectionError, SemanticItem, SemanticKind, SemanticParser, SemanticTree,
+    AccessibilityAttribute, CapturedNodeFlags, IdentityQuality, NodeId, ParseContext, ParseOutcome,
+    ParserManifest, ProjectionError, SemanticItem, SemanticKind, SemanticParser, SemanticTree,
 };
 
 /// Per-item byte cap: oversized buffers truncate instead of blowing the
@@ -27,22 +27,22 @@ pub struct EditorFamilyParser {
 
 impl EditorFamilyParser {
     pub fn new() -> Self {
-        Self {
-            manifest: manifest_for_family(
-                AppFamily::Editor,
-                "family.editor",
-                vec![SemanticKind::Document],
-                vec![
-                    AccessibilityAttribute::Title,
-                    AccessibilityAttribute::Description,
-                    AccessibilityAttribute::Value,
-                    AccessibilityAttribute::Children,
-                    AccessibilityAttribute::DomIdentifier,
-                    AccessibilityAttribute::DomClasses,
-                ],
-                60,
-            ),
-        }
+        let mut manifest = manifest_for_family(
+            AppFamily::Editor,
+            "family.editor",
+            vec![SemanticKind::Document],
+            vec![
+                AccessibilityAttribute::Title,
+                AccessibilityAttribute::Description,
+                AccessibilityAttribute::Value,
+                AccessibilityAttribute::Children,
+                AccessibilityAttribute::DomIdentifier,
+                AccessibilityAttribute::DomClasses,
+            ],
+            60,
+        );
+        manifest.parser_version = "2".into();
+        Self { manifest }
     }
 }
 
@@ -95,6 +95,9 @@ impl SemanticParser for EditorFamilyParser {
         }
 
         if !recognized_workbench {
+            if let Some(item) = persisted_tree_editor_item(profile, tree) {
+                return Ok(ParseOutcome::Handled(vec![item]));
+            }
             return Ok(ParseOutcome::NotHandled);
         }
 
@@ -129,6 +132,95 @@ impl SemanticParser for EditorFamilyParser {
             Ok(ParseOutcome::Handled(items))
         }
     }
+}
+
+/// Persisted accessibility records do not contain the transient DOM classes
+/// used by Monaco. A selected editor tab plus a text buffer is the durable
+/// cross-platform shape retained in the database. Requiring both prevents a
+/// settings page, search box, or command palette from becoming source code.
+fn persisted_tree_editor_item(
+    profile: &BuiltinAppProfile,
+    tree: &SemanticTree,
+) -> Option<SemanticItem> {
+    let (tab, title) = selected_editor_tab(tree)?;
+    if !looks_like_file_title(title) {
+        return None;
+    }
+    let buffer = tree
+        .roots()
+        .flat_map(|root| tree.descendants(root))
+        .filter(|node| is_buffer_role(tree.role(*node)))
+        .filter_map(|node| usable_buffer(tree, node).map(|body| (node, body)))
+        .filter(|(_, body)| looks_like_code_buffer(body))
+        .max_by_key(|(_, body)| body.len())?;
+
+    let body = truncate_body(buffer.1);
+    let mut item = SemanticItem::new(
+        "editor-0",
+        SemanticKind::Document,
+        format!("{}:editor:selected:{}", profile.id, key_component(title)),
+        IdentityQuality::Derived,
+    );
+    item.title = Some(title.trim().to_owned());
+    item.body = Some(body.to_owned());
+    item.metadata
+        .insert("app".into(), profile.display_name.into());
+    item.metadata.insert("family".into(), "editor".into());
+    item.metadata
+        .insert("surface".into(), "persisted_accessibility_tree".into());
+    item.source_nodes.extend([tab, buffer.0]);
+    Some(item)
+}
+
+fn selected_editor_tab(tree: &SemanticTree) -> Option<(NodeId, &str)> {
+    tree.roots()
+        .flat_map(|root| tree.descendants(root))
+        .find_map(|node| {
+            let role = tree.role(node)?;
+            if !["AXRadioButton", "AXTab", "Tab", "TabItem"]
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(role))
+                || tree.flags(node).unwrap_or_default() & CapturedNodeFlags::SELECTED == 0
+            {
+                return None;
+            }
+            let title = node_content(tree, node).or_else(|| {
+                tree.descendants(node)
+                    .skip(1)
+                    .find_map(|child| node_content(tree, child))
+            })?;
+            Some((node, title))
+        })
+}
+
+fn node_content(tree: &SemanticTree, node: NodeId) -> Option<&str> {
+    tree.value(node)
+        .or_else(|| tree.text(node))
+        .or_else(|| tree.title(node))
+        .or_else(|| tree.description(node))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn looks_like_file_title(value: &str) -> bool {
+    let value = value.trim();
+    value.eq_ignore_ascii_case("untitled")
+        || value.rsplit_once('.').is_some_and(|(stem, extension)| {
+            !stem.trim().is_empty()
+                && (1..=12).contains(&extension.len())
+                && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
+}
+
+fn looks_like_code_buffer(value: &str) -> bool {
+    let value = value.trim();
+    value.len() >= 8
+        && (value.contains('\n')
+            || ['{', '}', ';', '=', '(', ')', ':']
+                .iter()
+                .filter(|token| value.contains(**token))
+                .count()
+                >= 2)
 }
 
 fn is_workbench_marker(tree: &SemanticTree, node: NodeId) -> bool {

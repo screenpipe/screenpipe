@@ -462,6 +462,7 @@ export function sanitizeCommand(command: string): string {
 export interface PresentableToolCall {
   toolName: string;
   args?: Record<string, unknown>;
+  result?: string;
   // ACP tool-call kind (read/edit/execute/fetch/search/think/…). Native ACP
   // tools (Claude's Read/Edit/…) carry this even when the human title doesn't
   // match a known tool name, so it drives a sensible label as a fallback.
@@ -694,6 +695,84 @@ const MCP_STARTUP_RE = /^mcp__([a-z0-9_.-]+)__startup$/i;
  *  this is. Never a real tool the agent chose to call. */
 export function mcpStartupServerName(toolName: string): string | null {
   return toolName.match(MCP_STARTUP_RE)?.[1] ?? null;
+}
+
+export type McpStartupState =
+  | "connecting"
+  | "connected"
+  | "auth-required"
+  | "error";
+
+export interface McpStartupPresentation {
+  serverName: string;
+  state: McpStartupState;
+  detail?: string;
+}
+
+const MCP_AUTH_REQUIRED_RE =
+  /(?:not logged in|log in|login required|sign in|authenticate|authentication required|unauthorized|\b401\b|oauth|authorization header|missing authorization)/i;
+
+/** Remove credential-shaped values from adapter diagnostics before they reach
+ *  React, persisted screenshots, or copied accessibility text. */
+function redactAssignedCredential(
+  _match: string,
+  prefix: string,
+  value: string,
+): string {
+  if (value.startsWith('"')) return `${prefix}"…"`;
+  if (value.startsWith("'")) return `${prefix}'…'`;
+  return `${prefix}…`;
+}
+
+export function redactMcpStartupDetail(detail: string): string {
+  return detail
+    .replace(/(\bbearer\s+)[a-z0-9._~+\/=\-]{8,}/gi, "$1…")
+    .replace(/(\bbasic\s+)[a-z0-9+/=:\-]{8,}/gi, "$1…")
+    .replace(
+      /(["']?authorization["']?\s*[:=]\s*)(?!bearer\s+|basic\s+)("[^"]*"|'[^']*'|[^\s,;}]+)/gi,
+      redactAssignedCredential,
+    )
+    .replace(
+      /(["']?(?:(?:x[-_ ]?)?api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|auth[-_ ]?token|token|client[-_ ]?secret|secret|password)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}]+)/gi,
+      redactAssignedCredential,
+    );
+}
+
+function displayMcpServerName(serverName: string): string {
+  if (serverName.toLowerCase() === "screenpipe") return "screenpipe";
+  if (/[A-Z]/.test(serverName)) return serverName;
+  return serverName
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+/** Convert codex-acp's synthetic `mcp__<server>__startup` tool call into a
+ *  connection state. Returns null for real MCP tool calls. */
+export function presentMcpStartup(
+  toolCall: PresentableToolCall,
+): McpStartupPresentation | null {
+  const rawServerName = mcpStartupServerName(toolCall.toolName);
+  if (!rawServerName) return null;
+
+  const serverName = displayMcpServerName(rawServerName);
+  if (toolCall.isRunning) return { serverName, state: "connecting" };
+  if (!toolCall.isError) return { serverName, state: "connected" };
+
+  const rawDetail = formatToolResult(toolCall.result)?.replace(
+    /^MCP server\s+[`"']?[^`"']+[`"']?\s+failed to start:\s*/i,
+    "",
+  );
+  const detail = rawDetail
+    ? trunc(redactMcpStartupDetail(rawDetail).replace(/\s+/g, " ").trim(), 280)
+    : undefined;
+
+  return {
+    serverName,
+    state: detail && MCP_AUTH_REQUIRED_RE.test(detail) ? "auth-required" : "error",
+    detail,
+  };
 }
 
 /**

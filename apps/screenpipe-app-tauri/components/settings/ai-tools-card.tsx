@@ -4,7 +4,7 @@
 
 "use client";
 
-// "AI tools" block — 4th sibling to MCP servers / Pi extensions / Skills in
+// "AI tools" block — 4th sibling to MCP servers / Agent extensions / Skills in
 // Settings > Connections. One place to see every AI tool detected on this
 // machine, connect them all in one click, connect/remove a single tool, or
 // disconnect everything (two-step confirm). Connect always leads; disconnect

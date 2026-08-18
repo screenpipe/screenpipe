@@ -1212,13 +1212,14 @@
       "features": [
         "chat",
         "chat-tools",
+        "mcp-startup-status",
         "pi-tool-activity",
         "progressive-disclosure"
       ],
       "criticality": "high",
       "confidence": "strong",
       "ux": "mixed",
-      "notes": "Mixed Python, JavaScript, Screenpipe API, file, test, recovered-error, and optional live Pi tool flows stay collapsed by default, expose only friendly activity on first expansion, keep completed tools active while the shared Pi turn is still streaming, and capture screenshots."
+      "notes": "Mixed Python, JavaScript, Screenpipe API, file, test, recovered-error, and optional live Pi tool flows stay collapsed by default, expose only friendly activity on first expansion, and keep completed tools active while the shared Pi turn is still streaming. Synthetic MCP startup events render as a separate connection card with captured connecting, connected, sign-in-required, generic-error, and mixed-state screenshots; they never inflate the command rail's failure count."
     },
     {
       "spec": "chat-window.spec.ts",
@@ -1959,7 +1960,7 @@
       "criticality": "medium",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Opens Home -> Connections, opens Pi extensions, verifies catalog and warning copy, filters package search, and captures a screenshot. Read-only smoke: does not install packages."
+      "notes": "Opens Home -> Connections, opens Agent extensions, verifies provider-neutral built-ins and compatibility labels, filters the Pi package search, and captures a screenshot. Read-only smoke: does not install packages."
     },
     {
       "spec": "pipe-continuous-chat.spec.ts",

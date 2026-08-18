@@ -44,11 +44,20 @@ describe("normalizeSidebarNavLayout", () => {
     expect(layout.order.slice(0, 2)).toEqual(["timeline", "home"]);
     expect(layout.order).toContain("meetings");
     expect(layout.order).toContain("connections");
-    // meetings sits after brain (its canonical predecessor), not appended last.
+    // meetings sits after Chat (its canonical predecessor), not appended last.
     expect(layout.order.indexOf("meetings")).toBe(
-      layout.order.indexOf("brain") + 1,
+      layout.order.indexOf("home") + 1,
     );
     expect(layout.order).toHaveLength(ALL.length);
+  });
+
+  it("moves the previous untouched default to the new shipped order", () => {
+    const layout = normalizeSidebarNavLayout({
+      order: ["home", "brain", "meetings", "pipes", "timeline", "connections"],
+      hidden: ["connections"],
+    });
+    expect(layout.order).toEqual(ALL);
+    expect(layout.hidden).toEqual(["connections"]);
   });
 
   it("never duplicates an id", () => {
@@ -97,7 +106,7 @@ describe("reordering", () => {
   it("moves an item to an index among the visible rows", () => {
     const next = moveSidebarNavItem(DEFAULT_SIDEBAR_NAV_LAYOUT, ALL, "connections", 0);
     expect(resolveVisibleSidebarNavIds(next, ALL)).toEqual([
-      "connections", "home", "brain", "meetings", "pipes", "timeline",
+      "connections", "home", "meetings", "timeline", "brain", "pipes",
     ]);
   });
 
@@ -122,7 +131,7 @@ describe("reordering", () => {
 
   it("shifts up and down and no-ops at the ends", () => {
     const down = shiftSidebarNavItem(DEFAULT_SIDEBAR_NAV_LAYOUT, ALL, "home", 1);
-    expect(resolveVisibleSidebarNavIds(down, ALL).slice(0, 2)).toEqual(["brain", "home"]);
+    expect(resolveVisibleSidebarNavIds(down, ALL).slice(0, 2)).toEqual(["meetings", "home"]);
     const stuck = shiftSidebarNavItem(DEFAULT_SIDEBAR_NAV_LAYOUT, ALL, "home", -1);
     expect(stuck).toBe(DEFAULT_SIDEBAR_NAV_LAYOUT);
   });
@@ -146,8 +155,8 @@ describe("hide and show", () => {
     });
     const next = setSidebarNavItemHidden(meetingsHidden, ALL, "meetings", false);
     expect(resolveVisibleSidebarNavIds(next, ALL)).toContain("meetings");
-    // and it lands in its canonical neighbourhood, right after brain.
-    expect(resolveVisibleSidebarNavIds(next, ALL).indexOf("meetings")).toBe(2);
+    // and it lands in its canonical neighbourhood, right after Chat.
+    expect(resolveVisibleSidebarNavIds(next, ALL).indexOf("meetings")).toBe(1);
   });
 
   it("hides a row", () => {

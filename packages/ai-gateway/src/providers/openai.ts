@@ -297,9 +297,12 @@ export class OpenAIProvider implements AIProvider {
 	}
 
 	private applyGenerationOptions(params: ChatCompletionCreateParams, body: RequestBody): void {
-		if (body.temperature === undefined) return;
-		if (this.usesMaxCompletionTokens(body.model)) return;
-		params.temperature = body.temperature;
+		if (body.reasoning_effort !== undefined) {
+			Object.assign(params, { reasoning_effort: body.reasoning_effort });
+		}
+		if (body.temperature !== undefined && !this.usesMaxCompletionTokens(body.model)) {
+			params.temperature = body.temperature;
+		}
 	}
 
 	// OpenAI keeps adding model families that reject `temperature` (and a few

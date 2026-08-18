@@ -25,7 +25,7 @@ impl ChatGptParser {
         Self {
             manifest: ParserManifest {
                 id: "app.chatgpt.turn_markers".into(),
-                parser_version: "1".into(),
+                parser_version: "2".into(),
                 schema_version: 1,
                 scope: ParserScope::App,
                 platforms: vec![Platform::Macos, Platform::Windows, Platform::Linux],
@@ -71,6 +71,9 @@ impl SemanticParser for ChatGptParser {
                 return Ok(ParseOutcome::Empty);
             }
         }
+        if turns.is_empty() && macos_landing_surface(tree) {
+            return Ok(ParseOutcome::Empty);
+        }
         if turns.is_empty() {
             return Ok(ParseOutcome::NotHandled);
         }
@@ -109,6 +112,41 @@ impl SemanticParser for ChatGptParser {
         }
         Ok(ParseOutcome::Handled(items))
     }
+}
+
+/// Current persisted macOS ChatGPT trees omit actor markers on the landing
+/// and chat-list surfaces, but retain the native "New chat" and "Search"
+/// controls. Recognize that valid zero-message state instead of reporting
+/// parser drift. A real open conversation still requires actor evidence.
+fn macos_landing_surface(tree: &SemanticTree) -> bool {
+    let mut web_area = false;
+    let mut new_chat = false;
+    let mut search = false;
+    let mut conversation_action = false;
+    for root in tree.roots() {
+        for node in tree.descendants(root) {
+            web_area |= tree
+                .role(node)
+                .is_some_and(|role| role.eq_ignore_ascii_case("AXWebArea"));
+            let Some(content) = node_content(tree, node) else {
+                continue;
+            };
+            new_chat |= content.eq_ignore_ascii_case("New chat");
+            search |= content.eq_ignore_ascii_case("Search");
+            conversation_action |= [
+                "Copy",
+                "Copy response",
+                "Edit message",
+                "Good response",
+                "Bad response",
+                "Read aloud",
+                "Regenerate",
+            ]
+            .iter()
+            .any(|label| content.eq_ignore_ascii_case(label));
+        }
+    }
+    web_area && new_chat && search && !conversation_action
 }
 
 struct Turn {

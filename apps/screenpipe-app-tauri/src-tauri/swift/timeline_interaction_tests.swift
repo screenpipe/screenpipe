@@ -681,6 +681,70 @@ private func testKeyboardThroughWindow(window: NSWindow, model: TimelineViewMode
     expect(window.isVisible, "the window must still be visible for key handling")
 }
 
+/// A Search result can belong to a day that is not loaded yet. The hand-off
+/// must retain its exact frame id until the replacement stream batch arrives,
+/// then select that frame rather than the first/nearest frame of the day.
+@MainActor
+private func testSearchNavigationWaitsForExactFrame(model: TimelineViewModel) {
+    resetModel(model)
+    let targetDate = Date().addingTimeInterval(-2 * 24 * 60 * 60)
+    var targetFrames = fixtureFrames(count: 4, base: targetDate)
+    for index in targetFrames.indices {
+        targetFrames[index].devices[0].frameId = String(900_000 + index)
+    }
+
+    model.navigateToSearchResult(
+        timestamp: targetDate.addingTimeInterval(-60),
+        frameId: "900002",
+        query: "exact frame",
+        frameIds: ["900000", "900001", "900002", "900003"],
+        terms: ["exact", "frame"]
+    )
+    expect(model.frames.isEmpty, "a result on another day must request that day")
+
+    model.injectForTesting(frames: targetFrames)
+    expectEqual(
+        model.currentFrame?.devices.first?.frameId,
+        "900002",
+        "search navigation resolves the exact pending frame"
+    )
+    expectEqual(model.searchReview?.activeIndex, 2, "search review starts on the clicked result")
+}
+
+/// Home and the overlay keep independent attached controllers. A routed Search
+/// result must resolve by the Tauri host label instead of falling back to the
+/// standalone/shared model.
+@MainActor
+private func testSearchNavigationTargetsHostLabel() {
+    let host = NSWindow(
+        contentRect: NSRect(x: 160, y: 160, width: 720, height: 520),
+        styleMask: [.titled], backing: .buffered, defer: false
+    )
+    host.makeKeyAndOrderFront(nil)
+    let pointer = Int(bitPattern: Unmanaged.passUnretained(host).toOpaque())
+    let controller = TimelineWindowController.controller(forHost: pointer)
+    let attached = controller.attach(
+        config: TimelineAPIConfig(host: "127.0.0.1", port: 0, apiKey: nil),
+        hostWindowNumber: host.windowNumber,
+        rect: NSRect(x: 0, y: 0, width: 720, height: 520),
+        hostPointer: pointer,
+        hostWindowLabel: "home"
+    )
+    expect(attached, "the labelled timeline fixture must attach")
+    expect(
+        TimelineWindowController.model(forWindowLabel: "home") === controller.currentModel,
+        "Search must resolve the model owned by its Home host"
+    )
+    expect(
+        TimelineWindowController.model(forWindowLabel: "main") == nil,
+        "Search must not fall through to another timeline when its host label is absent"
+    )
+
+    TimelineWindowController.releaseController(forHost: pointer)
+    host.close()
+    pump(0.2)
+}
+
 // MARK: - Runner
 
 /// The tests run from inside `NSApp.run()`. A bare `RunLoop.main.run(until:)`
@@ -713,6 +777,9 @@ private func runTests() {
         ("scroll event decoding", { testScrollEventDecoding(window: window) }),
         ("keyboard through window",
          { testKeyboardThroughWindow(window: window, model: model) }),
+        ("search navigation waits for exact frame",
+         { testSearchNavigationWaitsForExactFrame(model: model) }),
+        ("search navigation targets host label", testSearchNavigationTargetsHostLabel),
         ("icons", testIcons),
         ("icon chip renders", { testIconChipRenders(shots: shots) }),
         // Last: it re-parents and re-styles the shared window.

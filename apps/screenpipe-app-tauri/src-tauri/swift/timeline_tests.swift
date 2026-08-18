@@ -467,6 +467,11 @@ private func testGrouping() {
     expectEqual(groups[0].frameCount, 2, "first segment absorbs the repeat")
     expectEqual(groups[1].appName, "Slack", "second segment app")
     expectEqual(groups[2].appName, "Cursor", "returning to an app starts a new segment")
+    expectEqual(
+        TimelineHoverMetadata.effectiveAppName(raw: "Unknown", carried: "ChatGPT"),
+        "ChatGPT",
+        "hover metadata uses the stable app group while a raw frame is incomplete"
+    )
 
     // "Unknown" inherits the previous app rather than shattering the run.
     let withUnknown = [
@@ -977,6 +982,7 @@ private func testSubtitles() {
         currentTime: base, now: base
     )
     expectEqual(namedLine.first?.speaker, "Ada", "named speakers are used")
+    expectEqual(namedLine.first?.audioChunkId, 14, "caption lines retain their editable audio chunk")
 }
 
 // MARK: - Audio
@@ -1018,6 +1024,10 @@ private func testAudio() {
            "a segment inside its span is active")
     expect(!TimelineAudio.isSegmentActive(clock: base.addingTimeInterval(60), recordingStart: base, duration: 30),
            "a segment past its span is inactive")
+    expectClose(TimelineAudio.effectiveDuration(reported: 0, decoded: 37), 37,
+                "decoded file duration repairs a zero stream duration")
+    expectClose(TimelineAudio.effectiveDuration(reported: 42, decoded: 37), 42,
+                "the longer reported span is preserved")
 
     expect(TimelineAudio.shouldPreload(clock: base, recordingStart: base.addingTimeInterval(30)),
            "upcoming audio is preloaded")
@@ -1117,6 +1127,31 @@ private func testFrameAccessors() {
     expect(!TimelineFrames.hasAudio(emptyAudio), "a blank transcription is not audio")
 }
 
+// MARK: - Hover preview placement
+
+private func testHoverPreviewPlacement() {
+    expectClose(
+        TimelineHoverLayout.previewLeadingX(cursorX: 500, containerWidth: 1_000),
+        364,
+        "preview centres above the pointer"
+    )
+    expectClose(
+        TimelineHoverLayout.previewLeadingX(cursorX: 10, containerWidth: 1_000),
+        8,
+        "preview clamps to the left edge"
+    )
+    expectClose(
+        TimelineHoverLayout.previewLeadingX(cursorX: 990, containerWidth: 1_000),
+        720,
+        "preview clamps to the right edge"
+    )
+    expectClose(
+        TimelineHoverLayout.previewLeadingX(cursorX: 120, containerWidth: 240),
+        0,
+        "preview avoids a negative origin in a narrow host"
+    )
+}
+
 // MARK: - Runner
 
 private let allTests: [(String, () -> Void)] = [
@@ -1152,6 +1187,7 @@ private let allTests: [(String, () -> Void)] = [
     ("search review", testSearchReview),
     ("date navigation", testDateNavigation),
     ("frame accessors", testFrameAccessors),
+    ("hover preview placement", testHoverPreviewPlacement),
 ]
 
 @main

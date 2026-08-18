@@ -1,0 +1,20 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "com.microsoft.VSCode",
+    "executable": "Visual Studio Code",
+    "display_name": "VS Code",
+    "version": "1.0",
+    "browser_url": null
+  },
+  "nodes": [
+    { "role": "AXWindow", "text": "main.rs - project", "depth": 0 },
+    { "role": "AXRadioButton", "text": "main.rs", "depth": 1, "is_selected": true },
+    {
+      "role": "AXTextArea",
+      "text": "",
+      "depth": 1,
+      "value": "fn main() {\n    println!(\"hello\");\n}"
+    }
+  ]
+}

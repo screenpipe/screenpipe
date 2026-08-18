@@ -268,6 +268,10 @@ pub struct PipeConfig {
     /// LLM provider override.  Default: none (uses screenpipe cloud).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// Reasoning effort used for every run. Background automation defaults to
+    /// low so recurring work does not inherit Pi's more expensive chat default.
+    #[serde(default, skip_serializing_if = "is_default_effort")]
+    pub effort: PipeEffort,
     /// AI preset id(s) from `~/.screenpipe/store.bin` → `settings.aiPresets`.
     /// When set, overrides `model` and `provider` at runtime.
     /// Accepts a single string or an array of strings for fallback.
@@ -378,6 +382,35 @@ pub struct PipeConfig {
     /// Catches any extra fields from front-matter (backwards compat).
     #[serde(default, flatten, skip_serializing_if = "HashMap::is_empty")]
     pub config: HashMap<String, serde_json::Value>,
+}
+
+/// Cross-provider reasoning effort exposed by Pipes.
+///
+/// Keep this deliberately smaller than Pi's full thinking-level vocabulary:
+/// low/medium/high form a portable UI vocabulary across hosted and BYOK
+/// providers. Individual models may still clamp or ignore an unsupported level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PipeEffort {
+    Low,
+    Medium,
+    High,
+}
+
+impl PipeEffort {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+}
+
+impl Default for PipeEffort {
+    fn default() -> Self {
+        Self::Low
+    }
 }
 
 /// How often a structured schedule repeats. The unit of `ScheduleConfig.interval`.
@@ -603,6 +636,9 @@ fn is_default_agent(s: &String) -> bool {
 }
 fn is_default_model(s: &String) -> bool {
     s == "auto" || s == "claude-haiku-4-5" || s == "claude-haiku-4-5@20251001"
+}
+fn is_default_effort(effort: &PipeEffort) -> bool {
+    *effort == PipeEffort::Low
 }
 fn is_false(b: &bool) -> bool {
     !b
@@ -3668,6 +3704,7 @@ impl PipeManager {
                     Some(shared_pid.clone()),
                     line_tx,
                     history_enabled,
+                    Some(config.effort.as_str()),
                     Some(&pipe_system_prompt),
                     mcp_allowlist_arg(&mcp_server_allowlist),
                     // Owner tag: must match the frontend's pipeSessionId()
@@ -4219,6 +4256,7 @@ impl PipeManager {
                     Some(shared_pid.clone()),
                     line_tx,
                     history_enabled,
+                    Some(config.effort.as_str()),
                     Some(&pipe_system_prompt),
                     mcp_allowlist_arg(&mcp_server_allowlist),
                     // Owner tag: must match the frontend's pipeSessionId()
@@ -4584,6 +4622,14 @@ impl PipeManager {
                         config.provider = Some(s.to_string());
                     }
                 }
+                "effort" => {
+                    config.effort = serde_json::from_value(v.clone()).map_err(|_| {
+                        anyhow!(
+                            "invalid effort for '{}': expected low, medium, or high",
+                            name
+                        )
+                    })?;
+                }
                 "preset" => {
                     config.preset = preset_fallback::parse_preset_list(v);
                 }
@@ -4856,7 +4902,7 @@ impl PipeManager {
 
         let (mut config, body) = parse_frontmatter(source_md)?;
 
-        // Preserve user's enabled state, schedule, preset, and connections from current config
+        // Preserve user's enabled state, schedule, preset, effort, and connections from current config
         let current_path = dest_dir.join("pipe.md");
         if let Ok(current_content) = std::fs::read_to_string(&current_path) {
             // Backup existing pipe.md before overwriting
@@ -4868,6 +4914,7 @@ impl PipeManager {
             if let Ok((current_config, _)) = parse_frontmatter(&current_content) {
                 config.enabled = current_config.enabled;
                 config.preset = current_config.preset.clone();
+                config.effort = current_config.effort;
                 config.schedule = current_config.schedule.clone();
                 config.connections = current_config.connections.clone();
             }
@@ -5836,6 +5883,7 @@ impl PipeManager {
                     let store_ref = store.clone();
                     let token_registry_ref = token_registry.clone();
                     let mcp_session_access_ref = mcp_session_access.clone();
+                    let effort = config.effort;
                     let pipe_timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
                     let semaphore = execution_semaphore.clone();
                     let event_sem = event_semaphore.clone();
@@ -6029,6 +6077,7 @@ impl PipeManager {
                                 Some(shared_pid.clone()),
                                 line_tx,
                                 history_enabled,
+                                Some(effort.as_str()),
                                 Some(&pipe_system_prompt),
                                 mcp_allowlist_arg(&mcp_server_allowlist),
                                 // Owner tag — must match pipeSessionId() on the
@@ -6770,7 +6819,7 @@ fn render_prompt_with_port(
     let header = format!(
         r#"Default run lookback: {start_time} to {end_time}
 Structured output targets may declare an authoritative time range that overrides this default for that target.
-Date: {date}
+Run date: {date}
 Timezone: {timezone} (UTC{tz_offset})
 Pipe name: {}
 "#,
@@ -9263,8 +9312,56 @@ mod tests {
         let (config, _) = parse_frontmatter(content).unwrap();
         assert_eq!(config.agent, "pi");
         assert_eq!(config.model, "auto");
+        assert_eq!(config.effort, PipeEffort::Low);
         assert!(config.enabled);
         assert!(config.provider.is_none());
+    }
+
+    #[test]
+    fn test_parse_frontmatter_reasoning_effort() {
+        let content = "---\nschedule: manual\neffort: high\n---\n\nBody";
+        let (config, _) = parse_frontmatter(content).unwrap();
+        assert_eq!(config.effort, PipeEffort::High);
+    }
+
+    #[tokio::test]
+    async fn pipe_effort_update_persists_and_rejects_invalid_values() {
+        let installed = tempfile::tempdir().unwrap();
+        let pipes_dir = installed.path().join("pipes");
+        std::fs::create_dir_all(&pipes_dir).unwrap();
+
+        let manager = PipeManager::new(pipes_dir.clone(), HashMap::new(), None, 0);
+        manager.install_builtin_pipes().unwrap();
+        manager.load_pipes().await.unwrap();
+        manager
+            .update_config(
+                "day-recap",
+                HashMap::from([("effort".to_string(), serde_json::json!("high"))]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            manager.get_pipe("day-recap").await.unwrap().config.effort,
+            PipeEffort::High
+        );
+        assert!(std::fs::read_to_string(pipes_dir.join("day-recap/pipe.md"))
+            .unwrap()
+            .contains("effort: high"));
+
+        let error = manager
+            .update_config(
+                "day-recap",
+                HashMap::from([("effort".to_string(), serde_json::json!("maximum"))]),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("expected low, medium, or high"));
+        assert_eq!(
+            manager.get_pipe("day-recap").await.unwrap().config.effort,
+            PipeEffort::High
+        );
     }
 
     #[test]
@@ -9343,6 +9440,7 @@ mod tests {
             agent: "pi".to_string(),
             model: "claude-haiku-4-5".to_string(),
             provider: None,
+            effort: PipeEffort::Low,
             preset: vec!["default".to_string()],
             permissions: PipePermissionsConfig::default(),
             schedule_config: None,
@@ -9364,8 +9462,19 @@ mod tests {
         assert_eq!(parsed.schedule, "every 1h");
         assert_eq!(parsed.preset, vec!["default".to_string()]);
         assert_eq!(parsed_body, body);
+        assert!(!serialized.contains("effort:"));
         // Name should be empty after serialize (skip_serializing_if)
         assert!(parsed.name.is_empty());
+    }
+
+    #[test]
+    fn test_serialize_preserves_non_default_effort() {
+        let content = "---\nschedule: every 1h\neffort: medium\n---\n\nBody";
+        let (config, body) = parse_frontmatter(content).unwrap();
+        let serialized = serialize_pipe(&config, &body).unwrap();
+        assert!(serialized.contains("effort: medium"));
+        let (reparsed, _) = parse_frontmatter(&serialized).unwrap();
+        assert_eq!(reparsed.effort, PipeEffort::Medium);
     }
 
     #[test]
@@ -10067,6 +10176,7 @@ mod tests {
             agent: "pi".to_string(),
             model: "claude-haiku-4-5".to_string(),
             provider: None,
+            effort: PipeEffort::Low,
             preset: vec!["default".to_string()],
             permissions: PipePermissionsConfig::default(),
             schedule_config: Some(cfg_every_30m),
@@ -10226,6 +10336,7 @@ mod tests {
             agent: "pi".to_string(),
             model: "test-model".to_string(),
             provider: None,
+            effort: PipeEffort::Low,
             preset: vec![],
             permissions: PipePermissionsConfig::default(),
             schedule_config: None,
@@ -10245,6 +10356,8 @@ mod tests {
         // User prompt contains a default lookback and the "Execute" instruction.
         assert!(prompt.contains("Default run lookback:"));
         assert!(prompt.contains("authoritative time range"));
+        assert!(prompt.contains("Run date:"));
+        assert!(!prompt.contains("\nDate:"));
         assert!(prompt.contains("Do the work described above now."));
         // Port / body go into system prompt, not user prompt
         let sys = render_pipe_system_prompt("body text", 3031, None, None, None, false);
@@ -10262,6 +10375,7 @@ mod tests {
             agent: "pi".to_string(),
             model: "test-model".to_string(),
             provider: None,
+            effort: PipeEffort::Low,
             preset: vec![],
             permissions: PipePermissionsConfig::default(),
             schedule_config: None,
@@ -10290,6 +10404,7 @@ mod tests {
             agent: "pi".to_string(),
             model: "test-model".to_string(),
             provider: None,
+            effort: PipeEffort::Low,
             preset: vec![],
             permissions: PipePermissionsConfig::default(),
             schedule_config: None,
@@ -10327,6 +10442,7 @@ mod tests {
             agent: "pi".to_string(),
             model: "test-model".to_string(),
             provider: None,
+            effort: PipeEffort::Low,
             preset: vec![],
             permissions: PipePermissionsConfig::default(),
             schedule_config: None,
@@ -10452,6 +10568,7 @@ mod tests {
                 agent: "pi".to_string(),
                 model: "test".to_string(),
                 provider: None,
+                effort: PipeEffort::Low,
                 preset: vec![],
                 permissions: PipePermissionsConfig::default(),
                 schedule_config: None,

@@ -1,0 +1,18 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "com.openai.codex",
+    "executable": "ChatGPT",
+    "display_name": "ChatGPT",
+    "version": "1.0",
+    "browser_url": null
+  },
+  "nodes": [
+    { "role": "AXWindow", "text": "ChatGPT", "depth": 0 },
+    { "role": "AXWebArea", "text": "", "depth": 1 },
+    { "role": "AXButton", "text": "New chat", "depth": 2 },
+    { "role": "AXButton", "text": "Search", "depth": 2 },
+    { "role": "AXStaticText", "text": "A turn with unknown actor structure", "depth": 2 },
+    { "role": "AXButton", "text": "Copy response", "depth": 2 }
+  ]
+}

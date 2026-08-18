@@ -1711,6 +1711,7 @@ impl PiExecutor {
         shared_pid: Option<super::SharedPid>,
         line_tx: tokio::sync::mpsc::UnboundedSender<String>,
         continue_session: bool,
+        thinking_level: Option<&str>,
         pipe_system_prompt: Option<&str>,
         mcp_server_allowlist: Option<&[String]>,
         session_owner: Option<&str>,
@@ -1737,6 +1738,9 @@ impl PiExecutor {
         }
         cmd.arg("--provider").arg(resolved_provider);
         cmd.arg("--model").arg(model);
+        if let Some(level) = thinking_level {
+            cmd.arg("--thinking").arg(level);
+        }
         // Pass pipe instructions as system prompt for Anthropic prompt caching.
         // Pi's internal system prompt + this appended text form the cached prefix.
         if let Some(sys) = pipe_system_prompt {
@@ -2072,6 +2076,7 @@ impl AgentExecutor for PiExecutor {
         shared_pid: Option<super::SharedPid>,
         line_tx: tokio::sync::mpsc::UnboundedSender<String>,
         continue_session: bool,
+        thinking_level: Option<&str>,
         pipe_system_prompt: Option<&str>,
         mcp_server_allowlist: Option<&[String]>,
         session_owner: Option<&str>,
@@ -2122,8 +2127,10 @@ impl AgentExecutor for PiExecutor {
         })?;
 
         info!(
-            "pipe streaming using provider: {}, model: {}",
-            resolved_provider, resolved_model
+            "pipe streaming using provider: {}, model: {}, effort: {}",
+            resolved_provider,
+            resolved_model,
+            thinking_level.unwrap_or("pi-default"),
         );
 
         let mut output = self
@@ -2137,6 +2144,7 @@ impl AgentExecutor for PiExecutor {
                 shared_pid.clone(),
                 line_tx.clone(),
                 continue_session,
+                thinking_level,
                 pipe_system_prompt,
                 mcp_server_allowlist,
                 session_owner,
@@ -2171,6 +2179,7 @@ impl AgentExecutor for PiExecutor {
                     None,
                     line_tx.clone(),
                     continue_session,
+                    thinking_level,
                     pipe_system_prompt,
                     mcp_server_allowlist,
                     session_owner,
@@ -2207,6 +2216,7 @@ impl AgentExecutor for PiExecutor {
                 None,
                 line_tx.clone(),
                 continue_session,
+                thinking_level,
                 pipe_system_prompt,
                 mcp_server_allowlist,
                 session_owner,

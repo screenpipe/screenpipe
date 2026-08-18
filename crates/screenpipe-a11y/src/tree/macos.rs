@@ -741,6 +741,11 @@ impl MacosTreeWalker {
 }
 
 impl TreeWalkerPlatform for MacosTreeWalker {
+    fn update_config(&mut self, mut config: TreeWalkerConfig) {
+        config.compile_patterns_reusing(Some(&self.config));
+        self.config = config;
+    }
+
     fn walk_focused_window(&self) -> Result<TreeWalkResult> {
         // Wrap in autorelease pool — cidre AX/NS APIs create autoreleased
         // ObjC objects. Without this, objects accumulate on the tokio

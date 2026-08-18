@@ -11,6 +11,7 @@ import { isPlaceholderConversationTitle } from "@/lib/chat/message-rendering";
 import { buildProviderErrorPresentation, preflightChatProvider } from "@/lib/chat/provider-errors";
 import { isAcpAuthenticationCancelledError, isAcpExternalAuthError } from "@/lib/chat/auth-errors";
 import { queuedPreviewForText } from "@/lib/chat/queued-display";
+import { attachContextToUserMessage } from "@/lib/chat/attached-context";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { createPiMessageQueueTransport } from "@/components/chat/standalone/hooks/use-pi-message-queue-transport";
 import { usePiLiveSendControls } from "@/components/chat/standalone/hooks/use-pi-live-send";
@@ -515,6 +516,20 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     const outgoingImages = imageDataUrls ?? pastedImages;
     const shouldClearPastedImages = imageDataUrls == null && pastedImages.length > 0;
 
+    // A share is one user turn with two representations: the readable prompt
+    // Pi echoes to the transcript, and the model text carrying the reviewed
+    // snapshot. Build both before persisting the optimistic turn. Previously
+    // the snapshot was injected later, so the durable user bubble held only
+    // the prompt while ACP echoed a raw envelope as a second user message.
+    const displayUserMessage = userMessage;
+    if (prefillContext) {
+      userMessage = attachContextToUserMessage({
+        message: displayUserMessage,
+        context: prefillContext,
+        source: prefillSource,
+      });
+    }
+
     const consumedAttachments = consumePendingAttachments();
     const newUserMessage: Message = {
       id: Date.now().toString(),
@@ -664,17 +679,9 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
         setPrefillFrameId(null);
       }
 
-      // Clear prefill context banner (was only cleared in non-Pi path)
+      // The context is already part of `userMessage`; retire the composer
+      // banner now that the durable turn owns it.
       if (prefillContext) {
-        // Prepend context to the user message so Pi sees it
-        // A reviewed snapshot is not a search hit, and calling it one told both
-        // the model and the reader the wrong thing about where it came from.
-        const contextLabel = prefillSource?.startsWith("connected-share-")
-          ? "reviewed Screenpipe snapshot"
-          : prefillSource === "timeline"
-            ? "timeline selection"
-            : "search";
-        userMessage = `[Context from ${contextLabel}: ${prefillContext}]\n\n${userMessage}`;
         setPrefillContext(null);
       }
 
@@ -736,7 +743,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       }
 
       // Send prompt — abort/new_session now await completion, so no retry needed
-      const displayPreview = queuedPreviewForText(displayLabel ?? userMessage);
+      const displayPreview = queuedPreviewForText(displayLabel ?? displayUserMessage);
       let result = await commands.piPrompt(
         piSessionIdRef.current,
         promptMessage,

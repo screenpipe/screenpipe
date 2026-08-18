@@ -28,6 +28,7 @@ const packageList = (...sources: string[]): PiExtensionPackage[] =>
     scope: "user",
     filtered: false,
     installed: true,
+    acpCompatible: false,
   }));
 
 const emptyRegistrySearch = () => ({
@@ -78,6 +79,17 @@ describe("PiExtensionsCard", () => {
     expect(commandMocks.piListExtensionPackages).toHaveBeenCalledTimes(1);
   });
 
+  it("shows provider-neutral extensions as built-in ACP middleware", async () => {
+    render(<PiExtensionsCard />);
+
+    expect(await screen.findByText("Screen history")).toBeInTheDocument();
+    expect(screen.getAllByText("ACP client middleware · MCP")).toHaveLength(5);
+    expect(
+      screen.getByRole("switch", { name: "Screen history available to all agents" }),
+    ).toBeDisabled();
+    expect(screen.getByText("activity-summary")).toBeInTheDocument();
+  });
+
   it("keeps subagents on when legacy settings do not list the package", async () => {
     commandMocks.piListExtensionPackages.mockResolvedValueOnce({ status: "ok", data: [] });
     render(<PiExtensionsCard />);
@@ -93,7 +105,7 @@ describe("PiExtensionsCard", () => {
     render(<PiExtensionsCard />);
     await screen.findByText("Subagents");
 
-    fireEvent.change(screen.getByPlaceholderText("Search Pi extensions..."), {
+    fireEvent.change(screen.getByPlaceholderText("Search Pi packages..."), {
       target: { value: "web" },
     });
 

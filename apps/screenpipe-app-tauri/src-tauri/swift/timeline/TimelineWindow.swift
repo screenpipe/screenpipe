@@ -30,23 +30,23 @@ final class TimelineActionBridge {
         callback = cb
     }
 
-    func emit(_ action: String) {
+    func emit(_ action: String, windowLabel explicitWindowLabel: String? = nil) {
         emitted.append(action)
         guard let callback else { return }
-        let windowLabel = MainActor.assumeIsolated {
+        let windowLabel = explicitWindowLabel ?? MainActor.assumeIsolated {
             TimelineWindowController.activeHostWindowLabel()
         }
-        let callbackAction: String
-        if let windowLabel,
-           let data = try? JSONSerialization.data(
-               withJSONObject: ["action": action, "windowLabel": windowLabel]
-           ),
-           let routed = String(data: data, encoding: .utf8) {
-            callbackAction = routed
-        } else {
-            callbackAction = action
-        }
+        let callbackAction = Self.callbackPayload(action: action, windowLabel: windowLabel)
         callbackAction.withCString { callback($0) }
+    }
+
+    static func callbackPayload(action: String, windowLabel: String?) -> String {
+        guard let windowLabel,
+              let data = try? JSONSerialization.data(
+                  withJSONObject: ["action": action, "windowLabel": windowLabel]
+              ),
+              let routed = String(data: data, encoding: .utf8) else { return action }
+        return routed
     }
 
     func drainEmitted() -> [String] {
@@ -152,7 +152,7 @@ struct TimelineKeyHandler {
                 model.resetFilters()
             } else if !embedded || closeOnEscape {
                 model.pause()
-                TimelineActionBridge.shared.emit("close_window")
+                model.emitAction("close_window")
             }
             return true
         default:
@@ -162,7 +162,7 @@ struct TimelineKeyHandler {
         switch event.characters {
         case "/" where !command:
             model.resetFilters()
-            TimelineActionBridge.shared.emit("open_search")
+            model.emitAction("open_search")
             return true
         case "g" where command && shift:
             model.stepSearchResult(1)
@@ -172,23 +172,23 @@ struct TimelineKeyHandler {
             return true
         case "c" where command && shift:
             if let id = model.displayFrame?.devices.first?.frameId {
-                TimelineActionBridge.shared.emit("copy_frame:\(id)")
+                model.emitAction("copy_frame:\(id)")
             }
             return true
         case "c" where command:
             if let text = model.displayFrame?.devices.first?.metadata.text, !text.isEmpty {
-                TimelineActionBridge.shared.emit("copy_text")
+                model.emitAction("copy_text")
             }
             return true
         case "l" where control && command:
             if let action = model.askAISelectionAction() {
-                TimelineActionBridge.shared.emit(action)
+                model.emitAction(action)
                 return true
             }
             return false
         case "s" where control && command:
             model.pause()
-            TimelineActionBridge.shared.emit("close_window")
+            model.emitAction("close_window")
             return true
         default:
             return false
@@ -336,6 +336,16 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
         return attachedControllers.values.first { $0.window === keyWindow }?.hostWindowLabel
     }
 
+    /// Return the model owned by a specific Tauri host window. Search results
+    /// must not use `shared`: Home and the overlay each have their own attached
+    /// controller, and whichever attached last is not necessarily the source.
+    static func model(forWindowLabel label: String?) -> TimelineViewModel? {
+        guard let label else { return shared.currentModel }
+        return attachedControllers.values
+            .first { $0.hostWindowLabel == label }?
+            .currentModel
+    }
+
     private var window: NSWindow?
     private var model: TimelineViewModel?
     private var keyMonitor: Any?
@@ -352,6 +362,10 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
     /// The attached rect, in the parent's own (bottom-left) coordinates, so the
     /// child can be re-laid whenever the parent moves or resizes.
     private var attachedRect: NSRect?
+    /// Daily Summary in the transparent overlay is DOM content. While it is
+    /// open the native child sits below its transparent host, so the panel can
+    /// render above the timeline instead of forcing the timeline to disappear.
+    private var attachedUnderlay = false
     private var parentObservers: [NSObjectProtocol] = []
     /// Cancels a pending attached-window blur when focus comes back inside the
     /// overlay before the normal 300 ms dismissal debounce expires.
@@ -381,7 +395,7 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
                   self.hostWindowNumber != nil,
                   self.focusLossGeneration == generation,
                   !self.attachedHierarchyHasKeyWindow() else { return }
-            TimelineActionBridge.shared.emit("close_window")
+            TimelineActionBridge.shared.emit("close_window", windowLabel: hostWindowLabel)
         }
     }
 
@@ -481,7 +495,8 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
         rect: NSRect,
         hostPointer: Int? = nil,
         hostWindowLabel: String? = nil,
-        closeOnEscape: Bool = false
+        closeOnEscape: Bool = false,
+        underlay: Bool = false
     ) -> Bool {
         self.hostPointer = hostPointer
         self.hostWindowLabel = hostWindowLabel
@@ -501,6 +516,7 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
             )
         }
         guard let window, let model else { return false }
+        model.setActionWindowLabel(hostWindowLabel)
         // Placement events repeat on resize. Refreshing the handler is cheap
         // and keeps an existing controller correct if its host mode changes.
         installKeyMonitor(model: model, embedded: true, closeOnEscape: closeOnEscape)
@@ -515,13 +531,14 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
         self.hostWindowNumber = host.windowNumber
         attachedRect = rect
 
-        if window.parent !== host {
+        if window.parent !== host || attachedUnderlay != underlay {
             window.parent?.removeChildWindow(window)
-            host.addChildWindow(window, ordered: .above)
+            host.addChildWindow(window, ordered: underlay ? .below : .above)
         }
+        attachedUnderlay = underlay
         applyAttachedFrame(host: host, rect: rect)
         observeParent(host)
-        window.orderFront(nil)
+        if !underlay { window.orderFront(nil) }
         return true
     }
 
@@ -602,6 +619,7 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
         hostPointer = nil
         hostWindowLabel = nil
         attachedRect = nil
+        attachedUnderlay = false
         guard let window else { return }
         window.parent?.removeChildWindow(window)
         window.orderOut(nil)
@@ -621,6 +639,7 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
         hostPointer = nil
         hostWindowLabel = nil
         attachedRect = nil
+        attachedUnderlay = false
         removeKeyMonitor()
         model?.stop()
         window?.close()
@@ -731,6 +750,7 @@ public func timeline_show(_ json: UnsafePointer<CChar>?) -> Int32 {
         if let key = obj["apiKey"] as? String, !key.isEmpty { config.apiKey = key }
         if let value = obj["embedded"] as? Bool { embedded = value }
         if let value = obj["closeOnEscape"] as? Bool { closeOnEscape = value }
+        let underlay = (obj["underlay"] as? Bool) ?? false
         if let r = obj["rect"] as? [String: Any] {
             let host = (obj["hostWindow"] as? Int) ?? -1
             let pointer = obj["hostPointer"] as? Int
@@ -751,7 +771,8 @@ public func timeline_show(_ json: UnsafePointer<CChar>?) -> Int32 {
                     rect: rect,
                     hostPointer: pointer,
                     hostWindowLabel: label,
-                    closeOnEscape: closeOnEscape
+                    closeOnEscape: closeOnEscape,
+                    underlay: underlay
                 ) ? 0 : -1
             }
             if Thread.isMainThread {
@@ -829,7 +850,8 @@ public func timeline_close() -> Int32 {
     return 0
 }
 
-/// Deep links and search hand-off: `{"timestamp":"...","frameId":"..."}`.
+/// Deep links and search hand-off. `windowLabel` addresses an attached Home or
+/// overlay timeline; absent labels retain the standalone/deep-link behavior.
 @_cdecl("timeline_navigate")
 public func timeline_navigate(_ json: UnsafePointer<CChar>?) -> Int32 {
     guard #available(macOS 13.0, *), let json,
@@ -840,18 +862,21 @@ public func timeline_navigate(_ json: UnsafePointer<CChar>?) -> Int32 {
     }
     DispatchQueue.main.async {
         MainActor.assumeIsolated {
-            guard let model = TimelineWindowController.shared.currentModel else { return }
-            if let frameId = obj["frameId"] as? String,
-               let index = TimelineNavigation.index(ofFrameId: frameId, in: model.frames) {
+            let windowLabel = obj["windowLabel"] as? String
+            guard let model = TimelineWindowController.model(forWindowLabel: windowLabel) else { return }
+            let frameId = obj["frameId"] as? String
+            let rawTimestamp = obj["timestamp"] as? String
+            if let rawTimestamp, let timestamp = TimelineTime.parse(rawTimestamp) {
+                model.navigateToSearchResult(
+                    timestamp: timestamp,
+                    frameId: frameId,
+                    query: obj["searchQuery"] as? String,
+                    frameIds: obj["searchFrameIds"] as? [String] ?? [],
+                    terms: obj["searchTerms"] as? [String] ?? []
+                )
+            } else if let frameId,
+                      let index = TimelineNavigation.index(ofFrameId: frameId, in: model.frames) {
                 model.setIndex(index)
-                return
-            }
-            if let raw = obj["timestamp"] as? String, let date = TimelineTime.parse(raw) {
-                if let index = TimelineNavigation.indexNearest(date, in: model.frames) {
-                    model.setIndex(index)
-                } else {
-                    model.changeDate(to: date)
-                }
             }
         }
     }

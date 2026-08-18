@@ -95,12 +95,7 @@ async function sha256Hex(value: string): Promise<string> {
 	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-/** Build the five reviewed metadata fields Cloudflare receives. No prompt data is included. */
-export async function buildHostedChatGatewayContext(
-	auth: AuthResult,
-	model: string,
-	workload: HostedChatWorkload,
-): Promise<HostedChatGatewayContext> {
+export async function hostedChatActorId(auth: AuthResult): Promise<string> {
 	const identity = auth.userId
 		? `account:${auth.userId.trim()}`
 		: auth.service === true
@@ -109,8 +104,17 @@ export async function buildHostedChatGatewayContext(
 	if (!identity) {
 		throw new HostedChatGatewayConfigurationError('Hosted AI account identity is unavailable');
 	}
+	return sha256Hex(`screenpipe-hosted-chat:v1:${identity}`);
+}
+
+/** Build the five reviewed metadata fields Cloudflare receives. No prompt data is included. */
+export async function buildHostedChatGatewayContext(
+	auth: AuthResult,
+	model: string,
+	workload: HostedChatWorkload,
+): Promise<HostedChatGatewayContext> {
 	return {
-		user_id: await sha256Hex(`screenpipe-hosted-chat:v1:${identity}`),
+		user_id: await hostedChatActorId(auth),
 		plan: collapsePlan(auth),
 		lane: hostedChatLaneForModel(
 			model,

@@ -412,6 +412,25 @@ private func testKeyboard() {
            "overlay escape asks to close its host window")
 }
 
+private func testActionRouting() {
+    let payload = TimelineActionBridge.callbackPayload(
+        action: "open_daily_summary:2026-08-17",
+        windowLabel: "main"
+    )
+    let object = payload.data(using: .utf8).flatMap {
+        try? JSONSerialization.jsonObject(with: $0) as? [String: String]
+    }
+    expectEqual(object?["action"], "open_daily_summary:2026-08-17",
+                "daily summary action survives routing")
+    expectEqual(object?["windowLabel"], "main",
+                "overlay actions stay bound to the overlay webview")
+    expectEqual(
+        TimelineActionBridge.callbackPayload(action: "open_search", windowLabel: nil),
+        "open_search",
+        "standalone timelines retain the legacy action shape"
+    )
+}
+
 @MainActor
 private func testScrollAndZoom() {
     let model = populatedModel()
@@ -528,11 +547,23 @@ private func testDateNavigation() {
     expect(model.frames.isEmpty, "changing date clears the previous day's frames")
     expect(model.isNavigating, "day navigation stays guarded while its batch is pending")
 
+    // A slow or empty older day has no batch to acknowledge the request. The
+    // forward arrow must still return to today instead of staying disabled for
+    // the navigation timeout.
+    model.jumpDay(1)
+    expect(model.isAtToday, "next day supersedes a pending previous-day request")
+    expect(model.isNavigating, "the replacement current-day request is now pending")
+
+    model.jumpDay(-1)
+    expect(model.isAtToday, "backward navigation stays guarded while the replacement is pending")
+
     model.injectForTesting(frames: fixtureFrames(count: 4, base: model.currentDate))
     expect(!model.isNavigating, "the requested day batch acknowledges navigation")
 
+    model.jumpDay(-1)
+    model.injectForTesting(frames: fixtureFrames(count: 4, base: model.currentDate))
     model.jumpDay(1)
-    expect(model.isAtToday, "next day works immediately after the previous day loads")
+    expect(model.isAtToday, "next day also works after the previous day loads")
 
     model.jumpToNow()
     expect(Calendar.current.isDate(model.currentDate, inSameDayAs: today), "jump to now returns to today")
@@ -633,6 +664,15 @@ private func testTagToolbarRenders(shots: String) {
     write(rep, to: shots, name: "tag-toolbar")
     expect(stats(rep).brightestLuma > 0.4, "the tag toolbar is legible")
 
+    expectEqual(model.tagState("deep work", in: selection), .none,
+                "an untagged selection starts unchecked")
+    model.applyTag("deep work", add: true)
+    expectEqual(model.tagState("deep work", in: selection), .all,
+                "tagging keeps the selection open and marks every frame")
+    model.applyTag("deep work", add: false)
+    expectEqual(model.tagState("deep work", in: selection), .none,
+                "the same selection can remove its existing tag")
+
     _ = TimelineActionBridge.shared.drainEmitted()
     TimelineActionBridge.shared.emit("apply_tag:deep work")
     expect(TimelineActionBridge.shared.drainEmitted().contains("apply_tag:deep work"),
@@ -689,7 +729,13 @@ private func testHoverPreviewAndPopover(shots: String) {
         return
     }
     if let rep = render(
-        TimelineHoverPreview(frame: model.frames[3], carriedURL: nil, loader: loader),
+        TimelineHoverPreview(
+            frame: model.frames[3],
+            carriedURL: nil,
+            carriedAppName: nil,
+            carriedDomain: nil,
+            loader: loader
+        ),
         size: CGSize(width: 288, height: 240)
     ) {
         write(rep, to: shots, name: "hover-preview")
@@ -713,7 +759,11 @@ private func testHoverPreviewAndPopover(shots: String) {
     measuringLoader.setImageForTesting(tall)
     let measured = NSHostingView(
         rootView: TimelineHoverPreview(
-            frame: model.frames[3], carriedURL: nil, loader: measuringLoader
+            frame: model.frames[3],
+            carriedURL: nil,
+            carriedAppName: nil,
+            carriedDomain: nil,
+            loader: measuringLoader
         )
     ).fittingSize
     expect(measured.height > 0 && measured.height <= 320,
@@ -850,6 +900,7 @@ struct TimelineRenderTests {
                 ("scrubber renders", { testScrubberRenders(shots: shots) }),
                 ("scrubber layout", testScrubberLayoutMatchesHitTest),
                 ("keyboard", testKeyboard),
+                ("action routing", testActionRouting),
                 ("scroll and zoom", testScrollAndZoom),
                 ("selection and filters", testSelectionAndFilters),
                 ("live edge", testLiveEdgeFollowing),

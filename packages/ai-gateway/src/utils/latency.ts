@@ -19,6 +19,22 @@ export function isBackgroundRequest(request: Request): boolean {
 }
 
 /**
+ * Keep unattended work cheap without weakening interactive chat.
+ *
+ * A Pipe can still send an explicit per-run effort; this only fills the value
+ * for older clients and other background callers that omit it. Use the
+ * header-only background boundary so the flex-tier kill switch cannot also
+ * turn off this cost control.
+ */
+export function applyBackgroundReasoningDefault(
+	body: RequestBody,
+	isBackground: boolean,
+): RequestBody {
+	if (!isBackground || body.reasoning_effort !== undefined) return body;
+	return { ...body, reasoning_effort: 'low' };
+}
+
+/**
  * Classify a chat request as interactive (user waiting) or background
  * (latency-tolerant: pipes, daily summary, suggestions). Background traffic is
  * routed to the cheaper Vertex flex tier (see handlers/chat tryModel).

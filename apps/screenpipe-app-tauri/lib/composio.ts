@@ -19,6 +19,34 @@ export const COMPOSIO_TOOLKITS = [
 export type ComposioToolkit = (typeof COMPOSIO_TOOLKITS)[number];
 export type ComposioStatusMap = Record<ComposioToolkit, boolean>;
 
+export const COMPOSIO_CONNECTIONS = [
+  { id: "gmail", name: "Gmail", icon: "gmail", toolkit: "gmail" },
+  { id: "zoom", name: "Zoom", icon: "zoom", toolkit: "zoom" },
+  {
+    id: "google-drive",
+    name: "Google Drive",
+    icon: "google-drive",
+    toolkit: "googledrive",
+  },
+  {
+    id: "google-docs",
+    name: "Google Docs",
+    icon: "google-docs",
+    toolkit: "googledocs",
+  },
+  {
+    id: "google-sheets",
+    name: "Google Sheets",
+    icon: "google-sheets",
+    toolkit: "googlesheets",
+  },
+] as const satisfies readonly {
+  id: string;
+  name: string;
+  icon: string;
+  toolkit: ComposioToolkit;
+}[];
+
 export interface ComposioAccount {
   id: string;
   alias: string | null;

@@ -310,14 +310,17 @@ describe("recording health hover detail", () => {
     expect(meetingDot.className).toContain("pointer-events-none");
   });
 
-  it("offers Wispr-style one-hour hiding and a path to Display settings", async () => {
+  it("keeps the brand mark expanded and opens its options on right-click", async () => {
     mocks.getRecordingHealthState.mockResolvedValue("normal");
     mocks.storeGet.mockResolvedValue({});
 
     render(<ShortcutReminderPage />);
 
     fireEvent.mouseEnter(await screen.findByTestId("shortcut-reminder-root"));
-    fireEvent.click(await screen.findByTitle("Overlay settings"));
+    const brand = await screen.findByTitle("screenpipe — right-click for options");
+    expect(brand).toBeVisible();
+    expect(brand.parentElement?.lastElementChild).toBe(brand);
+    fireEvent.contextMenu(brand);
 
     expect(screen.getByRole("menu", { name: "Shortcut reminder options" })).toBeVisible();
     fireEvent.click(screen.getByTitle("Hide for 1 hour"));
@@ -327,9 +330,11 @@ describe("recording health hover detail", () => {
     );
 
     fireEvent.mouseEnter(screen.getByTestId("shortcut-reminder-root"));
-    fireEvent.click(screen.getByTitle("Overlay settings"));
+    fireEvent.contextMenu(screen.getByTitle("screenpipe — right-click for options"));
     fireEvent.click(screen.getByTitle("Open overlay settings"));
     expect(mocks.showWindow).toHaveBeenCalledWith({ Home: { page: "display" } });
+    expect(screen.queryByRole("menu", { name: "Shortcut reminder options" })).toBeNull();
+    expect(screen.queryByTitle("Overlay settings")).toBeNull();
   });
 
   it("keeps a pinned transcript open after the pointer leaves", async () => {

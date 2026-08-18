@@ -159,6 +159,16 @@ describe('OpenAIProvider usage reporting', () => {
 		expect(calls[0].reasoning_effort).toBeUndefined();
 	});
 
+	it('forwards an explicit reasoning effort when tools do not require compatibility clamping', async () => {
+		const { provider, calls } = makeOpenAIProvider(async () => ({
+			choices: [{ message: { content: 'answer', role: 'assistant' } }],
+		}));
+
+		await provider.createCompletion({ ...body, model: 'gpt-5.4', reasoning_effort: 'low' });
+
+		expect(calls[0].reasoning_effort).toBe('low');
+	});
+
 	it('drops stream_options and retries when an OpenAI-compatible server rejects it', async () => {
 		let attempt = 0;
 		async function* stream() {

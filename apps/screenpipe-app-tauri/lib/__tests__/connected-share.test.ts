@@ -110,8 +110,13 @@ describe("connected share artifacts", () => {
 
     expect(prompt).toContain("Do not create or send anything yet");
     expect(prompt).toContain(
-      "If the parent page or database is missing, ask for it first",
+      "do not ask an open-ended destination question first",
     );
+    expect(prompt).toContain("list recent and favorite pages");
+    expect(prompt).toContain(
+      "Suggest at most three accessible pages or databases",
+    );
+    expect(prompt).toContain("nothing was created");
     expect(prompt).toContain("ask for approval exactly once");
     expect(prompt).toContain("snapshot attached as context");
   });

@@ -69,6 +69,8 @@ describe("pack-contents gate — file list", () => {
     // It had dist/cli.js, dist/index.js, dist/http-server.js and package.json,
     // so the separately compiled modules imported by today's entry point were absent.
     expect(missing).toEqual([
+      "dist/activity-summary-tool.js",
+      "dist/activity-summary-format.js",
       "dist/time-normalization.js",
       "dist/team-config.js",
       "dist/version.js",
@@ -90,6 +92,14 @@ describe("pack-contents gate — file list", () => {
   it("requires the local-calendar module imported by the MCP entry point", () => {
     expect(gate.REQUIRED_PATHS).toContain("dist/time-normalization.js");
   });
+
+  it("requires the activity-summary formatter imported by the MCP entry point", () => {
+    expect(gate.REQUIRED_PATHS).toContain("dist/activity-summary-format.js");
+  });
+
+  it("requires the activity-summary orchestrator imported by the MCP entry point", () => {
+    expect(gate.REQUIRED_PATHS).toContain("dist/activity-summary-tool.js");
+  });
 });
 
 describe("pack-contents gate — built-file contents", () => {
@@ -102,6 +112,8 @@ describe("pack-contents gate — built-file contents", () => {
     "dist/index.js":
       'else if (args[i] === "--team-api-url" && args[i + 1]) {\n' +
       "const TEAM_API = (0, team_config_1.discoverTeamApiBase)(teamApiOverride);\n",
+    "dist/activity-summary-format.js":
+      'return ["Authoritative active time", "Never convert frame counts"];\n',
     "dist/time-normalization.js":
       "const midnight = new Date(reference.getFullYear(), reference.getMonth(), reference.getDate());\n",
   };

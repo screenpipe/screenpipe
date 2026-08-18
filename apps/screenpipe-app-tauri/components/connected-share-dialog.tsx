@@ -90,6 +90,11 @@ import {
  * dialog can send to, and `null` means nothing is connected yet.
  */
 type Destination = "slack" | "linear" | "chat-linear" | "chat-notion";
+type ShareMode = "unchanged" | "chat";
+
+function shareModeForDestination(destination: Destination): ShareMode {
+  return destination.startsWith("chat-") ? "chat" : "unchanged";
+}
 
 type SlackInstance = {
   instance: string | null;
@@ -233,6 +238,7 @@ export function ConnectedShareDialog({
   const [message, setMessage] = useState("");
   const [slackMessage, setSlackMessage] = useState("");
   const [destination, setDestination] = useState<Destination | null>(null);
+  const [shareMode, setShareMode] = useState<ShareMode | null>(null);
   const [availability, setAvailability] = useState(EMPTY_AVAILABILITY);
   const [connectionsLoading, setConnectionsLoading] = useState(true);
   const [connectionsChecked, setConnectionsChecked] = useState(false);
@@ -327,6 +333,7 @@ export function ConnectedShareDialog({
     // Stays null until the connection check says what is actually reachable.
     // There is no longer a local destination to fall back to.
     setDestination(null);
+    setShareMode(null);
     setConnectionsError(null);
     setReceipt(null);
     setActionError(null);
@@ -393,6 +400,18 @@ export function ConnectedShareDialog({
           connected,
         ) as Destination | null;
         setDestination(nextDestination);
+        // Make the data-processing choice visible before the destination menu.
+        // When both are possible, unchanged is the lower-authority default;
+        // the destination remains unanswered until the person chooses one.
+        setShareMode(
+          nextDestination
+            ? shareModeForDestination(nextDestination)
+            : ready.direct.slack || ready.direct.linear
+              ? "unchanged"
+              : ready.chat.linear || ready.chat.notion
+                ? "chat"
+                : null,
+        );
         // Park the rest of the recall for the channel and team lists to claim
         // once they can confirm the remembered value still exists. Dropped when
         // the destination is gone, so a revoked Slack connection cannot leave a
@@ -643,6 +662,7 @@ export function ConnectedShareDialog({
 
   const selectDestination = (next: Destination) => {
     setDestination(next);
+    setShareMode(shareModeForDestination(next));
     setReceipt(null);
     setActionError(null);
   };
@@ -850,7 +870,28 @@ export function ConnectedShareDialog({
   const currentOption = [...directOptions, ...chatOptions].find(
     (option) => option.value === destination,
   );
-  const currentIsChat = destination?.startsWith("chat-") ?? false;
+  const currentIsChat = shareMode === "chat";
+  const hasBothModes = directOptions.length > 0 && chatOptions.length > 0;
+
+  const selectShareMode = (nextMode: ShareMode) => {
+    const nextOptions = nextMode === "chat" ? chatOptions : directOptions;
+    const currentStillFits =
+      destination !== null &&
+      shareModeForDestination(destination) === nextMode &&
+      nextOptions.some((option) => option.value === destination);
+    setShareMode(nextMode);
+    if (!currentStillFits) {
+      // Choosing a mode is not permission to choose among several external
+      // targets. Auto-select only when the mode has exactly one possible app.
+      setDestination(nextOptions.length === 1 ? nextOptions[0].value : null);
+    }
+    setReceipt(null);
+    setActionError(null);
+    posthog.capture("connected_share_mode_selected", {
+      surface: artifact.surface,
+      mode: nextMode,
+    });
+  };
   // "Nothing is connected" and "more than one thing is connected and you have
   // not said which" are both `destination === null`, but they need opposite
   // instructions. Telling someone to connect an app while Slack and Notion sit
@@ -866,7 +907,7 @@ export function ConnectedShareDialog({
       : destination === "linear"
         ? (linearTeams.find((item) => item.id === linearTeamId)?.name ??
           "choose a team")
-        : currentIsChat
+        : currentIsChat && destination
           ? "prepare a prompt in Chat"
           : hasAnyDestination
             ? "choose where this goes"
@@ -952,6 +993,62 @@ export function ConnectedShareDialog({
             already answered and this row reports it rather than asking. */}
         {connectionsChecked && !connectionsLoading && !connectionsError && (
           <div className="space-y-2">
+            {hasBothModes && (
+              <div
+                className="grid grid-cols-2 border border-border"
+                data-testid="connected-share-mode"
+                aria-label="how to send"
+              >
+                <button
+                  type="button"
+                  aria-pressed={shareMode === "unchanged"}
+                  data-testid="connected-share-mode-unchanged"
+                  onClick={() => selectShareMode("unchanged")}
+                  className={`min-w-0 border-r border-border px-3 py-2.5 text-left transition-colors ${
+                    shareMode === "unchanged"
+                      ? "bg-foreground text-background"
+                      : "bg-background hover:bg-muted/50"
+                  }`}
+                >
+                  <span className="block text-xs font-medium">
+                    send unchanged
+                  </span>
+                  <span
+                    className={`mt-0.5 block text-[10px] leading-snug ${
+                      shareMode === "unchanged"
+                        ? "text-background/70"
+                        : "text-muted-foreground"
+                    }`}
+                  >
+                    exact frozen copy · no new AI processing
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={shareMode === "chat"}
+                  data-testid="connected-share-mode-chat"
+                  onClick={() => selectShareMode("chat")}
+                  className={`min-w-0 px-3 py-2.5 text-left transition-colors ${
+                    shareMode === "chat"
+                      ? "bg-foreground text-background"
+                      : "bg-background hover:bg-muted/50"
+                  }`}
+                >
+                  <span className="flex items-center gap-1 text-xs font-medium">
+                    <Sparkles className="h-3 w-3" /> review in Chat
+                  </span>
+                  <span
+                    className={`mt-0.5 block text-[10px] leading-snug ${
+                      shareMode === "chat"
+                        ? "text-background/70"
+                        : "text-muted-foreground"
+                    }`}
+                  >
+                    AI can format it · approval before any write
+                  </span>
+                </button>
+              </div>
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
@@ -976,10 +1073,10 @@ export function ConnectedShareDialog({
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-72">
-                {directOptions.length > 0 && (
+                {shareMode !== "chat" && directOptions.length > 0 && (
                   <>
                     <DropdownMenuLabel className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                      direct — no AI
+                      send unchanged
                     </DropdownMenuLabel>
                     {directOptions.map((option) => (
                       <DropdownMenuItem
@@ -997,11 +1094,10 @@ export function ConnectedShareDialog({
                     ))}
                   </>
                 )}
-                {chatOptions.length > 0 && (
+                {shareMode === "chat" && chatOptions.length > 0 && (
                   <>
-                    <DropdownMenuSeparator />
                     <DropdownMenuLabel className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                      review with Chat — AI-assisted
+                      review in Chat
                     </DropdownMenuLabel>
                     {chatOptions.map((option) => (
                       <DropdownMenuItem
@@ -1052,10 +1148,16 @@ export function ConnectedShareDialog({
                 clipboard.
               </p>
             )}
+            {!hasBothModes && shareMode === "unchanged" && destination && (
+              <p className="text-[11px] text-muted-foreground">
+                Sends the frozen snapshot exactly as shown. No new AI
+                processing.
+              </p>
+            )}
             {currentIsChat && (
               <p className="text-[11px] text-muted-foreground">
-                Opens an editable Chat prompt. AI still does not run until you
-                submit it, and Chat must ask before creating anything.
+                Opens an editable Chat prompt. AI does not run until you submit
+                it, and Chat must ask before creating anything.
               </p>
             )}
           </div>

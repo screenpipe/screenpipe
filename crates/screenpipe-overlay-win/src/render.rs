@@ -431,6 +431,29 @@ impl Renderer {
             }
             let alpha = if hovered { 1.0 } else { 0.68 };
             match control {
+                Control::Brand => {
+                    let side = 12.0 * s;
+                    let icon_rect = Rect::new(
+                        cell.x + (cell.w - side) / 2.0,
+                        cell.y + (cell.h - side) / 2.0,
+                        side,
+                        side,
+                    );
+                    if let Some(bmp) = self.app_icon(rt) {
+                        unsafe {
+                            rt.DrawBitmap(
+                                &bmp,
+                                Some(&d2d_rect(icon_rect)),
+                                alpha,
+                                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                                None,
+                            );
+                        }
+                    }
+                    if state.meeting_active {
+                        self.dot(rt, icon_rect.right(), icon_rect.y, 2.0 * s, red(1.0));
+                    }
+                }
                 Control::Search => self.icon(rt, ICON_SEARCH, 10.0 * s, *cell, white(alpha)),
                 Control::Chat => self.icon(rt, ICON_CHAT, 10.0 * s, *cell, white(alpha)),
                 Control::Timeline => self.icon(rt, ICON_TIMELINE, 10.0 * s, *cell, white(alpha)),

@@ -87,6 +87,38 @@ const body = (messages: Message[], extra: Partial<RequestBody> = {}): RequestBod
 });
 
 describe('current Claude request compatibility', () => {
+	it('maps reasoning_effort to output effort for supported Claude models', async () => {
+		const { provider, calls } = makeProvider();
+		await provider.createCompletion(body(
+			[{ role: 'user', content: 'analyze this' }],
+			{ model: 'claude-sonnet-5', reasoning_effort: 'low' },
+		));
+
+		expect(calls[0].thinking).toBeUndefined();
+		expect(calls[0].output_config).toEqual({ effort: 'low' });
+	});
+
+	it('keeps reasoning disabled when effort is none', async () => {
+		const { provider, calls } = makeProvider();
+		await provider.createCompletion(body(
+			[{ role: 'user', content: 'answer briefly' }],
+			{ model: 'claude-sonnet-5', reasoning_effort: 'none' },
+		));
+
+		expect(calls[0].thinking).toBeUndefined();
+		expect(calls[0].output_config).toBeUndefined();
+	});
+
+	it('ignores reasoning_effort for older Claude models', async () => {
+		const { provider, calls } = makeProvider();
+		await provider.createCompletion(body(
+			[{ role: 'user', content: 'analyze this' }],
+			{ model: 'claude-haiku-4-5', reasoning_effort: 'low' },
+		));
+
+		expect(calls[0].output_config).toBeUndefined();
+	});
+
 	it('passes the real SDK auth validator while omitting the provider key for Cloudflare BYOK', async () => {
 		let sentHeaders: Headers | null = null;
 		const provider = new AnthropicProvider(

@@ -317,14 +317,14 @@ enum Block {
     Notification,
 }
 
-/// Three icon buttons, a divider, the audio meter, a divider, settings — the
+/// Three icon buttons, the audio meter, and the rightmost brand control — the
 /// dock from `dockView` in shortcut_reminder.swift.
 fn dock_cells(dock: Rect, s: f32) -> (Vec<(Control, Rect)>, Vec<Rect>) {
     let divider_w = 1.0f32.max(s.round());
     let icon_controls = [Control::Search, Control::Chat, Control::Timeline];
     // Audio is a status cell, not a button, but it still highlights on hover.
     let usable = dock.w - divider_w * 2.0;
-    // Five cells: three icons, the meter, settings. The meter gets the same
+    // Five cells: three icons, the meter, and brand. The meter gets the same
     // share as an icon so the row reads as evenly spaced.
     let cell_w = usable / 5.0;
 
@@ -342,7 +342,7 @@ fn dock_cells(dock: Rect, s: f32) -> (Vec<(Control, Rect)>, Vec<Rect>) {
     dividers.push(Rect::new(x, dock.y + 4.0 * s, divider_w, dock.h - 8.0 * s));
     x += divider_w;
     cells.push((
-        Control::Settings,
+        Control::Brand,
         Rect::new(x, dock.y, dock.right() - x, dock.h),
     ));
     (cells, dividers)
@@ -459,6 +459,14 @@ mod tests {
     fn every_dock_cell_is_clickable_and_they_tile_the_dock() {
         let l = compute(&hovered());
         assert_eq!(l.dock_cells.len(), 5);
+        assert_eq!(
+            l.dock_cells.first().map(|(control, _)| *control),
+            Some(Control::Search)
+        );
+        assert_eq!(
+            l.dock_cells.last().map(|(control, _)| *control),
+            Some(Control::Brand)
+        );
         let dock = l.primary;
         for (_, c) in &l.dock_cells {
             assert!(c.y == dock.y && c.h == dock.h);

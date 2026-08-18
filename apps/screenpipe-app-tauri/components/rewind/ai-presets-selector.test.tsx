@@ -142,4 +142,26 @@ describe("AIPresetsSelector controlled preset creation", () => {
     expect(mocks.controlledSelect).not.toHaveBeenCalled();
     expect(screen.getByRole("combobox")).toHaveTextContent("old-model");
   });
+
+  it("shows the colored mark for the active provider or model", () => {
+    mocks.settings.current = {
+      aiPresets: [
+        {
+          ...originalPreset,
+          id: "gemini",
+          provider: "custom",
+          model: "gemini-3.6-flash",
+          url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        },
+      ],
+      user: { token: "test-token" },
+    };
+
+    render(<AIPresetsSelector compact showModelOnly />);
+
+    expect(screen.getByTestId("active-model-provider-icon")).toHaveAttribute(
+      "src",
+      "/images/gemini.svg",
+    );
+  });
 });

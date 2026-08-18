@@ -7,6 +7,7 @@
 // from captured work into something usable. Phosphor stays scarce — the
 // playhead chip, the recording pulse, the primary action.
 
+import AppKit
 import SwiftUI
 
 enum TimelineTheme {
@@ -107,5 +108,36 @@ struct TimelineControlStyle: ButtonStyle {
             .overlay(Rectangle().stroke(TimelineTheme.border, lineWidth: 1))
             .opacity(configuration.isPressed ? 0.7 : 1)
             .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+            .timelinePointerCursor()
+    }
+}
+
+/// Plain SwiftUI buttons otherwise retain the arrow cursor on macOS, which
+/// makes small icon controls look decorative. Every timeline button opts into
+/// the same pointer affordance without changing its visual treatment.
+struct TimelinePlainButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.7 : 1)
+            .timelinePointerCursor()
+    }
+}
+
+struct TimelinePointerCursor: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { hovering in
+                if hovering && isEnabled { NSCursor.pointingHand.set() }
+                else { NSCursor.arrow.set() }
+            }
+            .onDisappear { NSCursor.arrow.set() }
+    }
+}
+
+extension View {
+    func timelinePointerCursor() -> some View {
+        modifier(TimelinePointerCursor())
     }
 }

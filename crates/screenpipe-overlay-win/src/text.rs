@@ -63,6 +63,7 @@ pub const MAX_HINT_CHARS: usize = 30;
 /// modifier — and a hint that clips teaches the wrong shortcut.
 pub fn disclosure_hint(state: &OverlayState) -> String {
     let hint = match state.hovered_control {
+        Some(Control::Brand) => "screenpipe · right-click".into(),
         Some(Control::Search) => labelled("search", &state.shortcut_search),
         Some(Control::Chat) => labelled("chat", &state.shortcut_chat),
         Some(Control::Timeline) => labelled("timeline", &state.shortcut_timeline),
@@ -177,6 +178,9 @@ mod tests {
         }
         s.hovered_control = None;
         assert_eq!(disclosure_hint(&s), "hide · alt+O");
+
+        s.hovered_control = Some(Control::Brand);
+        assert_eq!(disclosure_hint(&s), "screenpipe · right-click");
     }
 
     #[test]
@@ -207,6 +211,7 @@ mod tests {
         let mut s = state();
         for control in [
             None,
+            Some(Control::Brand),
             Some(Control::Search),
             Some(Control::Chat),
             Some(Control::Timeline),

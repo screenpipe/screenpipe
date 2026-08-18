@@ -1782,6 +1782,30 @@ export const AIPresetsSelector = ({
                         {selectedPresetRequiresLogin && (
                           <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
                         )}
+                        {/* The model name tells people what is selected; the
+                            real colored mark makes the provider scannable when
+                            cycling presets. Decorative because the label is the
+                            accessible name. */}
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={presetImageSrc(
+                            selectedPresetData?.provider,
+                            selectedPresetData?.acpAgent?.id,
+                            selectedPresetData?.model,
+                            selectedPresetData?.url,
+                          )}
+                          alt=""
+                          data-testid="active-model-provider-icon"
+                          className={cn(
+                            "h-4 w-4 shrink-0 object-contain",
+                            presetImageClass(
+                              selectedPresetData?.provider,
+                              selectedPresetData?.acpAgent?.id,
+                              selectedPresetData?.model,
+                              selectedPresetData?.url,
+                            ),
+                          )}
+                        />
                         <span
                           className="truncate text-left font-medium"
                           title={
@@ -2017,11 +2041,21 @@ export const AIPresetsSelector = ({
                           />
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
-                            src={presetImageSrc(preset.provider, preset.acpAgent?.id)}
+                            src={presetImageSrc(
+                              preset.provider,
+                              preset.acpAgent?.id,
+                              preset.model,
+                              preset.url,
+                            )}
                             alt=""
                             className={cn(
                               "h-4 w-4 rounded-sm shrink-0 opacity-80",
-                              presetImageClass(preset.provider, preset.acpAgent?.id),
+                              presetImageClass(
+                                preset.provider,
+                                preset.acpAgent?.id,
+                                preset.model,
+                                preset.url,
+                              ),
                             )}
                           />
                           <span className="font-medium truncate max-w-[120px]" title={preset.id}>
