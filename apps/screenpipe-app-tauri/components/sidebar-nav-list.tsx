@@ -82,6 +82,7 @@ export type SidebarNavListProps = {
   customizable: boolean;
   canReset: boolean;
   onSelect: (id: SidebarNavId) => void;
+  onIntent?: (id: SidebarNavId) => void;
   onMove: (id: SidebarNavId, toIndex: number) => void;
   onShift: (id: SidebarNavId, direction: -1 | 1) => void;
   onSetHidden: (id: SidebarNavId, hidden: boolean) => void;
@@ -170,6 +171,7 @@ function SortableRow({
   isTranslucent,
   canReset,
   onSelect,
+  onIntent,
   onShift,
   onSetHidden,
   onReset,
@@ -183,6 +185,7 @@ function SortableRow({
   | "isTranslucent"
   | "canReset"
   | "onSelect"
+  | "onIntent"
   | "onShift"
   | "onSetHidden"
   | "onReset"
@@ -221,6 +224,8 @@ function SortableRow({
             data-testid={`nav-${item.id}`}
             data-announcement-anchor={`sidebar-${item.id}`}
             onClick={() => onSelect(item.id)}
+            onMouseEnter={() => onIntent?.(item.id)}
+            onFocus={() => onIntent?.(item.id)}
             aria-current={isActive ? "page" : undefined}
             className={cn(
               rowClassName(isActive, isTranslucent),
@@ -348,6 +353,7 @@ export function SidebarNavList({
   customizable,
   canReset,
   onSelect,
+  onIntent,
   onMove,
   onShift,
   onSetHidden,
@@ -369,6 +375,8 @@ export function SidebarNavList({
             data-testid={`nav-${item.id}`}
             data-announcement-anchor={`sidebar-${item.id}`}
             onClick={() => onSelect(item.id)}
+            onMouseEnter={() => onIntent?.(item.id)}
+            onFocus={() => onIntent?.(item.id)}
             aria-current={activeId === item.id ? "page" : undefined}
             className={rowClassName(activeId === item.id, isTranslucent)}
           >
@@ -434,6 +442,7 @@ export function SidebarNavList({
                 isTranslucent={isTranslucent}
                 canReset={canReset}
                 onSelect={onSelect}
+                onIntent={onIntent}
                 onShift={onShift}
                 onSetHidden={onSetHidden}
                 onReset={onReset}

@@ -103,12 +103,14 @@ vi.mock("@/components/meeting-notes/note-view", async () => {
       initialTranscriptOpen,
       transcriptOpenIntent,
       transcriptOpenRequestKey,
+      initialWorkspaceTab,
     }: {
       meeting: MeetingRecord;
       onBack: () => void;
       initialTranscriptOpen?: boolean;
       transcriptOpenIntent?: "open" | "closed";
       transcriptOpenRequestKey?: number;
+      initialWorkspaceTab?: "notes" | "transcript" | "summary";
     }) => {
       // Preserve compatibility with the pre-fix open-only prop so the transition
       // reaches the actual bug: legacy false is absence of intent and therefore
@@ -120,6 +122,8 @@ vi.mock("@/components/meeting-notes/note-view", async () => {
           `screenpipe:meeting:${meeting.id}:transcript-open`,
         ) === "true";
       const transcriptOpen = resolveTranscriptOpen(intent, persistedOpen);
+      const activeTab =
+        initialWorkspaceTab ?? (transcriptOpen ? "transcript" : "notes");
 
       React.useEffect(() => {
         if (intent === undefined) return;
@@ -133,6 +137,7 @@ vi.mock("@/components/meeting-notes/note-view", async () => {
         <section
           aria-label="meeting note"
           data-transcript-open={String(transcriptOpen)}
+          data-active-tab={activeTab}
         >
           <button onClick={onBack}>back</button>
           <div data-testid="saved-note">{meeting.note ?? ""}</div>
@@ -222,6 +227,48 @@ describe("MeetingNotesSection meeting selection", () => {
       expect(note).toHaveAttribute("data-transcript-open", "false"),
     );
     expect(screen.queryByText(TRANSCRIPT)).not.toBeInTheDocument();
+  });
+
+  it("opens Activity meeting artifacts on notes when no summary exists", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?meetingId=42&meetingView=best",
+    );
+    mocks.localFetch.mockImplementation(async (path: string) =>
+      path === "/meetings/42"
+        ? new Response(JSON.stringify(emptyNoteMeeting), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          })
+        : meetingsResponse([emptyNoteMeeting]),
+    );
+    renderMeetingNotes();
+
+    const note = await screen.findByRole("region", { name: "meeting note" });
+    expect(note).toHaveAttribute("data-active-tab", "notes");
+    expect(note).toHaveAttribute("data-transcript-open", "false");
+  });
+
+  it("opens Activity meeting artifacts on the saved summary", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?meetingId=43&meetingView=best",
+    );
+    mocks.localFetch.mockImplementation(async (path: string) =>
+      path === "/meetings/43"
+        ? new Response(JSON.stringify(summarizedMeeting), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          })
+        : meetingsResponse([summarizedMeeting]),
+    );
+    renderMeetingNotes();
+
+    expect(
+      await screen.findByRole("region", { name: "meeting note" }),
+    ).toHaveAttribute("data-active-tab", "summary");
   });
 
   it("keeps an explicit false reopen closed after the same meeting persisted open", async () => {

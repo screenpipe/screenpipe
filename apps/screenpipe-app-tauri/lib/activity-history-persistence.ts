@@ -24,6 +24,10 @@ type StoredActivityHistory = PersistedActivityHistory & {
 
 const COVERAGE_SLOP_MS = 1_000;
 export const ACTIVITY_HISTORY_RECONCILE_OVERLAP_MS = 10 * 60_000;
+const storedHistoryReads = new Map<
+  string,
+  Promise<PersistedActivityHistory>
+>();
 
 function storeKey(producer: string): string {
   return `activityHistory:${producer}`;
@@ -151,12 +155,32 @@ function entriesInside(
   return entries.filter((entry) => entryOverlaps(entry, range));
 }
 
-async function readStored(producer: string): Promise<PersistedActivityHistory> {
+async function readStoredFresh(
+  producer: string,
+): Promise<PersistedActivityHistory> {
   const { getStore } = await import("@/lib/hooks/use-settings");
   const store = await getStore();
   return normalizeStored(
     await store.get<StoredActivityHistory>(storeKey(producer)),
   );
+}
+
+export function preloadPersistedActivityHistory(
+  producer: string,
+): Promise<PersistedActivityHistory> {
+  const existing = storedHistoryReads.get(producer);
+  if (existing) return existing;
+
+  const pending = readStoredFresh(producer).catch((error) => {
+    storedHistoryReads.delete(producer);
+    throw error;
+  });
+  storedHistoryReads.set(producer, pending);
+  return pending;
+}
+
+async function readStored(producer: string): Promise<PersistedActivityHistory> {
+  return preloadPersistedActivityHistory(producer);
 }
 
 async function writeStored(
@@ -172,6 +196,13 @@ async function writeStored(
     coverage: mergeActivityHistoryCoverage(snapshot.coverage),
   } satisfies StoredActivityHistory);
   await saveAndEncrypt(store);
+  storedHistoryReads.set(
+    producer,
+    Promise.resolve({
+      entries: snapshot.entries,
+      coverage: mergeActivityHistoryCoverage(snapshot.coverage),
+    }),
+  );
 }
 
 export async function loadPersistedActivityHistory(

@@ -72,6 +72,7 @@ import {
   ActivityLedger,
   artifactsForHistoryEntry,
   buildActivityLedgerArtifactsPath,
+  buildLocalActivityHistory,
   buildActivityMeetingsPath,
   buildActivitySummaryPath,
   minimumHistoryEntryCount,
@@ -225,6 +226,9 @@ const LEDGER_ARTIFACTS_RESPONSE = {
 };
 
 beforeEach(() => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.setSystemTime(new Date("2026-08-17T20:00:00Z"));
+  mocks.settings.enhancedAI = true;
   const values = new Map<string, string>();
   Object.defineProperty(window, "localStorage", {
     configurable: true,
@@ -274,6 +278,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -320,6 +325,30 @@ describe("activity history helpers", () => {
     expect(minimumHistoryEntryCount(45, { start, end })).toBe(2);
     expect(minimumHistoryEntryCount(180, { start, end })).toBe(5);
     expect(minimumHistoryEntryCount(480, { start, end })).toBe(7);
+  });
+
+  it("builds inspectable local history without inferred outcome claims", () => {
+    const local = buildLocalActivityHistory(
+      {
+        start: new Date("2026-08-17T16:00:00Z"),
+        end: new Date("2026-08-17T17:00:00Z"),
+      },
+      LEDGER_ARTIFACTS_RESPONSE.intervals,
+      [],
+    );
+
+    expect(local.entries).toHaveLength(2);
+    expect(local.entries[0]).toMatchObject({
+      title: "activity-ledger.tsx",
+      summary: "You worked on activity-ledger.tsx in Cursor.",
+      evidence: [
+        expect.objectContaining({
+          kind: "screen",
+          frame_id: 54321,
+          app_name: "Cursor",
+        }),
+      ],
+    });
   });
 
   it("ranks a compact artifact set while preserving a real website", () => {
@@ -526,7 +555,39 @@ describe("activity history helpers", () => {
 });
 
 describe("ActivityLedger", () => {
+  it("works without Enhanced AI and survives exhausted AI usage", async () => {
+    mocks.settings.enhancedAI = false;
+    mocks.runDailySummaryWithPi.mockRejectedValue(
+      new Error("hosted_ai_allowance_exceeded"),
+    );
+
+    render(<ActivityLedger />);
+
+    expect(
+      await screen.findByRole("heading", { name: "activity-ledger.tsx" }),
+    ).toBeVisible();
+    expect(mocks.runDailySummaryWithPi).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionPrefix: "activity-history" }),
+    );
+    await waitFor(() =>
+      expect(mocks.reconcilePersistedActivityHistory).toHaveBeenCalledWith(
+        "activity-history-pi-v8",
+        expect.any(Object),
+        expect.objectContaining({
+          entries: expect.arrayContaining([
+            expect.objectContaining({ title: "activity-ledger.tsx" }),
+          ]),
+        }),
+        expect.any(Object),
+      ),
+    );
+    expect(
+      screen.queryByText(/Turn on Enhanced AI|Choose an AI model/i),
+    ).toBeNull();
+  });
+
   it("loads a completed encrypted ledger without regenerating it", async () => {
+    mocks.localFetch.mockImplementation(() => new Promise(() => undefined));
     mocks.loadPersistedActivityHistory.mockImplementation(
       async (_producer: string, range: { start: Date; end: Date }) => ({
         entries: parseActivityHistoryResponse(HISTORY_RESPONSE, range).entries,
@@ -732,7 +793,7 @@ describe("ActivityLedger", () => {
     );
   });
 
-  it("opens meeting artifacts in the matching meeting transcript", async () => {
+  it("opens meeting artifacts in the matching meeting's best view", async () => {
     mocks.localFetch.mockImplementation((path: string) =>
       Promise.resolve({
         ok: true,
@@ -757,17 +818,17 @@ describe("ActivityLedger", () => {
     await screen.findByText("Aligned on Workflow Studio");
 
     const meetingArtifact = screen.getByRole("link", {
-      name: /Open Meeting transcript at .* in Meetings/,
+      name: /Open Meeting at .* in Meetings/,
     });
     expect(meetingArtifact).toHaveAttribute(
       "href",
-      "/home?section=meetings&meetingId=8&transcript=true",
+      "/home?section=meetings&meetingId=8&meetingView=best",
     );
 
     fireEvent.click(meetingArtifact);
 
     expect(mocks.routerPush).toHaveBeenCalledWith(
-      "/home?section=meetings&meetingId=8&transcript=true",
+      "/home?section=meetings&meetingId=8&meetingView=best",
     );
     expect(mocks.setPendingNavigation).not.toHaveBeenCalled();
     expect(mocks.emit).not.toHaveBeenCalled();

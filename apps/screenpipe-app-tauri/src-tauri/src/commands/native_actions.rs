@@ -203,6 +203,17 @@ fn native_timeline_action_callback_inner(action_ptr: *const std::os::raw::c_char
                 }
             });
         }
+        TimelineAction::ReturnToActivity => {
+            emit_timeline_event(&app, target.as_deref(), "timeline-return-to-activity", ());
+        }
+        TimelineAction::DismissActivityReturn => {
+            emit_timeline_event(
+                &app,
+                target.as_deref(),
+                "timeline-dismiss-activity-return",
+                (),
+            );
+        }
         TimelineAction::OpenSearch => {
             emit_timeline_event(&app, target.as_deref(), "timeline-open-search", ());
         }

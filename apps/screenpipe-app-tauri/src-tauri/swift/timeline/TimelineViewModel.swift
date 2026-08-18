@@ -202,6 +202,7 @@ final class TimelineViewModel: ObservableObject {
     @Published private(set) var connectionError: String?
     @Published private(set) var isLoading = true
     @Published private(set) var isNavigating = false
+    @Published private(set) var isResolvingExternalNavigation = false
     @Published var showAudioTranscript = false
     @Published var showSubtitles = true
     @Published var activePopoverGroupIndex: Int?
@@ -236,6 +237,8 @@ final class TimelineViewModel: ObservableObject {
     private var tagFetchInFlight = Set<String>()
     private var navigationGeneration = 0
     private var pendingSearchNavigation: (frameId: String?, timestamp: Date)?
+    private var externalNavigationGeneration = 0
+    private var externalNavigationHasSelectedTarget = false
 
     /// Native actions must return to the webview that owns this model. Looking
     /// up the current key window is racy because the fullscreen overlay is a
@@ -612,7 +615,8 @@ final class TimelineViewModel: ObservableObject {
     }
 
     var emptyState: TimelineEmptyState {
-        TimelineEmptyState.resolve(
+        if isResolvingExternalNavigation { return .loading }
+        return TimelineEmptyState.resolve(
             frameCount: frames.count,
             isLoading: isLoading,
             error: connectionError,
@@ -740,6 +744,38 @@ final class TimelineViewModel: ObservableObject {
         loadAdjacentDayIfNeeded()
     }
 
+    /// Artifact links arrive after the Timeline has already mounted on its
+    /// live edge. Keep those cached pixels hidden until the requested moment
+    /// has selected and loaded its own image.
+    func beginExternalNavigation(superseding: Bool = false) {
+        if isResolvingExternalNavigation && !superseding { return }
+        externalNavigationGeneration &+= 1
+        let generation = externalNavigationGeneration
+        externalNavigationHasSelectedTarget = false
+        isResolvingExternalNavigation = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + TimelineDateNavigation.navigationTimeout) { [weak self] in
+            guard let self,
+                  self.externalNavigationGeneration == generation,
+                  self.isResolvingExternalNavigation else { return }
+            self.finishExternalNavigation(reloadCurrentFrame: true)
+        }
+    }
+
+    func setExternalNavigationIndex(_ index: Int) {
+        externalNavigationHasSelectedTarget = true
+        currentImage = nil
+        let previous = currentIndex
+        setIndex(index)
+        if currentIndex == previous {
+            loadCurrentImage()
+        }
+    }
+
+    func cancelExternalNavigation() {
+        externalNavigationGeneration &+= 1
+        finishExternalNavigation(reloadCurrentFrame: true)
+    }
+
     func step(_ delta: Int) {
         setIndex(TimelineNavigation.nextIndex(
             from: currentIndex,
@@ -760,12 +796,16 @@ final class TimelineViewModel: ObservableObject {
     }
 
     private func loadCurrentImage() {
+        let externalNavigationGeneration = externalNavigationHasSelectedTarget
+            ? self.externalNavigationGeneration
+            : nil
         guard let frame = displayFrame,
               let deviceIndex = displayDeviceIndex,
               frame.devices.indices.contains(deviceIndex) else {
             currentImage = nil
             currentImageFrameId = nil
             imageUnavailable = false
+            if externalNavigationGeneration != nil { finishExternalNavigation() }
             return
         }
         let targetFrameId = frame.devices[deviceIndex].frameId
@@ -790,7 +830,18 @@ final class TimelineViewModel: ObservableObject {
                     self.imageUnavailable = true
                 }
                 self.isLoadingImage = false
+                if externalNavigationGeneration == self.externalNavigationGeneration {
+                    self.finishExternalNavigation()
+                }
             }
+        }
+    }
+
+    private func finishExternalNavigation(reloadCurrentFrame: Bool = false) {
+        externalNavigationHasSelectedTarget = false
+        isResolvingExternalNavigation = false
+        if reloadCurrentFrame, currentImage == nil, displayFrame != nil, !isLoadingImage {
+            loadCurrentImage()
         }
     }
 

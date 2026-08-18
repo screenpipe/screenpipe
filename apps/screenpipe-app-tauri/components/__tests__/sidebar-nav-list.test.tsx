@@ -70,6 +70,17 @@ describe("SidebarNavList", () => {
     expect(handlers.onSelect).toHaveBeenCalledWith("brain");
   });
 
+  it("signals hover and keyboard intent before a section opens", () => {
+    const onIntent = vi.fn();
+    renderList({ onIntent });
+
+    fireEvent.mouseEnter(screen.getByTestId("nav-brain"));
+    fireEvent.focus(screen.getByTestId("nav-pipes"));
+
+    expect(onIntent).toHaveBeenNthCalledWith(1, "brain");
+    expect(onIntent).toHaveBeenNthCalledWith(2, "pipes");
+  });
+
   it("moves a row from the right-click menu", () => {
     const handlers = renderList();
     rightClick("nav-brain");

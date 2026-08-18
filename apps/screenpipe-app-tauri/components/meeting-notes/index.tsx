@@ -35,6 +35,10 @@ import { ListView } from "./list-view";
 import { NoteView } from "./note-view";
 import type { ComingUpStatus } from "./coming-up";
 import type { TranscriptOpenIntent } from "./transcript-open-state";
+import {
+  extractMeetingSummary,
+  type MeetingWorkspaceTab,
+} from "./meeting-workspace";
 
 const PAGE_SIZE = 30;
 const CALENDAR_REFRESH_MS = 60_000;
@@ -69,6 +73,8 @@ export function MeetingNotesSection({
 }: MeetingNotesSectionProps) {
   const { health } = useHealthCheck();
   const [meetings, setMeetings] = useState<MeetingRecord[]>([]);
+  const meetingsRef = useRef<MeetingRecord[]>([]);
+  meetingsRef.current = meetings;
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
@@ -79,13 +85,22 @@ export function MeetingNotesSection({
     intent: TranscriptOpenIntent;
     token: number;
   } | null>(null);
+  const [initialWorkspaceTab, setInitialWorkspaceTab] =
+    useState<MeetingWorkspaceTab | null>(null);
   const selectMeeting = useCallback(
-    (id: number, { openTranscript }: { openTranscript: boolean }) => {
+    (
+      id: number,
+      {
+        openTranscript,
+        initialTab = null,
+      }: { openTranscript: boolean; initialTab?: MeetingWorkspaceTab | null },
+    ) => {
       setTranscriptOpenRequest({
         id,
         intent: openTranscript ? "open" : "closed",
         token: Date.now(),
       });
+      setInitialWorkspaceTab(initialTab);
       setSelectedId(id);
     },
     [],
@@ -176,12 +191,14 @@ export function MeetingNotesSection({
 
   // Fetch a single meeting by id, insert/update it in the list, and select it.
   const openMeetingNote = useCallback(
-    async (id: number, transcript: boolean) => {
+    async (id: number, transcript: boolean, preferBestView = false) => {
       pendingOpenRef.current = { id, at: Date.now() };
+      let openedMeeting: MeetingRecord | null = null;
       try {
         const res = await localFetch(`/meetings/${id}`);
         if (res.ok) {
           const meeting: MeetingRecord = await res.json();
+          openedMeeting = meeting;
           setMeetings((prev) => {
             const exists = prev.some((m) => m.id === meeting.id);
             return exists
@@ -195,7 +212,14 @@ export function MeetingNotesSection({
         console.warn("meeting notes: failed to open deep-linked meeting", err);
         await fetchPage(0, false, appliedQueryRef.current);
       }
-      selectMeeting(id, { openTranscript: transcript });
+      const meetingForView =
+        openedMeeting ?? meetingsRef.current.find((meeting) => meeting.id === id);
+      const initialTab = preferBestView
+        ? extractMeetingSummary(meetingForView?.note ?? "")
+          ? "summary"
+          : "notes"
+        : null;
+      selectMeeting(id, { openTranscript: transcript, initialTab });
     },
     [fetchPage, selectMeeting],
   );
@@ -203,19 +227,30 @@ export function MeetingNotesSection({
   // On mount, if the URL contains a meetingId param (set by Rust when the
   // user clicks a notification from /settings), open that meeting after
   // the initial fetchPage finishes.
-  const urlMeetingRef = useRef<{ id: number; transcript: boolean } | null>(
+  const urlMeetingRef = useRef<{
+    id: number;
+    transcript: boolean;
+    preferBestView: boolean;
+  } | null>(
     (() => {
       const params = new URLSearchParams(window.location.search);
       const id = Number(params.get("meetingId"));
       if (!Number.isFinite(id) || id <= 0) return null;
-      return { id, transcript: params.get("transcript") !== "false" };
+      const preferBestView = params.get("meetingView") === "best";
+      return {
+        id,
+        transcript: preferBestView
+          ? false
+          : params.get("transcript") !== "false",
+        preferBestView,
+      };
     })(),
   );
   useEffect(() => {
     if (loading || !urlMeetingRef.current) return;
-    const { id, transcript } = urlMeetingRef.current;
+    const { id, transcript, preferBestView } = urlMeetingRef.current;
     urlMeetingRef.current = null;
-    void openMeetingNote(id, transcript);
+    void openMeetingNote(id, transcript, preferBestView);
   }, [loading, openMeetingNote]);
 
   useEffect(() => {
@@ -658,6 +693,7 @@ export function MeetingNotesSection({
             ? transcriptOpenRequest.token
             : undefined
         }
+        initialWorkspaceTab={initialWorkspaceTab ?? undefined}
       />
     );
   }

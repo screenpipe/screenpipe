@@ -48,6 +48,7 @@ import {
   mergeActivityHistoryCoverage,
   mergeActivityHistoryDocuments,
   nextActivityHistoryRange,
+  preloadPersistedActivityHistory,
   reconcilePersistedActivityHistory,
   type ActivityHistoryCoverage,
 } from "@/lib/activity-history-persistence";
@@ -84,6 +85,10 @@ type ActivityLedgerArtifactEvidence = {
   browser_url?: string | null;
 };
 type ActivityLedgerArtifactInterval = {
+  id?: number;
+  kind?: string;
+  title?: string;
+  category?: string | null;
   start_at: string;
   end_at: string;
   app_name: string | null;
@@ -97,6 +102,11 @@ type ActivityArtifact = ActivityHistoryEvidence & {
 };
 
 const MAX_VISIBLE_ARTIFACTS = 6;
+const ACTIVITY_RANGE_STORAGE_KEY = "screenpipe:activity-history:range";
+const ACTIVITY_CUSTOM_START_STORAGE_KEY =
+  "screenpipe:activity-history:custom-start";
+const ACTIVITY_CUSTOM_END_STORAGE_KEY =
+  "screenpipe:activity-history:custom-end";
 const SYSTEM_ARTIFACT_APP =
   /^(controlcenter|notificationcenter|usernotificationcenter|loginwindow|spotlight|dock|systemuiserver|windowserver|interaction-tests)$/i;
 
@@ -106,6 +116,29 @@ const RANGE_COPY: Record<RangePreset, string> = {
   "7d": "Last 7 days",
   custom: "Custom range",
 };
+
+function readStoredRangePreset(): RangePreset {
+  if (typeof window === "undefined") return "today";
+  const stored = window.localStorage.getItem(ACTIVITY_RANGE_STORAGE_KEY);
+  return stored === "today" ||
+    stored === "24h" ||
+    stored === "7d" ||
+    stored === "custom"
+    ? stored
+    : "today";
+}
+
+function readStoredDateInput(key: string, fallback: string): string {
+  if (typeof window === "undefined") return fallback;
+  const stored = window.localStorage.getItem(key);
+  return stored && Number.isFinite(new Date(stored).getTime())
+    ? stored
+    : fallback;
+}
+
+export function preloadActivityHistory(): Promise<unknown> {
+  return preloadPersistedActivityHistory(ACTIVITY_REVIEW_PROMPT_VERSION);
+}
 
 function startOfLocalDay(value: Date): Date {
   const start = new Date(value);
@@ -209,6 +242,140 @@ function meetingAnchors(
   });
 }
 
+function localIntervalTitle(interval: ActivityLedgerArtifactInterval): string {
+  const evidenceTitle = interval.evidence?.find((item) =>
+    Boolean(item.window_title?.trim()),
+  )?.window_title;
+  return (
+    interval.title?.trim() ||
+    evidenceTitle?.trim() ||
+    usefulAppName(interval.app_name) ||
+    "Recorded activity"
+  );
+}
+
+function localIntervalEvidence(
+  interval: ActivityLedgerArtifactInterval,
+  start: number,
+  end: number,
+): ActivityHistoryEvidence[] {
+  const title = localIntervalTitle(interval);
+  const evidence = (interval.evidence ?? [])
+    .flatMap((item): ActivityHistoryEvidence[] => {
+      const at = new Date(item.occurred_at).getTime();
+      if (!Number.isFinite(at) || at < start || at > end) return [];
+      const isAudio = item.source_type === "audio";
+      const frameId =
+        item.frame_id ?? (item.source_type === "frame" ? item.source_id : null);
+      return [
+        {
+          kind: isAudio ? "audio" : "screen",
+          at: new Date(at).toISOString(),
+          frame_id: isAudio ? null : frameId,
+          meeting_id: null,
+          app_name: isAudio ? null : usefulAppName(item.app_name),
+          label: item.window_title?.trim() || title,
+        },
+      ];
+    })
+    .filter(
+      (item, index, all) =>
+        all.findIndex(
+          (candidate) =>
+            candidate.kind === item.kind &&
+            candidate.at === item.at &&
+            candidate.frame_id === item.frame_id,
+        ) === index,
+    );
+  if (evidence.length > 0) return evidence.slice(0, 3);
+  return [
+    {
+      kind: "screen",
+      at: new Date(start).toISOString(),
+      frame_id: null,
+      meeting_id: null,
+      app_name: usefulAppName(interval.app_name),
+      label: title,
+    },
+  ];
+}
+
+/**
+ * Keep History useful when hosted interpretation is disabled or unavailable.
+ * These entries make no inferred outcome claims: they preserve exact local
+ * task/meeting ranges and artifact anchors so every row remains inspectable.
+ */
+export function buildLocalActivityHistory(
+  range: TimeRange,
+  intervals: ActivityLedgerArtifactInterval[],
+  meetings: ActivityReviewMeeting[],
+): ActivityHistoryDocument {
+  const rangeStart = range.start.getTime();
+  const rangeEnd = range.end.getTime();
+  const entries: ActivityHistoryEntry[] = meetings.map((meeting) => {
+    const start = Math.max(rangeStart, new Date(meeting.start_at).getTime());
+    const end = Math.min(rangeEnd, new Date(meeting.end_at).getTime());
+    const app = usefulAppName(meeting.app_name);
+    return {
+      id: `local-meeting-${meeting.id}-${start}`,
+      kind: "meeting",
+      meeting_id: meeting.id,
+      start_at: new Date(start).toISOString(),
+      end_at: new Date(end).toISOString(),
+      title: meeting.title,
+      summary: app
+        ? `You met in ${app} about ${meeting.title}.`
+        : `You met about ${meeting.title}.`,
+      evidence: [
+        {
+          kind: "meeting",
+          at: new Date(start).toISOString(),
+          frame_id: null,
+          meeting_id: meeting.id,
+          app_name: app,
+          label: meeting.title,
+        },
+      ],
+    };
+  });
+
+  for (const interval of intervals) {
+    if (
+      interval.kind === "unobserved" ||
+      /^unobserved time$/i.test(interval.title?.trim() ?? "")
+    ) {
+      continue;
+    }
+    const start = Math.max(rangeStart, new Date(interval.start_at).getTime());
+    const end = Math.min(rangeEnd, new Date(interval.end_at).getTime());
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      continue;
+    }
+    const title = localIntervalTitle(interval);
+    const app = usefulAppName(interval.app_name);
+    entries.push({
+      id: `local-work-${interval.id ?? entries.length}-${start}`,
+      kind: "work",
+      meeting_id: null,
+      start_at: new Date(start).toISOString(),
+      end_at: new Date(end).toISOString(),
+      title,
+      summary:
+        app && title.toLowerCase() !== app.toLowerCase()
+          ? `You worked on ${title} in ${app}.`
+          : `You worked in ${app || title}.`,
+      evidence: localIntervalEvidence(interval, start, end),
+    });
+  }
+
+  return {
+    entries: entries.sort(
+      (left, right) =>
+        new Date(left.start_at).getTime() - new Date(right.start_at).getTime(),
+    ),
+  };
+}
+
 export function minimumHistoryEntryCount(
   totalActiveMinutes: number,
   range: TimeRange,
@@ -274,7 +441,7 @@ function evidenceHref(evidence: ActivityArtifact): string {
     const params = new URLSearchParams({
       section: "meetings",
       meetingId: String(evidence.meeting_id),
-      transcript: "true",
+      meetingView: "best",
     });
     return `/home?${params.toString()}`;
   }
@@ -526,22 +693,34 @@ function compactEntryContext(entry: ActivityHistoryEntry): string {
   ].join("\n");
 }
 
-export function ActivityLedger() {
+export function ActivityLedger({
+  onOpenArtifact,
+}: {
+  onOpenArtifact?: () => void;
+} = {}) {
   const router = useRouter();
   const setPendingNavigation = useTimelineStore(
     (state) => state.setPendingNavigation,
   );
   const initialNow = useMemo(() => new Date(), []);
   const [anchor, setAnchor] = useState(initialNow);
-  const [preset, setPreset] = useState<RangePreset>("today");
+  const [preset, setPreset] = useState<RangePreset>(readStoredRangePreset);
   const [customStart, setCustomStart] = useState(() =>
-    toLocalInputValue(startOfLocalDay(initialNow)),
+    readStoredDateInput(
+      ACTIVITY_CUSTOM_START_STORAGE_KEY,
+      toLocalInputValue(startOfLocalDay(initialNow)),
+    ),
   );
   const [customEnd, setCustomEnd] = useState(() =>
-    toLocalInputValue(initialNow),
+    readStoredDateInput(
+      ACTIVITY_CUSTOM_END_STORAGE_KEY,
+      toLocalInputValue(initialNow),
+    ),
   );
   const [summary, setSummary] = useState<ActivitySummaryResponse | null>(null);
   const [meetings, setMeetings] = useState<ActivityReviewMeeting[]>([]);
+  const meetingsRef = useRef(meetings);
+  meetingsRef.current = meetings;
   const [ledgerIntervals, setLedgerIntervals] = useState<
     ActivityLedgerArtifactInterval[]
   >([]);
@@ -571,6 +750,12 @@ export function ActivityLedger() {
     () => (range ? nextActivityHistoryRange(range, historyCoverage) : null),
     [historyCoverage, range],
   );
+
+  useEffect(() => {
+    window.localStorage.setItem(ACTIVITY_RANGE_STORAGE_KEY, preset);
+    window.localStorage.setItem(ACTIVITY_CUSTOM_START_STORAGE_KEY, customStart);
+    window.localStorage.setItem(ACTIVITY_CUSTOM_END_STORAGE_KEY, customEnd);
+  }, [customEnd, customStart, preset]);
 
   useEffect(() => {
     if (!range || range.start >= range.end) {
@@ -675,7 +860,7 @@ export function ActivityLedger() {
     setHistory(null);
     setHistoryCoverage([]);
     setCacheReady(false);
-    if (!range || loading) return;
+    if (!range) return;
     let cancelled = false;
     void loadPersistedActivityHistory(ACTIVITY_REVIEW_PROMPT_VERSION, range)
       .then(async (stored) => {
@@ -689,7 +874,7 @@ export function ActivityLedger() {
               const legacy = parseActivityHistoryResponse(
                 cached,
                 range,
-                meetings,
+                meetingsRef.current,
               );
               snapshot = await reconcilePersistedActivityHistory(
                 ACTIVITY_REVIEW_PROMPT_VERSION,
@@ -719,20 +904,12 @@ export function ActivityLedger() {
       cancelled = true;
       historyAbortRef.current?.abort();
     };
-  }, [loading, meetings, preset, range]);
+  }, [preset, range]);
 
   const generateHistory = useCallback(async () => {
     if (!range || historyLoadingRef.current) return;
     const generationRange = nextActivityHistoryRange(range, historyCoverage);
     if (!generationRange) return;
-    if (!settings?.enhancedAI) {
-      setHistoryError("Turn on Enhanced AI to build your history.");
-      return;
-    }
-    if (!reviewPreset?.model?.trim()) {
-      setHistoryError("Choose an AI model to build your history.");
-      return;
-    }
     historyAbortRef.current?.abort();
     const controller = new AbortController();
     historyAbortRef.current = controller;
@@ -765,9 +942,24 @@ export function ActivityLedger() {
         end: generationRange.end.toISOString(),
         label: `${RANGE_COPY[preset].toLowerCase()} continuation`,
       };
+      const localHistory = buildLocalActivityHistory(
+        generationRange,
+        ledgerIntervals,
+        generationMeetings,
+      );
+      if (localHistory.entries.length > 0) {
+        setHistory({
+          entries: mergeActivityHistoryDocuments(
+            history?.entries ?? [],
+            localHistory,
+            generationRange,
+          ),
+        });
+      }
       if (
-        generationSummary?.data_status !== "ok" ||
-        generationSummary.total_active_minutes <= 0
+        (generationSummary?.data_status !== "ok" ||
+          generationSummary.total_active_minutes <= 0) &&
+        localHistory.entries.length === 0
       ) {
         const persisted = await reconcilePersistedActivityHistory(
           ACTIVITY_REVIEW_PROMPT_VERSION,
@@ -781,65 +973,81 @@ export function ActivityLedger() {
         setHistoryCoverage(persisted.coverage);
         return;
       }
-      const raw = await runDailySummaryWithPi({
-        date: generationRange.start,
-        range: {
-          start: generationRange.start.toISOString(),
-          end: generationRange.end.toISOString(),
-        },
-        preset: reviewPreset,
-        userToken: settings.user?.token ?? null,
-        signal: controller.signal,
-        sessionPrefix: "activity-history",
-        systemPrompt: ACTIVITY_REVIEW_AGENT_SYSTEM_PROMPT,
-        prompt: buildActivityReviewAgentPrompt(reviewRange, generationMeetings),
-      });
-      const minimumEntries = minimumHistoryEntryCount(
-        generationSummary.total_active_minutes,
-        generationRange,
-      );
-      let next = parseActivityHistoryResponse(
-        raw,
-        generationRange,
-        generationMeetings,
-      );
-      let missingMeetings = missingRequiredMeetingIds(next, generationMeetings);
-      if (next.entries.length < minimumEntries || missingMeetings.length > 0) {
-        const repairedRaw = await runDailySummaryWithPi({
-          date: generationRange.start,
-          range: {
-            start: generationRange.start.toISOString(),
-            end: generationRange.end.toISOString(),
-          },
-          preset: reviewPreset,
-          userToken: settings.user?.token ?? null,
-          signal: controller.signal,
-          sessionPrefix: "activity-history-repair",
-          systemPrompt: ACTIVITY_REVIEW_AGENT_SYSTEM_PROMPT,
-          prompt: buildActivityReviewRepairPrompt(
-            reviewRange,
+      let next = localHistory;
+      if (reviewPreset?.model?.trim()) {
+        try {
+          const raw = await runDailySummaryWithPi({
+            date: generationRange.start,
+            range: {
+              start: generationRange.start.toISOString(),
+              end: generationRange.end.toISOString(),
+            },
+            preset: reviewPreset,
+            userToken: settings.user?.token ?? null,
+            signal: controller.signal,
+            sessionPrefix: "activity-history",
+            systemPrompt: ACTIVITY_REVIEW_AGENT_SYSTEM_PROMPT,
+            prompt: buildActivityReviewAgentPrompt(
+              reviewRange,
+              generationMeetings,
+            ),
+          });
+          const minimumEntries = minimumHistoryEntryCount(
+            generationSummary?.total_active_minutes ?? 0,
+            generationRange,
+          );
+          next = parseActivityHistoryResponse(
+            raw,
+            generationRange,
             generationMeetings,
+          );
+          let missingMeetings = missingRequiredMeetingIds(
             next,
-            minimumEntries,
-            missingMeetings,
-          ),
-        });
-        next = parseActivityHistoryResponse(
-          repairedRaw,
-          generationRange,
-          generationMeetings,
-        );
-        missingMeetings = missingRequiredMeetingIds(next, generationMeetings);
-      }
-      if (next.entries.length < minimumEntries) {
-        throw new Error(
-          "Activity history did not cover enough of this range. Rebuild it to try again.",
-        );
-      }
-      if (missingMeetings.length > 0) {
-        throw new Error(
-          "Activity history missed a recorded meeting. Rebuild it to try again.",
-        );
+            generationMeetings,
+          );
+          if (
+            next.entries.length < minimumEntries ||
+            missingMeetings.length > 0
+          ) {
+            const repairedRaw = await runDailySummaryWithPi({
+              date: generationRange.start,
+              range: {
+                start: generationRange.start.toISOString(),
+                end: generationRange.end.toISOString(),
+              },
+              preset: reviewPreset,
+              userToken: settings.user?.token ?? null,
+              signal: controller.signal,
+              sessionPrefix: "activity-history-repair",
+              systemPrompt: ACTIVITY_REVIEW_AGENT_SYSTEM_PROMPT,
+              prompt: buildActivityReviewRepairPrompt(
+                reviewRange,
+                generationMeetings,
+                next,
+                minimumEntries,
+                missingMeetings,
+              ),
+            });
+            next = parseActivityHistoryResponse(
+              repairedRaw,
+              generationRange,
+              generationMeetings,
+            );
+            missingMeetings = missingRequiredMeetingIds(
+              next,
+              generationMeetings,
+            );
+          }
+          if (
+            next.entries.length < minimumEntries ||
+            missingMeetings.length > 0
+          ) {
+            next = localHistory;
+          }
+        } catch {
+          if (controller.signal.aborted) return;
+          next = localHistory;
+        }
       }
       let persisted;
       try {
@@ -891,6 +1099,7 @@ export function ActivityLedger() {
     summary,
     history,
     historyCoverage,
+    ledgerIntervals,
   ]);
 
   useEffect(() => {
@@ -900,8 +1109,7 @@ export function ActivityLedger() {
       error ||
       summary?.data_status !== "ok" ||
       !pendingHistoryRange ||
-      historyError ||
-      !settings?.enhancedAI
+      historyError
     ) {
       return;
     }
@@ -913,7 +1121,6 @@ export function ActivityLedger() {
     history,
     historyError,
     loading,
-    settings?.enhancedAI,
     summary?.data_status,
     pendingHistoryRange,
   ]);
@@ -968,6 +1175,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
 
   const openEvidence = useCallback(
     (evidence: ActivityArtifact) => {
+      onOpenArtifact?.();
       if (
         evidence.kind === "meeting" &&
         evidence.meeting_id &&
@@ -990,7 +1198,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
         }
       }, 250);
     },
-    [router, setPendingNavigation],
+    [onOpenArtifact, router, setPendingNavigation],
   );
 
   const groupedEntries = useMemo(
@@ -1088,22 +1296,6 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
             <p className="text-sm text-muted-foreground">
               Start time must be before end time.
             </p>
-          ) : loading && !summary ? (
-            <div className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Reading your day…
-            </div>
-          ) : error ? (
-            <p className="text-sm text-muted-foreground">{error}</p>
-          ) : summary?.data_status !== "ok" ? (
-            <p className="text-sm text-muted-foreground">
-              There is not enough captured activity in this range yet.
-            </p>
-          ) : historyLoading && !history ? (
-            <div className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Understanding what you worked on…
-            </div>
           ) : history ? (
             <section aria-label="Activity history">
               {groupedEntries.map(([day, entries]) => (
@@ -1121,6 +1313,17 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                         href={`screenpipe://timeline?timestamp=${encodeURIComponent(
                           entry.start_at,
                         )}`}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          openEvidence({
+                            kind: "screen",
+                            at: entry.start_at,
+                            frame_id: null,
+                            meeting_id: null,
+                            app_name: null,
+                            label: entry.title,
+                          });
+                        }}
                         className="font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
                         aria-label={`Open ${entry.title} in timeline`}
                       >
@@ -1146,7 +1349,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                             ).map((evidence) => {
                               const artifactName =
                                 evidence.kind === "meeting"
-                                  ? "Meeting transcript"
+                                  ? "Meeting"
                                   : siteDomain(evidence.browser_url) ||
                                     evidence.app_name ||
                                     (evidence.kind === "audio"
@@ -1191,6 +1394,22 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                 </div>
               ))}
             </section>
+          ) : loading && !summary ? (
+            <div className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Reading your day…
+            </div>
+          ) : error ? (
+            <p className="text-sm text-muted-foreground">{error}</p>
+          ) : summary?.data_status !== "ok" ? (
+            <p className="text-sm text-muted-foreground">
+              There is not enough captured activity in this range yet.
+            </p>
+          ) : historyLoading && !history ? (
+            <div className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Understanding what you worked on…
+            </div>
           ) : (
             <div className="py-12 text-center">
               <p className="text-sm text-muted-foreground">

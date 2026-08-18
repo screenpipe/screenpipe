@@ -189,6 +189,7 @@ interface NoteViewProps {
   calendarEvents?: CalendarEvent[];
   transcriptOpenIntent?: TranscriptOpenIntent;
   transcriptOpenRequestKey?: number;
+  initialWorkspaceTab?: MeetingWorkspaceTab;
 }
 
 type SaveState =
@@ -235,6 +236,7 @@ export function NoteView({
   calendarEvents = [],
   transcriptOpenIntent,
   transcriptOpenRequestKey,
+  initialWorkspaceTab,
 }: NoteViewProps) {
   const { toast } = useToast();
   const [title, setTitle] = useState(meeting.title ?? "");
@@ -268,12 +270,13 @@ export function NoteView({
   const [summaryRevealKey, setSummaryRevealKey] = useState(0);
   const [meetingCtx, setMeetingCtx] = useState<MeetingContext | null>(null);
   const [activeTab, setActiveTab] = useState<MeetingWorkspaceTab>(() =>
-    resolveTranscriptOpen(
+    initialWorkspaceTab ??
+    (resolveTranscriptOpen(
       transcriptOpenIntent,
       readTranscriptOpenPreference(meeting.id),
     )
       ? "transcript"
-      : "notes",
+      : "notes"),
   );
   const [transcriptRefreshKey, setTranscriptRefreshKey] = useState(0);
   const [transcriptFreshness, setTranscriptFreshness] = useState<{

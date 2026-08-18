@@ -137,7 +137,13 @@ export function parseTimelineDailySummaryRequest(
  * `ShowRewindWindow` variant for it, and guessing one would be a click that
  * silently does nothing.
  */
-export function NativeTimelineBridge() {
+export function NativeTimelineBridge({
+  onReturnToActivity,
+  onDismissActivityReturn,
+}: {
+  onReturnToActivity?: () => void;
+  onDismissActivityReturn?: () => void;
+} = {}) {
   const [dailySummaryRequest, setDailySummaryRequest] = useState<{
     date: Date;
     id: number;
@@ -152,17 +158,26 @@ export function NativeTimelineBridge() {
       listen("timeline-open-chat", () => {
         void commands.showWindow("Chat");
       }),
-      listen<string | NativeTimelineDailySummaryRequest>("timeline-open-daily-summary", (event) => {
-        const date = parseTimelineDailySummaryRequest(
-          event.payload,
-          currentWindowLabel
-        );
-        if (!date) return;
-        setDailySummaryRequest((request) => ({
-          date,
-          id: (request?.id ?? 0) + 1,
-        }));
+      listen("timeline-return-to-activity", () => {
+        onReturnToActivity?.();
       }),
+      listen("timeline-dismiss-activity-return", () => {
+        onDismissActivityReturn?.();
+      }),
+      listen<string | NativeTimelineDailySummaryRequest>(
+        "timeline-open-daily-summary",
+        (event) => {
+          const date = parseTimelineDailySummaryRequest(
+            event.payload,
+            currentWindowLabel,
+          );
+          if (!date) return;
+          setDailySummaryRequest((request) => ({
+            date,
+            id: (request?.id ?? 0) + 1,
+          }));
+        },
+      ),
       listen<NativeTimelineSelectionContext>(
         "timeline-ask-ai-selection",
         (event) => {
@@ -244,7 +259,7 @@ export function NativeTimelineBridge() {
         void subscription.then((unlisten) => unlisten());
       }
     };
-  }, []);
+  }, [onDismissActivityReturn, onReturnToActivity]);
 
   if (!dailySummaryRequest) return null;
 
@@ -270,10 +285,12 @@ export function NativeTimeline({
   fallback,
   transparentHost = false,
   closeOnEscape = false,
+  showActivityReturn = false,
 }: {
   fallback: React.ReactNode;
   transparentHost?: boolean;
   closeOnEscape?: boolean;
+  showActivityReturn?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [available, setAvailable] = useState<boolean | null>(null);
@@ -289,6 +306,10 @@ export function NativeTimeline({
   const setPendingNavigation = useTimelineStore(
     (state) => state.setPendingNavigation,
   );
+  const showActivityReturnRef = useRef(showActivityReturn);
+  showActivityReturnRef.current = showActivityReturn;
+  const showNavigationLoadingRef = useRef(nativePendingNavigation !== null);
+  showNavigationLoadingRef.current = nativePendingNavigation !== null;
 
   useEffect(() => {
     if (pendingNavigation) setNativePendingNavigation(pendingNavigation);
@@ -411,6 +432,8 @@ export function NativeTimeline({
         apiKey: getApiKey(),
         embedded: true,
         closeOnEscape,
+        showActivityReturn: showActivityReturnRef.current,
+        showNavigationLoading: showNavigationLoadingRef.current,
         underlay,
         rect: {
           x: Math.round(box.left),

@@ -121,6 +121,7 @@ private func openWindow() -> (NSWindow, TimelineViewModel)? {
 /// that needs frames asks for them rather than inheriting whatever is left.
 @MainActor
 private func resetModel(_ model: TimelineViewModel) {
+    model.cancelExternalNavigation()
     if model.isPlaying { model.togglePlayback() }
     model.playbackSpeed = 1
     model.clearSelection()
@@ -129,6 +130,22 @@ private func resetModel(_ model: TimelineViewModel) {
     model.injectForTesting(frames: fixtureFrames())
     model.setIndex(60)
     pump(0.35)
+}
+
+@MainActor
+private func testExternalNavigationLoading(model: TimelineViewModel) {
+    resetModel(model)
+    expect(model.emptyState == .hasFrames, "the populated timeline starts with its frame visible")
+
+    model.beginExternalNavigation()
+    expect(model.isResolvingExternalNavigation,
+           "an artifact navigation must enter its loading state immediately")
+    expect(model.emptyState == .loading,
+           "artifact navigation loading must hide already-cached live-edge frames")
+
+    model.cancelExternalNavigation()
+    expect(!model.isResolvingExternalNavigation,
+           "cancelling artifact navigation must restore the timeline")
 }
 
 @MainActor
@@ -667,6 +684,29 @@ private func testAttachTracksHost(model: TimelineViewModel) {
     pump(0.3)
 }
 
+@MainActor
+private func testActivityReturnChrome() {
+    let chrome = TimelineOriginChrome()
+    _ = TimelineActionBridge.shared.drainEmitted()
+
+    chrome.setActivityReturnVisible(true)
+    expect(chrome.showsActivityReturn, "Activity return must become visible for a drill-down")
+    chrome.returnToActivity()
+    expect(!chrome.showsActivityReturn, "returning must hide the Activity return")
+    expect(
+        TimelineActionBridge.shared.drainEmitted().contains("return_to_activity"),
+        "the Activity return must emit its routed navigation action"
+    )
+
+    chrome.setActivityReturnVisible(true)
+    chrome.dismissActivityReturn()
+    expect(!chrome.showsActivityReturn, "an unrelated Timeline click must dismiss the return")
+    expect(
+        TimelineActionBridge.shared.drainEmitted().contains("dismiss_activity_return"),
+        "dismissal must clear the webview's Activity-origin state"
+    )
+}
+
 /// Deep links must drive the per-host controller used by the embedded app,
 /// not the separate standalone controller.
 @MainActor
@@ -684,7 +724,8 @@ private func testNavigationTargetsAttachedController() {
         config: TimelineAPIConfig(host: "127.0.0.1", port: 0, apiKey: nil),
         hostWindowNumber: host.windowNumber,
         rect: NSRect(x: 20, y: 20, width: 500, height: 400),
-        hostWindowLabel: "home"
+        hostWindowLabel: "home",
+        showNavigationLoading: true
     )
     expect(attached, "the host-specific timeline must attach")
     guard let model = controller.currentModel else {
@@ -693,6 +734,8 @@ private func testNavigationTargetsAttachedController() {
         host.close()
         return
     }
+    expect(model.isResolvingExternalNavigation,
+           "an attached artifact target must hide the default live-edge frame")
 
     let frames = fixtureFrames(count: 30, base: Date(timeIntervalSince1970: 1_787_000_000))
     model.injectForTesting(frames: frames)
@@ -904,6 +947,8 @@ private func runTests() {
         ("icons", testIcons),
         ("icon chip renders", { testIconChipRenders(shots: shots) }),
         ("deep links target attached host", testNavigationTargetsAttachedController),
+        ("external navigation hides stale frames", { testExternalNavigationLoading(model: model) }),
+        ("Activity return chrome", { testActivityReturnChrome() }),
         // Last: it re-parents and re-styles the shared window.
         ("attach tracks host", { testAttachTracksHost(model: model) }),
     ]

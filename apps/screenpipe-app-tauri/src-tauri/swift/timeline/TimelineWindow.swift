@@ -285,12 +285,56 @@ final class TimelineScrollHandler {
 /// concept and does not stop `NSView.hitTest` — so the overlay silently ate
 /// every button press. The window installs `NSEvent` monitors instead, which
 /// observe scroll and pinch without taking part in hit testing at all.
+@MainActor
+final class TimelineOriginChrome: ObservableObject {
+    @Published private(set) var showsActivityReturn = false
+
+    func setActivityReturnVisible(_ visible: Bool) {
+        showsActivityReturn = visible
+    }
+
+    func returnToActivity() {
+        showsActivityReturn = false
+        TimelineActionBridge.shared.emit("return_to_activity")
+    }
+
+    func dismissActivityReturn() {
+        guard showsActivityReturn else { return }
+        showsActivityReturn = false
+        TimelineActionBridge.shared.emit("dismiss_activity_return")
+    }
+}
+
 struct TimelineHostView: View {
     @ObservedObject var model: TimelineViewModel
+    @ObservedObject var originChrome: TimelineOriginChrome
     var embedded: Bool
 
     var body: some View {
         TimelineRootView(model: model, embedded: embedded)
+            .overlay(alignment: .topLeading) {
+                if originChrome.showsActivityReturn {
+                    Button(action: originChrome.returnToActivity) {
+                        Image(systemName: "arrow.left")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Color.white)
+                            .frame(width: 38, height: 38)
+                            .background(Circle().fill(Color.black.opacity(0.82)))
+                            .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 1))
+                            .shadow(color: Color.black.opacity(0.25), radius: 8, y: 3)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Back to activity")
+                    .padding(16)
+                }
+            }
+            .simultaneousGesture(
+                TapGesture().onEnded {
+                    DispatchQueue.main.async {
+                        originChrome.dismissActivityReturn()
+                    }
+                }
+            )
     }
 }
 
@@ -415,6 +459,46 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
         request.apply(to: model)
     }
 
+    /// Artifact links do not carry a Search host label. Keep the live-edge
+    /// pixels hidden until the requested day and exact frame have loaded.
+    @discardableResult
+    static func navigate(frameId: String?, timestamp: String?) -> Bool {
+        guard let model = activeNavigationModel() else { return false }
+        if let frameId,
+           let index = TimelineNavigation.index(ofFrameId: frameId, in: model.frames) {
+            if model.currentIndex == index,
+               model.currentImage != nil || model.imageUnavailable {
+                model.cancelExternalNavigation()
+                return true
+            }
+            model.beginExternalNavigation(superseding: true)
+            model.setExternalNavigationIndex(index)
+            return true
+        }
+        guard let timestamp, let date = TimelineTime.parse(timestamp) else {
+            model.beginExternalNavigation(superseding: true)
+            return false
+        }
+        let targetDayIsLoaded = model.frames.contains { frame in
+            guard let frameDate = TimelineFrames.date(of: frame) else { return false }
+            return Calendar.current.isDate(frameDate, inSameDayAs: date)
+        }
+        if targetDayIsLoaded,
+           let index = TimelineNavigation.indexNearest(date, in: model.frames) {
+            if model.currentIndex == index,
+               model.currentImage != nil || model.imageUnavailable {
+                model.cancelExternalNavigation()
+                return true
+            }
+            model.beginExternalNavigation(superseding: true)
+            model.setExternalNavigationIndex(index)
+        } else {
+            model.beginExternalNavigation(superseding: true)
+            model.changeDate(to: date, supersedePendingNavigation: true)
+        }
+        return true
+    }
+
     /// Feature-gated Rust E2E exposes this state to WebDriver so a real Search
     /// thumbnail click can assert on the native playhead rather than a hidden
     /// React fallback.
@@ -452,6 +536,7 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
 
     private var window: NSWindow?
     private var model: TimelineViewModel?
+    private let originChrome = TimelineOriginChrome()
     private var keyMonitor: Any?
     private var scrollMonitor: Any?
     private var scrollHandler: TimelineScrollHandler?
@@ -530,6 +615,8 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
             config: config,
             embedded: embedded,
             closeOnEscape: false,
+            showActivityReturn: false,
+            showNavigationLoading: false,
             frame: defaultFrame(),
             borderless: false
         )
@@ -543,13 +630,25 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
         config: TimelineAPIConfig,
         embedded: Bool,
         closeOnEscape: Bool,
+        showActivityReturn: Bool,
+        showNavigationLoading: Bool,
         frame: NSRect,
         borderless: Bool
     ) {
         let model = TimelineViewModel(config: config)
         self.model = model
+        originChrome.setActivityReturnVisible(showActivityReturn)
+        if showNavigationLoading {
+            model.beginExternalNavigation()
+        }
 
-        let hosting = NSHostingView(rootView: TimelineHostView(model: model, embedded: embedded))
+        let hosting = NSHostingView(
+            rootView: TimelineHostView(
+                model: model,
+                originChrome: originChrome,
+                embedded: embedded
+            )
+        )
         // The canvas contains the captured image at its native resolution.
         // NSHostingView's default sizing options propagate that intrinsic size
         // back into its NSWindow, so a 1920x1080 capture could grow an embedded
@@ -600,6 +699,8 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
         hostPointer: Int? = nil,
         hostWindowLabel: String? = nil,
         closeOnEscape: Bool = false,
+        showActivityReturn: Bool = false,
+        showNavigationLoading: Bool = false,
         underlay: Bool = false
     ) -> Bool {
         self.hostPointer = hostPointer
@@ -615,6 +716,8 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
                 config: config,
                 embedded: true,
                 closeOnEscape: closeOnEscape,
+                showActivityReturn: showActivityReturn,
+                showNavigationLoading: showNavigationLoading,
                 frame: target,
                 borderless: true
             )
@@ -622,6 +725,10 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
         guard let window, let model else { return false }
         model.setActionWindowLabel(hostWindowLabel)
         Self.deliverPendingSearchNavigation(to: model, windowLabel: hostWindowLabel)
+        originChrome.setActivityReturnVisible(showActivityReturn)
+        if showNavigationLoading {
+            model.beginExternalNavigation()
+        }
         // Placement events repeat on resize. Refreshing the handler is cheap
         // and keeps an existing controller correct if its host mode changes.
         installKeyMonitor(model: model, embedded: true, closeOnEscape: closeOnEscape)
@@ -848,6 +955,8 @@ public func timeline_show(_ json: UnsafePointer<CChar>?) -> Int32 {
     var config = TimelineAPIConfig.fromEnvironment()
     var embedded = false
     var closeOnEscape = false
+    var showActivityReturn = false
+    var showNavigationLoading = false
     if let json, let text = String(validatingUTF8: json), let data = text.data(using: .utf8),
        let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
         if let port = obj["port"] as? Int { config.port = port }
@@ -855,6 +964,8 @@ public func timeline_show(_ json: UnsafePointer<CChar>?) -> Int32 {
         if let key = obj["apiKey"] as? String, !key.isEmpty { config.apiKey = key }
         if let value = obj["embedded"] as? Bool { embedded = value }
         if let value = obj["closeOnEscape"] as? Bool { closeOnEscape = value }
+        if let value = obj["showActivityReturn"] as? Bool { showActivityReturn = value }
+        if let value = obj["showNavigationLoading"] as? Bool { showNavigationLoading = value }
         let underlay = (obj["underlay"] as? Bool) ?? false
         if let r = obj["rect"] as? [String: Any] {
             let host = (obj["hostWindow"] as? Int) ?? -1
@@ -877,6 +988,8 @@ public func timeline_show(_ json: UnsafePointer<CChar>?) -> Int32 {
                     hostPointer: pointer,
                     hostWindowLabel: label,
                     closeOnEscape: closeOnEscape,
+                    showActivityReturn: showActivityReturn,
+                    showNavigationLoading: showNavigationLoading,
                     underlay: underlay
                 ) ? 0 : -1
             }
@@ -969,7 +1082,9 @@ public func timeline_navigate(_ json: UnsafePointer<CChar>?) -> Int32 {
         let windowLabel = obj["windowLabel"] as? String
         let frameId = obj["frameId"] as? String
         let rawTimestamp = obj["timestamp"] as? String
-        if let rawTimestamp, let timestamp = TimelineTime.parse(rawTimestamp) {
+        if let windowLabel,
+           let rawTimestamp,
+           let timestamp = TimelineTime.parse(rawTimestamp) {
             TimelineWindowController.routeSearchNavigation(
                 TimelineSearchNavigationRequest(
                     timestamp: timestamp,
@@ -980,10 +1095,8 @@ public func timeline_navigate(_ json: UnsafePointer<CChar>?) -> Int32 {
                 ),
                 windowLabel: windowLabel
             )
-        } else if let frameId,
-                  let model = TimelineWindowController.model(forWindowLabel: windowLabel),
-                  let index = TimelineNavigation.index(ofFrameId: frameId, in: model.frames) {
-            model.setIndex(index)
+        } else {
+            TimelineWindowController.navigate(frameId: frameId, timestamp: rawTimestamp)
         }
     }
     // Return only after the native model has accepted or queued the click. The
