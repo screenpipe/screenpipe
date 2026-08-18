@@ -659,6 +659,54 @@ fn content_is_enterprise_managed(content: &str) -> bool {
                 .any(|line| line.trim() == "enterprise_managed: true")
         })
 }
+/// Front-matter fields `PipeManager::update_config` applies. Every other key is
+/// free-form user config, so an unrecognized key cannot simply be rejected.
+const KNOWN_CONFIG_UPDATE_KEYS: &[&str] = &[
+    "raw_content",
+    "prompt_body",
+    "schedule",
+    "enabled",
+    "agent",
+    "model",
+    "provider",
+    "preset",
+    "connections",
+    "timeout",
+    "history",
+    "trigger",
+    "schedule_config",
+];
+
+/// Spot a `POST /pipes/:id/config` body that wrapped its fields in a `config`
+/// envelope, returning the recognized fields it meant to set.
+///
+/// The handler's request type is `#[serde(flatten)]`, so the update map *is* the
+/// request body: `{"schedule": "every 1h"}`. An envelope still deserializes —
+/// it just arrives as a single unrecognized key, which the catch-all arm files
+/// under free-form user config. The write then succeeds and the caller is told
+/// `{"success": true}` while nothing it asked for changed.
+///
+/// Matching only when *every* nested key is a real field keeps a user setting
+/// that happens to be named `config` working.
+fn nested_config_envelope(updates: &HashMap<String, serde_json::Value>) -> Option<Vec<String>> {
+    if updates.len() != 1 {
+        return None;
+    }
+    let inner = updates.get("config")?.as_object()?;
+    if inner.is_empty() {
+        return None;
+    }
+    if !inner
+        .keys()
+        .all(|key| KNOWN_CONFIG_UPDATE_KEYS.contains(&key.as_str()))
+    {
+        return None;
+    }
+    let mut fields: Vec<String> = inner.keys().cloned().collect();
+    fields.sort();
+    Some(fields)
+}
+
 /// Simple FNV-1a 64-bit hash, sufficient for change detection.
 fn simple_hash(content: &str) -> String {
     let mut hash: u64 = 0xcbf29ce484222325;
@@ -4558,6 +4606,19 @@ impl PipeManager {
             return Err(anyhow!(
                 "pipe '{}' is managed by your organization and cannot be edited locally",
                 name
+            ));
+        }
+
+        // A caller that wraps its fields in a `config` envelope would otherwise
+        // land in the catch-all arm below, be filed under free-form user config,
+        // and get `{"success": true}` back with not one requested field applied.
+        // Silence is the worst answer here, so say what went wrong instead.
+        if let Some(fields) = nested_config_envelope(&updates) {
+            return Err(anyhow!(
+                "config update for '{}' wraps its fields in a `config` envelope; \
+                 send them at the top level instead: {}",
+                name,
+                fields.join(", ")
             ));
         }
 
@@ -11027,6 +11088,50 @@ mod tests {
 
         // Must still parse without error
         parse_frontmatter(&serialized).expect("round-trip parse failed after extras cleanup");
+    }
+
+    #[test]
+    fn test_nested_config_envelope_is_detected() {
+        // The exact body the Live View cadence write used to send. It reached
+        // the catch-all arm, so the schedule never changed and the caller still
+        // got `{"success": true}`.
+        let mut updates = HashMap::new();
+        updates.insert(
+            "config".to_string(),
+            serde_json::json!({"schedule": "every 1h", "enabled": true}),
+        );
+        let fields = nested_config_envelope(&updates).expect("envelope should be rejected");
+        assert_eq!(fields, vec!["enabled".to_string(), "schedule".to_string()]);
+    }
+
+    #[test]
+    fn test_flat_config_body_is_not_treated_as_an_envelope() {
+        // What every correct caller sends.
+        let mut updates = HashMap::new();
+        updates.insert("schedule".to_string(), serde_json::json!("every 1h"));
+        updates.insert("enabled".to_string(), serde_json::json!(true));
+        assert!(nested_config_envelope(&updates).is_none());
+    }
+
+    #[test]
+    fn test_user_config_named_config_still_allowed() {
+        // A free-form user setting that happens to be named `config` must keep
+        // working, so the guard only fires when every nested key is a real
+        // front-matter field.
+        let mut updates = HashMap::new();
+        updates.insert(
+            "config".to_string(),
+            serde_json::json!({"api_url": "https://example.com", "retries": 3}),
+        );
+        assert!(nested_config_envelope(&updates).is_none());
+
+        // Mixed: one real field, one arbitrary key. Ambiguous, so leave it be.
+        let mut mixed = HashMap::new();
+        mixed.insert(
+            "config".to_string(),
+            serde_json::json!({"schedule": "every 1h", "api_url": "https://example.com"}),
+        );
+        assert!(nested_config_envelope(&mixed).is_none());
     }
 
     #[test]

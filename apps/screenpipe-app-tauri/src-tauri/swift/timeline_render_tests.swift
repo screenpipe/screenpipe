@@ -456,6 +456,77 @@ private func testKeyboard() {
            "overlay escape asks to close its host window")
 }
 
+private func testAttachedHostArrowFocusPolicy() {
+    let left = TimelineKeyEvent(keyCode: TimelineKeyEvent.leftArrow)
+    let right = TimelineKeyEvent(keyCode: TimelineKeyEvent.rightArrow)
+    let space = TimelineKeyEvent(keyCode: TimelineKeyEvent.space)
+    let escape = TimelineKeyEvent(keyCode: TimelineKeyEvent.escape)
+
+    expect(
+        TimelineKeyFocusPolicy.shouldHandle(
+            left,
+            focusOwner: .attachedHost,
+            attachedUnderlay: false,
+            editingText: false
+        ),
+        "left arrow works when the attached Timeline host has focus"
+    )
+    expect(
+        TimelineKeyFocusPolicy.shouldHandle(
+            right,
+            focusOwner: .attachedHost,
+            attachedUnderlay: false,
+            editingText: false
+        ),
+        "right arrow works when the attached Timeline host has focus"
+    )
+    expect(
+        !TimelineKeyFocusPolicy.shouldHandle(
+            space,
+            focusOwner: .attachedHost,
+            attachedUnderlay: false,
+            editingText: false
+        ),
+        "parent focus does not capture playback keys"
+    )
+    expect(
+        !TimelineKeyFocusPolicy.shouldHandle(
+            escape,
+            focusOwner: .attachedHost,
+            attachedUnderlay: false,
+            editingText: false
+        ),
+        "parent focus does not capture Escape"
+    )
+    expect(
+        !TimelineKeyFocusPolicy.shouldHandle(
+            left,
+            focusOwner: .attachedHost,
+            attachedUnderlay: true,
+            editingText: false
+        ),
+        "an overlay above the Timeline keeps its arrows"
+    )
+    expect(
+        !TimelineKeyFocusPolicy.shouldHandle(
+            left,
+            focusOwner: .other,
+            attachedUnderlay: false,
+            editingText: false
+        ),
+        "another window or app keeps its arrows"
+    )
+    expect(
+        !TimelineKeyFocusPolicy.shouldHandle(
+            left,
+            focusOwner: .timeline,
+            attachedUnderlay: false,
+            editingText: true
+        ),
+        "text editing keeps its arrows"
+    )
+}
+
 private func testActionRouting() {
     let payload = TimelineActionBridge.callbackPayload(
         action: "open_daily_summary:2026-08-17",
@@ -1037,6 +1108,7 @@ struct TimelineRenderTests {
                 ("scrubber renders", { testScrubberRenders(shots: shots) }),
                 ("scrubber layout", testScrubberLayoutMatchesHitTest),
                 ("keyboard", testKeyboard),
+                ("attached host arrow focus", testAttachedHostArrowFocusPolicy),
                 ("action routing", testActionRouting),
                 ("scroll and zoom", testScrollAndZoom),
                 ("selection and filters", testSelectionAndFilters),

@@ -10,7 +10,7 @@ keep your always-on capture while you develop:
 
 | script | what it does |
 |--------|--------------|
-| `sp-dev-app` | quit prod app → `bun tauri dev` → **restore prod on exit** (even on crash/Ctrl-C) |
+| `sp-dev-app` | quit prod app → `bun run dev:tauri` → **restore prod on exit** (even on crash/Ctrl-C) |
 | `sp-dev-cli` | run the CLI/core against an isolated data dir + port, **alongside** a still-running prod app |
 | `sp-update-src` | clean `git pull` (survives a dirty tree) + `bun install` when JS deps change; the other two call it first |
 
@@ -69,7 +69,7 @@ Apple-Silicon gotchas trip up a first build from source and aren't covered there
    xcodebuild -downloadComponent MetalToolchain
    ```
 
-3. **`bun tauri dev`/`bun tauri build` auto-run `pre_build.js`; a raw `cargo build`
+3. **`bun run dev:tauri`/`bun run build:tauri:dev` auto-run `pre_build.js`; a raw `cargo build`
    in `src-tauri/` does not.** That prebuild downloads the bun/ffmpeg/ffprobe sidecars
    into `src-tauri/binaries/`. If you build that crate directly, run it yourself first:
 

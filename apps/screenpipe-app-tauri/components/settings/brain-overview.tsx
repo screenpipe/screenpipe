@@ -105,7 +105,10 @@ import {
   getLiveViewTimeRangeOption,
 } from "@/lib/live-views/time-range";
 import { summarizeLiveViewFreshness } from "@/lib/live-views/freshness";
-import { planSourceCadence } from "@/lib/live-views/source-cadence";
+import {
+  planSourceCadence,
+  sourceCadenceConfigBody,
+} from "@/lib/live-views/source-cadence";
 import {
   liveViewSourceStatus,
   parsePipeScheduleSnapshots,
@@ -1131,26 +1134,41 @@ export function BrainOverview({
         pipeSchedulesRef.current,
       );
       if (cadencePlans.length > 0) {
+        const cadenceFailures: string[] = [];
         await Promise.all(
           cadencePlans.map(async (plan) => {
+            // Shape pinned by `sourceCadenceConfigBody`: top-level fields, no
+            // `config` envelope. An envelope still answers `{"success": true}`
+            // while changing nothing, so the dashboard would silently freeze
+            // again with a refresh that looked like it worked.
+            const update = sourceCadenceConfigBody(plan);
             try {
-              const config: Record<string, unknown> = {};
-              if (plan.schedule) config.schedule = plan.schedule;
-              if (plan.enable) config.enabled = true;
-              await localFetch(`/pipes/${encodeURIComponent(plan.pipeName)}/config`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ config }),
-              });
+              const response = await localFetch(
+                `/pipes/${encodeURIComponent(plan.pipeName)}/config`,
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(update),
+                },
+              );
+              if (!response.ok) cadenceFailures.push(plan.pipeName);
             } catch {
-              // Non-fatal: the run below still refreshes the Block once.
+              cadenceFailures.push(plan.pipeName);
             }
           }),
         );
+        if (cadenceFailures.length > 0) {
+          console.warn(
+            `live view: could not set a cadence for ${cadenceFailures.join(", ")}; these blocks stay refresh-only`,
+          );
+        }
         posthog.capture("live_view_source_cadence_applied", {
           ...analyticsProperties,
           scheduled_pipe_count: cadencePlans.filter((plan) => plan.schedule).length,
           resumed_pipe_count: cadencePlans.filter((plan) => plan.enable).length,
+          // Non-zero means the cadence write silently failed and the dashboard
+          // is still frozen despite a refresh that reported success.
+          failed_pipe_count: cadenceFailures.length,
         });
         try {
           const response = await localFetch("/pipes");

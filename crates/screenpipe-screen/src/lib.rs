@@ -54,7 +54,7 @@ pub mod capture_screenshot_by_window;
 pub use custom_ocr::perform_ocr_custom;
 #[cfg(target_os = "windows")]
 pub use microsoft::perform_ocr_windows;
-pub use tesseract::perform_ocr_tesseract;
+pub use tesseract::{perform_ocr_tesseract, tesseract_available};
 pub mod browser_utils;
 pub mod snapshot_writer;
 

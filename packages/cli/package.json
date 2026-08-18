@@ -6,6 +6,7 @@
     "stage": "bun ./npm-e2e/cli.ts stage",
     "serve": "bun ./npm-e2e/cli.ts serve",
     "screenpipe": "NPM_CONFIG_REGISTRY=http://127.0.0.1:4873 npx --yes screenpipe@latest",
-    "test": "bun ./npm-e2e/runner.ts"
+    "test:payload": "bun test npm-e2e/lib/linux-payload.test.ts",
+    "test": "bun run test:payload && bun ./npm-e2e/runner.ts"
   }
 }

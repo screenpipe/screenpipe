@@ -9,18 +9,16 @@ From `apps/screenpipe-app-tauri`:
 **1. Build**
 
 ```bash
-NEXT_PUBLIC_SCREENPIPE_E2E=true bun tauri build --no-sign --debug --verbose --no-bundle -- --features e2e
+bun run build:tauri:e2e
 ```
 
-- `NEXT_PUBLIC_SCREENPIPE_E2E=true` — compiles in the frontend E2E hooks. CI sets
-  this (see `.github/workflows/e2e-test.yml`); without it the app-entitlement
-  account seed is compiled out, so any spec that needs a signed-in surface
-  (Brain, Chat) silently renders "sign in required" instead
-- `--no-sign` — skip code signing (dev)
-- `--debug` — debug build, faster than release
-- `--verbose` — show build output
-- `--no-bundle` — binary only, no installer
-- `-- --features e2e` — enable WebDriver plugin
+- The script sets `NEXT_PUBLIC_SCREENPIPE_E2E=true` to compile in the frontend
+  E2E hooks. CI sets this too (see `.github/workflows/e2e-test.yml`); without it
+  the app-entitlement account seed is compiled out, so any spec that needs a
+  signed-in surface (Brain, Chat) silently renders "sign in required" instead
+- It selects the fast `debug-dev` profile, builds only the binary, enables the
+  WebDriver plugin, and enters the same system-wide native build queue as normal
+  development.
 
 **2. Run tests**
 
@@ -129,7 +127,7 @@ The E2E launcher also moves the app-local focus/notification server to
 - **Bun** ≥ 1.3.10 — `winget install oven-sh.bun` or from [bun.sh](https://bun.sh)
 - **Rust** stable (x86_64-pc-windows-msvc) — `rustup target add x86_64-pc-windows-msvc`
 - **MSVC build tools** — Visual Studio 2022 Build Tools with C++ workload
-- **ONNX Runtime** — the pre_build script downloads this automatically during `bun tauri build`
+- **ONNX Runtime** — the pre_build script downloads this automatically during `bun run build:tauri:e2e`
 - No Scream audio driver needed for local runs (only required in CI for audio capture tests)
 
 ### Step-by-step (PowerShell)
@@ -140,7 +138,7 @@ cd apps/screenpipe-app-tauri
 bun install
 
 # 2. Build the debug binary with the WebDriver plugin enabled
-bun tauri build --no-sign --debug --no-bundle -- --features e2e
+bun run build:tauri:e2e
 
 # 3. Run all e2e specs
 bun run test:e2e
@@ -245,9 +243,9 @@ separately via `cargo llvm-cov`; see `../../docs/coverage/README.md`.
 
 **Binary not found**
 ```
-Error: Screenpipe debug binary not found at …\src-tauri\target\debug\screenpipe-app.exe
+Error: Screenpipe debug binary not found at …\src-tauri\target\debug-dev\screenpipe-app.exe
 ```
-Run the build step first. Debug builds land in `src-tauri/target/debug/`.
+Run the build step first. E2E builds land in `src-tauri/target/debug-dev/`.
 
 **Port 4445 already in use**
 The test runner (`wdio.conf.ts` `onPrepare`) calls `netstat -ano | findstr :4445` and kills the owner via `taskkill`. If it persists, manually run:

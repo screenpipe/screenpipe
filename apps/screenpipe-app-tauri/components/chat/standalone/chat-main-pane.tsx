@@ -27,6 +27,8 @@ type ActivePipeExecution = {
 } | null;
 
 interface ChatMainPaneProps {
+  /** Only the Home webview owns the first-summary lifecycle. */
+  firstRunLearningEnabled?: boolean;
   /** Preset the first-run summary is written with, and the token it needs.
    *  Passed down rather than read here so this pane (and the banner below it)
    *  stay renderable without a settings provider. */
@@ -76,6 +78,7 @@ interface ChatMainPaneProps {
 }
 
 export function ChatMainPane({
+  firstRunLearningEnabled = false,
   hideInlineHistory,
   showHistory,
   onCloseHistory,
@@ -236,10 +239,10 @@ export function ChatMainPane({
                   )}
                 </div>
               )}
-            {/* Post-setup learning window. Renders only while the window is
-                open, so it is inert for everyone else. It sits on the chat
-                because that is where setup lands and where the summary chat
-                appears once the window resolves.
+            {/* Post-setup learning window. Home is the single owner; the
+                separate Chat webview must not start a second copy from the
+                same onboarding timestamp. It sits on Home's chat because that
+                is where setup lands and where the summary appears once ready.
 
                 Deliberately NOT gated on `messages.length === 0`. The window
                 owns a ceiling timer, and unmounting the banner kills it: the
@@ -250,14 +253,12 @@ export function ChatMainPane({
                 destroy the first-run summary. Measured 2026-08: 69% of users
                 who completed setup produced no learning event at all while
                 staying in the app a median of 9.4 hours. */}
-            {!activePipeExecution && (
-              <div className="mx-auto w-full max-w-3xl px-4 pb-4">
-                <FirstRunLearningBanner
-                  aiPreset={firstRunAiPreset}
-                  userToken={firstRunUserToken}
-                  aiSettingsLoaded={firstRunAiSettingsLoaded}
-                />
-              </div>
+            {firstRunLearningEnabled && !activePipeExecution && (
+              <FirstRunLearningBanner
+                aiPreset={firstRunAiPreset}
+                userToken={firstRunUserToken}
+                aiSettingsLoaded={firstRunAiSettingsLoaded}
+              />
             )}
             {messages.length === 0 &&
               !pendingSend &&

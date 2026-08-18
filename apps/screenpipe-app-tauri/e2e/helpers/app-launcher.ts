@@ -69,8 +69,8 @@ const APP_PID_FILE = resolve(E2E_DATA_DIR, 'app.pid');
 
 // `onboarding` marks the onboarding store complete so the app drops straight
 // into the home window. `no-recording` disables vision + audio so the server
-// boots without Screen Recording / Microphone TCC — without it, an unsigned
-// debug build (`--no-sign`) on a host without granted permissions would have
+// boots without Screen Recording / Microphone TCC — without it, a raw debug
+// binary on a host without granted permissions would have
 // the server early-return at the permission gate and `/health` would never
 // respond. See e2e/seeds.rs + the feature-gated startup hooks in main.rs.
 //
@@ -132,12 +132,12 @@ export const E2E_BUN_PATH = resolve(
   APP_ROOT,
   'src-tauri',
   'target',
-  'debug',
+  'debug-dev',
   process.platform === 'win32' ? 'bun.exe' : 'bun',
 );
 
 export function getAppPath(): string {
-  const base = resolve(APP_ROOT, 'src-tauri/target/debug');
+  const base = resolve(APP_ROOT, 'src-tauri/target/debug-dev');
   const name = process.platform === 'win32' ? 'screenpipe-app.exe' : 'screenpipe-app';
   return resolve(base, name);
 }
@@ -280,7 +280,7 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
   const appPath = getAppPath();
   if (!existsSync(appPath)) {
     throw new Error(
-      `Screenpipe debug binary not found at ${appPath}. Build with e2e feature: cd apps/screenpipe-app-tauri && bun tauri build --no-sign --debug --verbose --no-bundle -- --features e2e`
+      `Screenpipe debug binary not found at ${appPath}. Build with e2e feature: cd apps/screenpipe-app-tauri && bun run build:tauri:e2e`
     );
   }
 

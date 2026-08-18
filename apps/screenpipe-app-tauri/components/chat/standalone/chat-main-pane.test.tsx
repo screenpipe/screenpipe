@@ -115,7 +115,11 @@ describe("ChatMainPane", () => {
     // the ceiling timer it owns: the first-run window then never settled and
     // emitted no event at all. Typing is the behaviour we want, so it must not
     // destroy the first-run summary.
-    const { rerender } = render(<ChatMainPane {...paneProps("chat", [])} />);
+    const enabled = {
+      ...paneProps("chat", []),
+      firstRunLearningEnabled: true,
+    };
+    const { rerender } = render(<ChatMainPane {...enabled} />);
     expect(screen.getByTestId("first-run-banner")).toBeInTheDocument();
 
     const sent: Message = {
@@ -124,9 +128,19 @@ describe("ChatMainPane", () => {
       content: "what did I work on this morning?",
       timestamp: Date.now(),
     };
-    rerender(<ChatMainPane {...paneProps("chat", [sent])} />);
+    rerender(
+      <ChatMainPane
+        {...paneProps("chat", [sent])}
+        firstRunLearningEnabled
+      />,
+    );
 
     expect(firstRunBannerUnmounted).not.toHaveBeenCalled();
     expect(screen.getByTestId("first-run-banner")).toBeInTheDocument();
+  });
+
+  it("does not mount the lifecycle in a non-owner webview", () => {
+    render(<ChatMainPane {...paneProps("chat", [])} />);
+    expect(screen.queryByTestId("first-run-banner")).not.toBeInTheDocument();
   });
 });

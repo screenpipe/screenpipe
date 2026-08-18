@@ -6,9 +6,6 @@ name: E2E Tests
 
 env:
   GIT_LFS_SKIP_SMUDGE: 1
-  CARGO_INCREMENTAL: "0"
-  CARGO_PROFILE_DEV_DEBUG: "0"
-  CARGO_PROFILE_DEV_CODEGEN_UNITS: "16"
 
 on:
   push:
@@ -71,11 +68,6 @@ jobs:
     continue-on-error: true
     timeout-minutes: 120
     env:
-      CARGO_INCREMENTAL: "0"
-      CARGO_PROFILE_DEV_OPT_LEVEL: "0"
-      CARGO_PROFILE_DEV_CODEGEN_UNITS: "256"
-      CARGO_PROFILE_DEV_INCREMENTAL: "false"
-      CARGO_PROFILE_DEV_DEBUG: "0"
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
     - uses: actions/checkout@v4
@@ -161,9 +153,9 @@ jobs:
     # sccache, same as the Linux/macOS e2e jobs. This Build step is the
     # slowest in all of CI (~45 min cold). Backend is the shared R2 bucket
     # (was SCCACHE_GHA_ENABLED, which competed for the 10 GB repo cache
-    # quota). CARGO_INCREMENTAL=0 (set in the job env above) is required
-    # for sccache to cache rustc invocations. Placed after rust-cache on
-    # purpose — see the action's ordering note.
+    # quota). The checked-in debug-dev profile disables incremental compilation,
+    # which is required for sccache to cache rustc invocations. Placed after
+    # rust-cache on purpose — see the action's ordering note.
     - name: Setup sccache (shared R2 compile cache)
       uses: ./.github/actions/setup-sccache
       with:
@@ -232,7 +224,7 @@ jobs:
         # Skip source maps in CI — faster Next.js compile, not needed for E2E.
         NEXT_DISABLE_SOURCEMAPS: "1"
       with:
-        args: "--no-sign --debug --no-bundle -- --features e2e"
+        args: "--no-bundle -- --profile debug-dev --features e2e"
         projectPath: "./apps/screenpipe-app-tauri"
         tauriScript: bunx tauri -v
 
@@ -248,13 +240,13 @@ jobs:
       shell: pwsh
       run: |
         $src = "${{ github.workspace }}/ort-system-lib/lib"
-        $dst = "${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/target/debug"
+        $dst = "${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/target/debug-dev"
         if (-not (Test-Path $dst)) {
           New-Item -ItemType Directory -Path $dst -Force | Out-Null
         }
         # Always remove any existing onnxruntime*.dll at the destination
         # before copying. Why this is necessary: prior cancelled runs
-        # could have left 0-byte stubs at target/debug/onnxruntime*.dll
+        # could have left 0-byte stubs at target/debug-dev/onnxruntime*.dll
         # which Swatinem/rust-cache then preserves across runs — once
         # cached, every subsequent run inherits the stubs and the test
         # binary fails to load ORT. Force-copy alone wasn't enough
@@ -623,7 +615,7 @@ jobs:
         # features; the dedicated gate spec re-enables it at runtime.
         NEXT_PUBLIC_SCREENPIPE_E2E: "true"
       with:
-        args: "--no-sign --debug --no-bundle -- --features e2e"
+        args: "--no-bundle -- --profile debug-dev --features e2e"
         projectPath: "./apps/screenpipe-app-tauri"
         tauriScript: bunx tauri -v
 
@@ -920,7 +912,7 @@ jobs:
         # features; the dedicated gate spec re-enables it at runtime.
         NEXT_PUBLIC_SCREENPIPE_E2E: "true"
       with:
-        args: "--no-sign --debug --no-bundle -- --features e2e"
+        args: "--no-bundle -- --profile debug-dev --features e2e"
         projectPath: "./apps/screenpipe-app-tauri"
         tauriScript: bunx tauri -v
 

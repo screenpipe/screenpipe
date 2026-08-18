@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - "packages/cli/**"
+      - ".github/workflows/release-cli.yml"
       - ".github/workflows/test-cli-npm-e2e.yml"
   push:
     branches:
       - main
     paths:
       - "packages/cli/**"
+      - ".github/workflows/release-cli.yml"
       - ".github/workflows/test-cli-npm-e2e.yml"
 
 concurrency:
@@ -41,6 +43,9 @@ jobs:
           brew unlink pkg-config@0.29.2 || true
           brew install ffmpeg pkg-config
           brew link --overwrite pkg-config
+
+      - name: Test Linux package payload contract
+        run: cd packages/cli && bun run test:payload
 
       - name: Build screenpipe CLI binary
         run: cd packages/cli && bun run build

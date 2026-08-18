@@ -12,7 +12,7 @@ const { capture, getOnboardingStatus, listen, emitted } = vi.hoisted(() => {
   return {
     capture: vi.fn(),
     getOnboardingStatus: vi.fn(),
-    // Captures the reset handler so a test can fire the cross-webview
+    // Captures the reset handler so a test can fire the mounted-state
     // broadcast without a real Tauri runtime.
     // Name-aware on purpose. A mock that collects every handler regardless of
     // event name makes the reset test pass even when the hook listens for the
@@ -104,6 +104,7 @@ describe("useLearningWindow opening", () => {
 
     await waitFor(() => expect(result.current.phase).toBe("learning"));
     expect(result.current.startedAt).toBe(completedAt);
+    expect(result.current.showProgress).toBe(true);
     expect(startedEvents()).toHaveLength(1);
     expect(startedEvents()[0][1]).toEqual({ opening: "immediate" });
   });
@@ -111,7 +112,7 @@ describe("useLearningWindow opening", () => {
   it("still opens for someone who closed the app and came back hours later", async () => {
     // The regression. Previously anything past the 5 minute ceiling returned
     // early, so finishing setup and closing the app meant the first summary
-    // never happened — no banner, no empty state, no event, permanently.
+    // never happened — no summary and no event, permanently.
     getOnboardingStatus.mockResolvedValue(
       okStatus(completedAgo(3 * 60 * 60 * 1_000)),
     );
@@ -119,6 +120,7 @@ describe("useLearningWindow opening", () => {
     const { result } = renderHook(() => useLearningWindow());
 
     await waitFor(() => expect(result.current.phase).toBe("learning"));
+    expect(result.current.showProgress).toBe(false);
     expect(startedEvents()[0][1]).toEqual({ opening: "late" });
   });
 
@@ -132,6 +134,7 @@ describe("useLearningWindow opening", () => {
 
     await waitFor(() => expect(result.current.phase).toBe("learning"));
     expect(result.current.startedAt).not.toBe(completedAt);
+    expect(result.current.showProgress).toBe(false);
     const anchoredMs = Date.parse(result.current.startedAt!);
     expect(Date.now() - anchoredMs).toBeLessThan(LEARNING_WINDOW_CEILING_MS);
   });
@@ -272,13 +275,10 @@ describe("useLearningWindow writing phase", () => {
   });
 });
 
-describe("useLearningWindow cross-webview reset", () => {
-  // The reported bug. `resetLearningWindow` in Settings clears only the `home`
-  // partition, but the banner also renders in the separate `chat` webview.
-  // That copy kept a terminal phase and a spent seed claim, and the opening
-  // effect returns immediately unless the phase is `idle` — so resetting
-  // onboarding never brought the banner back in that window.
-  it("returns a settled window to idle when another webview resets", async () => {
+describe("useLearningWindow reset", () => {
+  // Settings and the first-summary owner share Home's storage partition. The
+  // event is still required to move the already-mounted hook back to idle.
+  it("returns a settled mounted window to idle when onboarding resets", async () => {
     getOnboardingStatus.mockResolvedValue(okStatus(completedAgo(30_000)));
 
     const { result } = renderHook(() => useLearningWindow());
@@ -297,7 +297,7 @@ describe("useLearningWindow cross-webview reset", () => {
     // reopens on the spot and the test is asserting the wrong thing.
     getOnboardingStatus.mockResolvedValue(okStatus(null));
 
-    // The broadcast a reset in another webview would deliver here.
+    // The broadcast the Settings action delivers to the mounted Home hook.
     act(() => {
       for (const handler of emitted) handler({ payload: null });
     });

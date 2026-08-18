@@ -9,7 +9,7 @@
  * shared WebDriver session.
  *
  * Why only the banner (and not a real check / download / install):
- *   - The WDIO suite drives a `--debug --features e2e` build, and
+ *   - The WDIO suite drives a `--profile debug-dev --features e2e` build, and
  *     `check_for_updates` early-returns under `cfg!(debug_assertions)`
  *     (src-tauri/src/updates.rs) — so the real Tauri-updater check never runs.
  *   - That debug build also ships empty updater `endpoints` + `pubkey`

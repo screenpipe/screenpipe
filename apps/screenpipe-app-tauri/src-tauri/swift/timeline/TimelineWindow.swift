@@ -107,6 +107,41 @@ struct TimelineKeyEvent: Sendable, Equatable {
     }
 }
 
+enum TimelineKeyFocusOwner {
+    case timeline
+    case attachedHost
+    case other
+}
+
+/// Decides whether a local app key event belongs to the Timeline.
+///
+/// An attached Timeline is a native child over a Tauri host. Opening that host
+/// or returning from Search makes the host key before the child receives a
+/// click. Plain arrows still belong to the visible Timeline in that state, but
+/// no other shortcut does: Escape, Space and text-entry keys remain with the
+/// host. Because this policy is used by a local event monitor, another app's
+/// events never enter it.
+enum TimelineKeyFocusPolicy {
+    static func shouldHandle(
+        _ event: TimelineKeyEvent,
+        focusOwner: TimelineKeyFocusOwner,
+        attachedUnderlay: Bool,
+        editingText: Bool
+    ) -> Bool {
+        guard !editingText else { return false }
+        switch focusOwner {
+        case .timeline:
+            return true
+        case .attachedHost:
+            guard !attachedUnderlay, !event.command, !event.control else { return false }
+            return event.keyCode == TimelineKeyEvent.leftArrow
+                || event.keyCode == TimelineKeyEvent.rightArrow
+        case .other:
+            return false
+        }
+    }
+}
+
 /// The keyboard table from the webview, in one place.
 @MainActor
 struct TimelineKeyHandler {
@@ -935,13 +970,31 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
             closeOnEscape: closeOnEscape
         )
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, self.window?.isKeyWindow == true else { return event }
-            // Never steal keys from a text field; the tag input lives in this window.
-            if self.window?.firstResponder is NSTextView { return event }
+            guard let self else { return event }
             let key = TimelineKeyEvent(event)
+            let editingText = event.window?.firstResponder is NSTextView
+                || self.window?.firstResponder is NSTextView
+            guard TimelineKeyFocusPolicy.shouldHandle(
+                key,
+                focusOwner: self.keyFocusOwner(for: event),
+                attachedUnderlay: self.attachedUnderlay,
+                editingText: editingText
+            ) else { return event }
             let consumed = MainActor.assumeIsolated { handler.handle(key) }
             return consumed ? nil : event
         }
+    }
+
+    /// Local monitors see events for every screenpipe window. Route only the
+    /// key native child, or a key host that owns this attached child. Search,
+    /// Chat, another screenpipe window, and external apps remain `.other`.
+    private func keyFocusOwner(for event: NSEvent) -> TimelineKeyFocusOwner {
+        guard let timeline = window else { return .other }
+        if timeline.isKeyWindow { return .timeline }
+        guard let host = timeline.parent,
+              host.isKeyWindow,
+              event.window === host else { return .other }
+        return .attachedHost
     }
 
     private func removeKeyMonitor() {

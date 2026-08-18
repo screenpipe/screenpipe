@@ -139,8 +139,14 @@ export function StandaloneChat({
   className,
   hideInlineHistory,
   sidebarCollapsed,
+  firstRunLearningEnabled = false,
 }: {
   className?: string;
+  /**
+   * Makes this webview the single owner of the post-setup summary lifecycle.
+   * Home opts in; the separate Chat window stays read-only for that state.
+   */
+  firstRunLearningEnabled?: boolean;
   /** When true, the in-panel History button + slide-in panel are hidden.
    *  Set this from the home page where the chat list lives in the main
    *  app sidebar (avoids two history UIs side-by-side). The overlay
@@ -1996,6 +2002,7 @@ export function StandaloneChat({
         </div>
       ) : null}
       <ChatMainPane
+        firstRunLearningEnabled={firstRunLearningEnabled}
         firstRunAiPreset={firstRunAiPreset}
         firstRunUserToken={settings?.user?.token ?? null}
         firstRunAiSettingsLoaded={isSettingsLoaded}

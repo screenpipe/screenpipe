@@ -51,7 +51,7 @@ before you begin:
    ```bash
    cd apps/screenpipe-app-tauri
    bun install
-   bun tauri build --features metal
+   bun run build:tauri:dev
    ```
 
 #### sharing downloaded dependencies across worktrees
@@ -368,31 +368,16 @@ especially useful if you've done new database migrations and want to avoid break
 
 on macos, prefer `$TMPDIR` (a per-user temp dir) over `/tmp` — the system periodically sweeps `/tmp` and can wipe your dev data-dir mid-session, while `$TMPDIR` sticks around for the session. the `${TMPDIR:-/tmp}` form above uses it when set and falls back to `/tmp` otherwise.
 
-if you keep prod running 24/7 and want this loop scripted — pull, run dev, put prod back when you're done — [`scripts/dev`](scripts/dev) does it both ways: the cli on its own isolated dir+port (same idea as above) or the app via `bun tauri dev`. it also documents the apple-silicon build gotchas (full xcode, metal toolchain, `pre_build.js`). optional; macos only.
+if you keep prod running 24/7 and want this loop scripted — pull, run dev, put prod back when you're done — [`scripts/dev`](scripts/dev) does it both ways: the cli on its own isolated dir+port (same idea as above) or the app via `bun run dev:tauri`. it also documents the apple-silicon build gotchas (full xcode, metal toolchain, `pre_build.js`). optional; macos only.
 
 ### macos: keeping screen/mic/accessibility permissions across dev rebuilds
 
-macos ties tcc permissions — screen recording, microphone, accessibility — to the app's *code signature*. an unsigned or ad-hoc-signed build gets a fresh signature on every rebuild, so macos sees each rebuild as a new app and re-prompts — or silently drops the permission, which shows up as "capture suddenly returns nothing" after a rebuild.
-
-`apps/screenpipe-app-tauri/scripts/build_macos.sh` already signs the app (with an `Apple Development:` cert). if you don't have an apple developer cert, you can get the same permission-persistence with a **self-signed** code-signing cert:
-
-1. create the cert once — in Keychain Access: Certificate Assistant → Create a Certificate → name it e.g. `screenpipe dev`, Identity Type: **Self-Signed Root**, Certificate Type: **Code Signing** → Create. confirm it's usable:
-
-   ```bash
-   security find-identity -v -p codesigning
-   ```
-
-2. build, then sign with your identity — same flow as `scripts/build_macos.sh`, just your cert:
-
-   ```bash
-   cd apps/screenpipe-app-tauri
-   bun tauri build --no-sign --features metal
-   APP="src-tauri/target/release/bundle/macos/screenpipe - Development.app"
-   xattr -cr "$APP"
-   codesign --force --deep --sign "screenpipe dev" "$APP"
-   ```
-
-3. grant the permissions once. since the signature is stable across rebuilds, macos won't re-prompt and capture won't silently break — as long as you keep signing with the same identity.
+normal development does not package or sign an app. use `bun run dev:tauri` or
+`bun run build:tauri:dev`; do not add signing flags to either command. only use
+`apps/screenpipe-app-tauri/scripts/build_macos.sh` when a test specifically needs
+a stable signed `.app` identity for tcc permissions. the canonical commands and
+the reason for this separation are in
+[`docs/macos-dev-builds.md`](docs/macos-dev-builds.md).
 
 ### debugging github action
 

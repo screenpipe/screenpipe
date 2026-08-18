@@ -256,6 +256,9 @@ pub(crate) enum VisionReason {
     CaptureStalled,
     /// Capture is permitted and expected, but never produced a first frame.
     NotStarted,
+    /// Linux pixel capture is fresh, but no Tesseract binary is resolvable, so
+    /// screenshots are being stored without searchable OCR text.
+    OcrUnavailable,
 }
 
 impl VisionReason {
@@ -270,6 +273,7 @@ impl VisionReason {
             Self::PermissionDenied => "permission_denied",
             Self::CaptureStalled => "capture_stalled",
             Self::NotStarted => "not_started",
+            Self::OcrUnavailable => "ocr_unavailable",
         }
     }
 
@@ -278,7 +282,7 @@ impl VisionReason {
     pub(crate) fn is_fault(self) -> bool {
         matches!(
             self,
-            Self::PermissionDenied | Self::CaptureStalled | Self::NotStarted
+            Self::PermissionDenied | Self::CaptureStalled | Self::NotStarted | Self::OcrUnavailable
         )
     }
 
@@ -312,6 +316,9 @@ impl VisionReason {
             Self::NotStarted => {
                 Some("Screen capture has not produced a frame yet. If this persists, please send logs from the Help section.")
             }
+            Self::OcrUnavailable => Some(
+                "Screen text capture is unavailable because Tesseract could not be found. Update or reinstall screenpipe; on Debian/Ubuntu, run `sudo apt install tesseract-ocr`, then restart screenpipe.",
+            ),
         }
     }
 }
@@ -330,6 +337,24 @@ pub(crate) fn classify_vision_reason(
     permission_granted: bool,
     frame_status: &str,
 ) -> VisionReason {
+    classify_vision_reason_with_ocr(
+        vision_disabled,
+        displays_expected,
+        screenshot_state,
+        permission_granted,
+        frame_status,
+        true,
+    )
+}
+
+pub(crate) fn classify_vision_reason_with_ocr(
+    vision_disabled: bool,
+    displays_expected: bool,
+    screenshot_state: screenpipe_screen::ScreenshotCaptureState,
+    permission_granted: bool,
+    frame_status: &str,
+    ocr_available: bool,
+) -> VisionReason {
     use screenpipe_screen::ScreenshotCaptureState as S;
 
     if vision_disabled {
@@ -346,6 +371,7 @@ pub(crate) fn classify_vision_reason(
     // Only now can a missing frame be a real fault — and permission is only
     // the answer when the permission monitor actually says so.
     match frame_status {
+        "ok" | "disabled" if !ocr_available => VisionReason::OcrUnavailable,
         "ok" | "disabled" => VisionReason::Ok,
         _ if !permission_granted => VisionReason::PermissionDenied,
         "not_started" => VisionReason::NotStarted,
@@ -590,13 +616,14 @@ pub struct HealthCheckResponse {
     /// `ok`, `disabled_by_setting`, `no_displays_expected`,
     /// `screenshots_disabled_by_config`,
     /// `screenshots_disabled_by_power_profile`, `permission_denied`,
-    /// `capture_stalled`, `not_started`.
+    /// `capture_stalled`, `not_started`, `ocr_unavailable`.
     ///
     /// `frame_status` alone collapses "screenpipe turned pixels off" and "the
     /// OS is blocking capture" into the same value, which is how #5808 sent
     /// users to the permission screen for a permission that was already
     /// granted. Clients should prefer this field when choosing what to tell
-    /// the user; only `permission_denied` warrants permission guidance.
+    /// the user; only `permission_denied` warrants permission guidance, while
+    /// `ocr_unavailable` means fresh frames are not yielding searchable text.
     pub vision_reason: String,
     /// Capture-loop stage last entered, and how long ago. A frozen loop is the
     /// only thing that can make `frame_status` stale (it is a max of the DB
@@ -1417,12 +1444,17 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
 
     // Why vision is in that state, in terms the user can act on. Permission is
     // only ever named when the permission monitor's last known result says so.
-    let vision_reason = classify_vision_reason(
+    #[cfg(target_os = "linux")]
+    let ocr_available = screenpipe_screen::tesseract_available();
+    #[cfg(not(target_os = "linux"))]
+    let ocr_available = true;
+    let vision_reason = classify_vision_reason_with_ocr(
         state.vision_disabled,
         vision_capture_expected,
         state.vision_metrics.screenshot_capture_state(),
         crate::permission_monitor::screen_recording_granted(),
         frame_status,
+        ocr_available,
     );
 
     // Cross-check: if audio is enabled, uptime > 2 min, but zero chunks were ever
@@ -1608,6 +1640,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
             || audio_status == "no_input_device"
             || audio_status == "waiting_for_meeting")
         && !vision_degraded
+        && !vision_reason.is_fault()
         && !audio_degraded
     {
         (
@@ -1621,7 +1654,7 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         // An intentional pixel pause is not an unhealthy system: it is the app
         // doing what it was configured to do. Reporting it as a fault is what
         // dragged users to the permission screen in #5808.
-        if frame_status != "ok" && frame_status != "disabled" && vision_reason.is_fault() {
+        if vision_reason.is_fault() {
             unhealthy_systems.push("vision");
         }
         if vision_degraded && !unhealthy_systems.contains(&"vision") {
@@ -2161,6 +2194,43 @@ mod vision_reason_tests {
     const GRANTED: bool = true;
     const DENIED: bool = false;
 
+    #[test]
+    fn fresh_linux_frames_with_missing_ocr_are_degraded() {
+        let reason = classify_vision_reason_with_ocr(false, true, S::Enabled, GRANTED, "ok", false);
+        assert_eq!(reason, VisionReason::OcrUnavailable);
+        assert!(reason.is_fault());
+        let instruction = reason.instruction().expect("actionable OCR recovery");
+        assert!(instruction.contains("tesseract-ocr"));
+        assert!(instruction.to_lowercase().contains("restart"));
+    }
+
+    #[test]
+    fn available_ocr_and_intentional_pauses_keep_existing_reasons() {
+        assert_eq!(
+            classify_vision_reason_with_ocr(false, true, S::Enabled, GRANTED, "ok", true),
+            VisionReason::Ok,
+        );
+        assert_eq!(
+            classify_vision_reason_with_ocr(true, true, S::Enabled, GRANTED, "ok", false),
+            VisionReason::DisabledBySetting,
+        );
+        assert_eq!(
+            classify_vision_reason_with_ocr(
+                false,
+                true,
+                S::DisabledByConfig,
+                GRANTED,
+                "stale",
+                false,
+            ),
+            VisionReason::ScreenshotsDisabledByConfig,
+        );
+        assert_eq!(
+            classify_vision_reason_with_ocr(false, true, S::Enabled, DENIED, "stale", false),
+            VisionReason::PermissionDenied,
+        );
+    }
+
     /// The reported case: permission is fine, screenpipe disabled screenshots
     /// via config, capture goes stale because no pixel frame ever lands.
     #[test]
@@ -2206,6 +2276,7 @@ mod vision_reason_tests {
             VisionReason::ScreenshotsDisabledByPowerProfile,
             VisionReason::CaptureStalled,
             VisionReason::NotStarted,
+            VisionReason::OcrUnavailable,
         ] {
             let text = other.instruction().unwrap_or("").to_lowercase();
             assert!(
@@ -2284,6 +2355,7 @@ mod vision_reason_tests {
             VisionReason::PermissionDenied,
             VisionReason::CaptureStalled,
             VisionReason::NotStarted,
+            VisionReason::OcrUnavailable,
         ];
         let names: std::collections::HashSet<_> = all.iter().map(|r| r.as_str()).collect();
         assert_eq!(names.len(), all.len(), "reason names must be unique");

@@ -530,6 +530,33 @@ struct HealthCheckResponse {
     schedule_paused: bool,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct OcrUnavailableLatch {
+    unavailable: bool,
+}
+
+impl OcrUnavailableLatch {
+    /// Returns true only on a transition into deterministic OCR unavailability.
+    /// `None` is an older engine with no such reason and resets the latch.
+    fn observe(&mut self, vision_reason: Option<&str>) -> bool {
+        let unavailable = vision_reason == Some("ocr_unavailable");
+        let entered = unavailable && !self.unavailable;
+        self.unavailable = unavailable;
+        entered
+    }
+}
+
+fn ocr_unavailable_notification_payload() -> serde_json::Value {
+    serde_json::json!({
+        "id": "ocr_unavailable",
+        "type": "ocr_unavailable",
+        "title": "screen text capture unavailable",
+        "body": "screenpipe is recording screenshots without searchable text. update or reinstall screenpipe; on Debian/Ubuntu, run `sudo apt install tesseract-ocr`, then restart screenpipe.",
+        "actions": [],
+        "autoDismissMs": 0
+    })
+}
+
 fn audio_capture_status_from_health(
     health_result: &Result<HealthCheckResponse>,
 ) -> Option<AudioCaptureStatus> {
@@ -1317,6 +1344,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
     // the notification setting (which defaults off).
     let mut stall_reported = false;
     let mut vision_progress = VisionProgressTracker::default();
+    let mut ocr_unavailable_latch = OcrUnavailableLatch::default();
     let mut last_audio_notification: Option<Instant> = None;
     let mut last_vision_notification: Option<Instant> = None;
     let mut wake_reset_done = false;
@@ -1343,6 +1371,14 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
 
             let theme = dark_light::detect().unwrap_or(Mode::Dark);
             let health_result = check_health(&app, &client).await;
+
+            if matches!(
+                &health_result,
+                Ok(health) if ocr_unavailable_latch.observe(health.vision_reason.as_deref())
+            ) {
+                warn!("screen text capture unavailable, showing OCR capability notification");
+                let _ = show_ocr_unavailable_notification(&app).await;
+            }
 
             // Track consecutive failures (connection errors) and unhealthy responses separately.
             // Connection errors = server unreachable (crash, restart, port conflict).
@@ -2048,6 +2084,15 @@ async fn show_capture_stall_notification(app: &tauri::AppHandle, system: &str) -
         .map_err(|e| anyhow::anyhow!(e))
 }
 
+async fn show_ocr_unavailable_notification(app: &tauri::AppHandle) -> Result<()> {
+    crate::commands::show_notification_panel(
+        app.clone(),
+        ocr_unavailable_notification_payload().to_string(),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!(e))
+}
+
 /// Checks the health of the sidecar by making a request to its health endpoint.
 /// Returns an error if the sidecar is not running or not responding.
 async fn check_health(
@@ -2092,6 +2137,29 @@ async fn check_health(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ocr_unavailable_alert_emits_on_entry_and_reentry_only() {
+        let mut latch = OcrUnavailableLatch::default();
+        assert!(!latch.observe(None));
+        assert!(!latch.observe(Some("future_reason")));
+        assert!(latch.observe(Some("ocr_unavailable")));
+        assert!(!latch.observe(Some("ocr_unavailable")));
+        assert!(!latch.observe(Some("ok")));
+        assert!(latch.observe(Some("ocr_unavailable")));
+    }
+
+    #[test]
+    fn ocr_unavailable_alert_is_persistent_actionable_and_has_no_restart_action() {
+        let payload = ocr_unavailable_notification_payload();
+        assert_eq!(payload["id"], "ocr_unavailable");
+        assert_eq!(payload["autoDismissMs"], 0);
+        assert_eq!(payload["actions"], serde_json::json!([]));
+        let body = payload["body"].as_str().unwrap();
+        assert!(body.contains("sudo apt install tesseract-ocr"));
+        assert!(body.contains("restart screenpipe"));
+        assert!(!payload.to_string().contains("restart_recording"));
+    }
 
     #[test]
     fn cpu_compat_mode_round_trips_through_snapshot() {
@@ -2177,6 +2245,20 @@ mod tests {
 
     fn healthy_health() -> HealthCheckResponse {
         make_healthy_response().expect("healthy fixture")
+    }
+
+    #[test]
+    fn ocr_unavailable_does_not_enter_capture_restart_signals() {
+        let mut health = healthy_health();
+        health.status = "degraded".to_string();
+        health.frame_status = Some("ok".to_string());
+        health.audio_status = Some("ok".to_string());
+        health.vision_reason = Some("ocr_unavailable".to_string());
+
+        let signals = capture_failure_signals(&health, &mut VisionProgressTracker::default());
+        assert!(!signals.vision);
+        assert!(!signals.audio);
+        assert!(!signals.persistence);
     }
 
     #[test]

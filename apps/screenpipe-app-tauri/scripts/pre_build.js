@@ -11,6 +11,11 @@ import { setupOpenBlas } from './setup_openblas.js'
 import { downloadFile, find7z } from './find_tools.js'
 import { ensureCachedDirectory, ensureCachedFile } from './native_dependency_cache.js'
 
+if (process.env.SCREENPIPE_NATIVE_PREBUILD_COMPLETE === '1') {
+	console.log('native prebuild already completed by the system build queue')
+	process.exit(0)
+}
+
 const originalCWD = process.cwd()
 // Change CWD to src-tauri
 process.chdir(path.join(__dirname, '../src-tauri'))

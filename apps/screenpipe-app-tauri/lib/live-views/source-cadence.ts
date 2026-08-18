@@ -50,6 +50,25 @@ export type SourceCadencePlan = {
  *   needs, so the shortest period still updates.
  * - A task needing no change is omitted, so callers issue no request at all.
  */
+/**
+ * Body for `POST /pipes/:id/config` that applies a plan.
+ *
+ * The fields go at the top level. The handler flattens the request body into
+ * its update map, so wrapping them in a `config` envelope arrives as a single
+ * unrecognized key, gets filed under free-form user config, and still answers
+ * `{"success": true}` while the schedule stays exactly as it was. That failure
+ * is invisible from the response, so the shape is pinned by a test here rather
+ * than left inline at the call site.
+ */
+export function sourceCadenceConfigBody(
+  plan: SourceCadencePlan,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (plan.schedule) body.schedule = plan.schedule;
+  if (plan.enable) body.enabled = true;
+  return body;
+}
+
 export function planSourceCadence(
   bound: readonly { slots: readonly BrainViewSlot[]; timeRange: BrainViewTimeRange }[],
   snapshots: readonly PipeScheduleSnapshot[],

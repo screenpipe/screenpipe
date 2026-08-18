@@ -175,7 +175,7 @@ jobs:
         env:
           NEXT_PUBLIC_SCREENPIPE_E2E: "true"
         with:
-          args: "--no-sign --debug --no-bundle -- --features e2e"
+          args: "--no-bundle -- --profile debug-dev --features e2e"
           projectPath: "./apps/screenpipe-app-tauri"
           tauriScript: bunx tauri -v
 
@@ -195,7 +195,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          RAW_BIN="$(realpath apps/screenpipe-app-tauri/src-tauri/target/debug/screenpipe-app)"
+          RAW_BIN="$(realpath apps/screenpipe-app-tauri/src-tauri/target/debug-dev/screenpipe-app)"
           BUNDLE_ID="$(python3 -c "import json; print(json.load(open('apps/screenpipe-app-tauri/src-tauri/tauri.conf.json'))['identifier'])")"
           APP_BUNDLE="$RUNNER_TEMP/screenpipe-intel-smoke.app"
           .github/scripts/macos/wrap-binary-as-app-bundle.sh "$RAW_BIN" "$BUNDLE_ID" "screenpipe-app" "$APP_BUNDLE"
@@ -206,7 +206,7 @@ jobs:
         shell: bash
         env:
           APP_BUNDLE: ${{ steps.wrap_bundle.outputs.app_bundle }}
-        # --adhoc-sign: this is an unsigned --no-sign dev build, so
+        # --adhoc-sign: this is an unbundled raw dev binary, so
         # tcc-grant.sh needs to sign it itself before it can compute a csreq.
         # Whether this actually took effect is confirmed later from the
         # app's own log line, not from this command's own success/failure —

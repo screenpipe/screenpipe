@@ -12,7 +12,6 @@ import { Button } from "@/components/ui/button";
 import {
   formatCountdown,
   type FirstRunCapturedApp,
-  type FirstRunEmptyReason,
 } from "@/lib/first-run/learning-window";
 import { appIconUrl } from "@/lib/first-run/recent-activity";
 import { AgentHandoffPicker } from "@/components/first-run/agent-handoff-picker";
@@ -21,29 +20,6 @@ import {
   useLearningWindow,
   type LearningWindowOptions,
 } from "@/lib/first-run/use-learning-window";
-
-/**
- * Why the window closed with nothing, in the user's terms.
- *
- * The engine already distinguishes these cases, so we say which one happened
- * instead of a single vague "nothing yet" — the fix is different for each.
- */
-const EMPTY_COPY: Record<FirstRunEmptyReason, string> = {
-  not_recording:
-    "Recording is not running, so there was nothing to read. Start it and this fills in on its own.",
-  no_capture_in_range:
-    "Recording is on but nothing was captured yet. This usually means the screen did not change much.",
-  empty_but_recording:
-    "Recording is on and still warming up. Nothing has been indexed yet.",
-  no_frames_captured:
-    "Recording is on but no screens were captured in that window. If this keeps happening, check Screen Recording permission.",
-  below_frame_floor:
-    "Only a few screens were captured — not enough to say anything true about your work yet. Keep working and this fills in.",
-  single_app_below_floor:
-    "Everything captured came from a single app, which is too thin to summarize. This fills in as you move between apps.",
-  unknown:
-    "Nothing was captured in that window. Screenpipe keeps reading in the background as you work.",
-};
 
 function CapturedAppIcon({ app }: { app: FirstRunCapturedApp }) {
   const [failed, setFailed] = React.useState(false);
@@ -77,16 +53,20 @@ function CapturedAppIcon({ app }: { app: FirstRunCapturedApp }) {
  * on the surface the user lands on after onboarding.
  */
 export function FirstRunLearningBanner(props: LearningWindowOptions = {}) {
-  const { phase, capturedApps, remainingMs, chatId, emptyReason, dismiss } =
+  const { phase, capturedApps, remainingMs, chatId, showProgress, dismiss } =
     useLearningWindow(props);
   const { targets: handoffTargets, hint: handoffHint, askAgent } =
     useAgentHandoff(phase === "ready");
 
+  // Only show progress when setup just caused it, and only show a terminal
+  // outcome when there is something useful to open. Empty is an internal
+  // result/telemetry state, not a user task or an error they asked to inspect.
   if (
-    phase !== "learning" &&
-    phase !== "writing" &&
     phase !== "ready" &&
-    phase !== "empty"
+    !(
+      showProgress &&
+      (phase === "learning" || phase === "writing")
+    )
   ) {
     return null;
   }
@@ -110,7 +90,7 @@ export function FirstRunLearningBanner(props: LearningWindowOptions = {}) {
     <section
       data-testid="first-run-learning-banner"
       data-phase={phase}
-      className="border border-border bg-background p-4"
+      className="mx-auto mb-4 w-full max-w-3xl border border-border bg-background p-4"
     >
       {phase === "learning" && (
         <div className="flex flex-col gap-2">
@@ -225,31 +205,6 @@ export function FirstRunLearningBanner(props: LearningWindowOptions = {}) {
               {handoffHint}
             </p>
           )}
-        </div>
-      )}
-
-      {phase === "empty" && (
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-medium text-foreground">
-            Nothing to summarize yet
-          </p>
-          <p
-            className="text-[11px] leading-relaxed text-muted-foreground"
-            data-testid="first-run-empty-reason"
-          >
-            {EMPTY_COPY[emptyReason ?? "unknown"]}
-          </p>
-          <div className="pt-1">
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 text-[11px]"
-              data-testid="first-run-dismiss-empty"
-              onClick={() => dismiss()}
-            >
-              Got it
-            </Button>
-          </div>
         </div>
       )}
     </section>

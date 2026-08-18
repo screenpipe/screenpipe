@@ -862,12 +862,14 @@ jobs:
           for i in 1 2 3; do
             curl -fsSL https://github.com/DanielMYT/tesseract-static/releases/download/tesseract-5.5.0/tesseract -o "$PKG_BIN/tesseract" && break || sleep $((5 * i))
           done
+          echo "102f39b771904f529fb32f66d746d69bf1cbb11461ebe939c336afbbecabd725  $PKG_BIN/tesseract" | sha256sum -c -
           chmod +x "$PKG_BIN/tesseract"
           [ -s "$PKG_BIN/tesseract" ] || { echo "ERROR: bundled tesseract missing/empty"; exit 1; }
           mkdir -p "$PKG_BIN/tessdata"
           for i in 1 2 3; do
             curl -fsSL https://github.com/tesseract-ocr/tessdata_fast/raw/4.1.0/eng.traineddata -o "$PKG_BIN/tessdata/eng.traineddata" && break || sleep $((5 * i))
           done
+          echo "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2  $PKG_BIN/tessdata/eng.traineddata" | sha256sum -c -
           [ -s "$PKG_BIN/tessdata/eng.traineddata" ] || { echo "ERROR: bundled eng.traineddata missing/empty"; exit 1; }
           tar -czf screenpipe-${{ env.VERSION }}-${{ matrix.target }}.tar.gz -C screenpipe-${{ env.VERSION }}-${{ matrix.target }} .
 
@@ -895,6 +897,9 @@ jobs:
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
 
       - name: Set version
         run: |
@@ -934,10 +939,11 @@ jobs:
           chmod +x packages/cli/screenpipe-darwin-x64/bin/screenpipe
 
           # Linux x64
-          mkdir -p packages/cli/screenpipe-linux-x64/bin
-          cd artifacts/screenpipe-linux-x86_64-unknown-linux-gnu && tar -xzf screenpipe-*.tar.gz && cp bin/screenpipe ../../packages/cli/screenpipe-linux-x64/bin/ && cd ../..
-          chmod +x packages/cli/screenpipe-linux-x64/bin/screenpipe
-          test -f packages/cli/screenpipe-linux-x64/bin/screenpipe
+          mkdir -p /tmp/linux-x64
+          tar -xzf artifacts/screenpipe-linux-x86_64-unknown-linux-gnu/screenpipe-*.tar.gz -C /tmp/linux-x64
+          bun packages/cli/npm-e2e/cli.ts prepare-linux-release \
+            --source-bin /tmp/linux-x64/bin \
+            --package-root packages/cli/screenpipe-linux-x64
 
           # Windows x64
           mkdir -p packages/cli/screenpipe-win32-x64/bin
@@ -961,6 +967,13 @@ jobs:
             require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
           cd ../../..
+
+      - name: Validate bundled Linux OCR payload
+        run: |
+          LINUX_PACKAGE=packages/cli/screenpipe-linux-x64
+          bun packages/cli/npm-e2e/cli.ts validate-linux-package --package-root "$LINUX_PACKAGE"
+          "$LINUX_PACKAGE/bin/tesseract" --version
+          TESSDATA_PREFIX="$LINUX_PACKAGE/bin/tessdata" "$LINUX_PACKAGE/bin/tesseract" --list-langs | grep -qx eng
 
       # Publish helper: only swallow the *specific* "version already exists"
       # error from npm. Anything else (auth failure, network, validation) must
@@ -1007,6 +1020,14 @@ jobs:
               status=$(curl -sS -o /dev/null -w "%{http_code}" -L -I "$url" || true)
               if [[ "$status" == "200" ]]; then
                 echo "::notice::$pkg@${{ env.VERSION }} tarball is fetchable"
+                if [[ "$pkg" == "@screenpipe/cli-linux-x64" ]]; then
+                  verify_dir=$(mktemp -d)
+                  curl -fsSL "$url" -o "$verify_dir/package.tgz"
+                  tar -xzf "$verify_dir/package.tgz" -C "$verify_dir"
+                  bun packages/cli/npm-e2e/cli.ts validate-linux-package \
+                    --package-root "$verify_dir/package"
+                  rm -rf "$verify_dir"
+                fi
                 ok=true
                 break
               fi

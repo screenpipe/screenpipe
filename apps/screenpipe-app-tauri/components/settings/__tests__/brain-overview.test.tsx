@@ -1178,18 +1178,31 @@ describe("BrainOverview", () => {
 
     // Enabling alone is not enough: a `manual` schedule leaves the scheduler
     // with nothing to fire, so the block would freeze again after this refresh.
+    //
+    // The fields go at the top level. `POST /pipes/:id/config` flattens the
+    // request body into its update map, so a `config` envelope arrives as one
+    // unrecognized key, gets filed under free-form user config, and still
+    // answers `{"success": true}` with the schedule untouched. This assertion
+    // used to accept the envelope, which is how the write shipped applying
+    // nothing at all while every refresh reported success.
     await waitFor(() =>
       expect(
         calls.some((call) => {
-          const config = (call.body as { config?: Record<string, unknown> })?.config;
+          const body = call.body as Record<string, unknown> | null;
           return (
             call.path === "/pipes/daily-summary/config" &&
-            config?.schedule === "every 1h" &&
-            config?.enabled === true
+            body?.schedule === "every 1h" &&
+            body?.enabled === true
           );
         }),
       ).toBe(true),
     );
+    // No envelope: a nested `config` key would be silently ignored by the API.
+    expect(
+      calls.every(
+        (call) => !(call.body as { config?: unknown } | null)?.config,
+      ),
+    ).toBe(true);
     const configIndex = calls.findIndex((call) => call.path.endsWith("/config"));
     const runIndex = calls.findIndex((call) => call.path.endsWith("/run"));
     expect(configIndex).toBeGreaterThanOrEqual(0);

@@ -106,7 +106,15 @@ export function useLearningWindow(
         // outcome is indistinguishable from a window that never started, and
         // "never started" was by far the most common outcome.
         posthog.capture("first_run_learning_started", { opening: opening.kind });
-        setState(beginLearningWindow(opening.anchor));
+        // A same-session handoff can explain its short wait because setup just
+        // caused it. A retry on a later visit runs silently and only surfaces
+        // if it produces a summary worth opening.
+        setState(
+          beginLearningWindow(
+            opening.anchor,
+            opening.kind === "immediate",
+          ),
+        );
       } catch {
         // Without a status read there is no window; the app is unaffected.
       }
@@ -124,13 +132,9 @@ export function useLearningWindow(
   // lives in claimLearningSeed(); this only avoids a redundant round trip.
   const seedingRef = useRef(false);
 
-  // Drop this webview's copy when any webview resets onboarding.
-  //
-  // `resetLearningWindow` in Settings clears only the `home` partition. The
-  // banner also renders in the separate `chat` webview, whose copy kept its
-  // terminal phase and spent seed claim — and the opening effect above returns
-  // immediately unless the phase is `idle`, so that banner never came back no
-  // matter how many times setup was replayed.
+  // Reset the mounted Home owner when Settings resets onboarding. The storage
+  // write and this hook share a webview, but React state still needs the event
+  // to observe the external reset without waiting for a remount.
   useEffect(() => {
     const unlisten = listen(LEARNING_WINDOW_RESET_EVENT, () => {
       resetLearningWindow();
@@ -259,8 +263,8 @@ export function useLearningWindow(
       }
 
       if (!chatId) {
-        // Fall back to the visible empty state rather than a dead "done" the
-        // user cannot act on.
+        // Settle without surfacing an internal write failure. The event and
+        // stored reason preserve diagnosis; there is no result to offer.
         setState(markLearningEmpty("unknown"));
         return;
       }

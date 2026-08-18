@@ -7,7 +7,7 @@ members = ["wer-dump-helper"]
 
 [package]
 name = "screenpipe-app"
-version = "2.6.57"
+version = "2.6.60"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -420,55 +420,21 @@ debug = false
 opt-level = 0
 debug = false
 
-# Kept for explicit invocations; default non-release builds use these settings
-# through the `dev` profile above.
-[profile.dev-debug]
+# Deterministic fastest native-app profile. Avoid generating first-party
+# debuginfo; stripping it after generation would only add link work. Keep
+# incremental off so builds do not depend on per-worktree incremental state.
+[profile.debug-dev]
 inherits = "dev"
-debug = true
-split-debuginfo = "packed"
+debug = false
+codegen-units = 256
 incremental = false
 
-[profile.dev-debug.package."*"]
+[profile.debug-dev.package."*"]
 opt-level = 2
 debug = false
 
-# Preserve complete debugging across the first-party runtime
-# stack without paying for third-party dependency symbols.
-[profile.dev-debug.package.screenpipe-a11y]
-debug = true
-[profile.dev-debug.package.screenpipe-audio]
-debug = true
-[profile.dev-debug.package.screenpipe-capture]
-debug = true
-[profile.dev-debug.package.screenpipe-config]
-debug = true
-[profile.dev-debug.package.screenpipe-connect]
-debug = true
-[profile.dev-debug.package.screenpipe-core]
-debug = true
-[profile.dev-debug.package.screenpipe-db]
-debug = true
-[profile.dev-debug.package.screenpipe-engine]
-debug = true
-[profile.dev-debug.package.screenpipe-events]
-debug = true
-[profile.dev-debug.package.screenpipe-redact]
-debug = true
-[profile.dev-debug.package.screenpipe-resource]
-debug = true
-[profile.dev-debug.package.screenpipe-screen]
-debug = true
-[profile.dev-debug.package.screenpipe-secrets]
-debug = true
-[profile.dev-debug.package.screenpipe-sqlite-coordinator]
-debug = true
-[profile.dev-debug.package.screenpipe-sync]
-debug = true
-[profile.dev-debug.package.screenpipe-vault]
-debug = true
-
 # Build scripts/proc macros are not part of the shipped app, so do not retain
 # their debuginfo either.
-[profile.dev-debug.build-override]
+[profile.debug-dev.build-override]
 opt-level = 0
 debug = false

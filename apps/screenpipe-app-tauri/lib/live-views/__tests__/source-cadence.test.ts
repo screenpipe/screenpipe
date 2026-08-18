@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   liveViewCadenceFor,
   planSourceCadence,
+  sourceCadenceConfigBody,
 } from "@/lib/live-views/source-cadence";
 import { parsePipeScheduleSnapshots } from "@/lib/live-views/source-status";
 import type { BrainViewSlot, BrainViewTimeRange } from "@/lib/utils/tauri";
@@ -98,5 +99,33 @@ describe("planSourceCadence", () => {
         SNAPSHOTS,
       ),
     ).toEqual([]);
+  });
+});
+
+describe("sourceCadenceConfigBody", () => {
+  // POST /pipes/:id/config flattens the request body into its update map. A
+  // `config` envelope therefore arrives as one unrecognized key, is filed under
+  // free-form user config, and still returns `{"success": true}` while the
+  // schedule stays untouched: the dashboard freezes and the refresh looks fine.
+  it("puts fields at the top level, with no config envelope", () => {
+    const body = sourceCadenceConfigBody({
+      pipeName: "time-breakdown",
+      schedule: "every 1h",
+      enable: true,
+    });
+    expect(body).toEqual({ schedule: "every 1h", enabled: true });
+    expect(body).not.toHaveProperty("config");
+  });
+
+  it("omits a schedule the task already has", () => {
+    expect(
+      sourceCadenceConfigBody({ pipeName: "day-recap", schedule: null, enable: true }),
+    ).toEqual({ enabled: true });
+  });
+
+  it("omits enabled for a task that is already on", () => {
+    expect(
+      sourceCadenceConfigBody({ pipeName: "day-recap", schedule: "every 6h", enable: false }),
+    ).toEqual({ schedule: "every 6h" });
   });
 });

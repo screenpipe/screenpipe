@@ -53,7 +53,8 @@ export type FirstRunLearningPhase =
 
 /**
  * Why the window closed without a summary. Mirrors the engine's `data_status`
- * so the UI can say what is actually wrong instead of a generic "nothing yet".
+ * for telemetry and capture diagnosis. It is intentionally not product copy:
+ * an evidence threshold miss is not a task the user asked to inspect.
  */
 export type FirstRunEmptyReason =
   | "not_recording"
@@ -79,6 +80,15 @@ export type FirstRunLearningState = {
   phase: FirstRunLearningPhase;
   /** ISO timestamp the window opened; also the summary's lower time bound. */
   startedAt: string | null;
+  /**
+   * Whether waiting/writing progress belongs in the foreground.
+   *
+   * Immediate post-setup work is expected because setup just handed the user
+   * here. A late retry is useful background work, but surfacing its spinner
+   * hours after setup makes it look like a random onboarding regression.
+   * Ready summaries are visible regardless; empty outcomes are never visible.
+   */
+  showProgress: boolean;
   /** Set once a summary lands, so a reload cannot re-seed a second chat. */
   seededAt: string | null;
   chatId: string | null;
@@ -169,6 +179,7 @@ export const MAX_TRACKED_APPS = 5;
 const EMPTY_STATE: FirstRunLearningState = {
   phase: "idle",
   startedAt: null,
+  showProgress: false,
   seededAt: null,
   chatId: null,
   emptyReason: null,
@@ -565,9 +576,7 @@ function normalize(value: unknown): FirstRunLearningState {
         startedAt,
         // Deliberately still `unknown`, not a new reason. The hook re-derives
         // the real engine reason from `pendingEmptyReport` below, exactly as
-        // the ceiling effect would have. Inventing a user-visible "timed out
-        // while closed" state here replaced an actionable reason with a
-        // shrug, which is the opposite of why these reasons exist.
+        // the ceiling effect would have, so diagnostics keep their fidelity.
         emptyReason: "unknown",
         pendingEmptyReport: true,
       };
@@ -577,14 +586,15 @@ function normalize(value: unknown): FirstRunLearningState {
   // `writing` cannot survive the process that was doing the writing. The model
   // call died with it, and the seed claim is already spent, so nothing will
   // pick the work back up. Resume to whatever actually landed: the chat if it
-  // was seeded before the app went away, otherwise a settled empty state with
-  // a dismiss button. Leaving it as `writing` would restore a spinner that can
-  // never finish, which is the failure this phase exists to remove.
+  // was seeded before the app went away, otherwise a silent settled state.
+  // Leaving it as `writing` would restore a spinner that can never finish,
+  // which is the failure this phase exists to remove.
   if (phase === "writing") {
     if (typeof state.chatId === "string" && state.chatId) {
       return {
         phase: "ready",
         startedAt,
+        showProgress: false,
         seededAt: typeof state.seededAt === "string" ? state.seededAt : null,
         chatId: state.chatId,
         emptyReason: null,
@@ -609,6 +619,10 @@ function normalize(value: unknown): FirstRunLearningState {
   return {
     phase,
     startedAt,
+    // Old persisted windows predate this field. Fail quiet on upgrade: an
+    // unknown in-flight window is more likely a late/restored run than the
+    // setup handoff that explicitly opts into progress below.
+    showProgress: state.showProgress === true,
     seededAt: typeof state.seededAt === "string" ? state.seededAt : null,
     chatId: typeof state.chatId === "string" ? state.chatId : null,
     emptyReason: state.emptyReason ?? null,
@@ -638,11 +652,15 @@ function writeLearningWindow(state: FirstRunLearningState): FirstRunLearningStat
   return state;
 }
 
-export function beginLearningWindow(startedAt = new Date().toISOString()) {
+export function beginLearningWindow(
+  startedAt = new Date().toISOString(),
+  showProgress = true,
+) {
   return writeLearningWindow({
     ...EMPTY_STATE,
     phase: "learning",
     startedAt,
+    showProgress,
   });
 }
 
@@ -726,20 +744,12 @@ export function markLearningDone(): FirstRunLearningState {
 }
 
 /**
- * Broadcast that every webview must drop its learning-window state.
+ * Tell the mounted lifecycle owner to drop its learning-window state.
  *
- * `resetLearningWindow` can only clear the partition it runs in, and this
- * state is not single-partition: the banner renders inside `StandaloneChat`,
- * which is mounted from both `/home` (the `home` webview) and `/chat` (the
- * `chat` webview), while Reset Onboarding is clicked in Settings — which
- * `show.rs` maps onto `home`. So the reset wiped home's copy and left chat's
- * untouched, still holding `phase: "done"` and a spent seed claim. The opening
- * effect bails on `phase !== "idle"`, so that webview's banner was dead for
- * good and no amount of resetting brought it back.
- *
- * Same reasoning the module already applies to `completedAt`, which is read
- * from a fact Rust owns precisely because partitions do not share. Reset needs
- * the same treatment; an event is the cheaper half of it.
+ * Reset Onboarding and the lifecycle both live in Home's storage partition,
+ * but clearing localStorage does not update an already-mounted hook. The event
+ * closes that state-observation gap immediately; a later remount reads the
+ * already-cleared storage and reaches the same result.
  */
 export const LEARNING_WINDOW_RESET_EVENT = "first-run-learning-window-reset";
 

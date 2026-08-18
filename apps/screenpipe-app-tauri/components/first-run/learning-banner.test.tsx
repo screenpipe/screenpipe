@@ -37,6 +37,7 @@ function view(over: Partial<LearningWindowView> = {}): LearningWindowView {
   return {
     phase: "learning",
     startedAt: new Date().toISOString(),
+    showProgress: true,
     seededAt: null,
     chatId: null,
     emptyReason: null,
@@ -75,6 +76,13 @@ describe("first-run learning banner", () => {
     expect(screen.getByTestId("first-run-countdown")).toHaveTextContent("1:01");
   });
 
+  it("explains foreground writing after the evidence gate clears", () => {
+    mocks.view = view({ phase: "writing", showProgress: true });
+    render(<FirstRunLearningBanner />);
+    expect(screen.getByText("Writing your summary")).toBeInTheDocument();
+    expect(screen.queryByTestId("first-run-countdown")).not.toBeInTheDocument();
+  });
+
   it("shows captured apps as live proof once any arrive", () => {
     mocks.view = view({
       capturedApps: [
@@ -111,28 +119,40 @@ describe("first-run learning banner", () => {
     expect(dismiss).toHaveBeenCalled();
   });
 
-  it("names the specific reason nothing was captured", () => {
-    mocks.view = view({ phase: "empty", emptyReason: "not_recording" });
-    render(<FirstRunLearningBanner />);
-    expect(screen.getByTestId("first-run-empty-reason")).toHaveTextContent(
-      /Recording is not running/i,
-    );
+  it("keeps every empty result out of the interface", () => {
+    for (const emptyReason of [
+      "not_recording",
+      "no_capture_in_range",
+      "empty_but_recording",
+      "no_frames_captured",
+      "below_frame_floor",
+      "single_app_below_floor",
+      "unknown",
+    ] as const) {
+      mocks.view = view({ phase: "empty", emptyReason });
+      const rendered = render(<FirstRunLearningBanner />);
+      expect(rendered.container).toBeEmptyDOMElement();
+      rendered.unmount();
+    }
   });
 
-  it("falls back to honest generic copy for an unrecognized reason", () => {
-    mocks.view = view({ phase: "empty", emptyReason: null });
-    render(<FirstRunLearningBanner />);
-    expect(screen.getByTestId("first-run-empty-reason")).toHaveTextContent(
-      /Nothing was captured/i,
-    );
+  it("keeps a late learning or writing retry in the background", () => {
+    for (const phase of ["learning", "writing"] as const) {
+      mocks.view = view({ phase, showProgress: false });
+      const rendered = render(<FirstRunLearningBanner />);
+      expect(rendered.container).toBeEmptyDOMElement();
+      rendered.unmount();
+    }
   });
 
-  it("lets the user close the empty state", () => {
-    const dismiss = vi.fn();
-    mocks.view = view({ phase: "empty", emptyReason: "unknown", dismiss });
+  it("surfaces a ready summary even when its run was in the background", () => {
+    mocks.view = view({
+      phase: "ready",
+      showProgress: false,
+      chatId: "late-summary",
+    });
     render(<FirstRunLearningBanner />);
-    fireEvent.click(screen.getByTestId("first-run-dismiss-empty"));
-    expect(dismiss).toHaveBeenCalled();
+    expect(screen.getByTestId("first-run-open-summary")).toBeInTheDocument();
   });
 });
 

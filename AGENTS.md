@@ -14,7 +14,8 @@ a pointer.
 - `TESTING.md` — before touching window management, tray/dock, monitors, or
   audio. Regression checklist with commit references.
 - `docs/human-only-app-publication.md` — before anything release-related.
-- `docs/macos-dev-builds.md` — local signing and TCC permission behavior.
+- `docs/macos-dev-builds.md` — canonical fast native build commands and the
+  exceptional signed-bundle/TCC path.
 - skill `screenpipe-tauri` — before adding or changing Tauri commands or their
   TypeScript bindings.
 
@@ -41,6 +42,15 @@ Scope test runs; the workspace is ~490k lines. `cargo test -p <crate>`, or
 `cargo test` never compiles it. Test it explicitly with `--manifest-path`, after
 `bun scripts/pre_build.js` (its `build.rs` panics without the sidecars). That
 build also rewrites tracked `src-tauri/gen/schemas/`; `git checkout --` it.
+
+For native app development, use only the scripts in
+`apps/screenpipe-app-tauri`: `bun run dev:tauri` for the normal live loop and
+`bun run build:tauri:dev` for a one-shot test binary. Both select the
+`debug-dev` Cargo profile through Tauri and use the machine-wide native build
+queue/cache automatically. Do not bypass them with raw Tauri/Cargo commands,
+`cargo clean`, target-directory overrides, or ad hoc profile/cache settings.
+See `docs/macos-dev-builds.md` for the exact commands and for the separate
+signed `.app` path used only when persistent macOS TCC identity is required.
 
 ## Hot paths
 

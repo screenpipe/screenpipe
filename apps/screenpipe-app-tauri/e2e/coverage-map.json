@@ -1364,8 +1364,8 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "tests": 6,
-      "notes": "Post-setup learning window on Home under the authenticated seed: opens from a real complete_onboarding with nothing seeded (guards the cross-window webview localStorage handoff), live countdown, settles to the real engine-reported reason when nothing was captured, stays dismissed across a reload, offers a ready summary and clears after use, and never renders in idle or done."
+      "tests": 8,
+      "notes": "Post-setup summary on Home under the authenticated seed: immediate runs show a live countdown, empty engine results settle silently with their diagnostic reason preserved, silent states stay silent across reloads, late returns retry in the background, ready summaries remain actionable, and idle/done never render."
     },
     {
       "spec": "first-run-reset-learning-window.spec.ts",
@@ -1388,7 +1388,7 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "tests": 2,
-      "notes": "Reset Onboarding must revive the first-run banner in EVERY webview. resetLearningWindow only clears the partition it runs in; Settings shares the home webview while the banner also renders in the separate chat window, so a spent seed claim survived there and the banner never returned. Drives two live webviews because a jsdom test shares one storage object and cannot see a webview boundary at all."
+      "notes": "Home is the single first-summary lifecycle owner: reset events clear the mounted Home state, while the separate Chat webview neither renders nor claims a second learning window from the shared onboarding completion."
     },
     {
       "spec": "focus-server.spec.ts",
