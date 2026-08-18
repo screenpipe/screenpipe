@@ -23,6 +23,7 @@ const mockUpdateSettings = vi.fn();
 vi.mock("@/lib/hooks/use-settings", () => ({
   useSettings: () => ({
     settings: { appZoom: 1.0 },
+    isSettingsLoaded: true,
     updateSettings: mockUpdateSettings,
   }),
 }));

@@ -1275,15 +1275,12 @@ async fn main() {
                             process_exit::confirm_and_request_app_quit(app_handle.clone());
                         }
                         "zoom_in" => {
-                            use tauri::Emitter;
                             let _ = app_handle.emit("menu-zoom", "in");
                         }
                         "zoom_out" => {
-                            use tauri::Emitter;
                             let _ = app_handle.emit("menu-zoom", "out");
                         }
                         "reset_zoom" => {
-                            use tauri::Emitter;
                             let _ = app_handle.emit("menu-zoom", "reset");
                         }
                         _ => {}

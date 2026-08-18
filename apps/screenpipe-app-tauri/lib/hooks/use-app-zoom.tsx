@@ -65,11 +65,9 @@ interface AppZoomContextType {
 const AppZoomContext = createContext<AppZoomContextType | null>(null);
 
 export function AppZoomProvider({ children }: { children: React.ReactNode }) {
-  const { settings, updateSettings } = useSettings();
-  const [zoom, setZoomState] = useState<number>(() => {
-    return settings?.appZoom ? clampAppZoom(settings.appZoom) : readSavedAppZoom();
-  });
-  const prevSettingsZoomRef = useRef<number | undefined>(settings?.appZoom);
+  const { settings, isSettingsLoaded, updateSettings } = useSettings();
+  const [zoom, setZoomState] = useState<number>(() => readSavedAppZoom());
+  const prevSettingsZoomRef = useRef<number | undefined>(undefined);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const persistZoom = useCallback(
@@ -132,6 +130,7 @@ export function AppZoomProvider({ children }: { children: React.ReactNode }) {
 
   // Sync settings when loaded from backend or another window
   useEffect(() => {
+    if (!isSettingsLoaded) return;
     if (
       settings?.appZoom !== undefined &&
       settings.appZoom !== prevSettingsZoomRef.current
@@ -141,7 +140,7 @@ export function AppZoomProvider({ children }: { children: React.ReactNode }) {
       setZoomState(clamped);
       applyRootZoom(clamped);
     }
-  }, [settings?.appZoom]);
+  }, [settings?.appZoom, isSettingsLoaded]);
 
   // Initial apply on mount
   useEffect(() => {
