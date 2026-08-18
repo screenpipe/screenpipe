@@ -7,8 +7,8 @@ and layer declared in the manifest, weighted by confidence and criticality.
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
 - Mapped specs: 117
-- Declared test blocks: 335
-- Weighted coverage points: 262.3
+- Declared test blocks: 336
+- Weighted coverage points: 263.3
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 89 | 289 | 236.3 | 15 | 94 | 92% |
-| macos | 113 | 298 | 233.1 | 17 | 100 | 90% |
-| linux | 79 | 249 | 207.0 | 14 | 90 | 88% |
+| windows | 89 | 290 | 237.3 | 15 | 94 | 92% |
+| macos | 113 | 299 | 234.1 | 17 | 100 | 90% |
+| linux | 79 | 250 | 208.0 | 14 | 90 | 88% |
 
 ## Runtime Results
 
@@ -45,9 +45,9 @@ pass/fail/skip counts.
 | os-integration | 7 specs / 30 tests / 25.5 pts | 14 specs / 27 tests / 16.0 pts | 2 specs / 13 tests / 9.4 pts |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
 | pipes | 6 specs / 19 tests / 19.0 pts | 8 specs / 25 tests / 25.0 pts | 6 specs / 19 tests / 19.0 pts |
-| real-ui-e2e | 63 specs / 190 tests / 157.0 pts | 76 specs / 195 tests / 160.2 pts | 59 specs / 168 tests / 144.3 pts |
-| settings | 14 specs / 38 tests / 35.0 pts | 16 specs / 33 tests / 28.7 pts | 13 specs / 30 tests / 27.0 pts |
-| storage-privacy | 9 specs / 40 tests / 31.3 pts | 9 specs / 26 tests / 25.1 pts | 6 specs / 19 tests / 18.1 pts |
+| real-ui-e2e | 63 specs / 191 tests / 158.0 pts | 76 specs / 196 tests / 161.2 pts | 59 specs / 169 tests / 145.3 pts |
+| settings | 14 specs / 39 tests / 36.0 pts | 16 specs / 34 tests / 29.7 pts | 13 specs / 31 tests / 28.0 pts |
+| storage-privacy | 9 specs / 41 tests / 32.3 pts | 9 specs / 27 tests / 26.1 pts | 6 specs / 20 tests / 19.1 pts |
 | tauri-command | 18 specs / 50 tests / 39.1 pts | 26 specs / 61 tests / 46.6 pts | 18 specs / 52 tests / 40.2 pts |
 | window-lifecycle | 18 specs / 63 tests / 53.0 pts | 18 specs / 44 tests / 31.4 pts | 13 specs / 39 tests / 29.9 pts |
 
@@ -194,7 +194,7 @@ pass/fail/skip counts.
 | sck-startup-recovery.spec.ts | macos | capture-ocr, local-api, os-integration | app-launch, capture-ocr, health, local-api-search | high | conditional | api | 1 | Opt-in macOS fault injection verifies bounded SCK enumeration recovery, same-process capture, and OCR persistence. |
 | screen-recording-restart.spec.ts | macos | onboarding, os-integration, real-ui-e2e, tauri-command | onboarding, permission-recovery | high | conditional | real-user-flow | 1 | A deterministic post-Later TCC mismatch drives the packaged onboarding UI through the explicit restart button and into the native restart command without destroying the WebDriver session. |
 | search-request-priority.spec.ts | windows, macos, linux | real-ui-e2e, local-api | home-search, local-api-search | medium | partial | synthetic | 1 | Verifies keyword search request fires before secondary search, facet, and speaker requests. |
-| settings-sections.spec.ts | windows, macos, linux | settings, real-ui-e2e, storage-privacy | settings-recording, screen-share-privacy, settings-ai, settings-privacy-api-auth, settings-permissions, storage-retention, low-disk-recording-guard, audio-device-health | high | strong | real-user-flow | 13 | Separate Screen and Audio & meetings destinations, persisted screen-share privacy toggle with native-status readback, AI preset/preferences split and toggle flows, low-disk capture stop with persistent notification, storage, privacy, macOS-only permissions recovery hub (asserted absent on Windows/Linux), and rapid switching crash guard. |
+| settings-sections.spec.ts | windows, macos, linux | settings, real-ui-e2e, storage-privacy | settings-recording, screen-share-privacy, settings-ai, settings-privacy-api-auth, settings-permissions, storage-retention, low-disk-recording-guard, audio-device-health | high | strong | real-user-flow | 14 | Separate Screen and Audio & meetings destinations, persisted screen-share privacy toggle with native-status readback, AI preset/preferences split and toggle flows, low-disk capture stop with persistent notification, storage, privacy, macOS-only permissions recovery hub (asserted absent on Windows/Linux), and rapid switching crash guard. |
 | speaker-rename-scope.spec.ts | windows, macos, linux | local-api | meeting-notes, speaker-rename-scope | high | strong | real-user-flow | 3 | Seeds one unnamed voice across three chunks through the public API, renames a single line with scope=auto, and verifies the whole voice is relabelled while a correction on a named speaker stays on its line. Also asserts the orphaned-speaker repair migration is recorded applied after a real app boot and leaves no row pointing at a deleted speaker. |
 | spotlight-exclusion.spec.ts | macos | storage-privacy, os-integration | spotlight-exclusion | high | strong | mixed | 2 | Requires the launched app's exact E2E data directory to appear in Spotlight Search Privacy, then force-imports paired excluded/control canaries and proves only the control becomes searchable. |
 | timeline-daily-summary.spec.ts | windows, macos, linux | real-ui-e2e | timeline, settings-ai | medium | strong | real-user-flow | 1 | Opens a cached Pi-generated daily summary in Timeline, checks its bounded scrolling layout, captures a screenshot, and closes it. |
