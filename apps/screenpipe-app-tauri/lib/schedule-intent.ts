@@ -224,6 +224,34 @@ function tokenize(text: string): string[] {
     .filter(Boolean);
 }
 
+const ACKNOWLEDGEMENT_TOKENS = new Set([
+  "awesome",
+  "cool",
+  "good",
+  "got",
+  "great",
+  "it",
+  "looks",
+  "nice",
+  "ok",
+  "okay",
+  "perfect",
+  "thanks",
+  "thank",
+  "you",
+  "yep",
+  "yes",
+]);
+
+function isAcknowledgement(text: string): boolean {
+  const tokens = tokenize(text);
+  return (
+    tokens.length > 0 &&
+    tokens.length <= 6 &&
+    tokens.every((token) => ACKNOWLEDGEMENT_TOKENS.has(token))
+  );
+}
+
 export function isExplicitPiSubagentSchedule(text: string): boolean {
   return (
     /\bpi[- ]?subagents?\b/i.test(text) ||
@@ -329,6 +357,7 @@ export function priorUserTask(
   for (let i = userTurns.length - 1; i >= 0; i--) {
     const turn = userTurns[i];
     if (turn === latest) continue;
+    if (isAcknowledgement(turn)) continue;
     if (isScheduleThisUtterance(turn) && !isScreenpipeAutomationTask(turn)) continue;
     return turn;
   }

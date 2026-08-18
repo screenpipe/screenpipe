@@ -70,6 +70,18 @@ describe("schedule-this intent", () => {
   it("resolves this from the preceding Screenpipe recap", () => {
     expect(priorUserTask(RECAP, "scheduel ths")).toBe("give me a 16-hour Screenpipe recap");
   });
+
+  it("skips acknowledgements instead of scheduling them as the task", () => {
+    const messages = [
+      ...RECAP,
+      { role: "user" as const, content: "thanks, looks good" },
+      { role: "assistant" as const, content: "You're welcome." },
+    ];
+
+    expect(priorUserTask(messages, "schedule this")).toBe(
+      "give me a 16-hour Screenpipe recap",
+    );
+  });
 });
 
 describe("typo-tolerant scheduel ths after a Screenpipe recap", () => {
