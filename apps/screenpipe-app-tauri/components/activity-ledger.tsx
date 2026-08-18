@@ -85,10 +85,6 @@ type ActivityLedgerArtifactEvidence = {
   browser_url?: string | null;
 };
 type ActivityLedgerArtifactInterval = {
-  id?: number;
-  kind?: string;
-  title?: string;
-  category?: string | null;
   start_at: string;
   end_at: string;
   app_name: string | null;
@@ -109,6 +105,17 @@ const ACTIVITY_CUSTOM_END_STORAGE_KEY =
   "screenpipe:activity-history:custom-end";
 const SYSTEM_ARTIFACT_APP =
   /^(controlcenter|notificationcenter|usernotificationcenter|loginwindow|spotlight|dock|systemuiserver|windowserver|interaction-tests)$/i;
+const DEFAULT_ACTIVITY_REVIEW_PRESET: AIPreset = {
+  id: "activity-history",
+  prompt: "",
+  provider: "screenpipe-cloud",
+  url: "",
+  model: "auto",
+  defaultPreset: false,
+  apiKey: null,
+  maxContextChars: 200_000,
+  maxTokens: 8_192,
+};
 
 const RANGE_COPY: Record<RangePreset, string> = {
   today: "Today",
@@ -240,140 +247,6 @@ function meetingAnchors(
       },
     ];
   });
-}
-
-function localIntervalTitle(interval: ActivityLedgerArtifactInterval): string {
-  const evidenceTitle = interval.evidence?.find((item) =>
-    Boolean(item.window_title?.trim()),
-  )?.window_title;
-  return (
-    interval.title?.trim() ||
-    evidenceTitle?.trim() ||
-    usefulAppName(interval.app_name) ||
-    "Recorded activity"
-  );
-}
-
-function localIntervalEvidence(
-  interval: ActivityLedgerArtifactInterval,
-  start: number,
-  end: number,
-): ActivityHistoryEvidence[] {
-  const title = localIntervalTitle(interval);
-  const evidence = (interval.evidence ?? [])
-    .flatMap((item): ActivityHistoryEvidence[] => {
-      const at = new Date(item.occurred_at).getTime();
-      if (!Number.isFinite(at) || at < start || at > end) return [];
-      const isAudio = item.source_type === "audio";
-      const frameId =
-        item.frame_id ?? (item.source_type === "frame" ? item.source_id : null);
-      return [
-        {
-          kind: isAudio ? "audio" : "screen",
-          at: new Date(at).toISOString(),
-          frame_id: isAudio ? null : frameId,
-          meeting_id: null,
-          app_name: isAudio ? null : usefulAppName(item.app_name),
-          label: item.window_title?.trim() || title,
-        },
-      ];
-    })
-    .filter(
-      (item, index, all) =>
-        all.findIndex(
-          (candidate) =>
-            candidate.kind === item.kind &&
-            candidate.at === item.at &&
-            candidate.frame_id === item.frame_id,
-        ) === index,
-    );
-  if (evidence.length > 0) return evidence.slice(0, 3);
-  return [
-    {
-      kind: "screen",
-      at: new Date(start).toISOString(),
-      frame_id: null,
-      meeting_id: null,
-      app_name: usefulAppName(interval.app_name),
-      label: title,
-    },
-  ];
-}
-
-/**
- * Keep History useful when hosted interpretation is disabled or unavailable.
- * These entries make no inferred outcome claims: they preserve exact local
- * task/meeting ranges and artifact anchors so every row remains inspectable.
- */
-export function buildLocalActivityHistory(
-  range: TimeRange,
-  intervals: ActivityLedgerArtifactInterval[],
-  meetings: ActivityReviewMeeting[],
-): ActivityHistoryDocument {
-  const rangeStart = range.start.getTime();
-  const rangeEnd = range.end.getTime();
-  const entries: ActivityHistoryEntry[] = meetings.map((meeting) => {
-    const start = Math.max(rangeStart, new Date(meeting.start_at).getTime());
-    const end = Math.min(rangeEnd, new Date(meeting.end_at).getTime());
-    const app = usefulAppName(meeting.app_name);
-    return {
-      id: `local-meeting-${meeting.id}-${start}`,
-      kind: "meeting",
-      meeting_id: meeting.id,
-      start_at: new Date(start).toISOString(),
-      end_at: new Date(end).toISOString(),
-      title: meeting.title,
-      summary: app
-        ? `You met in ${app} about ${meeting.title}.`
-        : `You met about ${meeting.title}.`,
-      evidence: [
-        {
-          kind: "meeting",
-          at: new Date(start).toISOString(),
-          frame_id: null,
-          meeting_id: meeting.id,
-          app_name: app,
-          label: meeting.title,
-        },
-      ],
-    };
-  });
-
-  for (const interval of intervals) {
-    if (
-      interval.kind === "unobserved" ||
-      /^unobserved time$/i.test(interval.title?.trim() ?? "")
-    ) {
-      continue;
-    }
-    const start = Math.max(rangeStart, new Date(interval.start_at).getTime());
-    const end = Math.min(rangeEnd, new Date(interval.end_at).getTime());
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-      continue;
-    }
-    const title = localIntervalTitle(interval);
-    const app = usefulAppName(interval.app_name);
-    entries.push({
-      id: `local-work-${interval.id ?? entries.length}-${start}`,
-      kind: "work",
-      meeting_id: null,
-      start_at: new Date(start).toISOString(),
-      end_at: new Date(end).toISOString(),
-      title,
-      summary:
-        app && title.toLowerCase() !== app.toLowerCase()
-          ? `You worked on ${title} in ${app}.`
-          : `You worked in ${app || title}.`,
-      evidence: localIntervalEvidence(interval, start, end),
-    });
-  }
-
-  return {
-    entries: entries.sort(
-      (left, right) =>
-        new Date(left.start_at).getTime() - new Date(right.start_at).getTime(),
-    ),
-  };
 }
 
 export function minimumHistoryEntryCount(
@@ -743,7 +616,9 @@ export function ActivityLedger({
   );
   const invalidRange = !range || range.start >= range.end;
   const reviewPreset = useMemo(
-    () => pickPipePreset((settings?.aiPresets ?? []) as AIPreset[]),
+    () =>
+      pickPipePreset((settings?.aiPresets ?? []) as AIPreset[]) ??
+      DEFAULT_ACTIVITY_REVIEW_PRESET,
     [settings?.aiPresets],
   );
   const pendingHistoryRange = useMemo(
@@ -942,24 +817,9 @@ export function ActivityLedger({
         end: generationRange.end.toISOString(),
         label: `${RANGE_COPY[preset].toLowerCase()} continuation`,
       };
-      const localHistory = buildLocalActivityHistory(
-        generationRange,
-        ledgerIntervals,
-        generationMeetings,
-      );
-      if (localHistory.entries.length > 0) {
-        setHistory({
-          entries: mergeActivityHistoryDocuments(
-            history?.entries ?? [],
-            localHistory,
-            generationRange,
-          ),
-        });
-      }
       if (
-        (generationSummary?.data_status !== "ok" ||
-          generationSummary.total_active_minutes <= 0) &&
-        localHistory.entries.length === 0
+        generationSummary?.data_status !== "ok" ||
+        generationSummary.total_active_minutes <= 0
       ) {
         const persisted = await reconcilePersistedActivityHistory(
           ACTIVITY_REVIEW_PROMPT_VERSION,
@@ -973,81 +833,65 @@ export function ActivityLedger({
         setHistoryCoverage(persisted.coverage);
         return;
       }
-      let next = localHistory;
-      if (reviewPreset?.model?.trim()) {
-        try {
-          const raw = await runDailySummaryWithPi({
-            date: generationRange.start,
-            range: {
-              start: generationRange.start.toISOString(),
-              end: generationRange.end.toISOString(),
-            },
-            preset: reviewPreset,
-            userToken: settings.user?.token ?? null,
-            signal: controller.signal,
-            sessionPrefix: "activity-history",
-            systemPrompt: ACTIVITY_REVIEW_AGENT_SYSTEM_PROMPT,
-            prompt: buildActivityReviewAgentPrompt(
-              reviewRange,
-              generationMeetings,
-            ),
-          });
-          const minimumEntries = minimumHistoryEntryCount(
-            generationSummary?.total_active_minutes ?? 0,
-            generationRange,
-          );
-          next = parseActivityHistoryResponse(
-            raw,
-            generationRange,
+      const raw = await runDailySummaryWithPi({
+        date: generationRange.start,
+        range: {
+          start: generationRange.start.toISOString(),
+          end: generationRange.end.toISOString(),
+        },
+        preset: reviewPreset,
+        userToken: settings.user?.token ?? null,
+        signal: controller.signal,
+        sessionPrefix: "activity-history",
+        systemPrompt: ACTIVITY_REVIEW_AGENT_SYSTEM_PROMPT,
+        prompt: buildActivityReviewAgentPrompt(reviewRange, generationMeetings),
+      });
+      const minimumEntries = minimumHistoryEntryCount(
+        generationSummary.total_active_minutes,
+        generationRange,
+      );
+      let next = parseActivityHistoryResponse(
+        raw,
+        generationRange,
+        generationMeetings,
+      );
+      let missingMeetings = missingRequiredMeetingIds(next, generationMeetings);
+      if (next.entries.length < minimumEntries || missingMeetings.length > 0) {
+        const repairedRaw = await runDailySummaryWithPi({
+          date: generationRange.start,
+          range: {
+            start: generationRange.start.toISOString(),
+            end: generationRange.end.toISOString(),
+          },
+          preset: reviewPreset,
+          userToken: settings.user?.token ?? null,
+          signal: controller.signal,
+          sessionPrefix: "activity-history-repair",
+          systemPrompt: ACTIVITY_REVIEW_AGENT_SYSTEM_PROMPT,
+          prompt: buildActivityReviewRepairPrompt(
+            reviewRange,
             generationMeetings,
-          );
-          let missingMeetings = missingRequiredMeetingIds(
             next,
-            generationMeetings,
-          );
-          if (
-            next.entries.length < minimumEntries ||
-            missingMeetings.length > 0
-          ) {
-            const repairedRaw = await runDailySummaryWithPi({
-              date: generationRange.start,
-              range: {
-                start: generationRange.start.toISOString(),
-                end: generationRange.end.toISOString(),
-              },
-              preset: reviewPreset,
-              userToken: settings.user?.token ?? null,
-              signal: controller.signal,
-              sessionPrefix: "activity-history-repair",
-              systemPrompt: ACTIVITY_REVIEW_AGENT_SYSTEM_PROMPT,
-              prompt: buildActivityReviewRepairPrompt(
-                reviewRange,
-                generationMeetings,
-                next,
-                minimumEntries,
-                missingMeetings,
-              ),
-            });
-            next = parseActivityHistoryResponse(
-              repairedRaw,
-              generationRange,
-              generationMeetings,
-            );
-            missingMeetings = missingRequiredMeetingIds(
-              next,
-              generationMeetings,
-            );
-          }
-          if (
-            next.entries.length < minimumEntries ||
-            missingMeetings.length > 0
-          ) {
-            next = localHistory;
-          }
-        } catch {
-          if (controller.signal.aborted) return;
-          next = localHistory;
-        }
+            minimumEntries,
+            missingMeetings,
+          ),
+        });
+        next = parseActivityHistoryResponse(
+          repairedRaw,
+          generationRange,
+          generationMeetings,
+        );
+        missingMeetings = missingRequiredMeetingIds(next, generationMeetings);
+      }
+      if (next.entries.length < minimumEntries) {
+        throw new Error(
+          "History is still resolving this range. Try again in a moment.",
+        );
+      }
+      if (missingMeetings.length > 0) {
+        throw new Error(
+          "History is still resolving a recorded meeting. Try again in a moment.",
+        );
       }
       let persisted;
       try {
@@ -1077,13 +921,9 @@ export function ActivityLedger({
         persisted.entries.length > 0 ? { entries: persisted.entries } : null,
       );
       setHistoryCoverage(persisted.coverage);
-    } catch (reason) {
+    } catch {
       if (controller.signal.aborted) return;
-      setHistoryError(
-        reason instanceof Error
-          ? reason.message
-          : "Activity history could not be generated.",
-      );
+      setHistoryError("History could not be updated. Try again.");
     } finally {
       if (!controller.signal.aborted) {
         historyLoadingRef.current = false;
@@ -1099,7 +939,6 @@ export function ActivityLedger({
     summary,
     history,
     historyCoverage,
-    ledgerIntervals,
   ]);
 
   useEffect(() => {

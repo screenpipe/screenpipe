@@ -72,7 +72,6 @@ import {
   ActivityLedger,
   artifactsForHistoryEntry,
   buildActivityLedgerArtifactsPath,
-  buildLocalActivityHistory,
   buildActivityMeetingsPath,
   buildActivitySummaryPath,
   minimumHistoryEntryCount,
@@ -327,30 +326,6 @@ describe("activity history helpers", () => {
     expect(minimumHistoryEntryCount(480, { start, end })).toBe(7);
   });
 
-  it("builds inspectable local history without inferred outcome claims", () => {
-    const local = buildLocalActivityHistory(
-      {
-        start: new Date("2026-08-17T16:00:00Z"),
-        end: new Date("2026-08-17T17:00:00Z"),
-      },
-      LEDGER_ARTIFACTS_RESPONSE.intervals,
-      [],
-    );
-
-    expect(local.entries).toHaveLength(2);
-    expect(local.entries[0]).toMatchObject({
-      title: "activity-ledger.tsx",
-      summary: "You worked on activity-ledger.tsx in Cursor.",
-      evidence: [
-        expect.objectContaining({
-          kind: "screen",
-          frame_id: 54321,
-          app_name: "Cursor",
-        }),
-      ],
-    });
-  });
-
   it("ranks a compact artifact set while preserving a real website", () => {
     const entry = parseActivityHistoryResponse(HISTORY_RESPONSE, {
       start: new Date("2026-08-17T16:00:00Z"),
@@ -494,6 +469,8 @@ describe("activity history helpers", () => {
       meetings,
     );
     expect(prompt).toContain("/meetings/{id}/transcript");
+    expect(prompt).toContain("SCREENPIPE_LOCAL_API_URL");
+    expect(prompt).toContain("${SCREENPIPE_PORT:-3030}");
     expect(prompt).toContain("deterministic coverage sweep");
     expect(prompt).toContain("consecutive 30-minute absolute intervals");
     expect(prompt).toContain("meeting_id=8");
@@ -555,7 +532,7 @@ describe("activity history helpers", () => {
 });
 
 describe("ActivityLedger", () => {
-  it("works without Enhanced AI and survives exhausted AI usage", async () => {
+  it("bypasses Enhanced AI without exposing ledger rows on AI failure", async () => {
     mocks.settings.enhancedAI = false;
     mocks.runDailySummaryWithPi.mockRejectedValue(
       new Error("hosted_ai_allowance_exceeded"),
@@ -564,23 +541,14 @@ describe("ActivityLedger", () => {
     render(<ActivityLedger />);
 
     expect(
-      await screen.findByRole("heading", { name: "activity-ledger.tsx" }),
+      await screen.findByText("History could not be updated. Try again."),
     ).toBeVisible();
     expect(mocks.runDailySummaryWithPi).toHaveBeenCalledWith(
       expect.objectContaining({ sessionPrefix: "activity-history" }),
     );
-    await waitFor(() =>
-      expect(mocks.reconcilePersistedActivityHistory).toHaveBeenCalledWith(
-        "activity-history-pi-v8",
-        expect.any(Object),
-        expect.objectContaining({
-          entries: expect.arrayContaining([
-            expect.objectContaining({ title: "activity-ledger.tsx" }),
-          ]),
-        }),
-        expect.any(Object),
-      ),
-    );
+    expect(mocks.reconcilePersistedActivityHistory).not.toHaveBeenCalled();
+    expect(screen.queryByText("activity-ledger.tsx")).toBeNull();
+    expect(screen.queryByText(/Using Unknown app/i)).toBeNull();
     expect(
       screen.queryByText(/Turn on Enhanced AI|Choose an AI model/i),
     ).toBeNull();
@@ -679,7 +647,7 @@ describe("ActivityLedger", () => {
       ),
     );
     expect(mocks.reconcilePersistedActivityHistory).toHaveBeenCalledWith(
-      "activity-history-pi-v8",
+      "activity-history-pi-v9",
       expect.objectContaining({
         start: expect.any(Date),
         end: expect.any(Date),
