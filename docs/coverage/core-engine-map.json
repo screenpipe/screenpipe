@@ -296,10 +296,12 @@
       "label": "Engine API route logic and stream contracts",
       "crate": "screenpipe-engine",
       "files": [
+        "src/activity_ledger.rs",
         "src/auth_key.rs",
         "src/local_chat.rs",
         "src/pipe_stream.rs",
         "src/routes/activity_summary.rs",
+        "src/routes/activity_ledger.rs",
         "src/routes/artifacts.rs",
         "src/routes/connect_broker.rs",
         "src/routes/content.rs",
@@ -647,6 +649,7 @@
       "label": "Database frames, timeline, and storage joins",
       "crate": "screenpipe-db",
       "files": [
+        "src/db/activity_ledger.rs",
         "src/db/feedback.rs",
         "src/db/maintenance.rs",
         "src/db/setup.rs",
