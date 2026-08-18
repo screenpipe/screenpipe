@@ -33,7 +33,6 @@ import type {
 	EnterpriseInstallMetadata,
 } from "@/lib/enterprise/app-update-policy";
 import { type FontSize, applyFontSize } from "@/lib/utils/font-size";
-import { applyRootZoom } from "./use-app-zoom";
 import {
 	applyManagedOverrides,
 	type ManagedSettingValue,
@@ -1749,12 +1748,6 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 	useEffect(() => {
 		applyFontSize(settings.fontSize);
 	}, [settings.fontSize]);
-
-	useEffect(() => {
-		if (settings.appZoom) {
-			applyRootZoom(settings.appZoom);
-		}
-	}, [settings.appZoom]);
 
 	const updateSettings = async (updates: Partial<Settings>) => {
 		// Every settings mutation funnels through here, which makes this the one

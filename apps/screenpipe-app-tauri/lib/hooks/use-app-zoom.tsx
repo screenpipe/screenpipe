@@ -70,6 +70,27 @@ export function AppZoomProvider({ children }: { children: React.ReactNode }) {
     return settings?.appZoom ? clampAppZoom(settings.appZoom) : readSavedAppZoom();
   });
   const prevSettingsZoomRef = useRef<number | undefined>(settings?.appZoom);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const persistZoom = useCallback(
+    (targetZoom: number) => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+      debounceTimerRef.current = setTimeout(() => {
+        updateSettings({ appZoom: targetZoom });
+      }, 250);
+    },
+    [updateSettings],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, []);
 
   const setZoom = useCallback(
     (newZoom: number) => {
@@ -77,9 +98,9 @@ export function AppZoomProvider({ children }: { children: React.ReactNode }) {
       prevSettingsZoomRef.current = clamped;
       setZoomState(clamped);
       applyRootZoom(clamped);
-      updateSettings({ appZoom: clamped });
+      persistZoom(clamped);
     },
-    [updateSettings],
+    [persistZoom],
   );
 
   const zoomIn = useCallback(() => {
@@ -87,27 +108,27 @@ export function AppZoomProvider({ children }: { children: React.ReactNode }) {
       const next = clampAppZoom(prev + ZOOM_STEP);
       prevSettingsZoomRef.current = next;
       applyRootZoom(next);
-      updateSettings({ appZoom: next });
+      persistZoom(next);
       return next;
     });
-  }, [updateSettings]);
+  }, [persistZoom]);
 
   const zoomOut = useCallback(() => {
     setZoomState((prev) => {
       const next = clampAppZoom(prev - ZOOM_STEP);
       prevSettingsZoomRef.current = next;
       applyRootZoom(next);
-      updateSettings({ appZoom: next });
+      persistZoom(next);
       return next;
     });
-  }, [updateSettings]);
+  }, [persistZoom]);
 
   const resetZoom = useCallback(() => {
     prevSettingsZoomRef.current = ZOOM_DEFAULT;
     setZoomState(ZOOM_DEFAULT);
     applyRootZoom(ZOOM_DEFAULT);
-    updateSettings({ appZoom: ZOOM_DEFAULT });
-  }, [updateSettings]);
+    persistZoom(ZOOM_DEFAULT);
+  }, [persistZoom]);
 
   // Sync settings when loaded from backend or another window
   useEffect(() => {

@@ -96,9 +96,14 @@ describe("ZOOM_PRESETS", () => {
 
 describe("useAppZoom hook with AppZoomProvider", () => {
   beforeEach(() => {
+    vi.useFakeTimers();
     localStorage.clear();
     mockUpdateSettings.mockClear();
     document.documentElement.style.zoom = "";
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   const wrapper = ({ children }: { children: React.ReactNode }) => (
@@ -117,6 +122,9 @@ describe("useAppZoom hook with AppZoomProvider", () => {
     });
     expect(result.current.zoom).toBe(1.1);
     expect(document.documentElement.style.zoom).toBe("1.1");
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
     expect(mockUpdateSettings).toHaveBeenCalledWith({ appZoom: 1.1 });
   });
 
@@ -127,6 +135,9 @@ describe("useAppZoom hook with AppZoomProvider", () => {
     });
     expect(result.current.zoom).toBe(0.9);
     expect(document.documentElement.style.zoom).toBe("0.9");
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
     expect(mockUpdateSettings).toHaveBeenCalledWith({ appZoom: 0.9 });
   });
 
@@ -142,6 +153,10 @@ describe("useAppZoom hook with AppZoomProvider", () => {
     });
     expect(result.current.zoom).toBe(1.0);
     expect(document.documentElement.style.zoom).toBe("1");
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(mockUpdateSettings).toHaveBeenCalledWith({ appZoom: 1.0 });
   });
 
   it("responds to keyboard shortcuts (Cmd/Ctrl + = / - / 0)", () => {
