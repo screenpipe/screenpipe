@@ -1215,6 +1215,24 @@ async fn main() {
                     .item(&PredefinedMenuItem::select_all(app, None)?)
                     .build()?;
 
+                let view_submenu = SubmenuBuilder::new(app, "View")
+                    .item(
+                        &MenuItemBuilder::with_id("zoom_in", "Zoom In")
+                            .accelerator("CmdOrCtrl+=")
+                            .build(app)?,
+                    )
+                    .item(
+                        &MenuItemBuilder::with_id("zoom_out", "Zoom Out")
+                            .accelerator("CmdOrCtrl+-")
+                            .build(app)?,
+                    )
+                    .item(
+                        &MenuItemBuilder::with_id("reset_zoom", "Actual Size")
+                            .accelerator("CmdOrCtrl+0")
+                            .build(app)?,
+                    )
+                    .build()?;
+
                 // Standard Window menu so macOS key equivalents (Cmd-W close,
                 // Cmd-M minimize) work — without a menu item carrying the
                 // accelerator, AppKit silently swallows the keystroke. Close
@@ -1230,6 +1248,7 @@ async fn main() {
                 let menu = MenuBuilder::new(app)
                     .item(&app_submenu)
                     .item(&edit_submenu)
+                    .item(&view_submenu)
                     .item(&window_submenu)
                     .build()?;
 
@@ -1254,6 +1273,18 @@ async fn main() {
                         }
                         "quit_app" => {
                             process_exit::confirm_and_request_app_quit(app_handle.clone());
+                        }
+                        "zoom_in" => {
+                            use tauri::Emitter;
+                            let _ = app_handle.emit("menu-zoom", "in");
+                        }
+                        "zoom_out" => {
+                            use tauri::Emitter;
+                            let _ = app_handle.emit("menu-zoom", "out");
+                        }
+                        "reset_zoom" => {
+                            use tauri::Emitter;
+                            let _ = app_handle.emit("menu-zoom", "reset");
                         }
                         _ => {}
                     }

@@ -9,13 +9,14 @@ import { commands } from "@/lib/utils/tauri";
 import { useTheme } from "@/components/theme-provider";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent } from "@/components/ui/card";
-import { Moon, Sun, Monitor, Layers, MessageSquare, PanelLeft, Maximize2, EyeOff, MinusSquare, Type, CalendarClock } from "lucide-react";
+import { Moon, Sun, Monitor, Layers, MessageSquare, PanelLeft, Maximize2, EyeOff, MinusSquare, Type, CalendarClock, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { useToast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
 import { Settings } from "@/lib/hooks/use-settings";
 import { FONT_SIZE_DEFAULT, FONT_SIZE_OPTIONS } from "@/lib/utils/font-size";
+import { useAppZoom, ZOOM_PRESETS } from "@/lib/hooks/use-app-zoom";
 import { open } from "@tauri-apps/plugin-shell";
 import type { SettingsField } from "./settings-search";
 import { ManagedSwitch } from "@/components/enterprise-locked-setting";
@@ -32,6 +33,7 @@ import {
 export const searchIndex: SettingsField[] = [
   { label: "Theme", keywords: ["dark", "light", "appearance"] },
   { label: "Font Size" },
+  { label: "Page Zoom", keywords: ["zoom", "scale", "magnify", "size", "accessibility"] },
   { label: "Chat Always on Top", keywords: ["pin", "window"] },
   { label: "Shortcut Reminder", keywords: ["overlay", "pill", "pin", "drag", "position"] },
   { label: "Timeline / rewind", keywords: ["rewind", "timeline", "backend"] },
@@ -44,6 +46,7 @@ export const searchIndex: SettingsField[] = [
 export function DisplaySection() {
   const { settings, updateSettings } = useSettings();
   const { theme, setTheme } = useTheme();
+  const { zoom, zoomIn, zoomOut, resetZoom, setZoom } = useAppZoom();
   const { toast } = useToast();
   const { isMac, isWindows } = usePlatform();
   // Guards the Disable-Timeline toggle against double-invoke (rapid toggle /
@@ -144,6 +147,80 @@ export function DisplaySection() {
                     >
                       <div className="font-medium text-xs text-foreground">{option.label}</div>
                       <div className="text-muted-foreground mt-0.5" style={{ fontSize: option.value }}>Aa</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <ZoomIn className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                      Page Zoom
+                      <span className="text-xs text-muted-foreground font-normal">
+                        ({isMac ? "⌘+/⌘-" : "Ctrl+/Ctrl-"})
+                      </span>
+                    </h3>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={zoomOut}
+                    className="h-7 w-7 p-0"
+                    title="Zoom Out"
+                  >
+                    <ZoomOut className="h-3.5 w-3.5" />
+                  </Button>
+                  <span className="text-xs font-mono font-medium px-2 min-w-[48px] text-center">
+                    {Math.round(zoom * 100)}%
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={zoomIn}
+                    className="h-7 w-7 p-0"
+                    title="Zoom In"
+                  >
+                    <ZoomIn className="h-3.5 w-3.5" />
+                  </Button>
+                  {zoom !== 1.0 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={resetZoom}
+                      className="h-7 text-xs px-2 text-muted-foreground hover:text-foreground ml-1"
+                      title="Reset to 100%"
+                    >
+                      <RotateCcw className="h-3 w-3 mr-1" />
+                      Reset
+                    </Button>
+                  )}
+                </div>
+              </div>
+              <div className="flex gap-2 ml-[26px]">
+                {ZOOM_PRESETS.map((preset) => {
+                  const isActive = Math.abs(zoom - preset.value) < 0.02;
+                  return (
+                    <button
+                      key={preset.value}
+                      type="button"
+                      onClick={() => setZoom(preset.value)}
+                      className={`flex-1 px-2 py-1.5 border-2 transition-all text-center cursor-pointer ${
+                        isActive
+                          ? "border-primary bg-primary/5 font-semibold"
+                          : "border-border hover:border-muted-foreground/30 text-muted-foreground"
+                      }`}
+                    >
+                      <div className="text-xs text-foreground">{preset.label}</div>
                     </button>
                   );
                 })}

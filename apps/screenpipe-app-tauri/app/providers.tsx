@@ -25,6 +25,7 @@ import { resolveTelemetryDisabledByEnv } from "@/lib/telemetry-env";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/query-client";
 import { DesktopRemoteControl } from "@/components/desktop-remote-control";
+import { AppZoomProvider } from "@/lib/hooks/use-app-zoom";
 
 /// Global mount point for the updater event listener. Lives here (not in
 /// per-page hooks) so the listener is registered for the lifetime of the
@@ -128,30 +129,32 @@ export const Providers = forwardRef<
         <NuqsAdapter>
           <QueryClientProvider client={queryClient}>
             <SettingsProvider>
-              <ManagedPolicyProvider>
-                <AuthGuard>
-                  <ThemeProvider
-                    defaultTheme="system"
-                    storageKey="screenpipe-ui-theme"
-                  >
-                    <ChangelogDialogProvider>
-                      <PermissionMonitorProvider>
-                        <UpdateListenerMount />
-                        <PostHogProvider client={posthog}>
-                          {mounted ? (
-                            <>
-                              <DesktopRemoteControl enabled={posthogReady} />
-                              {!isOverlay && <DeeplinkHandler />}
-                              {!isOverlay && <LiveViewOnboardingFollowUp />}
-                              <AppEntitlementGate>{children}</AppEntitlementGate>
-                            </>
-                          ) : null}
-                        </PostHogProvider>
-                      </PermissionMonitorProvider>
-                    </ChangelogDialogProvider>
-                  </ThemeProvider>
-                </AuthGuard>
-              </ManagedPolicyProvider>
+              <AppZoomProvider>
+                <ManagedPolicyProvider>
+                  <AuthGuard>
+                    <ThemeProvider
+                      defaultTheme="system"
+                      storageKey="screenpipe-ui-theme"
+                    >
+                      <ChangelogDialogProvider>
+                        <PermissionMonitorProvider>
+                          <UpdateListenerMount />
+                          <PostHogProvider client={posthog}>
+                            {mounted ? (
+                              <>
+                                <DesktopRemoteControl enabled={posthogReady} />
+                                {!isOverlay && <DeeplinkHandler />}
+                                {!isOverlay && <LiveViewOnboardingFollowUp />}
+                                <AppEntitlementGate>{children}</AppEntitlementGate>
+                              </>
+                            ) : null}
+                          </PostHogProvider>
+                        </PermissionMonitorProvider>
+                      </ChangelogDialogProvider>
+                    </ThemeProvider>
+                  </AuthGuard>
+                </ManagedPolicyProvider>
+              </AppZoomProvider>
             </SettingsProvider>
           </QueryClientProvider>
         </NuqsAdapter>

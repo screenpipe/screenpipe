@@ -33,6 +33,7 @@ import type {
 	EnterpriseInstallMetadata,
 } from "@/lib/enterprise/app-update-policy";
 import { type FontSize, applyFontSize } from "@/lib/utils/font-size";
+import { applyRootZoom } from "./use-app-zoom";
 import {
 	applyManagedOverrides,
 	type ManagedSettingValue,
@@ -335,6 +336,8 @@ export type Settings = SettingsStore & {
 	connectionsSyncEnabled?: boolean;
 	/** Font size for the entire app UI */
 	fontSize?: FontSize;
+	/** Page zoom / UI scale factor (e.g. 1.0 = 100%, 1.25 = 125%) */
+	appZoom?: number;
 	/** OpenAI-compatible transcription endpoint URL */
 	openaiCompatibleEndpoint?: string;
 	/** OpenAI-compatible transcription API key */
@@ -714,6 +717,7 @@ let DEFAULT_SETTINGS: Settings = {
 			audioChunkDuration: 30,
 			useChineseMirror: false,
 			languages: [],
+			appZoom: 1.0,
 			embeddedLLM: {
 				enabled: false,
 				model: "ministral-3:latest",
@@ -1745,6 +1749,12 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 	useEffect(() => {
 		applyFontSize(settings.fontSize);
 	}, [settings.fontSize]);
+
+	useEffect(() => {
+		if (settings.appZoom) {
+			applyRootZoom(settings.appZoom);
+		}
+	}, [settings.appZoom]);
 
 	const updateSettings = async (updates: Partial<Settings>) => {
 		// Every settings mutation funnels through here, which makes this the one
