@@ -77,6 +77,10 @@ pub struct ActivityEvidenceRecord {
     pub source_type: String,
     pub source_id: i64,
     pub occurred_at: String,
+    pub frame_id: Option<i64>,
+    pub app_name: Option<String>,
+    pub window_title: Option<String>,
+    pub browser_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,6 +172,10 @@ struct RawEvidence {
     source_type: String,
     source_id: i64,
     occurred_at: String,
+    frame_id: Option<i64>,
+    app_name: Option<String>,
+    window_title: Option<String>,
+    browser_url: Option<String>,
 }
 
 impl From<RawObservation> for ActivityLedgerObservation {
@@ -570,7 +578,8 @@ impl DatabaseManager {
         &self,
         start_at: DateTime<Utc>,
         end_at: DateTime<Utc>,
-        include_details: bool,
+        include_actions: bool,
+        include_evidence: bool,
     ) -> Result<Vec<ActivityIntervalRecord>, SqlxError> {
         let start = start_at.to_rfc3339();
         let end = end_at.to_rfc3339();
@@ -597,7 +606,7 @@ impl DatabaseManager {
         }
         let mut actions_by_interval: HashMap<i64, Vec<ActivityActionRecord>> = HashMap::new();
         let mut evidence_by_interval: HashMap<i64, Vec<ActivityEvidenceRecord>> = HashMap::new();
-        if include_details {
+        if include_actions {
             let actions = sqlx::query_as::<_, RawAction>(
                 r#"SELECT a.id, a.interval_id, a.occurred_at, a.action_type,
                           a.summary, a.app_name, a.confidence, a.source_type, a.source_id
@@ -626,10 +635,31 @@ impl DatabaseManager {
                         source_id: action.source_id,
                     });
             }
+        }
+        if include_evidence {
             let evidence = sqlx::query_as::<_, RawEvidence>(
-                r#"SELECT e.interval_id, e.source_type, e.source_id, e.occurred_at
+                r#"SELECT e.interval_id, e.source_type, e.source_id, e.occurred_at,
+                          CASE
+                            WHEN e.source_type = 'frame' THEN source_frame.id
+                            WHEN e.source_type = 'ui_event' THEN event_frame.id
+                            ELSE NULL
+                          END AS frame_id,
+                          COALESCE(NULLIF(event.app_name, ''),
+                                   NULLIF(source_frame.app_name, ''),
+                                   NULLIF(event_frame.app_name, '')) AS app_name,
+                          COALESCE(NULLIF(event.window_title, ''),
+                                   NULLIF(source_frame.window_name, ''),
+                                   NULLIF(event_frame.window_name, '')) AS window_title,
+                          COALESCE(NULLIF(event.browser_url, ''),
+                                   NULLIF(source_frame.browser_url, ''),
+                                   NULLIF(event_frame.browser_url, '')) AS browser_url
                    FROM activity_evidence e
                    JOIN activity_intervals i ON i.id = e.interval_id
+                   LEFT JOIN frames source_frame
+                     ON e.source_type = 'frame' AND source_frame.id = e.source_id
+                   LEFT JOIN ui_events event
+                     ON e.source_type = 'ui_event' AND event.id = e.source_id
+                   LEFT JOIN frames event_frame ON event_frame.id = event.frame_id
                    WHERE julianday(i.end_at) > julianday(?1)
                      AND julianday(i.start_at) < julianday(?2)
                    ORDER BY e.occurred_at, e.id"#,
@@ -646,6 +676,10 @@ impl DatabaseManager {
                         source_type: item.source_type,
                         source_id: item.source_id,
                         occurred_at: item.occurred_at,
+                        frame_id: item.frame_id,
+                        app_name: item.app_name,
+                        window_title: item.window_title,
+                        browser_url: item.browser_url,
                     });
             }
         }
@@ -801,7 +835,32 @@ mod tests {
     #[tokio::test]
     async fn reconcile_round_trips_hierarchy_actions_and_evidence() {
         let (db, _dir) = test_db().await;
-        let (tasks, intervals) = drafts(9);
+        let mut tx = db.begin_immediate_with_retry().await.unwrap();
+        let frame_id: i64 = sqlx::query_scalar(
+            "INSERT INTO frames \
+             (timestamp, app_name, window_name, browser_url, focused) \
+             VALUES ('2026-08-17T09:01:00Z', 'Arc', 'Pull request', \
+                     'https://github.com/screenpipe/screenpipe/pull/42', 1) \
+             RETURNING id",
+        )
+        .fetch_one(&mut **tx.conn())
+        .await
+        .unwrap();
+        let source_id: i64 = sqlx::query_scalar(
+            "INSERT INTO ui_events \
+             (timestamp, relative_ms, event_type, frame_id, app_name, \
+              window_title, browser_url) \
+             VALUES ('2026-08-17T09:01:00Z', 0, 'click', ?1, 'Arc', \
+                     'Pull request', 'https://github.com/screenpipe/screenpipe/pull/42') \
+             RETURNING id",
+        )
+        .bind(frame_id)
+        .fetch_one(&mut **tx.conn())
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let (tasks, intervals) = drafts(source_id);
         db.reconcile_activity_ledger(
             "deterministic-v1",
             at("2026-08-17T09:00:00Z"),
@@ -813,7 +872,12 @@ mod tests {
         .unwrap();
 
         let rows = db
-            .list_activity_ledger(at("2026-08-17T08:00:00Z"), at("2026-08-17T10:00:00Z"), true)
+            .list_activity_ledger(
+                at("2026-08-17T08:00:00Z"),
+                at("2026-08-17T10:00:00Z"),
+                true,
+                true,
+            )
             .await
             .unwrap();
         assert_eq!(rows.len(), 1);
@@ -821,6 +885,12 @@ mod tests {
         assert_eq!(rows[0].parent_title.as_deref(), Some("Browser"));
         assert_eq!(rows[0].actions.len(), 1);
         assert_eq!(rows[0].evidence.len(), 1);
+        assert_eq!(rows[0].evidence[0].frame_id, Some(frame_id));
+        assert_eq!(rows[0].evidence[0].app_name.as_deref(), Some("Arc"));
+        assert_eq!(
+            rows[0].evidence[0].browser_url.as_deref(),
+            Some("https://github.com/screenpipe/screenpipe/pull/42")
+        );
         assert_eq!(
             db.activity_ledger_last_reconciled_at("deterministic-v1")
                 .await
@@ -904,7 +974,12 @@ mod tests {
         tx.commit().await.unwrap();
 
         let rows = db
-            .list_activity_ledger(at("2026-08-17T08:00:00Z"), at("2026-08-17T10:00:00Z"), true)
+            .list_activity_ledger(
+                at("2026-08-17T08:00:00Z"),
+                at("2026-08-17T10:00:00Z"),
+                true,
+                true,
+            )
             .await
             .unwrap();
         assert!(rows.is_empty());

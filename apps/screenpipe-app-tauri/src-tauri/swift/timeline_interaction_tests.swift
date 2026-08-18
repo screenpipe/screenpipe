@@ -667,6 +667,52 @@ private func testAttachTracksHost(model: TimelineViewModel) {
     pump(0.3)
 }
 
+/// Deep links must drive the per-host controller used by the embedded app,
+/// not the separate standalone controller.
+@MainActor
+private func testNavigationTargetsAttachedController() {
+    let hostKey = 91_117
+    let host = NSWindow(
+        contentRect: NSRect(x: 160, y: 160, width: 900, height: 700),
+        styleMask: [.titled, .resizable], backing: .buffered, defer: false
+    )
+    host.makeKeyAndOrderFront(nil)
+    pump(0.2)
+
+    let controller = TimelineWindowController.controller(forHost: hostKey)
+    let attached = controller.attach(
+        config: TimelineAPIConfig(host: "127.0.0.1", port: 0, apiKey: nil),
+        hostWindowNumber: host.windowNumber,
+        rect: NSRect(x: 20, y: 20, width: 500, height: 400),
+        hostWindowLabel: "home"
+    )
+    expect(attached, "the host-specific timeline must attach")
+    guard let model = controller.currentModel else {
+        failures.append("the host-specific timeline has no model")
+        TimelineWindowController.releaseController(forHost: hostKey)
+        host.close()
+        return
+    }
+
+    let frames = fixtureFrames(count: 30, base: Date(timeIntervalSince1970: 1_787_000_000))
+    model.injectForTesting(frames: frames)
+    model.setIndex(0)
+    pump(0.2)
+    expect(TimelineWindowController.activeNavigationModel() === model,
+           "deep links must resolve the embedded host model")
+
+    let target = frames[12].timestamp
+    let payload = "{\"timestamp\":\"\(target)\"}"
+    let result = payload.withCString { timeline_navigate($0) }
+    expectEqual(result, 0, "embedded timeline navigation result")
+    pump(0.2)
+    expectEqual(model.currentIndex, 12, "embedded timeline deep link index")
+
+    TimelineWindowController.releaseController(forHost: hostKey)
+    host.close()
+    pump(0.2)
+}
+
 /// Keyboard has to work through the real window, not just the handler.
 @MainActor
 private func testKeyboardThroughWindow(window: NSWindow, model: TimelineViewModel) {
@@ -857,6 +903,7 @@ private func runTests() {
         ("search click queues until host attaches", testSearchClickQueuedUntilHostAttaches),
         ("icons", testIcons),
         ("icon chip renders", { testIconChipRenders(shots: shots) }),
+        ("deep links target attached host", testNavigationTargetsAttachedController),
         // Last: it re-parents and re-styles the shared window.
         ("attach tracks host", { testAttachTracksHost(model: model) }),
     ]

@@ -30,6 +30,7 @@ import { commands } from "@/lib/utils/tauri";
 import { getApiKey, getApiPort, localFetch } from "@/lib/api";
 import { TimelineDailySummary } from "@/components/rewind/timeline/daily-summary";
 import { showChatWithPrefill } from "@/lib/chat-utils";
+import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { toast } from "@/components/ui/use-toast";
 
 export interface NativeTimelineSelectionContext {
@@ -53,16 +54,20 @@ export interface NativeTimelineDailySummaryRequest {
 
 export type NativeTimelineOcclusionMode = "above" | "underlay" | "detached";
 
+export const NATIVE_TIMELINE_NAVIGATION_RETRY_MS = [
+  0, 1_000, 3_000, 5_500, 8_000,
+] as const;
+
 export function nativeTimelineOcclusionMode(
   transparentHost: boolean,
-  occluded: boolean
+  occluded: boolean,
 ): NativeTimelineOcclusionMode {
   if (!occluded) return "above";
   return transparentHost ? "underlay" : "detached";
 }
 
 export function buildNativeSelectionChatPrefill(
-  selection: NativeTimelineSelectionContext
+  selection: NativeTimelineSelectionContext,
 ): { context: string; prompt: string } | null {
   const start = new Date(selection.start);
   const end = new Date(selection.end);
@@ -166,18 +171,23 @@ export function NativeTimelineBridge() {
           void showChatWithPrefill({
             ...prefill,
             source: "timeline",
-          }).then(() => {
-            posthog.capture("timeline_selection_to_chat", {
-              selection_duration_ms:
-                new Date(event.payload.end).getTime() -
-                new Date(event.payload.start).getTime(),
-              frames_in_selection: event.payload.frameCount,
-              native_timeline: true,
+          })
+            .then(() => {
+              posthog.capture("timeline_selection_to_chat", {
+                selection_duration_ms:
+                  new Date(event.payload.end).getTime() -
+                  new Date(event.payload.start).getTime(),
+                frames_in_selection: event.payload.frameCount,
+                native_timeline: true,
+              });
+            })
+            .catch((error) => {
+              console.error(
+                "failed to open chat for native timeline selection",
+                error,
+              );
             });
-          }).catch((error) => {
-            console.error("failed to open chat for native timeline selection", error);
-          });
-        }
+        },
       ),
       listen<NativeTimelineExportSelection>(
         "timeline-export-video-selection",
@@ -192,33 +202,41 @@ export function NativeTimelineBridge() {
               end: selection.end,
               include_audio: true,
             }),
-          }).then(async (response) => {
-            if (!response.ok) {
-              const body = await response.json().catch(() => null);
-              throw new Error(body?.error || `export failed (${response.status})`);
-            }
-            const result = await response.json();
-            const outputPath = String(result.output_path || "");
-            if (outputPath) await revealItemInDir(outputPath);
-            toast({
-              title: "timeline video exported",
-              description: outputPath || "Saved in screenpipe exports.",
+          })
+            .then(async (response) => {
+              if (!response.ok) {
+                const body = await response.json().catch(() => null);
+                throw new Error(
+                  body?.error || `export failed (${response.status})`,
+                );
+              }
+              const result = await response.json();
+              const outputPath = String(result.output_path || "");
+              if (outputPath) await revealItemInDir(outputPath);
+              toast({
+                title: "timeline video exported",
+                description: outputPath || "Saved in screenpipe exports.",
+              });
+              posthog.capture("timeline_selection_exported", {
+                selection_duration_ms:
+                  new Date(selection.end).getTime() -
+                  new Date(selection.start).getTime(),
+                native_timeline: true,
+              });
+            })
+            .catch((error) => {
+              console.error(
+                "failed to export native timeline selection",
+                error,
+              );
+              toast({
+                variant: "destructive",
+                title: "timeline export failed",
+                description:
+                  error instanceof Error ? error.message : "Try again.",
+              });
             });
-            posthog.capture("timeline_selection_exported", {
-              selection_duration_ms:
-                new Date(selection.end).getTime() -
-                new Date(selection.start).getTime(),
-              native_timeline: true,
-            });
-          }).catch((error) => {
-            console.error("failed to export native timeline selection", error);
-            toast({
-              variant: "destructive",
-              title: "timeline export failed",
-              description: error instanceof Error ? error.message : "Try again.",
-            });
-          });
-        }
+        },
       ),
     ];
     return () => {
@@ -263,6 +281,37 @@ export function NativeTimeline({
   // transparent hole where the timeline should be, which reads as a blank
   // screen, so the React one takes over instead.
   const [attached, setAttached] = useState<boolean | null>(null);
+  const pendingNavigation = useTimelineStore(
+    (state) => state.pendingNavigation,
+  );
+  const [nativePendingNavigation, setNativePendingNavigation] =
+    useState(pendingNavigation);
+  const setPendingNavigation = useTimelineStore(
+    (state) => state.setPendingNavigation,
+  );
+
+  useEffect(() => {
+    if (pendingNavigation) setNativePendingNavigation(pendingNavigation);
+  }, [pendingNavigation]);
+
+  useEffect(() => {
+    // The React fallback briefly mounts while native availability resolves and
+    // consumes the shared store target. Listen to the same navigation events
+    // so Swift retains an independent request until its child window attaches.
+    const subscriptions = [
+      listen<string>("navigate-to-timestamp", (event) => {
+        setNativePendingNavigation({ timestamp: event.payload });
+      }),
+      listen<string>("navigate-to-frame", (event) => {
+        setNativePendingNavigation({ timestamp: "", frameId: event.payload });
+      }),
+    ];
+    return () => {
+      for (const subscription of subscriptions) {
+        void subscription.then((unlisten) => unlisten());
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const label = getCurrentWindow().label;
@@ -271,7 +320,7 @@ export function NativeTimeline({
       (event) => {
         if (event.payload?.windowLabel !== label) return;
         setAttached(event.payload.ok);
-      }
+      },
     );
     return () => {
       void subscription.then((unlisten) => unlisten());
@@ -292,6 +341,55 @@ export function NativeTimeline({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    const navigation = nativePendingNavigation;
+    if (available !== true || attached !== true || !navigation) return;
+
+    const timestamp = navigation.timestamp || null;
+    const frameId = navigation.frameId || null;
+    const timers = NATIVE_TIMELINE_NAVIGATION_RETRY_MS.map((delay) =>
+      window.setTimeout(() => {
+        // Timestamp first ensures a past-day artifact loads the right day.
+        // Frame id then refines a screen artifact to the exact captured frame.
+        if (timestamp) {
+          void commands.nativeTimelineNavigate(timestamp, null).catch(() => {
+            // A later retry runs after the native day finishes loading.
+          });
+        }
+        if (frameId) {
+          void commands.nativeTimelineNavigate(null, frameId).catch(() => {
+            // The target frame may not exist until the timestamp request lands.
+          });
+        }
+      }, delay),
+    );
+    timers.push(
+      window.setTimeout(
+        () => {
+          const current = useTimelineStore.getState().pendingNavigation;
+          if (
+            !current ||
+            (current.timestamp === navigation.timestamp &&
+              current.frameId === navigation.frameId)
+          ) {
+            setNativePendingNavigation((pending) =>
+              pending?.timestamp === navigation.timestamp &&
+              pending?.frameId === navigation.frameId
+                ? null
+                : pending,
+            );
+            setPendingNavigation(null);
+          }
+        },
+        NATIVE_TIMELINE_NAVIGATION_RETRY_MS.at(-1)! + 500,
+      ),
+    );
+
+    return () => {
+      for (const timer of timers) window.clearTimeout(timer);
+    };
+  }, [attached, available, nativePendingNavigation, setPendingNavigation]);
 
   useEffect(() => {
     if (!available) return;
@@ -339,7 +437,8 @@ export function NativeTimeline({
         occluded = nowOccluded;
         const mode = nativeTimelineOcclusionMode(transparentHost, occluded);
         if (mode === "underlay") place(true);
-        else if (mode === "detached") void emit("native-timeline-detach", detachPayload);
+        else if (mode === "detached")
+          void emit("native-timeline-detach", detachPayload);
         else place();
         return;
       }

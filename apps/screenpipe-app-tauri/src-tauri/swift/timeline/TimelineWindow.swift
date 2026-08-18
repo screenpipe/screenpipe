@@ -362,11 +362,27 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
         return attachedControllers.values.first { $0.window === keyWindow }?.hostWindowLabel
     }
 
+    /// Deep links arrive without a host pointer. Prefer the timeline attached
+    /// to the key host (or the key timeline itself), then any visible attached
+    /// timeline, before falling back to the standalone window.
+    static func activeNavigationModel() -> TimelineViewModel? {
+        if let keyWindow = NSApp.keyWindow,
+           let attached = attachedControllers.values.first(where: { controller in
+               controller.window === keyWindow || controller.window?.parent === keyWindow
+           }) {
+            return attached.currentModel
+        }
+        if let visible = attachedControllers.values.first(where: { $0.isVisible }) {
+            return visible.currentModel
+        }
+        return shared.currentModel
+    }
+
     /// Return the model owned by a specific Tauri host window. Search results
     /// must not use `shared`: Home and the overlay each have their own attached
     /// controller, and whichever attached last is not necessarily the source.
     static func model(forWindowLabel label: String?) -> TimelineViewModel? {
-        guard let label else { return shared.currentModel }
+        guard let label else { return activeNavigationModel() }
         return attachedControllers.values
             .first { $0.hostWindowLabel == label }?
             .currentModel

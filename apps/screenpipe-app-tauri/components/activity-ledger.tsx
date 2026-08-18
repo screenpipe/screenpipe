@@ -10,14 +10,19 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { emit } from "@tauri-apps/api/event";
+import { useRouter } from "next/navigation";
 import {
-  ChevronDown,
+  AppWindow,
+  AudioLines,
   Loader2,
   MessageCircleMore,
   RefreshCw,
+  Users,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { faviconUrl } from "@/components/settings/capture-filters/icon-urls";
 import {
   Select,
   SelectContent,
@@ -37,10 +42,21 @@ import {
   type ActivityHistoryEntry,
   type ActivityReviewMeeting,
 } from "@/lib/activity-review-prompt";
+import {
+  clearPersistedActivityHistory,
+  loadPersistedActivityHistory,
+  mergeActivityHistoryCoverage,
+  mergeActivityHistoryDocuments,
+  nextActivityHistoryRange,
+  reconcilePersistedActivityHistory,
+  type ActivityHistoryCoverage,
+} from "@/lib/activity-history-persistence";
 import { localFetch } from "@/lib/api";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import { runDailySummaryWithPi } from "@/lib/daily-summary-pi";
+import { appIconUrl } from "@/lib/first-run/recent-activity";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { cn } from "@/lib/utils";
 import { pickPipePreset } from "@/lib/utils/pick-pipe-preset";
 import type { AIPreset } from "@/lib/utils/tauri";
@@ -58,6 +74,31 @@ type MeetingResponse = {
   title: string | null;
 };
 type TimeRange = { start: Date; end: Date };
+type ActivityLedgerArtifactEvidence = {
+  source_type: string;
+  source_id: number;
+  occurred_at: string;
+  frame_id?: number | null;
+  app_name?: string | null;
+  window_title?: string | null;
+  browser_url?: string | null;
+};
+type ActivityLedgerArtifactInterval = {
+  start_at: string;
+  end_at: string;
+  app_name: string | null;
+  evidence?: ActivityLedgerArtifactEvidence[];
+};
+type ActivityLedgerArtifactsResponse = {
+  intervals?: ActivityLedgerArtifactInterval[];
+};
+type ActivityArtifact = ActivityHistoryEvidence & {
+  browser_url?: string | null;
+};
+
+const MAX_VISIBLE_ARTIFACTS = 6;
+const SYSTEM_ARTIFACT_APP =
+  /^(controlcenter|notificationcenter|usernotificationcenter|loginwindow|spotlight|dock|systemuiserver|windowserver|interaction-tests)$/i;
 
 const RANGE_COPY: Record<RangePreset, string> = {
   today: "Today",
@@ -124,6 +165,16 @@ export function buildActivityMeetingsPath(range: TimeRange): string {
   return `/meetings?${params.toString()}`;
 }
 
+export function buildActivityLedgerArtifactsPath(range: TimeRange): string {
+  const params = new URLSearchParams({
+    start_time: range.start.toISOString(),
+    end_time: range.end.toISOString(),
+    depth: "task",
+    include_artifacts: "true",
+  });
+  return `/activity-ledger?${params.toString()}`;
+}
+
 function meetingAnchors(
   records: MeetingResponse[],
   range: TimeRange,
@@ -152,6 +203,7 @@ function meetingAnchors(
         title:
           meeting.title?.trim() ||
           `${meeting.meeting_app?.trim() || "Recorded"} meeting`,
+        app_name: meeting.meeting_app?.trim() || null,
       },
     ];
   });
@@ -190,9 +242,41 @@ function formatEvidenceTime(at: string): string {
   }).format(new Date(at));
 }
 
-function evidenceHref(evidence: ActivityHistoryEvidence): string {
-  if (evidence.kind === "meeting" && evidence.meeting_id) {
-    return `screenpipe://meeting/${evidence.meeting_id}`;
+function siteDomain(value?: string | null): string | null {
+  if (!value) return null;
+  try {
+    return new URL(value).hostname.toLowerCase().replace(/^www\./, "") || null;
+  } catch {
+    return null;
+  }
+}
+
+function usefulAppName(value?: string | null): string | null {
+  const app = value
+    ?.replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "")
+    .trim();
+  if (
+    !app ||
+    /^(unknown app|unknown)$/i.test(app) ||
+    SYSTEM_ARTIFACT_APP.test(app)
+  ) {
+    return null;
+  }
+  return app;
+}
+
+function evidenceHref(evidence: ActivityArtifact): string {
+  if (
+    evidence.kind === "meeting" &&
+    evidence.meeting_id &&
+    evidence.meeting_id > 0
+  ) {
+    const params = new URLSearchParams({
+      section: "meetings",
+      meetingId: String(evidence.meeting_id),
+      transcript: "true",
+    });
+    return `/home?${params.toString()}`;
   }
   if (evidence.kind === "screen" && evidence.frame_id) {
     return `screenpipe://frame/${evidence.frame_id}`;
@@ -200,8 +284,193 @@ function evidenceHref(evidence: ActivityHistoryEvidence): string {
   return `screenpipe://timeline?timestamp=${encodeURIComponent(evidence.at)}`;
 }
 
-function entryKey(entry: ActivityHistoryEntry): string {
-  return `${entry.id}:${entry.start_at}`;
+function artifactKey(evidence: ActivityArtifact): string {
+  if (evidence.kind === "meeting" && evidence.meeting_id) {
+    return `meeting:${evidence.meeting_id}`;
+  }
+  const domain = siteDomain(evidence.browser_url);
+  if (domain) return `site:${domain}`;
+  const app = usefulAppName(evidence.app_name);
+  if (app) return `app:${app.toLowerCase()}`;
+  return evidence.kind;
+}
+
+function artifactEvidence(evidence: ActivityArtifact[]): ActivityArtifact[] {
+  const seen = new Set<string>();
+  return evidence.filter((item) => {
+    if (
+      item.kind !== "meeting" &&
+      item.app_name &&
+      !usefulAppName(item.app_name)
+    ) {
+      return false;
+    }
+    const key = artifactKey(item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export function artifactsForHistoryEntry(
+  entry: ActivityHistoryEntry,
+  intervals: ActivityLedgerArtifactInterval[],
+): ActivityArtifact[] {
+  const entryStart = new Date(entry.start_at).getTime();
+  const entryEnd = new Date(entry.end_at).getTime();
+  const ranked = new Map<
+    string,
+    { artifact: ActivityArtifact; activeMs: number }
+  >();
+
+  for (const interval of intervals) {
+    const intervalStart = new Date(interval.start_at).getTime();
+    const intervalEnd = new Date(interval.end_at).getTime();
+    if (
+      !Number.isFinite(intervalStart) ||
+      !Number.isFinite(intervalEnd) ||
+      intervalEnd <= entryStart ||
+      intervalStart >= entryEnd
+    ) {
+      continue;
+    }
+
+    const overlapMs =
+      Math.min(entryEnd, intervalEnd) - Math.max(entryStart, intervalStart);
+    const intervalArtifacts = new Map<string, ActivityArtifact>();
+    for (const evidence of interval.evidence ?? []) {
+      const at = new Date(evidence.occurred_at).getTime();
+      if (!Number.isFinite(at) || at < entryStart || at > entryEnd) continue;
+      const app = usefulAppName(evidence.app_name);
+      const domain = siteDomain(evidence.browser_url);
+      const frameId =
+        evidence.frame_id ??
+        (evidence.source_type === "frame" ? evidence.source_id : null);
+      const common = {
+        kind: "screen" as const,
+        at: new Date(at).toISOString(),
+        frame_id: frameId,
+        meeting_id: null,
+        label:
+          evidence.window_title?.trim() || app || domain || "Screen capture",
+      };
+      if (app) {
+        const artifact = { ...common, app_name: app, browser_url: null };
+        intervalArtifacts.set(artifactKey(artifact), artifact);
+      }
+      if (domain) {
+        const artifact = {
+          ...common,
+          app_name: null,
+          browser_url: evidence.browser_url,
+          label: domain,
+        };
+        intervalArtifacts.set(artifactKey(artifact), artifact);
+      }
+    }
+
+    const intervalApp = usefulAppName(interval.app_name);
+    if (intervalArtifacts.size === 0 && intervalApp) {
+      const artifact = {
+        kind: "screen",
+        at: new Date(Math.max(entryStart, intervalStart)).toISOString(),
+        frame_id: null,
+        meeting_id: null,
+        app_name: intervalApp,
+        label: intervalApp,
+        browser_url: null,
+      } satisfies ActivityArtifact;
+      intervalArtifacts.set(artifactKey(artifact), artifact);
+    }
+
+    for (const [key, artifact] of intervalArtifacts) {
+      const existing = ranked.get(key);
+      ranked.set(key, {
+        artifact:
+          existing?.artifact.frame_id && !artifact.frame_id
+            ? existing.artifact
+            : artifact,
+        activeMs: (existing?.activeMs ?? 0) + overlapMs,
+      });
+    }
+  }
+
+  const meetings = artifactEvidence(
+    entry.evidence.filter((item) => item.kind === "meeting"),
+  );
+  const audio = artifactEvidence(
+    entry.evidence.filter((item) => item.kind === "audio"),
+  );
+  const derivedBudget = Math.max(
+    0,
+    MAX_VISIBLE_ARTIFACTS - meetings.length - audio.length,
+  );
+  const rankedArtifacts = [...ranked.values()].sort(
+    (left, right) =>
+      right.activeMs - left.activeMs ||
+      new Date(left.artifact.at).getTime() -
+        new Date(right.artifact.at).getTime(),
+  );
+  const selected = rankedArtifacts.slice(0, derivedBudget);
+  const bestSite = rankedArtifacts.find(({ artifact }) =>
+    Boolean(siteDomain(artifact.browser_url)),
+  );
+  if (
+    bestSite &&
+    selected.length > 0 &&
+    !selected.some(({ artifact }) => siteDomain(artifact.browser_url))
+  ) {
+    selected[selected.length - 1] = bestSite;
+  }
+
+  const normalizedOriginals = entry.evidence
+    .filter(
+      (item) =>
+        item.kind === "screen" &&
+        (!item.app_name || Boolean(usefulAppName(item.app_name))),
+    )
+    .map((item) => ({
+      ...item,
+      app_name: usefulAppName(item.app_name),
+    }));
+  return artifactEvidence([
+    ...meetings,
+    ...selected.map(({ artifact }) => artifact),
+    ...audio,
+    ...normalizedOriginals,
+  ]).slice(0, MAX_VISIBLE_ARTIFACTS);
+}
+
+function EvidenceArtifactIcon({ evidence }: { evidence: ActivityArtifact }) {
+  const [iconFailed, setIconFailed] = useState(false);
+  const domain = siteDomain(evidence.browser_url);
+  if (evidence.kind === "meeting") {
+    return <Users className="h-4 w-4" aria-hidden="true" />;
+  }
+  if (domain && !iconFailed) {
+    return (
+      <img
+        src={faviconUrl(domain)}
+        alt=""
+        className="h-full w-full object-contain"
+        onError={() => setIconFailed(true)}
+      />
+    );
+  }
+  if (evidence.app_name && !iconFailed) {
+    return (
+      <img
+        src={appIconUrl(evidence.app_name)}
+        alt=""
+        className="h-full w-full object-contain"
+        onError={() => setIconFailed(true)}
+      />
+    );
+  }
+  if (evidence.kind === "audio") {
+    return <AudioLines className="h-4 w-4" aria-hidden="true" />;
+  }
+  return <AppWindow className="h-4 w-4" aria-hidden="true" />;
 }
 
 function localDayKey(value: string): string {
@@ -246,18 +515,22 @@ function compactEntryContext(entry: ActivityHistoryEntry): string {
     `Kind: ${entry.kind}${entry.meeting_id ? ` (meeting ${entry.meeting_id})` : ""}`,
     `Activity: ${entry.title}`,
     `Summary: ${entry.summary}`,
-    `Citations:\n${entry.evidence
+    `Source artifacts:\n${entry.evidence
       .map(
         (evidence) =>
           `- ${evidence.kind} at ${evidence.at}${
             evidence.frame_id ? `, frame ${evidence.frame_id}` : ""
-          }: ${evidence.label}`,
+          }${evidence.app_name ? `, app ${evidence.app_name}` : ""}: ${evidence.label}`,
       )
       .join("\n")}`,
   ].join("\n");
 }
 
 export function ActivityLedger() {
+  const router = useRouter();
+  const setPendingNavigation = useTimelineStore(
+    (state) => state.setPendingNavigation,
+  );
   const initialNow = useMemo(() => new Date(), []);
   const [anchor, setAnchor] = useState(initialNow);
   const [preset, setPreset] = useState<RangePreset>("today");
@@ -269,11 +542,16 @@ export function ActivityLedger() {
   );
   const [summary, setSummary] = useState<ActivitySummaryResponse | null>(null);
   const [meetings, setMeetings] = useState<ActivityReviewMeeting[]>([]);
+  const [ledgerIntervals, setLedgerIntervals] = useState<
+    ActivityLedgerArtifactInterval[]
+  >([]);
   const [history, setHistory] = useState<ActivityHistoryDocument | null>(null);
+  const [historyCoverage, setHistoryCoverage] = useState<
+    ActivityHistoryCoverage[]
+  >([]);
   const [loading, setLoading] = useState(true);
   const [cacheReady, setCacheReady] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [expandedEntry, setExpandedEntry] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState("");
   const historyAbortRef = useRef<AbortController | null>(null);
@@ -289,6 +567,10 @@ export function ActivityLedger() {
     () => pickPipePreset((settings?.aiPresets ?? []) as AIPreset[]),
     [settings?.aiPresets],
   );
+  const pendingHistoryRange = useMemo(
+    () => (range ? nextActivityHistoryRange(range, historyCoverage) : null),
+    [historyCoverage, range],
+  );
 
   useEffect(() => {
     if (!range || range.start >= range.end) {
@@ -300,10 +582,11 @@ export function ActivityLedger() {
     setLoading(true);
     setSummary(null);
     setMeetings([]);
+    setLedgerIntervals([]);
     setError(null);
     const fetchSnapshot = async () => {
       let lastError: unknown;
-      for (let attempt = 0; attempt < 3; attempt += 1) {
+      for (let attempt = 0; attempt < 6; attempt += 1) {
         if (attempt > 0) {
           await new Promise<void>((resolve) => {
             const timeout = window.setTimeout(resolve, attempt * 750);
@@ -319,15 +602,19 @@ export function ActivityLedger() {
         }
         if (controller.signal.aborted) return null;
         try {
-          const [summaryResponse, meetingsResponse] = await Promise.all([
-            localFetch(buildActivitySummaryPath(range), {
-              signal: controller.signal,
-            }),
-            localFetch(buildActivityMeetingsPath(range), {
-              signal: controller.signal,
-            }),
-          ]);
-          return { summaryResponse, meetingsResponse };
+          const [summaryResponse, meetingsResponse, artifactsResponse] =
+            await Promise.all([
+              localFetch(buildActivitySummaryPath(range), {
+                signal: controller.signal,
+              }),
+              localFetch(buildActivityMeetingsPath(range), {
+                signal: controller.signal,
+              }),
+              localFetch(buildActivityLedgerArtifactsPath(range), {
+                signal: controller.signal,
+              }).catch(() => null),
+            ]);
+          return { summaryResponse, meetingsResponse, artifactsResponse };
         } catch (reason) {
           lastError = reason;
         }
@@ -348,19 +635,27 @@ export function ActivityLedger() {
             `Meeting request failed (${responses.meetingsResponse.status}).`,
           );
         }
-        const [nextSummary, meetingRecords] = await Promise.all([
-          responses.summaryResponse.json() as Promise<ActivitySummaryResponse>,
-          responses.meetingsResponse.json() as Promise<MeetingResponse[]>,
-        ]);
+        const [nextSummary, meetingRecords, artifactRecords] =
+          await Promise.all([
+            responses.summaryResponse.json() as Promise<ActivitySummaryResponse>,
+            responses.meetingsResponse.json() as Promise<MeetingResponse[]>,
+            responses.artifactsResponse?.ok
+              ? (responses.artifactsResponse.json() as Promise<ActivityLedgerArtifactsResponse>)
+              : Promise.resolve({ intervals: [] }),
+          ]);
         return {
           summary: nextSummary,
           meetings: meetingAnchors(meetingRecords, range),
+          ledgerIntervals: Array.isArray(artifactRecords.intervals)
+            ? artifactRecords.intervals
+            : [],
         };
       })
       .then((snapshot) => {
         if (!snapshot) return;
         setSummary(snapshot.summary);
         setMeetings(snapshot.meetings);
+        setLedgerIntervals(snapshot.ledgerIntervals);
       })
       .catch((reason: unknown) => {
         if (controller.signal.aborted) return;
@@ -378,24 +673,58 @@ export function ActivityLedger() {
     setHistoryLoading(false);
     setHistoryError("");
     setHistory(null);
-    setExpandedEntry(null);
+    setHistoryCoverage([]);
     setCacheReady(false);
-    if (!range) return;
-    try {
-      const cached = window.localStorage.getItem(
-        historyCacheKey(range, preset),
-      );
-      if (cached) setHistory(parseActivityHistoryResponse(cached, range));
-    } catch {
-      // A malformed or stale cache should never prevent a fresh interpretation.
-    } finally {
-      setCacheReady(true);
-    }
-    return () => historyAbortRef.current?.abort();
-  }, [preset, range]);
+    if (!range || loading) return;
+    let cancelled = false;
+    void loadPersistedActivityHistory(ACTIVITY_REVIEW_PROMPT_VERSION, range)
+      .then(async (stored) => {
+        let snapshot = stored;
+        if (stored.entries.length === 0 && stored.coverage.length === 0) {
+          try {
+            const cached = window.localStorage.getItem(
+              historyCacheKey(range, preset),
+            );
+            if (cached) {
+              const legacy = parseActivityHistoryResponse(
+                cached,
+                range,
+                meetings,
+              );
+              snapshot = await reconcilePersistedActivityHistory(
+                ACTIVITY_REVIEW_PROMPT_VERSION,
+                range,
+                legacy,
+                range,
+              );
+              window.localStorage.removeItem(historyCacheKey(range, preset));
+            }
+          } catch {
+            // Ignore a malformed legacy cache and build from source evidence.
+          }
+        }
+        if (cancelled) return;
+        setHistory(
+          snapshot.entries.length > 0 ? { entries: snapshot.entries } : null,
+        );
+        setHistoryCoverage(snapshot.coverage);
+      })
+      .catch(() => {
+        // The tab remains usable in memory if encrypted-store access fails.
+      })
+      .finally(() => {
+        if (!cancelled) setCacheReady(true);
+      });
+    return () => {
+      cancelled = true;
+      historyAbortRef.current?.abort();
+    };
+  }, [loading, meetings, preset, range]);
 
   const generateHistory = useCallback(async () => {
     if (!range || historyLoadingRef.current) return;
+    const generationRange = nextActivityHistoryRange(range, historyCoverage);
+    if (!generationRange) return;
     if (!settings?.enhancedAI) {
       setHistoryError("Turn on Enhanced AI to build your history.");
       return;
@@ -411,36 +740,76 @@ export function ActivityLedger() {
     setHistoryLoading(true);
     setHistoryError("");
     try {
+      const generationMeetings = meetings.filter(
+        (meeting) =>
+          new Date(meeting.end_at).getTime() >
+            generationRange.start.getTime() &&
+          new Date(meeting.start_at).getTime() < generationRange.end.getTime(),
+      );
+      let generationSummary = summary;
+      if (
+        generationRange.start.getTime() !== range.start.getTime() ||
+        generationRange.end.getTime() !== range.end.getTime()
+      ) {
+        const response = await localFetch(
+          buildActivitySummaryPath(generationRange),
+          { signal: controller.signal },
+        );
+        if (!response.ok) {
+          throw new Error(`Activity request failed (${response.status}).`);
+        }
+        generationSummary = (await response.json()) as ActivitySummaryResponse;
+      }
       const reviewRange = {
-        start: range.start.toISOString(),
-        end: range.end.toISOString(),
-        label: RANGE_COPY[preset].toLowerCase(),
+        start: generationRange.start.toISOString(),
+        end: generationRange.end.toISOString(),
+        label: `${RANGE_COPY[preset].toLowerCase()} continuation`,
       };
+      if (
+        generationSummary?.data_status !== "ok" ||
+        generationSummary.total_active_minutes <= 0
+      ) {
+        const persisted = await reconcilePersistedActivityHistory(
+          ACTIVITY_REVIEW_PROMPT_VERSION,
+          generationRange,
+          { entries: [] },
+          range,
+        );
+        setHistory(
+          persisted.entries.length > 0 ? { entries: persisted.entries } : null,
+        );
+        setHistoryCoverage(persisted.coverage);
+        return;
+      }
       const raw = await runDailySummaryWithPi({
-        date: range.start,
+        date: generationRange.start,
         range: {
-          start: range.start.toISOString(),
-          end: range.end.toISOString(),
+          start: generationRange.start.toISOString(),
+          end: generationRange.end.toISOString(),
         },
         preset: reviewPreset,
         userToken: settings.user?.token ?? null,
         signal: controller.signal,
         sessionPrefix: "activity-history",
         systemPrompt: ACTIVITY_REVIEW_AGENT_SYSTEM_PROMPT,
-        prompt: buildActivityReviewAgentPrompt(reviewRange, meetings),
+        prompt: buildActivityReviewAgentPrompt(reviewRange, generationMeetings),
       });
       const minimumEntries = minimumHistoryEntryCount(
-        summary?.total_active_minutes ?? 0,
-        range,
+        generationSummary.total_active_minutes,
+        generationRange,
       );
-      let next = parseActivityHistoryResponse(raw, range, meetings);
-      let missingMeetings = missingRequiredMeetingIds(next, meetings);
+      let next = parseActivityHistoryResponse(
+        raw,
+        generationRange,
+        generationMeetings,
+      );
+      let missingMeetings = missingRequiredMeetingIds(next, generationMeetings);
       if (next.entries.length < minimumEntries || missingMeetings.length > 0) {
         const repairedRaw = await runDailySummaryWithPi({
-          date: range.start,
+          date: generationRange.start,
           range: {
-            start: range.start.toISOString(),
-            end: range.end.toISOString(),
+            start: generationRange.start.toISOString(),
+            end: generationRange.end.toISOString(),
           },
           preset: reviewPreset,
           userToken: settings.user?.token ?? null,
@@ -449,14 +818,18 @@ export function ActivityLedger() {
           systemPrompt: ACTIVITY_REVIEW_AGENT_SYSTEM_PROMPT,
           prompt: buildActivityReviewRepairPrompt(
             reviewRange,
-            meetings,
+            generationMeetings,
             next,
             minimumEntries,
             missingMeetings,
           ),
         });
-        next = parseActivityHistoryResponse(repairedRaw, range, meetings);
-        missingMeetings = missingRequiredMeetingIds(next, meetings);
+        next = parseActivityHistoryResponse(
+          repairedRaw,
+          generationRange,
+          generationMeetings,
+        );
+        missingMeetings = missingRequiredMeetingIds(next, generationMeetings);
       }
       if (next.entries.length < minimumEntries) {
         throw new Error(
@@ -468,15 +841,34 @@ export function ActivityLedger() {
           "Activity history missed a recorded meeting. Rebuild it to try again.",
         );
       }
-      setHistory(next);
+      let persisted;
       try {
-        window.localStorage.setItem(
-          historyCacheKey(range, preset),
-          JSON.stringify(next),
+        persisted = await reconcilePersistedActivityHistory(
+          ACTIVITY_REVIEW_PROMPT_VERSION,
+          generationRange,
+          next,
+          range,
         );
       } catch {
-        // The generated history remains available for this session.
+        persisted = {
+          entries: mergeActivityHistoryDocuments(
+            history?.entries ?? [],
+            next,
+            generationRange,
+          ),
+          coverage: mergeActivityHistoryCoverage([
+            ...historyCoverage,
+            {
+              start: generationRange.start.toISOString(),
+              end: generationRange.end.toISOString(),
+            },
+          ]),
+        };
       }
+      setHistory(
+        persisted.entries.length > 0 ? { entries: persisted.entries } : null,
+      );
+      setHistoryCoverage(persisted.coverage);
     } catch (reason) {
       if (controller.signal.aborted) return;
       setHistoryError(
@@ -496,7 +888,9 @@ export function ActivityLedger() {
     range,
     reviewPreset,
     settings,
-    summary?.total_active_minutes,
+    summary,
+    history,
+    historyCoverage,
   ]);
 
   useEffect(() => {
@@ -505,7 +899,7 @@ export function ActivityLedger() {
       loading ||
       error ||
       summary?.data_status !== "ok" ||
-      history ||
+      !pendingHistoryRange ||
       historyError ||
       !settings?.enhancedAI
     ) {
@@ -521,19 +915,25 @@ export function ActivityLedger() {
     loading,
     settings?.enhancedAI,
     summary?.data_status,
+    pendingHistoryRange,
   ]);
 
-  const refresh = () => {
+  const refresh = async () => {
+    historyAbortRef.current?.abort();
     if (range) {
       try {
+        await clearPersistedActivityHistory(
+          ACTIVITY_REVIEW_PROMPT_VERSION,
+          range,
+        );
         window.localStorage.removeItem(historyCacheKey(range, preset));
       } catch {
-        // Regeneration still works without cache access.
+        // Regeneration still works in memory without store access.
       }
     }
     setHistory(null);
+    setHistoryCoverage([]);
     setHistoryError("");
-    setExpandedEntry(null);
     setAnchor(new Date());
     if (preset === "custom") setCustomEnd(toLocalInputValue(new Date()));
   };
@@ -565,6 +965,33 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
       source: "activity-history-skill",
     });
   };
+
+  const openEvidence = useCallback(
+    (evidence: ActivityArtifact) => {
+      if (
+        evidence.kind === "meeting" &&
+        evidence.meeting_id &&
+        evidence.meeting_id > 0
+      ) {
+        router.push(evidenceHref(evidence));
+        return;
+      }
+      const frameId =
+        evidence.kind === "screen" && evidence.frame_id
+          ? String(evidence.frame_id)
+          : undefined;
+      setPendingNavigation({ timestamp: evidence.at, frameId });
+      router.push("/home?section=timeline");
+      window.setTimeout(() => {
+        if (frameId) {
+          void emit("navigate-to-frame", frameId);
+        } else {
+          void emit("navigate-to-timestamp", evidence.at);
+        }
+      }, 250);
+    },
+    [router, setPendingNavigation],
+  );
 
   const groupedEntries = useMemo(
     () => groupByDay(history?.entries ?? []),
@@ -616,7 +1043,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={refresh}
+                onClick={() => void refresh()}
                 disabled={loading || historyLoading}
                 aria-label="Refresh history"
               >
@@ -672,7 +1099,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
             <p className="text-sm text-muted-foreground">
               There is not enough captured activity in this range yet.
             </p>
-          ) : historyLoading ? (
+          ) : historyLoading && !history ? (
             <div className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
               Understanding what you worked on…
@@ -708,69 +1135,56 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                           {entry.summary}
                         </p>
 
-                        <div className="mt-3 flex items-center gap-3 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setExpandedEntry((current) =>
-                                current === entryKey(entry)
-                                  ? null
-                                  : entryKey(entry),
-                              )
-                            }
-                            className="inline-flex items-center gap-1 transition-colors hover:text-foreground"
-                            aria-expanded={expandedEntry === entryKey(entry)}
-                            aria-label={`${
-                              expandedEntry === entryKey(entry)
-                                ? "Hide"
-                                : "Show"
-                            } ${entry.evidence.length} citations for ${entry.title}`}
+                        <div className="mt-4 flex items-center gap-3">
+                          <div
+                            className="flex items-center gap-1.5"
+                            aria-label={`Source artifacts for ${entry.title}`}
                           >
-                            {entry.evidence.length}{" "}
-                            {entry.evidence.length === 1
-                              ? "citation"
-                              : "citations"}
-                            <ChevronDown
-                              className={cn(
-                                "h-3 w-3 transition-transform",
-                                expandedEntry === entryKey(entry) &&
-                                  "rotate-180",
-                              )}
-                            />
-                          </button>
+                            {artifactsForHistoryEntry(
+                              entry,
+                              ledgerIntervals,
+                            ).map((evidence) => {
+                              const artifactName =
+                                evidence.kind === "meeting"
+                                  ? "Meeting transcript"
+                                  : siteDomain(evidence.browser_url) ||
+                                    evidence.app_name ||
+                                    (evidence.kind === "audio"
+                                      ? "Transcript"
+                                      : "Screen capture");
+                              const destination =
+                                evidence.kind === "meeting" &&
+                                evidence.meeting_id
+                                  ? "Meetings"
+                                  : "Timeline";
+                              const accessibleLabel = `Open ${artifactName} at ${formatEvidenceTime(evidence.at)} in ${destination}`;
+                              return (
+                                <a
+                                  key={`${artifactKey(evidence)}-${evidence.at}-${evidence.frame_id ?? evidence.meeting_id ?? "timeline"}`}
+                                  href={evidenceHref(evidence)}
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    openEvidence(evidence);
+                                  }}
+                                  className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-background p-1 text-muted-foreground shadow-sm transition hover:border-foreground/40 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                  aria-label={accessibleLabel}
+                                  title={accessibleLabel}
+                                >
+                                  <EvidenceArtifactIcon evidence={evidence} />
+                                </a>
+                              );
+                            })}
+                          </div>
                           <span aria-hidden="true">·</span>
                           <button
                             type="button"
                             onClick={() => makeSkill(entry)}
-                            className="transition-colors hover:text-foreground"
+                            className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
                             aria-label={`Make skill from ${entry.title}`}
                           >
                             Make skill
                           </button>
                         </div>
-
-                        {expandedEntry === entryKey(entry) ? (
-                          <ol className="mt-3 max-w-2xl space-y-2 border-l border-border pl-3">
-                            {entry.evidence.map((evidence) => (
-                              <li
-                                key={`${evidence.kind}-${evidence.at}-${evidence.frame_id ?? evidence.meeting_id ?? "timeline"}`}
-                              >
-                                <a
-                                  href={evidenceHref(evidence)}
-                                  className="group/citation grid gap-1 text-xs leading-5 text-muted-foreground transition-colors hover:text-foreground sm:grid-cols-[72px_48px_1fr]"
-                                >
-                                  <span className="font-mono">
-                                    {formatEvidenceTime(evidence.at)}
-                                  </span>
-                                  <span className="font-mono text-[10px] uppercase tracking-wider">
-                                    {evidence.kind}
-                                  </span>
-                                  <span>{evidence.label}</span>
-                                </a>
-                              </li>
-                            ))}
-                          </ol>
-                        ) : null}
                       </div>
                     </article>
                   ))}

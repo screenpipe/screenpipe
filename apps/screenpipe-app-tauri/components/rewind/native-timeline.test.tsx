@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildNativeSelectionChatPrefill,
+  NATIVE_TIMELINE_NAVIGATION_RETRY_MS,
   nativeTimelineOcclusionMode,
   parseTimelineDailySummaryRequest,
   parseTimelineDay,
@@ -67,14 +68,14 @@ describe("native timeline bridge payloads", () => {
         ...base,
         start: "not-a-date",
         end: "2026-08-16T22:05:00.000Z",
-      })
+      }),
     ).toBeNull();
     expect(
       buildNativeSelectionChatPrefill({
         ...base,
         start: "2026-08-16T22:05:00.000Z",
         end: "2026-08-16T22:00:00.000Z",
-      })
+      }),
     ).toBeNull();
   });
 
@@ -82,5 +83,12 @@ describe("native timeline bridge payloads", () => {
     expect(nativeTimelineOcclusionMode(true, true)).toBe("underlay");
     expect(nativeTimelineOcclusionMode(false, true)).toBe("detached");
     expect(nativeTimelineOcclusionMode(true, false)).toBe("above");
+  });
+
+  it("reasserts pending navigation after the native day finishes loading", () => {
+    expect(NATIVE_TIMELINE_NAVIGATION_RETRY_MS[0]).toBe(0);
+    expect(NATIVE_TIMELINE_NAVIGATION_RETRY_MS.at(-1)).toBeGreaterThanOrEqual(
+      8_000,
+    );
   });
 });

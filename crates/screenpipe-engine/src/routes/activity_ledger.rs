@@ -12,6 +12,7 @@ use oasgen::{oasgen, OaSchema};
 use screenpipe_db::{ActivityActionRecord, ActivityEvidenceRecord, ActivityIntervalRecord};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::error;
 
@@ -34,6 +35,11 @@ pub struct ActivityLedgerQuery {
     pub end_time: DateTime<Utc>,
     #[serde(default)]
     pub depth: ActivityLedgerDepth,
+    /// Include sparse frame-backed app and browser metadata on evidence.
+    /// This is opt-in so ordinary agent queries do not receive extra browsing
+    /// context they did not request.
+    #[serde(default)]
+    pub include_artifacts: bool,
 }
 
 #[derive(Debug, Clone, Serialize, OaSchema)]
@@ -53,6 +59,14 @@ pub struct ActivityLedgerEvidence {
     pub source_type: String,
     pub source_id: i64,
     pub occurred_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, OaSchema)]
@@ -102,10 +116,16 @@ pub async fn get_activity_ledger(
     if query.end_time - query.start_time > Duration::days(31) {
         return Err(bad_request("activity ledger ranges are limited to 31 days"));
     }
-    let include_details = query.depth == ActivityLedgerDepth::Action;
+    let include_actions = query.depth == ActivityLedgerDepth::Action;
+    let include_evidence = include_actions || query.include_artifacts;
     let records = state
         .db
-        .list_activity_ledger(query.start_time, query.end_time, include_details)
+        .list_activity_ledger(
+            query.start_time,
+            query.end_time,
+            include_actions,
+            include_evidence,
+        )
         .await
         .map_err(|error| {
             error!(%error, "activity ledger query failed");
@@ -114,7 +134,13 @@ pub async fn get_activity_ledger(
                 JsonResponse(json!({"error": "activity ledger query failed"})),
             )
         })?;
-    let intervals = project_intervals(records, query.depth, query.start_time, query.end_time);
+    let intervals = project_intervals(
+        records,
+        query.depth,
+        query.start_time,
+        query.end_time,
+        query.include_artifacts,
+    );
     let data_status = if intervals.is_empty() { "empty" } else { "ok" }.to_string();
     Ok(JsonResponse(ActivityLedgerResponse {
         intervals,
@@ -133,6 +159,7 @@ fn project_intervals(
     depth: ActivityLedgerDepth,
     range_start: DateTime<Utc>,
     range_end: DateTime<Utc>,
+    include_artifacts: bool,
 ) -> Vec<ActivityLedgerInterval> {
     let mut projected = Vec::with_capacity(records.len());
     for record in records {
@@ -163,8 +190,13 @@ fn project_intervals(
         };
         let actions = (depth == ActivityLedgerDepth::Action)
             .then(|| record.actions.into_iter().map(map_action).collect());
-        let evidence = (depth == ActivityLedgerDepth::Action)
-            .then(|| record.evidence.into_iter().map(map_evidence).collect());
+        let evidence = (depth == ActivityLedgerDepth::Action || include_artifacts).then(|| {
+            record
+                .evidence
+                .into_iter()
+                .map(|evidence| map_evidence(evidence, include_artifacts))
+                .collect()
+        });
         projected.push(ActivityLedgerInterval {
             id: record.id,
             task_id,
@@ -183,7 +215,15 @@ fn project_intervals(
             evidence,
         });
     }
-    merge_adjacent(projected)
+    let mut merged = merge_adjacent(projected);
+    if include_artifacts && depth != ActivityLedgerDepth::Action {
+        for interval in &mut merged {
+            if let Some(evidence) = interval.evidence.take() {
+                interval.evidence = Some(sparse_artifact_evidence(evidence));
+            }
+        }
+    }
+    merged
 }
 
 fn merge_adjacent(intervals: Vec<ActivityLedgerInterval>) -> Vec<ActivityLedgerInterval> {
@@ -243,12 +283,44 @@ fn map_action(action: ActivityActionRecord) -> ActivityLedgerAction {
     }
 }
 
-fn map_evidence(evidence: ActivityEvidenceRecord) -> ActivityLedgerEvidence {
+fn map_evidence(
+    evidence: ActivityEvidenceRecord,
+    include_artifacts: bool,
+) -> ActivityLedgerEvidence {
     ActivityLedgerEvidence {
         source_type: evidence.source_type,
         source_id: evidence.source_id,
         occurred_at: evidence.occurred_at,
+        frame_id: include_artifacts.then_some(evidence.frame_id).flatten(),
+        app_name: include_artifacts.then_some(evidence.app_name).flatten(),
+        window_title: include_artifacts.then_some(evidence.window_title).flatten(),
+        browser_url: include_artifacts.then_some(evidence.browser_url).flatten(),
     }
+}
+
+fn sparse_artifact_evidence(evidence: Vec<ActivityLedgerEvidence>) -> Vec<ActivityLedgerEvidence> {
+    let mut seen = HashSet::new();
+    evidence
+        .into_iter()
+        .filter(|item| {
+            let site = item.browser_url.as_deref().and_then(|value| {
+                url::Url::parse(value)
+                    .ok()
+                    .and_then(|url| url.host_str().map(str::to_lowercase))
+                    .map(|host| host.strip_prefix("www.").unwrap_or(&host).to_string())
+            });
+            let app = item
+                .app_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_lowercase);
+            let key = site
+                .map(|host| format!("site:{host}"))
+                .or_else(|| app.map(|app| format!("app:{app}")));
+            key.is_some_and(|key| seen.insert(key))
+        })
+        .collect()
 }
 
 fn parse_timestamp(value: &str) -> Option<DateTime<Utc>> {
@@ -300,10 +372,56 @@ mod tests {
             ActivityLedgerDepth::Category,
             start,
             end,
+            false,
         );
         assert_eq!(output.len(), 1);
         assert_eq!(output[0].task_id, 7);
         assert_eq!(output[0].title, "Editor");
         assert_eq!(output[0].evidence_count, 2);
+    }
+
+    #[test]
+    fn artifact_mode_returns_one_exact_anchor_per_app_or_site() {
+        let start = "2026-08-17T09:00:00Z".parse().unwrap();
+        let end = "2026-08-17T10:00:00Z".parse().unwrap();
+        let mut row = record(1, 11, 7, "2026-08-17T09:00:00Z", "2026-08-17T09:20:00Z");
+        row.evidence = vec![
+            ActivityEvidenceRecord {
+                source_type: "frame".to_string(),
+                source_id: 41,
+                occurred_at: "2026-08-17T09:01:00Z".to_string(),
+                frame_id: Some(41),
+                app_name: Some("Arc".to_string()),
+                window_title: Some("Pull request".to_string()),
+                browser_url: Some("https://github.com/screenpipe/screenpipe/pull/1".to_string()),
+            },
+            ActivityEvidenceRecord {
+                source_type: "frame".to_string(),
+                source_id: 42,
+                occurred_at: "2026-08-17T09:02:00Z".to_string(),
+                frame_id: Some(42),
+                app_name: Some("Arc".to_string()),
+                window_title: Some("Another pull request".to_string()),
+                browser_url: Some(
+                    "https://www.github.com/screenpipe/screenpipe/pull/2".to_string(),
+                ),
+            },
+            ActivityEvidenceRecord {
+                source_type: "frame".to_string(),
+                source_id: 43,
+                occurred_at: "2026-08-17T09:03:00Z".to_string(),
+                frame_id: Some(43),
+                app_name: Some("Cursor".to_string()),
+                window_title: Some("activity-ledger.tsx".to_string()),
+                browser_url: None,
+            },
+        ];
+
+        let output = project_intervals(vec![row], ActivityLedgerDepth::Task, start, end, true);
+        let evidence = output[0].evidence.as_ref().unwrap();
+        assert_eq!(evidence.len(), 2);
+        assert_eq!(evidence[0].frame_id, Some(41));
+        assert_eq!(evidence[0].app_name.as_deref(), Some("Arc"));
+        assert_eq!(evidence[1].app_name.as_deref(), Some("Cursor"));
     }
 }
