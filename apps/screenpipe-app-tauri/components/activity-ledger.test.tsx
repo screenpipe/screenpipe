@@ -75,6 +75,7 @@ import {
   buildActivityMeetingsPath,
   buildActivitySummaryPath,
   minimumHistoryEntryCount,
+  rangeForPreset,
 } from "@/components/activity-ledger";
 import {
   buildActivityReviewAgentPrompt,
@@ -282,6 +283,15 @@ afterEach(() => {
 });
 
 describe("activity history helpers", () => {
+  it("keeps the last 24 hours rolling across midnight", () => {
+    const anchor = new Date("2026-08-18T08:02:00.000Z");
+    const range = rangeForPreset("24h", anchor, "", "");
+
+    expect(range?.start.toISOString()).toBe("2026-08-17T08:02:00.000Z");
+    expect(range?.end.toISOString()).toBe("2026-08-18T08:02:00.000Z");
+    expect(range!.end.getTime() - range!.start.getTime()).toBe(86_400_000);
+  });
+
   it("builds a bounded summary path", () => {
     const summary = new URL(
       buildActivitySummaryPath({

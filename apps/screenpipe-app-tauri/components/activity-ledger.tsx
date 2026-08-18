@@ -158,7 +158,7 @@ function toLocalInputValue(value: Date): string {
   return local.toISOString().slice(0, 16);
 }
 
-function rangeForPreset(
+export function rangeForPreset(
   preset: RangePreset,
   anchor: Date,
   customStart: string,
