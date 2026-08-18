@@ -36,13 +36,14 @@ describe("normalizeSidebarNavLayout", () => {
   });
 
   it("keeps the user order and splices unknown-to-them ids at canonical spots", () => {
-    // A layout stored before "meetings" and "connections" joined the set.
+    // A layout stored before "meetings", "activity", and "connections" joined the set.
     const layout = normalizeSidebarNavLayout({
       order: ["timeline", "home", "brain", "pipes"],
       hidden: [],
     });
     expect(layout.order.slice(0, 2)).toEqual(["timeline", "home"]);
     expect(layout.order).toContain("meetings");
+    expect(layout.order).toContain("activity");
     expect(layout.order).toContain("connections");
     // meetings sits after Chat (its canonical predecessor), not appended last.
     expect(layout.order.indexOf("meetings")).toBe(
@@ -106,7 +107,7 @@ describe("reordering", () => {
   it("moves an item to an index among the visible rows", () => {
     const next = moveSidebarNavItem(DEFAULT_SIDEBAR_NAV_LAYOUT, ALL, "connections", 0);
     expect(resolveVisibleSidebarNavIds(next, ALL)).toEqual([
-      "connections", "home", "meetings", "timeline", "brain", "pipes",
+      "connections", "home", "meetings", "timeline", "activity", "brain", "pipes",
     ]);
   });
 

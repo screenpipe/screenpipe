@@ -111,6 +111,9 @@ export function mockLocalApiResponse(
     }
     return Response.json(mockActivitySummary());
   }
+  if (url.pathname === "/activity-ledger") {
+    return Response.json(mockActivityLedger(url, scenario));
+  }
   if (url.pathname === "/meetings/status") {
     return Response.json({ active: false, manualActive: false });
   }
@@ -242,6 +245,152 @@ function mockActivitySummary() {
     total_frames: 600,
     time_range: { start: start.toISOString(), end: end.toISOString() },
   };
+}
+
+/** Invented intervals for the browser-only ledger surface. The fixture follows
+ * the requested depth so browser QA exercises the real response contract. */
+function mockActivityLedger(url: URL, scenario: BrowserDevScenario) {
+  const requestedEnd = new Date(url.searchParams.get("end_time") ?? "");
+  const end = Number.isFinite(requestedEnd.getTime()) ? requestedEnd : new Date();
+  const requestedStart = new Date(url.searchParams.get("start_time") ?? "");
+  const start = Number.isFinite(requestedStart.getTime())
+    ? requestedStart
+    : new Date(end.getTime() - 4 * 60 * 60 * 1000);
+  const depth = url.searchParams.get("depth") ?? "task";
+  const envelope = (intervals: unknown[]) => ({
+    intervals,
+    depth,
+    data_status: intervals.length ? "ok" : "empty",
+    time_range: { start: start.toISOString(), end: end.toISOString() },
+    generated_at: new Date().toISOString(),
+  });
+  if (scenario === "empty") return envelope([]);
+
+  const at = (minutesAgo: number) =>
+    new Date(end.getTime() - minutesAgo * 60_000).toISOString();
+  const base = [
+    {
+      id: 101,
+      task_id: 11,
+      parent_task_id: 1,
+      kind: "task",
+      title: "review sample onboarding issue",
+      category: "Slack",
+      app_name: "Slack",
+      start_at: at(170),
+      end_at: at(132),
+      state: "final",
+      confidence: 0.82,
+      producer: "deterministic-v1",
+      evidence_count: 12,
+      actions: [
+        {
+          id: 1001,
+          occurred_at: at(162),
+          action_type: "window_focus",
+          summary: "focused Slack conversation",
+          app_name: "Slack",
+          confidence: 0.8,
+          source_type: "ui_event",
+          source_id: 7101,
+        },
+        {
+          id: 1002,
+          occurred_at: at(141),
+          action_type: "text",
+          summary: "typed in message field",
+          app_name: "Slack",
+          confidence: 0.85,
+          source_type: "ui_event",
+          source_id: 7102,
+        },
+      ],
+      evidence: [
+        { source_type: "frame", source_id: 90101, occurred_at: at(169) },
+        { source_type: "ui_event", source_id: 7102, occurred_at: at(141) },
+      ],
+    },
+    {
+      id: 102,
+      task_id: 12,
+      parent_task_id: 2,
+      kind: "document",
+      title: "activity-ledger.tsx",
+      category: "Cursor",
+      app_name: "Cursor",
+      start_at: at(124),
+      end_at: at(48),
+      state: "final",
+      confidence: 0.9,
+      producer: "deterministic-v1",
+      evidence_count: 24,
+      actions: [
+        {
+          id: 1003,
+          occurred_at: at(97),
+          action_type: "text",
+          summary: "typed in editor",
+          app_name: "Cursor",
+          confidence: 0.88,
+          source_type: "ui_event",
+          source_id: 7103,
+        },
+      ],
+      evidence: [
+        { source_type: "frame", source_id: 90102, occurred_at: at(122) },
+        { source_type: "frame", source_id: 90103, occurred_at: at(49) },
+      ],
+    },
+    {
+      id: 103,
+      task_id: 13,
+      parent_task_id: 3,
+      kind: "task",
+      title: "inspect sample pull request",
+      category: "Arc",
+      app_name: "Arc",
+      start_at: at(39),
+      end_at: at(4),
+      state: "provisional",
+      confidence: 0.75,
+      producer: "deterministic-v1",
+      evidence_count: 9,
+      actions: [
+        {
+          id: 1004,
+          occurred_at: at(24),
+          action_type: "click",
+          summary: "clicked review control",
+          app_name: "Arc",
+          confidence: 0.8,
+          source_type: "ui_event",
+          source_id: 7104,
+        },
+      ],
+      evidence: [
+        { source_type: "frame", source_id: 90104, occurred_at: at(38) },
+        { source_type: "frame", source_id: 90105, occurred_at: at(5) },
+      ],
+    },
+  ];
+
+  return envelope(
+    base.map((interval, index) => {
+      if (depth === "category") {
+        return {
+          ...interval,
+          task_id: 200 + index,
+          parent_task_id: null,
+          kind: "category",
+          title: interval.category,
+          actions: undefined,
+          evidence: undefined,
+        };
+      }
+      if (depth === "action") return interval;
+      return { ...interval, actions: undefined, evidence: undefined };
+    }),
+  );
 }
 
 // Invented content only. This exists so the meeting note surface renders in

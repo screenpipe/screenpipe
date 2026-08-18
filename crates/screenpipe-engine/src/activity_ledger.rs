@@ -22,7 +22,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
 pub const ACTIVITY_LEDGER_PRODUCER: &str = "deterministic-v1";
-const BOOTSTRAP_WINDOW: ChronoDuration = ChronoDuration::hours(24);
+const BOOTSTRAP_WINDOW: ChronoDuration = ChronoDuration::days(7);
 const RECONCILE_WINDOW: ChronoDuration = ChronoDuration::minutes(30);
 const UNOBSERVED_GAP: ChronoDuration = ChronoDuration::minutes(5);
 const LIVE_TAIL: ChronoDuration = ChronoDuration::minutes(1);
@@ -385,49 +385,50 @@ fn identity_for(observation: &ActivityLedgerObservation) -> TaskIdentity {
     );
     let parent_key = stable_key(&format!("category|app|{}", app.to_lowercase()));
 
-    let (identity_part, title, confidence) = if let Some(title) = observation
-        .semantic_title
-        .as_deref()
-        .map(|value| clean_label(value, 200))
-        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case(&app))
-    {
-        let key = observation
-            .semantic_key
+    let (identity_part, title, confidence) =
+        if let Some(path) = observation.document_path.as_deref() {
+            let title = Path::new(path)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(|value| clean_label(value, 200))
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| app.clone());
+            (format!("document|{}", path), title, 0.85)
+        } else if let Some(title) = observation
+            .window_title
             .as_deref()
-            .unwrap_or(title.as_str());
-        (
-            format!(
-                "semantic|{}|{}",
-                observation.semantic_kind.as_deref().unwrap_or("item"),
-                key
-            ),
-            title,
-            0.9,
-        )
-    } else if let Some(path) = observation.document_path.as_deref() {
-        let title = Path::new(path)
-            .file_name()
-            .and_then(|value| value.to_str())
             .map(|value| clean_label(value, 200))
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| app.clone());
-        (format!("document|{}", path), title, 0.85)
-    } else if let Some(window) = observation.window_title.as_deref() {
-        let title = clean_label(window, 200);
-        if title.is_empty() || title.eq_ignore_ascii_case(&app) {
-            (format!("app|{}", app), format!("Using {app}"), 0.65)
+            .filter(|value| meaningful_title(value, &app))
+        {
+            (format!("window|{}", title), title, 0.8)
+        } else if let Some(title) = observation
+            .semantic_title
+            .as_deref()
+            .map(|value| clean_label(value, 200))
+            .filter(|value| meaningful_title(value, &app))
+        {
+            let key = observation
+                .semantic_key
+                .as_deref()
+                .unwrap_or(title.as_str());
+            (
+                format!(
+                    "semantic|{}|{}",
+                    observation.semantic_kind.as_deref().unwrap_or("item"),
+                    key
+                ),
+                title,
+                0.8,
+            )
+        } else if let Some(url) = observation.browser_url.as_deref() {
+            let host = url::Url::parse(url)
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_string))
+                .unwrap_or_else(|| app.clone());
+            (format!("site|{}", host), clean_label(&host, 200), 0.7)
         } else {
-            (format!("window|{}", title), title, 0.75)
-        }
-    } else if let Some(url) = observation.browser_url.as_deref() {
-        let host = url::Url::parse(url)
-            .ok()
-            .and_then(|url| url.host_str().map(str::to_string))
-            .unwrap_or_else(|| app.clone());
-        (format!("site|{}", host), clean_label(&host, 200), 0.7)
-    } else {
-        (format!("app|{}", app), format!("Using {app}"), 0.6)
-    };
+            (format!("app|{}", app), format!("Using {app}"), 0.6)
+        };
     let task_key = stable_key(&format!(
         "task|{}|{}",
         app.to_lowercase(),
@@ -472,6 +473,11 @@ fn action_for(observation: &ActivityLedgerObservation) -> Option<ActivityActionD
     let (action_type, summary, confidence) = match observation.source_type.as_str() {
         "ui_event" => match observation.event_type.as_deref()? {
             "click" => {
+                // UI event rows are persisted on pointer down. A zero count is
+                // AX context enrichment, not a user input action.
+                if observation.click_count == Some(0) {
+                    return None;
+                }
                 let target = observation
                     .element_name
                     .as_deref()
@@ -479,7 +485,7 @@ fn action_for(observation: &ActivityLedgerObservation) -> Option<ActivityActionD
                     .map(|value| clean_label(value, 120))
                     .filter(|value| !value.is_empty())
                     .unwrap_or_else(|| "control".to_string());
-                ("click", format!("Clicked {target}"), 0.95)
+                ("pointer_down", format!("Pointer down on {target}"), 0.95)
             }
             "text" => {
                 let target = observation
@@ -491,7 +497,11 @@ fn action_for(observation: &ActivityLedgerObservation) -> Option<ActivityActionD
                     .unwrap_or_else(|| "focused field".to_string());
                 ("text", format!("Typed in {target}"), 0.9)
             }
-            "clipboard" => ("clipboard", "Used the clipboard".to_string(), 0.85),
+            "clipboard" => (
+                "clipboard_event",
+                "Clipboard event observed".to_string(),
+                0.75,
+            ),
             "app_switch" => {
                 let app = observation
                     .app_name
@@ -553,13 +563,46 @@ fn stable_key(input: &str) -> String {
 }
 
 fn clean_label(value: &str, max_chars: usize) -> String {
-    value
+    let query_start = value.find('?').filter(|index| {
+        let (prefix, suffix) = value.split_at(*index);
+        suffix.contains('=') && (prefix.contains('/') || prefix.contains('.'))
+    });
+    let without_query = query_start.map_or(value, |index| &value[..index]);
+    without_query
         .split_whitespace()
+        .map(|token| {
+            let opaque = token.chars().count() >= 48
+                && token.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || "._-".contains(character)
+                });
+            if opaque {
+                "[redacted]"
+            } else {
+                token
+            }
+        })
         .collect::<Vec<_>>()
         .join(" ")
         .chars()
         .take(max_chars)
         .collect()
+}
+
+fn meaningful_title(value: &str, app: &str) -> bool {
+    !value.is_empty()
+        && !value.eq_ignore_ascii_case(app)
+        && !matches!(
+            value.to_ascii_lowercase().as_str(),
+            "about:blank"
+                | "activity"
+                | "dashboard"
+                | "home"
+                | "new tab"
+                | "overview"
+                | "screenpipe"
+                | "standard window"
+                | "untitled"
+        )
 }
 
 #[cfg(test)]
@@ -583,6 +626,7 @@ mod tests {
             semantic_title: None,
             semantic_key: None,
             event_type: None,
+            click_count: None,
             element_role: None,
             element_name: None,
             device_name: None,
@@ -605,6 +649,7 @@ mod tests {
             semantic_title: None,
             semantic_key: None,
             event_type: None,
+            click_count: None,
             element_role: None,
             element_name: None,
             device_name: Some("microphone".to_string()),
@@ -612,6 +657,16 @@ mod tests {
             is_input_device: Some(true),
             attention_rank: 1,
         }
+    }
+
+    fn pointer_down(id: i64, at: &str, click_count: i64) -> ActivityLedgerObservation {
+        let mut observation = frame(id, at, "Browser", "Customer ticket");
+        observation.source_type = "ui_event".to_string();
+        observation.event_type = Some("click".to_string());
+        observation.click_count = Some(click_count);
+        observation.element_role = Some("AXButton".to_string());
+        observation.element_name = Some("Reply".to_string());
+        observation
     }
 
     #[test]
@@ -662,5 +717,47 @@ mod tests {
         assert_eq!(intervals[0].actions.len(), 1);
         assert_eq!(intervals[0].actions[0].summary, "Spoke in an audio segment");
         assert_eq!(intervals[0].evidence.len(), 2);
+    }
+
+    #[test]
+    fn pointer_down_is_literal_and_ax_enrichment_is_not_an_action() {
+        let (_, intervals) = build_ledger(
+            vec![
+                pointer_down(1, "2026-08-17T09:00:00Z", 0),
+                pointer_down(2, "2026-08-17T09:00:01Z", 1),
+            ],
+            at("2026-08-17T09:00:00Z"),
+            at("2026-08-17T09:01:00Z"),
+        );
+
+        assert_eq!(intervals.len(), 1);
+        assert_eq!(intervals[0].actions.len(), 1);
+        assert_eq!(intervals[0].actions[0].action_type, "pointer_down");
+        assert_eq!(intervals[0].actions[0].summary, "Pointer down on Reply");
+        assert_eq!(intervals[0].evidence.len(), 2);
+    }
+
+    #[test]
+    fn captured_labels_do_not_persist_url_credentials() {
+        assert_eq!(
+            clean_label(
+                "accounts.screenpipe.com/sign-in?__clerk_ticket=secret-value",
+                200,
+            ),
+            "accounts.screenpipe.com/sign-in"
+        );
+    }
+
+    #[test]
+    fn reliable_window_title_beats_page_content_projection() {
+        let mut observation = frame(1, "2026-08-17T09:00:00Z", "Arc", "screenpipe pull requests");
+        observation.semantic_kind = Some("task".to_string());
+        observation.semantic_title = Some("fusion inert gas hybrid engine".to_string());
+        observation.semantic_key = Some("random-page-copy".to_string());
+
+        let identity = identity_for(&observation);
+
+        assert_eq!(identity.task_title, "screenpipe pull requests");
+        assert_eq!(identity.confidence(), 0.8);
     }
 }

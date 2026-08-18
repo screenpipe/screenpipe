@@ -16,6 +16,7 @@ import {
   Search,
   Plug,
   CalendarClock,
+  ListTree,
 } from "lucide-react";
 import { emit } from "@tauri-apps/api/event";
 import {
@@ -106,8 +107,9 @@ import {
 import { PlanExpirationNotice } from "@/components/plan-expiration-notice";
 import type { AppUser } from "@/lib/app-entitlement";
 import { ONBOARDING_BRAIN_HANDOFF_EVENT } from "@/lib/live-views/onboarding-activation";
+import { ActivityLedger } from "@/components/activity-ledger";
 
-type MainSection = "home" | "timeline" | "brain" | "pipes" | "connections" | "meetings" | "help";
+type MainSection = "home" | "timeline" | "activity" | "brain" | "pipes" | "connections" | "meetings" | "help";
 type ConnectionFocusRequest = {
   id: string | null;
   category: string | null;
@@ -117,7 +119,7 @@ type ConnectionFocusRequest = {
 
 // All valid URL sections for the home page
 const ALL_SECTIONS = [
-  "home", "timeline", "pipes", "help", "brain", "connections", "meetings", "history",
+  "home", "timeline", "activity", "pipes", "help", "brain", "connections", "meetings", "history",
   "feedback", // backwards compat → maps to "help"
   "memories", // backwards compat → maps to "brain"
   "artifacts", // backwards compat → maps to "brain"
@@ -942,6 +944,8 @@ function HomeContent() {
         // The native window replaces the React timeline where it can run; the
         // webview one stays as the fallback for hosts without it.
         return <NativeTimeline fallback={<Timeline embedded />} />;
+      case "activity":
+        return <ActivityLedger />;
       case "brain":
         return <BrainSection />;
       case "pipes":
@@ -999,6 +1003,7 @@ function HomeContent() {
     home: { label: "Chat", icon: <Plus className="h-3.5 w-3.5" /> },
     meetings: { label: "Meetings", icon: <CalendarClock className="h-3.5 w-3.5" /> },
     timeline: { label: "Timeline", icon: <MonitorPlay className="h-3.5 w-3.5" /> },
+    activity: { label: "Activity", icon: <ListTree className="h-3.5 w-3.5" /> },
     brain: { label: "Brain", icon: <Brain className="h-3.5 w-3.5" /> },
     pipes: { label: "Scheduled", icon: <TimerReset className="h-3.5 w-3.5" /> },
     connections: { label: "Connections", icon: <Plug className="h-3.5 w-3.5" /> },
@@ -1099,6 +1104,7 @@ function HomeContent() {
   const isFullHeight =
     activeSection === "home" ||
     activeSection === "timeline" ||
+    activeSection === "activity" ||
     activeSection === "meetings" ||
     activeSection === "history" ||
     activeSection === "brain";

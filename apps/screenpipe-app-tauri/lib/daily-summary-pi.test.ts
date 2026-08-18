@@ -132,6 +132,50 @@ describe("runDailySummaryWithPi", () => {
     expect(mocks.piStop).toHaveBeenCalledOnce();
   });
 
+  it("supports a bounded read-only prompt for another private review surface", async () => {
+    let handler: ((envelope: any) => void) | null = null;
+    mocks.registerForeground.mockImplementation((_sessionId, nextHandler) => {
+      handler = nextHandler;
+      return vi.fn();
+    });
+    mocks.piPrompt.mockImplementation(async () => {
+      queueMicrotask(() => {
+        handler?.({
+          event: {
+            type: "agent_end",
+            messages: [{ role: "assistant", content: "Activity review" }],
+          },
+        });
+      });
+      return { status: "ok", data: null };
+    });
+
+    await runDailySummaryWithPi({
+      date: new Date(2026, 6, 25),
+      range: { start: "start", end: "end" },
+      preset: PRESET,
+      userToken: "user-token",
+      sessionPrefix: "activity-review",
+      systemPrompt: "private read-only activity-review agent",
+      prompt: "review this exact range",
+    });
+
+    expect(mocks.piStart).toHaveBeenCalledWith(
+      expect.stringContaining("activity-review"),
+      expect.any(String),
+      "user-token",
+      expect.objectContaining({
+        systemPrompt: expect.stringContaining("activity-review agent"),
+      }),
+    );
+    expect(mocks.piPrompt).toHaveBeenCalledWith(
+      expect.stringContaining("activity-review"),
+      "review this exact range",
+      null,
+      null,
+    );
+  });
+
   it("stops the Pi session when the request is aborted", async () => {
     mocks.registerForeground.mockReturnValue(vi.fn());
     mocks.piPrompt.mockResolvedValue({ status: "ok", data: null });

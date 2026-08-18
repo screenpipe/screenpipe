@@ -23,15 +23,21 @@ import { applyResolvedModelLimits } from "@/lib/model-metadata";
 const DAILY_SUMMARY_TIMEOUT_MS = 120_000;
 const DAILY_SUMMARY_PROJECT_DIR = "pi-daily-summary";
 
-type RunDailySummaryOptions = {
+export type RunDailySummaryOptions = {
   date: Date;
   range: DailySummaryRange;
   preset: AIPreset;
   userToken: string | null;
   signal?: AbortSignal;
+  prompt?: string;
+  systemPrompt?: string;
+  sessionPrefix?: string;
 };
 
-export function buildDailySummaryProviderConfig(preset: AIPreset): PiProviderConfig {
+export function buildDailySummaryProviderConfig(
+  preset: AIPreset,
+  systemPrompt = DAILY_SUMMARY_AGENT_SYSTEM_PROMPT,
+): PiProviderConfig {
   const effectivePreset = applyResolvedModelLimits(preset);
   const presetPrompt = preset.prompt?.trim();
   return {
@@ -42,11 +48,12 @@ export function buildDailySummaryProviderConfig(preset: AIPreset): PiProviderCon
       "apiKey" in preset && typeof preset.apiKey === "string" && preset.apiKey
         ? preset.apiKey
         : null,
-    maxTokens: Math.max(2_048, Math.min(effectivePreset.maxTokens ?? 4_096, 8_192)),
+    maxTokens: Math.max(
+      2_048,
+      Math.min(effectivePreset.maxTokens ?? 4_096, 8_192),
+    ),
     maxContextChars: effectivePreset.maxContextChars,
-    systemPrompt: [presetPrompt, DAILY_SUMMARY_AGENT_SYSTEM_PROMPT]
-      .filter(Boolean)
-      .join("\n\n"),
+    systemPrompt: [presetPrompt, systemPrompt].filter(Boolean).join("\n\n"),
   };
 }
 
@@ -89,7 +96,8 @@ export async function runDailySummaryWithPi(
   if (!options.preset.model?.trim())
     throw new Error("No AI model is configured");
 
-  const sessionId = `${INTERNAL_TITLE_PREFIX}daily-summary-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const sessionPrefix = options.sessionPrefix?.trim() || "daily-summary";
+  const sessionId = `${INTERNAL_TITLE_PREFIX}${sessionPrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   await mountAgentEventBus();
   const home = await homeDir();
   const projectDir = await join(home, ".screenpipe", DAILY_SUMMARY_PROJECT_DIR);
@@ -150,7 +158,10 @@ export async function runDailySummaryWithPi(
       sessionId,
       projectDir,
       options.userToken,
-      buildDailySummaryProviderConfig(options.preset),
+      buildDailySummaryProviderConfig(
+        options.preset,
+        options.systemPrompt ?? DAILY_SUMMARY_AGENT_SYSTEM_PROMPT,
+      ),
     );
     if (started.status !== "ok" || !started.data.running) {
       throw new Error(
@@ -161,7 +172,8 @@ export async function runDailySummaryWithPi(
 
     const prompted = await commands.piPrompt(
       sessionId,
-      buildDailySummaryAgentPrompt(options.date, options.range),
+      options.prompt ??
+        buildDailySummaryAgentPrompt(options.date, options.range),
       null,
       null,
     );

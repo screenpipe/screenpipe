@@ -21,6 +21,7 @@ pub struct ActivityLedgerObservation {
     pub semantic_title: Option<String>,
     pub semantic_key: Option<String>,
     pub event_type: Option<String>,
+    pub click_count: Option<i64>,
     pub element_role: Option<String>,
     pub element_name: Option<String>,
     pub device_name: Option<String>,
@@ -122,6 +123,7 @@ struct RawObservation {
     semantic_title: Option<String>,
     semantic_key: Option<String>,
     event_type: Option<String>,
+    click_count: Option<i64>,
     element_role: Option<String>,
     element_name: Option<String>,
     device_name: Option<String>,
@@ -183,6 +185,7 @@ impl From<RawObservation> for ActivityLedgerObservation {
             semantic_title: nonempty(row.semantic_title),
             semantic_key: nonempty(row.semantic_key),
             event_type: nonempty(row.event_type),
+            click_count: row.click_count,
             element_role: nonempty(row.element_role),
             element_name: nonempty(row.element_name),
             device_name: nonempty(row.device_name),
@@ -254,7 +257,8 @@ impl DatabaseManager {
                             WHEN 'task' THEN 0 WHEN 'conversation' THEN 1
                             WHEN 'document' THEN 2 WHEN 'page' THEN 3 ELSE 4 END,
                             sri.sort_order LIMIT 1) AS semantic_key,
-                      NULL AS event_type, NULL AS element_role, NULL AS element_name,
+                      NULL AS event_type, NULL AS click_count,
+                      NULL AS element_role, NULL AS element_name,
                       NULL AS device_name, NULL AS speaker_name, NULL AS is_input_device,
                       CASE WHEN f.focused = 1 THEN 3 ELSE 2 END AS attention_rank
                FROM sampled s JOIN frames f ON f.id = s.id"#,
@@ -272,7 +276,7 @@ impl DatabaseManager {
                       COALESCE(NULLIF(u.browser_url, ''), f.browser_url) AS browser_url,
                       f.document_path,
                       NULL AS semantic_kind, NULL AS semantic_title, NULL AS semantic_key,
-                      u.event_type, u.element_role, u.element_name,
+                      u.event_type, u.click_count, u.element_role, u.element_name,
                       NULL AS device_name, NULL AS speaker_name, NULL AS is_input_device,
                       4 AS attention_rank
                FROM ui_events u
@@ -293,6 +297,7 @@ impl DatabaseManager {
                       NULL AS app_name, NULL AS window_title, NULL AS browser_url,
                       NULL AS document_path, NULL AS semantic_kind,
                       NULL AS semantic_title, NULL AS semantic_key, NULL AS event_type,
+                      NULL AS click_count,
                       NULL AS element_role, NULL AS element_name,
                       a.device AS device_name, s.name AS speaker_name,
                       a.is_input_device, 1 AS attention_rank

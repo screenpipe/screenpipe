@@ -9,6 +9,7 @@ import {
   Brain,
   CalendarClock,
   Keyboard,
+  ListTree,
   MessageSquare,
   MonitorPlay,
   PanelLeft,
@@ -108,6 +109,7 @@ const SECTION_ACTION_IDS: Record<SidebarNavId, CommandPaletteActionId> = {
   meetings: "go_meetings",
   pipes: "go_scheduled",
   timeline: "go_timeline",
+  activity: "go_activity",
   connections: "go_connections",
 };
 
@@ -117,6 +119,7 @@ const SECTION_ICONS: Record<SidebarNavId, LucideIcon> = {
   meetings: CalendarClock,
   pipes: TimerReset,
   timeline: MonitorPlay,
+  activity: ListTree,
   connections: Plug,
 };
 

@@ -19,6 +19,7 @@ export const COMMAND_PALETTE_ACTION_IDS = [
   "go_meetings",
   "go_scheduled",
   "go_timeline",
+  "go_activity",
   "go_connections",
   "toggle_sidebar",
   "open_settings",

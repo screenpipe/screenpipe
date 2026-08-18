@@ -33,8 +33,8 @@
 //! Hot path: anything reached per frame or per audio callback. See the hot-path
 //! section in `AGENTS.md` before touching those.
 
-pub mod analytics;
 pub mod activity_ledger;
+pub mod analytics;
 pub mod archive;
 mod atomic_file;
 pub mod auth_key;
