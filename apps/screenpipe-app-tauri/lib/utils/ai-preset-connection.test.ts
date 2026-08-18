@@ -145,4 +145,72 @@ describe("testAiPresetConnection", () => {
       ),
     ).resolves.toMatchObject({ reply: "hi" });
   });
+
+  it("rejects an error-only SSE response even when HTTP status is 200", async () => {
+    const sse = [
+      'data: {"error":{"message":"model is not available"}}',
+      "data: [DONE]",
+      "",
+    ].join("\n");
+    const request = vi.fn(async () =>
+      new Response(sse, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }));
+
+    await expect(
+      testAiPresetConnection(
+        {
+          provider: "custom",
+          url: "http://localhost:20128/v1",
+          model: "missing-model",
+          apiKey: "secret",
+        },
+        { fetch: request },
+      ),
+    ).rejects.toThrow("model is not available");
+  });
+
+  it("rejects an SSE response containing only malformed data frames", async () => {
+    const request = vi.fn(async () =>
+      new Response("data: {not-json}\n\ndata: [DONE]\n", {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }));
+
+    await expect(
+      testAiPresetConnection(
+        {
+          provider: "custom",
+          url: "http://localhost:20128/v1",
+          model: "gpt-4o-mini",
+          apiKey: "secret",
+        },
+        { fetch: request },
+      ),
+    ).rejects.toThrow("Provider returned no chat message");
+  });
+
+  it("accepts a structurally valid SSE chat frame with empty content", async () => {
+    const request = vi.fn(async () =>
+      new Response(
+        'data: {"choices":[{"message":{"role":"assistant","content":""}}]}\n\ndata: [DONE]\n',
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        },
+      ));
+
+    await expect(
+      testAiPresetConnection(
+        {
+          provider: "custom",
+          url: "http://localhost:20128/v1",
+          model: "gpt-4o-mini",
+          apiKey: "secret",
+        },
+        { fetch: request },
+      ),
+    ).resolves.toMatchObject({ reply: "Valid chat response received" });
+  });
 });

@@ -8,7 +8,7 @@ import {
   buildChatTestBody,
   shouldRetryWithMaxCompletionTokens,
   looksLikeSsePayload,
-  parseSseChatContent,
+  parseSseChatResponse,
 } from "./chat-test-body";
 import {
   extractAiProviderErrorMessage,
@@ -130,9 +130,16 @@ export async function testAiPresetConnection(
       response.headers.get("content-type")?.includes("text/event-stream") ||
       looksLikeSsePayload(rawText);
     if (isSse) {
-      reply =
-        parseSseChatContent(rawText).slice(0, 100) ||
-        "Valid chat response received";
+      const parsed = parseSseChatResponse(rawText);
+      if (parsed.errorPayload !== undefined) {
+        throw new Error(
+          extractAiProviderErrorMessage(JSON.stringify(parsed.errorPayload)),
+        );
+      }
+      if (!parsed.hasChatMessage) {
+        throw new Error("Provider returned no chat message");
+      }
+      reply = parsed.content.slice(0, 100) || "Valid chat response received";
     } else {
       const data = JSON.parse(rawText);
       if (!data.choices?.[0]?.message) {

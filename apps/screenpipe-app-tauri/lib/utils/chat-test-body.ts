@@ -93,14 +93,21 @@ export function looksLikeSsePayload(text: string): boolean {
   return /(^|\n)\s*data:/.test(text);
 }
 
+export interface SseChatParseResult {
+  content: string;
+  hasChatMessage: boolean;
+  errorPayload?: unknown;
+}
+
 /**
- * Reconstruct assistant text from an OpenAI-style chat completions SSE stream.
- * Handles both streamed `choices[].delta.content` chunks and non-streamed
- * `choices[].message.content` frames, and ignores keep-alive comments and the
- * terminal `[DONE]` sentinel.
+ * Parse an OpenAI-compatible SSE response without confusing a syntactically
+ * SSE-shaped error (or a stream of malformed frames) for a valid chat reply.
  */
-export function parseSseChatContent(text: string): string {
+export function parseSseChatResponse(text: string): SseChatParseResult {
   let content = "";
+  let hasChatMessage = false;
+  let errorPayload: unknown;
+
   for (const line of text.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed.startsWith("data:")) continue;
@@ -108,13 +115,32 @@ export function parseSseChatContent(text: string): string {
     if (!payload || payload === "[DONE]") continue;
     try {
       const json = JSON.parse(payload);
-      const delta = json?.choices?.[0]?.delta?.content;
-      const message = json?.choices?.[0]?.message?.content;
-      if (typeof delta === "string") content += delta;
-      else if (typeof message === "string") content += message;
+      if (json?.error !== undefined && errorPayload === undefined) {
+        errorPayload = json.error;
+      }
+
+      const choice = json?.choices?.[0];
+      const delta = choice?.delta;
+      const message = choice?.message;
+      if (delta && typeof delta === "object") hasChatMessage = true;
+      if (message && typeof message === "object") hasChatMessage = true;
+
+      if (typeof delta?.content === "string") content += delta.content;
+      else if (typeof message?.content === "string") content += message.content;
     } catch {
-      // ignore keep-alive comments / partial frames
+      // Malformed or partial frames do not prove that the provider works.
     }
   }
-  return content;
+
+  return { content, hasChatMessage, errorPayload };
+}
+
+/**
+ * Reconstruct assistant text from an OpenAI-style chat completions SSE stream.
+ * Handles both streamed `choices[].delta.content` chunks and non-streamed
+ * `choices[].message.content` frames, and ignores keep-alive comments and the
+ * terminal `[DONE]` sentinel.
+ */
+export function parseSseChatContent(text: string): string {
+  return parseSseChatResponse(text).content;
 }
