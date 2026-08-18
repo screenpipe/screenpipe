@@ -38,6 +38,7 @@ import {
   shouldHandleChatLoadConversationForWindow,
   shouldHandleChatPrefillForWindow,
   normalizeComposerMentionsForModel,
+  stripInternalQueryContext,
 } from "./chat-utils";
 import { useChatStore } from "./stores/chat-store";
 
@@ -244,5 +245,58 @@ describe("normalizeComposerMentionsForModel", () => {
     const result = normalizeComposerMentionsForModel("$nope on this", { now, skills });
     expect(result.context.skills).toEqual([]);
     expect(result.modelInput).toBe("$nope on this");
+  });
+});
+
+describe("stripInternalQueryContext", () => {
+  it("returns clean message when no context block is present", () => {
+    expect(stripInternalQueryContext("hello world")).toBe("hello world");
+    expect(stripInternalQueryContext("what did I do today?")).toBe("what did I do today?");
+  });
+
+  it("strips multiline <screenpipe_query_context> block from message", () => {
+    const raw = [
+      "<screenpipe_query_context>",
+      "The user selected these filters in the composer. Use these exact values when querying screenpipe; do not reinterpret the original tokens.",
+      "app_name: Slack",
+      "content_type: audio",
+      "</screenpipe_query_context>",
+      "summarize our meeting",
+    ].join("\n");
+
+    expect(stripInternalQueryContext(raw)).toBe("summarize our meeting");
+  });
+
+  it("strips single-line <screenpipe_query_context> block", () => {
+    const raw = "<screenpipe_query_context>app: Chrome</screenpipe_query_context> find my tabs";
+    expect(stripInternalQueryContext(raw)).toBe("find my tabs");
+  });
+
+  it("strips multiple <screenpipe_query_context> blocks", () => {
+    const raw = "<screenpipe_query_context>part 1</screenpipe_query_context>\n<screenpipe_query_context>part 2</screenpipe_query_context>\nmy prompt";
+    expect(stripInternalQueryContext(raw)).toBe("my prompt");
+  });
+
+  it("preserves markdown, code blocks, and other xml-like tags", () => {
+    const raw = [
+      "<screenpipe_query_context>",
+      "app_name: VS Code",
+      "</screenpipe_query_context>",
+      "Look at this code:\n```xml\n<custom_tag>hello</custom_tag>\n```\n**bold** and *italic*",
+    ].join("\n");
+
+    expect(stripInternalQueryContext(raw)).toBe(
+      "Look at this code:\n```xml\n<custom_tag>hello</custom_tag>\n```\n**bold** and *italic*",
+    );
+  });
+
+  it("handles empty or whitespace strings cleanly", () => {
+    expect(stripInternalQueryContext("")).toBe("");
+    expect(stripInternalQueryContext("   ")).toBe("");
+    expect(
+      stripInternalQueryContext(
+        "<screenpipe_query_context>\napp_name: Chrome\n</screenpipe_query_context>",
+      ),
+    ).toBe("");
   });
 });

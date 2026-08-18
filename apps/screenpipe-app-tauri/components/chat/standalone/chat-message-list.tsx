@@ -30,6 +30,7 @@ import {
   hasPendingPermissionRequest,
 } from "@/lib/chat/message-rendering";
 import { cn } from "@/lib/utils";
+import { stripInternalQueryContext } from "@/lib/chat-utils";
 import { useAcpBootLabel } from "@/lib/stores/acp-boot-state";
 import type { ContentBlock, Message } from "@/lib/chat/types";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
@@ -309,7 +310,7 @@ export function ChatMessageList({
                     <div
                       onMouseDown={(e) => {
                         if (!canEditMessage || editingMessageId === message.id) return;
-                        pendingCaretRef.current = caretOffsetFromClick(e, message.content);
+                        pendingCaretRef.current = caretOffsetFromClick(e, stripInternalQueryContext(message.content));
                         pendingEditDownXYRef.current = { x: e.clientX, y: e.clientY };
                       }}
                       onMouseUp={(e) => {

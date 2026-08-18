@@ -22,6 +22,7 @@ import type { Message, ToolCall, ContentBlock } from "@/lib/chat/types";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import type { InlineConnectStatus } from "@/lib/connections/inline-connect";
 import { formatDurationParts, formatStoppedWorkDuration, formatWorkDuration, hasAssistantTextBody, hasAssistantToolWorkBody } from "@/lib/chat/message-rendering";
+import { stripInternalQueryContext } from "@/lib/chat-utils";
 import {
   classifyCurl,
   endpointFamily,
@@ -1792,7 +1793,7 @@ export function MessageContent({
         {attachmentsRow}
         {hasDocs
           ? <div className="text-sm font-medium">{message.displayContent}</div>
-          : <CollapsibleUserMessage label={message.displayContent} fullContent={message.content} />}
+          : <CollapsibleUserMessage label={message.displayContent} fullContent={stripInternalQueryContext(message.content)} />}
       </div>
     );
   }
@@ -1937,7 +1938,9 @@ export function MessageContent({
   // Strip raw "Error:" prefix that leaks from backend — show only the human part
   const rawText = !isUser && message.content.startsWith("Error: ")
     ? message.content.slice("Error: ".length)
-    : message.content;
+    : isUser
+      ? stripInternalQueryContext(message.content)
+      : message.content;
   // "(tool result)" is a persistence placeholder given to tool-only messages so
   // they are not stored empty. It is not user-facing text, so never render it as
   // an assistant bubble (the tool activity itself renders from contentBlocks).

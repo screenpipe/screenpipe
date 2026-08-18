@@ -4,6 +4,7 @@
 
 import type { ContentBlock, Message } from "@/lib/chat/types";
 import { parseAttachedContext } from "@/lib/chat/attached-context";
+import { stripInternalQueryContext } from "@/lib/chat-utils";
 
 type PersistedMessage = Message & { image?: string };
 
@@ -82,7 +83,7 @@ export function optimisticAssistantForUserEcho(
   const assistant = messages[messages.length - 1];
   const attached = user.role === "user" ? parseAttachedContext(user.content) : null;
   const optimisticDisplayText = user.role === "user"
-    ? (user.displayContent ?? attached?.message ?? user.content).trim()
+    ? (user.displayContent ?? attached?.message ?? stripInternalQueryContext(user.content)).trim()
     : "";
   if (
     user.role !== "user" ||

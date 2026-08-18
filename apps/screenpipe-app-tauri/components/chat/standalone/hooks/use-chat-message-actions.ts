@@ -11,6 +11,7 @@ import type { ContentBlock, Message } from "@/lib/chat/types";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import type { InlineConnectStatus } from "@/lib/connections/inline-connect";
 import type { MarkdownCitationPlan } from "@/lib/chat/markdown-export";
+import { stripInternalQueryContext } from "@/lib/chat-utils";
 
 interface UseChatMessageActionsOptions {
   messages: Message[];
@@ -61,8 +62,9 @@ export function useChatMessageActions({
   const [scheduleDialogMessage, setScheduleDialogMessage] = useState<{ prompt: string; response: string } | null>(null);
 
   const enterEditMode = useCallback((message: Message, caretPos?: number) => {
-    setEditDraft(message.content);
-    pendingCaretRef.current = caretPos ?? message.content.length;
+    const cleanContent = stripInternalQueryContext(message.content);
+    setEditDraft(cleanContent);
+    pendingCaretRef.current = caretPos ?? cleanContent.length;
     setEditingMessageId(message.id);
   }, []);
 
@@ -129,7 +131,7 @@ export function useChatMessageActions({
   const cancelMessageEdit = useCallback((message: Message) => {
     setEditingMessageId(null);
     pendingCaretRef.current = null;
-    setEditDraft(message.content);
+    setEditDraft(stripInternalQueryContext(message.content));
   }, []);
 
   const updateEditDraft = useCallback((value: string) => {
@@ -137,7 +139,8 @@ export function useChatMessageActions({
   }, []);
 
   const copyMessageToClipboard = useCallback(async (message: Message) => {
-    await commands.copyTextToClipboard(message.content);
+    const cleanContent = stripInternalQueryContext(message.content);
+    await commands.copyTextToClipboard(cleanContent);
     setCopiedMessageId(message.id);
     setTimeout(() => setCopiedMessageId(null), 2000);
   }, []);

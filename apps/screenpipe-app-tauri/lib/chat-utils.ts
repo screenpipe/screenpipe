@@ -717,6 +717,20 @@ export function normalizeComposerMentionsForModel(
   };
 }
 
+/**
+ * Strip internal `<screenpipe_query_context>` XML tags and metadata from message content.
+ *
+ * Used when copying messages to clipboard, editing drafts, and rendering message text
+ * so that resolved backend query context injected for model inference is never exposed
+ * to the user.
+ */
+export function stripInternalQueryContext(content: string): string {
+  if (!content) return "";
+  return content
+    .replace(/<screenpipe_query_context>[\s\S]*?<\/screenpipe_query_context>\n?/g, "")
+    .trim();
+}
+
 // Common app name mappings (user-friendly -> actual app name patterns)
 const APP_MAPPINGS: Record<string, string[]> = {
   "chrome": ["Google Chrome", "Chrome"],
