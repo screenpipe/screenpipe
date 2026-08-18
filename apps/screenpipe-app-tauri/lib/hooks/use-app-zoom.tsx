@@ -4,7 +4,7 @@
 
 "use client";
 
-import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useSettings } from "@/lib/hooks/use-settings";
 
@@ -44,17 +44,13 @@ export function readSavedAppZoom(): number {
 }
 
 export function applyRootZoom(factor: number): void {
-  if (typeof document === "undefined") return;
+  if (typeof document === "undefined" || !document.documentElement) return;
   const clamped = clampAppZoom(factor);
-  document.documentElement.style.zoom = String(clamped);
-  document.documentElement.style.height = "100%";
-  document.documentElement.style.width = "100%";
-  if (document.body) {
-    document.body.style.height = "100%";
-    document.body.style.width = "100%";
-  }
+  const zoomStr = String(clamped);
+  if (document.documentElement.style.zoom === zoomStr) return;
+  document.documentElement.style.zoom = zoomStr;
   try {
-    localStorage.setItem(STORAGE_KEY, String(clamped));
+    localStorage.setItem(STORAGE_KEY, zoomStr);
   } catch {}
 }
 
@@ -73,10 +69,12 @@ export function AppZoomProvider({ children }: { children: React.ReactNode }) {
   const [zoom, setZoomState] = useState<number>(() => {
     return settings?.appZoom ? clampAppZoom(settings.appZoom) : readSavedAppZoom();
   });
+  const prevSettingsZoomRef = useRef<number | undefined>(settings?.appZoom);
 
   const setZoom = useCallback(
     (newZoom: number) => {
       const clamped = clampAppZoom(newZoom);
+      prevSettingsZoomRef.current = clamped;
       setZoomState(clamped);
       applyRootZoom(clamped);
       updateSettings({ appZoom: clamped });
@@ -87,6 +85,7 @@ export function AppZoomProvider({ children }: { children: React.ReactNode }) {
   const zoomIn = useCallback(() => {
     setZoomState((prev) => {
       const next = clampAppZoom(prev + ZOOM_STEP);
+      prevSettingsZoomRef.current = next;
       applyRootZoom(next);
       updateSettings({ appZoom: next });
       return next;
@@ -96,6 +95,7 @@ export function AppZoomProvider({ children }: { children: React.ReactNode }) {
   const zoomOut = useCallback(() => {
     setZoomState((prev) => {
       const next = clampAppZoom(prev - ZOOM_STEP);
+      prevSettingsZoomRef.current = next;
       applyRootZoom(next);
       updateSettings({ appZoom: next });
       return next;
@@ -103,14 +103,19 @@ export function AppZoomProvider({ children }: { children: React.ReactNode }) {
   }, [updateSettings]);
 
   const resetZoom = useCallback(() => {
+    prevSettingsZoomRef.current = ZOOM_DEFAULT;
     setZoomState(ZOOM_DEFAULT);
     applyRootZoom(ZOOM_DEFAULT);
     updateSettings({ appZoom: ZOOM_DEFAULT });
   }, [updateSettings]);
 
-  // Sync settings when loaded from backend
+  // Sync settings when loaded from backend or another window
   useEffect(() => {
-    if (settings?.appZoom && settings.appZoom !== zoom) {
+    if (
+      settings?.appZoom !== undefined &&
+      settings.appZoom !== prevSettingsZoomRef.current
+    ) {
+      prevSettingsZoomRef.current = settings.appZoom;
       const clamped = clampAppZoom(settings.appZoom);
       setZoomState(clamped);
       applyRootZoom(clamped);
@@ -122,10 +127,16 @@ export function AppZoomProvider({ children }: { children: React.ReactNode }) {
     applyRootZoom(zoom);
   }, []);
 
-  // Global keyboard shortcuts (Cmd/Ctrl + +, -, 0)
+  // Global keyboard shortcuts (Cmd/Ctrl + +, -, 0) for web mode / browser fallback
   useEffect(() => {
+    const isTauri =
+      typeof window !== "undefined" && Boolean((window as any).__TAURI_INTERNALS__);
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!e.metaKey && !e.ctrlKey) return;
+
+      // In Tauri desktop app, the native View menu accelerator handles this natively
+      if (isTauri) return;
 
       // Allow inputs or sub-canvases that explicitly handle custom zoom
       if (e.defaultPrevented) return;
@@ -161,20 +172,6 @@ export function AppZoomProvider({ children }: { children: React.ReactNode }) {
       unlisten?.();
     };
   }, [zoomIn, zoomOut, resetZoom]);
-
-  // Ensure layout reflow on window resize / maximize
-  useEffect(() => {
-    const handleResize = () => {
-      if (typeof document !== "undefined" && document.documentElement) {
-        const currentZoom = document.documentElement.style.zoom;
-        if (currentZoom) {
-          document.documentElement.style.zoom = currentZoom;
-        }
-      }
-    };
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
 
   return (
     <AppZoomContext.Provider
