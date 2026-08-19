@@ -288,9 +288,7 @@ async function searchInstalledPipes(query: unknown, signal: AbortSignal) {
       return words.some((word) => haystack.includes(word));
     },
   );
-  // Never hide the inventory: an empty match set would otherwise read as "no
-  // scheduled tasks exist" and push the model into inventing one.
-  return (matched.length > 0 ? matched : pipes).slice(0, MAX_PIPE_RESULTS);
+  return matched.slice(0, MAX_PIPE_RESULTS);
 }
 
 function valuePreview(value: unknown): {

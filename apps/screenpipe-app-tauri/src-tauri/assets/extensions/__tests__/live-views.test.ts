@@ -387,7 +387,7 @@ describe("live view retrieval the model drives", () => {
     ]);
   });
 
-  it("falls back to the full inventory rather than reporting no tasks exist", async () => {
+  it("returns an empty list when query matches zero installed pipes rather than falling back to all pipes", async () => {
     globalThis.fetch = vi.fn(async () =>
       response({
         data: [
@@ -405,7 +405,7 @@ describe("live view retrieval the model drives", () => {
       new AbortController().signal,
     );
 
-    expect(resultJson(result).pipes).toHaveLength(1);
+    expect(resultJson(result).pipes).toHaveLength(0);
   });
 
   it("reports what a Block currently renders, not its intent", async () => {
@@ -553,5 +553,82 @@ describe("screenpipe_live_view_propose", () => {
 
     expect(guidance).toContain("renders identically");
     expect(guidance).toContain("action=values");
+  });
+});
+
+describe("screenpipe_live_view action=pipes", () => {
+  it("returns all installed pipes when query is omitted", async () => {
+    globalThis.fetch = vi.fn(async (url: string) => {
+      if (url.includes("/pipes")) {
+        return response({
+          data: [
+            { id: "pipe-1", config: { name: "daily-summary", description: "Summarize today" }, enabled: true },
+            { id: "pipe-2", config: { name: "slack-tracker", description: "Track slack" }, enabled: true },
+          ],
+        });
+      }
+      return response({});
+    }) as any;
+
+    const tool = getTool();
+    const result = await tool.execute(
+      "call-pipes-1",
+      { action: "pipes" },
+      new AbortController().signal,
+    );
+
+    const parsed = resultJson(result);
+    expect(parsed.pipes).toHaveLength(2);
+    expect(parsed.pipes[0].name).toBe("daily-summary");
+    expect(parsed.pipes[1].name).toBe("slack-tracker");
+  });
+
+  it("returns only matched pipes when query matches", async () => {
+    globalThis.fetch = vi.fn(async (url: string) => {
+      if (url.includes("/pipes")) {
+        return response({
+          data: [
+            { id: "pipe-1", config: { name: "daily-summary", description: "Summarize today" }, enabled: true },
+            { id: "pipe-2", config: { name: "slack-tracker", description: "Track slack" }, enabled: true },
+          ],
+        });
+      }
+      return response({});
+    }) as any;
+
+    const tool = getTool();
+    const result = await tool.execute(
+      "call-pipes-2",
+      { action: "pipes", query: "slack" },
+      new AbortController().signal,
+    );
+
+    const parsed = resultJson(result);
+    expect(parsed.pipes).toHaveLength(1);
+    expect(parsed.pipes[0].name).toBe("slack-tracker");
+  });
+
+  it("returns empty list when query matches zero installed pipes", async () => {
+    globalThis.fetch = vi.fn(async (url: string) => {
+      if (url.includes("/pipes")) {
+        return response({
+          data: [
+            { id: "pipe-1", config: { name: "daily-summary", description: "Summarize today" }, enabled: true },
+            { id: "pipe-2", config: { name: "slack-tracker", description: "Track slack" }, enabled: true },
+          ],
+        });
+      }
+      return response({});
+    }) as any;
+
+    const tool = getTool();
+    const result = await tool.execute(
+      "call-pipes-3",
+      { action: "pipes", query: "jira-nonexistent" },
+      new AbortController().signal,
+    );
+
+    const parsed = resultJson(result);
+    expect(parsed.pipes).toEqual([]);
   });
 });
