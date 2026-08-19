@@ -390,9 +390,11 @@ describe("window lifecycle", () => {
     const stale = new Date(
       Date.now() - LEARNING_WINDOW_CEILING_MS - 1_000,
     ).toISOString();
-    beginLearningWindow(stale);
+    beginLearningWindow(stale, true);
     // A reload after the ceiling must not show an expired countdown.
-    expect(readLearningWindow().phase).toBe("empty");
+    const settled = readLearningWindow();
+    expect(settled.phase).toBe("empty");
+    expect(settled.showProgress).toBe(true);
   });
 
   it("never rehydrates captured apps, which would show stale evidence", () => {
@@ -604,6 +606,7 @@ describe("a window that expired while nothing was mounted", () => {
         seededAt: null,
         chatId: null,
         emptyReason: null,
+        showProgress: true,
       }),
     );
   };
@@ -621,6 +624,7 @@ describe("a window that expired while nothing was mounted", () => {
     // state of its own.
     expect(state.emptyReason).toBe("unknown");
     expect(state.pendingEmptyReport).toBe(true);
+    expect(state.showProgress).toBe(true);
   });
 
   it("flags the settle rather than inventing a new diagnostic reason", () => {

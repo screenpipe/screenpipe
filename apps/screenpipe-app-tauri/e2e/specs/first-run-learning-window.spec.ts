@@ -18,12 +18,13 @@
 // What this proves that unit tests cannot:
 //   1. The banner mounts on Home — the surface setup now routes to — and its
 //      countdown is live rather than a frozen first render.
-//   2. An empty result settles durably but never becomes product UI. The real
-//      engine reason remains in state/telemetry for diagnosis without making
-//      an internal evidence threshold the user's problem.
+//   2. A foreground empty result settles durably into useful setup choices.
+//      The real engine reason remains in state/telemetry without making the
+//      internal evidence threshold the user's problem.
 //   3. A late retry runs in the background and surfaces only if a summary is
 //      ready. Reopening hours later must not look like onboarding restarted.
-//   4. Silent terminal states stay silent across reloads.
+//   4. Foreground terminal choices survive reload until the user dismisses
+//      them; background terminal states stay silent.
 //
 // The summary text and the seed-once rules are pure functions covered in
 // lib/first-run/learning-window.test.ts. This spec drives the state machine
@@ -195,10 +196,11 @@ const learningState = (over: Record<string, unknown> = {}) => ({
     expect(existsSync(filepath)).toBe(true);
   });
 
-  it("settles an empty engine result without putting it in the interface", async () => {
+  it("ends an empty foreground result on useful setup choices", async () => {
     // Ceiling already elapsed, so the window must settle on this mount. With
     // recording off the engine answers that it is not recording, and that
-    // exact reason remains available for diagnosis without becoming a card.
+    // exact reason remains available for diagnosis while onboarding still
+    // reaches the daily-summary setup instead of disappearing.
     await openHomeWith(
       learningState({
         startedAt: new Date(Date.now() - 10 * 60 * 1_000).toISOString(),
@@ -219,25 +221,36 @@ const learningState = (over: Record<string, unknown> = {}) => ({
         timeoutMsg: "window never persisted a classified empty reason",
       },
     );
-    expect(await bannerCount()).toBe(0);
+    expect(await bannerCount()).toBe(1);
+    expect(await bannerPhase()).toBe("empty");
     const bodyText = (await browser.execute(
       () => document.body.textContent ?? "",
     )) as string;
-    expect(bodyText).not.toContain("Nothing to summarize");
+    expect(bodyText).toContain("screenpipe is ready");
+    expect(bodyText).toContain("enable daily summary");
 
-    const filepath = await saveScreenshot("first-run-empty-silent");
+    const filepath = await saveScreenshot("first-run-empty-ready");
     expect(existsSync(filepath)).toBe(true);
   });
 
-  it("keeps the settled empty result silent across a reload", async () => {
+  it("keeps the setup choices across reload until the user dismisses them", async () => {
     await showWindow({ Home: { page: null } });
     await browser.switchToWindow("home");
     await browser.execute(() => {
       window.location.href = "/home?section=home";
     });
     await browser.pause(t(4_000));
-    expect(await bannerCount()).toBe(0);
+    expect(await bannerCount()).toBe(1);
+    expect(await bannerPhase()).toBe("empty");
     expect((await storedLearningState())?.phase).toBe("empty");
+
+    const done = await browser.$('[data-testid="first-run-setup-complete"]');
+    await done.click();
+    await browser.waitUntil(async () => (await bannerCount()) === 0, {
+      timeout: t(10_000),
+      timeoutMsg: "setup choices survived explicit dismissal",
+    });
+    expect((await storedLearningState())?.phase).toBe("done");
   });
 
   it("offers the summary once one is ready, then gets out of the way", async () => {
@@ -272,8 +285,20 @@ const learningState = (over: Record<string, unknown> = {}) => ({
   // localStorage partition, so Home never saw it. Nothing is seeded here — the
   // window has to appear from a real completion alone.
   it("opens from a real setup completion, with nothing seeded", async () => {
+    // Simulate a user deleting ~/.screenpipe while WebView data survives. The
+    // old terminal lifecycle must not suppress a newly completed setup.
     await browser.execute((key: string) => {
-      window.localStorage.removeItem(key);
+      window.localStorage.setItem(
+        key,
+        JSON.stringify({
+          phase: "done",
+          startedAt: new Date(Date.now() - 10 * 60 * 1_000).toISOString(),
+          showProgress: true,
+          seededAt: null,
+          chatId: null,
+          emptyReason: null,
+        }),
+      );
     }, LEARNING_STORAGE_KEY);
 
     // Re-complete setup through the real command, exactly as the last slide

@@ -121,6 +121,52 @@ export function FirstRunReadyPanel({
   );
 }
 
+export function FirstRunSetupReadyPanel({
+  onDismiss,
+  nextSteps,
+}: {
+  onDismiss: () => void;
+  nextSteps: React.ReactNode;
+}) {
+  return (
+    <div data-testid="first-run-setup-ready">
+      <div className="p-5">
+        <div className="flex items-center gap-2">
+          <span className="h-2 w-2 bg-phosphor-strong" aria-hidden="true" />
+          <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-phosphor-strong">
+            setup · ready
+          </span>
+        </div>
+        <h2 className="mt-3 font-mono text-base font-semibold lowercase text-foreground">
+          screenpipe is ready
+        </h2>
+        <p className="mt-2 max-w-xl text-[11px] leading-relaxed text-muted-foreground">
+          there was not enough activity in this short setup window to write a
+          useful first summary. you can still enable your daily summary now.
+        </p>
+      </div>
+
+      {nextSteps}
+
+      <div className="flex items-center justify-between gap-4 border-t border-border px-4 py-3">
+        <p className="text-[10px] leading-relaxed text-muted-foreground">
+          these optional setups remain available from scheduled tasks and
+          connections.
+        </p>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 shrink-0 px-2 text-[9px]"
+          data-testid="first-run-setup-complete"
+          onClick={onDismiss}
+        >
+          this is ready
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /**
  * First-run learning window.
  *
@@ -136,14 +182,15 @@ export function FirstRunLearningBanner(
   const { targets: handoffTargets, hint: handoffHint, askAgent } =
     useAgentHandoff(phase === "ready");
 
-  // Only show progress when setup just caused it, and only show a terminal
-  // outcome when there is something useful to open. Empty is an internal
-  // result/telemetry state, not a user task or an error they asked to inspect.
+  // Only show progress when setup just caused it. A foreground empty result is
+  // still a terminal onboarding state: hiding it also hid the daily-summary
+  // setup and made the two-minute card appear to vanish. Background retries
+  // remain quiet unless they produce a summary worth opening.
   if (
     phase !== "ready" &&
     !(
       showProgress &&
-      (phase === "learning" || phase === "writing")
+      (phase === "learning" || phase === "writing" || phase === "empty")
     )
   ) {
     return fallback ? <>{fallback}</> : null;
@@ -169,7 +216,9 @@ export function FirstRunLearningBanner(
       data-testid="first-run-learning-banner"
       data-phase={phase}
       className={`mx-auto mb-4 w-full border border-border bg-background ${
-        phase === "ready" ? "max-w-3xl overflow-hidden" : "max-w-3xl p-4"
+        phase === "ready" || phase === "empty"
+          ? "max-w-3xl overflow-hidden"
+          : "max-w-3xl p-4"
       }`}
     >
       {phase === "learning" && (
@@ -246,6 +295,13 @@ export function FirstRunLearningBanner(
           handoffHint={handoffHint}
           onOpenSummary={() => void openSummary()}
           onPickAgent={(target) => void askAgent(target)}
+          onDismiss={() => dismiss()}
+          nextSteps={<FirstRunNextSteps userToken={learningOptions.userToken} />}
+        />
+      )}
+
+      {phase === "empty" && (
+        <FirstRunSetupReadyPanel
           onDismiss={() => dismiss()}
           nextSteps={<FirstRunNextSteps userToken={learningOptions.userToken} />}
         />

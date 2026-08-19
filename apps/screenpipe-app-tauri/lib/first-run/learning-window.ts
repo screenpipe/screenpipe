@@ -574,6 +574,7 @@ function normalize(value: unknown): FirstRunLearningState {
         ...EMPTY_STATE,
         phase: "empty",
         startedAt,
+        showProgress: state.showProgress === true,
         // Deliberately still `unknown`, not a new reason. The hook re-derives
         // the real engine reason from `pendingEmptyReport` below, exactly as
         // the ceiling effect would have, so diagnostics keep their fidelity.
@@ -594,7 +595,7 @@ function normalize(value: unknown): FirstRunLearningState {
       return {
         phase: "ready",
         startedAt,
-        showProgress: false,
+        showProgress: state.showProgress === true,
         seededAt: typeof state.seededAt === "string" ? state.seededAt : null,
         chatId: state.chatId,
         emptyReason: null,
@@ -606,6 +607,7 @@ function normalize(value: unknown): FirstRunLearningState {
       ...EMPTY_STATE,
       phase: "empty",
       startedAt,
+      showProgress: state.showProgress === true,
       emptyReason: "unknown",
       // NOT flagged for reporting, unlike the expired-learning path above. A
       // `writing` window that lost its process may still have an in-flight

@@ -93,7 +93,7 @@ export function useLearningWindow(
   // cutoff stays exactly right because `completedAt` IS the moment setup
   // ended — everything summarized was captured after it.
   useEffect(() => {
-    if (state.phase !== "idle") return;
+    if (state.phase === "learning" || state.phase === "writing") return;
     let cancelled = false;
     void (async () => {
       try {
@@ -101,7 +101,21 @@ export function useLearningWindow(
         if (cancelled || result.status !== "ok") return;
         const opening = learningWindowOpening(result.data.completedAt);
         if (opening.kind === "none") return;
-        if (readLearningWindow().phase !== "idle") return;
+        const stored = readLearningWindow();
+        const completedMs = Date.parse(result.data.completedAt ?? "");
+        const startedMs = Date.parse(stored.startedAt ?? "");
+        const isFreshCompletion =
+          stored.phase === "idle" ||
+          !Number.isFinite(startedMs) ||
+          (Number.isFinite(completedMs) && completedMs > startedMs);
+        if (!isFreshCompletion) return;
+
+        // `~/.screenpipe` is not the WebView storage partition. A manual data
+        // reset can therefore leave an old empty/done result in localStorage
+        // even though setup just wrote a brand-new completion. The fresh
+        // backend timestamp is authoritative: retire the stale lifecycle and
+        // start this setup's learning window.
+        if (stored.phase !== "idle") resetLearningWindow();
         // The only signal that a window ever opened. Without it an absent
         // outcome is indistinguishable from a window that never started, and
         // "never started" was by far the most common outcome.

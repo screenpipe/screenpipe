@@ -163,7 +163,8 @@ describe("first-run learning banner", () => {
     expect(dismiss).toHaveBeenCalled();
   });
 
-  it("keeps every empty result out of the interface", () => {
+  it("ends a foreground empty result with useful setup choices", () => {
+    const dismiss = vi.fn();
     for (const emptyReason of [
       "not_recording",
       "no_capture_in_range",
@@ -173,11 +174,35 @@ describe("first-run learning banner", () => {
       "single_app_below_floor",
       "unknown",
     ] as const) {
-      mocks.view = view({ phase: "empty", emptyReason });
+      mocks.view = view({
+        phase: "empty",
+        emptyReason,
+        showProgress: true,
+        dismiss,
+      });
       const rendered = render(<FirstRunLearningBanner />);
-      expect(rendered.container).toBeEmptyDOMElement();
+      expect(screen.getByText("screenpipe is ready")).toBeInTheDocument();
+      expect(screen.getByTestId("first-run-next-steps")).toBeInTheDocument();
+      expect(
+        screen.queryByTestId("first-run-open-summary"),
+      ).not.toBeInTheDocument();
       rendered.unmount();
     }
+
+    mocks.view = view({ phase: "empty", showProgress: true, dismiss });
+    render(<FirstRunLearningBanner />);
+    fireEvent.click(screen.getByRole("button", { name: "this is ready" }));
+    expect(dismiss).toHaveBeenCalled();
+  });
+
+  it("keeps an empty background retry out of the interface", () => {
+    mocks.view = view({
+      phase: "empty",
+      emptyReason: "below_frame_floor",
+      showProgress: false,
+    });
+    const rendered = render(<FirstRunLearningBanner />);
+    expect(rendered.container).toBeEmptyDOMElement();
   });
 
   it("keeps a late learning or writing retry in the background", () => {
