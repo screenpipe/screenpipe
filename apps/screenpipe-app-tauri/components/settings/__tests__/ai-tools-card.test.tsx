@@ -16,6 +16,7 @@ const libMocks = vi.hoisted(() => ({
   disconnectAiTool: vi.fn(),
   isOpenclawMcpInstalled: vi.fn(async () => false),
   isHermesMcpInstalled: vi.fn(async () => false),
+  isGeminiMcpInstalled: vi.fn(async () => false),
   isRunnerMcpInstalled: vi.fn(async () => false),
   isWindsurfMcpInstalled: vi.fn(async () => false),
 }));
@@ -40,12 +41,13 @@ vi.mock("@/lib/ai-tools-mcp", () => ({
     claude: "Claude",
     codex: "Codex",
     cursor: "Cursor",
+    gemini: "Gemini CLI",
     openclaw: "OpenClaw",
     hermes: "Hermes",
     runner: "Runner",
     windsurf: "Windsurf (Devin Desktop)",
   },
-  SKILLS_TARGET: { claude: "claude", codex: "codex" },
+  SKILLS_TARGET: { claude: "claude", codex: "codex", gemini: "gemini" },
 }));
 
 vi.mock("@/lib/hooks/use-hardcoded-tiles", () => hookMocks);
@@ -113,5 +115,16 @@ describe("AiToolsCard", () => {
     fireEvent.click(await screen.findByRole("button", { name: /manage/i }));
 
     expect(await screen.findByText(/enable Settings > Workspace > Local MCP Servers/i)).toBeTruthy();
+  });
+
+  it("shows detected Gemini CLI with MCP and skills", async () => {
+    libMocks.detectAiTools.mockResolvedValue(["gemini"]);
+
+    render(<AiToolsCard />);
+    fireEvent.click(await screen.findByRole("button", { name: /connect all/i }));
+
+    expect(await screen.findByText("Gemini CLI")).toBeTruthy();
+    expect(screen.getByText("MCP + skills")).toBeTruthy();
+    await waitFor(() => expect(libMocks.connectAiTool).toHaveBeenCalledWith("gemini"));
   });
 });

@@ -419,9 +419,7 @@ jobs:
       timeout-minutes: 35
       run: |
         set -euo pipefail
-        export DEBIAN_FRONTEND=noninteractive
-        sudo apt-get update -qq
-        sudo apt-get install -y --no-install-recommends \
+        .github/scripts/apt-install-with-retries.sh --no-install-recommends \
           tesseract-ocr libtesseract-dev ffmpeg pkg-config build-essential libglib2.0-dev \
           libgtk-3-dev libwebkit2gtk-4.1-dev clang cmake \
           libavutil-dev libavformat-dev libavfilter-dev libavdevice-dev \
@@ -444,8 +442,7 @@ jobs:
       run: |
         set -euo pipefail
         if ! gsettings list-schemas | grep -qx 'org.gnome.system.proxy'; then
-          sudo apt-get update -qq
-          sudo apt-get install -y --reinstall gsettings-desktop-schemas
+          .github/scripts/apt-install-with-retries.sh --reinstall gsettings-desktop-schemas
           sudo glib-compile-schemas /usr/share/glib-2.0/schemas
         fi
         gsettings list-schemas | grep -qx 'org.gnome.system.proxy'
@@ -487,8 +484,7 @@ jobs:
         REAL_SO="$(find_openblas_so)"
         if [ -z "$REAL_SO" ]; then
           echo "libopenblas not found on disk — forcing fresh install"
-          sudo apt-get update -qq
-          sudo apt-get install -y --reinstall libopenblas-dev
+          .github/scripts/apt-install-with-retries.sh --reinstall libopenblas-dev
           REAL_SO="$(find_openblas_so)"
         fi
         if [ -z "$REAL_SO" ]; then
@@ -720,8 +716,7 @@ jobs:
       shell: bash
       run: |
         set -euxo pipefail
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
+        .github/scripts/apt-install-with-retries.sh --no-install-recommends \
           build-essential \
           cmake \
           foot \

@@ -58,6 +58,7 @@ mod commands;
 mod db_recovery_notifications;
 mod db_relaunch;
 mod db_self_heal;
+mod deep_link;
 mod dev_isolation;
 mod diagnostic_logs;
 mod disk_usage;
@@ -603,10 +604,7 @@ async fn main() {
     // zbus/tokio conflict) and acts as a fallback on macOS/Windows.
     {
         let args: Vec<String> = std::env::args().collect();
-        let deep_link_url = args
-            .iter()
-            .find(|a| a.starts_with("screenpipe://"))
-            .cloned();
+        let deep_link_url = deep_link::url_from_args(&args);
 
         let focus_port: u16 = std::env::var("SCREENPIPE_FOCUS_PORT")
             .ok()
@@ -1088,9 +1086,11 @@ async fn main() {
         let app_for_closure = app.clone();
         let args_clone = args.clone();
         let _ = app.run_on_main_thread(move || {
+            let deep_link_url = deep_link::url_from_args(&args_clone);
             // A second app launch is usually the Windows taskbar/dock entry point.
-            // Open the Home app window here; `show_main_window` intentionally
-            // opens the timeline overlay for the global shortcut/tray timeline.
+            // Deep links use route-specific foregrounding: auth returns through
+            // the app-entry gate, explicit timeline links open Timeline, and
+            // every other route starts from Home.
             // macOS can start both the main-app login item and the retained
             // legacy LaunchAgent at once. The plugin's exact --autostart flag
             // always stays background-only. If legacy won the primary race,
@@ -1098,14 +1098,24 @@ async fn main() {
             // during setup; normal subsequent launches retain Home behavior.
             let login_duplicate = should_suppress_startup_handoff(&args_clone);
             if !crate::enterprise_policy::is_app_ui_hidden() && !login_duplicate {
-                let _ = ShowRewindWindow::Home { page: None }.show(&app_for_closure);
+                match deep_link::handoff_window(deep_link_url.as_deref()) {
+                    deep_link::HandoffWindow::AppEntry => {
+                        let _ = ShowRewindWindow::Onboarding.show(&app_for_closure);
+                    }
+                    deep_link::HandoffWindow::Home => {
+                        let _ = ShowRewindWindow::Home { page: None }.show(&app_for_closure);
+                    }
+                    deep_link::HandoffWindow::Timeline => {
+                        commands::show_main_window(app_for_closure.clone());
+                    }
+                }
             } else if login_duplicate {
                 info!("autostart: ignored duplicate login LaunchAgent handoff");
             }
 
             // Forward deep-link URL from args
-            if let Some(url) = args_clone.iter().find(|a| a.starts_with("screenpipe://")) {
-                let _ = app_for_closure.emit("deep-link-received", url.clone());
+            if let Some(url) = deep_link_url {
+                let _ = app_for_closure.emit("deep-link-received", url);
             }
 
             // Forward CLI args

@@ -27,6 +27,13 @@ const mocks = vi.hoisted(() => ({
       cloud_subscribed: true,
       has_payment_method: false,
       subscription_plan: "pro",
+    } as {
+      token: string;
+      cloud_subscribed?: boolean;
+      app_entitled?: boolean;
+      has_payment_method?: boolean;
+      entitlement_source?: string;
+      subscription_plan?: string;
     },
   },
 }));
@@ -176,6 +183,67 @@ describe("hosted onboarding checkout", () => {
 
     expect(mocks.loadUser).toHaveBeenCalledWith("token-1");
     expect(next).not.toHaveBeenCalled();
+  });
+
+  it("advances when a higher existing entitlement remains authoritative", async () => {
+    window.history.replaceState({}, "", "/onboarding?checkout=complete");
+    mocks.settings.user = {
+      token: "token-1",
+      app_entitled: true,
+      has_payment_method: false,
+      entitlement_source: "manual",
+      subscription_plan: "pro_ultra",
+    };
+    const next = vi.fn();
+
+    render(<PlanSelectionStep handleNextSlide={next} />);
+
+    await waitFor(() =>
+      expect(mocks.loadUser).toHaveBeenCalledWith("token-1", true),
+    );
+    await waitFor(() => expect(next).toHaveBeenCalledOnce());
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "onboarding_plan_activated",
+      expect.objectContaining({
+        confirmation: "existing_entitlement",
+        plan: "pro_ultra",
+      }),
+    );
+  });
+
+  it("bounds confirmation polling and offers a verification retry", async () => {
+    vi.useFakeTimers();
+    window.history.replaceState({}, "", "/onboarding?checkout=complete");
+    const next = vi.fn();
+
+    render(<PlanSelectionStep handleNextSlide={next} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mocks.loadUser).toHaveBeenCalledWith("token-1", true);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(
+      screen.getByText("account confirmation is taking longer than expected"),
+    ).toBeInTheDocument();
+    expect(next).not.toHaveBeenCalled();
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "onboarding_card_checkout_confirmation_timed_out",
+      { poll_attempts: 10 },
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "retry confirmation" }),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      mocks.loadUser.mock.calls.filter((call) => call[1] === true),
+    ).toHaveLength(2);
   });
 
   it("does not auto-navigate after cancellation and retries in the same webview", async () => {

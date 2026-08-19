@@ -420,6 +420,18 @@ commits: `87abb00d`, `9464fdc9`, `0f9e43aa`, `7ea15f32`
 - [ ] **onboarding window size** — window is correctly sized, no overflow (`7ea15f32`).
 - [ ] **onboarding doesn't re-show** — after completing onboarding, restart app. main window shows, not onboarding.
 
+#### Desktop account login callbacks
+
+- [ ] **Windows consumer login, cold and running** — sign in and sign up from a closed app and an already-running app. The `screenpipe://auth` callback returns to the consumer build, stores the account, and never opens Timeline.
+- [ ] **Windows Enterprise login, cold and running** — repeat with the Enterprise build. The callback uses `screenpipe-enterprise://auth`, reaches the Enterprise process, and never opens the consumer build or Timeline.
+- [ ] **consumer and Enterprise both installed** — start login from each build in turn. Each callback returns to the build that initiated it; a callback for the other registered scheme is rejected.
+- [ ] **onboarding versus existing account destination** — an auth callback during incomplete setup returns to Onboarding and auto-advances after login; an auth callback from an established app returns to Home.
+- [ ] **wrong browser account retry** — when the browser is already signed into the wrong account, sign out on the login page and sign in again. The original build scheme and callback version survive the Clerk round trip.
+- [ ] **blocked automatic protocol launch** — block the browser's automatic custom-protocol launch, then use the visible "open screenpipe" fallback. The callback is delivered once to the correct build.
+- [ ] **default browser unavailable** — make the OS browser launch fail and verify `open_login_window` falls back to the isolated in-app WebView, including "use different account".
+- [ ] **macOS and Linux parity** — macOS ASWebAuthenticationSession and Linux system-browser login use the same versioned callback contract and return to the initiating build.
+- [ ] **CLI login remains separate** — `/login?code=…&redirect=…` completes the device-code flow without attempting a desktop custom-scheme callback.
+
 ### 12. timeline & search
 
 commits: `f1255eac`, `25cbdc6b`, `2529367d`, `d9821624`, `e61501da`, `039d5fea`, `50ff4f4c`, `91cc4371`, `bcce42796`, `a98fa2991`, `0ff93b167`, `adbbb8f84`

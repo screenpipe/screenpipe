@@ -17,8 +17,8 @@
 //   2. One tap writes through to store.bin via the real settings command,
 //      not a mocked updateSettings.
 //   3. Skip records nothing at all.
-//   4. Embedded card capture is the LAST slide after engine startup, with the
-//      limited Free path still available.
+//   4. Existing entitlements cannot be restored into mandatory checkout, even
+//      when an older build persisted the plan step.
 //
 // The post-setup learning window lives in first-run-learning-window.spec.ts:
 // it renders on Brain, which is behind the account gate, so it needs the
@@ -102,6 +102,24 @@ const readSetting = async <T>(key: string): Promise<T | undefined> => {
   >("plugin:store|get", { rid, key: "settings" });
   if (!exists || !settings) return undefined;
   return settings[key] as T | undefined;
+};
+
+/** Persist account truth through the same store the onboarding window reads. */
+const seedOnboardingUser = async (user: Record<string, unknown>) => {
+  const rid = await invokeOrThrow<number | null>("plugin:store|get_store", {
+    path: join(E2E_DATA_DIR, "store.bin"),
+  });
+  if (rid == null) throw new Error("settings store is not loaded");
+  const [settings, exists] = await invokeOrThrow<
+    [Record<string, unknown>, boolean]
+  >("plugin:store|get", { rid, key: "settings" });
+  if (!exists || !settings) throw new Error("settings are not loaded");
+  await invokeOrThrow("plugin:store|set", {
+    rid,
+    key: "settings",
+    value: { ...settings, user },
+  });
+  await invokeOrThrow("plugin:store|save", { rid });
 };
 
 /**
@@ -223,7 +241,7 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
     await waitForBodyText("permission", 15_000);
   });
 
-  it("puts plan selection after engine startup with no goal picker", async () => {
+  it("keeps engine final for a signed-out install with no goal picker", async () => {
     await gotoSlide("engine");
     await waitForTestId("onboarding-scroll-region", 30_000);
 
@@ -233,32 +251,52 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
     expect(text).not.toContain("what do you want first");
     expect(text).not.toContain("build my first live view");
 
-    // Engine startup is now the penultimate setup step.
+    // A fresh signed-out install cannot enter hosted checkout because there is
+    // no account to attach a subscription to. Engine is therefore the final
+    // reachable step until authenticated free-account truth exists.
     const match = text.match(/setup[^0-9]*(\d+)\s*of\s*(\d+)/);
     if (match) {
       const [, current, total] = match.map(Number);
-      expect(current).toBe(total - 1);
+      expect(current).toBe(total);
     }
   });
 
-  it("embeds card capture as the final onboarding screen", async () => {
+  it("keeps lifetime ownership out of mandatory checkout", async () => {
+    await seedOnboardingUser({
+      id: "e2e-lifetime-owner",
+      email: "lifetime-owner@screenpipe.test",
+      app_entitled: true,
+      subscription_plan: "lifetime",
+      entitlement_source: "lifetime",
+      has_payment_method: false,
+      entitlement: {
+        active: true,
+        plan: "lifetime",
+        source: "lifetime",
+        features: { app: true, cloud: true },
+      },
+    });
+
+    // Simulate an upgrade from a build that had already persisted "plan".
+    // The current shipped route must map it back to engine instead of opening
+    // a hosted checkout for an account that already has access.
     await gotoSlide("plan");
-    await waitForTestId("onboarding-card-capture", 30_000);
+    await waitForTestId("onboarding-engine-startup", 30_000);
 
     const text = await bodyText();
-    expect(text).toContain("add a payment method to keep screenpipe business");
-    expect(text).toContain("annual");
-    expect(text).toContain("monthly");
-    expect(text).not.toContain("choose your plan");
-    expect(text).not.toContain("continue with limited free plan");
-    await waitForBodyText("continue with limited free plan", 10_000);
+    expect(text).not.toContain("opening secure checkout");
+    expect(
+      await browser.execute(
+        () => !!document.querySelector('[data-testid="onboarding-card-capture"]'),
+      ),
+    ).toBe(false);
 
     const match = text.match(/setup[^0-9]*(\d+)\s*of\s*(\d+)/);
     expect(match).not.toBeNull();
     const [, current, total] = match!.map(Number);
     expect(current).toBe(total);
 
-    const filepath = await saveScreenshot("onboarding-card-capture");
+    const filepath = await saveScreenshot("onboarding-lifetime-checkout-skip");
     expect(existsSync(filepath)).toBe(true);
   });
 });

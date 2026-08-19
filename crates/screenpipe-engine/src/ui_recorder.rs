@@ -306,6 +306,9 @@ pub struct TreeWalkerSnapshot {
     pub walks_deduped: u64,
     pub walks_empty: u64,
     pub walks_error: u64,
+    pub walks_worker_timeout: u64,
+    pub walks_worker_saturated: u64,
+    pub worker_restarts: u64,
     pub walks_truncated: u64,
     pub walks_truncated_timeout: u64,
     pub walks_truncated_max_nodes: u64,
@@ -350,6 +353,11 @@ pub enum TreeWalkOutcome {
     Empty,
     /// Walk failed — no focused window / AX error (`TreeWalkResult::NotFound`).
     Error,
+    /// The platform call exceeded the worker watchdog. `restarted` is false
+    /// when another non-cancellable call is already quarantined.
+    WorkerTimeout { restarted: bool },
+    /// Both bounded worker slots are occupied by prior timed-out calls.
+    WorkerSaturated,
 }
 
 /// Internal cumulative accumulator behind [`TREE_WALKER_METRICS`]. Stores
@@ -363,6 +371,9 @@ struct TreeWalkerAccumulator {
     walks_deduped: u64,
     walks_empty: u64,
     walks_error: u64,
+    walks_worker_timeout: u64,
+    walks_worker_saturated: u64,
+    worker_restarts: u64,
     walks_truncated: u64,
     walks_truncated_timeout: u64,
     walks_truncated_max_nodes: u64,
@@ -385,6 +396,9 @@ impl TreeWalkerAccumulator {
             walks_deduped: self.walks_deduped,
             walks_empty: self.walks_empty,
             walks_error: self.walks_error,
+            walks_worker_timeout: self.walks_worker_timeout,
+            walks_worker_saturated: self.walks_worker_saturated,
+            worker_restarts: self.worker_restarts,
             walks_truncated: self.walks_truncated,
             walks_truncated_timeout: self.walks_truncated_timeout,
             walks_truncated_max_nodes: self.walks_truncated_max_nodes,
@@ -462,6 +476,17 @@ pub fn record_tree_walk(outcome: TreeWalkOutcome) {
         }
         TreeWalkOutcome::Error => {
             acc.walks_error += 1;
+        }
+        TreeWalkOutcome::WorkerTimeout { restarted } => {
+            acc.walks_error += 1;
+            acc.walks_worker_timeout += 1;
+            if restarted {
+                acc.worker_restarts += 1;
+            }
+        }
+        TreeWalkOutcome::WorkerSaturated => {
+            acc.walks_error += 1;
+            acc.walks_worker_saturated += 1;
         }
     }
 }
@@ -2359,6 +2384,17 @@ mod tests {
             }
             TreeWalkOutcome::Empty => acc.walks_empty += 1,
             TreeWalkOutcome::Error => acc.walks_error += 1,
+            TreeWalkOutcome::WorkerTimeout { restarted } => {
+                acc.walks_error += 1;
+                acc.walks_worker_timeout += 1;
+                if restarted {
+                    acc.worker_restarts += 1;
+                }
+            }
+            TreeWalkOutcome::WorkerSaturated => {
+                acc.walks_error += 1;
+                acc.walks_worker_saturated += 1;
+            }
         }
     }
 
@@ -2413,6 +2449,24 @@ mod tests {
         assert_eq!(snap.avg_nodes_per_walk, 50);
         assert_eq!(snap.max_depth_reached, 9);
         assert_eq!(snap.total_text_chars, 1000);
+    }
+
+    #[test]
+    fn tree_walker_accumulator_distinguishes_worker_failures() {
+        let mut acc = TreeWalkerAccumulator::default();
+        apply(&mut acc, TreeWalkOutcome::WorkerTimeout { restarted: true });
+        apply(
+            &mut acc,
+            TreeWalkOutcome::WorkerTimeout { restarted: false },
+        );
+        apply(&mut acc, TreeWalkOutcome::WorkerSaturated);
+
+        let snap = acc.snapshot();
+        assert_eq!(snap.walks_total, 3);
+        assert_eq!(snap.walks_error, 3);
+        assert_eq!(snap.walks_worker_timeout, 2);
+        assert_eq!(snap.walks_worker_saturated, 1);
+        assert_eq!(snap.worker_restarts, 1);
     }
 
     #[test]

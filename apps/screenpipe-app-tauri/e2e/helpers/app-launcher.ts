@@ -298,8 +298,8 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
 
   if (backgroundAiToolsEnabled) {
     // Cross-platform fake agent homes. The app's e2e-only home override keeps
-    // the native background writer away from real ~/.codex, ~/.cursor, and
-    // ~/.runner.
+    // the native background writer away from real ~/.codex, ~/.cursor,
+    // ~/.gemini, and ~/.runner.
     mkdirSync(resolve(E2E_AI_TOOLS_HOME, '.codex'), { recursive: true });
     writeFileSync(
       resolve(E2E_AI_TOOLS_HOME, '.codex', 'config.toml'),
@@ -311,6 +311,14 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
       JSON.stringify({
         mcpServers: { existing: { command: 'existing-server' } },
         theme: 'dark',
+      }),
+    );
+    mkdirSync(resolve(E2E_AI_TOOLS_HOME, '.gemini'), { recursive: true });
+    writeFileSync(
+      resolve(E2E_AI_TOOLS_HOME, '.gemini', 'settings.json'),
+      JSON.stringify({
+        mcpServers: { existing: { command: 'gemini-existing' } },
+        ui: { theme: 'GitHub' },
       }),
     );
     mkdirSync(resolve(E2E_AI_TOOLS_HOME, '.runner'), { recursive: true });

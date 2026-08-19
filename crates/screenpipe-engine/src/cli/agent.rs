@@ -34,7 +34,7 @@ pub enum AgentCommand {
     Setup {
         /// Which agent to wire up. Omit when using --all.
         #[arg(
-            value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "runner", "windsurf"],
+            value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "gemini", "runner", "windsurf"],
             required_unless_present = "all",
             conflicts_with = "all"
         )]
@@ -54,7 +54,7 @@ pub enum AgentCommand {
     /// agent's own config or other skills.
     Remove {
         /// Which agent to unwire.
-        #[arg(value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "runner", "windsurf"])]
+        #[arg(value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "gemini", "runner", "windsurf"])]
         target: String,
     },
 }
@@ -219,6 +219,7 @@ fn detected_agents_in(home: &Path) -> Vec<DetectedAgent> {
     for (target, name, relative_dir) in [
         ("codex", "Codex", ".codex"),
         ("cursor", "Cursor", ".cursor"),
+        ("gemini", "Gemini CLI", ".gemini"),
         ("openclaw", "OpenClaw", ".openclaw"),
         ("hermes", "Hermes", ".hermes"),
         ("runner", "Runner", ".runner"),
@@ -376,6 +377,7 @@ fn detected_desktop_agents_in(home: &Path) -> Vec<DesktopDetectedAgent> {
     for (id, name, target, relative_dir, has_skills) in [
         ("codex", "Codex", "codex", ".codex", true),
         ("cursor", "Cursor", "cursor", ".cursor", true),
+        ("gemini", "Gemini CLI", "gemini", ".gemini", true),
         ("openclaw", "OpenClaw", "openclaw", ".openclaw", true),
         ("hermes", "Hermes", "hermes", ".hermes", true),
         ("runner", "Runner", "runner", ".runner", false),
@@ -633,6 +635,14 @@ fn layout_in(target: &str, h: &Path) -> Result<AgentLayout> {
             mcp_path: h.join(".codex/config.toml"),
             mcp_format: McpFormat::Toml,
         },
+        // https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/configuration.md
+        // https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/skills.md
+        "gemini" => AgentLayout {
+            name: "Gemini CLI",
+            skills_dir: Some(h.join(".gemini/skills")),
+            mcp_path: h.join(".gemini/settings.json"),
+            mcp_format: McpFormat::Json,
+        },
         // Cursor loads global skills from ~/.cursor/skills (also ~/.agents/skills
         // and, for compat, ~/.claude/skills + ~/.codex/skills) — see
         // https://cursor.com/docs/skills
@@ -658,7 +668,7 @@ fn layout_in(target: &str, h: &Path) -> Result<AgentLayout> {
             mcp_format: McpFormat::Json,
         },
         other => anyhow::bail!(
-            "unknown agent target '{other}' (use: openclaw, hermes, claude-code, claude-desktop, codex, cursor, runner, windsurf)"
+            "unknown agent target '{other}' (use: openclaw, hermes, claude-code, claude-desktop, codex, cursor, gemini, runner, windsurf)"
         ),
     })
 }
@@ -1368,7 +1378,7 @@ mod tests {
     }
 
     #[test]
-    fn test_codex_and_claude_code_have_skill_directories() {
+    fn test_codex_claude_code_and_gemini_have_skill_directories() {
         let codex = layout("codex").unwrap();
         assert!(codex
             .skills_dir
@@ -1380,6 +1390,13 @@ mod tests {
             .skills_dir
             .as_deref()
             .is_some_and(|path| path.ends_with(".claude/skills")));
+
+        let gemini = layout("gemini").unwrap();
+        assert!(gemini
+            .skills_dir
+            .as_deref()
+            .is_some_and(|path| path.ends_with(".gemini/skills")));
+        assert!(gemini.mcp_path.ends_with(".gemini/settings.json"));
     }
 
     #[test]
@@ -1741,6 +1758,7 @@ mod tests {
         for relative in [
             ".codex",
             ".cursor",
+            ".gemini",
             ".openclaw",
             ".hermes",
             ".runner",
@@ -1764,6 +1782,7 @@ mod tests {
                 "claude-code",
                 "codex",
                 "cursor",
+                "gemini",
                 "openclaw",
                 "hermes",
                 "runner",
@@ -1777,6 +1796,7 @@ mod tests {
                 "claude-code",
                 "codex",
                 "cursor",
+                "gemini",
                 "openclaw",
                 "hermes",
                 "runner",
@@ -1864,6 +1884,17 @@ mod tests {
         )
         .unwrap();
 
+        std::fs::create_dir_all(home.join(".gemini")).unwrap();
+        std::fs::write(
+            home.join(".gemini/settings.json"),
+            serde_json::json!({
+                "mcpServers": {"existing": {"command": "gemini-existing"}},
+                "ui": {"theme": "GitHub"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+
         std::fs::create_dir_all(home.join(".openclaw")).unwrap();
         std::fs::write(
             home.join(".openclaw/openclaw.json"),
@@ -1898,8 +1929,8 @@ mod tests {
         assert_eq!(
             report,
             DesktopAgentSetupReport {
-                detected: 6,
-                connected: 6,
+                detected: 7,
+                connected: 7,
                 already_connected: 0,
                 failures: Vec::new(),
             }
@@ -1934,6 +1965,26 @@ mod tests {
             "sp-test-key"
         );
 
+        let gemini: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(home.join(".gemini/settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(gemini["ui"]["theme"], "GitHub");
+        assert_eq!(
+            gemini["mcpServers"]["existing"]["command"],
+            "gemini-existing"
+        );
+        assert_eq!(
+            gemini["mcpServers"]["screenpipe"]["env"]["SCREENPIPE_MCP_CLIENT"],
+            "gemini"
+        );
+        assert!(home
+            .join(".gemini/skills/screenpipe-api/SKILL.md")
+            .is_file());
+        assert!(home
+            .join(".gemini/skills/screenpipe-cli/SKILL.md")
+            .is_file());
+
         let openclaw: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(home.join(".openclaw/openclaw.json")).unwrap(),
         )
@@ -1967,9 +2018,9 @@ mod tests {
             Some("sp-test-key"),
             "http://localhost:31337",
         );
-        assert_eq!(second.detected, 6);
+        assert_eq!(second.detected, 7);
         assert_eq!(second.connected, 0);
-        assert_eq!(second.already_connected, 6);
+        assert_eq!(second.already_connected, 7);
         assert!(second.failures.is_empty());
         assert_eq!(
             std::fs::read_to_string(home.join(".codex/config.toml")).unwrap(),

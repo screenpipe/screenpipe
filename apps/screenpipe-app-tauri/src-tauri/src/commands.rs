@@ -1724,6 +1724,11 @@ fn login_url_with_intent(
         }
         if let Some(scheme) = return_scheme {
             query.append_pair("return_scheme", scheme);
+            // The website only honors a non-consumer scheme when the caller
+            // advertises this contract. That keeps deploy order safe: older
+            // Enterprise builds requested their scheme but dropped it during
+            // warm-instance forwarding on Windows and Linux.
+            query.append_pair("callback_version", crate::deep_link::AUTH_CALLBACK_VERSION);
         }
     }
     Ok(url.to_string())
@@ -1750,6 +1755,10 @@ mod login_url_intent_tests {
             pairs.get("return_scheme").map(|value| value.as_ref()),
             Some("screenpipe")
         );
+        assert_eq!(
+            pairs.get("callback_version").map(|value| value.as_ref()),
+            Some("1")
+        );
     }
 
     #[test]
@@ -1766,24 +1775,27 @@ mod login_url_intent_tests {
             pairs.get("return_scheme").map(|value| value.as_ref()),
             Some("screenpipe-enterprise")
         );
+        assert_eq!(
+            pairs.get("callback_version").map(|value| value.as_ref()),
+            Some("1")
+        );
     }
 }
 
 /// The custom URL scheme this build registers for deep links. The enterprise
 /// build uses a distinct scheme so it does not collide with the consumer app's
 /// `screenpipe://` on machines that have both installed (see #3890). Login
-/// URLs pass a `return_scheme` query param so the website can redirect back
-/// to the right build; until the website supports the param it is ignored and
-/// redirects stay on `screenpipe://`, matching the consumer path.
+/// URLs pass an allowlisted `return_scheme` plus a versioned callback contract
+/// so the website can redirect back to the right build without making rollout
+/// order unsafe for older Enterprise clients.
 pub fn deep_link_scheme() -> &'static str {
-    if cfg!(feature = "enterprise-build") {
-        "screenpipe-enterprise"
-    } else {
-        "screenpipe"
-    }
+    crate::deep_link::scheme()
 }
 
 fn is_login_callback_scheme(scheme: &str) -> bool {
+    // Keep accepting the old consumer callback inside the embedded WebView for
+    // fallback compatibility during rollout. OS-level routing remains strict
+    // and is handled by deep_link::is_for_current_build.
     scheme == deep_link_scheme() || scheme == "screenpipe"
 }
 
@@ -1830,12 +1842,12 @@ pub async fn open_login_window(
     #[cfg(target_os = "macos")]
     {
         // ASWebAuthenticationSession intercepts the redirect itself (no OS
-        // scheme routing), so the consumer `screenpipe` scheme cannot collide
-        // with another installed build here (#3890) and stays correct until
-        // the website honours `return_scheme`.
+        // scheme routing), but still use the same versioned build scheme as
+        // Windows/Linux so the website contract is identical everywhere.
+        let callback_scheme = deep_link_scheme();
         let callback_url = match crate::auth_session::start_session(
-            login_url_with_intent(auth_mode, None)?,
-            "screenpipe".to_string(),
+            login_url_with_intent(auth_mode, Some(callback_scheme))?,
+            callback_scheme.to_string(),
             fresh_session,
         )
         .await

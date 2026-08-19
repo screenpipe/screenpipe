@@ -19,7 +19,7 @@ describe("generated skill content", () => {
       "utf8"
     );
 
-    expect(generator.startsWith(REQUIRED_HEADER)).toBe(true);
-    expect(generated.startsWith(REQUIRED_HEADER)).toBe(true);
+    expect(generator.replace(/\r\n/g, "\n").startsWith(REQUIRED_HEADER)).toBe(true);
+    expect(generated.replace(/\r\n/g, "\n").startsWith(REQUIRED_HEADER)).toBe(true);
   });
 });

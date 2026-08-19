@@ -83,6 +83,15 @@
         },
         {
           "url": "^obsidian://.*"
+        },
+        {
+          "url": "^claude://claude\\.ai/new\\?q=.*$"
+        },
+        {
+          "url": "^cursor://anysphere\\.cursor-deeplink/prompt\\?text=.*$"
+        },
+        {
+          "url": "^codex://threads/new\\?prompt=.*$"
         }
       ]
     },

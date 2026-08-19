@@ -18,19 +18,24 @@
 // What this proves that unit tests cannot:
 //   1. The banner mounts on Home — the surface setup now routes to — and its
 //      countdown is live rather than a frozen first render.
-//   2. An empty result settles durably but never becomes product UI. The real
-//      engine reason remains in state/telemetry for diagnosis without making
-//      an internal evidence threshold the user's problem.
+//   2. A foreground empty result settles durably into useful setup choices.
+//      The real engine reason remains in state/telemetry without making the
+//      internal evidence threshold the user's problem.
 //   3. A late retry runs in the background and surfaces only if a summary is
 //      ready. Reopening hours later must not look like onboarding restarted.
-//   4. Silent terminal states stay silent across reloads.
+//   4. Foreground terminal choices survive reload until the user dismisses
+//      them; background terminal states stay silent.
 //
 // The summary text and the seed-once rules are pure functions covered in
 // lib/first-run/learning-window.test.ts. This spec drives the state machine
 // through the real UI against the real engine.
 
-import { existsSync } from "node:fs";
-import { E2E_SEED_FLAGS } from "../helpers/app-launcher.js";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  E2E_DATA_DIR,
+  E2E_SEED_FLAGS,
+} from "../helpers/app-launcher.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import {
   invokeOrThrow,
@@ -53,6 +58,40 @@ const LEARNING_STORAGE_KEY = "screenpipe.first-run.learning-window.v1";
 // creates a signed-in user, so without this the section never renders.
 const E2E_ACCOUNT_USER_KEY = "screenpipe_e2e_account_user";
 const BANNER = '[data-testid="first-run-learning-banner"]';
+const SUMMARY_CHAT_ID = "first-run-e2e";
+const SUMMARY_TEXT =
+  "Screenpipe saw work across Arc and Cursor. You reviewed onboarding and prepared the next app release.";
+const SUMMARY_CHAT_PATH = join(E2E_DATA_DIR, "chats", `${SUMMARY_CHAT_ID}.json`);
+
+const writeSummaryConversation = () => {
+  mkdirSync(join(E2E_DATA_DIR, "chats"), { recursive: true });
+  const now = Date.now();
+  writeFileSync(
+    SUMMARY_CHAT_PATH,
+    JSON.stringify(
+      {
+        id: SUMMARY_CHAT_ID,
+        title: "What screenpipe saw so far",
+        titleSource: "fallback",
+        messages: [
+          {
+            id: `${SUMMARY_CHAT_ID}-assistant`,
+            role: "assistant",
+            content: SUMMARY_TEXT,
+            timestamp: now,
+          },
+        ],
+        createdAt: now,
+        updatedAt: now,
+        lastContentAt: now,
+        lastViewedAt: 0,
+        kind: "chat",
+      },
+      null,
+      2,
+    ),
+  );
+};
 
 const bannerCount = async (): Promise<number> =>
   (await browser.execute(
@@ -84,7 +123,26 @@ const storedLearningState = async (): Promise<Record<string, unknown> | null> =>
  * Sets storage and navigates in one step so the banner mounts already reading
  * the seeded state rather than briefly rendering the previous test's.
  */
-const openHomeWith = async (state: Record<string, unknown>) => {
+const openHomeWith = async (
+  state: Record<string, unknown>,
+  options: { alignCompletion?: boolean } = {},
+) => {
+  // Directly seeded lifecycle states model a window that already belongs to
+  // the latest setup. Keep the native completion just behind that window;
+  // otherwise the app-start seed is newer than an intentionally old
+  // `startedAt` and the production stale-WebView recovery correctly replaces
+  // the fixture with a fresh learning run before the assertion can inspect it.
+  const startedAt =
+    typeof state.startedAt === "string" ? Date.parse(state.startedAt) : NaN;
+  if (options.alignCompletion !== false && Number.isFinite(startedAt)) {
+    await invokeOrThrow("plugin:e2e|set_onboarding_completed_ago", {
+      seconds: Math.max(
+        1,
+        Math.ceil((Date.now() - startedAt) / 1_000) + 1,
+      ),
+    });
+  }
+
   // Same route setup completion uses: show_window(Home { page: "home" }).
   await showWindow({ Home: { page: "home" } });
   await waitForWindowHandle("home", t(20_000));
@@ -163,6 +221,7 @@ const learningState = (over: Record<string, unknown> = {}) => ({
   // ~20 minutes of the job budget on their retries. Same restore as
   // screen-recording-restart.spec.ts.
   after(async () => {
+    rmSync(SUMMARY_CHAT_PATH, { force: true });
     await invokeOrThrow("complete_onboarding").catch(() => {});
   });
 
@@ -195,10 +254,11 @@ const learningState = (over: Record<string, unknown> = {}) => ({
     expect(existsSync(filepath)).toBe(true);
   });
 
-  it("settles an empty engine result without putting it in the interface", async () => {
+  it("ends an empty foreground result on useful setup choices", async () => {
     // Ceiling already elapsed, so the window must settle on this mount. With
     // recording off the engine answers that it is not recording, and that
-    // exact reason remains available for diagnosis without becoming a card.
+    // exact reason remains available for diagnosis while onboarding still
+    // reaches the daily-summary setup instead of disappearing.
     await openHomeWith(
       learningState({
         startedAt: new Date(Date.now() - 10 * 60 * 1_000).toISOString(),
@@ -219,33 +279,52 @@ const learningState = (over: Record<string, unknown> = {}) => ({
         timeoutMsg: "window never persisted a classified empty reason",
       },
     );
-    expect(await bannerCount()).toBe(0);
+    expect(await bannerCount()).toBe(1);
+    expect(await bannerPhase()).toBe("empty");
     const bodyText = (await browser.execute(
       () => document.body.textContent ?? "",
     )) as string;
-    expect(bodyText).not.toContain("Nothing to summarize");
+    expect(bodyText).toContain("screenpipe is ready");
+    expect(
+      await browser.execute(
+        () =>
+          !!document.querySelector(
+            '[data-testid="first-run-next-step-daily-email"]',
+          ),
+      ),
+    ).toBe(true);
 
-    const filepath = await saveScreenshot("first-run-empty-silent");
+    const filepath = await saveScreenshot("first-run-empty-ready");
     expect(existsSync(filepath)).toBe(true);
   });
 
-  it("keeps the settled empty result silent across a reload", async () => {
+  it("keeps the setup choices across reload until the user dismisses them", async () => {
     await showWindow({ Home: { page: null } });
     await browser.switchToWindow("home");
     await browser.execute(() => {
       window.location.href = "/home?section=home";
     });
     await browser.pause(t(4_000));
-    expect(await bannerCount()).toBe(0);
+    expect(await bannerCount()).toBe(1);
+    expect(await bannerPhase()).toBe("empty");
     expect((await storedLearningState())?.phase).toBe("empty");
+
+    const done = await browser.$('[data-testid="first-run-setup-complete"]');
+    await done.click();
+    await browser.waitUntil(async () => (await bannerCount()) === 0, {
+      timeout: t(10_000),
+      timeoutMsg: "setup choices survived explicit dismissal",
+    });
+    expect((await storedLearningState())?.phase).toBe("done");
   });
 
-  it("offers the summary once one is ready, then gets out of the way", async () => {
+  it("opens the summary without inventing a user turn or losing setup", async () => {
+    writeSummaryConversation();
     await openHomeWith(
       learningState({
         phase: "ready",
         seededAt: new Date().toISOString(),
-        chatId: "first-run-e2e",
+        chatId: SUMMARY_CHAT_ID,
       }),
     );
 
@@ -254,17 +333,74 @@ const learningState = (over: Record<string, unknown> = {}) => ({
       timeoutMsg: "ready banner never mounted",
     });
 
+    const readyScreenshot = await saveScreenshot("first-run-ready-before-open");
+    expect(existsSync(readyScreenshot)).toBe(true);
+
     const open = await browser.$('[data-testid="first-run-open-summary"]');
     await open.click();
 
-    // Acting on it settles the window — it must not linger after use.
-    await browser.waitUntil(async () => (await bannerCount()) === 0, {
-      timeout: t(10_000),
-      timeoutMsg: "banner survived opening the summary",
-    });
+    await browser.waitUntil(
+      async () => {
+        const state = await storedLearningState();
+        const text = (await browser.execute(
+          () => document.body.textContent ?? "",
+        )) as string;
+        return Boolean(state?.summaryOpenedAt) && text.includes(SUMMARY_TEXT);
+      },
+      {
+        timeout: t(20_000),
+        timeoutMsg: "summary chat never opened with persistent setup",
+      },
+    );
 
-    const filepath = await saveScreenshot("first-run-ready");
-    expect(existsSync(filepath)).toBe(true);
+    expect(await bannerCount()).toBe(1);
+    expect(await bannerPhase()).toBe("ready");
+    expect(
+      await browser.execute(
+        () => !!document.querySelector('[data-testid="first-run-setup-dock"]'),
+      ),
+    ).toBe(true);
+
+    const bodyText = (await browser.execute(
+      () => document.body.textContent ?? "",
+    )) as string;
+    expect(bodyText).toContain(SUMMARY_TEXT);
+    expect(bodyText).not.toContain(
+      "What have you picked up about my work so far?",
+    );
+
+    const composerAvailable = (await browser.execute(() => {
+      const composer = document.querySelector<HTMLTextAreaElement>(
+        'textarea[placeholder^="Ask about your screen"]',
+      );
+      return Boolean(composer && !composer.disabled);
+    })) as boolean;
+    expect(composerAvailable).toBe(true);
+
+    const collapsedScreenshot = await saveScreenshot(
+      "first-run-summary-with-setup-dock",
+    );
+    expect(existsSync(collapsedScreenshot)).toBe(true);
+
+    const toggle = await browser.$('[data-testid="first-run-toggle-setup"]');
+    await toggle.click();
+    await browser.waitUntil(
+      async () =>
+        Boolean(
+          await browser.execute(
+            () => !!document.querySelector('[data-testid="first-run-next-steps"]'),
+          ),
+        ),
+      {
+        timeout: t(10_000),
+        timeoutMsg: "setup dock did not expand over the summary chat",
+      },
+    );
+
+    const expandedScreenshot = await saveScreenshot(
+      "first-run-summary-with-setup-open",
+    );
+    expect(existsSync(expandedScreenshot)).toBe(true);
   });
 
   // Regression guard for the bug this spec originally missed: the window used
@@ -272,8 +408,20 @@ const learningState = (over: Record<string, unknown> = {}) => ({
   // localStorage partition, so Home never saw it. Nothing is seeded here — the
   // window has to appear from a real completion alone.
   it("opens from a real setup completion, with nothing seeded", async () => {
+    // Simulate a user deleting ~/.screenpipe while WebView data survives. The
+    // old terminal lifecycle must not suppress a newly completed setup.
     await browser.execute((key: string) => {
-      window.localStorage.removeItem(key);
+      window.localStorage.setItem(
+        key,
+        JSON.stringify({
+          phase: "done",
+          startedAt: new Date(Date.now() - 10 * 60 * 1_000).toISOString(),
+          showProgress: true,
+          seededAt: null,
+          chatId: null,
+          emptyReason: null,
+        }),
+      );
     }, LEARNING_STORAGE_KEY);
 
     // Re-complete setup through the real command, exactly as the last slide
@@ -288,12 +436,11 @@ const learningState = (over: Record<string, unknown> = {}) => ({
       window.location.href = "/home?section=home";
     });
 
-    await browser.waitUntil(async () => (await bannerCount()) === 1, {
+    await browser.waitUntil(async () => (await bannerPhase()) === "learning", {
       timeout: t(40_000),
       timeoutMsg:
         "no learning window after a real completion — the cross-window handoff regressed",
     });
-    expect(await bannerPhase()).toBe("learning");
   });
 
   // A late retry preserves the chance to produce a first summary, but the wait
@@ -334,13 +481,15 @@ const learningState = (over: Record<string, unknown> = {}) => ({
     expect(bodyText).not.toContain("Learning about your work");
   });
 
-  it("keeps every evidence-floor miss out of the interface", async () => {
+  it("keeps every background evidence-floor miss out of the interface", async () => {
     for (const emptyReason of [
       "no_frames_captured",
       "below_frame_floor",
       "single_app_below_floor",
     ]) {
-      await openHomeWith(learningState({ phase: "empty", emptyReason }));
+      await openHomeWith(
+        learningState({ phase: "empty", emptyReason, showProgress: false }),
+      );
       await browser.waitUntil(
         async () => {
           const state = await storedLearningState();
@@ -363,7 +512,9 @@ const learningState = (over: Record<string, unknown> = {}) => ({
     await invokeOrThrow("reset_onboarding");
 
     for (const phase of ["idle", "done"]) {
-      await openHomeWith(learningState({ phase }));
+      await openHomeWith(learningState({ phase }), {
+        alignCompletion: false,
+      });
       await browser.pause(t(3_000));
       expect(await bannerCount()).toBe(0);
     }

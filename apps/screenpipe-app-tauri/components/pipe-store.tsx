@@ -13,8 +13,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
@@ -468,7 +466,6 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
   // Install state
   const [installing, setInstalling] = useState<string | null>(null);
   const [pendingInstall, setPendingInstall] = useState<StorePipe | PipeDetail | null>(null);
-  const [installRiskAcknowledged, setInstallRiskAcknowledged] = useState(false);
 
   // Review state
   const [reviewExpanded, setReviewExpanded] = useState(false);
@@ -654,7 +651,6 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       return;
     }
     setPendingInstall(pipe);
-    setInstallRiskAcknowledged(false);
   };
 
   // Update an already-installed store pipe in place. Unlike install, this
@@ -693,13 +689,10 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
 
   const closeInstallGate = () => {
     setPendingInstall(null);
-    setInstallRiskAcknowledged(false);
   };
 
   const confirmPendingInstall = () => {
     if (!pendingInstall) return;
-    const risk = getPipeInstallRisk(pendingInstall);
-    if (risk === "high" && !installRiskAcknowledged) return;
     const slug = pendingInstall.slug;
     closeInstallGate();
     void handleInstall(slug);
@@ -868,9 +861,6 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
             authorVerified={pendingInstall.author_verified}
             permissions={pendingInstall.permissions}
             onReviewSource={reviewPendingInstallSource}
-            acknowledgeId="pipe-risk-ack"
-            acknowledged={installRiskAcknowledged}
-            onAcknowledgedChange={setInstallRiskAcknowledged}
           />
         ) : null}
 
@@ -882,8 +872,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
             data-testid="pipe-risk-install-confirm"
             disabled={
               !pendingInstall ||
-              installing === pendingInstall.slug ||
-              (getPipeInstallRisk(pendingInstall) === "high" && !installRiskAcknowledged)
+              installing === pendingInstall.slug
             }
             onClick={confirmPendingInstall}
             >
@@ -1646,18 +1635,12 @@ export function InstallRiskSummary({
   authorVerified,
   permissions,
   onReviewSource,
-  acknowledgeId,
-  acknowledged,
-  onAcknowledgedChange,
 }: {
   title: string;
   author?: string;
   authorVerified: boolean;
   permissions?: PipePermissions;
   onReviewSource?: () => void;
-  acknowledgeId?: string;
-  acknowledged?: boolean;
-  onAcknowledgedChange?: (checked: boolean) => void;
 }) {
   const risk = getPipeInstallRisk({
     permissions,
@@ -1703,20 +1686,6 @@ export function InstallRiskSummary({
             ))}
           </div>
         )}
-
-        {risk === "high" && acknowledgeId && onAcknowledgedChange ? (
-          <div className="flex items-start gap-2 pt-3 border-t border-border">
-            <Checkbox
-              id={acknowledgeId}
-              data-testid="pipe-risk-ack"
-              checked={acknowledged === true}
-              onCheckedChange={(value) => onAcknowledgedChange(value === true)}
-            />
-            <Label htmlFor={acknowledgeId} className="text-xs leading-relaxed">
-              I understand this scheduled task can access all my data.
-            </Label>
-          </div>
-        ) : null}
       </div>
     </div>
   );

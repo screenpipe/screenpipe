@@ -86,9 +86,21 @@ describe("chat send gives feedback in the same frame", () => {
       const preceding = window.slice(Math.max(0, i - 4), i).join("\n");
       expect(
         preceding,
-        `preflight exit "${line.trim()}" leaves the chat stranded — cards hidden, loader forever. Restore with setIsLoading(false).`,
-      ).toContain("setIsLoading(false)");
+        `preflight exit "${line.trim()}" leaves the chat stranded — cards hidden, loader forever. Restore with finishAttempt().`,
+      ).toContain("finishAttempt()");
     });
+  });
+
+  it("marks the shared session busy before the first await", () => {
+    const lines = readFileSync(TRANSPORT, "utf8").split("\n");
+    const fnStart = lines.findIndex((l) => l.includes("async function sendPiMessage"));
+    const firstAwait = lines.findIndex(
+      (l, i) => i > fnStart && l.includes("await awaitPendingPiPresetSwitch"),
+    );
+    const preAwait = lines.slice(fnStart, firstAwait).join("\n");
+
+    expect(preAwait).toContain("attemptStore.actions.setStreaming(attemptSessionId");
+    expect(preAwait).toContain("isLoading: true");
   });
 
   it("has at least one guarded abort and one guarded throw", () => {

@@ -22,6 +22,7 @@ import {
 import { emit } from "@tauri-apps/api/event";
 import {
   getOrCreateEmptyChatId,
+  isReusableBlankChatSession,
   applyChatSessionActivity,
   sessionRecordFromMeta,
   useChatStore,
@@ -277,7 +278,9 @@ function HomeContent() {
     const { id, isNew } = getOrCreateEmptyChatId();
     // Clean up any *other* stray empty drafts, keeping the one we reuse.
     Object.values(store.sessions).forEach((s) => {
-      if (s.draft && s.id !== id) store.actions.drop(s.id);
+      if (s.draft && s.id !== id && isReusableBlankChatSession(s)) {
+        store.actions.drop(s.id);
+      }
     });
     if (isNew) {
       store.actions.upsert({

@@ -23,13 +23,16 @@ function AgentLogo({ id }: { id: ConnectAllToolId }) {
       // eslint-disable-next-line @next/next/no-img-element
       return <img src="/images/claude-ai.svg" alt="" className={size} />;
     case "codex":
-      // No `dark:invert` here, unlike the Settings tools card. codex.svg is
-      // LobeHub's COLOUR variant: a white plate behind a blue gradient glyph.
-      // Inverting it turns the plate black and the glyph yellow, which is not
-      // the Codex mark and reads as a rendering bug next to Claude's.
+      // The desktop destination is the ChatGPT app (its registered protocol is
+      // still `codex://`), so use the ChatGPT/OpenAI mark rather than the CLI
+      // Codex mark shown in Settings.
       return (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src="/images/codex.svg" alt="" className={cn(size, "rounded-[2px]")} />
+        <img
+          src="/images/openai.svg"
+          alt=""
+          className={cn(size, "dark:invert")}
+        />
       );
     case "cursor":
       return <CursorLogo className={size} />;
@@ -108,7 +111,11 @@ export function AgentHandoffPicker({
             title={verb(target)}
             aria-label={verb(target)}
             onClick={() => onPick(target)}
-            style={{ "--fan-rotate": `${restRotation(index)}deg` } as React.CSSProperties}
+            style={
+              {
+                "--fan-rotate": `${restRotation(index)}deg`,
+              } as React.CSSProperties
+            }
             className={cn(
               "flex h-6 w-6 shrink-0 items-center justify-center border border-border bg-background",
               "transition-all duration-200 ease-out motion-reduce:transition-none",

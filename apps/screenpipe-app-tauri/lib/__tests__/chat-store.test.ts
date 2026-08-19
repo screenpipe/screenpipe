@@ -14,6 +14,7 @@ import {
   selectOrderedSessions,
   selectRecentSwitcherSessions,
   getOrCreateEmptyChatId,
+  isReusableBlankChatSession,
   dedupeSessionRecords,
   sessionRecordFromMeta,
   applyChatSessionActivity,
@@ -239,6 +240,27 @@ describe("chat-store: getOrCreateEmptyChatId (no spam on +new)", () => {
     const { id, isNew } = getOrCreateEmptyChatId();
     expect(id).not.toBe("panelChat");
     expect(isNew).toBe(true);
+  });
+
+  it("creates a new id while the panel chat is acknowledging a send", () => {
+    useChatStore.setState({
+      sessions: {
+        panelChat: baseRecord({
+          id: "panelChat",
+          draft: true,
+          messages: [],
+          isLoading: true,
+        }),
+      },
+      currentId: "panelChat",
+      panelSessionId: "panelChat",
+    });
+
+    const { id, isNew } = getOrCreateEmptyChatId();
+
+    expect(id).not.toBe("panelChat");
+    expect(isNew).toBe(true);
+    expect(isReusableBlankChatSession(useChatStore.getState().sessions.panelChat)).toBe(false);
   });
 
   it("reuses any other empty chat (newest first) when the panel chat is full", () => {

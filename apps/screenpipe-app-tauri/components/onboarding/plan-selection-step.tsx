@@ -13,12 +13,14 @@ import {
   submitHostedCheckoutStart,
 } from "@/lib/onboarding-checkout-navigation";
 import type { AppUser } from "@/lib/app-entitlement";
+import { isOnboardingCheckoutResolved } from "@/lib/onboarding-checkout";
 
 const HOSTED_CHECKOUT_URL = screenpipeWebUrl(
   "/onboarding/checkout",
   "https://screenpipe.com",
 );
 const CHECKOUT_POLL_INTERVAL_MS = 3_000;
+const CHECKOUT_MAX_POLL_ATTEMPTS = 10;
 
 function checkoutStatus() {
   if (typeof window === "undefined") return null;
@@ -38,11 +40,15 @@ export default function PlanSelectionStep({
   const [returnRecoveryFinished, setReturnRecoveryFinished] = useState(
     returnStatus !== "complete",
   );
+  const [recoveryAttempt, setRecoveryAttempt] = useState(0);
+  const [confirmationTimedOut, setConfirmationTimedOut] = useState(false);
   const submissionStartedRef = useRef(false);
-  const recoveryStartedRef = useRef(false);
+  const recoveryAttemptRef = useRef(-1);
+  const pollAttemptsRef = useRef(0);
   const advancedRef = useRef(false);
   const loadUserRef = useRef(loadUser);
   const userToken = user?.token;
+  const checkoutResolved = isOnboardingCheckoutResolved(user);
   loadUserRef.current = loadUser;
 
   const startCheckout = useCallback(() => {
@@ -93,7 +99,7 @@ export default function PlanSelectionStep({
     if (
       returnStatus !== "complete" ||
       !userToken ||
-      recoveryStartedRef.current
+      recoveryAttemptRef.current === recoveryAttempt
     ) {
       if (returnStatus === "complete" && !userToken) {
         setBusy(false);
@@ -102,7 +108,8 @@ export default function PlanSelectionStep({
       return;
     }
 
-    recoveryStartedRef.current = true;
+    recoveryAttemptRef.current = recoveryAttempt;
+    pollAttemptsRef.current = 0;
     setBusy(true);
     setError(null);
     void loadUserRef
@@ -115,14 +122,15 @@ export default function PlanSelectionStep({
         setReturnRecoveryFinished(true);
         setBusy(false);
       });
-  }, [returnStatus, userToken]);
+  }, [recoveryAttempt, returnStatus, userToken]);
 
   useEffect(() => {
     if (
       returnStatus !== "complete" ||
       !returnRecoveryFinished ||
       !userToken ||
-      user?.has_payment_method === true
+      checkoutResolved ||
+      confirmationTimedOut
     ) {
       return;
     }
@@ -130,10 +138,21 @@ export default function PlanSelectionStep({
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const poll = async () => {
+      pollAttemptsRef.current += 1;
       try {
         await loadUserRef.current(userToken);
       } catch {}
-      if (!cancelled) timer = setTimeout(poll, CHECKOUT_POLL_INTERVAL_MS);
+      if (cancelled) return;
+      if (pollAttemptsRef.current >= CHECKOUT_MAX_POLL_ATTEMPTS) {
+        setConfirmationTimedOut(true);
+        setBusy(false);
+        setError("account confirmation is taking longer than expected");
+        posthog.capture("onboarding_card_checkout_confirmation_timed_out", {
+          poll_attempts: pollAttemptsRef.current,
+        });
+        return;
+      }
+      timer = setTimeout(poll, CHECKOUT_POLL_INTERVAL_MS);
     };
     timer = setTimeout(poll, CHECKOUT_POLL_INTERVAL_MS);
     return () => {
@@ -141,15 +160,16 @@ export default function PlanSelectionStep({
       if (timer) clearTimeout(timer);
     };
   }, [
+    checkoutResolved,
+    confirmationTimedOut,
     returnRecoveryFinished,
     returnStatus,
-    user?.has_payment_method,
     userToken,
   ]);
 
   useEffect(() => {
     if (
-      user?.has_payment_method !== true ||
+      !checkoutResolved ||
       advancedRef.current ||
       (returnStatus === "complete" && !returnRecoveryFinished)
     ) {
@@ -158,16 +178,31 @@ export default function PlanSelectionStep({
     advancedRef.current = true;
     posthog.capture("onboarding_card_checkout_completed");
     posthog.capture("onboarding_plan_activated", {
-      plan: user.subscription_plan || "unknown",
+      plan: user?.subscription_plan || "unknown",
+      confirmation:
+        user?.has_payment_method === true
+          ? "payment_method"
+          : "existing_entitlement",
     });
     void handleNextSlide();
   }, [
+    checkoutResolved,
     handleNextSlide,
     returnRecoveryFinished,
     returnStatus,
+    user?.entitlement_source,
     user?.has_payment_method,
     user?.subscription_plan,
   ]);
+
+  const retryConfirmation = useCallback(() => {
+    if (!userToken) return;
+    setError(null);
+    setBusy(true);
+    setConfirmationTimedOut(false);
+    setReturnRecoveryFinished(false);
+    setRecoveryAttempt((attempt) => attempt + 1);
+  }, [userToken]);
 
   if (returnStatus === "complete") {
     return (
@@ -185,7 +220,18 @@ export default function PlanSelectionStep({
         </div>
         <div className="mt-5 flex min-h-[150px] items-center justify-center border p-6 text-center">
           {error ? (
-            <p className="font-mono text-[11px] text-destructive">{error}</p>
+            <div>
+              <p className="font-mono text-[11px] text-destructive">{error}</p>
+              {confirmationTimedOut && (
+                <button
+                  type="button"
+                  onClick={retryConfirmation}
+                  className="mt-4 border px-4 py-2 font-mono text-[10px] uppercase tracking-widest transition-colors hover:bg-foreground hover:text-background"
+                >
+                  retry confirmation
+                </button>
+              )}
+            </div>
           ) : (
             <p className="font-mono text-[11px] text-muted-foreground">
               {busy ? "checking secure checkout" : "waiting for confirmation"}

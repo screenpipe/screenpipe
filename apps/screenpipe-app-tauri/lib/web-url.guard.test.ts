@@ -24,6 +24,7 @@ import { describe, expect, it } from "vitest";
 
 const ROOT = path.resolve(__dirname, "..");
 const SCAN_DIRS = ["lib", "components", "app", "modules"];
+const GENERATED_CONTENT_DIR = path.join(ROOT, "lib", "generated");
 const PROD_ORIGIN = /https:\/\/(www\.)?(screenpipe\.com|screenpi\.pe)/;
 const HELPER_CALL = /screenpipeWeb(Url|Base)\s*\(/;
 // Fallback args in a multi-line helper call sit at most this many lines below
@@ -59,6 +60,11 @@ describe("no hardcoded prod website origins outside the web-url helpers", () => 
       if (!fs.existsSync(abs)) continue;
 
       for (const file of walk(abs)) {
+        // Generated skill exports contain markdown documentation, not webview
+        // navigation code. Their example/download URLs must remain literal so
+        // external tools receive valid docs; runtime source stays guarded.
+        if (file.startsWith(`${GENERATED_CONTENT_DIR}${path.sep}`)) continue;
+
         const rel = path.relative(ROOT, file);
         if (rel === path.join("lib", "web-url.ts")) continue; // defines the helpers + PROD_WEB_BASE
 

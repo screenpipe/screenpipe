@@ -25,6 +25,7 @@ import {
   markLearningDone,
   markLearningEmpty,
   markLearningReady,
+  markLearningSummaryOpened,
   markLearningWriting,
   releaseLearningSeed,
   resetLearningWindow,
@@ -44,7 +45,8 @@ import type { AIPreset } from "@/lib/utils/tauri";
 
 export type LearningWindowView = FirstRunLearningState & {
   remainingMs: number;
-  dismiss: (options?: { opened?: boolean }) => void;
+  markSummaryOpened: () => void;
+  dismiss: () => void;
 };
 
 export type LearningWindowOptions = {
@@ -93,7 +95,7 @@ export function useLearningWindow(
   // cutoff stays exactly right because `completedAt` IS the moment setup
   // ended — everything summarized was captured after it.
   useEffect(() => {
-    if (state.phase !== "idle") return;
+    if (state.phase === "learning" || state.phase === "writing") return;
     let cancelled = false;
     void (async () => {
       try {
@@ -101,7 +103,21 @@ export function useLearningWindow(
         if (cancelled || result.status !== "ok") return;
         const opening = learningWindowOpening(result.data.completedAt);
         if (opening.kind === "none") return;
-        if (readLearningWindow().phase !== "idle") return;
+        const stored = readLearningWindow();
+        const completedMs = Date.parse(result.data.completedAt ?? "");
+        const startedMs = Date.parse(stored.startedAt ?? "");
+        const isFreshCompletion =
+          stored.phase === "idle" ||
+          !Number.isFinite(startedMs) ||
+          (Number.isFinite(completedMs) && completedMs > startedMs);
+        if (!isFreshCompletion) return;
+
+        // `~/.screenpipe` is not the WebView storage partition. A manual data
+        // reset can therefore leave an old empty/done result in localStorage
+        // even though setup just wrote a brand-new completion. The fresh
+        // backend timestamp is authoritative: retire the stale lifecycle and
+        // start this setup's learning window.
+        if (stored.phase !== "idle") resetLearningWindow();
         // The only signal that a window ever opened. Without it an absent
         // outcome is indistinguishable from a window that never started, and
         // "never started" was by far the most common outcome.
@@ -376,19 +392,29 @@ export function useLearningWindow(
     };
   }, [pendingEmptyReport, pendingStartedAt]);
 
+  const markSummaryOpened = useCallback(() => {
+    setState(markLearningSummaryOpened());
+  }, []);
+
   const dismiss = useCallback(
-    (options: { opened?: boolean } = {}) => {
+    () => {
       posthog.capture("first_run_learning_dismissed", {
         phase: state.phase,
-        // Opening the summary also closes the banner. Without this the two
-        // exits are indistinguishable and "reached ready but never looked" —
-        // the failure worth knowing about — cannot be counted.
-        opened: Boolean(options.opened),
+        // Opening the summary no longer destroys setup. This persisted fact
+        // keeps the analytics distinction when the user eventually finishes
+        // or hides the optional setup dock.
+        opened: Boolean(state.summaryOpenedAt),
       });
       setState(markLearningDone());
     },
-    [state.phase],
+    [state.phase, state.summaryOpenedAt],
   );
 
-  return { ...state, capturedApps, remainingMs, dismiss };
+  return {
+    ...state,
+    capturedApps,
+    remainingMs,
+    markSummaryOpened,
+    dismiss,
+  };
 }

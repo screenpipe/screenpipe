@@ -5,7 +5,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { emit } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import posthog from "posthog-js";
 import {
   BrainCircuit,
@@ -18,18 +18,23 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { localFetch } from "@/lib/api";
-import { fetchComposioStatus } from "@/lib/composio";
-import { CONNECTIONS_UPDATED_EVENT } from "@/lib/connections-events";
 import {
-  PIPE_INSTALL_CANCELLED_EVENT,
-  PIPE_INSTALLED_EVENT,
-  type PipeInstallCancelledReceipt,
-  type PipeInstalledReceipt,
-} from "@/lib/pipe-install-receipt";
+  authorizeComposioToolkit,
+  fetchComposioStatus,
+  registerComposioMcpServer,
+} from "@/lib/composio";
+import {
+  CONNECTIONS_UPDATED_EVENT,
+  notifyConnectionsUpdated,
+} from "@/lib/connections-events";
+import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
+import { publishPipeInstalledReceipt } from "@/lib/pipe-install-receipt";
 import { commands } from "@/lib/utils/tauri";
 
 const DAILY_EMAIL_PIPE = "daily-email-summary";
 const DIGITAL_CLONE_PIPE = "digital-clone";
+const GMAIL_POLL_INTERVAL_MS = 2_000;
+const GMAIL_POLL_ATTEMPTS = 60;
 
 type SetupCheck = boolean | null;
 type PipeSetupState = "missing" | "disabled" | "enabled" | null;
@@ -89,6 +94,27 @@ async function enablePipe(slug: string): Promise<void> {
   }
 }
 
+async function installStorePipe(slug: string): Promise<void> {
+  const response = await localFetch("/pipes/store/install", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug }),
+  });
+  const body = (await response.json().catch(() => null)) as {
+    name?: string;
+    connections?: string[];
+    error?: string;
+  } | null;
+  if (!response.ok || body?.error) {
+    throw new Error(body?.error ?? "scheduled task could not be installed");
+  }
+
+  publishPipeInstalledReceipt({
+    pipeName: body?.name || slug,
+    connections: Array.isArray(body?.connections) ? body.connections : [],
+  });
+}
+
 async function checkGoogleCalendarConnected(): Promise<boolean> {
   const result = await commands.oauthStatus("google-calendar", null);
   if (result.status === "error") throw new Error(result.error);
@@ -99,12 +125,35 @@ function settledValue<T>(result: PromiseSettledResult<T>): T | null {
   return result.status === "fulfilled" ? result.value : null;
 }
 
-function openConnection(connectionId: "gmail" | "google-calendar") {
-  window.dispatchEvent(
-    new CustomEvent("open-settings", {
-      detail: { section: "connections", connectionId },
-    }),
-  );
+function wait(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException("cancelled", "AbortError"));
+      return;
+    }
+    const timer = window.setTimeout(resolve, ms);
+    signal.addEventListener(
+      "abort",
+      () => {
+        window.clearTimeout(timer);
+        reject(new DOMException("cancelled", "AbortError"));
+      },
+      { once: true },
+    );
+  });
+}
+
+async function waitForGmailConnection(
+  token: string,
+  signal: AbortSignal,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < GMAIL_POLL_ATTEMPTS; attempt += 1) {
+    if (signal.aborted) return false;
+    const status = await fetchComposioStatus(token);
+    if (status?.gmail?.connected === true) return true;
+    await wait(GMAIL_POLL_INTERVAL_MS, signal);
+  }
+  return false;
 }
 
 function StatusLabel({
@@ -128,7 +177,7 @@ function StatusLabel({
   );
 }
 
-function NextStepCard({
+function NextStepRow({
   icon,
   title,
   description,
@@ -138,6 +187,7 @@ function NextStepCard({
   actionTestId,
   complete = false,
   busy = false,
+  disabled = false,
   busyLabel = "checking",
 }: {
   icon: React.ReactNode;
@@ -149,6 +199,7 @@ function NextStepCard({
   actionTestId: string;
   complete?: boolean;
   busy?: boolean;
+  disabled?: boolean;
   busyLabel?: string;
 }) {
   const titleId = `${actionTestId}-title`;
@@ -156,30 +207,32 @@ function NextStepCard({
   return (
     <article
       aria-labelledby={titleId}
-      className="flex min-h-44 flex-col border border-border bg-background p-4"
+      className="grid grid-cols-[2rem_minmax(0,1fr)] gap-x-3 gap-y-2 border-t border-border px-4 py-3 sm:grid-cols-[2rem_minmax(0,1fr)_auto] sm:items-center"
     >
-      <div className="flex items-start justify-between gap-3">
-        <span className="flex h-8 w-8 items-center justify-center border border-border bg-muted/20">
-          {icon}
-        </span>
-        <StatusLabel ready={complete}>{status}</StatusLabel>
+      <span className="row-span-2 flex h-8 w-8 items-center justify-center border border-border bg-muted/20">
+        {icon}
+      </span>
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <h3
+            id={titleId}
+            className="font-mono text-xs font-semibold lowercase text-foreground"
+          >
+            {title}
+          </h3>
+          <StatusLabel ready={complete}>{status}</StatusLabel>
+        </div>
+        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+          {description}
+        </p>
       </div>
-      <h3
-        id={titleId}
-        className="mt-4 font-mono text-xs font-semibold lowercase text-foreground"
-      >
-        {title}
-      </h3>
-      <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
-        {description}
-      </p>
       <Button
         type="button"
         size="sm"
         variant={complete ? "ghost" : "outline"}
         data-testid={actionTestId}
-        className="mt-auto h-8 w-full justify-between px-2.5 text-[10px]"
-        disabled={complete || busy}
+        className="col-start-2 h-8 w-full justify-between px-2.5 text-[10px] sm:col-start-3 sm:row-span-2 sm:row-start-1 sm:min-w-32"
+        disabled={complete || busy || disabled}
         aria-busy={busy}
         onClick={action}
       >
@@ -202,11 +255,9 @@ export function FirstRunNextStepsPanel({
   actionError,
   dailyEmailBusyLabel,
   digitalCloneBusyLabel,
-  onInstallDailyEmail,
-  onInstallDigitalClone,
-  onEnableDailyEmail,
-  onEnableDigitalClone,
-  onConnectGmail,
+  calendarBusyLabel,
+  onSetupDailyEmail,
+  onSetupDigitalClone,
   onConnectGoogleCalendar,
   onRetry,
 }: {
@@ -215,11 +266,9 @@ export function FirstRunNextStepsPanel({
   actionError?: string | null;
   dailyEmailBusyLabel?: string | null;
   digitalCloneBusyLabel?: string | null;
-  onInstallDailyEmail: () => void;
-  onInstallDigitalClone: () => void;
-  onEnableDailyEmail: () => void;
-  onEnableDigitalClone: () => void;
-  onConnectGmail: () => void;
+  calendarBusyLabel?: string | null;
+  onSetupDailyEmail: () => void;
+  onSetupDigitalClone: () => void;
   onConnectGoogleCalendar: () => void;
   onRetry: () => void;
 }) {
@@ -234,8 +283,7 @@ export function FirstRunNextStepsPanel({
   const dailyNeedsEnable = dailyDisabled && snapshot.gmailConnected === true;
   const dailyUnknown =
     snapshot.checked &&
-    (snapshot.dailyEmailState === null ||
-      (!dailyMissing && snapshot.gmailConnected === null));
+    (snapshot.dailyEmailState === null || snapshot.gmailConnected === null);
   const cloneReady = snapshot.digitalCloneState === "enabled";
   const cloneDisabled = snapshot.digitalCloneState === "disabled";
   const cloneUnknown = snapshot.checked && snapshot.digitalCloneState === null;
@@ -247,6 +295,10 @@ export function FirstRunNextStepsPanel({
   const allReady = dailyReady && cloneReady && calendarReady;
   const dailyBusy = checking || Boolean(dailyEmailBusyLabel);
   const cloneBusy = checking || Boolean(digitalCloneBusyLabel);
+  const calendarBusy = checking || Boolean(calendarBusyLabel);
+  const actionInProgress = Boolean(
+    dailyEmailBusyLabel || digitalCloneBusyLabel || calendarBusyLabel,
+  );
 
   const announcement = checking
     ? "checking recommended setup status"
@@ -281,8 +333,8 @@ export function FirstRunNextStepsPanel({
           </h2>
         </div>
         <p className="max-w-sm text-[10px] leading-relaxed text-muted-foreground sm:text-right">
-          each setup stays behind your review. nothing connects, installs, or
-          turns on by itself.
+          setup runs from here. screenpipe only asks for a connection when one
+          is missing.
         </p>
       </div>
 
@@ -305,8 +357,8 @@ export function FirstRunNextStepsPanel({
           </div>
         </div>
       ) : (
-        <div className="grid gap-2 px-4 pb-4 md:grid-cols-3">
-          <NextStepCard
+        <div className="border-b border-border pb-1">
+          <NextStepRow
             icon={<Mail className="h-4 w-4" aria-hidden="true" />}
             title="daily email summary"
             description="send one concise, source-backed recap to your own inbox every evening."
@@ -329,37 +381,36 @@ export function FirstRunNextStepsPanel({
                             ? "gmail connected"
                             : gmailUnknown
                               ? "gmail check unavailable"
-                              : "gmail setup follows"
+                              : "gmail needed"
             }
-            action={
-              dailyUnknown
-                ? onRetry
-                : dailyNeedsGmail
-                  ? onConnectGmail
-                  : dailyNeedsEnable
-                    ? onEnableDailyEmail
-                    : onInstallDailyEmail
-            }
+            action={dailyUnknown ? onRetry : onSetupDailyEmail}
             actionLabel={
               dailyReady
                 ? "ready"
                 : dailyUnknown
                   ? "retry"
-                  : dailyNeedsGmail
-                    ? "connect gmail"
+                  : dailyMissing
+                    ? snapshot.gmailConnected === true
+                      ? "install & enable"
+                      : "install & connect"
+                    : dailyNeedsGmail
+                      ? dailyEnabled
+                        ? "connect gmail"
+                        : "connect & enable"
                     : dailyNeedsEnable
                       ? "enable summary"
-                      : "install"
+                      : "set up"
             }
             actionTestId="first-run-next-step-daily-email"
             complete={dailyReady}
             busy={dailyBusy}
+            disabled={actionInProgress}
             busyLabel={
               checking ? "checking" : (dailyEmailBusyLabel ?? "working")
             }
           />
 
-          <NextStepCard
+          <NextStepRow
             icon={<BrainCircuit className="h-4 w-4" aria-hidden="true" />}
             title="digital clone"
             description="build a structured memory of your work, meetings, and recurring people on this device."
@@ -376,13 +427,7 @@ export function FirstRunNextStepsPanel({
                         ? "status unavailable"
                         : "no connection needed"
             }
-            action={
-              cloneUnknown
-                ? onRetry
-                : cloneDisabled
-                  ? onEnableDigitalClone
-                  : onInstallDigitalClone
-            }
+            action={cloneUnknown ? onRetry : onSetupDigitalClone}
             actionLabel={
               cloneReady
                 ? "ready"
@@ -390,17 +435,18 @@ export function FirstRunNextStepsPanel({
                   ? "retry"
                   : cloneDisabled
                     ? "enable"
-                    : "install"
+                    : "install & enable"
             }
             actionTestId="first-run-next-step-digital-clone"
             complete={cloneReady}
             busy={cloneBusy}
+            disabled={actionInProgress}
             busyLabel={
               checking ? "checking" : (digitalCloneBusyLabel ?? "working")
             }
           />
 
-          <NextStepCard
+          <NextStepRow
             icon={<CalendarDays className="h-4 w-4" aria-hidden="true" />}
             title="google calendar"
             description="add upcoming meeting context so calls are easier to prepare for."
@@ -423,7 +469,11 @@ export function FirstRunNextStepsPanel({
             }
             actionTestId="first-run-next-step-google-calendar"
             complete={calendarReady}
-            busy={checking}
+            busy={calendarBusy}
+            disabled={actionInProgress}
+            busyLabel={
+              checking ? "checking" : (calendarBusyLabel ?? "connecting")
+            }
           />
         </div>
       )}
@@ -462,18 +512,13 @@ export function FirstRunNextSteps({
     useState<FirstRunNextStepsSnapshot>(INITIAL_SNAPSHOT);
   const [refreshing, setRefreshing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [installerPendingSlug, setInstallerPendingSlug] = useState<
-    string | null
-  >(null);
-  const [enablingPipe, setEnablingPipe] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<{
+    id: "daily-email" | "digital-clone" | "google-calendar";
+    label: string;
+  } | null>(null);
   const refreshIdRef = useRef(0);
-  const pendingDailyInstallRef = useRef(false);
-  const installerPendingSlugRef = useRef<string | null>(null);
-  const enablingPipeRef = useRef<string | null>(null);
-  const gmailConnectedRef = useRef<SetupCheck>(null);
-  const followUpTimerRef = useRef<number | null>(null);
-
-  gmailConnectedRef.current = snapshot.gmailConnected;
+  const busyActionRef = useRef<typeof busyAction>(null);
+  const gmailConnectAbortRef = useRef<AbortController | null>(null);
 
   const refresh = useCallback(async () => {
     const refreshId = ++refreshIdRef.current;
@@ -488,7 +533,7 @@ export function FirstRunNextSteps({
               if (!status) throw new Error("gmail status unavailable");
               return status.gmail?.connected === true;
             })
-          : Promise.resolve(false),
+          : Promise.resolve(null),
         checkGoogleCalendarConnected(),
       ]);
 
@@ -511,117 +556,160 @@ export function FirstRunNextSteps({
     const refreshWhenVisible = () => {
       if (document.visibilityState === "visible") void refresh();
     };
-    const onInstalled = (event: Event) => {
-      const detail = (event as CustomEvent<PipeInstalledReceipt>).detail;
-      if (detail?.pipeName === installerPendingSlugRef.current) {
-        installerPendingSlugRef.current = null;
-        setInstallerPendingSlug(null);
-      }
-      void refresh();
-      if (
-        pendingDailyInstallRef.current &&
-        detail?.pipeName === DAILY_EMAIL_PIPE
-      ) {
-        pendingDailyInstallRef.current = false;
-        if (gmailConnectedRef.current === false) {
-          if (followUpTimerRef.current !== null) {
-            window.clearTimeout(followUpTimerRef.current);
-          }
-          // The global installer navigates to Scheduled Tasks after it emits
-          // this receipt. Run the focused Gmail handoff on the next task so it
-          // wins that harmless navigation race.
-          followUpTimerRef.current = window.setTimeout(() => {
-            posthog.capture("first_run_next_step_selected", {
-              step: "gmail",
-              source: "daily_email_install_follow_up",
-            });
-            openConnection("gmail");
-          }, 0);
-        }
-      }
-    };
-    const onInstallCancelled = (event: Event) => {
-      const detail = (event as CustomEvent<PipeInstallCancelledReceipt>).detail;
-      if (detail?.url !== `registry:${installerPendingSlugRef.current}`) return;
-      installerPendingSlugRef.current = null;
-      pendingDailyInstallRef.current = false;
-      setInstallerPendingSlug(null);
-    };
 
     window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", refreshWhenVisible);
     window.addEventListener(CONNECTIONS_UPDATED_EVENT, refresh);
-    window.addEventListener(PIPE_INSTALLED_EVENT, onInstalled);
-    window.addEventListener(PIPE_INSTALL_CANCELLED_EVENT, onInstallCancelled);
     return () => {
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
       window.removeEventListener(CONNECTIONS_UPDATED_EVENT, refresh);
-      window.removeEventListener(PIPE_INSTALLED_EVENT, onInstalled);
-      window.removeEventListener(
-        PIPE_INSTALL_CANCELLED_EVENT,
-        onInstallCancelled,
-      );
-      if (followUpTimerRef.current !== null) {
-        window.clearTimeout(followUpTimerRef.current);
-      }
+      gmailConnectAbortRef.current?.abort();
     };
   }, [refresh]);
 
-  const openInstaller = useCallback(
-    async (slug: string, followWithGmail = false) => {
-      if (installerPendingSlugRef.current) return;
-      installerPendingSlugRef.current = slug;
-      setInstallerPendingSlug(slug);
-      setActionError(null);
-      pendingDailyInstallRef.current = followWithGmail;
-      posthog.capture("first_run_next_step_selected", {
-        step: slug,
-        state: "not_installed",
-      });
-      try {
-        await emit("install-pipe", { url: `registry:${slug}` });
-      } catch {
-        installerPendingSlugRef.current = null;
-        pendingDailyInstallRef.current = false;
-        setInstallerPendingSlug(null);
-        setActionError("could not open the installer. try again.");
-      }
+  const setActionLabel = useCallback(
+    (
+      id: "daily-email" | "digital-clone" | "google-calendar",
+      label: string,
+    ) => {
+      setBusyAction({ id, label });
     },
     [],
   );
 
-  const enableRecommendedPipe = useCallback(
-    async (slug: string) => {
-      if (enablingPipeRef.current) return;
-      enablingPipeRef.current = slug;
-      setEnablingPipe(slug);
-      setActionError(null);
-      posthog.capture("first_run_next_step_selected", {
-        step: slug,
-        state: "installed_disabled",
-      });
-      try {
-        await enablePipe(slug);
-        await refresh();
-      } catch {
-        setActionError("could not enable the scheduled task. try again.");
-      } finally {
-        enablingPipeRef.current = null;
-        setEnablingPipe(null);
-      }
-    },
-    [refresh],
-  );
+  const connectGmail = useCallback(async () => {
+    if (!userToken) {
+      throw new Error("sign in to connect gmail, then try again.");
+    }
+    gmailConnectAbortRef.current?.abort();
+    const controller = new AbortController();
+    gmailConnectAbortRef.current = controller;
+    const redirectUrl = await authorizeComposioToolkit(userToken, "gmail");
+    await openUrl(redirectUrl);
+    const connected = await waitForGmailConnection(
+      userToken,
+      controller.signal,
+    );
+    if (!connected) {
+      throw new Error("gmail connection was not completed. try again.");
+    }
+    await registerComposioMcpServer(userToken);
+    await foregroundAfterOAuth();
+    notifyConnectionsUpdated();
+    posthog.capture("connection_saved", {
+      integration: "composio-gmail",
+      source: "first_run_next_steps",
+    });
+  }, [userToken]);
 
-  const connect = useCallback((connectionId: "gmail" | "google-calendar") => {
+  const setupDailyEmail = useCallback(async () => {
+    if (busyActionRef.current) return;
+    busyActionRef.current = { id: "daily-email", label: "starting" };
+    setActionLabel("daily-email", "starting");
     setActionError(null);
     posthog.capture("first_run_next_step_selected", {
-      step: connectionId,
+      step: DAILY_EMAIL_PIPE,
+      state: snapshot.dailyEmailState,
+      gmail_connected: snapshot.gmailConnected,
+    });
+    try {
+      if (snapshot.dailyEmailState === "missing") {
+        setActionLabel("daily-email", "installing");
+        await installStorePipe(DAILY_EMAIL_PIPE);
+      }
+      if (snapshot.gmailConnected !== true) {
+        setActionLabel("daily-email", "connecting gmail");
+        await connectGmail();
+      }
+      if (snapshot.dailyEmailState !== "enabled") {
+        setActionLabel("daily-email", "enabling");
+        await enablePipe(DAILY_EMAIL_PIPE);
+      }
+      await refresh();
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        await refresh();
+        setActionError(
+          error instanceof Error
+            ? error.message
+            : "could not finish the daily email setup. try again.",
+        );
+      }
+    } finally {
+      busyActionRef.current = null;
+      setBusyAction(null);
+    }
+  }, [connectGmail, refresh, setActionLabel, snapshot]);
+
+  const setupDigitalClone = useCallback(async () => {
+    if (busyActionRef.current) return;
+    busyActionRef.current = { id: "digital-clone", label: "starting" };
+    setActionLabel("digital-clone", "starting");
+    setActionError(null);
+    posthog.capture("first_run_next_step_selected", {
+      step: DIGITAL_CLONE_PIPE,
+      state: snapshot.digitalCloneState,
+    });
+    try {
+      if (snapshot.digitalCloneState === "missing") {
+        setActionLabel("digital-clone", "installing");
+        await installStorePipe(DIGITAL_CLONE_PIPE);
+      }
+      if (snapshot.digitalCloneState !== "enabled") {
+        setActionLabel("digital-clone", "enabling");
+        await enablePipe(DIGITAL_CLONE_PIPE);
+      }
+      await refresh();
+    } catch (error) {
+      await refresh();
+      setActionError(
+        error instanceof Error
+          ? error.message
+          : "could not finish the digital clone setup. try again.",
+      );
+    } finally {
+      busyActionRef.current = null;
+      setBusyAction(null);
+    }
+  }, [refresh, setActionLabel, snapshot.digitalCloneState]);
+
+  const connectGoogleCalendar = useCallback(async () => {
+    if (busyActionRef.current) return;
+    busyActionRef.current = { id: "google-calendar", label: "connecting" };
+    setActionLabel("google-calendar", "connecting");
+    setActionError(null);
+    posthog.capture("first_run_next_step_selected", {
+      step: "google-calendar",
       state: "not_connected",
     });
-    openConnection(connectionId);
-  }, []);
+    try {
+      const result = await commands.oauthConnect(
+        "google-calendar",
+        null,
+        null,
+      );
+      if (result.status === "error") throw new Error(result.error);
+      if (!result.data.connected) {
+        throw new Error("google calendar connection was not completed.");
+      }
+      notifyConnectionsUpdated();
+      posthog.capture("google_calendar_connected", {
+        source: "first_run_next_steps",
+      });
+      await refresh();
+    } catch (error) {
+      await refresh();
+      setActionError(
+        error instanceof Error
+          ? error.message
+          : "could not connect google calendar. try again.",
+      );
+    } finally {
+      busyActionRef.current = null;
+      setBusyAction(null);
+    }
+  }, [refresh, setActionLabel]);
 
   const retry = useCallback(() => {
     setActionError(null);
@@ -634,29 +722,17 @@ export function FirstRunNextSteps({
       refreshing={refreshing}
       actionError={actionError}
       dailyEmailBusyLabel={
-        installerPendingSlug === DAILY_EMAIL_PIPE
-          ? "reviewing install"
-          : enablingPipe === DAILY_EMAIL_PIPE
-            ? "enabling"
-            : null
+        busyAction?.id === "daily-email" ? busyAction.label : null
       }
       digitalCloneBusyLabel={
-        installerPendingSlug === DIGITAL_CLONE_PIPE
-          ? "reviewing install"
-          : enablingPipe === DIGITAL_CLONE_PIPE
-            ? "enabling"
-            : null
+        busyAction?.id === "digital-clone" ? busyAction.label : null
       }
-      onInstallDailyEmail={() =>
-        void openInstaller(DAILY_EMAIL_PIPE, snapshot.gmailConnected === false)
+      calendarBusyLabel={
+        busyAction?.id === "google-calendar" ? busyAction.label : null
       }
-      onInstallDigitalClone={() => void openInstaller(DIGITAL_CLONE_PIPE)}
-      onEnableDailyEmail={() => void enableRecommendedPipe(DAILY_EMAIL_PIPE)}
-      onEnableDigitalClone={() =>
-        void enableRecommendedPipe(DIGITAL_CLONE_PIPE)
-      }
-      onConnectGmail={() => connect("gmail")}
-      onConnectGoogleCalendar={() => connect("google-calendar")}
+      onSetupDailyEmail={() => void setupDailyEmail()}
+      onSetupDigitalClone={() => void setupDigitalClone()}
+      onConnectGoogleCalendar={() => void connectGoogleCalendar()}
       onRetry={retry}
     />
   );

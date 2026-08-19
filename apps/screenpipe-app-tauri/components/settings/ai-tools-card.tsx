@@ -29,6 +29,7 @@ import {
   type FriendlyToolError,
   isOpenclawMcpInstalled,
   isHermesMcpInstalled,
+  isGeminiMcpInstalled,
   isRunnerMcpInstalled,
   isWindsurfMcpInstalled,
 } from "@/lib/ai-tools-mcp";
@@ -53,6 +54,8 @@ async function isToolConnected(id: ConnectAllToolId): Promise<boolean> {
       return (await isCodexMcpInstalled()) && (await areExternalAgentSkillsInstalled("codex"));
     case "cursor":
       return (await isCursorMcpInstalled()) && (await areExternalAgentSkillsInstalled("cursor"));
+    case "gemini":
+      return (await isGeminiMcpInstalled()) && (await areExternalAgentSkillsInstalled("gemini"));
     case "openclaw":
       return (await isOpenclawMcpInstalled()) && (await areExternalAgentSkillsInstalled("openclaw"));
     case "hermes":
@@ -76,6 +79,8 @@ function ToolIcon({ id }: { id: ConnectAllToolId }) {
       return <img src="/images/codex.svg" alt="" className={`${img} rounded dark:invert`} />;
     case "cursor":
       return <CursorLogo className={img} />;
+    case "gemini":
+      return <img src="/images/gemini.svg" alt="" className={img} />;
     case "openclaw":
       return <img src="/images/openclaw.png" alt="" className={`${img} rounded`} />;
     case "hermes":

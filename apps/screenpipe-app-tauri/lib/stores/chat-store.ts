@@ -805,30 +805,34 @@ export function sessionRecordFromMeta(m: ConversationMeta): SessionRecord {
  *     SessionRecord doc), so a naive `messages.length === 0` check would
  *     treat every real conversation on disk as "empty" and make "+ new
  *     chat" hop through the sidebar instead of opening a fresh one (#4719).
+ *   - no loading/streaming turn — send preflight is mirrored here before its
+ *     first await, so New chat never reuses the session whose send is pending.
  *   - no loaded `user` message — belt-and-suspenders for a foreground
  *     draft that already has an unsent user turn before its count updates.
  *
  * Returns `{ id, isNew }` so callers can decide whether to upsert.
  */
+export function isReusableBlankChatSession(s: SessionRecord): boolean {
+  if (s.kind && s.kind !== "chat") return false;
+  if (s.isLoading || s.isStreaming) return false;
+  if (s.messageCount > 0) return false;
+  const msgs = (s.messages as Array<{ role?: string }> | undefined) ?? [];
+  return !msgs.some((m) => m?.role === "user");
+}
+
 export function getOrCreateEmptyChatId(): { id: string; isNew: boolean } {
   const state = useChatStore.getState();
-  const isReusableBlankChat = (s: SessionRecord) => {
-    if (s.kind && s.kind !== "chat") return false;
-    if (s.messageCount > 0) return false;
-    const msgs = (s.messages as Array<{ role?: string }> | undefined) ?? [];
-    return !msgs.some((m) => m?.role === "user");
-  };
 
   // Prefer the chat the user is already on.
   const panelId = state.panelSessionId;
   if (panelId) {
     const panel = state.sessions[panelId];
-    if (panel && isReusableBlankChat(panel)) return { id: panelId, isNew: false };
+    if (panel && isReusableBlankChatSession(panel)) return { id: panelId, isNew: false };
   }
 
   // Otherwise any other blank chat, newest first by createdAt.
   const empties = Object.values(state.sessions)
-    .filter(isReusableBlankChat)
+    .filter(isReusableBlankChatSession)
     .sort((a, b) => b.createdAt - a.createdAt);
   if (empties.length > 0) return { id: empties[0].id, isNew: false };
 

@@ -164,4 +164,18 @@ describe("AIPresetsSelector controlled preset creation", () => {
       "/images/gemini.svg",
     );
   });
+
+  it("accepts a surface-specific accessible label", () => {
+    render(
+      <AIPresetsSelector
+        compact
+        showModelOnly
+        triggerAriaLabel="AI preset"
+      />,
+    );
+
+    expect(
+      screen.getByRole("combobox", { name: "AI preset" }),
+    ).toHaveTextContent("old-model");
+  });
 });

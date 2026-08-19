@@ -353,8 +353,7 @@ jobs:
         if: matrix.os_type == 'linux'
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          .github/scripts/apt-install-with-retries.sh \
             g++ \
             ffmpeg \
             tesseract-ocr \

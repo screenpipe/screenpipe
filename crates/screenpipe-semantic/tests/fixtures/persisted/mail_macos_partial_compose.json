@@ -1,0 +1,24 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "com.apple.mail",
+    "executable": "Mail",
+    "display_name": "Mail",
+    "version": "16.0",
+    "browser_url": null
+  },
+  "nodes": [
+    {
+      "role": "AXWindow",
+      "text": "New Message",
+      "depth": 0,
+      "automation_id": "_NS:41"
+    },
+    {
+      "role": "AXStaticText",
+      "text": "To:",
+      "depth": 1,
+      "automation_id": "lablel_to"
+    }
+  ]
+}

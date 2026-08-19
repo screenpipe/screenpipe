@@ -120,18 +120,18 @@ export function useAgentHandoff(enabled: boolean): AgentHandoffView {
   const askAgent = useCallback(async (target: AgentHandoffTarget) => {
     if (!target) return;
 
-    // Copy first. If the clipboard write fails there is nothing to paste, so
-    // opening the app would strand the user in an empty composer with no way
-    // back to the question.
+    // Copy first as a fallback for older app builds, missing protocol handlers,
+    // and CLI-only Codex installs. The verified deeplinks carry their own prompt,
+    // so a clipboard failure must not block the primary prefilled handoff.
+    let copied = false;
     try {
       await commands.copyTextToClipboard(HANDOFF_PROMPT);
+      copied = true;
     } catch {
-      setHint("Could not copy the question. Open the summary instead.");
       posthog.capture("first_run_agent_handoff_failed", {
         agent: target.id,
         stage: "clipboard",
       });
-      return;
     }
 
     let opened = false;
@@ -141,8 +141,8 @@ export function useAgentHandoff(enabled: boolean): AgentHandoffView {
         await openUrl(target.deeplink);
         opened = true;
       } catch {
-        // The question is already on the clipboard, so this degrades to the
-        // copy-only path rather than failing outright.
+        // When the clipboard succeeded this degrades to copy-only. When both
+        // paths fail, the in-app summary remains the recovery action.
         posthog.capture("first_run_agent_handoff_failed", {
           agent: target.id,
           stage: "open",
@@ -150,11 +150,16 @@ export function useAgentHandoff(enabled: boolean): AgentHandoffView {
       }
     }
 
-    setHint(
-      opened || !target.deeplink
-        ? target.hint
-        : `Question copied. Open ${target.label} and paste it.`,
-    );
+    if (opened) {
+      setHint(target.hint);
+    } else if (copied) {
+      setHint(`Question copied. Open ${target.label} and paste it.`);
+    } else {
+      setHint(
+        `Could not open ${target.label} or copy the question. Open the summary instead.`,
+      );
+      return;
+    }
 
     // The loop closes outside this app: screenpipe-mcp reports a privacy-safe
     // `client` on every tool call, so a call arriving from this agent shortly
@@ -162,7 +167,9 @@ export function useAgentHandoff(enabled: boolean): AgentHandoffView {
     posthog.capture("first_run_agent_handoff_clicked", {
       agent: target.id,
       opened,
-      copy_only: !target.deeplink,
+      prefilled: opened,
+      copy_only: !opened,
+      clipboard_copied: copied,
     });
   }, []);
 

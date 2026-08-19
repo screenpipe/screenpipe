@@ -17,6 +17,7 @@ import {
   AppWindow,
   AudioLines,
   CalendarDays,
+  CalendarRange,
   RefreshCw,
   Users,
 } from "lucide-react";
@@ -32,12 +33,12 @@ import {
 } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { faviconUrl } from "@/components/settings/capture-filters/icon-urls";
+import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import {
   ACTIVITY_REVIEW_AGENT_SYSTEM_PROMPT,
@@ -147,6 +148,13 @@ const RANGE_COPY: Record<RangePreset, string> = {
   "24h": "Last 24 hours",
   "7d": "Last 7 days",
   custom: "Custom range",
+};
+
+const RANGE_SHORT_COPY: Record<RangePreset, string> = {
+  today: "Today",
+  "24h": "24h",
+  "7d": "7d",
+  custom: "Custom",
 };
 
 function readStoredRangePreset(): RangePreset {
@@ -1302,6 +1310,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                 value={preset}
                 onValueChange={(value) => {
                   const nextPreset = value as RangePreset;
+                  setCustomCalendarOpen(false);
                   setPreset(nextPreset);
                   posthog.capture("activity_range_changed", {
                     range: nextPreset,
@@ -1309,11 +1318,13 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                 }}
               >
                 <SelectTrigger
-                  className="h-9 w-[150px] rounded-none text-xs"
+                  className="h-9 w-auto min-w-0 shrink-0 justify-center gap-1.5 rounded-none px-2 text-xs [&>svg:last-child]:hidden"
                   data-testid="activity-range"
-                  aria-label="Time range"
+                  aria-label={`Time range: ${RANGE_COPY[preset]}`}
+                  title={`Time range: ${RANGE_COPY[preset]}`}
                 >
-                  <SelectValue />
+                  <CalendarRange className="h-4 w-4" aria-hidden="true" />
+                  <span aria-hidden="true">{RANGE_SHORT_COPY[preset]}</span>
                 </SelectTrigger>
                 <SelectContent>
                   {(
@@ -1325,24 +1336,30 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                   ))}
                 </SelectContent>
               </Select>
-              <Select
-                value={reviewPreset.id}
-                onValueChange={setSelectedReviewPresetId}
-              >
-                <SelectTrigger
-                  className="h-9 w-[190px] max-w-[36vw] text-xs"
+              {reviewPresets.length > 0 ? (
+                <AIPresetsSelector
+                  compact
+                  showModelOnly
+                  includeAgentPresets={false}
+                  triggerAriaLabel="AI preset"
+                  containerClassName="w-[190px] max-w-[36vw] min-w-[132px] shrink-0 gap-0"
+                  triggerClassName="h-9 rounded-none text-xs"
+                  controlledPresetId={reviewPreset.id}
+                  onControlledSelect={(nextPreset) => {
+                    if (nextPreset) setSelectedReviewPresetId(nextPreset.id);
+                  }}
+                />
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled
                   aria-label="AI preset"
+                  className="h-9 w-[190px] max-w-[36vw] justify-start rounded-none text-xs"
                 >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent align="end">
-                  {selectableReviewPresets.map((candidate) => (
-                    <SelectItem key={candidate.id} value={candidate.id}>
-                      {candidate.id} · {candidate.model || "default"}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                  {reviewPreset.model || "auto"}
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="icon"
@@ -1401,6 +1418,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                       setCustomEnd(
                         toLocalInputValue(endOfSelectedDay(nextRange.to, now)),
                       );
+                      setCustomCalendarOpen(false);
                     }}
                     defaultMonth={customDateRange?.from}
                     disabled={{ after: new Date() }}

@@ -107,8 +107,48 @@ fn claude_extracts_actor_turns_from_exact_message_dom() {
 }
 
 #[test]
+fn claude_extracts_macos_turns_from_accessible_headings() {
+    let items = handled(
+        include_str!("fixtures/apps/claude_macos_accessible_headings.json"),
+        "app.claude.message_dom",
+    );
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0].title.as_deref(), Some("Parser repair - Claude"));
+    assert_eq!(
+        items[0].metadata.get("surface").map(String::as_str),
+        Some("accessible_heading_markers")
+    );
+    assert_eq!(items[1].actor.as_deref(), Some("[user]"));
+    assert_eq!(
+        items[1].body.as_deref(),
+        Some("Reply with exactly SEMANTIC_PARSER_ASSISTANT")
+    );
+    assert_eq!(items[2].actor.as_deref(), Some("Claude"));
+    assert_eq!(items[2].body.as_deref(), Some("SEMANTIC_PARSER_ASSISTANT"));
+}
+
+#[test]
 fn claude_abstains_on_typography_outside_a_message_pair() {
     let (app, tree) = fixture_tree(include_str!("fixtures/apps/claude_card_only.json"));
+    let context = ParseContext {
+        frame_id: 7,
+        captured_at_unix_ms: 1_700_000_000_000,
+        utc_offset_minutes: None,
+        locale_hint: None,
+        app: &app,
+        input_content_hash: 9,
+    };
+    assert_eq!(
+        ClaudeParser::new().parse(&context, &tree).unwrap(),
+        ParseOutcome::NotHandled
+    );
+}
+
+#[test]
+fn claude_abstains_on_an_assistant_only_accessible_heading() {
+    let (app, tree) = fixture_tree(include_str!(
+        "fixtures/apps/claude_macos_assistant_only.json"
+    ));
     let context = ParseContext {
         frame_id: 7,
         captured_at_unix_ms: 1_700_000_000_000,

@@ -1263,6 +1263,8 @@ interface AIPresetsSelectorProps {
   containerClassName?: string;
   /** Class applied to the trigger button. */
   triggerClassName?: string;
+  /** Accessible label for surfaces where the visible model name needs context. */
+  triggerAriaLabel?: string;
   /** For tight composer UIs, show the active model instead of preset details. */
   showModelOnly?: boolean;
   /** Notify parent surfaces when the preset popover opens or closes. */
@@ -1363,6 +1365,7 @@ export const AIPresetsSelector = ({
   compact = false,
   containerClassName,
   triggerClassName,
+  triggerAriaLabel,
   showModelOnly = false,
   onOpenChange,
   includeAgentPresets = true,
@@ -1768,6 +1771,7 @@ export const AIPresetsSelector = ({
                   type="button"
                   variant="outline"
                   role="combobox"
+                  aria-label={triggerAriaLabel}
                   aria-expanded={open}
                   className={cn(
                     "w-full justify-between hover:bg-accent hover:text-accent-foreground",

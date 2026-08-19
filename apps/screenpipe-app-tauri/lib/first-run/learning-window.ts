@@ -92,6 +92,14 @@ export type FirstRunLearningState = {
   /** Set once a summary lands, so a reload cannot re-seed a second chat. */
   seededAt: string | null;
   chatId: string | null;
+  /**
+   * Set after the user opens the summary.
+   *
+   * Opening the result is not the same as finishing setup. Keeping this
+   * separate lets Home collapse the large result card into a durable setup
+   * dock while the summary conversation remains usable underneath it.
+   */
+  summaryOpenedAt: string | null;
   emptyReason: FirstRunEmptyReason | null;
   /**
    * Set when a window is settled by rehydration rather than by the ceiling
@@ -182,6 +190,7 @@ const EMPTY_STATE: FirstRunLearningState = {
   showProgress: false,
   seededAt: null,
   chatId: null,
+  summaryOpenedAt: null,
   emptyReason: null,
   pendingEmptyReport: false,
   capturedApps: [],
@@ -574,6 +583,7 @@ function normalize(value: unknown): FirstRunLearningState {
         ...EMPTY_STATE,
         phase: "empty",
         startedAt,
+        showProgress: state.showProgress === true,
         // Deliberately still `unknown`, not a new reason. The hook re-derives
         // the real engine reason from `pendingEmptyReport` below, exactly as
         // the ceiling effect would have, so diagnostics keep their fidelity.
@@ -594,9 +604,13 @@ function normalize(value: unknown): FirstRunLearningState {
       return {
         phase: "ready",
         startedAt,
-        showProgress: false,
+        showProgress: state.showProgress === true,
         seededAt: typeof state.seededAt === "string" ? state.seededAt : null,
         chatId: state.chatId,
+        summaryOpenedAt:
+          typeof state.summaryOpenedAt === "string"
+            ? state.summaryOpenedAt
+            : null,
         emptyReason: null,
         pendingEmptyReport: false,
         capturedApps: [],
@@ -606,6 +620,7 @@ function normalize(value: unknown): FirstRunLearningState {
       ...EMPTY_STATE,
       phase: "empty",
       startedAt,
+      showProgress: state.showProgress === true,
       emptyReason: "unknown",
       // NOT flagged for reporting, unlike the expired-learning path above. A
       // `writing` window that lost its process may still have an in-flight
@@ -625,6 +640,10 @@ function normalize(value: unknown): FirstRunLearningState {
     showProgress: state.showProgress === true,
     seededAt: typeof state.seededAt === "string" ? state.seededAt : null,
     chatId: typeof state.chatId === "string" ? state.chatId : null,
+    summaryOpenedAt:
+      typeof state.summaryOpenedAt === "string"
+        ? state.summaryOpenedAt
+        : null,
     emptyReason: state.emptyReason ?? null,
     pendingEmptyReport: state.pendingEmptyReport === true,
     // Always live; see the type comment.
@@ -707,6 +726,20 @@ export function markLearningWriting(): FirstRunLearningState {
 export function markLearningReady(chatId: string): FirstRunLearningState {
   const current = readLearningWindow();
   return writeLearningWindow({ ...current, phase: "ready", chatId });
+}
+
+/**
+ * Remember that the result was opened without retiring its setup controls.
+ *
+ * This is deliberately a no-op outside `ready`: a stale click or duplicate
+ * event must not revive onboarding after the user explicitly finished it.
+ */
+export function markLearningSummaryOpened(
+  openedAt = new Date().toISOString(),
+): FirstRunLearningState {
+  const current = readLearningWindow();
+  if (current.phase !== "ready") return current;
+  return writeLearningWindow({ ...current, summaryOpenedAt: openedAt });
 }
 
 export function markLearningEmpty(

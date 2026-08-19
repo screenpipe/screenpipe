@@ -7,7 +7,8 @@
  *
  * Setup connects every detected AI tool over MCP in a native background task
  * (`skills.rs::connect_detected_ai_tools_in_background`), so by the time the
- * first-run summary resolves, Claude or Codex can already query this machine.
+ * first-run summary resolves, Claude, Cursor, or Codex can already query this
+ * machine.
  * That is the product thesis, and it is also the stickiest thing we measure:
  * MCP users repeat across days at 48% against a 7-9% D7 baseline.
  *
@@ -19,11 +20,12 @@
  * - Only tools that are actually CONNECTED are offered. Detected-but-unwired
  *   would send the user to an agent that cannot see anything, which is worse
  *   than not asking.
- * - `deeplink` is optional and only set where a real URL scheme exists.
- *   Claude Desktop registers `claude://` (routes: claude, cowork, resume).
- *   None of them accept a prompt, so we copy the question to the clipboard and
- *   open the app; the user pastes. Codex is a terminal CLI with no scheme at
- *   all, so it gets copy-only and says so.
+ * - `deeplink` is optional and only set where a real prompt-prefill route has
+ *   been verified. Claude, Cursor, and Codex all leave the prompt unsent so the
+ *   user can review it before handing any captured context to the agent.
+ * - The clipboard remains a fallback. Older app builds may know the URL scheme
+ *   but not the prompt route, and a machine can have MCP configured without the
+ *   desktop app installed.
  */
 
 import type { ConnectAllToolId } from "@/lib/ai-tools-mcp";
@@ -33,51 +35,54 @@ export type AgentHandoffTarget = {
   /** Shown on the button. */
   label: string;
   /**
-   * URL that brings the app forward. Absent for terminal tools, which turns
-   * the handoff into copy-only rather than pretending we can focus them.
+   * Verified URL that opens the app with the prompt prefilled. Optional so a
+   * future target can explicitly degrade to clipboard-only.
    */
   deeplink?: string;
-  /** How the user gets from the clipboard to an answer. */
+  /** What the user should do after the handoff. */
   hint: string;
 };
 
 /**
- * The question we hand over. Short on purpose: it has to survive being pasted
- * by hand, and a long prompt reads as work. Five minutes matches the window
- * the user just watched fill up, so the agent answers about the session they
- * were part of rather than an arbitrary range.
+ * The question we hand over. Short on purpose: it has to fit cleanly in a URL
+ * or survive being pasted by hand, and a long prompt reads as work. Five
+ * minutes matches the window the user just watched fill up, so the agent
+ * answers about the session they were part of rather than an arbitrary range.
  */
 export const HANDOFF_PROMPT =
   "Using screenpipe, summarize what I worked on in the last 5 minutes.";
 
+const ENCODED_HANDOFF_PROMPT = encodeURIComponent(HANDOFF_PROMPT);
+
 /**
- * Preference order, not an alphabetical list. Claude first because it is both
- * the most connected tool (107 people/21d against Codex 97) and the only one
- * that can be brought forward with a deeplink, so it is the shortest path from
- * the button to an answer.
+ * Preference order, not an alphabetical list. Every shipped target has a
+ * prompt-prefill route; the order therefore follows connection usage rather
+ * than an implementation limitation.
  */
 const HANDOFF_TARGETS: AgentHandoffTarget[] = [
   {
     id: "claude",
     label: "Claude",
-    deeplink: "claude://claude",
-    hint: "Claude opens with the question copied. Paste it to run.",
+    // Claude Desktop handles this as a new Claude chat and maps `q` into the
+    // composer without submitting it.
+    deeplink: `claude://claude.ai/new?q=${ENCODED_HANDOFF_PROMPT}`,
+    hint: "Question ready in Claude. Review and send it.",
   },
   {
     id: "cursor",
     label: "Cursor",
-    // No deeplink until someone verifies the scheme on a real install. An
-    // earlier revision shipped `cursor://` from memory rather than from a
-    // registered CFBundleURLSchemes entry; if the scheme is wrong the button
-    // silently does nothing, which is the exact failure copy-only avoids.
-    hint: "Question copied. Open Cursor and paste it into chat.",
+    // Cursor's documented prompt deeplink opens Chat with the text prefilled
+    // and explicitly never executes it automatically.
+    deeplink: `cursor://anysphere.cursor-deeplink/prompt?text=${ENCODED_HANDOFF_PROMPT}`,
+    hint: "Question ready in Cursor. Review and send it.",
   },
   {
     id: "codex",
-    label: "Codex",
-    // Ships as a terminal CLI writing to ~/.codex/config.toml, and no URL
-    // scheme has been verified. Copy-only, and the hint says where to paste.
-    hint: "Question copied. Paste it into your Codex terminal session.",
+    label: "ChatGPT",
+    // The ChatGPT/Codex desktop app accepts exactly one `prompt` parameter on
+    // its new-thread route. CLI-only installs fall back to the copied prompt.
+    deeplink: `codex://threads/new?prompt=${ENCODED_HANDOFF_PROMPT}`,
+    hint: "Question ready in ChatGPT. Review and send it.",
   },
 ];
 

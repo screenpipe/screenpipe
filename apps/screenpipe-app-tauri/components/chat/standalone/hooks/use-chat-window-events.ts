@@ -523,11 +523,46 @@ export function useChatE2EGlobals({
       setIsStreaming(true);
     };
 
+    // Reproduce the earlier send-preflight window: the UI has acknowledged
+    // Send, but no durable user row exists yet. New chat must still allocate a
+    // distinct id instead of reusing this apparently-empty session.
+    (window as unknown as {
+      __e2eLatchPreflightSend?: (sid: string) => void;
+    }).__e2eLatchPreflightSend = (sid: string) => {
+      const store = useChatStore.getState();
+      if (!store.sessions[sid]) {
+        store.actions.upsert({
+          id: sid,
+          title: "untitled",
+          preview: "",
+          status: "idle",
+          messageCount: 0,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          pinned: false,
+          unread: false,
+          draft: true,
+          messages: [],
+        });
+      }
+      store.actions.setCurrent(sid);
+      store.actions.setPanelSession(sid);
+      store.actions.setStreaming(sid, { isLoading: true, isStreaming: false });
+      setMessages([]);
+      setConversationId(sid);
+      piSessionIdRef.current = sid;
+      piSessionSyncedRef.current = true;
+      setIsLoading(true);
+      setIsStreaming(false);
+      void emit("chat-current-session", { id: sid });
+    };
+
     return () => {
       delete (window as unknown as { __e2eSeedUserMessage?: unknown }).__e2eSeedUserMessage;
       delete (window as unknown as { __e2eSeedAssistantMessage?: unknown }).__e2eSeedAssistantMessage;
       delete (window as unknown as { __e2eReadActiveTurn?: unknown }).__e2eReadActiveTurn;
       delete (window as unknown as { __e2eLatchActiveSend?: unknown }).__e2eLatchActiveSend;
+      delete (window as unknown as { __e2eLatchPreflightSend?: unknown }).__e2eLatchPreflightSend;
     };
   }, [
     forceQueueModeRef,

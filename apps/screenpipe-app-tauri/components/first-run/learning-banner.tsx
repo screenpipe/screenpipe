@@ -7,7 +7,7 @@
 import React from "react";
 import { emit } from "@tauri-apps/api/event";
 import posthog from "posthog-js";
-import { Clock, Loader2 } from "lucide-react";
+import { ChevronDown, Clock, ListChecks, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   formatCountdown,
@@ -105,8 +105,8 @@ export function FirstRunReadyPanel({
 
       <div className="flex items-center justify-between gap-4 border-t border-border px-4 py-3">
         <p className="text-[10px] leading-relaxed text-muted-foreground">
-          these are optional. you can set them up later from scheduled tasks and
-          connections.
+          screenpipe is ready now. these optional setups remain available from
+          scheduled tasks and connections.
         </p>
         <Button
           size="sm"
@@ -114,9 +114,115 @@ export function FirstRunReadyPanel({
           className="h-7 shrink-0 px-2 text-[9px]"
           onClick={onDismiss}
         >
-          later
+          this is ready
         </Button>
       </div>
+    </div>
+  );
+}
+
+export function FirstRunSetupReadyPanel({
+  onDismiss,
+  nextSteps,
+}: {
+  onDismiss: () => void;
+  nextSteps: React.ReactNode;
+}) {
+  return (
+    <div data-testid="first-run-setup-ready">
+      <div className="p-5">
+        <div className="flex items-center gap-2">
+          <span className="h-2 w-2 bg-phosphor-strong" aria-hidden="true" />
+          <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-phosphor-strong">
+            setup · ready
+          </span>
+        </div>
+        <h2 className="mt-3 font-mono text-base font-semibold lowercase text-foreground">
+          screenpipe is ready
+        </h2>
+        <p className="mt-2 max-w-xl text-[11px] leading-relaxed text-muted-foreground">
+          there was not enough activity in this short setup window to write a
+          useful first summary. you can still enable your daily summary now.
+        </p>
+      </div>
+
+      {nextSteps}
+
+      <div className="flex items-center justify-between gap-4 border-t border-border px-4 py-3">
+        <p className="text-[10px] leading-relaxed text-muted-foreground">
+          these optional setups remain available from scheduled tasks and
+          connections.
+        </p>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 shrink-0 px-2 text-[9px]"
+          data-testid="first-run-setup-complete"
+          onClick={onDismiss}
+        >
+          this is ready
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+export function FirstRunSetupDock({
+  onDismiss,
+  nextSteps,
+}: {
+  onDismiss: () => void;
+  nextSteps: React.ReactNode;
+}) {
+  const [expanded, setExpanded] = React.useState(false);
+
+  return (
+    <div data-testid="first-run-setup-dock">
+      <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center border border-phosphor-strong text-phosphor-strong">
+          <ListChecks className="h-4 w-4" aria-hidden="true" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="font-mono text-[9px] uppercase tracking-[0.2em] text-phosphor-strong">
+            getting started
+          </p>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+            your summary is open. daily summary, digital clone, and calendar
+            setup stay available here while you chat.
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 gap-1.5 px-2 text-[9px]"
+            data-testid="first-run-toggle-setup"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((current) => !current)}
+          >
+            {expanded ? "close setup" : "open setup"}
+            <ChevronDown
+              className={`h-3 w-3 transition-transform duration-150 ${
+                expanded ? "rotate-180" : ""
+              }`}
+              aria-hidden="true"
+            />
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2 text-[9px]"
+            data-testid="first-run-hide-setup"
+            onClick={onDismiss}
+          >
+            hide
+          </Button>
+        </div>
+      </div>
+
+      {expanded && nextSteps}
     </div>
   );
 }
@@ -127,46 +233,82 @@ export function FirstRunReadyPanel({
  * Renders nothing outside the window, so it is safe to mount unconditionally
  * on the surface the user lands on after onboarding.
  */
-export function FirstRunLearningBanner(props: LearningWindowOptions = {}) {
-  const { phase, capturedApps, remainingMs, chatId, showProgress, dismiss } =
-    useLearningWindow(props);
+export function FirstRunLearningBanner(
+  props: LearningWindowOptions & { fallback?: React.ReactNode } = {},
+) {
+  const { fallback, ...learningOptions } = props;
+  const {
+    phase,
+    capturedApps,
+    remainingMs,
+    chatId,
+    summaryOpenedAt,
+    showProgress,
+    markSummaryOpened,
+    dismiss,
+  } = useLearningWindow(learningOptions);
   const { targets: handoffTargets, hint: handoffHint, askAgent } =
-    useAgentHandoff(phase === "ready");
+    useAgentHandoff(phase === "ready" && !summaryOpenedAt);
 
-  // Only show progress when setup just caused it, and only show a terminal
-  // outcome when there is something useful to open. Empty is an internal
-  // result/telemetry state, not a user task or an error they asked to inspect.
+  // Only show progress when setup just caused it. A foreground empty result is
+  // still a terminal onboarding state: hiding it also hid the daily-summary
+  // setup and made the two-minute card appear to vanish. Background retries
+  // remain quiet unless they produce a summary worth opening.
   if (
     phase !== "ready" &&
     !(
       showProgress &&
-      (phase === "learning" || phase === "writing")
+      (phase === "learning" || phase === "writing" || phase === "empty")
     )
   ) {
-    return null;
+    return fallback ? <>{fallback}</> : null;
   }
 
   const openSummary = async () => {
     if (!chatId) return;
-    // Distinct from dismiss(). Opening the summary and clicking "Later" both
-    // close the banner, so without this they collapse into one event and the
-    // activation question this whole flow exists to answer — did the user read
-    // what we found? — becomes unmeasurable.
+    // Distinct from dismiss(). Opening the result keeps optional setup alive,
+    // while hiding the dock explicitly retires it.
     posthog.capture("first_run_summary_opened");
     try {
       await emit("chat-load-conversation", { conversationId: chatId });
+      markSummaryOpened();
     } catch {
-      // The chat is still in the sidebar even if the focus hint does not land.
+      // Keep the full result card so the user can retry instead of collapsing
+      // setup around a summary that did not open.
     }
-    dismiss({ opened: true });
   };
+
+  // Once the result opens, keep setup as a compact workspace-level control
+  // instead of destroying it or leaving the large onboarding card above every
+  // chat. A blank chat can still render its normal starter beneath the dock.
+  if (phase === "ready" && summaryOpenedAt) {
+    return (
+      <>
+        <section
+          data-testid="first-run-learning-banner"
+          data-phase="ready"
+          className="mx-auto mb-4 w-full max-w-3xl overflow-hidden border border-border bg-background"
+        >
+          <FirstRunSetupDock
+            onDismiss={() => dismiss()}
+            nextSteps={
+              <FirstRunNextSteps userToken={learningOptions.userToken} />
+            }
+          />
+        </section>
+        {fallback ? <>{fallback}</> : null}
+      </>
+    );
+  }
 
   return (
     <section
       data-testid="first-run-learning-banner"
       data-phase={phase}
       className={`mx-auto mb-4 w-full border border-border bg-background ${
-        phase === "ready" ? "max-w-4xl overflow-hidden" : "max-w-3xl p-4"
+        phase === "ready" || phase === "empty"
+          ? "max-w-3xl overflow-hidden"
+          : "max-w-3xl p-4"
       }`}
     >
       {phase === "learning" && (
@@ -244,7 +386,14 @@ export function FirstRunLearningBanner(props: LearningWindowOptions = {}) {
           onOpenSummary={() => void openSummary()}
           onPickAgent={(target) => void askAgent(target)}
           onDismiss={() => dismiss()}
-          nextSteps={<FirstRunNextSteps userToken={props.userToken} />}
+          nextSteps={<FirstRunNextSteps userToken={learningOptions.userToken} />}
+        />
+      )}
+
+      {phase === "empty" && (
+        <FirstRunSetupReadyPanel
+          onDismiss={() => dismiss()}
+          nextSteps={<FirstRunNextSteps userToken={learningOptions.userToken} />}
         />
       )}
     </section>

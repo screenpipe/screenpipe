@@ -46,9 +46,11 @@ function view(over: Partial<LearningWindowView> = {}): LearningWindowView {
     showProgress: true,
     seededAt: null,
     chatId: null,
+    summaryOpenedAt: null,
     emptyReason: null,
     capturedApps: [],
     remainingMs: 5 * 60 * 1_000,
+    markSummaryOpened: vi.fn(),
     dismiss: vi.fn(),
     ...over,
   } as LearningWindowView;
@@ -76,6 +78,27 @@ describe("first-run learning banner", () => {
     expect(done.container).toBeEmptyDOMElement();
   });
 
+  it("renders the normal Home surface only when the learning card is absent", () => {
+    mocks.view = view({ phase: "idle" });
+    const { rerender } = render(
+      <FirstRunLearningBanner
+        fallback={<div data-testid="normal-home">How can I help today?</div>}
+      />,
+    );
+    expect(screen.getByTestId("normal-home")).toBeInTheDocument();
+
+    mocks.view = view({ phase: "ready", chatId: "ready-summary" });
+    rerender(
+      <FirstRunLearningBanner
+        fallback={<div data-testid="normal-home">How can I help today?</div>}
+      />,
+    );
+    expect(screen.queryByTestId("normal-home")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("screenpipe learned enough to help"),
+    ).toBeInTheDocument();
+  });
+
   it("shows the countdown while learning", () => {
     mocks.view = view({ remainingMs: 61_000 });
     render(<FirstRunLearningBanner />);
@@ -98,7 +121,9 @@ describe("first-run learning banner", () => {
     });
     render(<FirstRunLearningBanner />);
     expect(screen.getByText("Reading from")).toBeInTheDocument();
-    expect(screen.getByTestId("first-run-captured-app-Arc")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("first-run-captured-app-Arc"),
+    ).toBeInTheDocument();
     expect(
       screen.getByTestId("first-run-captured-app-Cursor"),
     ).toBeInTheDocument();
@@ -110,9 +135,15 @@ describe("first-run learning banner", () => {
     expect(screen.queryByText("Reading from")).not.toBeInTheDocument();
   });
 
-  it("opens the seeded chat and settles the window", async () => {
+  it("opens the seeded chat without retiring setup", async () => {
     const dismiss = vi.fn();
-    mocks.view = view({ phase: "ready", chatId: "first-run-1", dismiss });
+    const markSummaryOpened = vi.fn();
+    mocks.view = view({
+      phase: "ready",
+      chatId: "first-run-1",
+      dismiss,
+      markSummaryOpened,
+    });
     render(<FirstRunLearningBanner />);
 
     fireEvent.click(screen.getByTestId("first-run-open-summary"));
@@ -122,20 +153,54 @@ describe("first-run learning banner", () => {
         conversationId: "first-run-1",
       }),
     );
-    expect(dismiss).toHaveBeenCalled();
+    expect(markSummaryOpened).toHaveBeenCalledTimes(1);
+    expect(dismiss).not.toHaveBeenCalled();
+  });
+
+  it("keeps a compact expandable setup dock over the opened summary", () => {
+    const dismiss = vi.fn();
+    mocks.view = view({
+      phase: "ready",
+      chatId: "first-run-1",
+      summaryOpenedAt: "2026-08-19T17:00:00.000Z",
+      dismiss,
+    });
+    render(<FirstRunLearningBanner />);
+
+    expect(screen.getByTestId("first-run-setup-dock")).toBeInTheDocument();
+    expect(
+      screen.queryByText("screenpipe learned enough to help"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("first-run-next-steps"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("first-run-toggle-setup"));
+    expect(screen.getByTestId("first-run-next-steps")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("first-run-hide-setup"));
+    expect(dismiss).toHaveBeenCalledTimes(1);
   });
 
   it("offers the state-aware daily setup after learning resolves", () => {
-    mocks.view = view({ phase: "ready", chatId: "first-run-steps" });
+    const dismiss = vi.fn();
+    mocks.view = view({
+      phase: "ready",
+      chatId: "first-run-steps",
+      dismiss,
+    });
     render(<FirstRunLearningBanner />);
 
     expect(
       screen.getByText("screenpipe learned enough to help"),
     ).toBeInTheDocument();
     expect(screen.getByTestId("first-run-next-steps")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "this is ready" }));
+    expect(dismiss).toHaveBeenCalled();
   });
 
-  it("keeps every empty result out of the interface", () => {
+  it("ends a foreground empty result with useful setup choices", () => {
+    const dismiss = vi.fn();
     for (const emptyReason of [
       "not_recording",
       "no_capture_in_range",
@@ -145,11 +210,35 @@ describe("first-run learning banner", () => {
       "single_app_below_floor",
       "unknown",
     ] as const) {
-      mocks.view = view({ phase: "empty", emptyReason });
+      mocks.view = view({
+        phase: "empty",
+        emptyReason,
+        showProgress: true,
+        dismiss,
+      });
       const rendered = render(<FirstRunLearningBanner />);
-      expect(rendered.container).toBeEmptyDOMElement();
+      expect(screen.getByText("screenpipe is ready")).toBeInTheDocument();
+      expect(screen.getByTestId("first-run-next-steps")).toBeInTheDocument();
+      expect(
+        screen.queryByTestId("first-run-open-summary"),
+      ).not.toBeInTheDocument();
       rendered.unmount();
     }
+
+    mocks.view = view({ phase: "empty", showProgress: true, dismiss });
+    render(<FirstRunLearningBanner />);
+    fireEvent.click(screen.getByRole("button", { name: "this is ready" }));
+    expect(dismiss).toHaveBeenCalled();
+  });
+
+  it("keeps an empty background retry out of the interface", () => {
+    mocks.view = view({
+      phase: "empty",
+      emptyReason: "below_frame_floor",
+      showProgress: false,
+    });
+    const rendered = render(<FirstRunLearningBanner />);
+    expect(rendered.container).toBeEmptyDOMElement();
   });
 
   it("keeps a late learning or writing retry in the background", () => {
@@ -175,13 +264,14 @@ describe("first-run learning banner", () => {
 const CLAUDE = {
   id: "claude",
   label: "Claude",
-  deeplink: "claude://claude",
-  hint: "Claude opens with the question copied. Paste it to run.",
+  deeplink: "claude://claude.ai/new?q=test",
+  hint: "Question ready in Claude. Review and send it.",
 };
 const CODEX = {
   id: "codex",
-  label: "Codex",
-  hint: "Question copied. Paste it into your Codex terminal session.",
+  label: "ChatGPT",
+  deeplink: "codex://threads/new?prompt=test",
+  hint: "Question ready in ChatGPT. Review and send it.",
 };
 
 describe("agent handoff on the ready summary", () => {
@@ -208,11 +298,11 @@ describe("agent handoff on the ready summary", () => {
     expect(screen.getByTestId("first-run-open-summary")).toBeInTheDocument();
   });
 
-  it("says copy, not ask, for an agent it cannot bring forward", () => {
+  it("offers the verified prompt handoff for ChatGPT", () => {
     mocks.handoff.targets = [CODEX];
     render(<FirstRunLearningBanner />);
     expect(screen.getByTestId("first-run-ask-agent")).toHaveTextContent(
-      "Copy for Codex",
+      "Ask ChatGPT",
     );
   });
 
@@ -231,7 +321,9 @@ describe("agent handoff on the ready summary", () => {
     mocks.handoff.targets = [CLAUDE, CODEX];
     render(<FirstRunLearningBanner />);
 
-    expect(screen.getByTestId("first-run-ask-agent-picker")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("first-run-ask-agent-picker"),
+    ).toBeInTheDocument();
     const asks = screen.getAllByTestId("first-run-ask-agent");
     expect(asks.map((el) => el.getAttribute("data-agent"))).toEqual([
       "claude",
@@ -239,7 +331,7 @@ describe("agent handoff on the ready summary", () => {
     ]);
     // Logos carry no text, so the accessible name is the only affordance a
     // screen reader or keyboard user gets.
-    expect(asks[1]).toHaveAccessibleName("Copy for Codex");
+    expect(asks[1]).toHaveAccessibleName("Ask ChatGPT");
 
     fireEvent.click(asks[1]);
     expect(mocks.handoff.askAgent).toHaveBeenCalledWith(
@@ -247,17 +339,17 @@ describe("agent handoff on the ready summary", () => {
     );
   });
 
-  it("shows the paste instruction only once there is one", () => {
+  it("shows the review instruction only once there is one", () => {
     mocks.handoff.targets = [CLAUDE];
     const { rerender } = render(<FirstRunLearningBanner />);
     expect(
       screen.queryByTestId("first-run-ask-agent-hint"),
     ).not.toBeInTheDocument();
 
-    mocks.handoff.hint = "Claude opens with the question copied. Paste it to run.";
+    mocks.handoff.hint = "Question ready in Claude. Review and send it.";
     rerender(<FirstRunLearningBanner />);
     expect(screen.getByTestId("first-run-ask-agent-hint")).toHaveTextContent(
-      /paste it to run/i,
+      /review and send it/i,
     );
   });
 });

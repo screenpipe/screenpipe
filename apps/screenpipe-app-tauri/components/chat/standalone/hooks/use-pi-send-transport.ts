@@ -97,6 +97,7 @@ export async function checkLivePiSession(
  * while a turn is in flight.
  */
 export type PendingSend = {
+  sessionId: string;
   text: string;
   /** The friendly label a Home card sends, so the optimistic bubble matches
    *  the durable row's `displayContent` and nothing changes on the swap. */
@@ -212,7 +213,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     }
   }
 
-  async function interruptActivePiTurn() {
+  async function interruptActivePiTurn(sessionId = piSessionIdRef.current) {
     const hasActiveTurn = hasAuthoritativeActivePiTurn({
       isLoading,
       isStreaming,
@@ -223,7 +224,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     let aborted = false;
     try {
       const abortResult = await Promise.race([
-        commands.piAbort(piSessionIdRef.current),
+        commands.piAbort(sessionId),
         new Promise<{ status: "error"; error: string }>((resolve) => {
           window.setTimeout(() => resolve({ status: "error", error: "Abort timed out" }), 1_500);
         }),
@@ -255,6 +256,29 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     sendOptions?: ChatSendOptions,
   ) {
     clearPendingSteerTransportState();
+    // This send belongs to the session that was foreground when the user
+    // clicked Send. New chat is allowed during every asynchronous pause, so never
+    // re-read piSessionIdRef for the attempt after this point: it may already
+    // point at the newly-opened chat.
+    const attemptSessionId = piSessionIdRef.current;
+    const attemptPreset = getActivePreset();
+    const isAttemptForeground = () => piSessionIdRef.current === attemptSessionId;
+    const setAttemptPiInfo = (info: PiInfo | null) => {
+      if (isAttemptForeground()) setPiInfo(info);
+    };
+    const finishAttempt = () => {
+      const store = useChatStore.getState();
+      if (store.sessions[attemptSessionId]) {
+        store.actions.setStreaming(attemptSessionId, {
+          isLoading: false,
+          isStreaming: false,
+        });
+      }
+      if (isAttemptForeground()) {
+        setIsLoading(false);
+        setIsStreaming(false);
+      }
+    };
     // Capture the attempt up front so it survives a failed ACP start — the
     // "switch to default" sign-in card resends this message on the new preset.
     lastUserMessageRef.current = userMessage;
@@ -265,6 +289,14 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     // its 5s ChatGPT token pre-check, two liveness checks, and the interrupt of
     // any active turn). Every abort and throw below restores this.
     setIsLoading(true);
+    // Home chooses whether "+ new chat" can reuse the current draft from the
+    // shared chat store, not this component's React state. Mirror the
+    // optimistic loading edge before the first await so the current session
+    // cannot be mistaken for a reusable blank chat during preflight.
+    const attemptStore = useChatStore.getState();
+    if (attemptStore.sessions[attemptSessionId]) {
+      attemptStore.actions.setStreaming(attemptSessionId, { isLoading: true });
+    }
 
     // Put the message on screen and empty the composer NOW, in the same commit.
     // Previously both waited for the preflight, so for its whole duration the
@@ -274,7 +306,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     // `pendingSend` renders a real user bubble until the durable row replaces
     // it, and the recovery effect at the end of this hook puts the text back if
     // the send aborts.
-    setPendingSend({ text: userMessage, displayLabel });
+    setPendingSend({ sessionId: attemptSessionId, text: userMessage, displayLabel });
     setInput("");
     if (inputRef.current) inputRef.current.style.height = "auto";
 
@@ -293,7 +325,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
           variant: "destructive",
         });
       }
-      setIsLoading(false);
+      finishAttempt();
       return;
     }
 
@@ -303,9 +335,9 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     // stale provider.
     let liveSession: Awaited<ReturnType<typeof checkLivePiSession>>;
     try {
-      liveSession = await checkLivePiSession(piSessionIdRef.current, setPiInfo);
+      liveSession = await checkLivePiSession(attemptSessionId, setAttemptPiInfo);
     } catch (e) {
-      setIsLoading(false);
+      finishAttempt();
       throw e;
     }
 
@@ -314,7 +346,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       if (piStartInFlightRef.current) {
         if (!autoSendBypassRef.current) {
           toast({ title: "Pi starting", description: "Please wait a moment", variant: "destructive" });
-          setIsLoading(false);
+          finishAttempt();
           return;
         }
         // Prefill auto-send: wait for in-flight start to complete
@@ -323,7 +355,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
           await new Promise(r => setTimeout(r, 300));
         }
         if (piStartInFlightRef.current) {
-          setIsLoading(false);
+          finishAttempt();
           return; // timed out
         }
       } else {
@@ -334,7 +366,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
         // Build a list of presets to try: active first, then other available
         // presets as fallbacks. This ensures that if the active preset fails
         // (e.g. ChatGPT OAuth expired), we try alternatives before giving up.
-        const activeP = getActivePreset();
+        const activeP = attemptPreset;
         const allPresets = settings.aiPresets ?? [];
         const fallbackPresets = allPresets.filter(
           (p) =>
@@ -349,7 +381,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
         let lastError = "";
 
         try {
-          const dir = await piProjectDirForSession(piSessionIdRef.current);
+          const dir = await piProjectDirForSession(attemptSessionId);
 
           for (const preset of presetsToTry) {
             const providerConfig = buildProviderConfig(preset);
@@ -382,17 +414,21 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
 
             try {
               const result = await commands.piStart(
-                piSessionIdRef.current,
+                attemptSessionId,
                 dir,
                 settings.user?.token ?? null,
                 providerConfig,
               );
               if (result.status === "ok" && result.data.running) {
-                setPiInfo(result.data);
-                piSessionSyncedRef.current = false;
+                if (isAttemptForeground()) {
+                  setPiInfo(result.data);
+                  piSessionSyncedRef.current = false;
+                }
                 piCrashCountRef.current = 0;
-                setRunningConfigFromProviderConfig(providerConfig);
-                syncThinkingLevelAfterStart(piSessionIdRef.current);
+                if (isAttemptForeground()) {
+                  setRunningConfigFromProviderConfig(providerConfig);
+                }
+                syncThinkingLevelAfterStart(attemptSessionId);
 
                 // Notify the user about the session-only fallback, but
                 // do NOT persist it — the user's chosen preset stays.
@@ -429,7 +465,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
                   }
                   // The ACP sign-in / auth-cancelled card renders in-chat;
                   // leave the loader up and it spins behind that card forever.
-                  setIsLoading(false);
+                  finishAttempt();
                   return;
                 }
               }
@@ -453,7 +489,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
                   }
                   // Same as the branch above: the in-chat auth card owns the
                   // outcome, so the optimistic loader must be handed back.
-                  setIsLoading(false);
+                  finishAttempt();
                   return;
                 }
             }
@@ -468,14 +504,14 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
                 : lastError,
               variant: "destructive",
             });
-            setIsLoading(false);
+            finishAttempt();
             return;
           }
         } catch (e) {
           // A throw here (project dir, token check, piStart) aborts the send
           // before any turn exists. Without this the optimistic loading flag
           // set above would strand the chat: cards gone, loader forever.
-          setIsLoading(false);
+          finishAttempt();
           throw e;
         } finally {
           setPiStarting(false);
@@ -495,23 +531,23 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       // transient IPC race), proceed with the send — the backend command surfaces
       // a real error if the process is genuinely gone, rather than dropping a send
       // that would have worked.
-      liveSession = await checkLivePiSession(piSessionIdRef.current, setPiInfo);
+      liveSession = await checkLivePiSession(attemptSessionId, setAttemptPiInfo);
       if (!liveSession.running && !liveSession.indeterminate) {
         toast({
           title: "AI assistant is not ready",
           description: liveSession.error,
           variant: "destructive",
         });
-        setIsLoading(false);
+        finishAttempt();
         return;
       }
 
-      await interruptActivePiTurn();
+      await interruptActivePiTurn(attemptSessionId);
     } catch (e) {
-      setIsLoading(false);
+      finishAttempt();
       throw e;
     }
-    forceQueueModeRef.current = true;
+    if (isAttemptForeground()) forceQueueModeRef.current = true;
 
     const outgoingImages = imageDataUrls ?? pastedImages;
     const shouldClearPastedImages = imageDataUrls == null && pastedImages.length > 0;
@@ -549,27 +585,28 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       role: "assistant",
       content: "Processing...",
       timestamp: Date.now(),
-      model: getActivePreset()?.model,
-      provider: getActivePreset()?.provider,
+      model: attemptPreset?.model,
+      provider: attemptPreset?.provider,
     };
-
-    piStreamingTextRef.current = "";
-    piMessageIdRef.current = assistantMessageId;
-    piContentBlocksRef.current = [];
 
     piRateLimitRetries.current = 0;
     lastUserMessageRef.current = userMessage;
 
     // The id this turn is dispatched and streamed under — the single source of
     // truth for the whole turn's persistence (#4719).
-    const turnSessionId = piSessionIdRef.current;
+    const turnSessionId = attemptSessionId;
     // Pull `conversationId` (React state, used by the edge/streaming auto-saves
     // in useChatConversations) into lockstep with the dispatched session id. If
     // it lags, those later saves write under a SECOND id and the sidebar
     // upserts a duplicate row (the summary/todo card twin). Setting it here
     // makes every save for this turn — immediate, streaming, and edge — land on
     // one id.
-    setConversationId(turnSessionId);
+    if (isAttemptForeground()) {
+      piStreamingTextRef.current = "";
+      piMessageIdRef.current = assistantMessageId;
+      piContentBlocksRef.current = [];
+      setConversationId(turnSessionId);
+    }
 
     // Persist from the current render snapshot instead of assigning inside the
     // state updater. React may defer updater callbacks; when that happened, a
@@ -580,14 +617,56 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       newUserMessage,
       assistantPlaceholder,
     ];
-    setMessages((prev) => [...prev, newUserMessage, assistantPlaceholder]);
+    if (isAttemptForeground()) {
+      setMessages((prev) => [...prev, newUserMessage, assistantPlaceholder]);
+    }
     // The durable row is in the transcript now, so the optimistic one retires
     // in the same commit. Two bubbles must never paint at once.
     setPendingSend(null);
-    setInput("");
-    if (inputRef.current) inputRef.current.style.height = "auto";
-    setIsLoading(true);
-    setIsStreaming(true);
+    if (isAttemptForeground()) {
+      setInput("");
+      if (inputRef.current) inputRef.current.style.height = "auto";
+      setIsLoading(true);
+      setIsStreaming(true);
+    }
+
+    // Mirror the user message + assistant placeholder before persistence.
+    // saveConversation performs filesystem reads before its own store mirror;
+    // during that await, New chat must already see this as a real active turn.
+    // This also lets the background router own the response immediately when
+    // the user switches chats while the initial save is still in flight.
+    const storeState = useChatStore.getState();
+    if (!storeState.sessions[turnSessionId]) {
+      storeState.actions.upsert({
+        id: turnSessionId,
+        title: "untitled",
+        preview: "",
+        status: "streaming",
+        messageCount: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        pinned: false,
+        unread: false,
+      });
+    }
+    storeState.actions.appendMessage(turnSessionId, newUserMessage as any);
+    const currentTitle = useChatStore.getState().sessions[turnSessionId]?.title;
+    if (displayLabel && isPlaceholderConversationTitle(currentTitle)) {
+      storeState.actions.patch(turnSessionId, { title: displayLabel });
+    }
+    storeState.actions.appendMessage(turnSessionId, assistantPlaceholder as any);
+    storeState.actions.setStreaming(turnSessionId, {
+      streamingMessageId: assistantMessageId,
+      streamingText: "",
+      contentBlocks: [],
+      isStreaming: true,
+      isLoading: true,
+    });
+    storeState.actions.patch(turnSessionId, {
+      lastUserMessageAt: Date.now(),
+      draft: false,
+    });
+
     // conversationId state hasn't committed yet this tick, so force the
     // immediate save under the same id explicitly.
     // Do not dispatch to the provider until the user turn is durable. Besides
@@ -598,62 +677,12 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       idOverride: turnSessionId,
       turnState: { isLoading: true, isStreaming: true },
     });
-
-    // Mirror the user message + assistant placeholder DIRECTLY into the
-    // chat-store, synchronously. The snapshot-on-switch path reads
-    // `messages` from the React closure, which lags behind setMessages
-    // by one render cycle (React batches). If the user clicks "+ new
-    // chat" in that gap, the snapshot writes stale messages (without
-    // the freshly-sent user message) to the store. Then the router
-    // takes over for the now-backgrounded session and only knows about
-    // assistant deltas — the user comes back and sees the assistant
-    // reply with no preceding user message. By writing both messages
-    // here, the store is at least as fresh as the panel and survives
-    // any closure staleness.
-    const sidNow = piSessionIdRef.current;
-    if (sidNow) {
-      const storeState = useChatStore.getState();
-      if (!storeState.sessions[sidNow]) {
-        storeState.actions.upsert({
-          id: sidNow,
-          title: "untitled",
-          preview: "",
-          status: "streaming",
-          messageCount: 0,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          pinned: false,
-          unread: false,
-        });
-      }
-      storeState.actions.appendMessage(sidNow, newUserMessage as any);
-      const currentTitle = useChatStore.getState().sessions[sidNow]?.title;
-      if (displayLabel && isPlaceholderConversationTitle(currentTitle)) {
-        storeState.actions.patch(sidNow, { title: displayLabel });
-      }
-      storeState.actions.appendMessage(sidNow, assistantPlaceholder as any);
-      storeState.actions.setStreaming(sidNow, {
-        streamingMessageId: assistantMessageId,
-        streamingText: "",
-        contentBlocks: [],
-        isStreaming: true,
-        isLoading: true,
-      });
-      // Bump the sort key — sending a message is the one user action
-      // that should pull a chat to the top of the sidebar. Pi-driven
-      // activity (text_delta, agent_end) does NOT bump this; the
-      // sidebar order is otherwise stable.
-      storeState.actions.patch(sidNow, { lastUserMessageAt: Date.now() });
-      // Clear the draft flag so the chat appears in the sidebar immediately.
-      // Without this, navigating away before the assistant responds leaves
-      // the session hidden (draft:true) even though there's a user message.
-      storeState.actions.patch(sidNow, { draft: false });
-    }
+    const sidNow = turnSessionId;
 
     const messageIndex = messages.filter((m) => m.role === "user").length;
     posthog.capture("chat_message_sent", {
-      provider: getActivePreset()?.provider,
-      model: getActivePreset()?.model,
+      provider: attemptPreset?.provider,
+      model: attemptPreset?.model,
       has_images: outgoingImages.length > 0 || !!prefillFrameId,
       has_context: !!prefillContext,
       message_index: messageIndex,
@@ -676,27 +705,27 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
         } catch (error) {
           console.error("Failed to fetch frame image for Pi:", error);
         }
-        setPrefillFrameId(null);
+        if (isAttemptForeground()) setPrefillFrameId(null);
       }
 
       // The context is already part of `userMessage`; retire the composer
       // banner now that the durable turn owns it.
       if (prefillContext) {
-        setPrefillContext(null);
+        if (isAttemptForeground()) setPrefillContext(null);
       }
 
       for (const img of outgoingImages) {
         const piImage = piImageFromDataUrl(img);
         if (piImage) piImages.push(piImage);
       }
-      if (shouldClearPastedImages) setPastedImages([]);
+      if (shouldClearPastedImages && isAttemptForeground()) setPastedImages([]);
 
       // Always attach the bounded frontend snapshot used to recover issue
       // #3636. Rust knows the exact Pi subprocess state: a cold/new process
       // keeps this snapshot once, while a warm process strips it before RPC
       // so Pi's own threaded history is not duplicated.
       const promptMessage = promptWithConversationHistory(userMessage, messages);
-      piSessionSyncedRef.current = true;
+      if (isAttemptForeground()) piSessionSyncedRef.current = true;
 
       // E2E test hook: capture the frontend recovery payload before Rust decides
       // whether the Pi subprocess still needs it.
@@ -704,23 +733,25 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
         const g = window as any;
         if (Array.isArray(g.__e2ePiPromptCaptures)) {
           g.__e2ePiPromptCaptures.push({
-            sessionId: piSessionIdRef.current,
+            sessionId: turnSessionId,
             message: promptMessage,
             at: Date.now(),
           });
         }
       }
 
-      const providerPreflight = await preflightChatProvider(getActivePreset());
+      const providerPreflight = await preflightChatProvider(attemptPreset);
       if (!providerPreflight.ok) {
-        piStreamingTextRef.current = "";
-        piMessageIdRef.current = null;
-        piContentBlocksRef.current = [];
-        setMessages((prev) =>
-          prev.map((m) => m.id === assistantMessageId
-            ? { ...m, content: providerPreflight.message, retryPrompt: userMessage }
-            : m)
-        );
+        if (isAttemptForeground()) {
+          piStreamingTextRef.current = "";
+          piMessageIdRef.current = null;
+          piContentBlocksRef.current = [];
+          setMessages((prev) =>
+            prev.map((m) => m.id === assistantMessageId
+              ? { ...m, content: providerPreflight.message, retryPrompt: userMessage }
+              : m)
+          );
+        }
         if (sidNow) {
           const storeState = useChatStore.getState();
           storeState.actions.patchMessage(sidNow, assistantMessageId, (m: any) => ({
@@ -736,16 +767,15 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
             isStreaming: false,
           });
         }
-        forceQueueModeRef.current = false;
-        setIsLoading(false);
-        setIsStreaming(false);
+        if (isAttemptForeground()) forceQueueModeRef.current = false;
+        finishAttempt();
         return;
       }
 
       // Send prompt — abort/new_session now await completion, so no retry needed
       const displayPreview = queuedPreviewForText(displayLabel ?? displayUserMessage);
       let result = await commands.piPrompt(
-        piSessionIdRef.current,
+        turnSessionId,
         promptMessage,
         piImages.length > 0 ? piImages : null,
         displayPreview,
@@ -756,23 +786,25 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       if (result.status === "error" && result.error.includes("Pi not initialized")) {
         console.log("[Pi] session not registered yet — auto-spawning and retrying");
         try {
-          const dir = await piProjectDirForSession(piSessionIdRef.current);
-          const providerConfig = buildProviderConfig();
+          const dir = await piProjectDirForSession(turnSessionId);
+          const providerConfig = buildProviderConfig(attemptPreset);
           const startRes = await commands.piStart(
-            piSessionIdRef.current,
+            turnSessionId,
             dir,
             settings.user?.token ?? null,
             providerConfig,
           );
           if (startRes.status === "ok" && startRes.data.running) {
-            setPiInfo(startRes.data);
-            piSessionSyncedRef.current = false;
-            if (providerConfig) {
-              setRunningConfigFromProviderConfig(providerConfig);
+            if (isAttemptForeground()) {
+              setPiInfo(startRes.data);
+              piSessionSyncedRef.current = false;
+              if (providerConfig) {
+                setRunningConfigFromProviderConfig(providerConfig);
+              }
             }
-            syncThinkingLevelAfterStart(piSessionIdRef.current);
+            syncThinkingLevelAfterStart(turnSessionId);
             result = await commands.piPrompt(
-              piSessionIdRef.current,
+              turnSessionId,
               promptMessage,
               piImages.length > 0 ? piImages : null,
               displayPreview,
@@ -785,12 +817,12 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
 
       if (result.status === "error") {
         if (timeoutId) clearTimeout(timeoutId);
-        piMessageIdRef.current = null;
+        if (isAttemptForeground()) piMessageIdRef.current = null;
         // Provide helpful error messages for common failures
         const rawError = result.error;
         let errorMsg: string;
         let retryPrompt: string | undefined;
-        const currentPreset = getActivePreset();
+        const currentPreset = attemptPreset;
         const providerError = buildProviderErrorPresentation(rawError, currentPreset);
 
         if (isPiPromptStartTimeout(rawError)) {
@@ -814,13 +846,15 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
           errorMsg = rawError;
           retryPrompt = userMessage;
         }
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMessageId
-              ? { ...m, content: errorMsg, ...(retryPrompt ? { retryPrompt } : {}) }
-              : m
-          )
-        );
+        if (isAttemptForeground()) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMessageId
+                ? { ...m, content: errorMsg, ...(retryPrompt ? { retryPrompt } : {}) }
+                : m
+            )
+          );
+        }
         if (sidNow) {
           const storeState = useChatStore.getState();
           storeState.actions.patchMessage(sidNow, assistantMessageId, (message: any) => ({
@@ -837,27 +871,28 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
           });
         }
         posthog.capture("chat_response_error", {
-          provider: getActivePreset()?.provider,
-          model: getActivePreset()?.model,
+          provider: attemptPreset?.provider,
+          model: attemptPreset?.model,
           error_type: isPiPromptStartTimeout(rawError) ? "start_timeout" : "prompt_dispatch",
           ...chatSendTelemetryContext(sendOptions, messageIndex, messages),
         });
-        forceQueueModeRef.current = false;
-        setIsLoading(false);
-        setIsStreaming(false);
+        if (isAttemptForeground()) forceQueueModeRef.current = false;
+        finishAttempt();
       }
     } catch (error) {
       if (timeoutId) clearTimeout(timeoutId);
-      piMessageIdRef.current = null;
+      if (isAttemptForeground()) piMessageIdRef.current = null;
       const rawError = error instanceof Error ? error.message : "Unknown error";
-      const providerError = buildProviderErrorPresentation(rawError, getActivePreset());
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantMessageId
-            ? { ...m, content: providerError?.message || `Error: ${rawError}` }
-            : m
-        )
-      );
+      const providerError = buildProviderErrorPresentation(rawError, attemptPreset);
+      if (isAttemptForeground()) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMessageId
+              ? { ...m, content: providerError?.message || `Error: ${rawError}` }
+              : m
+          )
+        );
+      }
       if (sidNow) {
         const content = providerError?.message || `Error: ${rawError}`;
         const storeState = useChatStore.getState();
@@ -874,9 +909,8 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
           isStreaming: false,
         });
       }
-      forceQueueModeRef.current = false;
-      setIsLoading(false);
-      setIsStreaming(false);
+      if (isAttemptForeground()) forceQueueModeRef.current = false;
+      finishAttempt();
     }
   }
 
@@ -1002,6 +1036,10 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
   // composer so the message is never lost.
   useEffect(() => {
     if (!pendingSend) return;
+    // A pending send belongs to its original chat. Opening a new chat hides it
+    // there without cancelling the background preflight, and an abort must not
+    // restore the old text into the new chat's composer.
+    if (pendingSend.sessionId !== piSessionIdRef.current) return;
     if (isLoading || isStreaming) return;
     const timer = window.setTimeout(() => {
       const stillPending = pendingSendRef.current;
@@ -1013,7 +1051,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       inputRef.current?.focus();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [pendingSend, isLoading, isStreaming, setInput, inputRef]);
+  }, [pendingSend, isLoading, isStreaming, setInput, inputRef, piSessionIdRef]);
 
   // Keep ref in sync so useEffect callbacks can call sendMessage
   sendMessageRef.current = sendMessage;
@@ -1022,7 +1060,8 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     flushPendingSteerBatch,
     handleStop,
     openConnectionSetup,
-    pendingSend,
+    pendingSend:
+      pendingSend?.sessionId === piSessionIdRef.current ? pendingSend : null,
     sendMessage,
     steerMessage,
     steerQueuedPrompt,

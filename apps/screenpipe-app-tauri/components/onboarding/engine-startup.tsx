@@ -716,7 +716,10 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
 
   // ── Engine startup phase (starting / stuck) ──
   return (
-    <div className="w-full flex flex-col items-center justify-center min-h-[400px]">
+    <div
+      className="w-full flex flex-col items-center justify-center min-h-[400px]"
+      data-testid="onboarding-engine-startup"
+    >
       {/* Branding */}
       <motion.div
         className="flex flex-col items-center mb-4"

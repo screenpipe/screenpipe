@@ -31,12 +31,12 @@
 // Does NOT assert which agent is offered. `detectAiTools()` runs in the
 // webview and resolves the REAL home directory: `SCREENPIPE_E2E_AI_TOOLS_HOME`
 // is read only by Rust (`skills.rs`), so the frontend probe sees whatever
-// Claude/Codex state the host happens to have. Asserting a specific agent
+// connected-agent state the host happens to have. Asserting a specific agent
 // here would pass on a developer laptop and fail on a clean CI runner, or the
-// reverse. Which agent wins, the connected-not-merely-detected rule, clipboard
-// and deeplink failure handling, and copy-only for terminal agents are covered
-// deterministically in lib/first-run/agent-handoff.test.ts (10 cases),
-// lib/first-run/use-agent-handoff.test.ts (11 cases) and the banner render in
+// reverse. Which agent wins, the connected-not-merely-detected rule, prompt
+// routes, and clipboard/deeplink failure handling are covered
+// deterministically in lib/first-run/agent-handoff.test.ts (13 cases),
+// lib/first-run/use-agent-handoff.test.ts (15 cases) and the banner render in
 // components/first-run/learning-banner.test.tsx.
 //
 // The one thing this spec DOES assert about the handoff is conditional and
@@ -75,7 +75,10 @@ const bannerPhase = async (): Promise<string | null> =>
     BANNER,
   )) as string | null;
 
-const readHandoff = async (): Promise<{ agent: string; label: string } | null> =>
+const readHandoff = async (): Promise<{
+  agent: string;
+  label: string;
+} | null> =>
   (await browser.execute((selector: string) => {
     const el = document.querySelector(selector);
     if (!el) return null;
@@ -85,7 +88,9 @@ const readHandoff = async (): Promise<{ agent: string; label: string } | null> =
       // buttons, so the name lives in aria-label. Reading textContent alone
       // reported an unnamed target on exactly the hosts that had the most
       // agents wired.
-      label: (el.textContent ?? "").trim() || (el.getAttribute("aria-label") ?? "").trim(),
+      label:
+        (el.textContent ?? "").trim() ||
+        (el.getAttribute("aria-label") ?? "").trim(),
     };
   }, ASK_AGENT)) as { agent: string; label: string } | null;
 
@@ -247,11 +252,12 @@ describeOrSkip("first-run agent handoff", () => {
     });
   });
 
-  it("shows the paste instruction only after the handoff runs", async () => {
+  it("shows the handoff result only after the handoff runs", async () => {
     await openHomeWith(readyState());
 
     const before = await browser.execute(
-      () => !!document.querySelector('[data-testid="first-run-ask-agent-hint"]'),
+      () =>
+        !!document.querySelector('[data-testid="first-run-ask-agent-hint"]'),
     );
     // The hint is a result, not a label. Rendering it up front would be
     // instructions for something the user has not done.
@@ -263,8 +269,8 @@ describeOrSkip("first-run agent handoff", () => {
     const button = await browser.$(ASK_AGENT);
     await button.click();
 
-    // Clicking must produce a visible next step, whether the agent opened or
-    // the handoff degraded to copy-only.
+    // Clicking must produce a visible next step, whether the agent opened with
+    // the prompt prefilled or the handoff degraded to clipboard recovery.
     await browser.waitUntil(
       async () =>
         Boolean(

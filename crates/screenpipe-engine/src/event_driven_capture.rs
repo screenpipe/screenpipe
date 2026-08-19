@@ -11,7 +11,7 @@
 use crate::capture_exclusions::{probe_excluded_sck_window_ids, storage_excluded_sck_window_ids};
 use crate::hot_frame_cache::{HotFrame, HotFrameCache};
 use crate::power::PowerProfile;
-use crate::semantic_worker::{SemanticProjectionJob, SemanticProjectionSender};
+use crate::semantic_worker::{SemanticCaptureGap, SemanticProjectionJob, SemanticProjectionSender};
 use crate::visual_probe::bounded_visual_probe;
 use anyhow::Result;
 use chrono::Utc;
@@ -21,7 +21,7 @@ use screenpipe_capture::ocr_gate::OcrGate;
 use screenpipe_capture::paired_capture::{
     detach_tree_from_pixels, paired_capture, CaptureContext, PairedCaptureResult,
 };
-use screenpipe_capture::TreeWalkerWorker;
+use screenpipe_capture::{TreeWalkerWorker, TreeWalkerWorkerOutcome};
 use screenpipe_core::window_pattern::{self, WindowPattern};
 use screenpipe_db::DatabaseManager;
 use screenpipe_screen::capture_screenshot_by_window::WindowFilters;
@@ -46,9 +46,15 @@ use tracing::{debug, error, info, warn};
 const CAPTURE_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 #[cfg(not(target_os = "macos"))]
 const CAPTURE_OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
-const TREE_WALK_WORKER_TIMEOUT: Duration = Duration::from_secs(12);
+const TREE_WALK_WORKER_TIMEOUT_GRACE: Duration = Duration::from_millis(750);
 const WARM_VISUAL_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const WARM_FOCUS_BACKSTOP_INTERVAL: Duration = Duration::from_secs(1);
+
+fn tree_walk_worker_timeout(config: &TreeWalkerConfig) -> Duration {
+    config
+        .effective_walk_timeout()
+        .saturating_add(TREE_WALK_WORKER_TIMEOUT_GRACE)
+}
 
 /// Debug-only one-shot fault state for the exact production symptom where all
 /// monitor tasks remain alive but stop issuing capture heartbeats:
@@ -2999,12 +3005,32 @@ async fn do_capture(
     // that window's tree, identity, and dedup hash. Non-focused monitors use
     // the screenshot/OCR path below instead.
     let tree_walk_result = if monitor_hosts_focus {
-        Some(
-            params
-                .tree_walker
-                .walk_with_timeout(config, TREE_WALK_WORKER_TIMEOUT)
-                .await?,
-        )
+        let worker_timeout = tree_walk_worker_timeout(&config);
+        match params
+            .tree_walker
+            .walk_with_timeout(config, worker_timeout)
+            .await?
+        {
+            TreeWalkerWorkerOutcome::Completed(result) => Some(result),
+            TreeWalkerWorkerOutcome::TimedOut { restarted } => {
+                if let Some(app) = trigger_app.as_deref() {
+                    walk_budget.record_worker_timeout(app);
+                }
+                crate::ui_recorder::record_tree_walk(
+                    crate::ui_recorder::TreeWalkOutcome::WorkerTimeout { restarted },
+                );
+                None
+            }
+            TreeWalkerWorkerOutcome::Saturated => {
+                if let Some(app) = trigger_app.as_deref() {
+                    walk_budget.record_worker_timeout(app);
+                }
+                crate::ui_recorder::record_tree_walk(
+                    crate::ui_recorder::TreeWalkOutcome::WorkerSaturated,
+                );
+                None
+            }
+        }
     } else {
         None
     };
@@ -3337,16 +3363,24 @@ async fn do_capture(
     };
 
     let result = paired_capture(&ctx, tree_snapshot.as_ref(), Some(ocr_gate)).await?;
-    if ax_screenshot_coherent {
-        if let (Some(sender), Some(snapshot)) = (params.semantic_tx, tree_snapshot) {
-            sender.submit(SemanticProjectionJob::from_capture(
-                result.frame_id,
-                result.captured_at,
-                result.app_name.clone(),
-                result.browser_url.clone(),
-                snapshot,
-                params.use_pii_removal,
-            ));
+    if let Some(sender) = params.semantic_tx {
+        match tree_snapshot {
+            Some(snapshot) if ax_screenshot_coherent => {
+                let _ = sender.submit(SemanticProjectionJob::from_capture(
+                    result.frame_id,
+                    result.captured_at,
+                    result.app_name.clone(),
+                    result.browser_url.clone(),
+                    snapshot,
+                    params.use_pii_removal,
+                ));
+            }
+            Some(_) => {
+                sender.record_capture_gap(result.frame_id, SemanticCaptureGap::FocusIncoherent);
+            }
+            None => {
+                sender.record_capture_gap(result.frame_id, SemanticCaptureGap::TreeMissing);
+            }
         }
     }
     let deduped = elements_ref_frame_id.is_some();

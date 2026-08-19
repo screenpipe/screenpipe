@@ -435,7 +435,12 @@ fn sqlite_sidecar(database_path: &Path, suffix: &str) -> PathBuf {
 }
 
 fn sync_file(path: &Path) -> Result<()> {
-    fs::File::open(path)
+    // FlushFileBuffers rejects Windows handles opened without write access,
+    // even when the file itself was just created by fs::copy.
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
         .with_context(|| format!("opening {} for durability sync", path.display()))?
         .sync_all()
         .with_context(|| format!("syncing {}", path.display()))
@@ -1461,7 +1466,10 @@ mod recovery_tests {
         screenpipe_db::persist_sqlite_quarantine(&live, Some(11), "test corruption")
             .expect("persist quarantine");
 
-        recover_quarantined_database(data_dir)
+        // Exercise the complete offline recovery pipeline without making the
+        // test depend on whether a developer has screenpipe on port 3030.
+        // The public wrapper's live-server guard remains unchanged.
+        recover_offline(data_dir)
             .await
             .expect("end-to-end offline recovery");
 

@@ -37,6 +37,7 @@ const CONNECT_ALL_TOOL_IDS = [
   "claude",
   "codex",
   "cursor",
+  "gemini",
   "openclaw",
   "hermes",
   "runner",
@@ -48,6 +49,7 @@ export const CONNECT_ALL_TOOL_NAMES: Record<ConnectAllToolId, string> = {
   claude: "Claude",
   codex: "Codex",
   cursor: "Cursor",
+  gemini: "Gemini CLI",
   openclaw: "OpenClaw",
   hermes: "Hermes",
   runner: "Runner",
@@ -58,9 +60,10 @@ export const CONNECT_ALL_TOOL_NAMES: Record<ConnectAllToolId, string> = {
 };
 
 // Skills support per tool lives in the disconnect-all component's
-// SKILLS_TARGET map: claude/codex/openclaw/hermes read SKILL.md skills,
-// cursor, runner, and windsurf are MCP-only. Grok is intentionally not in this matrix:
-// it isn't part of connect-all and its settings panel has its own disconnect.
+// SKILLS_TARGET map: claude/codex/cursor/gemini/openclaw/hermes read
+// SKILL.md skills; runner and windsurf are MCP-only. Grok is intentionally
+// not in this matrix: it isn't part of connect-all and its settings panel has
+// its own disconnect.
 
 export async function detectAiTools(): Promise<ConnectAllToolId[]> {
   const home = await homeDir();
@@ -75,6 +78,7 @@ export async function detectAiTools(): Promise<ConnectAllToolId[]> {
     ],
     ["codex", async () => exists(await join(home, ".codex"))],
     ["cursor", async () => exists(await join(home, ".cursor"))],
+    ["gemini", async () => exists(await join(home, ".gemini"))],
     // Locally installed remote-capable agents. Remote setups keep using the
     // settings remote agent card.
     ["openclaw", async () => exists(await join(home, ".openclaw"))],
@@ -542,6 +546,36 @@ export async function uninstallRunnerMcp(): Promise<void> {
   await removeScreenpipeFromJsonConfig(await getRunnerMcpConfigPath());
 }
 
+// ─── Gemini CLI ────────────────────────────────────────────────────────
+// Gemini CLI reads global MCP servers from ~/.gemini/settings.json and
+// user-scoped Agent Skills from ~/.gemini/skills.
+
+export async function getGeminiMcpConfigPath(): Promise<string> {
+  const home = await homeDir();
+  return join(home, ".gemini", "settings.json");
+}
+
+export async function isGeminiMcpInstalled(): Promise<boolean> {
+  try {
+    const content = await readTextFile(await getGeminiMcpConfigPath());
+    return !!JSON.parse(content)?.mcpServers?.screenpipe;
+  } catch { return false; }
+}
+
+export async function installGeminiMcp(): Promise<McpCommand> {
+  const configPath = await getGeminiMcpConfigPath();
+  const config = await readJsonConfigStrict(configPath);
+  const mcp = await buildMcpConfig({ client: "gemini" });
+  if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
+  (config.mcpServers as Record<string, unknown>).screenpipe = mcp;
+  await writeJsonConfig(configPath, config);
+  return mcp;
+}
+
+export async function uninstallGeminiMcp(): Promise<void> {
+  await removeScreenpipeFromJsonConfig(await getGeminiMcpConfigPath());
+}
+
 // ─── Transactional Settings connect / disconnect orchestrators (#5291) ──────
 
 // Tools whose agent reads global SKILL.md skills. Runner has no global skills
@@ -553,6 +587,7 @@ export const SKILLS_TARGET: Partial<Record<ConnectAllToolId, ExternalAgentWithSk
   claude: "claude",
   codex: "codex",
   cursor: "cursor",
+  gemini: "gemini",
   openclaw: "openclaw",
   hermes: "hermes",
 };
@@ -561,6 +596,7 @@ const INSTALL_MCP: Record<ConnectAllToolId, () => Promise<McpCommand>> = {
   claude: installClaudeMcp,
   codex: installCodexMcp,
   cursor: installCursorMcp,
+  gemini: installGeminiMcp,
   openclaw: installOpenclawMcp,
   hermes: installHermesMcp,
   runner: installRunnerMcp,
@@ -571,6 +607,7 @@ const UNINSTALL_MCP: Record<ConnectAllToolId, () => Promise<void>> = {
   claude: uninstallClaudeMcp,
   codex: uninstallCodexMcp,
   cursor: uninstallCursorMcp,
+  gemini: uninstallGeminiMcp,
   openclaw: uninstallOpenclawMcp,
   hermes: uninstallHermesMcp,
   runner: uninstallRunnerMcp,
@@ -693,6 +730,9 @@ export async function isToolConfigHealthy(id: ConnectAllToolId): Promise<boolean
       }
       case "cursor":
         await readJsonConfigStrict(await getCursorMcpConfigPath());
+        return true;
+      case "gemini":
+        await readJsonConfigStrict(await getGeminiMcpConfigPath());
         return true;
       case "openclaw":
         await readJsonConfigStrict(await getOpenclawMcpConfigPath());

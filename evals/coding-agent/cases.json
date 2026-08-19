@@ -1,0 +1,505 @@
+{
+  "schema_version": 1,
+  "suite": "screenpipe-app-coding-agent-regressions",
+  "dataset_version": "2026-08-19.3",
+  "suite_type": "regression",
+  "owner": "screenpipe engineering",
+  "policy": {
+    "stage": "advisory",
+    "promotion_requirement": "matched-environment repeated trials with reliable pass^k"
+  },
+  "cases": [
+    {
+      "id": "app-chat-concurrent-save",
+      "name": "Preserve both writers during concurrent chat saves",
+      "source": { "kind": "git_regression", "fix_commit": "1a74f9c68" },
+      "base_ref": "1a74f9c68^",
+      "oracle_ref": "1a74f9c68",
+      "tags": ["regression", "escaped-failure", "chat", "concurrency", "data-loss"],
+      "prompt": "A user has the same chat open in two app windows. Both writers start from the same conversation. Writer A saves a new message, then writer B saves a different new message from its stale snapshot. The later save silently deletes writer A's message. Fix conversation persistence so concurrent saves preserve both suffixes, do not duplicate messages, retain the richer copy of a streaming message, and do not let stale scalar fields revert newer disk state. Keep the solution scoped to chat persistence and add or update tests as needed.",
+      "agent_timeout_seconds": 900,
+      "dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 300,
+        "fixtures": [
+          {
+            "source_path": "apps/screenpipe-app-tauri/lib/__tests__/chat-merge.test.ts"
+          },
+          {
+            "source_path": "apps/screenpipe-app-tauri/lib/__tests__/chat-storage-concurrency.test.ts"
+          }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts lib/__tests__/chat-merge.test.ts lib/__tests__/chat-storage-concurrency.test.ts"
+      }
+    },
+    {
+      "id": "app-terminal-quota-retry",
+      "name": "Stop retrying terminal Pi quota failures",
+      "source": { "kind": "git_regression", "fix_commit": "58c6e837f" },
+      "base_ref": "58c6e837f^",
+      "oracle_ref": "58c6e837f",
+      "tags": ["regression", "escaped-failure", "chat", "quota", "retry"],
+      "prompt": "The Pi chat transport receives provider 429 responses that mean the account has exhausted a daily allowance or the selected model is not permitted. The app currently treats these as transient and keeps retrying, leaving the user in a loop. Make terminal quota/plan errors stop the retry path and surface the assistant error, while ordinary transient failures remain retryable. Preserve existing silent prompt-timeout and connection-card behavior.",
+      "agent_timeout_seconds": 720,
+      "dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 300,
+        "fixtures": [
+          {
+            "local_path": "graders/app-terminal-quota.test.ts",
+            "destination_path": "apps/screenpipe-app-tauri/lib/chat/__tests__/eval-terminal-quota.test.ts"
+          },
+          {
+            "source_ref": "58c6e837f^",
+            "source_path": "apps/screenpipe-app-tauri/lib/chat/__tests__/quota-errors.test.ts"
+          },
+          {
+            "source_ref": "58c6e837f^",
+            "source_path": "apps/screenpipe-app-tauri/lib/chat/__tests__/provider-errors.test.ts"
+          }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts lib/chat/__tests__/eval-terminal-quota.test.ts lib/chat/__tests__/quota-errors.test.ts lib/chat/__tests__/provider-errors.test.ts"
+      }
+    },
+    {
+      "id": "app-timeline-stream-reliability",
+      "name": "Keep native Timeline streams bounded and complete",
+      "source": { "kind": "git_regression", "fix_commit": "a4c1161d2" },
+      "base_ref": "a4c1161d2^",
+      "oracle_ref": "a4c1161d2",
+      "tags": ["regression", "escaped-failure", "timeline", "websocket", "native"],
+      "prompt": "Native Timeline search becomes unreliable on large days: serialized WebSocket batches can exceed the native receiver ceiling, and navigation/search races can surface stale or incomplete frames. Fix the stream path so payloads are bounded by encoded bytes without dropping or duplicating rows, cancellation is respected, and the native search contract remains compatible. Do not solve this by imposing a small arbitrary row limit.",
+      "agent_timeout_seconds": 1200,
+      "grader_dependency_links": [
+        {
+          "source_path": "target",
+          "destination_path": "target"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 1200,
+        "fixtures": [
+          {
+            "source_path": "crates/screenpipe-engine/tests/stream_frames_test.rs"
+          }
+        ],
+        "command": "cargo test -p screenpipe-engine --test stream_frames_test"
+      }
+    },
+    {
+      "id": "app-first-run-empty-summary",
+      "name": "Never render an empty first-run summary as success",
+      "source": { "kind": "git_regression", "fix_commit": "91fa9bd1b" },
+      "base_ref": "91fa9bd1b^",
+      "oracle_ref": "91fa9bd1b",
+      "tags": ["regression", "escaped-failure", "onboarding", "truthfulness"],
+      "prompt": "The first-run learning flow can finish with an empty or unusable generated summary and then render that as if capture produced a meaningful result. Fix the state and UI boundary so empty summaries stay out of the content surface, capture diagnostics remain actionable, and resume/dismiss behavior remains stable. A valid non-empty summary must still render normally.",
+      "agent_timeout_seconds": 900,
+      "dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 420,
+        "fixtures": [
+          {
+            "source_path": "apps/screenpipe-app-tauri/lib/first-run/learning-window.test.ts"
+          },
+          {
+            "source_path": "apps/screenpipe-app-tauri/components/first-run/learning-banner.test.tsx"
+          }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts lib/first-run/learning-window.test.ts components/first-run/learning-banner.test.tsx"
+      }
+    },
+    {
+      "id": "app-onboarding-checkout-confirmation",
+      "name": "Confirm onboarding checkout without false completion",
+      "source": { "kind": "git_regression", "fix_commit": "301535539" },
+      "base_ref": "301535539^",
+      "oracle_ref": "301535539",
+      "tags": ["regression", "escaped-failure", "onboarding", "billing", "state-machine"],
+      "prompt": "Onboarding can advance after a canceled or unconfirmed checkout, submit duplicate checkout requests, or get stuck while entitlement hydration is incomplete. Make checkout confirmation bounded and fail closed: cancellation must not advance, an existing valid entitlement or payment must avoid another checkout, polling must stop deterministically, and repeated clicks must not create duplicate submissions. Preserve a successful checkout's normal onboarding transition.",
+      "agent_timeout_seconds": 1200,
+      "dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 420,
+        "fixtures": [
+          { "source_path": "apps/screenpipe-app-tauri/app/onboarding/page.test.tsx" },
+          { "source_path": "apps/screenpipe-app-tauri/components/onboarding/plan-selection-step.test.tsx" },
+          { "source_path": "apps/screenpipe-app-tauri/lib/onboarding-checkout.test.ts" }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts app/onboarding/page.test.tsx components/onboarding/plan-selection-step.test.tsx lib/onboarding-checkout.test.ts"
+      }
+    },
+    {
+      "id": "app-activity-recent-control",
+      "name": "Keep recent activity navigation anchored to now",
+      "source": { "kind": "git_regression", "fix_commit": "1a854ab86" },
+      "base_ref": "1a854ab86^",
+      "oracle_ref": "1a854ab86",
+      "tags": ["regression", "escaped-failure", "activity", "navigation", "time"],
+      "prompt": "The activity ledger lost its useful recent-activity control. Restore a bottom append control for Today and Last 24 hours when there is enough uncovered recent time, but do not roll the visible page clock forward or disturb historical/custom ranges. Keep the control hidden when the uncovered interval is too small and preserve existing paging behavior.",
+      "agent_timeout_seconds": 900,
+      "dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 300,
+        "fixtures": [
+          { "source_path": "apps/screenpipe-app-tauri/components/activity-ledger.test.tsx" }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts components/activity-ledger.test.tsx"
+      }
+    },
+    {
+      "id": "app-chat-correction-boundaries",
+      "name": "Preserve user correction boundaries in chat context",
+      "source": { "kind": "git_regression", "fix_commit": "f177dc7bb" },
+      "base_ref": "f177dc7bb^",
+      "oracle_ref": "f177dc7bb",
+      "tags": ["regression", "escaped-failure", "chat", "steering", "prompt"],
+      "prompt": "When a user corrects an in-progress Pi chat task, the app can flatten the correction into the original request or lose prior constraints. Preserve the original request and ordered steering boundaries so the latest correction wins only where it conflicts, unrelated constraints remain active, and the system prompt clearly distinguishes corrections, evidence requirements, and read-only boundaries.",
+      "agent_timeout_seconds": 900,
+      "dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 300,
+        "fixtures": [
+          { "source_path": "apps/screenpipe-app-tauri/components/chat/standalone/hooks/__tests__/pi-event-handlers.test.ts" },
+          { "source_path": "apps/screenpipe-app-tauri/lib/chat/__tests__/system-prompt.test.ts" }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts components/chat/standalone/hooks/__tests__/pi-event-handlers.test.ts lib/chat/__tests__/system-prompt.test.ts"
+      }
+    },
+    {
+      "id": "app-settings-clear-timeline-cache",
+      "name": "Clear timeline caches with backend data",
+      "source": { "kind": "git_regression", "fix_commit": "e12d48ef1" },
+      "base_ref": "e12d48ef1^",
+      "oracle_ref": "e12d48ef1",
+      "tags": ["regression", "escaped-failure", "settings", "cache", "privacy"],
+      "prompt": "Clearing screenpipe data in Settings removes backend records but leaves Timeline caches behind, so deleted transcripts can reappear. Make the clear-cache action remove the current and legacy Timeline IndexedDB caches, await and report failures, and remain safe when no browser cache exists. Preserve the existing backend clear behavior and success/error UI semantics.",
+      "agent_timeout_seconds": 900,
+      "dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 300,
+        "fixtures": [
+          { "source_path": "apps/screenpipe-app-tauri/components/settings/storage-section.test.tsx" },
+          { "source_path": "apps/screenpipe-app-tauri/lib/hooks/use-timeline-cache.test.tsx" }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts components/settings/storage-section.test.tsx lib/hooks/use-timeline-cache.test.tsx"
+      }
+    },
+    {
+      "id": "app-optional-connection-credentials",
+      "name": "Allow connections whose credential fields are all optional",
+      "source": { "kind": "git_regression", "fix_commit": "4b0d119fd" },
+      "base_ref": "4b0d119fd^",
+      "oracle_ref": "4b0d119fd",
+      "tags": ["regression", "escaped-failure", "connections", "credentials", "form"],
+      "prompt": "A connection definition whose credential fields are all optional cannot be connected because the submit action stays disabled when every field is blank. Allow that valid case and send the backend a usable non-empty credentials object, while still disabling submission when any required field is blank. Do not weaken validation for integrations with required credentials.",
+      "agent_timeout_seconds": 720,
+      "dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 300,
+        "fixtures": [
+          { "source_path": "apps/screenpipe-app-tauri/components/settings/__tests__/connection-credential-forms.test.tsx" }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts components/settings/__tests__/connection-credential-forms.test.tsx"
+      }
+    },
+    {
+      "id": "app-pipe-store-load-error",
+      "name": "Distinguish pipe-store failures from an empty catalog",
+      "source": { "kind": "git_regression", "fix_commit": "8dbf6e47b" },
+      "base_ref": "8dbf6e47b^",
+      "oracle_ref": "8dbf6e47b",
+      "tags": ["regression", "escaped-failure", "pipes", "error-state", "retry"],
+      "prompt": "When the pipe store request fails, the app renders the same empty state as a successfully loaded catalog with no pipes. Surface a clear load-error state with a working retry action, keep genuine empty results distinct, and recover to the normal store after a successful retry without stale error UI.",
+      "agent_timeout_seconds": 900,
+      "dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 300,
+        "fixtures": [
+          { "source_path": "apps/screenpipe-app-tauri/components/__tests__/pipe-store-error-state.test.tsx" }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts components/__tests__/pipe-store-error-state.test.tsx"
+      }
+    },
+    {
+      "id": "app-learning-handoff-always-finishes",
+      "name": "Always finish the first-run learning handoff",
+      "source": { "kind": "git_regression", "fix_commit": "e3587f5654" },
+      "base_ref": "e3587f5654^",
+      "oracle_ref": "e3587f5654",
+      "gate": "advisory",
+      "trigger_paths": ["apps/screenpipe-app-tauri/components/first-run/**", "apps/screenpipe-app-tauri/lib/first-run/**"],
+      "tags": ["regression", "escaped-failure", "onboarding", "state-machine", "rehydration"],
+      "prompt": "The first-run learning handoff can remain in a fake in-progress state after an empty foreground result, disappear after reload, or reuse stale webview state after setup is completed again. Make every foreground attempt reach useful setup choices, keep background retries out of the interface, preserve unresolved choices across reload, and start a fresh learning window after setup is completed again. Valid completed summaries must keep their existing behavior.",
+      "agent_timeout_seconds": 1200,
+      "dependency_links": [
+        { "source_path": "apps/screenpipe-app-tauri/node_modules", "destination_path": "apps/screenpipe-app-tauri/node_modules" }
+      ],
+      "grader": {
+        "timeout_seconds": 420,
+        "fixtures": [
+          { "source_path": "apps/screenpipe-app-tauri/components/first-run/learning-banner.test.tsx" },
+          { "source_path": "apps/screenpipe-app-tauri/lib/first-run/learning-window.test.ts" },
+          { "source_path": "apps/screenpipe-app-tauri/lib/first-run/use-learning-window.test.ts" }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts components/first-run/learning-banner.test.tsx lib/first-run/learning-window.test.ts lib/first-run/use-learning-window.test.ts"
+      }
+    },
+    {
+      "id": "app-chat-activity-episode-content",
+      "name": "Analyze attached activity episode content instead of its title",
+      "source": { "kind": "git_regression", "fix_commit": "7fa6d1a956" },
+      "base_ref": "7fa6d1a956^",
+      "oracle_ref": "7fa6d1a956",
+      "gate": "advisory",
+      "trigger_paths": ["apps/screenpipe-app-tauri/components/chat/**", "apps/screenpipe-app-tauri/lib/chat/**"],
+      "tags": ["regression", "escaped-failure", "chat", "retrieval", "evidence"],
+      "prompt": "When a user asks about an attached activity-history episode, the agent searches for the generated episode title instead of reading the bounded source content. Mark activity-history attachments as episodes and route questions to the exact attached interval and its content. Reject title-keyword searches and plans that drift outside the interval, while preserving ordinary search attachments and traceable evidence behavior.",
+      "agent_timeout_seconds": 1200,
+      "dependency_links": [
+        { "source_path": "apps/screenpipe-app-tauri/node_modules", "destination_path": "apps/screenpipe-app-tauri/node_modules" }
+      ],
+      "grader": {
+        "timeout_seconds": 420,
+        "fixtures": [
+          { "source_path": "apps/screenpipe-app-tauri/components/chat/standalone/attached-context.test.tsx" },
+          { "source_path": "apps/screenpipe-app-tauri/lib/chat/__tests__/activity-episode-retrieval-eval.test.ts" },
+          { "source_path": "apps/screenpipe-app-tauri/lib/chat/__tests__/system-prompt.test.ts" }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts components/chat/standalone/attached-context.test.tsx lib/chat/__tests__/activity-episode-retrieval-eval.test.ts lib/chat/__tests__/system-prompt.test.ts"
+      }
+    },
+    {
+      "id": "app-recording-stale-permission-recovery",
+      "name": "Recover recording from stale screen-permission state",
+      "source": { "kind": "git_regression", "fix_commit": "8f79280560" },
+      "base_ref": "8f79280560^",
+      "oracle_ref": "8f79280560",
+      "gate": "advisory",
+      "trigger_paths": ["apps/screenpipe-app-tauri/app/shortcut-reminder/**", "apps/screenpipe-app-tauri/lib/hooks/use-health-check.ts"],
+      "tags": ["regression", "escaped-failure", "recording", "permissions", "recovery"],
+      "prompt": "After screen permission is restored, stale permission state can leave the recording overlay showing a broken or restart-only state even though capture can recover. Reconcile permission and health state so the user gets a truthful recovery confirmation and recording resumes without an unnecessary restart. Keep genuine permission denial and real capture failures actionable.",
+      "agent_timeout_seconds": 900,
+      "dependency_links": [
+        { "source_path": "apps/screenpipe-app-tauri/node_modules", "destination_path": "apps/screenpipe-app-tauri/node_modules" }
+      ],
+      "grader": {
+        "timeout_seconds": 300,
+        "fixtures": [
+          { "source_path": "apps/screenpipe-app-tauri/app/shortcut-reminder/page.test.tsx" }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts app/shortcut-reminder/page.test.tsx"
+      }
+    },
+    {
+      "id": "app-history-long-generation",
+      "name": "Keep legitimate slow history generation alive",
+      "source": { "kind": "git_regression", "fix_commit": "b402c7be54" },
+      "base_ref": "b402c7be54^",
+      "oracle_ref": "b402c7be54",
+      "gate": "advisory",
+      "trigger_paths": ["apps/screenpipe-app-tauri/components/activity-ledger.tsx", "apps/screenpipe-app-tauri/components/share-logs-button.tsx"],
+      "tags": ["regression", "escaped-failure", "activity", "timeout", "performance"],
+      "prompt": "Generating a long activity-history result can take more than two minutes, but the app times it out as a failure. Keep legitimate slow generation running while retaining a bounded failure path, and load only the five conversations that can actually be attached instead of expanding work without limit. Preserve existing cancellation and successful short-generation behavior.",
+      "agent_timeout_seconds": 1200,
+      "dependency_links": [
+        { "source_path": "apps/screenpipe-app-tauri/node_modules", "destination_path": "apps/screenpipe-app-tauri/node_modules" }
+      ],
+      "grader": {
+        "timeout_seconds": 420,
+        "fixtures": [
+          { "source_path": "apps/screenpipe-app-tauri/components/activity-ledger.test.tsx" },
+          { "source_path": "apps/screenpipe-app-tauri/components/share-logs-button.test.tsx" }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts components/activity-ledger.test.tsx components/share-logs-button.test.tsx"
+      }
+    },
+    {
+      "id": "app-live-view-cadence-write",
+      "name": "Make Live View cadence writes take effect",
+      "source": { "kind": "git_regression", "fix_commit": "f9f2445b94" },
+      "base_ref": "f9f2445b94^",
+      "oracle_ref": "f9f2445b94",
+      "gate": "advisory",
+      "trigger_paths": ["apps/screenpipe-app-tauri/lib/live-views/**", "apps/screenpipe-app-tauri/components/settings/brain-overview.tsx"],
+      "tags": ["regression", "escaped-failure", "live-view", "api-contract", "silent-failure"],
+      "prompt": "Refreshing a paused or manual Live View reports success but leaves its task disabled because the cadence update is wrapped in a config envelope that the API silently ignores. Send the flat configuration shape the endpoint consumes, omit fields that do not need changing, reject an invalid nested front-matter envelope, and surface partial write failures instead of pretending every task refreshed.",
+      "agent_timeout_seconds": 1200,
+      "dependency_links": [
+        { "source_path": "apps/screenpipe-app-tauri/node_modules", "destination_path": "apps/screenpipe-app-tauri/node_modules" }
+      ],
+      "grader": {
+        "timeout_seconds": 420,
+        "fixtures": [
+          { "source_path": "apps/screenpipe-app-tauri/components/settings/__tests__/brain-overview.test.tsx" },
+          { "source_path": "apps/screenpipe-app-tauri/lib/live-views/__tests__/source-cadence.test.ts" }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts components/settings/__tests__/brain-overview.test.tsx lib/live-views/__tests__/source-cadence.test.ts"
+      }
+    },
+    {
+      "id": "app-mcp-traceable-activity-context",
+      "name": "Return bounded, traceable activity context from MCP",
+      "source": { "kind": "git_regression", "fix_commit": "e76dac2120" },
+      "base_ref": "e76dac2120^",
+      "oracle_ref": "e76dac2120",
+      "gate": "advisory",
+      "trigger_paths": ["packages/screenpipe-mcp/src/**"],
+      "tags": ["regression", "escaped-failure", "mcp", "activity", "evidence"],
+      "prompt": "The MCP activity-summary tool returns aggregate time without enough traceable task context, and consumers can confuse missing parsed rows with missing activity. Add optional bounded parsed context while keeping duration authoritative, distinguish disabled context from fetch failure, retain the time result when parsing is unavailable, and expose source paths without making parsed context the default.",
+      "agent_timeout_seconds": 1200,
+      "dependency_links": [
+        { "source_path": "packages/screenpipe-mcp/node_modules", "destination_path": "packages/screenpipe-mcp/node_modules" }
+      ],
+      "grader": {
+        "timeout_seconds": 420,
+        "fixtures": [
+          { "source_path": "packages/screenpipe-mcp/src/activity-summary-format.test.ts" },
+          { "source_path": "packages/screenpipe-mcp/src/activity-summary-tool.test.ts" },
+          { "source_path": "packages/screenpipe-mcp/src/pack-contents.test.ts" },
+          { "source_path": "packages/screenpipe-mcp/src/stdio-startup.test.ts" }
+        ],
+        "command": "cd packages/screenpipe-mcp && node ./node_modules/vitest/vitest.mjs run src/activity-summary-format.test.ts src/activity-summary-tool.test.ts src/pack-contents.test.ts src/stdio-startup.test.ts"
+      }
+    },
+    {
+      "id": "app-chat-inspector-pipe-artifacts",
+      "name": "Keep pipe-run artifacts in the active chat inspector",
+      "source": { "kind": "git_regression", "fix_commit": "d3569717c0" },
+      "base_ref": "d3569717c0^",
+      "oracle_ref": "d3569717c0",
+      "gate": "advisory",
+      "trigger_paths": ["apps/screenpipe-app-tauri/components/chat/**", "apps/screenpipe-app-tauri/lib/hooks/use-chat-inspector.ts"],
+      "tags": ["regression", "escaped-failure", "pipes", "chat", "artifacts"],
+      "prompt": "Artifacts registered by a pipe run do not appear in the chat inspector unless a matching tool call exists, and stale artifacts can leak into a different task. Merge declared run artifacts into the active inspector, deduplicate files already represented by tool output, rewrite absolute artifact links safely, and keep pinned summaries open beside output previews without crossing execution boundaries.",
+      "agent_timeout_seconds": 1200,
+      "dependency_links": [
+        { "source_path": "apps/screenpipe-app-tauri/node_modules", "destination_path": "apps/screenpipe-app-tauri/node_modules" }
+      ],
+      "grader": {
+        "timeout_seconds": 420,
+        "fixtures": [
+          { "source_path": "apps/screenpipe-app-tauri/components/__tests__/markdown-viewer-link.test.ts" },
+          { "source_path": "apps/screenpipe-app-tauri/components/chat/chat-inspector.test.tsx" },
+          { "source_path": "apps/screenpipe-app-tauri/lib/hooks/use-chat-inspector.test.ts" }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts components/__tests__/markdown-viewer-link.test.ts components/chat/chat-inspector.test.tsx lib/hooks/use-chat-inspector.test.ts"
+      }
+    },
+    {
+      "id": "app-sync-legacy-key-recovery",
+      "name": "Recover safely from legacy sync-key mismatches",
+      "source": { "kind": "git_regression", "fix_commit": "0f26a722d2" },
+      "base_ref": "0f26a722d2^",
+      "oracle_ref": "0f26a722d2",
+      "gate": "advisory",
+      "trigger_paths": ["apps/screenpipe-app-tauri/components/settings/**sync**", "apps/screenpipe-app-tauri/lib/hooks/use-cloud-sync.ts"],
+      "tags": ["regression", "escaped-failure", "sync", "encryption", "recovery"],
+      "prompt": "A device with a legacy account-key mismatch cannot resume cloud sync and generic errors can incorrectly trigger destructive recovery UI. Detect only the specific legacy mismatch, keep recovery hidden otherwise, require explicit confirmation before the exact scoped start-fresh request, and leave recovery available when the remote reset fails. Do not weaken ordinary sync error handling.",
+      "agent_timeout_seconds": 900,
+      "dependency_links": [
+        { "source_path": "apps/screenpipe-app-tauri/node_modules", "destination_path": "apps/screenpipe-app-tauri/node_modules" }
+      ],
+      "grader": {
+        "timeout_seconds": 300,
+        "fixtures": [
+          { "source_path": "apps/screenpipe-app-tauri/components/settings/__tests__/sync-key-recovery.test.tsx" }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts components/settings/__tests__/sync-key-recovery.test.tsx"
+      }
+    },
+    {
+      "id": "app-agent-local-calendar-days",
+      "name": "Use local calendar days for agent time ranges",
+      "source": { "kind": "git_regression", "fix_commit": "afed076026" },
+      "base_ref": "afed076026^",
+      "oracle_ref": "afed076026",
+      "gate": "advisory",
+      "trigger_paths": ["packages/screenpipe-mcp/src/**time**", "apps/screenpipe-app-tauri/lib/chat/system-prompt.ts"],
+      "tags": ["regression", "escaped-failure", "agent", "time", "timezone"],
+      "prompt": "Agent time ranges such as today and yesterday are normalized through UTC, so users near a day boundary can query the wrong local date. Normalize calendar literals from the runtime local day, use calendar arithmetic across daylight-saving changes and zones that skip midnight, preserve already supported values and input objects, and advertise the same local-calendar contract in every time field.",
+      "agent_timeout_seconds": 1200,
+      "dependency_links": [
+        { "source_path": "apps/screenpipe-app-tauri/node_modules", "destination_path": "apps/screenpipe-app-tauri/node_modules" },
+        { "source_path": "packages/screenpipe-mcp/node_modules", "destination_path": "packages/screenpipe-mcp/node_modules" }
+      ],
+      "grader": {
+        "timeout_seconds": 420,
+        "fixtures": [
+          { "source_path": "apps/screenpipe-app-tauri/lib/chat/__tests__/system-prompt.test.ts" },
+          { "source_path": "packages/screenpipe-mcp/src/time-normalization.test.ts" },
+          { "source_path": "packages/screenpipe-mcp/src/pack-contents.test.ts" },
+          { "source_path": "packages/screenpipe-mcp/src/stdio-startup.test.ts" }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts lib/chat/__tests__/system-prompt.test.ts && cd ../../packages/screenpipe-mcp && node ./node_modules/vitest/vitest.mjs run src/time-normalization.test.ts src/pack-contents.test.ts src/stdio-startup.test.ts"
+      }
+    },
+    {
+      "id": "app-privacy-category-rule-ownership",
+      "name": "Never delete user-owned privacy rules with a category",
+      "source": { "kind": "git_regression", "fix_commit": "4450aaa82d" },
+      "base_ref": "4450aaa82d^",
+      "oracle_ref": "4450aaa82d",
+      "gate": "advisory",
+      "trigger_paths": ["apps/screenpipe-app-tauri/lib/settings/capture-categories.ts"],
+      "tags": ["regression", "escaped-failure", "privacy", "settings", "data-loss"],
+      "prompt": "Disabling a privacy capture category deletes an identical exclusion rule or domain the user created manually. Track category ownership so disabling removes only entries that category actually created, preserves hand-written and other-category entries, and still cleans up all owned filters. Keep a safe compatibility path for legacy state with no provenance.",
+      "agent_timeout_seconds": 900,
+      "dependency_links": [
+        { "source_path": "apps/screenpipe-app-tauri/node_modules", "destination_path": "apps/screenpipe-app-tauri/node_modules" }
+      ],
+      "grader": {
+        "timeout_seconds": 300,
+        "fixtures": [
+          { "source_path": "apps/screenpipe-app-tauri/lib/settings/__tests__/capture-categories.test.ts" }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts lib/settings/__tests__/capture-categories.test.ts"
+      }
+    }
+  ]
+}

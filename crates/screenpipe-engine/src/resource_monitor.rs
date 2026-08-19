@@ -5,7 +5,7 @@
 use chrono::Local;
 use reqwest::Client;
 use screenpipe_resource::{ProcessBreakdown, ResourceSampler, ResourceSnapshot};
-use serde_json::{json, Map};
+use serde_json::{json, Map, Value};
 use std::env;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -18,6 +18,38 @@ use tracing::trace;
 use tracing::{error, info, warn};
 
 use crate::telemetry_context::TelemetryContext;
+
+const RESOURCE_PROCESS_GROUPS: [(&str, &str); 5] = [
+    ("screenpipe_app", "app"),
+    ("screenpipe_app_child", "app_child"),
+    ("screenpipe_mcp_child", "mcp_child"),
+    ("screenpipe_mcp_external", "mcp_external"),
+    ("screenpipe_other", "other"),
+];
+
+fn insert_process_breakdown_properties(
+    properties: &mut Map<String, Value>,
+    breakdown: &ProcessBreakdown,
+) {
+    for (group_name, property_name) in RESOURCE_PROCESS_GROUPS {
+        let group = breakdown
+            .groups
+            .iter()
+            .find(|group| group.group == group_name);
+        properties.insert(
+            format!("process_{property_name}_count"),
+            json!(group.map(|group| group.process_count).unwrap_or(0)),
+        );
+        properties.insert(
+            format!("process_{property_name}_cpu_percent"),
+            json!(group.map(|group| group.cpu_percent).unwrap_or(0.0)),
+        );
+        properties.insert(
+            format!("process_{property_name}_rss_gb"),
+            json!(group.map(|group| group.rss_gb).unwrap_or(0.0)),
+        );
+    }
+}
 
 // --- memory-leak sentinel -------------------------------------------------
 // A leak that users actually feel ("screenpipe ate 10GB overnight") is slow
@@ -587,6 +619,10 @@ impl ResourceTelemetryReporter {
             );
             properties.insert("leak_suspected".to_string(), json!(trend.is_leak()));
         }
+        // Fleet CPU regressions must be attributable without transmitting
+        // process names, PIDs, command lines, or paths. These stable aggregate
+        // buckets mirror the richer local-only process breakdown.
+        insert_process_breakdown_properties(&mut properties, &snapshot.process_breakdown);
         TelemetryContext::from_env().insert_posthog_properties(&mut properties);
 
         let payload = json!({
@@ -814,7 +850,9 @@ impl ResourceTelemetryReporter {
 
 #[cfg(test)]
 mod tests {
-    use super::{analyze_memory_trend, LEAK_WARMUP_SECS};
+    use super::{analyze_memory_trend, insert_process_breakdown_properties, LEAK_WARMUP_SECS};
+    use screenpipe_resource::{ProcessBreakdown, ProcessGroupUsage};
+    use serde_json::Map;
 
     /// (runtime_secs, mem_gb) samples at 30s cadence starting after warmup.
     fn samples_over(hours: f64, mem_at: impl Fn(f64) -> f64) -> Vec<(f64, f64)> {
@@ -905,5 +943,31 @@ mod tests {
         let stats = analyze_memory_trend(&s).expect("5h window should be judged");
         assert!(stats.r2 > 0.99);
         assert!(!stats.is_leak(), "30 MB/h flagged: {:?}", stats);
+    }
+
+    #[test]
+    fn posthog_process_breakdown_is_aggregate_only_and_stable() {
+        let breakdown = ProcessBreakdown {
+            groups: vec![ProcessGroupUsage {
+                group: "screenpipe_app_child".into(),
+                process_count: 2,
+                rss_gb: 1.25,
+                cpu_percent: 42.0,
+            }],
+            top_related_by_memory: Vec::new(),
+            top_related_by_cpu: Vec::new(),
+        };
+        let mut properties = Map::new();
+        insert_process_breakdown_properties(&mut properties, &breakdown);
+
+        assert_eq!(properties["process_app_child_count"], 2);
+        assert_eq!(properties["process_app_child_cpu_percent"], 42.0);
+        assert_eq!(properties["process_app_child_rss_gb"], 1.25);
+        assert_eq!(properties["process_app_count"], 0);
+        let serialized = serde_json::to_string(&properties).expect("properties serialize");
+        assert!(!serialized.contains("pid"));
+        assert!(!serialized.contains("name"));
+        assert!(!serialized.contains("command"));
+        assert_eq!(properties.len(), 15);
     }
 }

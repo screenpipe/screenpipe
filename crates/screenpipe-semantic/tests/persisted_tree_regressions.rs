@@ -61,6 +61,37 @@ fn mail_empty_compose_is_a_valid_empty_surface() {
 }
 
 #[test]
+fn mail_partial_compose_is_a_valid_empty_surface() {
+    let (parser, outcome) = parse_fixture(include_str!(
+        "fixtures/persisted/mail_macos_partial_compose.json"
+    ));
+    assert_eq!(parser.as_deref(), Some("app.macos.mail.message_view"));
+    assert_eq!(outcome, ValidatedParseOutcome::Empty);
+}
+
+#[test]
+fn mail_recovers_a_flattened_persisted_draft_body() {
+    let (parser, outcome) = parse_fixture(include_str!(
+        "fixtures/persisted/mail_macos_flattened_draft.json"
+    ));
+    assert_eq!(parser.as_deref(), Some("app.macos.mail.message_view"));
+    let ValidatedParseOutcome::Handled(projection) = outcome else {
+        panic!("expected handled Mail draft");
+    };
+    assert_eq!(projection.items().len(), 2);
+    assert_eq!(
+        projection.items()[0].title.as_deref(),
+        Some("Release update")
+    );
+    assert_eq!(projection.items()[1].actor.as_deref(), Some("[user]"));
+    assert_eq!(
+        projection.items()[1].body.as_deref(),
+        Some("First draft line.\nSecond draft line.")
+    );
+    assert_eq!(projection.items()[1].status.as_deref(), Some("draft"));
+}
+
+#[test]
 fn gmail_thread_uses_persisted_accessible_actions_without_dom_classes() {
     let (parser, outcome) =
         parse_fixture(include_str!("fixtures/persisted/gmail_macos_thread.json"));

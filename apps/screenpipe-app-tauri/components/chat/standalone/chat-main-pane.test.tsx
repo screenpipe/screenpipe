@@ -121,6 +121,7 @@ describe("ChatMainPane", () => {
     };
     const { rerender } = render(<ChatMainPane {...enabled} />);
     expect(screen.getByTestId("first-run-banner")).toBeInTheDocument();
+    expect(screen.queryByTestId("summary-cards")).not.toBeInTheDocument();
 
     const sent: Message = {
       id: "sent-message",

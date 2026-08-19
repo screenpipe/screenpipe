@@ -49,7 +49,8 @@ impl NativeMacParser {
         kinds: Vec<SemanticKind>,
     ) -> Self {
         let parser_version = match kind {
-            NativeKind::Discord | NativeKind::Mail => "3",
+            NativeKind::Mail => "4",
+            NativeKind::Discord => "3",
             NativeKind::Gemini
             | NativeKind::Messages
             | NativeKind::Slack
@@ -338,25 +339,35 @@ fn parse_notes(tree: &SemanticTree) -> ParseOutcome {
 }
 
 fn parse_mail(context: &ParseContext<'_>, tree: &SemanticTree) -> ParseOutcome {
-    let compose_field = find_identifier(tree, "Mail.subjectField")
-        .or_else(|| find_identifier(tree, "Mail.toField"));
-    if let (Some(subject_node), Some(web_area)) = (compose_field, find_role(tree, "AXWebArea")) {
-        if let Some(body) = collect_text(tree, web_area, &[]) {
-            let subject = node_content(tree, subject_node).unwrap_or("Draft");
-            return conversation_with_messages(
-                context,
-                "mail",
-                subject,
-                vec![MessageData {
-                    node: web_area,
-                    actor: Some("[user]".into()),
-                    actor_evidence: Some("draft_state"),
-                    body,
-                    time_label: None,
-                    status: Some("draft".into()),
-                    native_message_id: None,
-                }],
-            );
+    let subject_field = find_identifier(tree, "Mail.subjectField");
+    let compose_marker = subject_field
+        .or_else(|| find_identifier(tree, "Mail.toField"))
+        .or_else(|| find_identifier(tree, "Mail.ccField"))
+        .or_else(|| find_identifier(tree, "lablel_to"))
+        .or_else(|| find_identifier(tree, "label_subject"));
+    if compose_marker.is_some() {
+        if let Some(web_area) = find_role(tree, "AXWebArea") {
+            if let Some(body) = collect_text(tree, web_area, &[])
+                .or_else(|| collect_flattened_mail_draft(tree, web_area))
+            {
+                let subject = subject_field
+                    .and_then(|node| node_content(tree, node))
+                    .unwrap_or("Draft");
+                return conversation_with_messages(
+                    context,
+                    "mail",
+                    subject,
+                    vec![MessageData {
+                        node: web_area,
+                        actor: Some("[user]".into()),
+                        actor_evidence: Some("draft_state"),
+                        body,
+                        time_label: None,
+                        status: Some("draft".into()),
+                        native_message_id: None,
+                    }],
+                );
+            }
         }
         return ParseOutcome::Empty;
     }
@@ -399,6 +410,63 @@ fn parse_mail(context: &ParseContext<'_>, tree: &SemanticTree) -> ParseOutcome {
     } else {
         conversation_with_messages(context, "mail", subject, messages)
     }
+}
+
+/// Some persisted Mail compose captures flatten the web area's text into
+/// subsequent root-level static-text nodes. Recover only that narrow shape and
+/// stop at the first native compose control so unrelated window chrome cannot
+/// enter the draft body.
+fn collect_flattened_mail_draft(tree: &SemanticTree, web_area: NodeId) -> Option<String> {
+    const COMPOSE_CONTROLS: &[&str] = &["label_from", "popup_from", "_closeButton"];
+    let mut after_web_area = false;
+    let mut lines = Vec::<String>::new();
+    let mut bytes = 0usize;
+    for node in all_nodes(tree).take(4_000) {
+        if node == web_area {
+            after_web_area = true;
+            continue;
+        }
+        if !after_web_area {
+            continue;
+        }
+        if tree.identifier(node).is_some_and(|identifier| {
+            COMPOSE_CONTROLS
+                .iter()
+                .any(|control| identifier.eq_ignore_ascii_case(control))
+        }) {
+            break;
+        }
+        if tree.parent(node).is_some() || !role_is(tree, node, "AXStaticText") {
+            continue;
+        }
+        let Some(content) = node_content(tree, node) else {
+            continue;
+        };
+        for line in content
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
+            if lines.last().is_some_and(|previous| previous == line) {
+                continue;
+            }
+            let separator = usize::from(!lines.is_empty());
+            let remaining = MAX_BODY_BYTES.saturating_sub(bytes + separator);
+            if remaining == 0 {
+                break;
+            }
+            let line = truncate_str(line, remaining);
+            if line.is_empty() {
+                break;
+            }
+            bytes += line.len() + separator;
+            lines.push(line.to_owned());
+        }
+        if bytes == MAX_BODY_BYTES {
+            break;
+        }
+    }
+    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 fn parse_messages(context: &ParseContext<'_>, tree: &SemanticTree) -> ParseOutcome {

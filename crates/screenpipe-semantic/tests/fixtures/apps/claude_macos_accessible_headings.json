@@ -1,0 +1,96 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "com.anthropic.claudefordesktop",
+    "executable": "Claude",
+    "display_name": "Claude",
+    "version": "1.32885.1",
+    "browser_url": "https://claude.ai/new"
+  },
+  "nodes": [
+    {
+      "parent": null,
+      "role": "AXWindow",
+      "title": "Parser repair - Claude"
+    },
+    {
+      "parent": 0,
+      "role": "AXWebArea",
+      "text": "Claude"
+    },
+    {
+      "parent": 1,
+      "role": "AXGroup",
+      "description": "Chat messages"
+    },
+    {
+      "parent": 2,
+      "role": "AXGroup",
+      "description": "Message 1"
+    },
+    {
+      "parent": 3,
+      "role": "AXHeading",
+      "text": "You said: Reply with exactly SEMANTICPARSERASSISTANT"
+    },
+    {
+      "parent": 4,
+      "role": "AXStaticText",
+      "text": "You said: Reply with exactly SEMANTICPARSERASSISTANT"
+    },
+    {
+      "parent": 3,
+      "role": "AXStaticText",
+      "text": "Reply with exactly SEMANTIC_PARSER_ASSISTANT"
+    },
+    {
+      "parent": 3,
+      "role": "AXButton",
+      "text": "Show message actions"
+    },
+    {
+      "parent": 2,
+      "role": "AXGroup",
+      "description": "Message 2"
+    },
+    {
+      "parent": 8,
+      "role": "AXGroup"
+    },
+    {
+      "parent": 9,
+      "role": "AXHeading",
+      "text": "Claude responded: SEMANTICPARSERASSISTANT"
+    },
+    {
+      "parent": 10,
+      "role": "AXStaticText",
+      "text": "Claude responded: SEMANTICPARSERASSISTANT"
+    },
+    {
+      "parent": 9,
+      "role": "AXStaticText",
+      "text": "SEMANTIC_PARSER_ASSISTANT"
+    },
+    {
+      "parent": 9,
+      "role": "AXButton",
+      "text": "Show message actions"
+    },
+    {
+      "parent": 1,
+      "role": "AXStaticText",
+      "text": "Chat mode"
+    },
+    {
+      "parent": 1,
+      "role": "AXTextArea",
+      "value": "composer contamination"
+    },
+    {
+      "parent": 1,
+      "role": "AXButton",
+      "text": "Send"
+    }
+  ]
+}

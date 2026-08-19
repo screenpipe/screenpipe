@@ -30,9 +30,9 @@ const ASSISTANT_ANNOUNCEMENT: &str = "Claude responded:";
 const TURN_STOP_CLASSES: &[&str] = &["group/btn", "group/dd", "cds-reset"];
 const CHROME_LINES: &[&str] = &["Chat mode", "Fast mode off", "Show message actions"];
 
-/// Exact Claude conversation parser. It requires actor-bearing DOM markers and
-/// abstains on older or incompatible layouts so the shared conversation and
-/// document parsers remain available.
+/// Exact Claude conversation parser. It requires actor-bearing DOM markers,
+/// accessible turn headings, or Windows live-region announcements and
+/// abstains on incompatible layouts so the shared parsers remain available.
 pub struct ClaudeParser {
     manifest: ParserManifest,
 }
@@ -42,7 +42,7 @@ impl ClaudeParser {
         Self {
             manifest: ParserManifest {
                 id: "app.claude.message_dom".into(),
-                parser_version: "1".into(),
+                parser_version: "2".into(),
                 schema_version: 1,
                 scope: ParserScope::App,
                 platforms: vec![Platform::Macos, Platform::Windows, Platform::Linux],
@@ -84,6 +84,8 @@ impl SemanticParser for ClaudeParser {
     ) -> Result<ParseOutcome, ProjectionError> {
         let (messages, surface, key_from_url) = if let Some(messages) = dom_marker_messages(tree) {
             (messages, "actor_dom_markers", false)
+        } else if let Some(messages) = accessible_heading_messages(tree) {
+            (messages, "accessible_heading_markers", false)
         } else if let Some(messages) = announcement_messages(tree) {
             (messages, "sr_announcements", true)
         } else {
@@ -126,6 +128,119 @@ impl SemanticParser for ClaudeParser {
         }
         Ok(ParseOutcome::Handled(items))
     }
+}
+
+/// Persisted macOS/Electron trees omit DOM classes but preserve one accessible
+/// heading per turn: `You said: ...` or `Claude responded: ...`. The visible
+/// body follows the heading and ends at the exact message-actions control.
+/// Requiring both actor headings keeps partial loading states and unrelated
+/// headings from being treated as conversations.
+fn accessible_heading_messages(tree: &SemanticTree) -> Option<Vec<(NodeId, &'static str, String)>> {
+    let order: Vec<NodeId> = all_nodes(tree).collect();
+    let mut markers: Vec<(usize, NodeId, &'static str, String)> = Vec::new();
+    for (position, &node) in order.iter().enumerate() {
+        if !tree.role(node).is_some_and(|role| {
+            role.eq_ignore_ascii_case("AXHeading") || role.eq_ignore_ascii_case("Heading")
+        }) {
+            continue;
+        }
+        let Some((actor, remainder)) = turn_marker(tree, node) else {
+            continue;
+        };
+        markers.push((position, node, actor, remainder.to_owned()));
+        if markers.len() == MAX_MESSAGES {
+            break;
+        }
+    }
+    let has_user = markers.iter().any(|(_, _, actor, _)| *actor == "[user]");
+    let has_assistant = markers.iter().any(|(_, _, actor, _)| *actor == "Claude");
+    if !has_user || !has_assistant {
+        return None;
+    }
+
+    let mut messages = Vec::new();
+    let mut retained_bytes = 0usize;
+    for (index, (position, node, actor, remainder)) in markers.iter().enumerate() {
+        let window_end = markers.get(index + 1).map_or(order.len(), |next| next.0);
+        let body = accessible_turn_body(
+            tree,
+            *node,
+            &order[position + 1..window_end],
+            &mut retained_bytes,
+        )
+        .or_else(|| (!remainder.is_empty()).then(|| remainder.clone()));
+        if let Some(body) = body {
+            messages.push((*node, *actor, body));
+        }
+    }
+    (!messages.is_empty()).then_some(messages)
+}
+
+fn accessible_turn_body(
+    tree: &SemanticTree,
+    marker: NodeId,
+    window: &[NodeId],
+    retained_bytes: &mut usize,
+) -> Option<String> {
+    let mut lines = Vec::<String>::new();
+    let mut skip_under: Option<NodeId> = None;
+    for &node in window {
+        if is_descendant(tree, node, marker) {
+            continue;
+        }
+        if let Some(anchor) = skip_under {
+            if is_descendant(tree, node, anchor) {
+                continue;
+            }
+            skip_under = None;
+        }
+        if is_button_role(tree.role(node)) {
+            if node_content(tree, node)
+                .is_some_and(|content| content.eq_ignore_ascii_case("Show message actions"))
+            {
+                break;
+            }
+            skip_under = Some(node);
+            continue;
+        }
+        if !is_message_text_role(tree.role(node)) {
+            continue;
+        }
+        let Some(content) = node_content(tree, node) else {
+            continue;
+        };
+        for line in content
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
+            if line.starts_with(USER_ANNOUNCEMENT)
+                || line.starts_with(ASSISTANT_ANNOUNCEMENT)
+                || CHROME_LINES
+                    .iter()
+                    .chain(IGNORED_ACTIONS.iter())
+                    .any(|chrome| line.eq_ignore_ascii_case(chrome))
+                || lines.last().is_some_and(|previous| previous == line)
+            {
+                continue;
+            }
+            let separator = usize::from(!lines.is_empty());
+            let remaining = MAX_BODY_BYTES.saturating_sub(*retained_bytes + separator);
+            if remaining == 0 {
+                break;
+            }
+            let line = truncate_str(line, remaining);
+            if line.is_empty() {
+                break;
+            }
+            *retained_bytes += line.len() + separator;
+            lines.push(line.to_owned());
+        }
+        if *retained_bytes == MAX_BODY_BYTES {
+            break;
+        }
+    }
+    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 /// Web/macOS surface: actor-bearing DOM marker classes. Unchanged behavior.
@@ -208,6 +323,10 @@ fn announcement(tree: &SemanticTree, node: NodeId) -> Option<(&'static str, &str
     if !has_class(tree, node, "sr-only") {
         return None;
     }
+    turn_marker(tree, node)
+}
+
+fn turn_marker(tree: &SemanticTree, node: NodeId) -> Option<(&'static str, &str)> {
     let text = node_content(tree, node)?;
     text.strip_prefix(USER_ANNOUNCEMENT)
         .map(|remainder| ("[user]", remainder.trim()))
@@ -235,10 +354,7 @@ fn assistant_body(
             }
             skip_under = None;
         }
-        if tree
-            .role(node)
-            .is_some_and(|role| role.eq_ignore_ascii_case("Button"))
-        {
+        if is_button_role(tree.role(node)) {
             if has_class(tree, node, "sr-only") {
                 break;
             }
@@ -484,6 +600,12 @@ fn is_message_text_role(role: Option<&str>) -> bool {
         ]
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(role))
+    })
+}
+
+fn is_button_role(role: Option<&str>) -> bool {
+    role.is_some_and(|role| {
+        role.eq_ignore_ascii_case("AXButton") || role.eq_ignore_ascii_case("Button")
     })
 }
 

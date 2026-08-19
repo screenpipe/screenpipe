@@ -15,15 +15,15 @@ describe("pickHandoffTargets", () => {
   it("returns every connected agent, in preference order", () => {
     // Order is ours, choice is the user's. Returning only the first hid Codex
     // from anyone who also had Claude installed.
-    expect(pickHandoffTargets(["codex", "cursor", "claude"]).map((t) => t.id)).toEqual(
-      ["claude", "cursor", "codex"],
-    );
+    expect(
+      pickHandoffTargets(["codex", "cursor", "claude"]).map((t) => t.id),
+    ).toEqual(["claude", "cursor", "codex"]);
   });
 
   it("drops unsupported tools instead of offering a dead button", () => {
-    expect(pickHandoffTargets(["hermes", "windsurf", "codex"]).map((t) => t.id)).toEqual(
-      ["codex"],
-    );
+    expect(
+      pickHandoffTargets(["hermes", "windsurf", "codex"]).map((t) => t.id),
+    ).toEqual(["codex"]);
   });
 
   it("returns nothing when no connected agent is supported", () => {
@@ -43,7 +43,7 @@ describe("pickHandoffTarget", () => {
     expect(pickHandoffTarget(["hermes", "windsurf", "openclaw"])).toBeNull();
   });
 
-  it("prefers Claude, the most connected tool and the only reliable deeplink", () => {
+  it("prefers Claude, the most connected tool", () => {
     expect(pickHandoffTarget(["codex", "cursor", "claude"])?.id).toBe("claude");
   });
 
@@ -52,36 +52,28 @@ describe("pickHandoffTarget", () => {
     expect(pickHandoffTarget(["codex"])?.id).toBe("codex");
   });
 
-  it("only Claude ships a deeplink, because it is the only verified scheme", () => {
-    // Claude registers CFBundleURLSchemes = ["claude"]. Cursor and Codex were
-    // NOT verified on a real install, and an unregistered scheme produces a
-    // button that silently does nothing — strictly worse than copy-only.
+  it("ships a prompt-prefill deeplink for every supported desktop agent", () => {
     const withDeeplink = handoffTargets()
       .filter((t) => t.deeplink)
       .map((t) => t.id);
-    expect(withDeeplink).toEqual(["claude"]);
+    expect(withDeeplink).toEqual(["claude", "cursor", "codex"]);
   });
 
-  it("gives Codex no deeplink, because no scheme was verified", () => {
-    const codex = pickHandoffTarget(["codex"]);
-    expect(codex?.deeplink).toBeUndefined();
-    expect(codex?.hint).toMatch(/paste it into your codex terminal/i);
+  it("pins the verified prompt routes and URL-encodes the question", () => {
+    const encoded = encodeURIComponent(HANDOFF_PROMPT);
+    expect(
+      Object.fromEntries(handoffTargets().map((t) => [t.id, t.deeplink])),
+    ).toEqual({
+      claude: `claude://claude.ai/new?q=${encoded}`,
+      cursor: `cursor://anysphere.cursor-deeplink/prompt?text=${encoded}`,
+      codex: `codex://threads/new?prompt=${encoded}`,
+    });
   });
 
-  it("pins the one verified scheme exactly", () => {
-    // Format alone is not verification: a well-formed but unregistered scheme
-    // fails silently. Pin the literal value that was read out of
-    // /Applications/Claude.app CFBundleURLSchemes.
-    for (const target of handoffTargets()) {
-      if (!target.deeplink) continue;
-      expect(target.deeplink).toBe("claude://claude");
-    }
-  });
-
-  it("every target explains how to get from clipboard to answer", () => {
+  it("every target leaves the prompt for review instead of auto-sending", () => {
     for (const target of handoffTargets()) {
       expect(target.label.length).toBeGreaterThan(0);
-      expect(target.hint).toMatch(/paste/i);
+      expect(target.hint).toMatch(/review and send/i);
     }
   });
 });

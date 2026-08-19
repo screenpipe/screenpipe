@@ -26,8 +26,11 @@ const mocks = vi.hoisted(() => ({
     deviceTier: "low" as string | null | undefined,
     user: null as null | {
       cloud_subscribed?: boolean;
+      app_entitled?: boolean;
       has_payment_method?: boolean;
       entitlement_source?: string;
+      subscription_plan?: string;
+      enterprise_account?: { org_name?: string; role?: string };
       // Plan selection needs a token to open checkout, so page.tsx keeps the
       // slide out of visibleOrder. Seed it wherever a signed-in user is intended.
       token?: string;
@@ -400,6 +403,74 @@ describe("enterprise onboarding authentication", () => {
       entitlement_source: "manual",
       token: "tok",
     };
+    onboardingData.currentStep = "engine";
+
+    render(<OnboardingPage />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "finish engine" }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.completeOnboarding).toHaveBeenCalledWith({
+        method: "setup_finished",
+      }),
+    );
+    expect(screen.queryByText("plan selection")).not.toBeInTheDocument();
+  });
+
+  it.each(["subscription", "lifetime", "enterprise"])(
+    "does not collect payment from an existing %s entitlement",
+    async (entitlementSource) => {
+      mocks.enterprisePolicy.isManagedDeployment = false;
+      mocks.settings.user = {
+        app_entitled: true,
+        has_payment_method: false,
+        entitlement_source: entitlementSource,
+        token: "tok",
+      };
+      onboardingData.currentStep = "engine";
+
+      render(<OnboardingPage />);
+      fireEvent.click(
+        await screen.findByRole("button", { name: "finish engine" }),
+      );
+
+      await waitFor(() =>
+        expect(mocks.completeOnboarding).toHaveBeenCalledWith({
+          method: "setup_finished",
+        }),
+      );
+      expect(screen.queryByText("plan selection")).not.toBeInTheDocument();
+    },
+  );
+
+  it("does not collect payment from an Enterprise workspace member", async () => {
+    mocks.enterprisePolicy.isManagedDeployment = false;
+    mocks.settings.user = {
+      app_entitled: true,
+      has_payment_method: false,
+      entitlement_source: "none",
+      enterprise_account: { org_name: "acme", role: "member" },
+      token: "tok",
+    };
+    onboardingData.currentStep = "engine";
+
+    render(<OnboardingPage />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "finish engine" }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.completeOnboarding).toHaveBeenCalledWith({
+        method: "setup_finished",
+      }),
+    );
+    expect(screen.queryByText("plan selection")).not.toBeInTheDocument();
+  });
+
+  it("does not guess at checkout while account state is hydrating", async () => {
+    mocks.enterprisePolicy.isManagedDeployment = false;
+    mocks.settings.user = { token: "tok" };
     onboardingData.currentStep = "engine";
 
     render(<OnboardingPage />);

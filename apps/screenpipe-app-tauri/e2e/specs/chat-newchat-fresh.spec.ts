@@ -29,6 +29,7 @@ import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
 const MARKER = "E2E-NEWCHAT-FRESH-MARKER-9F2K7X";
 // A stable id for the "existing, non-empty" chat we foreground in Case 3.
 const EXISTING_CHAT = "77777777-cccc-4ccc-8ccc-cccccccccccc";
+const PREFLIGHT_CHAT = "88888888-dddd-4ddd-8ddd-dddddddddddd";
 
 async function emitTauri(event: string, payload: unknown): Promise<void> {
   await browser.executeAsync(
@@ -158,5 +159,23 @@ describe("New chat opens fresh + reuses blank (#4719)", function () {
     // Reuse means the blank chat's id is stable across repeated presses.
     expect(second).toBe(first);
     expect(third).toBe(first);
+  });
+
+  it("Case 5: '+ new chat' works while a send is still in preflight", async () => {
+    await browser.execute((sid: string) => {
+      (window as any).__e2eLatchPreflightSend(sid);
+    }, PREFLIGHT_CHAT);
+    await waitForeground(
+      (id) => id === PREFLIGHT_CHAT,
+      "preflight chat never foregrounded",
+    );
+
+    await pressNewChat();
+    const fresh = await waitForeground(
+      (id) => id !== PREFLIGHT_CHAT,
+      "'+ new chat' reused the loading preflight chat",
+    );
+
+    expect(fresh).not.toBe(PREFLIGHT_CHAT);
   });
 });

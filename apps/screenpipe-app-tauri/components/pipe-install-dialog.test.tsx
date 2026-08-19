@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   toast: vi.fn(),
   capture: vi.fn(),
   openFeedback: vi.fn(),
+  risk: "safe" as "safe" | "warning" | "high",
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -48,7 +49,7 @@ vi.mock("@/components/ui/use-toast", () => ({
   useToast: () => ({ toast: mocks.toast }),
 }));
 vi.mock("@/components/pipe-store", () => ({
-  getPipeInstallRisk: () => "safe",
+  getPipeInstallRisk: () => mocks.risk,
   InstallRiskSummary: () => <div>review requested access</div>,
 }));
 vi.mock("@/lib/stores/feedback-store", () => ({
@@ -75,12 +76,13 @@ async function openRegistryInstall() {
       payload: { url: "registry:digital-clone" },
     });
   });
-  await screen.findByText("install scheduled task?");
+  await screen.findByText("review scheduled task access");
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.installListener = null;
+  mocks.risk = "safe";
   mocks.localFetch.mockResolvedValue(
     response({
       slug: "digital-clone",
@@ -124,13 +126,13 @@ describe("pipe install dialog lifecycle", () => {
     });
     fireEvent.click(install);
     expect(await screen.findByText("installing...")).toBeInTheDocument();
-    expect(screen.getByText("install scheduled task?")).toBeInTheDocument();
+    expect(screen.getByText("review scheduled task access")).toBeInTheDocument();
     expect(cancelled).not.toHaveBeenCalled();
 
     await act(async () => finishInstall?.());
     await waitFor(() =>
       expect(
-        screen.queryByText("install scheduled task?"),
+        screen.queryByText("review scheduled task access"),
       ).not.toBeInTheDocument(),
     );
     expect(installed).toHaveBeenCalledWith(
@@ -139,6 +141,7 @@ describe("pipe install dialog lifecycle", () => {
       }),
     );
     expect(cancelled).not.toHaveBeenCalled();
+    expect(mocks.setSection).not.toHaveBeenCalled();
     window.removeEventListener(PIPE_INSTALLED_EVENT, installed);
     window.removeEventListener(PIPE_INSTALL_CANCELLED_EVENT, cancelled);
   });
@@ -152,7 +155,7 @@ describe("pipe install dialog lifecycle", () => {
     fireEvent.click(screen.getByRole("button", { name: "not now" }));
     await waitFor(() =>
       expect(
-        screen.queryByText("install scheduled task?"),
+        screen.queryByText("review scheduled task access"),
       ).not.toBeInTheDocument(),
     );
     expect(cancelled).toHaveBeenCalledWith(
@@ -165,5 +168,41 @@ describe("pipe install dialog lifecycle", () => {
       expect.anything(),
     );
     window.removeEventListener(PIPE_INSTALL_CANCELLED_EVENT, cancelled);
+  });
+
+  it("keeps one confirmation for high-risk links without an acknowledgement checkbox", async () => {
+    mocks.risk = "high";
+    render(<PipeInstallDialog />);
+    await openRegistryInstall();
+
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "install scheduled task" }),
+    ).toBeEnabled();
+  });
+
+  it("opens Scheduled Tasks only when the installed task declares connections", async () => {
+    mocks.localFetch.mockImplementation((url: string) =>
+      Promise.resolve(
+        response(
+          url === "/pipes/store/install"
+            ? { name: "connected-task", connections: ["slack"] }
+            : {
+                slug: "digital-clone",
+                title: "Digital Clone",
+                author: "screenpipe",
+                author_verified: true,
+                permissions: {},
+              },
+        ),
+      ),
+    );
+    render(<PipeInstallDialog />);
+    await openRegistryInstall();
+    fireEvent.click(
+      screen.getByRole("button", { name: "install scheduled task" }),
+    );
+
+    await waitFor(() => expect(mocks.setSection).toHaveBeenCalledWith("pipes"));
   });
 });

@@ -83,6 +83,8 @@ import {
   uninstallHermesMcp,
   installRunnerMcp,
   uninstallRunnerMcp,
+  installGeminiMcp,
+  uninstallGeminiMcp,
   detectAiTools,
   connectAiTool,
   disconnectAiTool,
@@ -92,6 +94,7 @@ import {
 const CURSOR = "/Users/test/.cursor/mcp.json";
 const HERMES = "/Users/test/.hermes/config.yaml";
 const RUNNER = "/Users/test/.runner/mcp.json";
+const GEMINI = "/Users/test/.gemini/settings.json";
 
 const backupsOf = (path: string) =>
   Array.from(fsMock.files.keys()).filter((p) => p.startsWith(`${path}.screenpipe-backup-`));
@@ -229,6 +232,36 @@ describe("runner desktop MCP", () => {
   });
 });
 
+describe("gemini CLI MCP", () => {
+  it("detects Gemini CLI from its user config directory", async () => {
+    fsMock.files.set("/Users/test/.gemini", "directory marker");
+
+    await expect(detectAiTools()).resolves.toContain("gemini");
+  });
+
+  it("preserves Gemini settings and unrelated servers across install and remove", async () => {
+    const seeded = JSON.stringify({
+      mcpServers: { other: { command: "other-server" } },
+      ui: { theme: "GitHub" },
+    });
+    fsMock.files.set(GEMINI, seeded);
+
+    await installGeminiMcp();
+
+    const config = JSON.parse(fsMock.files.get(GEMINI)!);
+    expect(config.ui.theme).toBe("GitHub");
+    expect(config.mcpServers.other.command).toBe("other-server");
+    expect(config.mcpServers.screenpipe.command).toBe("/app/bun");
+    expect(config.mcpServers.screenpipe.env.SCREENPIPE_MCP_CLIENT).toBe("gemini");
+    expect(backupsOf(GEMINI)).toHaveLength(1);
+
+    await uninstallGeminiMcp();
+    const removed = JSON.parse(fsMock.files.get(GEMINI)!);
+    expect(removed.mcpServers.screenpipe).toBeUndefined();
+    expect(removed.mcpServers.other.command).toBe("other-server");
+  });
+});
+
 describe("friendlyToolError", () => {
   it("keeps the absolute path for the open-file action but displays it tildified", () => {
     const err = friendlyToolError(
@@ -271,6 +304,15 @@ describe("transactional connect / disconnect", () => {
     expect(skillsMock.installExternalAgentSkills).toHaveBeenCalledWith("cursor");
     expect(skillsMock.removeExternalAgentSkills).not.toHaveBeenCalled();
     expect(JSON.parse(fsMock.files.get(CURSOR)!).mcpServers.screenpipe).toBeTruthy();
+  });
+
+  it("installs and removes Gemini's user-scoped skills with its MCP entry", async () => {
+    await connectAiTool("gemini");
+    expect(skillsMock.installExternalAgentSkills).toHaveBeenCalledWith("gemini");
+    expect(JSON.parse(fsMock.files.get(GEMINI)!).mcpServers.screenpipe).toBeTruthy();
+
+    await disconnectAiTool("gemini");
+    expect(skillsMock.removeExternalAgentSkills).toHaveBeenCalledWith("gemini");
   });
 
   it("disconnect removes skills even when the MCP step fails, then rethrows", async () => {

@@ -49,6 +49,7 @@ import {
   LEARNING_WINDOW_CEILING_MS,
   LEARNING_WINDOW_GRACE_MS,
   MIN_LEARNING_MS,
+  beginLearningWindow,
   markLearningDone,
   readLearningWindow,
   resetLearningWindow,
@@ -170,6 +171,20 @@ describe("useLearningWindow opening", () => {
     await waitFor(() => expect(getOnboardingStatus).toHaveBeenCalled());
     expect(result.current.phase).toBe("idle");
     expect(startedEvents()).toHaveLength(0);
+  });
+
+  it("starts a fresh window after setup is completed again with stale webview state", async () => {
+    beginLearningWindow(completedAgo(10 * 60_000));
+    markLearningDone();
+    const completedAt = completedAgo(30_000);
+    getOnboardingStatus.mockResolvedValue(okStatus(completedAt));
+
+    const { result } = renderHook(() => useLearningWindow());
+
+    await waitFor(() => expect(result.current.phase).toBe("learning"));
+    expect(result.current.startedAt).toBe(completedAt);
+    expect(result.current.showProgress).toBe(true);
+    expect(startedEvents()).toHaveLength(1);
   });
 });
 

@@ -86,6 +86,43 @@ vi.mock("@/lib/hooks/use-timeline-store", () => ({
   useTimelineStore: (selector: (state: unknown) => unknown) =>
     selector({ setPendingNavigation: mocks.setPendingNavigation }),
 }));
+vi.mock("@/components/rewind/ai-presets-selector", async () => {
+  const React = await import("react");
+  return {
+    AIPresetsSelector: ({
+      controlledPresetId,
+      onControlledSelect,
+      triggerAriaLabel,
+    }: {
+      controlledPresetId: string | null;
+      onControlledSelect: (
+        preset: (typeof mocks.settings.aiPresets)[number],
+      ) => void;
+      triggerAriaLabel?: string;
+    }) =>
+      React.createElement(
+        "select",
+        {
+          "aria-label": triggerAriaLabel,
+          "data-testid": "shared-ai-preset-selector",
+          value: controlledPresetId ?? "",
+          onChange: (event: React.ChangeEvent<HTMLSelectElement>) => {
+            const preset = mocks.settings.aiPresets.find(
+              (candidate) => candidate.id === event.target.value,
+            );
+            if (preset) onControlledSelect(preset);
+          },
+        },
+        mocks.settings.aiPresets.map((preset) =>
+          React.createElement(
+            "option",
+            { key: preset.id, value: preset.id },
+            preset.model,
+          ),
+        ),
+      ),
+  };
+});
 
 import {
   ActivityLedger,
@@ -625,8 +662,9 @@ describe("ActivityLedger", () => {
     const generate = await screen.findByRole("button", {
       name: "Generate activities",
     });
+    expect(screen.getByTestId("shared-ai-preset-selector")).toBeVisible();
     expect(screen.getByLabelText("AI preset")).toHaveTextContent(
-      "chat · gpt-5.6-terra",
+      "gpt-5.6-terra",
     );
     expect(mocks.runDailySummaryWithPi).not.toHaveBeenCalled();
 
@@ -647,7 +685,11 @@ describe("ActivityLedger", () => {
 
     await screen.findByRole("button", { name: "Generate activities" });
     expect(screen.queryByRole("heading", { name: "Activity" })).toBeNull();
-    expect(screen.getByLabelText("Time range")).toBeVisible();
+    const timeRange = screen.getByRole("combobox", {
+      name: "Time range: Today",
+    });
+    expect(timeRange).toBeVisible();
+    expect(timeRange).toHaveTextContent("Today");
     expect(screen.getByLabelText("AI preset")).toBeVisible();
   });
 
@@ -655,7 +697,9 @@ describe("ActivityLedger", () => {
     render(<ActivityLedger />);
 
     await screen.findByRole("button", { name: "Generate activities" });
-    fireEvent.click(screen.getByLabelText("Time range"));
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Time range: Today" }),
+    );
     fireEvent.click(
       await screen.findByRole("option", { name: "Custom range" }),
     );
@@ -666,6 +710,45 @@ describe("ActivityLedger", () => {
     expect(
       screen.getByRole("button", { name: "Choose custom date range" }),
     ).toHaveAttribute("aria-haspopup", "dialog");
+  });
+
+  it("returns from Custom range to Today", async () => {
+    render(<ActivityLedger />);
+
+    await screen.findByRole("button", { name: "Generate activities" });
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Time range: Today" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("option", { name: "Custom range" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose custom date range" }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Choose custom date range" }),
+    ).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(
+      screen.getByRole("gridcell", { name: "16", exact: true }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Choose custom date range" }),
+      ).toHaveAttribute("aria-expanded", "false"),
+    );
+
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Time range: Custom range" }),
+    );
+    fireEvent.click(await screen.findByRole("option", { name: "Today" }));
+
+    expect(
+      screen.getByRole("combobox", { name: "Time range: Today" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Choose custom date range" }),
+    ).toBeNull();
   });
 
   it("generates through click time when capture starts after Activity opens", async () => {
@@ -746,12 +829,9 @@ describe("ActivityLedger", () => {
     render(<ActivityLedger />);
 
     await screen.findByText("Fixed a capture reliability regression");
-    fireEvent.click(screen.getByLabelText("AI preset"));
-    fireEvent.click(
-      await screen.findByRole("option", {
-        name: "pipes · claude-sonnet-5",
-      }),
-    );
+    fireEvent.change(screen.getByLabelText("AI preset"), {
+      target: { value: "pipes" },
+    });
     const refresh = screen.getByRole("button", { name: "Refresh history" });
     await waitFor(() => expect(refresh).toBeEnabled());
     fireEvent.click(refresh);
@@ -1177,7 +1257,9 @@ describe("ActivityLedger", () => {
     expect(
       screen.getByRole("button", { name: "Refresh history" }),
     ).toBeVisible();
-    expect(screen.getByLabelText("Time range")).toBeVisible();
+    expect(
+      screen.getByRole("combobox", { name: "Time range: Today" }),
+    ).toBeVisible();
   });
 
   it("opens app and transcript artifacts at their exact timeline moments", async () => {

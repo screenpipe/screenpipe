@@ -1,0 +1,56 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "com.apple.mail",
+    "executable": "Mail",
+    "display_name": "Mail",
+    "version": "16.0",
+    "browser_url": null
+  },
+  "nodes": [
+    {
+      "role": "AXWindow",
+      "text": "Release update",
+      "depth": 0,
+      "automation_id": "_NS:41"
+    },
+    {
+      "role": "AXTextField",
+      "text": "Release update",
+      "value": "Release update",
+      "depth": 1,
+      "automation_id": "Mail.subjectField"
+    },
+    {
+      "role": "AXScrollArea",
+      "text": "",
+      "depth": 1
+    },
+    {
+      "role": "AXWebArea",
+      "text": "",
+      "depth": 2
+    },
+    {
+      "role": "AXStaticText",
+      "text": "First draft line.",
+      "depth": 0
+    },
+    {
+      "role": "AXStaticText",
+      "text": "Second draft line.",
+      "depth": 0
+    },
+    {
+      "role": "AXStaticText",
+      "text": "From:",
+      "depth": 1,
+      "automation_id": "label_from"
+    },
+    {
+      "role": "AXStaticText",
+      "text": "must not leak into the draft",
+      "depth": 2
+    }
+  ]
+}

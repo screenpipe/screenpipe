@@ -21,6 +21,7 @@ import { commands } from "@/lib/utils/tauri";
 import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
 import type { AppUser } from "@/lib/app-entitlement";
 import { readOnboardingCheckoutStatus } from "@/lib/onboarding-checkout-navigation";
+import { requiresOnboardingCheckout } from "@/lib/onboarding-checkout";
 
 type SlideKey =
   "login" | "acquisition" | "permissions" | "timeline" | "engine" | "plan";
@@ -172,30 +173,24 @@ export default function OnboardingPage() {
     settings.deviceTier === "high"
       ? settings.deviceTier
       : "unknown";
-  const needsOnboardingCheckout =
-    user?.has_payment_method !== true && user?.entitlement_source !== "manual";
+  const needsOnboardingCheckout = requiresOnboardingCheckout(user);
   const shouldShowPlanSelection =
     !isManagedDeployment &&
     (checkoutReturnStatus !== null || needsOnboardingCheckout);
-  // New accounts no longer receive the old cardless profile grant, so they
-  // resolve entitlement_source as "none" and enter checkout. Accounts that
-  // already hold a preserved manual grant keep that access without being
-  // forced to add a card. The previous card-ask experiment must not suppress
-  // checkout for an eligible new account.
+  // Only a fully resolved new consumer account enters mandatory checkout.
+  // Manual grants, lifetime ownership, Enterprise membership, subscriptions,
+  // and partially hydrated account responses all stay out. A later contextual
+  // card ask may still be appropriate for an expiring manual grant, but that is
+  // a different intervention from first-run setup.
   // "plan" is the last slide, so auto-advancing onto it without a token traps
   // the user in onboarding: PlanSelectionStep cannot open hosted checkout
   // (it renders "sign in to continue"),
   // and handleNextSlide stops calling completeOnboarding once a next slide
   // exists. Someone who skipped sign-in would sit on /onboarding forever.
   //
-  // This gates only the automatic walk out of the engine slide. The slide stays
-  // in visibleOrder — and so in the progress total and the restore mapping — so
-  // navigating to it directly still renders card capture. That distinction is
-  // load-bearing for the E2E suite: `onboarding-first-run` asserts the slide
-  // EXISTS and renders `onboarding-card-capture` via gotoSlide, while
-  // `onboarding-background-ai-tools` asserts setup FINISHES. Excluding the
-  // slide from visibleOrder instead would satisfy the second and break the
-  // first.
+  // This gates only the automatic walk out of the engine slide. An eligible
+  // account keeps plan in visibleOrder and can enter it; every other account
+  // excludes it from progress and saved-step restoration as well.
   const canAdvanceIntoPlanSelection =
     shouldShowPlanSelection && Boolean(user?.token);
   const visibleOrder = useMemo(

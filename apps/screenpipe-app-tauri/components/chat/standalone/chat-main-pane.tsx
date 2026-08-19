@@ -116,6 +116,21 @@ export function ChatMainPane({
   firstRunUserToken,
   firstRunAiSettingsLoaded,
 }: ChatMainPaneProps) {
+  const homeStarter =
+    messages.length === 0 &&
+    !pendingSend &&
+    !isPreparingPrefill &&
+    !activePipeExecution &&
+    !isLoading &&
+    !isStreaming &&
+    hasPresets &&
+    hasValidModel ? (
+      <HomeStarterSurface
+        summaryCardsProps={summaryCardsProps}
+        {...homeStarterProps}
+      />
+    ) : null;
+
   return (
     <div className="flex-1 flex overflow-hidden">
       <InlineChatHistory
@@ -258,21 +273,10 @@ export function ChatMainPane({
                 aiPreset={firstRunAiPreset}
                 userToken={firstRunUserToken}
                 aiSettingsLoaded={firstRunAiSettingsLoaded}
+                fallback={homeStarter}
               />
             )}
-            {messages.length === 0 &&
-              !pendingSend &&
-              !isPreparingPrefill &&
-              !activePipeExecution &&
-              !isLoading &&
-              !isStreaming &&
-              hasPresets &&
-              hasValidModel && (
-                <HomeStarterSurface
-                  summaryCardsProps={summaryCardsProps}
-                  {...homeStarterProps}
-                />
-              )}
+            {!firstRunLearningEnabled && homeStarter}
             {/* The message the user just sent, shown from the send frame until
                 the durable row replaces it. Same geometry as a real user row so
                 nothing moves when the swap happens. */}

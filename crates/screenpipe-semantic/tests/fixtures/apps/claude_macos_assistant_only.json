@@ -1,0 +1,32 @@
+{
+  "app": {
+    "platform": "macos",
+    "app_id": "com.anthropic.claudefordesktop",
+    "executable": "Claude",
+    "display_name": "Claude",
+    "version": "1.32885.1",
+    "browser_url": null
+  },
+  "nodes": [
+    {
+      "parent": null,
+      "role": "AXWindow",
+      "title": "Claude"
+    },
+    {
+      "parent": 0,
+      "role": "AXHeading",
+      "text": "Claude responded: A partial loading state"
+    },
+    {
+      "parent": 0,
+      "role": "AXStaticText",
+      "text": "A partial loading state"
+    },
+    {
+      "parent": 0,
+      "role": "AXButton",
+      "text": "Show message actions"
+    }
+  ]
+}
