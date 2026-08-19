@@ -339,7 +339,7 @@ function LiveViewBlockNode({ id, data }: NodeProps<LiveViewFlowNode>) {
           </div>
         )}
       </div>
-      <div className="nowheel h-[calc(100%-2rem)] overflow-auto border border-t-0 border-border [&>article]:min-h-full">
+      <div className="h-[calc(100%-2rem)] overflow-auto border border-t-0 border-border [&>article]:min-h-full">
         <LiveViewCard
           slot={slot}
           timeRange={data.timeRange}
@@ -1264,6 +1264,8 @@ export function LiveViewCanvas({
     const surface = surfaceRef.current;
     if (!surface) return;
     const swallowDuplicatePinch = (event: WheelEvent) => {
+      pointerAnchorRef.current = { x: event.clientX, y: event.clientY };
+      canvasActiveRef.current = true;
       if (!event.ctrlKey || !nativeMagnifySeenRef.current) return;
       event.preventDefault();
       event.stopPropagation();

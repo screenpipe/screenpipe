@@ -850,4 +850,21 @@ describe("LiveViewCanvas", () => {
     });
     expect(screen.getByText("100%")).toBeTruthy();
   });
+
+  it("allows trackpad pinch and pan gestures initiated over a card block", () => {
+    render(<CanvasHarness />);
+    const block = screen.getByTestId("canvas-block-focus-time");
+    expect(block).toBeTruthy();
+    expect(block.querySelector(".nowheel")).toBeNull();
+
+    openCanvasTools();
+    fireEvent.wheel(block, {
+      ctrlKey: true,
+      deltaY: -100,
+      clientX: 200,
+      clientY: 150,
+      bubbles: true,
+    });
+    expect(screen.queryByText("100%")).toBeNull();
+  });
 });
