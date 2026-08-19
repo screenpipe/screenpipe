@@ -32,6 +32,9 @@ jobs:
               query($owner: String!, $repo: String!, $number: Int!) {
                 repository(owner: $owner, name: $repo) {
                   pullRequest(number: $number) {
+                    author {
+                      __typename
+                    }
                     authorAssociation
                     number
                     state
@@ -53,7 +56,16 @@ jobs:
                 return;
               }
 
-              if (!newContributorAssociations.has(pullRequest.authorAssociation)) {
+              // GitHub masks both first-time associations as NONE when this
+              // query uses the workflow GITHUB_TOKEN. Existing contributors
+              // retain CONTRIBUTOR, while bot actors are excluded explicitly.
+              const isMaskedNewContributor =
+                pullRequest.authorAssociation === "NONE" &&
+                pullRequest.author?.__typename === "User";
+              if (
+                !newContributorAssociations.has(pullRequest.authorAssociation) &&
+                !isMaskedNewContributor
+              ) {
                 core.info(
                   `Leaving PR #${pullRequest.number} open: author association is ${pullRequest.authorAssociation}.`,
                 );
