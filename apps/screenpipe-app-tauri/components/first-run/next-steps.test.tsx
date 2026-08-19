@@ -13,7 +13,10 @@ import {
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { PIPE_INSTALLED_EVENT } from "@/lib/pipe-install-receipt";
+import {
+  PIPE_INSTALL_CANCELLED_EVENT,
+  PIPE_INSTALLED_EVENT,
+} from "@/lib/pipe-install-receipt";
 import { FirstRunNextSteps } from "./next-steps";
 
 const mocks = vi.hoisted(() => ({
@@ -44,13 +47,25 @@ function response(body: unknown, ok = true): Response {
   } as Response;
 }
 
+function setPipeStates(states: Record<string, boolean>) {
+  mocks.localFetch.mockImplementation(
+    async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/enable") && init?.method === "POST") {
+        const slug = url.split("/").at(-2) ?? "";
+        states[slug] = true;
+        return response({ success: true });
+      }
+
+      const slug = url.split("/").pop() ?? "";
+      return slug in states
+        ? response({ data: { config: { name: slug, enabled: states[slug] } } })
+        : response({ error: `pipe '${slug}' not found` });
+    },
+  );
+}
+
 function setInstalledPipes(installed: string[]) {
-  mocks.localFetch.mockImplementation(async (url: string) => {
-    const slug = url.split("/").pop() ?? "";
-    return installed.includes(slug)
-      ? response({ data: { config: { name: slug } } })
-      : response({ error: `pipe '${slug}' not found` });
-  });
+  setPipeStates(Object.fromEntries(installed.map((slug) => [slug, true])));
 }
 
 beforeEach(() => {
@@ -92,6 +107,19 @@ describe("first-run next steps", () => {
       }),
     );
 
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(PIPE_INSTALL_CANCELLED_EVENT, {
+          detail: { url: "registry:daily-email-summary" },
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("first-run-next-step-digital-clone"),
+      ).toBeEnabled(),
+    );
+
     fireEvent.click(screen.getByTestId("first-run-next-step-digital-clone"));
     await waitFor(() =>
       expect(mocks.emit).toHaveBeenCalledWith("install-pipe", {
@@ -111,7 +139,7 @@ describe("first-run next steps", () => {
     window.removeEventListener("open-settings", openSettings);
   });
 
-  it("collapses completed work and asks only for Gmail when the Pipe is installed", async () => {
+  it("keeps completed steps disabled and asks only for Gmail when the Pipe is enabled", async () => {
     setInstalledPipes(["daily-email-summary", "digital-clone"]);
     mocks.oauthStatus.mockResolvedValue({
       status: "ok",
@@ -126,6 +154,7 @@ describe("first-run next steps", () => {
         screen.getByTestId("first-run-next-step-daily-email"),
       ).toHaveTextContent("connect gmail"),
     );
+    expect(screen.getByText("enabled, needs gmail")).toBeInTheDocument();
     expect(
       screen.getByTestId("first-run-next-step-digital-clone"),
     ).toBeDisabled();
@@ -187,6 +216,8 @@ describe("first-run next steps", () => {
         screen.getByTestId("first-run-next-step-daily-email"),
       ).toHaveTextContent("install"),
     );
+    expect(screen.getByText("gmail connected")).toBeInTheDocument();
+    expect(screen.queryByText("gmail setup follows")).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId("first-run-next-step-daily-email"));
     await waitFor(() => expect(mocks.emit).toHaveBeenCalledTimes(1));
     act(() => {
@@ -231,25 +262,27 @@ describe("first-run next steps", () => {
     window.removeEventListener("open-settings", openSettings);
   });
 
-  it("does not emit duplicate installer requests on a double click", async () => {
-    let resolveEmit: (() => void) | undefined;
-    mocks.emit.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveEmit = resolve;
-        }),
-    );
+  it("keeps the installer action locked until install or cancel", async () => {
     render(<FirstRunNextSteps userToken="user-token" />);
 
     const action = await screen.findByTestId("first-run-next-step-daily-email");
     await waitFor(() => expect(action).toHaveTextContent("install"));
     fireEvent.click(action);
     fireEvent.click(action);
-    expect(mocks.emit).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mocks.emit).toHaveBeenCalledTimes(1));
+    expect(action).toBeDisabled();
+    expect(action).toHaveTextContent("reviewing install");
 
-    await act(async () => {
-      resolveEmit?.();
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(PIPE_INSTALL_CANCELLED_EVENT, {
+          detail: { url: "registry:daily-email-summary" },
+        }),
+      );
     });
+    await waitFor(() => expect(action).toBeEnabled());
+    fireEvent.click(action);
+    await waitFor(() => expect(mocks.emit).toHaveBeenCalledTimes(2));
   });
 
   it("reports partial status failures as unknown and retries instead of guessing", async () => {
@@ -265,7 +298,9 @@ describe("first-run next steps", () => {
       expect(screen.getAllByText("status unavailable")).toHaveLength(3),
     );
     expect(
-      screen.getByText("some setup status could not be checked."),
+      screen.getByText(
+        "some setup status could not be checked. nothing changed.",
+      ),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("first-run-next-step-daily-email"));
@@ -273,5 +308,100 @@ describe("first-run next steps", () => {
       expect(mocks.localFetch.mock.calls.length).toBeGreaterThan(2),
     );
     expect(mocks.emit).not.toHaveBeenCalled();
+  });
+
+  it("requires an explicit enable step before calling installed Pipes ready", async () => {
+    setPipeStates({
+      "daily-email-summary": false,
+      "digital-clone": false,
+    });
+    mocks.fetchComposioStatus.mockResolvedValue({
+      gmail: { connected: true, status: "active" },
+    });
+    render(<FirstRunNextSteps userToken="user-token" />);
+
+    const dailyAction = await screen.findByTestId(
+      "first-run-next-step-daily-email",
+    );
+    await waitFor(() =>
+      expect(dailyAction).toHaveTextContent("enable summary"),
+    );
+    expect(screen.getAllByText("installed, not active")).toHaveLength(2);
+
+    fireEvent.click(dailyAction);
+    await waitFor(() =>
+      expect(mocks.localFetch).toHaveBeenCalledWith(
+        "/pipes/daily-email-summary/enable",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ enabled: true }),
+        }),
+      ),
+    );
+    await waitFor(() => expect(dailyAction).toHaveTextContent("ready"));
+
+    const cloneAction = screen.getByTestId("first-run-next-step-digital-clone");
+    fireEvent.click(cloneAction);
+    await waitFor(() => expect(cloneAction).toHaveTextContent("ready"));
+  });
+
+  it("surfaces enable failure without claiming the scheduled task is ready", async () => {
+    setPipeStates({ "daily-email-summary": false });
+    mocks.fetchComposioStatus.mockResolvedValue({
+      gmail: { connected: true, status: "active" },
+    });
+    render(<FirstRunNextSteps userToken="user-token" />);
+
+    const action = await screen.findByTestId("first-run-next-step-daily-email");
+    await waitFor(() => expect(action).toHaveTextContent("enable summary"));
+    mocks.localFetch.mockResolvedValue(response({ error: "engine busy" }));
+    fireEvent.click(action);
+
+    expect(
+      await screen.findByText(
+        "could not enable the scheduled task. try again.",
+      ),
+    ).toBeInTheDocument();
+    expect(action).toHaveTextContent("enable summary");
+    expect(action).toBeEnabled();
+  });
+
+  it("clears a stale installer error when retry succeeds", async () => {
+    mocks.emit.mockRejectedValueOnce(new Error("event bus unavailable"));
+    render(<FirstRunNextSteps userToken="user-token" />);
+
+    const action = await screen.findByTestId("first-run-next-step-daily-email");
+    await waitFor(() => expect(action).toHaveTextContent("install"));
+    fireEvent.click(action);
+    expect(
+      await screen.findByText("could not open the installer. try again."),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "retry" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByText("could not open the installer. try again."),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("collapses fully completed recommendations into one quiet summary", async () => {
+    setInstalledPipes(["daily-email-summary", "digital-clone"]);
+    mocks.fetchComposioStatus.mockResolvedValue({
+      gmail: { connected: true, status: "active" },
+    });
+    mocks.oauthStatus.mockResolvedValue({
+      status: "ok",
+      data: { connected: true },
+    });
+    render(<FirstRunNextSteps userToken="user-token" />);
+
+    expect(
+      await screen.findByTestId("first-run-next-steps-complete"),
+    ).toHaveTextContent("daily setup ready");
+    expect(
+      screen.queryByTestId("first-run-next-step-daily-email"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("daily setup ready");
   });
 });

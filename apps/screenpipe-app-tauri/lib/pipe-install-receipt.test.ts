@@ -4,7 +4,9 @@
 
 import { describe, expect, it, vi } from "vitest";
 import {
+  PIPE_INSTALL_CANCELLED_EVENT,
   PIPE_INSTALLED_EVENT,
+  publishPipeInstallCancelledReceipt,
   publishPipeInstalledReceipt,
 } from "./pipe-install-receipt";
 
@@ -24,5 +26,21 @@ describe("pipe install receipts", () => {
       }),
     );
     window.removeEventListener(PIPE_INSTALLED_EVENT, listener);
+  });
+
+  it("publishes the cancelled request so its caller can offer installation again", () => {
+    const listener = vi.fn();
+    window.addEventListener(PIPE_INSTALL_CANCELLED_EVENT, listener);
+
+    publishPipeInstallCancelledReceipt({
+      url: "registry:daily-email-summary",
+    });
+
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detail: { url: "registry:daily-email-summary" },
+      }),
+    );
+    window.removeEventListener(PIPE_INSTALL_CANCELLED_EVENT, listener);
   });
 });

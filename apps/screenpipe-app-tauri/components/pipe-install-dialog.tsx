@@ -14,15 +14,18 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogCancel,
-  AlertDialogAction,
 } from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { listen } from "@tauri-apps/api/event";
 import posthog from "posthog-js";
 import { InstallRiskSummary, getPipeInstallRisk } from "@/components/pipe-store";
 import { localFetch } from "@/lib/api";
-import { publishPipeInstalledReceipt } from "@/lib/pipe-install-receipt";
+import {
+  publishPipeInstallCancelledReceipt,
+  publishPipeInstalledReceipt,
+} from "@/lib/pipe-install-receipt";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
 
 interface PipeInstallRequest {
@@ -178,7 +181,9 @@ export function PipeInstallDialog() {
   };
 
   const handleCancel = () => {
+    if (!request) return;
     posthog.capture("pipe_install_cancelled", { url: request?.url });
+    publishPipeInstallCancelledReceipt({ url: request.url });
     setRequest(null);
     setInstallRiskAcknowledged(false);
   };
@@ -250,10 +255,9 @@ export function PipeInstallDialog() {
           )}
 
           <AlertDialogFooter>
-            <AlertDialogCancel className="text-xs" onClick={handleCancel}>
-              not now
-            </AlertDialogCancel>
-            <AlertDialogAction
+            <AlertDialogCancel className="text-xs">not now</AlertDialogCancel>
+            <Button
+              type="button"
               className="text-xs"
               onClick={handleInstall}
               disabled={installing || (isRegistry && registryRisk === "high" && !installRiskAcknowledged)}
@@ -266,7 +270,7 @@ export function PipeInstallDialog() {
               ) : (
                 "install scheduled task"
               )}
-            </AlertDialogAction>
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
