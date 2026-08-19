@@ -33,6 +33,12 @@ vi.mock("@/lib/first-run/use-agent-handoff", () => ({
   useAgentHandoff: () => mocks.handoff,
 }));
 
+vi.mock("@/components/first-run/next-steps", () => ({
+  FirstRunNextSteps: () => (
+    <div data-testid="first-run-next-steps">next steps</div>
+  ),
+}));
+
 function view(over: Partial<LearningWindowView> = {}): LearningWindowView {
   return {
     phase: "learning",
@@ -117,6 +123,16 @@ describe("first-run learning banner", () => {
       }),
     );
     expect(dismiss).toHaveBeenCalled();
+  });
+
+  it("offers the state-aware daily setup after learning resolves", () => {
+    mocks.view = view({ phase: "ready", chatId: "first-run-steps" });
+    render(<FirstRunLearningBanner />);
+
+    expect(
+      screen.getByText("screenpipe learned enough to help"),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("first-run-next-steps")).toBeInTheDocument();
   });
 
   it("keeps every empty result out of the interface", () => {

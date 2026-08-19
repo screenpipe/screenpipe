@@ -22,6 +22,7 @@ import { listen } from "@tauri-apps/api/event";
 import posthog from "posthog-js";
 import { InstallRiskSummary, getPipeInstallRisk } from "@/components/pipe-store";
 import { localFetch } from "@/lib/api";
+import { publishPipeInstalledReceipt } from "@/lib/pipe-install-receipt";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
 
 interface PipeInstallRequest {
@@ -139,13 +140,17 @@ export function PipeInstallDialog() {
       if (pipeConnections.length > 0) {
         // sessionStorage fallback for when PipesSection isn't mounted yet
         sessionStorage.setItem(`justInstalled:${data.name}`, "1");
-        // Also fire event in case PipesSection is already mounted
-        window.dispatchEvent(
-          new CustomEvent("screenpipe:pipeInstalled", {
-            detail: { pipeName: data.name, connections: pipeConnections },
-          })
-        );
       }
+
+      // Always publish an installation receipt. Connection-aware installs use
+      // it to open the existing modal; first-run recommendations also use it
+      // to reconcile an installed card and continue a promised setup handoff.
+      // Previously connection-free Pipes emitted nothing, so callers could
+      // only guess whether the install finished.
+      publishPipeInstalledReceipt({
+        pipeName: data.name,
+        connections: pipeConnections,
+      });
 
       setRequest(null);
       // Navigate to pipes tab so user sees installed pipe + connection modal

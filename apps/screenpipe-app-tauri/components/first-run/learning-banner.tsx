@@ -20,6 +20,8 @@ import {
   useLearningWindow,
   type LearningWindowOptions,
 } from "@/lib/first-run/use-learning-window";
+import { FirstRunNextSteps } from "@/components/first-run/next-steps";
+import type { AgentHandoffTarget } from "@/lib/first-run/agent-handoff";
 
 function CapturedAppIcon({ app }: { app: FirstRunCapturedApp }) {
   const [failed, setFailed] = React.useState(false);
@@ -43,6 +45,79 @@ function CapturedAppIcon({ app }: { app: FirstRunCapturedApp }) {
         />
       )}
     </span>
+  );
+}
+
+export function FirstRunReadyPanel({
+  handoffTargets,
+  handoffHint,
+  onOpenSummary,
+  onPickAgent,
+  onDismiss,
+  nextSteps,
+}: {
+  handoffTargets: readonly AgentHandoffTarget[];
+  handoffHint: string | null;
+  onOpenSummary: () => void;
+  onPickAgent: (target: AgentHandoffTarget) => void;
+  onDismiss: () => void;
+  nextSteps: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div className="p-5">
+        <div className="flex items-center gap-2">
+          <span className="h-2 w-2 bg-phosphor-strong" aria-hidden="true" />
+          <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-phosphor-strong">
+            first result · ready
+          </span>
+        </div>
+        <h2 className="mt-3 font-mono text-base font-semibold lowercase text-foreground">
+          screenpipe learned enough to help
+        </h2>
+        <p className="mt-2 max-w-xl text-[11px] leading-relaxed text-muted-foreground">
+          a source-backed summary of the apps and activity captured since setup
+          is waiting in a new chat.
+        </p>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            className="h-8 border-phosphor-strong bg-phosphor px-3 text-[10px] text-phosphor-ink hover:border-foreground hover:bg-foreground hover:text-background"
+            data-testid="first-run-open-summary"
+            onClick={onOpenSummary}
+          >
+            open the summary
+          </Button>
+          <AgentHandoffPicker targets={handoffTargets} onPick={onPickAgent} />
+        </div>
+        {handoffHint && (
+          <p
+            className="mt-2 text-[11px] leading-relaxed text-muted-foreground"
+            data-testid="first-run-ask-agent-hint"
+            role="status"
+          >
+            {handoffHint}
+          </p>
+        )}
+      </div>
+
+      {nextSteps}
+
+      <div className="flex items-center justify-between gap-4 border-t border-border px-4 py-3">
+        <p className="text-[10px] leading-relaxed text-muted-foreground">
+          these are optional. you can set them up later from scheduled tasks and
+          connections.
+        </p>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 shrink-0 px-2 text-[9px]"
+          onClick={onDismiss}
+        >
+          later
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -90,7 +165,9 @@ export function FirstRunLearningBanner(props: LearningWindowOptions = {}) {
     <section
       data-testid="first-run-learning-banner"
       data-phase={phase}
-      className="mx-auto mb-4 w-full max-w-3xl border border-border bg-background p-4"
+      className={`mx-auto mb-4 w-full border border-border bg-background ${
+        phase === "ready" ? "max-w-4xl overflow-hidden" : "max-w-3xl p-4"
+      }`}
     >
       {phase === "learning" && (
         <div className="flex flex-col gap-2">
@@ -161,51 +238,14 @@ export function FirstRunLearningBanner(props: LearningWindowOptions = {}) {
       )}
 
       {phase === "ready" && (
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-medium text-foreground">
-            Here is what Screenpipe saw
-          </p>
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
-            A summary of the apps and activity captured since setup is waiting
-            in a new chat.
-          </p>
-          <div className="flex items-center gap-2 pt-1">
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 text-[11px]"
-              data-testid="first-run-open-summary"
-              onClick={openSummary}
-            >
-              Open the summary
-            </Button>
-            {/* Setup already wired these agents over MCP, so they can answer
-                from real captured context. Offered second, never instead: the
-                summary is guaranteed to exist, the handoff depends on another
-                app being where we think it is. */}
-            <AgentHandoffPicker
-              targets={handoffTargets}
-              onPick={(target) => void askAgent(target)}
-            />
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 text-[11px]"
-              onClick={() => dismiss()}
-            >
-              Later
-            </Button>
-          </div>
-          {handoffHint && (
-            <p
-              className="text-[11px] leading-relaxed text-muted-foreground"
-              data-testid="first-run-ask-agent-hint"
-              role="status"
-            >
-              {handoffHint}
-            </p>
-          )}
-        </div>
+        <FirstRunReadyPanel
+          handoffTargets={handoffTargets}
+          handoffHint={handoffHint}
+          onOpenSummary={() => void openSummary()}
+          onPickAgent={(target) => void askAgent(target)}
+          onDismiss={() => dismiss()}
+          nextSteps={<FirstRunNextSteps userToken={props.userToken} />}
+        />
       )}
     </section>
   );
