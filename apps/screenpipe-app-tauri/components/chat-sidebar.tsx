@@ -1425,10 +1425,15 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
             <DialogDescription>Delete this chat? This cannot be undone.</DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDeletingSessionId(null)}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDeletingSessionId(null)}
+            >
               Cancel
             </Button>
             <Button
+              autoFocus
               variant="destructive"
               onClick={async () => {
                 const id = deletingSessionId;

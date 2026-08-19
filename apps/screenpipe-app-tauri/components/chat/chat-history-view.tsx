@@ -963,6 +963,7 @@ export function ChatHistoryView({
           </DialogHeader>
           <DialogFooter>
             <Button
+              type="button"
               variant="outline"
               onClick={() => setDeleteIds([])}
               disabled={bulkPending === "deleting"}
@@ -970,6 +971,7 @@ export function ChatHistoryView({
               Cancel
             </Button>
             <Button
+              autoFocus
               variant="destructive"
               disabled={bulkPending === "deleting"}
               onClick={async () => {
