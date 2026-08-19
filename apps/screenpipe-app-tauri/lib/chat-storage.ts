@@ -146,10 +146,11 @@ async function notifySaveFailure(e: unknown): Promise<void> {
 //
 // Two layers fix it:
 //
-//  1. In-process serialization (`withConversationLock`). Same-window writers —
-//     the common case, and the one behind the observed "persist browserState
-//     failed: rename … .tmp … No such file or directory" log — now queue behind
-//     each other per conversation id instead of interleaving.
+//  1. Cross-webview serialization (`withConversationLock`). The Web Locks API
+//     gives every same-origin webview one shared lock namespace; the local
+//     promise queue is retained as a fallback for tests/SSR and runtimes that
+//     do not expose Web Locks. This closes the read -> rename race, not only the
+//     earlier temporary-file collision.
 //  2. Compare-and-swap across processes (`persistWithMerge`). Every save bumps
 //     a monotonic `rev`. A writer whose base `rev` is behind what's on disk
 //     lost a race, so its content is merged with the winner's rather than
@@ -166,22 +167,39 @@ const conversationWriteQueues = new Map<string, Promise<unknown>>();
  *  Failures are isolated: a rejected task never poisons the queue for the next
  *  writer, and the map entry is dropped once the chain drains so long-lived
  *  sessions don't leak one promise per conversation ever touched. */
-function withConversationLock<T>(
+async function withConversationLock<T>(
   id: string,
   task: () => Promise<T>
 ): Promise<T> {
-  const previous = conversationWriteQueues.get(id) ?? Promise.resolve();
-  // `then(task, task)` so a failed predecessor still lets us run.
-  const run = previous.then(task, task);
-  const guarded = run.catch(() => undefined);
-  conversationWriteQueues.set(id, guarded);
-  void guarded.then(() => {
-    // Only clear if nobody queued behind us in the meantime.
-    if (conversationWriteQueues.get(id) === guarded) {
-      conversationWriteQueues.delete(id);
-    }
-  });
-  return run;
+  const runInProcess = (): Promise<T> => {
+    const previous = conversationWriteQueues.get(id) ?? Promise.resolve();
+    // `then(task, task)` so a failed predecessor still lets us run.
+    const run = previous.then(task, task);
+    const guarded = run.catch(() => undefined);
+    conversationWriteQueues.set(id, guarded);
+    void guarded.then(() => {
+      // Only clear if nobody queued behind us in the meantime.
+      if (conversationWriteQueues.get(id) === guarded) {
+        conversationWriteQueues.delete(id);
+      }
+    });
+    return run;
+  };
+
+  // Each Tauri webview has its own JS module state, so a module-local promise
+  // queue cannot serialize the chat panel, search window, and background
+  // writers with one another. Web Locks are origin-wide and therefore make
+  // the read/revision-check/write sequence one critical section across those
+  // contexts. The current desktop webviews already use this primitive for the
+  // onboarding follow-up scheduler.
+  if (typeof navigator !== "undefined" && "locks" in navigator) {
+    return await navigator.locks.request(
+      `screenpipe-chat-conversation:${id}`,
+      runInProcess,
+    );
+  }
+
+  return runInProcess();
 }
 
 /** Reset the in-process write queues. Tests only. */

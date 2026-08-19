@@ -20,6 +20,11 @@ const fsMock = vi.hoisted(() => ({
   writeGate: null as null | ((path: string) => Promise<void>),
 }));
 
+const webLocksMock = vi.hoisted(() => ({
+  request: vi.fn(),
+  queues: new Map<string, Promise<unknown>>(),
+}));
+
 vi.mock("@tauri-apps/api/path", () => ({
   homeDir: vi.fn(async () => "/Users/test"),
   join: vi.fn(async (...parts: string[]) => parts.join("/")),
@@ -100,11 +105,34 @@ async function readBack(): Promise<ChatConversation> {
 beforeEach(() => {
   fsMock.files.clear();
   fsMock.writeGate = null;
+  webLocksMock.queues.clear();
+  webLocksMock.request.mockReset();
+  webLocksMock.request.mockImplementation(
+    (name: string, operation: () => Promise<unknown>) => {
+      const previous = webLocksMock.queues.get(name) ?? Promise.resolve();
+      const run = previous.then(operation, operation);
+      webLocksMock.queues.set(name, run.catch(() => undefined));
+      return run;
+    },
+  );
+  Object.defineProperty(globalThis.navigator, "locks", {
+    configurable: true,
+    value: webLocksMock,
+  });
   __resetChatStorageCachesForTests();
   __resetConversationWriteQueuesForTests();
 });
 
 describe("conversation persistence concurrency", () => {
+  it("uses an origin-wide lock for the cross-webview read/write critical section", async () => {
+    await saveConversationFile(conversation([message("u1", "hi")]));
+
+    expect(webLocksMock.request).toHaveBeenCalledWith(
+      `screenpipe-chat-conversation:${ID}`,
+      expect.any(Function),
+    );
+  });
+
   it("does not lose a streamed reply written by another window", async () => {
     // Seed: one user message, already on disk.
     await saveConversationFile(conversation([message("u1", "hi")]));
@@ -181,6 +209,10 @@ describe("conversation persistence concurrency", () => {
   });
 
   it("serializes concurrent writers so every save lands", async () => {
+    // SSR/tests and older embedded runtimes can lack the origin-wide Web Locks
+    // API. The module-local queue remains a safe fallback for one context.
+    delete (globalThis.navigator as Navigator & { locks?: LockManager }).locks;
+
     await saveConversationFile(conversation([message("u1", "hi")]));
     const base = await readBack();
 
