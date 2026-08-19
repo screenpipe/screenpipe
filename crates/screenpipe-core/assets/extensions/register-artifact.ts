@@ -90,7 +90,10 @@ export default function (pi: ExtensionAPI) {
       const apiBase =
         process.env.SCREENPIPE_LOCAL_API_URL ||
         `http://localhost:${process.env.SCREENPIPE_PORT || "3030"}`;
-      const authKey = process.env.SCREENPIPE_LOCAL_API_KEY || "";
+      const authKey =
+        process.env.SCREENPIPE_LOCAL_API_KEY ||
+        process.env.SCREENPIPE_API_AUTH_KEY ||
+        "";
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
