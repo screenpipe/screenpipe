@@ -153,4 +153,47 @@ describe("mcp-bridge tool error handling", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("sp_mcp_list_tools failed: Failed to reach server registry");
   });
+
+  it("fetches tools across multiple enabled servers concurrently in parallel", async () => {
+    globalThis.fetch = vi.fn(async (url: string) => {
+      if (url.endsWith("/mcp-servers")) {
+        return {
+          ok: true,
+          json: async () => ({
+            data: [
+              { id: "github", name: "GitHub", url: "http://localhost:8001", enabled: true },
+              { id: "slack", name: "Slack", url: "http://localhost:8002", enabled: true },
+            ],
+          }),
+        } as any;
+      }
+      if (url.includes("/github/tools")) {
+        return {
+          ok: true,
+          json: async () => ({ data: { tools: [{ name: "list_issues", description: "List issues" }] } }),
+        } as any;
+      }
+      if (url.includes("/slack/tools")) {
+        return {
+          ok: true,
+          json: async () => ({ data: { tools: [{ name: "post_message", description: "Post message" }] } }),
+        } as any;
+      }
+      return { ok: false, status: 404, text: async () => "not found" } as any;
+    }) as any;
+
+    const { listTools } = getMcpBridgeTools();
+    const result = await listTools.execute(
+      "list_2",
+      {},
+      new AbortController().signal,
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain("GitHub (github)");
+    expect(result.content[0].text).toContain("list_issues");
+    expect(result.content[0].text).toContain("Slack (slack)");
+    expect(result.content[0].text).toContain("post_message");
+    expect(result.details.servers).toHaveLength(2);
+  });
 });

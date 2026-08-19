@@ -126,42 +126,41 @@ export default function (pi: ExtensionAPI) {
           server_name: string;
           tools: ToolDescriptor[];
           error?: string;
-        }> = [];
-
-        for (const srv of targets) {
-          try {
-            const res = await fetch(`${API_BASE}/${encodeURIComponent(srv.id)}/tools`, {
-              method: "GET",
-              headers: { ...authHeaders() },
-              signal,
-            });
-            if (!res.ok) {
-              const text = await res.text().catch(() => "");
-              results.push({
+        }> = await Promise.all(
+          targets.map(async (srv) => {
+            try {
+              const res = await fetch(`${API_BASE}/${encodeURIComponent(srv.id)}/tools`, {
+                method: "GET",
+                headers: { ...authHeaders() },
+                signal,
+              });
+              if (!res.ok) {
+                const text = await res.text().catch(() => "");
+                return {
+                  server_id: srv.id,
+                  server_name: srv.name,
+                  tools: [],
+                  error: `${res.status}: ${text.slice(0, 200)}`,
+                };
+              }
+              const body = (await res.json()) as {
+                data?: { tools?: ToolDescriptor[] };
+              };
+              return {
+                server_id: srv.id,
+                server_name: srv.name,
+                tools: body.data?.tools ?? [],
+              };
+            } catch (e: any) {
+              return {
                 server_id: srv.id,
                 server_name: srv.name,
                 tools: [],
-                error: `${res.status}: ${text.slice(0, 200)}`,
-              });
-              continue;
+                error: e?.message ?? String(e),
+              };
             }
-            const body = (await res.json()) as {
-              data?: { tools?: ToolDescriptor[] };
-            };
-            results.push({
-              server_id: srv.id,
-              server_name: srv.name,
-              tools: body.data?.tools ?? [],
-            });
-          } catch (e: any) {
-            results.push({
-              server_id: srv.id,
-              server_name: srv.name,
-              tools: [],
-              error: e?.message ?? String(e),
-            });
-          }
-        }
+          }),
+        );
 
         const text = results
           .map((r) => {
