@@ -621,7 +621,7 @@ export async function isOpencodeMcpInstalled(): Promise<boolean> {
 export async function installOpencodeMcp(): Promise<McpCommand> {
   const configPath = await getOpencodeConfigPath();
   const config = await readJsonConfigStrict(configPath);
-  const mcp = await buildMcpConfig();
+  const mcp = await buildMcpConfig({ client: "opencode" });
   if (!config.mcp || typeof config.mcp !== "object") config.mcp = {};
   (config.mcp as Record<string, unknown>).screenpipe = {
     type: "local",

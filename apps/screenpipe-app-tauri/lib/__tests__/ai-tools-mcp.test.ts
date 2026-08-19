@@ -90,6 +90,9 @@ import {
   uninstallRunnerMcp,
   installGeminiMcp,
   uninstallGeminiMcp,
+  installOpencodeMcp,
+  uninstallOpencodeMcp,
+  isOpencodeMcpInstalled,
   detectAiTools,
   connectAiTool,
   connectAiToolTargets,
@@ -104,6 +107,7 @@ const CLAUDE_CODE = "/Users/test/.claude.json";
 const HERMES = "/Users/test/.hermes/config.yaml";
 const RUNNER = "/Users/test/.runner/mcp.json";
 const GEMINI = "/Users/test/.gemini/settings.json";
+const OPENCODE = "/Users/test/.config/opencode/opencode.json";
 
 const backupsOf = (path: string) =>
   Array.from(fsMock.files.keys()).filter((p) => p.startsWith(`${path}.screenpipe-backup-`));
@@ -334,6 +338,86 @@ describe("gemini CLI MCP", () => {
   });
 });
 
+describe("opencode MCP", () => {
+  it("detects OpenCode from its XDG config directory, not a home dot-dir", async () => {
+    fsMock.files.set("/Users/test/.config/opencode", "directory marker");
+
+    await expect(detectAiTools()).resolves.toContain("opencode");
+  });
+
+  // OpenCode's config is the one shape in this file that does not follow the
+  // `mcpServers` convention: servers nest under a top-level `mcp` key,
+  // `command` is a single array rather than split command+args, `enabled` is
+  // explicit, and the environment block is `environment` rather than `env`.
+  // https://opencode.ai/docs/mcp-servers/#local-server
+  //
+  // Every one of those is silently wrong-but-valid JSON if it regresses:
+  // OpenCode would simply not see the server, with no error anywhere.
+  it("writes OpenCode's bespoke schema rather than the mcpServers convention", async () => {
+    await installOpencodeMcp();
+
+    const config = JSON.parse(fsMock.files.get(OPENCODE)!);
+    expect(config.mcpServers).toBeUndefined();
+
+    const entry = config.mcp.screenpipe;
+    expect(entry.type).toBe("local");
+    expect(entry.enabled).toBe(true);
+    // command+args flattened into one array, not split fields
+    expect(entry.command).toEqual(["/app/bun", "x", "screenpipe-mcp@latest"]);
+    expect(entry.args).toBeUndefined();
+    // `environment`, not `env`
+    expect(entry.env).toBeUndefined();
+    expect(entry.environment.SCREENPIPE_LOCAL_API_KEY).toBe("sp-test");
+    expect(entry.environment.SCREENPIPE_MCP_CLIENT).toBe("opencode");
+  });
+
+  it("preserves unrelated OpenCode settings and servers across install and remove", async () => {
+    const seeded = JSON.stringify({
+      mcp: { other: { type: "local", command: ["other-server"], enabled: true } },
+      theme: "opencode-dark",
+      model: "anthropic/claude-sonnet-4",
+    });
+    fsMock.files.set(OPENCODE, seeded);
+
+    await installOpencodeMcp();
+
+    const config = JSON.parse(fsMock.files.get(OPENCODE)!);
+    expect(config.theme).toBe("opencode-dark");
+    expect(config.model).toBe("anthropic/claude-sonnet-4");
+    expect(config.mcp.other.command).toEqual(["other-server"]);
+    expect(config.mcp.screenpipe).toBeTruthy();
+    expect(backupsOf(OPENCODE)).toHaveLength(1);
+    expect(fsMock.files.get(backupsOf(OPENCODE)[0])).toBe(seeded);
+
+    await uninstallOpencodeMcp();
+    const removed = JSON.parse(fsMock.files.get(OPENCODE)!);
+    expect(removed.mcp.screenpipe).toBeUndefined();
+    expect(removed.mcp.other.command).toEqual(["other-server"]);
+    expect(removed.theme).toBe("opencode-dark");
+  });
+
+  it("reports installed state from the mcp key, and uninstall stays idempotent", async () => {
+    await expect(isOpencodeMcpInstalled()).resolves.toBe(false);
+    await expect(uninstallOpencodeMcp()).resolves.toBeUndefined(); // missing → no-op
+
+    await installOpencodeMcp();
+    await expect(isOpencodeMcpInstalled()).resolves.toBe(true);
+
+    await uninstallOpencodeMcp();
+    await expect(isOpencodeMcpInstalled()).resolves.toBe(false);
+    await expect(uninstallOpencodeMcp()).resolves.toBeUndefined(); // no entry → no-op
+  });
+
+  it("refuses to overwrite an invalid config and leaves it untouched", async () => {
+    fsMock.files.set(OPENCODE, "{ definitely not json");
+
+    await expect(installOpencodeMcp()).rejects.toThrow(/not valid JSON/);
+
+    expect(fsMock.files.get(OPENCODE)).toBe("{ definitely not json");
+    expect(backupsOf(OPENCODE)).toHaveLength(0);
+  });
+});
+
 describe("friendlyToolError", () => {
   it("keeps the absolute path for the open-file action but displays it tildified", () => {
     const err = friendlyToolError(
@@ -387,6 +471,16 @@ describe("transactional connect / disconnect", () => {
     await disconnectAiTool("gemini");
     expect(skillsMock.removeExternalAgentSkills).toHaveBeenCalledWith("gemini");
     expect(tauriMock.setAiToolAutoConnectOptOut).toHaveBeenCalledWith("gemini", true);
+  });
+
+  it("installs and removes OpenCode's skills with its MCP entry", async () => {
+    await connectAiTool("opencode");
+    expect(skillsMock.installExternalAgentSkills).toHaveBeenCalledWith("opencode");
+    expect(JSON.parse(fsMock.files.get(OPENCODE)!).mcp.screenpipe).toBeTruthy();
+
+    await disconnectAiTool("opencode");
+    expect(skillsMock.removeExternalAgentSkills).toHaveBeenCalledWith("opencode");
+    expect(JSON.parse(fsMock.files.get(OPENCODE)!).mcp.screenpipe).toBeUndefined();
   });
 
   it("disconnect removes skills even when the MCP step fails, then rethrows", async () => {
