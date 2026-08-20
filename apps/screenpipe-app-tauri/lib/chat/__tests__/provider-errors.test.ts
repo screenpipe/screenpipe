@@ -96,6 +96,20 @@ describe("provider error copy", () => {
     expect(msg?.toLowerCase()).not.toContain("ollama");
   });
 
+  it("maps Bun socket-close errors to retryable connectivity copy", () => {
+    const raw =
+      "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()";
+    const presentation = buildProviderErrorPresentation(raw, {
+      provider: "pi",
+      model: "auto",
+    });
+
+    expect(presentation).toMatchObject({ kind: "provider", retryable: true });
+    expect(presentation?.message).toContain("screenpipe cloud");
+    expect(presentation?.message.toLowerCase()).toContain("try again");
+    expect(presentation?.message).not.toContain("verbose: true");
+  });
+
   it("maps the gateway TLS-handshake / send-request signatures the same way", () => {
     // exact strings observed reaching the app during the 2026-06-18 outage
     for (const raw of [

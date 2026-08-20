@@ -93,6 +93,7 @@ function isConnectionLikeError(errorStr: string): boolean {
     normalized.includes("connection error") ||
     normalized.includes("failed to fetch") ||
     normalized.includes("fetch failed") ||
+    normalized.includes("socket connection was closed unexpectedly") ||
     normalized.includes("econnrefused") ||
     normalized.includes("connection refused") ||
     // network/TLS signatures seen reaching the chat from the gateway, e.g. the
