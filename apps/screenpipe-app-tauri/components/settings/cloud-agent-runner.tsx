@@ -211,12 +211,13 @@ export function CloudAgentRunner({
       try {
         await api.savePipe(pipeName, nextAgent, nextCloud);
       } catch (cause) {
+        onSaved(agent, cloudAgent ?? null);
         setError(errorMessage(cause, "couldn't save cloud runner"));
       } finally {
         setSaving(false);
       }
     },
-    [api, onSaved, pipeName],
+    [agent, api, cloudAgent, onSaved, pipeName],
   );
 
   const chooseRunner = (value: string) => {

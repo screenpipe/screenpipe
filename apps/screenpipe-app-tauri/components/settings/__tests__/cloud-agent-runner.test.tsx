@@ -359,4 +359,144 @@ describe("CloudAgentRunner", () => {
     });
     expect(screen.queryByText(/GitHub OAuth/i)).not.toBeInTheDocument();
   });
+
+  it("keeps manual codebase entry available when discovery is offline", async () => {
+    fetchMock.mockImplementation(async (url) => {
+      if (String(url).endsWith("/cloud-agents/claude/codebases")) {
+        throw new Error("offline");
+      }
+      if (String(url).endsWith("/cloud-agents/status")) {
+        return response({
+          providers: [
+            {
+              provider: "claude",
+              available: true,
+              configured: true,
+              detail: "connected to your Claude account",
+            },
+          ],
+        });
+      }
+      return response({ ok: true });
+    });
+
+    renderRunner({ provider: "claude" }, "offline-codebase");
+    const codebase = screen.getByTestId("cloud-agent-codebase-select");
+    fireEvent.change(codebase, {
+      target: { value: "screenpipe/screenpipe" },
+    });
+    fireEvent.blur(codebase);
+
+    await waitFor(() => {
+      const saveCall = fetchMock.mock.calls.find(([url, init]) => {
+        if (!String(url).includes("/pipes/offline-codebase/config")) {
+          return false;
+        }
+        return (
+          JSON.parse(String(init?.body)).cloud_agent.repository ===
+          "screenpipe/screenpipe"
+        );
+      });
+      expect(saveCall).toBeTruthy();
+    });
+  });
+
+  it("shows connection failures and leaves the provider disconnected", async () => {
+    fetchMock.mockImplementation(async (url) => {
+      if (String(url).endsWith("/cloud-agents/status")) {
+        return response({
+          providers: [
+            {
+              provider: "codex",
+              available: true,
+              configured: false,
+              detail: "connect your ChatGPT account",
+            },
+          ],
+        });
+      }
+      if (String(url).endsWith("/cloud-agents/codex/connect")) {
+        return response({ error: "sign-in was cancelled" }, false);
+      }
+      return response({ codebases: [] });
+    });
+
+    renderRunner({ environment_id: "env_screenpipe" });
+    fireEvent.click(await screen.findByTestId("cloud-agent-connect"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "sign-in was cancelled",
+    );
+    expect(
+      screen.getByText("connect your ChatGPT account"),
+    ).toBeInTheDocument();
+  });
+
+  it("rolls back an optimistic runner change when saving fails", async () => {
+    fetchMock.mockImplementation(async (url) => {
+      if (String(url).includes("/pipes/day-recap/config")) {
+        return response({ error: "could not write pipe config" }, false);
+      }
+      if (String(url).endsWith("/cloud-agents/status")) {
+        return response({
+          providers: [
+            {
+              provider: "codex",
+              available: true,
+              configured: true,
+              detail: "connected to your ChatGPT account",
+            },
+          ],
+        });
+      }
+      return response({ codebases: [] });
+    });
+
+    renderRunner({ environment_id: "env_screenpipe" });
+    fireEvent.click(screen.getByTestId("cloud-agent-memory-select"));
+    fireEvent.click(await screen.findByText("share relevant context"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "could not write pipe config",
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("cloud-agent-memory-select")).toHaveTextContent(
+        "not shared",
+      ),
+    );
+  });
+
+  it("starts a provider switch with clean provider-specific settings", async () => {
+    fetchMock.mockImplementation(async (url) => {
+      if (String(url).endsWith("/cloud-agents/status")) {
+        return response({ providers: [] });
+      }
+      return response({ ok: true, codebases: [] });
+    });
+
+    renderRunner({
+      provider: "codex",
+      environment_id: "env_old",
+      branch: "feature/old",
+      send_screenpipe_context: true,
+    });
+    fireEvent.click(screen.getByTestId("cloud-agent-provider-select"));
+    fireEvent.click(await screen.findByText("Claude in the cloud"));
+
+    await waitFor(() => {
+      const saveCall = fetchMock.mock.calls.find(([url, init]) => {
+        if (!String(url).includes("/pipes/day-recap/config")) return false;
+        const payload = JSON.parse(String(init?.body));
+        return payload.cloud_agent?.provider === "claude";
+      });
+      expect(saveCall).toBeTruthy();
+      const payload = JSON.parse(String(saveCall?.[1]?.body));
+      expect(payload.cloud_agent).toEqual({
+        provider: "claude",
+        send_screenpipe_context: false,
+        context_lookback_hours: 24,
+        context_max_items: 80,
+      });
+    });
+  });
 });

@@ -8123,6 +8123,43 @@ mod tests {
     use chrono::{TimeZone, Timelike};
     use std::sync::atomic::Ordering;
 
+    #[test]
+    fn cloud_scheduler_settings_preserve_task_and_provider_for_every_runner() {
+        for provider in ["codex", "claude", "cursor"] {
+            let source = format!(
+                "---\nschedule: daily\ncloud_agent:\n  provider: {provider}\n  send_screenpipe_context: false\n---\nSummarize my day"
+            );
+            let (config, task) = parse_frontmatter(&source).unwrap();
+            let settings = cloud_agent_run_settings(&config, &task).unwrap();
+
+            assert_eq!(settings.provider, provider);
+            assert_eq!(settings.model, "provider-default");
+            assert_eq!(settings.executor_config["task_instructions"], task);
+            assert_eq!(
+                settings.executor_config["cloud_agent"]["provider"],
+                provider
+            );
+            assert_eq!(
+                settings.executor_config["cloud_agent"]["send_screenpipe_context"],
+                false
+            );
+        }
+    }
+
+    #[test]
+    fn cloud_scheduler_rejects_missing_runner_configuration() {
+        let (config, task) =
+            parse_frontmatter("---\nschedule: daily\n---\nSummarize my day").unwrap();
+
+        assert_eq!(
+            cloud_agent_run_settings(&config, &task)
+                .err()
+                .unwrap()
+                .to_string(),
+            "cloud_agent config is missing"
+        );
+    }
+
     // -- scheduler lifecycle tests ------------------------------------------
 
     /// Helper: create a minimal PipeManager for testing (no executors, no store).

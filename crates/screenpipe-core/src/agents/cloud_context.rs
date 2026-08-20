@@ -11,7 +11,8 @@ use serde_json::Value;
 
 const MAX_CONTEXT_ITEMS: u32 = 200;
 const DEFAULT_CONTEXT_ITEMS: u32 = 80;
-const MAX_CONTEXT_CHARS: usize = 24_000;
+const MAX_CONTEXT_BYTES: usize = 24_000;
+const TRUNCATION_MARKER: &str = "\n[screenpipe context truncated]";
 
 pub(super) async fn fetch(
     client: &reqwest::Client,
@@ -141,16 +142,170 @@ async fn local_get(
 }
 
 fn truncate(body: String) -> String {
-    if body.len() <= MAX_CONTEXT_CHARS {
+    if body.len() <= MAX_CONTEXT_BYTES {
         return body;
     }
-    let mut end = MAX_CONTEXT_CHARS;
+    let mut end = MAX_CONTEXT_BYTES.saturating_sub(TRUNCATION_MARKER.len());
     while !body.is_char_boundary(end) {
         end -= 1;
     }
-    format!(
-        "{}\n[screenpipe context truncated at {} characters]",
-        &body[..end],
-        MAX_CONTEXT_CHARS
-    )
+    format!("{}{}", &body[..end], TRUNCATION_MARKER)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::cloud::CloudAgentProvider;
+    use wiremock::{
+        matchers::{header, method, path, query_param},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    fn config() -> CloudAgentConfig {
+        CloudAgentConfig {
+            provider: CloudAgentProvider::Codex,
+            environment_id: Some("env_screenpipe".into()),
+            branch: None,
+            session_id: None,
+            agent_id: None,
+            repository: None,
+            starting_ref: None,
+            model: None,
+            send_screenpipe_context: true,
+            context_lookback_hours: Some(8),
+            context_max_items: Some(999),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_prefers_sanitized_activity_capsule_and_sends_local_auth() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/activity-summary"))
+            .and(header("authorization", "Bearer local-key"))
+            .and(query_param("include_recording", "false"))
+            .and(query_param("include_memories", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{"apps":[{"name":"Code"}],"edited_files":[{"path":"/Users/me/private.rs"}]}"#,
+                "application/json",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let context = fetch(
+            &reqwest::Client::new(),
+            server.address().port(),
+            Some("local-key"),
+            &config(),
+        )
+        .await
+        .unwrap();
+
+        assert!(context.contains("Code"));
+        assert!(!context.contains("edited_files"));
+        assert!(!context.contains("private.rs"));
+    }
+
+    #[tokio::test]
+    async fn fetch_falls_back_to_bounded_field_limited_search() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/activity-summary"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .and(query_param("content_type", "all"))
+            .and(query_param("limit", "200"))
+            .and(query_param("max_content_length", "800"))
+            .and(query_param(
+                "fields",
+                "type,content.timestamp,content.app_name,content.window_name,content.text,content.transcription,content.name",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_string("bounded fallback"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let context = fetch(
+            &reqwest::Client::new(),
+            server.address().port(),
+            None,
+            &config(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(context, "bounded fallback");
+    }
+
+    #[tokio::test]
+    async fn fetch_falls_back_when_activity_capsule_json_is_malformed() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/activity-summary"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("safe fallback"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let context = fetch(
+            &reqwest::Client::new(),
+            server.address().port(),
+            None,
+            &config(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(context, "safe fallback");
+    }
+
+    #[tokio::test]
+    async fn fetch_fails_closed_when_both_local_context_sources_fail() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/activity-summary"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .respond_with(ResponseTemplate::new(429))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let error = fetch(
+            &reqwest::Client::new(),
+            server.address().port(),
+            None,
+            &config(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("activity capsule failed with HTTP 500"));
+        assert!(error.contains("raw search fallback also failed"));
+    }
+
+    #[test]
+    fn truncation_is_utf8_safe_and_respects_the_total_byte_cap() {
+        let context = truncate("é".repeat(MAX_CONTEXT_BYTES));
+
+        assert!(context.is_char_boundary(context.len()));
+        assert!(context.ends_with(TRUNCATION_MARKER));
+        assert!(context.len() <= MAX_CONTEXT_BYTES);
+    }
 }

@@ -29,9 +29,10 @@ pub const CURSOR_CLOUD_API_KEY_SECRET: &str = "cloud_agents.cursor.api_key";
 const CURSOR_API_BASE: &str = "https://api.cursor.com";
 const CURSOR_REPOSITORY_CACHE_TTL: Duration = Duration::from_secs(60);
 
-static CURSOR_REPOSITORY_CACHE: LazyLock<
-    AsyncMutex<Option<(Instant, Vec<CloudRepositorySummary>)>>,
-> = LazyLock::new(|| AsyncMutex::new(None));
+static CURSOR_REPOSITORY_CACHE: LazyLock<AsyncMutex<CursorRepositoryCache>> =
+    LazyLock::new(|| AsyncMutex::new(None));
+
+type CursorRepositoryCache = Option<(Instant, Vec<CloudRepositorySummary>)>;
 
 fn repository_label(url: &str) -> String {
     let normalized = url.trim_end_matches('/').trim_end_matches(".git");
@@ -549,6 +550,18 @@ impl CloudAgentExecutor {
         Ok(format!("https://github.com/{}/{}", parts[0], parts[1]))
     }
 
+    fn normalize_cursor_agent_id(value: &str) -> Result<&str> {
+        let agent_id = value.trim();
+        let valid = agent_id.starts_with("bc-")
+            && agent_id
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '-');
+        if !valid {
+            return Err(anyhow!("the selected Cursor agent ID is invalid"));
+        }
+        Ok(agent_id)
+    }
+
     async fn remote_prompt(&self, task_prompt: &str, config: &CloudAgentConfig) -> Result<String> {
         let context = if config.send_screenpipe_context {
             Some(
@@ -563,8 +576,13 @@ impl CloudAgentExecutor {
         } else {
             None
         };
+        let context_guidance = if context.is_some() {
+            "Use only the bounded screenpipe context included below when it is relevant."
+        } else {
+            "No screenpipe recording context is available for this run."
+        };
         let mut prompt = format!(
-            "You are running a screenpipe scheduled task. Complete it using the bounded context included below. Do not try to access localhost or the user's device. Return the useful result directly in your final response.\n\nTASK\n{}",
+            "You are running a screenpipe scheduled task. {context_guidance} Do not try to access localhost or the user's device. Return the useful result directly in your final response.\n\nTASK\n{}",
             task_prompt.trim(),
         );
         if let Some(context) = context {
@@ -769,16 +787,9 @@ impl CloudAgentExecutor {
             .agent_id
             .as_deref()
             .map(str::trim)
-            .filter(|value| !value.is_empty());
-        if let Some(agent_id) = existing_agent {
-            let valid = agent_id.starts_with("bc-")
-                && agent_id
-                    .chars()
-                    .all(|character| character.is_ascii_alphanumeric() || character == '-');
-            if !valid {
-                return Err(anyhow!("the selected Cursor agent ID is invalid"));
-            }
-        }
+            .filter(|value| !value.is_empty())
+            .map(Self::normalize_cursor_agent_id)
+            .transpose()?;
         let mut body = json!({ "prompt": { "text": prompt } });
         if existing_agent.is_none() {
             body["name"] = json!("screenpipe scheduled task");
@@ -821,6 +832,14 @@ impl CloudAgentExecutor {
             .context("failed to reach Cursor Cloud Agents")?;
         let status = response.status();
         let text = response.text().await?;
+        Self::cursor_launch_output(status, &text, existing_agent)
+    }
+
+    fn cursor_launch_output(
+        status: reqwest::StatusCode,
+        text: &str,
+        existing_agent: Option<&str>,
+    ) -> Result<AgentOutput> {
         if !status.is_success() {
             return Ok(AgentOutput {
                 stdout: String::new(),
@@ -829,7 +848,7 @@ impl CloudAgentExecutor {
                 pid: None,
             });
         }
-        let value: Value = serde_json::from_str(&text)?;
+        let value: Value = serde_json::from_str(text)?;
         let cursor_url =
             existing_agent.map(|agent_id| format!("https://cursor.com/agents/{agent_id}"));
         let url = value
@@ -837,11 +856,11 @@ impl CloudAgentExecutor {
             .and_then(Value::as_str)
             .map(str::to_string)
             .or(cursor_url)
-            .unwrap_or_else(|| "Cursor Cloud agent created".into());
+            .ok_or_else(|| anyhow!("Cursor Cloud returned no agent URL"))?;
         let run_id = value
             .pointer("/run/id")
             .and_then(Value::as_str)
-            .unwrap_or("unknown run");
+            .ok_or_else(|| anyhow!("Cursor Cloud returned no run ID"))?;
         Ok(AgentOutput {
             stdout: format!("launched in Cursor Cloud\n{url}\nrun: {run_id}"),
             stderr: String::new(),
@@ -935,6 +954,8 @@ impl AgentExecutor for CloudAgentExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::STOP_REQUESTED_PID;
+    use std::sync::{atomic::AtomicU32, Arc};
 
     #[test]
     fn cloud_agent_config_round_trips_without_secrets() {
@@ -1029,5 +1050,136 @@ mod tests {
             "https://github.com/screenpipe/screenpipe"
         );
         assert!(CloudAgentExecutor::normalize_github_repository("not a repo").is_err());
+        assert!(CloudAgentExecutor::normalize_github_repository(
+            "https://github.com/screenpipe/screenpipe/tree/main"
+        )
+        .is_err());
+        assert!(CloudAgentExecutor::normalize_github_repository(
+            "https://gitlab.com/screenpipe/screenpipe"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn provider_names_parse_strictly() {
+        assert_eq!(
+            CloudAgentProvider::from_str("codex").unwrap(),
+            CloudAgentProvider::Codex
+        );
+        assert_eq!(
+            CloudAgentProvider::from_str("claude").unwrap(),
+            CloudAgentProvider::Claude
+        );
+        assert_eq!(
+            CloudAgentProvider::from_str("cursor").unwrap(),
+            CloudAgentProvider::Cursor
+        );
+        assert!(CloudAgentProvider::from_str("Codex").is_err());
+        assert!(CloudAgentProvider::from_str("unknown").is_err());
+    }
+
+    #[test]
+    fn malformed_codex_task_lists_fail_without_guessing() {
+        assert!(CloudAgentExecutor::parse_codex_environments("not json").is_err());
+        assert!(CloudAgentExecutor::parse_codex_environments(r#"{"items":[]}"#).is_err());
+    }
+
+    #[test]
+    fn cursor_agent_ids_are_trimmed_and_validated_before_building_a_url() {
+        assert_eq!(
+            CloudAgentExecutor::normalize_cursor_agent_id(
+                "  bc-00000000-0000-0000-0000-000000000001  "
+            )
+            .unwrap(),
+            "bc-00000000-0000-0000-0000-000000000001"
+        );
+        assert!(CloudAgentExecutor::normalize_cursor_agent_id("agent-123").is_err());
+        assert!(CloudAgentExecutor::normalize_cursor_agent_id("bc-123/runs").is_err());
+    }
+
+    #[test]
+    fn cursor_rate_limits_are_returned_as_failed_runs() {
+        let output = CloudAgentExecutor::cursor_launch_output(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            r#"{"error":"rate limited"}"#,
+            None,
+        )
+        .unwrap();
+
+        assert!(!output.success);
+        assert!(output.stderr.contains("429 Too Many Requests"));
+        assert!(output.stderr.contains("rate limited"));
+    }
+
+    #[test]
+    fn cursor_success_responses_require_a_traceable_run() {
+        assert!(CloudAgentExecutor::cursor_launch_output(
+            reqwest::StatusCode::OK,
+            r#"{"agent":{"url":"https://cursor.com/agents/bc-1"}}"#,
+            None,
+        )
+        .is_err());
+        assert!(CloudAgentExecutor::cursor_launch_output(
+            reqwest::StatusCode::OK,
+            r#"{"run":{"id":"run-1"}}"#,
+            None,
+        )
+        .is_err());
+
+        let output = CloudAgentExecutor::cursor_launch_output(
+            reqwest::StatusCode::OK,
+            r#"{"run":{"id":"run-1"}}"#,
+            Some("bc-existing"),
+        )
+        .unwrap();
+        assert!(output.success);
+        assert!(output
+            .stdout
+            .contains("https://cursor.com/agents/bc-existing"));
+        assert!(output.stdout.contains("run: run-1"));
+    }
+
+    #[tokio::test]
+    async fn remote_prompt_honors_context_opt_out_without_contacting_local_api() {
+        let executor = CloudAgentExecutor::new(1, None);
+        let config = CloudAgentConfig {
+            provider: CloudAgentProvider::Claude,
+            environment_id: None,
+            branch: None,
+            session_id: None,
+            agent_id: None,
+            repository: None,
+            starting_ref: None,
+            model: None,
+            send_screenpipe_context: false,
+            context_lookback_hours: None,
+            context_max_items: None,
+        };
+
+        let prompt = executor
+            .remote_prompt("  summarize only this task  ", &config)
+            .await
+            .unwrap();
+
+        assert!(prompt.contains("TASK\nsummarize only this task"));
+        assert!(prompt.contains("No screenpipe recording context is available"));
+        assert!(prompt.contains("No screenpipe recording context was shared"));
+        assert!(!prompt.contains("CONTEXT CAPSULE"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pending_stop_cancels_a_spawned_cloud_cli_before_waiting() {
+        let shared_pid = Arc::new(AtomicU32::new(STOP_REQUESTED_PID));
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "sleep 10"]);
+
+        let error = CloudAgentExecutor::run_command(command, Some(shared_pid.clone()))
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert_eq!(error, "cloud-agent submission was cancelled");
+        assert_ne!(shared_pid.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }
