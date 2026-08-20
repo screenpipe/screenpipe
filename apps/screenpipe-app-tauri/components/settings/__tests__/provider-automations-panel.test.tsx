@@ -76,6 +76,9 @@ describe("ProviderAutomationsPanel", () => {
     );
     expect(screen.getByText("Daily review")).toBeInTheDocument();
     expect(screen.queryByText("Say hi")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "open Codex schedules" }),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: /Claude Code 1/i }));
 
@@ -90,6 +93,7 @@ describe("ProviderAutomationsPanel", () => {
     expect(
       screen.getByRole("button", { name: "open Claude schedules" }),
     ).toBeInTheDocument();
+    expect(screen.queryByText("open Claude schedules")).not.toBeInTheDocument();
   });
 
   it("uses the scheduled-task search for native provider rows", async () => {
@@ -110,10 +114,18 @@ describe("ProviderAutomationsPanel", () => {
     render(<ProviderAutomationsPanel onOpenProvider={onOpenProvider} />);
 
     expect(await screen.findByText("Daily review")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "open Codex" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "open Codex schedules" }),
+    );
 
     expect(onOpenProvider).toHaveBeenCalledWith("codex://automations");
-    expect(providerManagementUrl("claude")).toBeNull();
+    expect(providerManagementUrl("claude")).toBe("https://claude.ai");
+
+    fireEvent.click(screen.getByRole("tab", { name: /Claude Code 1/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "open Claude schedules" }),
+    );
+    expect(onOpenProvider).toHaveBeenCalledWith("https://claude.ai");
   });
 
   it("keeps Claude cloud schedules inside the Claude view", async () => {
@@ -237,7 +249,9 @@ describe("ProviderAutomationsPanel", () => {
     render(<ProviderAutomationsPanel onOpenProvider={onOpenProvider} />);
 
     expect(await screen.findByText("Daily review")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "open Codex" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "open Codex schedules" }),
+    );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "couldn't open Codex",

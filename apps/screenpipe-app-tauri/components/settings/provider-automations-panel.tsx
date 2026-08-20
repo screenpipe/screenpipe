@@ -196,7 +196,14 @@ export function providerScheduleLabel(task: ProviderAutomation): string {
 
 export function providerManagementUrl(provider: string): string | null {
   if (provider.toLowerCase() === "codex") return "codex://automations";
+  if (provider.toLowerCase() === "claude") return CLAUDE_CLOUD_URL;
   return null;
+}
+
+function providerManagementActionLabel(provider: string): string {
+  const name =
+    provider.toLowerCase() === "claude" ? "Claude" : providerLabel(provider);
+  return `open ${name} schedules`;
 }
 
 type ProviderOpenDependencies = {
@@ -369,15 +376,6 @@ export function ProviderAutomationsPanel({
     [onOpenProvider],
   );
 
-  const openClaudeCloud = React.useCallback(async () => {
-    setOpenError(null);
-    try {
-      await onOpenProvider(CLAUDE_CLOUD_URL);
-    } catch {
-      setOpenError("couldn't open Claude");
-    }
-  }, [onOpenProvider]);
-
   const mutateTask = React.useCallback(
     async (task: ProviderAutomation, action: "pause" | "resume" | "delete") => {
       setPendingTask(task.key);
@@ -398,21 +396,6 @@ export function ProviderAutomationsPanel({
     [load, onManageTask],
   );
 
-  const claudeCloudLink = (
-    <button
-      type="button"
-      aria-label="open Claude schedules"
-      title="open schedules in Claude"
-      className="flex min-h-10 w-full items-center gap-2 border-t border-border px-3 py-2 text-left transition-colors first:border-t-0 hover:bg-background/70"
-      onClick={() => void openClaudeCloud()}
-    >
-      <ProviderIcon provider="claude" />
-      <span className="text-xs font-medium">open Claude schedules</span>
-      <div className="flex-1" />
-      <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
-    </button>
-  );
-
   if (visible.length === 0) {
     if (query) return null;
     return (
@@ -420,7 +403,21 @@ export function ProviderAutomationsPanel({
         className="overflow-hidden border border-border bg-muted/10"
         data-testid="provider-automations-panel"
       >
-        {claudeCloudLink}
+        <div className="flex min-h-10 items-stretch">
+          <div className="flex min-w-0 flex-1 items-center gap-2 px-3">
+            <ProviderIcon provider="claude" />
+            <span className="truncate text-xs font-medium">Claude</span>
+          </div>
+          <button
+            type="button"
+            aria-label="open Claude schedules"
+            title="open Claude schedules"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center border-l border-border text-muted-foreground transition-colors hover:bg-foreground hover:text-background"
+            onClick={() => void manageProvider("claude")}
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </button>
+        </div>
         {openError && (
           <p
             className="border-t border-border px-4 py-2 text-xs text-destructive"
@@ -437,6 +434,9 @@ export function ProviderAutomationsPanel({
   const activeManagementUrl = activeProvider
     ? providerManagementUrl(activeProvider)
     : null;
+  const activeManagementAction = activeProvider
+    ? providerManagementActionLabel(activeProvider)
+    : "open provider schedules";
   const displayedActiveTasks =
     expandedProvider === activeProvider ? activeTasks : activeTasks.slice(0, 5);
   const hiddenTaskCount = activeTasks.length - displayedActiveTasks.length;
@@ -466,7 +466,7 @@ export function ProviderAutomationsPanel({
                   aria-selected={isActive}
                   aria-controls={`provider-panel-${provider}`}
                   className={cn(
-                    "inline-flex h-10 shrink-0 items-center gap-2 border-b-2 px-2.5 text-xs transition-colors",
+                    "inline-flex h-10 shrink-0 items-center gap-2 border-b-2 px-2.5 text-xs outline-none transition-colors focus-visible:border-foreground focus-visible:text-foreground",
                     isActive
                       ? "border-foreground bg-background text-foreground"
                       : "border-transparent text-muted-foreground hover:bg-background/70 hover:text-foreground",
@@ -499,8 +499,8 @@ export function ProviderAutomationsPanel({
         {activeManagementUrl && (
           <button
             type="button"
-            aria-label={`open ${activeProviderLabel}`}
-            title={`open ${activeProviderLabel}`}
+            aria-label={activeManagementAction}
+            title={activeManagementAction}
             className="inline-flex h-10 w-10 shrink-0 items-center justify-center border-l border-border text-muted-foreground transition-colors hover:bg-foreground hover:text-background"
             onClick={() => void manageProvider(activeProvider!)}
           >
@@ -637,8 +637,6 @@ export function ProviderAutomationsPanel({
           )}
         </div>
       )}
-
-      {!query && activeProvider === "claude" && claudeCloudLink}
 
       {openError && (
         <p
