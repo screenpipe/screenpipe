@@ -9,6 +9,7 @@ pub mod artifacts;
 pub mod audio;
 pub mod browser;
 pub mod capture;
+pub mod cloud_agents;
 pub mod cloud_proxy;
 pub mod connect_broker;
 pub mod content;

@@ -691,13 +691,21 @@ impl ServerCore {
             "acp".to_string(),
             Arc::new(
                 screenpipe_core::agents::acp::AcpExecutor::with_shared_user_token(
-                    cloud_token_handle,
+                    cloud_token_handle.clone(),
                     acp_gateway_url,
                     config.port,
                     config.api_auth_key.clone(),
                 ),
             ),
         );
+        let cloud_agent_executor = Arc::new(
+            screenpipe_core::agents::cloud::CloudAgentExecutor::new(
+                config.port,
+                config.api_auth_key.clone(),
+            )
+            .with_secret_store(server.secret_store.clone()),
+        );
+        agent_executors.insert("cloud-agent".to_string(), cloud_agent_executor);
 
         let pipe_store: Option<Arc<dyn screenpipe_core::pipes::PipeStore>> = Some(Arc::new(
             screenpipe_engine::pipe_store::SqlitePipeStore::new(db.clone()),

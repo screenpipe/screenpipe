@@ -54,6 +54,10 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { PipeTriggerPicker } from "./pipe-trigger-picker";
 import { ProviderAutomationsPanel } from "./provider-automations-panel";
+import {
+  CloudAgentRunner,
+  type CloudAgentConfig,
+} from "./cloud-agent-runner";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Select,
@@ -478,6 +482,7 @@ interface PipeConfig {
   agent: string;
   model: string;
   provider?: string;
+  cloud_agent?: CloudAgentConfig | null;
   effort?: PipeEffort;
   preset?: string | string[];
   enterprise_managed?: boolean;
@@ -3560,17 +3565,44 @@ export function PipesSection() {
                           </div>
                         </div>
 
-
-                        {/* Model — secondary; most pipes run fine on the default */}
                         <div className="p-4">
-                        <PipePresetSelector
-                          pipe={pipe}
-                          setPipes={setPipes}
-                          fetchPipes={fetchPipes}
-                          pendingConfigSaves={pendingConfigSaves}
-                          apiBase={apiBase}
-                        />
+                          <CloudAgentRunner
+                            pipeName={pipe.config.name}
+                            agent={pipe.config.agent}
+                            cloudAgent={pipe.config.cloud_agent}
+                            apiBase={apiBase}
+                            onSaved={(agent, cloudAgent) => {
+                              setPipes((previous) =>
+                                previous.map((candidate) =>
+                                  candidate.config.name === pipe.config.name
+                                    ? {
+                                        ...candidate,
+                                        is_bundled_builtin: false,
+                                        config: {
+                                          ...candidate.config,
+                                          agent,
+                                          cloud_agent: cloudAgent,
+                                        },
+                                      }
+                                    : candidate,
+                                ),
+                              );
+                            }}
+                          />
                         </div>
+
+                        {/* Model — only the local runner consumes AI presets. */}
+                        {pipe.config.agent !== "cloud-agent" && (
+                          <div className="p-4">
+                            <PipePresetSelector
+                              pipe={pipe}
+                              setPipes={setPipes}
+                              fetchPipes={fetchPipes}
+                              pendingConfigSaves={pendingConfigSaves}
+                              apiBase={apiBase}
+                            />
+                          </div>
+                        )}
 
                           </div>
                         )}

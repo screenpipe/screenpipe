@@ -13,6 +13,7 @@
 pub mod acp;
 pub mod bash_env;
 pub mod cli_runtime;
+pub mod cloud;
 pub mod pi;
 
 use anyhow::Result;
