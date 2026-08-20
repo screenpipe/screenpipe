@@ -364,6 +364,17 @@ impl CloudAgentExecutor {
         )
     }
 
+    fn sanitize_activity_capsule(body: &str) -> Result<String> {
+        let mut capsule: Value = serde_json::from_str(body)
+            .context("local screenpipe activity capsule returned invalid JSON")?;
+        if let Some(object) = capsule.as_object_mut() {
+            // Absolute local paths are useful on-device but cannot be opened by
+            // the cloud runner and should not cross the provider boundary.
+            object.remove("edited_files");
+        }
+        Ok(serde_json::to_string(&capsule)?)
+    }
+
     async fn fetch_activity_capsule(&self, config: &CloudAgentConfig) -> Result<String> {
         let hours = config.context_lookback_hours.unwrap_or(24).clamp(1, 24 * 7);
         let end = Utc::now();
@@ -398,7 +409,9 @@ impl CloudAgentExecutor {
                 "local screenpipe activity capsule failed with HTTP {status}"
             ));
         }
-        Ok(Self::truncate_context(body))
+        Ok(Self::truncate_context(Self::sanitize_activity_capsule(
+            &body,
+        )?))
     }
 
     async fn fetch_search_snapshot(&self, config: &CloudAgentConfig) -> Result<String> {
@@ -847,5 +860,16 @@ mod tests {
             CloudAgentExecutor::codex_auth_status_from_text(true, b"Logged in using ChatGPT", b""),
             (true, true)
         );
+    }
+
+    #[test]
+    fn cloud_capsule_strips_local_file_paths() {
+        let capsule = CloudAgentExecutor::sanitize_activity_capsule(
+            r#"{"apps":[{"name":"Code"}],"edited_files":[{"path":"/Users/me/secret.txt"}]}"#,
+        )
+        .unwrap();
+        assert!(capsule.contains("Code"));
+        assert!(!capsule.contains("edited_files"));
+        assert!(!capsule.contains("secret.txt"));
     }
 }

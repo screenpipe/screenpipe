@@ -684,10 +684,10 @@ export function CloudAgentRunner({
               <div className="border border-border bg-muted/20 p-3">
                 <p className="text-xs font-medium">relevant context capsule</p>
                 <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                  At run time, screenpipe builds a bounded activity summary with
-                  relevant screen text, transcript excerpts, and curated
-                  memories. Screenshots, audio files, the raw database, and live
-                  device access stay private.
+                  At run time, screenpipe builds a bounded summary with app and
+                  window activity, relevant screen text, transcript excerpts,
+                  and curated memories. Screenshots, audio files, local file
+                  paths, the raw database, and live device access stay private.
                 </p>
               </div>
               <div className="space-y-1.5">

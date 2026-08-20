@@ -72,7 +72,7 @@ describe("CloudAgentRunner", () => {
       screen.getByRole("button", { name: "review memory access" }),
     );
     expect(
-      await screen.findByText(/screenshots, audio files, the raw database/i),
+      await screen.findByText(/screenshots, audio files, local file paths/i),
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
