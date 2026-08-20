@@ -1780,8 +1780,7 @@ fn seed_pi_project_trust(project_dir: &str) -> Result<(), String> {
     }
     let body = serde_json::to_string_pretty(&map)
         .map_err(|e| format!("Failed to serialize trust.json: {}", e))?;
-    std::fs::write(&trust_path, body)
-        .map_err(|e| format!("Failed to write trust.json: {}", e))?;
+    std::fs::write(&trust_path, body).map_err(|e| format!("Failed to write trust.json: {}", e))?;
     debug!("seeded pi project trust for {:?}", trust_path);
     Ok(())
 }
@@ -1954,20 +1953,39 @@ fn apply_pi_tool_allowlist(command: &mut Command, provider_config: Option<&PiPro
 fn model_supports_reasoning(provider: &str, model: &str) -> bool {
     let model = model.to_ascii_lowercase();
     match provider {
-        "openai-byok" | "openai-chatgpt" | "custom" => {
+        "openai-byok" | "openai-chatgpt" => {
             model.starts_with("gpt-5")
                 || model.starts_with("o1")
                 || model.starts_with("o3")
                 || model.starts_with("o4")
         }
-        "anthropic-byok" => model.starts_with("claude-"),
-        "ollama" => {
-            model.contains("thinking")
-                || model.starts_with("qwen3")
-                || model.starts_with("deepseek-r1")
+        // Custom endpoints host OpenAI models behind proxies AND local
+        // reasoning models (llama.cpp, vLLM, LM Studio, ...). Without the
+        // local-model names here, a Qwen3/DeepSeek-R1 model on a custom
+        // provider is stamped `reasoning: false` and Pi silently drops the
+        // user's chosen thinking level. Servers that do not understand
+        // `reasoning_effort` reject it with an explicit API error rather
+        // than failing silently, which is the better failure mode.
+        "custom" => {
+            model.starts_with("gpt-5")
+                || model.starts_with("o1")
+                || model.starts_with("o3")
+                || model.starts_with("o4")
+                || is_local_reasoning_model(&model)
         }
+        "anthropic-byok" => model.starts_with("claude-"),
+        "ollama" => is_local_reasoning_model(&model),
         _ => false,
     }
+}
+
+/// Model-name heuristic for open-weight reasoning model families served
+/// locally (Ollama, llama.cpp, vLLM, LM Studio, and other OpenAI-compatible
+/// servers).
+fn is_local_reasoning_model(model_lowercase: &str) -> bool {
+    model_lowercase.contains("thinking")
+        || model_lowercase.starts_with("qwen3")
+        || model_lowercase.starts_with("deepseek-r1")
 }
 
 /// GPT-5.5 and GPT-5.6 reject function tools on OpenAI's Chat Completions
@@ -2173,8 +2191,7 @@ async fn ensure_pi_config(
         .map_err(|e| format!("Failed to create pi config dir: {}", e))?;
 
     let api_url = crate::config::screenpipe_ai_gateway_url()?;
-    let new_providers =
-        build_models_json_with_api_url(user_token, provider_config, &api_url).await;
+    let new_providers = build_models_json_with_api_url(user_token, provider_config, &api_url).await;
 
     // Merge into existing models.json to avoid race conditions with concurrent pipes
     let models_path = config_dir.join("models.json");
@@ -2553,9 +2570,7 @@ pub async fn pi_start_inner(
         if acp.id == "custom" && !has_custom_command {
             return Err("Custom ACP agents require a command".to_string());
         }
-        if acp.id != "custom"
-            && !crate::acp_runtime::is_known_agent(&acp.id)
-            && !has_custom_command
+        if acp.id != "custom" && !crate::acp_runtime::is_known_agent(&acp.id) && !has_custom_command
         {
             return Err(format!(
                 "Unknown ACP agent '{}'. Select a built-in agent or configure a custom command.",
@@ -3418,8 +3433,7 @@ pub async fn pi_start_inner(
             }
 
             if let Some(event) = parsed.as_ref() {
-                if event_type.as_deref() == Some("error")
-                    && sid_clone.contains("activity-history")
+                if event_type.as_deref() == Some("error") && sid_clone.contains("activity-history")
                 {
                     error!(
                         "Pi provider error (session {}): {}",
@@ -3941,15 +3955,7 @@ pub async fn pi_prompt(
     display_preview: Option<String>,
 ) -> Result<String, String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
-    pi_prompt_inner(
-        &app,
-        state.inner(),
-        &sid,
-        message,
-        images,
-        display_preview,
-    )
-    .await
+    pi_prompt_inner(&app, state.inner(), &sid, message, images, display_preview).await
 }
 
 pub(crate) async fn pi_prompt_inner(
@@ -4444,7 +4450,9 @@ pub async fn pi_acp_probe_agent(agent: AcpAgentConfig) -> Result<String, String>
         cmd.env("SCREENPIPE_ACP_COMMAND", command);
     }
 
-    let mut child = cmd.spawn().map_err(|e| format!("probe spawn failed: {e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("probe spawn failed: {e}"))?;
     let stdout = child.stdout.take().ok_or("probe stdout unavailable")?;
     use tokio::io::AsyncBufReadExt as _;
     let mut lines = tokio::io::BufReader::new(stdout).lines();
@@ -5422,7 +5430,10 @@ fn prewarm_screenpipe_mcp(bun: &str) {
                     Err(_) => break,
                 }
             }
-            info!("screenpipe-mcp prewarm complete ({})", crate::acp_runtime::SCREENPIPE_MCP_PKG);
+            info!(
+                "screenpipe-mcp prewarm complete ({})",
+                crate::acp_runtime::SCREENPIPE_MCP_PKG
+            );
         }
         Err(e) => warn!("screenpipe-mcp prewarm could not spawn bun: {}", e),
     }
@@ -7050,8 +7061,7 @@ error: InstallFailed extracting tarball"#;
 
     #[tokio::test]
     async fn test_build_models_json_uses_resolved_gateway_url() {
-        let config =
-            build_models_json_with_api_url(None, None, "http://127.0.0.1:8787/v1").await;
+        let config = build_models_json_with_api_url(None, None, "http://127.0.0.1:8787/v1").await;
         assert_eq!(
             config["providers"]["screenpipe"]["baseUrl"],
             "http://127.0.0.1:8787/v1"
@@ -7330,6 +7340,31 @@ error: InstallFailed extracting tarball"#;
     }
 
     #[tokio::test]
+    async fn test_build_models_json_custom_local_reasoning_models_support_reasoning() {
+        // Local reasoning families served through a custom OpenAI-compatible
+        // endpoint (llama.cpp, vLLM, LM Studio, ...) must be stamped
+        // `reasoning: true`, or Pi silently drops the user's thinking level.
+        for model in [
+            "qwen3.8-27b",
+            "Qwen3-32B",
+            "deepseek-r1:70b",
+            "my-thinking-model",
+        ] {
+            let mut pc = make_provider_config("custom", model);
+            pc.url = "http://127.0.0.1:8188/v1".to_string();
+            let config = build_models_json(None, Some(&pc)).await;
+            let models = config["providers"]["custom"]["models"].as_array().unwrap();
+            assert_eq!(models[0]["reasoning"], true, "{model}");
+        }
+        // Non-reasoning local names stay false.
+        let mut pc = make_provider_config("custom", "llama-3.3-70b");
+        pc.url = "http://127.0.0.1:8188/v1".to_string();
+        let config = build_models_json(None, Some(&pc)).await;
+        let models = config["providers"]["custom"]["models"].as_array().unwrap();
+        assert_eq!(models[0]["reasoning"], false);
+    }
+
+    #[tokio::test]
     async fn test_build_models_json_repairs_ai_genesis_custom_url() {
         for base_url in ["https://ai.ai-genesis.app", "https://api.ai-genesis.app/"] {
             let mut pc = make_provider_config("custom", "glm-5.2");
@@ -7498,7 +7533,10 @@ error: InstallFailed extracting tarball"#;
         // Screenpipe skills materialize under the fresh project's .pi/skills.
         super::ensure_screenpipe_skill(project_dir).expect("seed skills");
         let skills_dir = project.path().join(".pi").join("skills");
-        assert!(skills_dir.is_dir(), "skills dir must exist on a fresh profile");
+        assert!(
+            skills_dir.is_dir(),
+            "skills dir must exist on a fresh profile"
+        );
         assert!(
             std::fs::read_dir(&skills_dir)
                 .expect("read skills")
