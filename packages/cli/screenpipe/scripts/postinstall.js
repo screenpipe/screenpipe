@@ -8,6 +8,27 @@ const { existsSync } = require("node:fs");
 const { hostname } = require("node:os");
 const { join } = require("node:path");
 const https = require("node:https");
+const { version } = require("../package.json");
+
+const FALSY = /^(0|false|no|off)$/i;
+const DISABLE_ENV_VARS = [
+  "SCREENPIPE_DISABLE_TELEMETRY",
+  "SCREENPIPE_DISABLE_ANALYTICS",
+  "SCREENPIPE_TELEMETRY_DISABLED",
+  "SCREENPIPE_CLI_TELEMETRY_DISABLED",
+  "DO_NOT_TRACK",
+  "GITHUB_ACTIONS",
+  "CI",
+];
+
+function envFlagEnabled(value) {
+  const normalized = String(value || "").trim();
+  return Boolean(normalized) && !FALSY.test(normalized);
+}
+
+function telemetryDisabled() {
+  return DISABLE_ENV_VARS.some((key) => envFlagEnabled(process.env[key]));
+}
 
 function firstEnv(names) {
   for (const name of names) {
@@ -51,6 +72,10 @@ function supportTelemetryContext() {
 }
 
 function trackInstall() {
+  if (telemetryDisabled()) {
+    return;
+  }
+
   try {
     const supportContext = supportTelemetryContext();
     const distinctId =
@@ -60,6 +85,9 @@ function trackInstall() {
       distinct_id: distinctId,
       os: process.platform,
       arch: process.arch,
+      $lib: "screenpipe-cli-wrapper",
+      release: `screenpipe-cli@${version}`,
+      cli_wrapper_version: version,
       ...supportContext,
     };
     if (Object.keys(supportContext).length > 0) {

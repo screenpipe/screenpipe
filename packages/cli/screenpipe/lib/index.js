@@ -13,13 +13,16 @@ const PLATFORMS = {
   "win32-x64": "@screenpipe/cli-win32-x64",
 };
 
+function getPlatformPackage() {
+  return PLATFORMS[`${process.platform}-${process.arch}`] || null;
+}
+
 /**
  * Resolve the path to the screenpipe native binary for the current platform.
  * Returns the absolute path, or null if not installed.
  */
 function getBinaryPath() {
-  const key = `${process.platform}-${process.arch}`;
-  const pkg = PLATFORMS[key];
+  const pkg = getPlatformPackage();
   if (!pkg) return null;
 
   try {
@@ -63,4 +66,4 @@ function getApiKey() {
   }
 }
 
-module.exports = { getBinaryPath, getApiKey };
+module.exports = { getBinaryPath, getApiKey, getPlatformPackage };

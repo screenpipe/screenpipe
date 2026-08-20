@@ -9,29 +9,88 @@
 // eventually kills Node.js, the native binary becomes an orphan, and the
 // supervisor restarts — creating duplicate recorder processes on every cycle.
 const { spawn } = require("child_process");
-const { getBinaryPath } = require("./index.js");
+const { getBinaryPath, getPlatformPackage } = require("./index.js");
+const {
+  baseProperties,
+  telemetryDisabled,
+  trackCliEvent,
+} = require("./telemetry.js");
+
+const args = process.argv.slice(2);
+const binPackage = getPlatformPackage();
+const telemetryOff = telemetryDisabled(args);
+const startedAt = Date.now();
+
+function completionProperties(result, extra = {}) {
+  return {
+    ...baseProperties({ args, binPackage }),
+    result,
+    duration_ms: Date.now() - startedAt,
+    ...extra,
+  };
+}
+
+function trackCompletionAndExit(exitFn, properties) {
+  if (telemetryOff) {
+    exitFn();
+    return;
+  }
+
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    exitFn();
+  };
+
+  const timeout = setTimeout(finish, 900);
+  timeout.unref();
+  trackCliEvent("cli_command_completed", properties, { timeoutMs: 800 })
+    .then(finish, finish)
+    .finally(() => clearTimeout(timeout));
+}
 
 const bin = getBinaryPath();
 if (!bin) {
   const key = `${process.platform}-${process.arch}`;
-  console.error(
-    `screenpipe: no prebuilt binary for ${key}. ` +
-      `reinstall with: npm i -g screenpipe`,
+  trackCompletionAndExit(
+    () => {
+      console.error(
+        `screenpipe: no prebuilt binary for ${key}. ` +
+          `reinstall with: npm i -g screenpipe`,
+      );
+      process.exit(1);
+    },
+    completionProperties("missing_binary", { exit_code: 1 }),
   );
-  process.exit(1);
+  return;
+} else if (!telemetryOff) {
+  trackCliEvent(
+    "cli_command_started",
+    baseProperties({ args, binPackage }),
+    { timeoutMs: 800 },
+  ).finally(() => {});
 }
 
 // Tag engine telemetry as the npm/bunx CLI (vs desktop-app / source) so WAU can
 // be split by distribution. Respect an explicit override if one is already set.
-const child = spawn(bin, process.argv.slice(2), {
+const child = spawn(bin, args, {
   stdio: "inherit",
-  env: { ...process.env, SCREENPIPE_DISTRIBUTION: process.env.SCREENPIPE_DISTRIBUTION || "cli" },
+  env: {
+    ...process.env,
+    SCREENPIPE_DISTRIBUTION: process.env.SCREENPIPE_DISTRIBUTION || "cli",
+  },
 });
 let forwardingSignal = null;
 
 child.on("error", (error) => {
-  console.error(`screenpipe: failed to spawn binary: ${error.message}`);
-  process.exit(1);
+  trackCompletionAndExit(
+    () => {
+      console.error(`screenpipe: failed to spawn binary: ${error.message}`);
+      process.exit(1);
+    },
+    completionProperties("spawn_error", { exit_code: 1 }),
+  );
 });
 
 const signalNumbers = {
@@ -70,14 +129,32 @@ for (const signal of Object.keys(signalNumbers)) {
 
 child.on("exit", (status, signal) => {
   if (signal) {
-    reRaise(signal);
+    trackCompletionAndExit(
+      () => reRaise(signal),
+      completionProperties("signal", {
+        signal,
+        exit_code: 128 + (signalNumbers[signal] || 0),
+      }),
+    );
     return;
   }
 
   if (forwardingSignal) {
-    reRaise(forwardingSignal);
+    trackCompletionAndExit(
+      () => reRaise(forwardingSignal),
+      completionProperties("signal", {
+        signal: forwardingSignal,
+        exit_code: 128 + (signalNumbers[forwardingSignal] || 0),
+      }),
+    );
     return;
   }
 
-  process.exit(status ?? 0);
+  const exitCode = status ?? 0;
+  trackCompletionAndExit(
+    () => process.exit(exitCode),
+    completionProperties(exitCode === 0 ? "success" : "error", {
+      exit_code: exitCode,
+    }),
+  );
 });
