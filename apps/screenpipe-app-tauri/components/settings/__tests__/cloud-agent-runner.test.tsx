@@ -46,7 +46,7 @@ describe("CloudAgentRunner", () => {
     );
   });
 
-  it("requires an explicit switch before screenpipe context is shared", async () => {
+  it("requires an explicit memory choice before screenpipe context is shared", async () => {
     const onSaved = vi.fn();
     render(
       <CloudAgentRunner
@@ -64,15 +64,20 @@ describe("CloudAgentRunner", () => {
       />,
     );
 
-    expect(
-      screen.getByText(/no screenshots, audio files, database access/i),
-    ).toBeTruthy();
-    expect(screen.getByTestId("cloud-agent-context-opt-in")).toHaveAttribute(
-      "data-state",
-      "unchecked",
+    expect(screen.getByTestId("cloud-agent-memory-select")).toHaveTextContent(
+      "none",
     );
 
-    fireEvent.click(screen.getByTestId("cloud-agent-context-opt-in"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "review memory access" }),
+    );
+    expect(
+      await screen.findByText(/screenshots, audio files, the raw database/i),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+    fireEvent.click(screen.getByTestId("cloud-agent-memory-select"));
+    fireEvent.click(await screen.findByText("relevant context"));
 
     await waitFor(() => {
       const saveCall = fetchMock.mock.calls.find(([url]) =>
@@ -101,7 +106,12 @@ describe("CloudAgentRunner", () => {
       />,
     );
 
-    fireEvent.change(screen.getByPlaceholderText("paste API key"), {
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Cursor Cloud Agent settings",
+      }),
+    );
+    fireEvent.change(await screen.findByPlaceholderText("paste API key"), {
       target: { value: "cursor-user-key" },
     });
     fireEvent.click(screen.getByRole("button", { name: "save key" }));
@@ -120,6 +130,53 @@ describe("CloudAgentRunner", () => {
       String(url).includes("/pipes/day-recap/config"),
     );
     expect(configCalls).toHaveLength(0);
+  });
+
+  it("starts the provider account flow from one connect button", async () => {
+    fetchMock.mockImplementation(async (url) => {
+      if (String(url).endsWith("/cloud-agents/status")) {
+        return response({
+          providers: [
+            {
+              provider: "codex",
+              available: true,
+              configured: false,
+              detail: "connect your ChatGPT account",
+            },
+          ],
+        });
+      }
+      return response({ providers: [] });
+    });
+
+    render(
+      <CloudAgentRunner
+        pipeName="day-recap"
+        agent="cloud-agent"
+        cloudAgent={{
+          provider: "codex",
+          environment_id: "screenpipe",
+          send_screenpipe_context: false,
+          context_lookback_hours: 24,
+          context_max_items: 80,
+        }}
+        apiBase="http://localhost:3030"
+        onSaved={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("connect your ChatGPT account");
+    fireEvent.click(screen.getByTestId("cloud-agent-connect"));
+
+    await waitFor(() => {
+      const connectCall = fetchMock.mock.calls.find(([url]) =>
+        String(url).endsWith("/cloud-agents/connect"),
+      );
+      expect(connectCall).toBeTruthy();
+      expect(JSON.parse(String(connectCall?.[1]?.body))).toEqual({
+        provider: "codex",
+      });
+    });
   });
 
   it("loads and reuses an existing Cursor cloud agent", async () => {
@@ -166,7 +223,7 @@ describe("CloudAgentRunner", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTestId("cursor-existing-agent-select"));
+    fireEvent.click(await screen.findByTestId("cursor-existing-agent-select"));
     fireEvent.click(await screen.findByText("daily memory agent · active"));
 
     await waitFor(() => {

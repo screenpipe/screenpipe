@@ -6,8 +6,8 @@
 //!
 //! Codex and Claude reuse the user's authenticated provider CLI. Cursor uses
 //! the user's Cloud Agents API key from Screenpipe's encrypted SecretStore.
-//! Screenpipe context is fetched locally, reduced to a bounded text-only
-//! snapshot, and embedded in the remote prompt only after explicit opt-in.
+//! Screenpipe context is fetched locally, reduced to a bounded activity and
+//! memory capsule, and embedded in the remote prompt only after explicit opt-in.
 
 use super::{install_spawned_pid, AgentExecutor, AgentOutput, ExecutionHandle, SharedPid};
 use anyhow::{anyhow, Context, Result};
@@ -148,13 +148,30 @@ impl CloudAgentExecutor {
             .unwrap_or(false)
     }
 
-    async fn codex_is_authenticated(path: &Path) -> bool {
-        Command::new(path)
+    fn codex_auth_status_from_text(
+        authenticated: bool,
+        stdout: &[u8],
+        stderr: &[u8],
+    ) -> (bool, bool) {
+        let detail = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(stdout),
+            String::from_utf8_lossy(stderr)
+        )
+        .to_ascii_lowercase();
+        (authenticated, authenticated && detail.contains("chatgpt"))
+    }
+
+    async fn codex_auth_status(path: &Path) -> (bool, bool) {
+        let output = Command::new(path)
             .args(["login", "status"])
             .output()
             .await
-            .map(|output| output.status.success())
-            .unwrap_or(false)
+            .ok();
+        let Some(output) = output else {
+            return (false, false);
+        };
+        Self::codex_auth_status_from_text(output.status.success(), &output.stdout, &output.stderr)
     }
 
     async fn claude_is_authenticated(path: &Path) -> bool {
@@ -202,9 +219,9 @@ impl CloudAgentExecutor {
     pub async fn provider_statuses(&self) -> Vec<CloudAgentProviderStatus> {
         let codex = Self::provider_binary(CloudAgentProvider::Codex);
         let claude = Self::provider_binary(CloudAgentProvider::Claude);
-        let codex_authenticated = match codex.as_deref() {
-            Some(path) => Self::codex_is_authenticated(path).await,
-            None => false,
+        let (codex_authenticated, codex_chatgpt) = match codex.as_deref() {
+            Some(path) => Self::codex_auth_status(path).await,
+            None => (false, false),
         };
         let claude_cloud = match claude.as_deref() {
             Some(path) => Self::claude_supports_cloud(path).await,
@@ -220,13 +237,15 @@ impl CloudAgentExecutor {
             CloudAgentProviderStatus {
                 provider: "codex",
                 available: codex.is_some(),
-                configured: codex_authenticated,
-                detail: if codex_authenticated {
-                    "uses your Codex CLI login; choose a Cloud environment".into()
+                configured: codex_chatgpt,
+                detail: if codex_chatgpt {
+                    "connected to your ChatGPT account".into()
+                } else if codex_authenticated {
+                    "Codex Cloud needs a ChatGPT sign-in, not an API key".into()
                 } else if codex.is_some() {
-                    "sign in with `codex login` first".into()
+                    "connect your ChatGPT account".into()
                 } else {
-                    "install or sign in to Codex first".into()
+                    "install Codex to connect your ChatGPT account".into()
                 },
             },
             CloudAgentProviderStatus {
@@ -234,15 +253,15 @@ impl CloudAgentExecutor {
                 available: claude_cloud,
                 configured: claude_cloud && claude_authenticated,
                 detail: if claude_cloud && claude_authenticated {
-                    "uses your Claude account through claude --cloud".into()
+                    "connected to your Claude account".into()
                 } else if claude.is_some() {
                     if !claude_cloud {
-                        "update Claude Code to a version with --cloud".into()
+                        "update Claude Code to enable cloud sessions".into()
                     } else {
-                        "sign in with `claude auth login` first".into()
+                        "connect your Claude account".into()
                     }
                 } else {
-                    "install and sign in to Claude Code first".into()
+                    "install Claude Code to connect your account".into()
                 },
             },
             CloudAgentProviderStatus {
@@ -250,12 +269,58 @@ impl CloudAgentExecutor {
                 available: true,
                 configured: cursor_configured,
                 detail: if cursor_configured {
-                    "uses your Cursor Cloud Agents API key".into()
+                    "connected to your Cursor Cloud Agents".into()
                 } else {
-                    "add a Cursor Cloud Agents API key".into()
+                    "add a Cursor API key once".into()
                 },
             },
         ]
+    }
+
+    /// Starts the provider's first-party account flow. Credentials remain in
+    /// the provider CLI; screenpipe only checks whether cloud use is ready.
+    pub async fn connect_provider(&self, provider: CloudAgentProvider) -> Result<()> {
+        match provider {
+            CloudAgentProvider::Codex => {
+                let path = Self::provider_binary(provider)
+                    .ok_or_else(|| anyhow!("install Codex before connecting ChatGPT"))?;
+                let output = Self::run_cli(&path, vec!["login".into()], None).await?;
+                if !output.success {
+                    return Err(anyhow!("Codex could not complete the ChatGPT sign-in"));
+                }
+                let (_, chatgpt) = Self::codex_auth_status(&path).await;
+                if !chatgpt {
+                    return Err(anyhow!(
+                        "Codex Cloud requires ChatGPT sign-in; choose ChatGPT in the Codex login flow"
+                    ));
+                }
+            }
+            CloudAgentProvider::Claude => {
+                let path = Self::provider_binary(provider)
+                    .ok_or_else(|| anyhow!("install Claude Code before connecting Claude"))?;
+                if !Self::claude_supports_cloud(&path).await {
+                    let output = Self::run_cli(&path, vec!["update".into()], None).await?;
+                    if !output.success || !Self::claude_supports_cloud(&path).await {
+                        return Err(anyhow!(
+                            "Claude Code could not update to a version with cloud sessions"
+                        ));
+                    }
+                }
+                if !Self::claude_is_authenticated(&path).await {
+                    let output =
+                        Self::run_cli(&path, vec!["auth".into(), "login".into()], None).await?;
+                    if !output.success || !Self::claude_is_authenticated(&path).await {
+                        return Err(anyhow!("Claude could not complete account sign-in"));
+                    }
+                }
+            }
+            CloudAgentProvider::Cursor => {
+                return Err(anyhow!(
+                    "Cursor currently requires an API key from its integrations page"
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub async fn cursor_agents(&self) -> Result<Vec<CursorCloudAgentSummary>> {
@@ -284,8 +349,60 @@ impl CloudAgentExecutor {
             .ok_or_else(|| anyhow!("Cursor Cloud returned no agent list"))
     }
 
-    async fn fetch_context_snapshot(&self, config: &CloudAgentConfig) -> Result<String> {
-        let hours = config.context_lookback_hours.unwrap_or(8).clamp(1, 24 * 7);
+    fn truncate_context(body: String) -> String {
+        if body.len() <= MAX_CONTEXT_CHARS {
+            return body;
+        }
+        let mut end = MAX_CONTEXT_CHARS;
+        while !body.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!(
+            "{}\n[screenpipe context truncated at {} characters]",
+            &body[..end],
+            MAX_CONTEXT_CHARS
+        )
+    }
+
+    async fn fetch_activity_capsule(&self, config: &CloudAgentConfig) -> Result<String> {
+        let hours = config.context_lookback_hours.unwrap_or(24).clamp(1, 24 * 7);
+        let end = Utc::now();
+        let start = end - ChronoDuration::hours(i64::from(hours));
+        let url = format!("http://localhost:{}/activity-summary", self.api_port);
+        let mut request = self.client.get(url).query(&[
+            (
+                "start_time",
+                start.to_rfc3339_opts(SecondsFormat::Secs, true),
+            ),
+            ("end_time", end.to_rfc3339_opts(SecondsFormat::Secs, true)),
+            ("include_recording", "false".to_string()),
+            ("include_key_texts", "false".to_string()),
+            ("include_memories", "true".to_string()),
+            ("include_snippets", "true".to_string()),
+            ("include_guidance", "true".to_string()),
+            ("max_snippets", "12".to_string()),
+            ("max_snippet_chars", "700".to_string()),
+            ("max_memories", "20".to_string()),
+        ]);
+        if let Some(key) = self.api_auth_key.as_deref() {
+            request = request.bearer_auth(key);
+        }
+        let response = request
+            .send()
+            .await
+            .context("failed to build local screenpipe activity capsule")?;
+        let status = response.status();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(anyhow!(
+                "local screenpipe activity capsule failed with HTTP {status}"
+            ));
+        }
+        Ok(Self::truncate_context(body))
+    }
+
+    async fn fetch_search_snapshot(&self, config: &CloudAgentConfig) -> Result<String> {
+        let hours = config.context_lookback_hours.unwrap_or(24).clamp(1, 24 * 7);
         let limit = config
             .context_max_items
             .unwrap_or(DEFAULT_CONTEXT_ITEMS)
@@ -325,18 +442,17 @@ impl CloudAgentExecutor {
                 "local screenpipe context request failed with HTTP {status}"
             ));
         }
-        if body.len() <= MAX_CONTEXT_CHARS {
-            return Ok(body);
+        Ok(Self::truncate_context(body))
+    }
+
+    async fn fetch_context_capsule(&self, config: &CloudAgentConfig) -> Result<String> {
+        match self.fetch_activity_capsule(config).await {
+            Ok(capsule) => Ok(capsule),
+            Err(activity_error) => self
+                .fetch_search_snapshot(config)
+                .await
+                .with_context(|| format!("{activity_error}; raw search fallback also failed")),
         }
-        let mut end = MAX_CONTEXT_CHARS;
-        while !body.is_char_boundary(end) {
-            end -= 1;
-        }
-        Ok(format!(
-            "{}\n[screenpipe context truncated at {} characters]",
-            &body[..end],
-            MAX_CONTEXT_CHARS
-        ))
     }
 
     async fn remote_prompt(
@@ -345,7 +461,7 @@ impl CloudAgentExecutor {
         config: &CloudAgentConfig,
     ) -> Result<String> {
         let context = if config.send_screenpipe_context {
-            Some(self.fetch_context_snapshot(config).await?)
+            Some(self.fetch_context_capsule(config).await?)
         } else {
             None
         };
@@ -355,7 +471,7 @@ impl CloudAgentExecutor {
         );
         if let Some(context) = context {
             prompt.push_str(
-                "\n\nSCREENPIPE CONTEXT SNAPSHOT (TEXT ONLY; EXPLICITLY SHARED BY THE USER)\n",
+                "\n\nSCREENPIPE CONTEXT CAPSULE (BOUNDED ACTIVITY + MEMORY; EXPLICITLY SHARED BY THE USER)\n",
             );
             prompt.push_str(&context);
         } else {
@@ -715,5 +831,21 @@ mod tests {
         let json = serde_json::to_value(&config).unwrap();
         assert_eq!(json["provider"], "cursor");
         assert!(json.get("api_key").is_none());
+    }
+
+    #[test]
+    fn codex_cloud_requires_chatgpt_auth_not_an_api_key() {
+        assert_eq!(
+            CloudAgentExecutor::codex_auth_status_from_text(
+                true,
+                b"Logged in using an API key",
+                b""
+            ),
+            (true, false)
+        );
+        assert_eq!(
+            CloudAgentExecutor::codex_auth_status_from_text(true, b"Logged in using ChatGPT", b""),
+            (true, true)
+        );
     }
 }

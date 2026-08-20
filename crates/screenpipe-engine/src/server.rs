@@ -972,6 +972,10 @@ impl SCServer {
                 "/cloud-agents/status",
                 crate::routes::cloud_agents::cloud_agent_status,
             )
+            .post(
+                "/cloud-agents/connect",
+                crate::routes::cloud_agents::connect_cloud_agent,
+            )
             .get(
                 "/cloud-agents/cursor-agents",
                 crate::routes::cloud_agents::list_cursor_cloud_agents,
