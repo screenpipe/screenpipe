@@ -23,6 +23,20 @@
 //! the caller to decide on a non-tap fallback. Full-endpoint loopback stays
 //! available separately via `spawn_process_tap_capture`, which is explicitly
 //! system-wide by design (the Windows counterpart to the macOS global tap).
+//!
+//! Blind-tap fallback: some render paths never reach the process-loopback
+//! virtual device even on supported builds — observed with New Teams call
+//! audio (communications-category streams), where the tap delivers a healthy
+//! 48 kHz clock of all-zero frames while the app is audibly playing. That
+//! state is detected by cross-checking the tap against the target tree's own
+//! WASAPI session meter: sustained zero samples from the tap while the
+//! session meter reports real signal proves the tap is blind (a quiet call is
+//! never misread — the meter is quiet too, and the "silent tap must not
+//! rebuild" rule in `run_capture_loop` still holds for it). Only then does
+//! the supervisor rebuild as endpoint loopback of the endpoint carrying the
+//! target's active session. That widens capture to the endpoint mix, which is
+//! logged loudly; the alternative is recording nothing at all for the
+//! meeting.
 
 use anyhow::{anyhow, Result};
 use std::collections::HashSet;
@@ -41,14 +55,16 @@ use windows::Win32::Foundation::{
     CloseHandle, HANDLE, RPC_E_CHANGED_MODE, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows::Win32::Media::Audio::{
-    eConsole, eRender, ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
+    eConsole, eRender, ActivateAudioInterfaceAsync, AudioSessionStateActive,
+    Endpoints::IAudioMeterInformation, IActivateAudioInterfaceAsyncOperation,
     IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl,
-    IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
-    AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
-    AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK,
-    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, AUDIOCLIENT_ACTIVATION_PARAMS,
-    AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
-    AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+    IAudioCaptureClient, IAudioClient, IAudioSessionControl2, IAudioSessionManager2, IMMDevice,
+    IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
+    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+    AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+    AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
+    AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
+    DEVICE_STATE_ACTIVE, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
     PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
     WAVEFORMATEX, WAVE_FORMAT_PCM,
 };
@@ -69,6 +85,16 @@ const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(5);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(8);
 const CAPTURE_WAIT_MS: u32 = 250;
 const EXCLUSION_TARGET_POLL_INTERVAL: Duration = Duration::from_secs(2);
+// Blind-tap detection: the tap must stay at exact digital zero across this
+// many consecutive checks while the target's session meter shows real signal
+// before the supervisor falls back to endpoint loopback. The peak epsilon
+// sits just above one i16 LSB of dither (~3.1e-5); the meter floor is well
+// above the far-end speech levels observed when a tap goes blind (Teams call
+// audio meters at 0.4+ while the blind tap reads 0.0).
+const TAP_BLIND_CHECK_INTERVAL: Duration = Duration::from_secs(2);
+const TAP_BLIND_CONSECUTIVE_CHECKS: u32 = 3;
+const TAP_BLIND_TAP_PEAK_EPSILON: f32 = 1e-4;
+const TAP_BLIND_SESSION_PEAK_MIN: f32 = 0.01;
 const REBUILD_COOLDOWN_SECS: u64 = 60;
 const REBUILD_BACKOFF_CAP: u32 = 4;
 const MAX_CONSECUTIVE_REBUILD_FAILURES: u32 = 3;
@@ -169,6 +195,11 @@ enum LoopbackTarget {
     ProcessTree(u32),
     ExcludeProcessTree(u32),
     DefaultEndpoint,
+    /// Blind-tap fallback: endpoint loopback of whichever render endpoint
+    /// carries an active session owned by this root pid's tree. Resolved
+    /// fresh on every (re)build so the capture follows the app across device
+    /// switches (e.g. a Bluetooth headset flipping A2DP <-> hands-free).
+    TreeSessionEndpoint(u32),
 }
 
 impl LoopbackTarget {
@@ -177,6 +208,7 @@ impl LoopbackTarget {
             LoopbackTarget::ProcessTree(pid) => format!("process-tree:{pid}"),
             LoopbackTarget::ExcludeProcessTree(pid) => format!("exclude-process-tree:{pid}"),
             LoopbackTarget::DefaultEndpoint => "default-render-endpoint".to_string(),
+            LoopbackTarget::TreeSessionEndpoint(pid) => format!("tree-session-endpoint:{pid}"),
         }
     }
 }
@@ -337,16 +369,23 @@ fn spawn_wasapi_loopback(
 
         let mut rebuild_streak = 0u32;
         let mut rebuild_failures = 0u32;
+        // Once the blind-tap fallback engages it overrides the source's
+        // target for the rest of this capture's life; the next meeting gets a
+        // fresh tap attempt.
+        let mut fallback_target: Option<LoopbackTarget> = None;
 
         loop {
             let target_watch = match target {
-                LoopbackTarget::ProcessTree(pid) | LoopbackTarget::ExcludeProcessTree(pid) => {
-                    TargetProcessWatch::open(pid)
-                }
+                LoopbackTarget::ProcessTree(pid)
+                | LoopbackTarget::ExcludeProcessTree(pid)
+                | LoopbackTarget::TreeSessionEndpoint(pid) => TargetProcessWatch::open(pid),
                 LoopbackTarget::DefaultEndpoint => None,
             };
             let endpoint_baseline = match target {
                 LoopbackTarget::DefaultEndpoint => current_default_render_endpoint_id(),
+                LoopbackTarget::TreeSessionEndpoint(pid) => {
+                    unsafe { find_tree_render_session(pid) }.map(|found| found.endpoint_id)
+                }
                 LoopbackTarget::ProcessTree(_) | LoopbackTarget::ExcludeProcessTree(_) => None,
             };
             let exit = run_capture_loop(
@@ -374,7 +413,18 @@ fn spawn_wasapi_loopback(
                 break;
             }
 
-            target = source.current_target();
+            if exit == CaptureExit::TapBlind {
+                if let LoopbackTarget::ProcessTree(pid) = target {
+                    warn!(
+                        "Windows process tap is blind for tree {pid} (tap all-zero while the \
+                         app's session meter shows signal); widening to endpoint loopback of \
+                         the endpoint carrying its active session"
+                    );
+                    fallback_target = Some(LoopbackTarget::TreeSessionEndpoint(pid));
+                }
+            }
+
+            target = fallback_target.unwrap_or_else(|| source.current_target());
             thread_label = target.label();
 
             drop(capture);
@@ -453,6 +503,19 @@ unsafe fn build_wasapi_capture(target: LoopbackTarget) -> Result<WasapiLoopbackC
         LoopbackTarget::ProcessTree(pid) => activate_process_loopback_client(pid, false)?,
         LoopbackTarget::ExcludeProcessTree(pid) => activate_process_loopback_client(pid, true)?,
         LoopbackTarget::DefaultEndpoint => activate_default_endpoint_loopback_client()?,
+        LoopbackTarget::TreeSessionEndpoint(pid) => {
+            let found = find_tree_render_session(pid)
+                .ok_or_else(|| anyhow!("no active render session found for process tree {pid}"))?;
+            info!(
+                "Windows blind-tap fallback: endpoint loopback for tree {pid} on endpoint {}",
+                found.endpoint_id
+            );
+            let client: IAudioClient = found
+                .device
+                .Activate(CLSCTX_ALL, None)
+                .map_err(|e| anyhow!("failed to activate session endpoint IAudioClient: {e}"))?;
+            AudioClientSend(client)
+        }
     };
 
     let sample_ready = EventHandle(CreateEventW(None, false, false, PCWSTR::null())?);
@@ -552,6 +615,10 @@ enum CaptureExit {
     EndpointChanged,
     WaitFailed,
     DrainFailed,
+    /// The process tap streams zeros while the target tree's own session
+    /// meter shows real signal — per-process loopback cannot see this app's
+    /// render path. The supervisor rebuilds as `TreeSessionEndpoint`.
+    TapBlind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -564,7 +631,9 @@ enum SupervisorStep {
 fn supervisor_policy(exit: CaptureExit) -> SupervisorStep {
     match exit {
         CaptureExit::Disconnected | CaptureExit::TargetExited => SupervisorStep::Stop,
-        CaptureExit::EndpointChanged | CaptureExit::TargetChanged => SupervisorStep::RebuildNow,
+        CaptureExit::EndpointChanged | CaptureExit::TargetChanged | CaptureExit::TapBlind => {
+            SupervisorStep::RebuildNow
+        }
         CaptureExit::WaitFailed | CaptureExit::DrainFailed => SupervisorStep::RebuildAfterCooldown,
     }
 }
@@ -609,10 +678,15 @@ fn run_capture_loop(
     }
 
     let mut last_target_poll = std::time::Instant::now();
+    let mut blind_detector = BlindTapDetector::new();
+    let mut last_blind_check = std::time::Instant::now();
+    let mut window_peak = 0f32;
     while !is_disconnected.load(Ordering::Relaxed) {
         if last_target_poll.elapsed() >= EXCLUSION_TARGET_POLL_INTERVAL {
             last_target_poll = std::time::Instant::now();
-            if source.current_target() != active_target {
+            if source.current_target() != active_target
+                && !matches!(active_target, LoopbackTarget::TreeSessionEndpoint(_))
+            {
                 info!("Windows audio exclusion target changed; rebuilding loopback ({label})");
                 return CaptureExit::TargetChanged;
             }
@@ -621,11 +695,50 @@ fn run_capture_loop(
             info!("Windows WASAPI loopback target exited ({label})");
             return CaptureExit::TargetExited;
         }
-        if endpoint_baseline.is_some_and(|baseline| {
-            current_default_render_endpoint_id().is_some_and(|current| current != baseline)
-        }) {
+        if matches!(active_target, LoopbackTarget::DefaultEndpoint)
+            && endpoint_baseline.is_some_and(|baseline| {
+                current_default_render_endpoint_id().is_some_and(|current| current != baseline)
+            })
+        {
             info!("Windows default render endpoint changed; rebuilding loopback ({label})");
             return CaptureExit::EndpointChanged;
+        }
+
+        if last_blind_check.elapsed() >= TAP_BLIND_CHECK_INTERVAL {
+            last_blind_check = std::time::Instant::now();
+            match active_target {
+                LoopbackTarget::ProcessTree(pid) => {
+                    // Only pay for the session scan while the tap window was
+                    // silent; a tap with signal can never be blind.
+                    let session_peak = if window_peak < TAP_BLIND_TAP_PEAK_EPSILON {
+                        unsafe { find_tree_render_session(pid) }.map(|found| found.meter_peak)
+                    } else {
+                        None
+                    };
+                    if blind_detector.observe(window_peak, session_peak) {
+                        return CaptureExit::TapBlind;
+                    }
+                }
+                LoopbackTarget::TreeSessionEndpoint(pid) => {
+                    // Follow the app if its active session moves to another
+                    // endpoint (e.g. a headset profile flip). No move is
+                    // inferred while no session is visible — a quiet moment
+                    // must not bounce the capture.
+                    if let (Some(baseline), Some(found)) =
+                        (endpoint_baseline, unsafe { find_tree_render_session(pid) })
+                    {
+                        if found.endpoint_id != baseline {
+                            info!(
+                                "Windows tree session endpoint changed; rebuilding loopback \
+                                 ({label})"
+                            );
+                            return CaptureExit::EndpointChanged;
+                        }
+                    }
+                }
+                LoopbackTarget::ExcludeProcessTree(_) | LoopbackTarget::DefaultEndpoint => {}
+            }
+            window_peak = 0.0;
         }
 
         let wait = unsafe { WaitForSingleObject(capture.sample_ready.0, CAPTURE_WAIT_MS) };
@@ -634,9 +747,16 @@ fn run_capture_loop(
             return CaptureExit::WaitFailed;
         }
         if wait == WAIT_OBJECT_0 {
-            if let Err(error) = unsafe { drain_capture_packets(capture, tx) } {
-                warn!("Windows WASAPI loopback packet drain failed ({label}): {error}");
-                return CaptureExit::DrainFailed;
+            match unsafe { drain_capture_packets(capture, tx) } {
+                Ok(drained_peak) => {
+                    if drained_peak > window_peak {
+                        window_peak = drained_peak;
+                    }
+                }
+                Err(error) => {
+                    warn!("Windows WASAPI loopback packet drain failed ({label}): {error}");
+                    return CaptureExit::DrainFailed;
+                }
             }
         }
     }
@@ -644,10 +764,41 @@ fn run_capture_loop(
     CaptureExit::Disconnected
 }
 
+/// Decides when a process tap is provably blind: the tap must read exact
+/// digital silence while the target's own session meter reports real signal,
+/// for several consecutive checks. Plain silence (quiet call, muted far end)
+/// never trips it — the session meter is quiet then too.
+struct BlindTapDetector {
+    strikes: u32,
+}
+
+impl BlindTapDetector {
+    fn new() -> Self {
+        Self { strikes: 0 }
+    }
+
+    /// `tap_peak` is the tap's max |sample| since the last check;
+    /// `session_peak` is the target tree's session meter peak, when a scan
+    /// ran and found an active session. Returns true when the tap is blind.
+    fn observe(&mut self, tap_peak: f32, session_peak: Option<f32>) -> bool {
+        let tap_silent = tap_peak < TAP_BLIND_TAP_PEAK_EPSILON;
+        let session_loud = session_peak.is_some_and(|peak| peak > TAP_BLIND_SESSION_PEAK_MIN);
+        if tap_silent && session_loud {
+            self.strikes += 1;
+        } else {
+            self.strikes = 0;
+        }
+        self.strikes >= TAP_BLIND_CONSECUTIVE_CHECKS
+    }
+}
+
+/// Drains all pending packets; returns the max |sample| seen so the capture
+/// loop's blind-tap detector can compare the tap against the session meter.
 unsafe fn drain_capture_packets(
     capture: &WasapiLoopbackCapture,
     tx: &broadcast::Sender<Vec<f32>>,
-) -> Result<()> {
+) -> Result<f32> {
+    let mut peak = 0f32;
     loop {
         let frames = capture
             .capture_client
@@ -655,7 +806,7 @@ unsafe fn drain_capture_packets(
             .GetNextPacketSize()
             .map_err(|e| anyhow!("GetNextPacketSize failed: {e}"))?;
         if frames == 0 {
-            return Ok(());
+            return Ok(peak);
         }
 
         let mut data: *mut u8 = std::ptr::null_mut();
@@ -676,6 +827,12 @@ unsafe fn drain_capture_packets(
                 .map(|sample| *sample as f32 / i16::MAX as f32)
                 .collect::<Vec<f32>>()
         };
+        for sample in &interleaved {
+            let magnitude = sample.abs();
+            if magnitude > peak {
+                peak = magnitude;
+            }
+        }
         capture
             .capture_client
             .0
@@ -910,6 +1067,86 @@ fn select_target_root_pid(pids: &[i32]) -> Result<u32> {
     }
 }
 
+struct TreeRenderSession {
+    device: IMMDevice,
+    endpoint_id: String,
+    meter_peak: f32,
+}
+
+/// Scan every active render endpoint for WASAPI sessions whose owning process
+/// resolves (via the same parent walk as the tap target) into `root_pid`'s
+/// tree, and return the endpoint carrying the loudest active one.
+///
+/// Runs on the capture/supervisor thread inside its COM apartment, on the
+/// blind-check cadence and only while the tap window was silent — the session
+/// enumeration itself is a few milliseconds. The process snapshot matches the
+/// cheap refresh used by `find_excluded_process_root` (no CPU/disk extras).
+unsafe fn find_tree_render_session(root_pid: u32) -> Option<TreeRenderSession> {
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessRefreshKind::new());
+
+    let enumerator: IMMDeviceEnumerator =
+        CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
+    let devices = enumerator
+        .EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)
+        .ok()?;
+    let device_count = devices.GetCount().ok()?;
+
+    let mut best: Option<TreeRenderSession> = None;
+    for device_index in 0..device_count {
+        let Ok(device) = devices.Item(device_index) else {
+            continue;
+        };
+        let Ok(manager) = device.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) else {
+            continue;
+        };
+        let Ok(sessions) = manager.GetSessionEnumerator() else {
+            continue;
+        };
+        let session_count = sessions.GetCount().unwrap_or(0);
+        for session_index in 0..session_count {
+            let Ok(control) = sessions.GetSession(session_index) else {
+                continue;
+            };
+            let Ok(control2) = control.cast::<IAudioSessionControl2>() else {
+                continue;
+            };
+            let Ok(session_pid) = control2.GetProcessId() else {
+                continue;
+            };
+            if session_pid == 0 || resolve_root_pid_in(&system, session_pid) != root_pid {
+                continue;
+            }
+            if control.GetState() != Ok(AudioSessionStateActive) {
+                continue;
+            }
+            let meter_peak = control
+                .cast::<IAudioMeterInformation>()
+                .ok()
+                .and_then(|meter| meter.GetPeakValue().ok())
+                .unwrap_or(0.0);
+            if best
+                .as_ref()
+                .is_some_and(|found| found.meter_peak >= meter_peak)
+            {
+                continue;
+            }
+            let endpoint_id = device
+                .GetId()
+                .ok()
+                .map(CoTaskMemPwstr)
+                .and_then(|id| id.to_string())
+                .unwrap_or_default();
+            best = Some(TreeRenderSession {
+                device: device.clone(),
+                endpoint_id,
+                meter_peak,
+            });
+        }
+    }
+    best
+}
+
 pub(crate) fn resolve_target_root_pid(pid: u32) -> u32 {
     let mut sys = System::new();
     sys.refresh_processes_specifics(ProcessRefreshKind::new());
@@ -1046,6 +1283,52 @@ mod tests {
         assert_eq!(
             supervisor_policy(CaptureExit::DrainFailed),
             SupervisorStep::RebuildAfterCooldown
+        );
+    }
+
+    #[test]
+    fn tap_blind_rebuilds_immediately() {
+        assert_eq!(
+            supervisor_policy(CaptureExit::TapBlind),
+            SupervisorStep::RebuildNow
+        );
+    }
+
+    #[test]
+    fn blind_detector_needs_consecutive_silent_checks_with_loud_session() {
+        let mut detector = BlindTapDetector::new();
+        assert!(!detector.observe(0.0, Some(0.4)));
+        assert!(!detector.observe(0.0, Some(0.4)));
+        assert!(detector.observe(0.0, Some(0.4)), "third strike trips it");
+    }
+
+    #[test]
+    fn blind_detector_resets_when_tap_carries_audio() {
+        let mut detector = BlindTapDetector::new();
+        assert!(!detector.observe(0.0, Some(0.4)));
+        assert!(!detector.observe(0.0, Some(0.4)));
+        assert!(!detector.observe(0.2, Some(0.4)), "tap audio resets");
+        assert!(!detector.observe(0.0, Some(0.4)));
+        assert!(!detector.observe(0.0, Some(0.4)));
+        assert!(detector.observe(0.0, Some(0.4)));
+    }
+
+    #[test]
+    fn blind_detector_ignores_quiet_or_absent_sessions() {
+        let mut detector = BlindTapDetector::new();
+        // A silent tap during a quiet call (meter quiet or no session found)
+        // must never count as blindness.
+        for _ in 0..10 {
+            assert!(!detector.observe(0.0, None));
+            assert!(!detector.observe(0.0, Some(0.001)));
+        }
+    }
+
+    #[test]
+    fn tree_session_endpoint_label_names_the_tree() {
+        assert_eq!(
+            LoopbackTarget::TreeSessionEndpoint(42).label(),
+            "tree-session-endpoint:42"
         );
     }
 
