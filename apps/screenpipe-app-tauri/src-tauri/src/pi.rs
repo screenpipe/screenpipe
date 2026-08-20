@@ -1982,10 +1982,30 @@ fn model_supports_reasoning(provider: &str, model: &str) -> bool {
 /// Model-name heuristic for open-weight reasoning model families served
 /// locally (Ollama, llama.cpp, vLLM, LM Studio, and other OpenAI-compatible
 /// servers).
+///
+/// A name heuristic cannot be exhaustive — new reasoning families appear
+/// constantly and servers name models freely. The asymmetry decides the
+/// bias: a missed reasoning model degrades to the old silent no-op, while a
+/// false positive on a server that rejects `reasoning_effort` surfaces an
+/// explicit API error the user can act on. So list every family whose name
+/// unambiguously implies reasoning support.
 fn is_local_reasoning_model(model_lowercase: &str) -> bool {
+    const REASONING_FAMILIES: &[&str] = &[
+        "qwen3",
+        "qwq",
+        "deepseek-r1",
+        "gpt-oss",
+        "magistral",
+        "exaone-deep",
+        "phi-4-reasoning",
+        "phi-4-mini-reasoning",
+        "openthinker",
+        "smallthinker",
+    ];
     model_lowercase.contains("thinking")
-        || model_lowercase.starts_with("qwen3")
-        || model_lowercase.starts_with("deepseek-r1")
+        || REASONING_FAMILIES
+            .iter()
+            .any(|family| model_lowercase.starts_with(family))
 }
 
 /// GPT-5.5 and GPT-5.6 reject function tools on OpenAI's Chat Completions
