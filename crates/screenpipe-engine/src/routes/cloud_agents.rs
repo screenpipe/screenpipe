@@ -66,6 +66,32 @@ pub async fn list_cursor_cloud_agents(
     Ok(Json(json!({ "agents": agents })))
 }
 
+#[oasgen]
+pub async fn list_cursor_repositories(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let executor =
+        CloudAgentExecutor::new(3030, None).with_secret_store(state.secret_store.clone());
+    let repositories = executor
+        .cursor_repositories()
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(json!({ "repositories": repositories })))
+}
+
+#[oasgen]
+pub async fn list_codex_environments(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let executor =
+        CloudAgentExecutor::new(3030, None).with_secret_store(state.secret_store.clone());
+    let environments = executor
+        .codex_environments()
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(json!({ "environments": environments })))
+}
+
 #[derive(Debug, Deserialize, OaSchema)]
 pub struct CursorCloudKeyRequest {
     key: Option<String>,
@@ -97,6 +123,7 @@ pub async fn set_cursor_cloud_key(
             .await
             .map_err(internal_error)?,
     }
+    CloudAgentExecutor::clear_cursor_repository_cache().await;
     Ok(Json(json!({ "ok": true })))
 }
 

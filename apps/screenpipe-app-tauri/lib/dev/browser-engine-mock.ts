@@ -9,6 +9,7 @@ type MockCloudAgentProvider = "codex" | "claude" | "cursor";
 interface MockCloudAgentConfig {
   provider: MockCloudAgentProvider;
   environment_id?: string;
+  branch?: string;
   session_id?: string;
   agent_id?: string;
   repository?: string;
@@ -259,6 +260,23 @@ export function mockLocalApiResponse(
             },
           ]
         : [],
+    });
+  }
+  if (url.pathname === "/cloud-agents/codex-environments") {
+    return Response.json({
+      environments: [
+        { id: "screenpipe/screenpipe", label: "screenpipe/screenpipe" },
+        { id: "screenpipe/docs", label: "screenpipe/docs" },
+      ],
+    });
+  }
+  if (url.pathname === "/cloud-agents/cursor-repositories") {
+    return Response.json({
+      repositories: [
+        { url: "https://github.com/screenpipe/screenpipe" },
+        { url: "https://github.com/screenpipe/docs" },
+        { url: "https://github.com/example/product-app" },
+      ],
     });
   }
   if (url.pathname === "/search") {

@@ -15,14 +15,23 @@ use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+#[cfg(feature = "secrets")]
 use std::sync::Arc;
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 use tokio::process::Command;
+use tokio::sync::Mutex as AsyncMutex;
 
 pub const CURSOR_CLOUD_API_KEY_SECRET: &str = "cloud_agents.cursor.api_key";
 const CURSOR_API_BASE: &str = "https://api.cursor.com";
 const MAX_CONTEXT_ITEMS: u32 = 200;
 const DEFAULT_CONTEXT_ITEMS: u32 = 80;
 const MAX_CONTEXT_CHARS: usize = 24_000;
+const CURSOR_REPOSITORY_CACHE_TTL: Duration = Duration::from_secs(60);
+
+static CURSOR_REPOSITORY_CACHE: LazyLock<
+    AsyncMutex<Option<(Instant, Vec<CloudRepositorySummary>)>>,
+> = LazyLock::new(|| AsyncMutex::new(None));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -85,6 +94,17 @@ pub struct CursorCloudAgentSummary {
     pub name: String,
     pub status: String,
     pub url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct CloudRepositorySummary {
+    pub url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CodexCloudEnvironmentSummary {
+    pub id: String,
+    pub label: String,
 }
 
 pub struct CloudAgentExecutor {
@@ -349,6 +369,129 @@ impl CloudAgentExecutor {
             .ok_or_else(|| anyhow!("Cursor Cloud returned no agent list"))
     }
 
+    pub async fn cursor_repositories(&self) -> Result<Vec<CloudRepositorySummary>> {
+        {
+            let cache = CURSOR_REPOSITORY_CACHE.lock().await;
+            if let Some((loaded_at, repositories)) = cache.as_ref() {
+                if loaded_at.elapsed() < CURSOR_REPOSITORY_CACHE_TTL {
+                    return Ok(repositories.clone());
+                }
+            }
+        }
+
+        let key = self.cursor_api_key().await?;
+        let response = self
+            .client
+            .get(format!("{CURSOR_API_BASE}/v1/repositories"))
+            .bearer_auth(key)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .context("failed to list repositories from Cursor")?;
+        let status = response.status();
+        let text = response.text().await?;
+        if !status.is_success() {
+            return Err(anyhow!(
+                "Cursor Cloud returned HTTP {status} while listing repositories: {text}"
+            ));
+        }
+        let value: Value = serde_json::from_str(&text)?;
+        let repositories: Vec<CloudRepositorySummary> = value
+            .get("items")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?
+            .ok_or_else(|| anyhow!("Cursor Cloud returned no repository list"))?;
+        *CURSOR_REPOSITORY_CACHE.lock().await = Some((Instant::now(), repositories.clone()));
+        Ok(repositories)
+    }
+
+    pub async fn clear_cursor_repository_cache() {
+        *CURSOR_REPOSITORY_CACHE.lock().await = None;
+    }
+
+    pub async fn codex_environments(&self) -> Result<Vec<CodexCloudEnvironmentSummary>> {
+        let path = Self::provider_binary(CloudAgentProvider::Codex)
+            .ok_or_else(|| anyhow!("Codex CLI is not installed"))?;
+        let output = Self::run_cli(
+            &path,
+            vec![
+                "cloud".into(),
+                "list".into(),
+                "--json".into(),
+                "--limit".into(),
+                "20".into(),
+            ],
+            None,
+        )
+        .await?;
+        if !output.success {
+            return Err(anyhow!(
+                "Codex could not list recent cloud environments: {}",
+                output.stderr
+            ));
+        }
+        Self::parse_codex_environments(&output.stdout)
+    }
+
+    fn parse_codex_environments(body: &str) -> Result<Vec<CodexCloudEnvironmentSummary>> {
+        let value: Value = serde_json::from_str(body)
+            .context("Codex returned an invalid recent cloud-task list")?;
+        let tasks = value
+            .get("tasks")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("Codex returned no recent cloud-task list"))?;
+        let mut environments = Vec::new();
+        for task in tasks {
+            let Some(id) = task
+                .get("environment_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            if environments
+                .iter()
+                .any(|environment: &CodexCloudEnvironmentSummary| environment.id == id)
+            {
+                continue;
+            }
+            let label = task
+                .get("environment_label")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(id);
+            environments.push(CodexCloudEnvironmentSummary {
+                id: id.to_string(),
+                label: label.to_string(),
+            });
+        }
+        Ok(environments)
+    }
+
+    fn normalize_github_repository(value: &str) -> Result<String> {
+        let mut path = value.trim().trim_end_matches('/');
+        if let Some(stripped) = path.strip_prefix("https://github.com/") {
+            path = stripped;
+        } else if let Some(stripped) = path.strip_prefix("http://github.com/") {
+            path = stripped;
+        }
+        path = path.strip_suffix(".git").unwrap_or(path);
+        let parts = path.split('/').collect::<Vec<_>>();
+        let valid_part = |part: &str| {
+            !part.is_empty()
+                && part
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
+        };
+        if parts.len() != 2 || !parts.iter().all(|part| valid_part(part)) {
+            return Err(anyhow!("use a GitHub codebase like owner/repository"));
+        }
+        Ok(format!("https://github.com/{}/{}", parts[0], parts[1]))
+    }
+
     fn truncate_context(body: String) -> String {
         if body.len() <= MAX_CONTEXT_CHARS {
             return body;
@@ -606,6 +749,37 @@ impl CloudAgentExecutor {
                 "could not create the isolated Claude Cloud workspace snapshot"
             ));
         }
+        if let Some(repository) = config
+            .repository
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let repository = Self::normalize_github_repository(repository)?;
+            let remote = Command::new("git")
+                .args(["remote", "add", "origin", repository.as_str()])
+                .current_dir(temp.path())
+                .output()
+                .await?;
+            if !remote.status.success() {
+                return Err(anyhow!("could not prepare the selected Claude codebase"));
+            }
+            if let Some(branch) = config
+                .branch
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && *value != "main")
+            {
+                let switched = Command::new("git")
+                    .args(["branch", "-M", branch])
+                    .current_dir(temp.path())
+                    .output()
+                    .await?;
+                if !switched.status.success() {
+                    return Err(anyhow!("could not select the Claude codebase branch"));
+                }
+            }
+        }
         let existing_session = config
             .session_id
             .as_deref()
@@ -617,7 +791,14 @@ impl CloudAgentExecutor {
         };
         let mut std_command = std::process::Command::new(&path);
         std_command.args(args).current_dir(temp.path());
-        if existing_session.is_none() {
+        if existing_session.is_none()
+            && config
+                .repository
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+        {
             // This workspace contains only one empty commit. Force Claude to
             // bundle it so no unrelated local checkout is inferred or sent.
             std_command.env("CCR_FORCE_BUNDLE", "1");
@@ -691,6 +872,7 @@ impl CloudAgentExecutor {
                 .as_deref()
                 .filter(|value| !value.trim().is_empty())
             {
+                let repository = Self::normalize_github_repository(repository)?;
                 let mut repo = json!({ "url": repository });
                 if let Some(reference) = config
                     .starting_ref
@@ -871,5 +1053,48 @@ mod tests {
         assert!(capsule.contains("Code"));
         assert!(!capsule.contains("edited_files"));
         assert!(!capsule.contains("secret.txt"));
+    }
+
+    #[test]
+    fn codex_recent_tasks_become_unique_environment_choices() {
+        let environments = CloudAgentExecutor::parse_codex_environments(
+            r#"{
+                "tasks": [
+                    {"environment_id":"env_1","environment_label":"screenpipe/screenpipe"},
+                    {"environment_id":"env_1","environment_label":"screenpipe/screenpipe"},
+                    {"environment_id":"env_2","environment_label":null}
+                ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            environments,
+            vec![
+                CodexCloudEnvironmentSummary {
+                    id: "env_1".into(),
+                    label: "screenpipe/screenpipe".into(),
+                },
+                CodexCloudEnvironmentSummary {
+                    id: "env_2".into(),
+                    label: "env_2".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn github_codebases_are_normalized_before_remote_submission() {
+        assert_eq!(
+            CloudAgentExecutor::normalize_github_repository("screenpipe/screenpipe.git").unwrap(),
+            "https://github.com/screenpipe/screenpipe"
+        );
+        assert_eq!(
+            CloudAgentExecutor::normalize_github_repository(
+                "https://github.com/screenpipe/screenpipe/"
+            )
+            .unwrap(),
+            "https://github.com/screenpipe/screenpipe"
+        );
+        assert!(CloudAgentExecutor::normalize_github_repository("not a repo").is_err());
     }
 }

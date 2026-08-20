@@ -8,6 +8,7 @@ import React from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Check,
+  ChevronsUpDown,
   Cloud,
   ExternalLink,
   KeyRound,
@@ -16,6 +17,14 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import {
   Dialog,
   DialogContent,
@@ -27,6 +36,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -34,6 +48,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { localFetch } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 export type CloudAgentProvider = "codex" | "claude" | "cursor";
 
@@ -65,6 +80,13 @@ interface CursorAgentSummary {
   url: string;
 }
 
+interface CodebaseOption {
+  value: string;
+  label: string;
+}
+
+type CodebaseStatus = "idle" | "loading" | "ready" | "error";
+
 const PROVIDER_NAMES: Record<CloudAgentProvider, string> = {
   codex: "Codex",
   claude: "Claude",
@@ -72,6 +94,203 @@ const PROVIDER_NAMES: Record<CloudAgentProvider, string> = {
 };
 
 const CURSOR_KEYS_URL = "https://cursor.com/dashboard?tab=integrations";
+const PROVIDER_DESTINATIONS_URL: Record<CloudAgentProvider, string> = {
+  codex: "https://chatgpt.com/codex/settings/environments",
+  claude: "https://claude.ai/code",
+  cursor: CURSOR_KEYS_URL,
+};
+
+function displayCodebase(value: string) {
+  return value
+    .replace(/^https?:\/\/github\.com\//, "")
+    .replace(/\.git$/, "")
+    .replace(/\/$/, "");
+}
+
+function CodebasePicker({
+  provider,
+  value,
+  options,
+  status,
+  errorMessage,
+  required,
+  onOpen,
+  onValueChange,
+}: {
+  provider: CloudAgentProvider;
+  value: string;
+  options: CodebaseOption[];
+  status: CodebaseStatus;
+  errorMessage: string | null;
+  required: boolean;
+  onOpen: () => void;
+  onValueChange: (value: string) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [search, setSearch] = React.useState("");
+  const allOptions = React.useMemo(() => {
+    const unique = new Map(options.map((option) => [option.value, option]));
+    if (value && !unique.has(value)) {
+      unique.set(value, { value, label: displayCodebase(value) });
+    }
+    return Array.from(unique.values());
+  }, [options, value]);
+  const normalizedSearch = search.trim();
+  const exactMatch = allOptions.some(
+    (option) =>
+      option.value.toLowerCase() === normalizedSearch.toLowerCase() ||
+      option.label.toLowerCase() === normalizedSearch.toLowerCase(),
+  );
+  const providerName = PROVIDER_NAMES[provider];
+  const searchPlaceholder =
+    provider === "codex"
+      ? "search or enter environment ID"
+      : "search or enter owner/repo";
+
+  const choose = (next: string) => {
+    onValueChange(next);
+    setSearch("");
+    setOpen(false);
+  };
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen) onOpen();
+        else setSearch("");
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-label="codebase"
+          aria-expanded={open}
+          className={cn(
+            "h-9 w-full justify-between rounded-none px-3 text-xs font-normal normal-case tracking-normal",
+            !value && "text-muted-foreground",
+          )}
+          data-testid="cloud-agent-codebase-select"
+        >
+          <span className="truncate">
+            {value
+              ? allOptions.find((option) => option.value === value)?.label ||
+                displayCodebase(value)
+              : required
+                ? "choose codebase"
+                : "no codebase · summary task"}
+          </span>
+          {status === "loading" ? (
+            <Loader2 className="ml-2 h-3.5 w-3.5 shrink-0 animate-spin" />
+          ) : (
+            <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+          )}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="w-[--radix-popover-trigger-width] rounded-none p-0"
+      >
+        <Command label="choose codebase" className="rounded-none">
+          <CommandInput
+            value={search}
+            onValueChange={setSearch}
+            placeholder={searchPlaceholder}
+            aria-label="search codebases"
+          />
+          <CommandList>
+            {status === "error" && (
+              <div className="border-b px-3 py-2 text-[11px] text-muted-foreground">
+                {errorMessage || "Could not load codebases. Enter one below."}
+              </div>
+            )}
+            {status === "loading" && allOptions.length === 0 ? (
+              <CommandGroup>
+                <CommandItem disabled value="loading-codebases">
+                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                  loading codebases...
+                </CommandItem>
+              </CommandGroup>
+            ) : (
+              <>
+                <CommandEmpty>
+                  {provider === "codex"
+                    ? "Enter a Codex environment ID."
+                    : "Enter a GitHub codebase as owner/repository."}
+                </CommandEmpty>
+                {!required && (
+                  <CommandGroup heading="without code">
+                    <CommandItem
+                      value="no codebase summary task"
+                      className="rounded-none"
+                      onSelect={() => choose("")}
+                    >
+                      <Check
+                        className={cn(
+                          "mr-2 h-3.5 w-3.5",
+                          value ? "opacity-0" : "opacity-100",
+                        )}
+                      />
+                      no codebase · summary task
+                    </CommandItem>
+                  </CommandGroup>
+                )}
+                {allOptions.length > 0 && (
+                  <CommandGroup heading="codebases">
+                    {allOptions.map((option) => (
+                      <CommandItem
+                        key={option.value}
+                        value={`${option.label} ${option.value}`}
+                        className="rounded-none"
+                        onSelect={() => choose(option.value)}
+                      >
+                        <Check
+                          className={cn(
+                            "mr-2 h-3.5 w-3.5",
+                            value === option.value
+                              ? "opacity-100"
+                              : "opacity-0",
+                          )}
+                        />
+                        <span className="truncate">{option.label}</span>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                )}
+              </>
+            )}
+            {normalizedSearch && !exactMatch && (
+              <CommandGroup heading="use another">
+                <CommandItem
+                  value={`manual ${normalizedSearch}`}
+                  className="rounded-none"
+                  onSelect={() => choose(normalizedSearch)}
+                >
+                  use “{displayCodebase(normalizedSearch)}”
+                </CommandItem>
+              </CommandGroup>
+            )}
+          </CommandList>
+          <div className="border-t p-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 w-full justify-start rounded-none text-[11px]"
+              onClick={() => void openUrl(PROVIDER_DESTINATIONS_URL[provider])}
+            >
+              manage in {providerName}
+              <ExternalLink className="ml-auto h-3 w-3" />
+            </Button>
+          </div>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 export function CloudAgentRunner({
   pipeName,
@@ -95,6 +314,12 @@ export function CloudAgentRunner({
   const [cursorAgents, setCursorAgents] = React.useState<CursorAgentSummary[]>(
     [],
   );
+  const [codebaseOptions, setCodebaseOptions] = React.useState<
+    CodebaseOption[]
+  >([]);
+  const [codebaseStatus, setCodebaseStatus] =
+    React.useState<CodebaseStatus>("idle");
+  const [codebaseError, setCodebaseError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [connecting, setConnecting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -136,6 +361,56 @@ export function CloudAgentRunner({
   React.useEffect(() => {
     if (draft?.provider === "cursor") void loadCursorAgents();
   }, [draft?.provider, loadCursorAgents]);
+
+  React.useEffect(() => {
+    setCodebaseOptions([]);
+    setCodebaseStatus(draft?.provider === "claude" ? "ready" : "idle");
+    setCodebaseError(null);
+  }, [draft?.provider]);
+
+  const loadCodebases = React.useCallback(async () => {
+    if (!draft || codebaseStatus === "loading" || codebaseStatus === "ready")
+      return;
+    if (draft.provider === "claude") {
+      setCodebaseStatus("ready");
+      return;
+    }
+    setCodebaseStatus("loading");
+    setCodebaseError(null);
+    const endpoint =
+      draft.provider === "codex" ? "codex-environments" : "cursor-repositories";
+    try {
+      const response = await localFetch(`${apiBase}/cloud-agents/${endpoint}`);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${response.status}`);
+      }
+      const body = await response.json();
+      const options: CodebaseOption[] =
+        draft.provider === "codex"
+          ? (Array.isArray(body.environments) ? body.environments : []).map(
+              (environment: { id: string; label: string }) => ({
+                value: environment.id,
+                label: environment.label || environment.id,
+              }),
+            )
+          : (Array.isArray(body.repositories) ? body.repositories : []).map(
+              (repository: { url: string }) => ({
+                value: repository.url,
+                label: displayCodebase(repository.url),
+              }),
+            );
+      setCodebaseOptions(options);
+      setCodebaseStatus("ready");
+    } catch (cause) {
+      setCodebaseStatus("error");
+      setCodebaseError(
+        cause instanceof Error
+          ? cause.message
+          : "Could not load provider codebases",
+      );
+    }
+  }, [apiBase, codebaseStatus, draft]);
 
   const persist = React.useCallback(
     async (nextAgent: string, nextCloud: CloudAgentConfig | null) => {
@@ -188,6 +463,15 @@ export function CloudAgentRunner({
     const next = { ...draft, ...patch };
     setDraft(next);
     if (save) void persist("cloud-agent", next);
+  };
+
+  const chooseCodebase = (value: string) => {
+    if (!draft) return;
+    if (draft.provider === "codex") {
+      patchDraft({ environment_id: value || undefined }, true);
+    } else {
+      patchDraft({ repository: value || undefined }, true);
+    }
   };
 
   const saveCursorKey = async () => {
@@ -253,6 +537,13 @@ export function CloudAgentRunner({
   const providerName = draft ? PROVIDER_NAMES[draft.provider] : "";
   const needsDestinationSetup =
     draft?.provider === "codex" && !draft.environment_id?.trim();
+  const codebaseValue =
+    draft?.provider === "codex"
+      ? (draft.environment_id ?? "")
+      : (draft?.repository ?? "");
+  const destinationComesFromConversation =
+    (draft?.provider === "claude" && Boolean(draft.session_id?.trim())) ||
+    (draft?.provider === "cursor" && Boolean(draft.agent_id?.trim()));
   const contextLabel = draft?.send_screenpipe_context
     ? `shared · ${draft.context_lookback_hours ?? 24}h`
     : "not shared";
@@ -352,6 +643,29 @@ export function CloudAgentRunner({
                 </Button>
               </div>
             </div>
+
+            {!destinationComesFromConversation && (
+              <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_15rem] sm:items-center">
+                <div>
+                  <Label className="text-xs font-medium">codebase</Label>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    {draft.provider === "codex"
+                      ? "the Codex environment this task works in."
+                      : "choose code when this task should make changes."}
+                  </p>
+                </div>
+                <CodebasePicker
+                  provider={draft.provider}
+                  value={codebaseValue}
+                  options={codebaseOptions}
+                  status={codebaseStatus}
+                  errorMessage={codebaseError}
+                  required={draft.provider === "codex"}
+                  onOpen={() => void loadCodebases()}
+                  onValueChange={chooseCodebase}
+                />
+              </div>
+            )}
 
             {draft.provider === "cursor" && status?.configured && (
               <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_15rem] sm:items-center">
@@ -493,50 +807,6 @@ export function CloudAgentRunner({
                 )}
               </div>
 
-              {draft.provider === "codex" && (
-                <>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">Codex environment</Label>
-                    <Input
-                      value={draft.environment_id ?? ""}
-                      onChange={(event) =>
-                        patchDraft({ environment_id: event.target.value })
-                      }
-                      onBlur={(event) =>
-                        void persist("cloud-agent", {
-                          ...draft,
-                          environment_id: event.currentTarget.value,
-                        })
-                      }
-                      placeholder="paste environment ID"
-                      className="h-9 rounded-none text-xs"
-                      data-testid="codex-cloud-environment"
-                    />
-                    <p className="text-[11px] text-muted-foreground">
-                      Copy this from Codex once. screenpipe remembers it for
-                      future runs.
-                    </p>
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">branch · optional</Label>
-                    <Input
-                      value={draft.branch ?? ""}
-                      onChange={(event) =>
-                        patchDraft({ branch: event.target.value })
-                      }
-                      onBlur={(event) =>
-                        void persist("cloud-agent", {
-                          ...draft,
-                          branch: event.currentTarget.value,
-                        })
-                      }
-                      placeholder="main"
-                      className="h-9 rounded-none text-xs"
-                    />
-                  </div>
-                </>
-              )}
-
               {draft.provider === "claude" && (
                 <div className="space-y-1.5">
                   <Label className="text-xs">
@@ -616,48 +886,37 @@ export function CloudAgentRunner({
                       in the scheduled task.
                     </p>
                   </div>
-
-                  {!draft.agent_id && (
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <div className="space-y-1.5">
-                        <Label className="text-xs">repository · optional</Label>
-                        <Input
-                          value={draft.repository ?? ""}
-                          onChange={(event) =>
-                            patchDraft({ repository: event.target.value })
-                          }
-                          onBlur={(event) =>
-                            void persist("cloud-agent", {
-                              ...draft,
-                              repository: event.currentTarget.value,
-                            })
-                          }
-                          placeholder="summary-only agent"
-                          className="h-9 rounded-none text-xs"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label className="text-xs">
-                          starting ref · optional
-                        </Label>
-                        <Input
-                          value={draft.starting_ref ?? ""}
-                          onChange={(event) =>
-                            patchDraft({ starting_ref: event.target.value })
-                          }
-                          onBlur={(event) =>
-                            void persist("cloud-agent", {
-                              ...draft,
-                              starting_ref: event.currentTarget.value,
-                            })
-                          }
-                          placeholder="main"
-                          className="h-9 rounded-none text-xs"
-                        />
-                      </div>
-                    </div>
-                  )}
                 </>
+              )}
+
+              {codebaseValue && !destinationComesFromConversation && (
+                <div className="space-y-1.5">
+                  <Label className="text-xs">branch · optional</Label>
+                  <Input
+                    value={
+                      draft.provider === "cursor"
+                        ? (draft.starting_ref ?? "")
+                        : (draft.branch ?? "")
+                    }
+                    onChange={(event) =>
+                      patchDraft(
+                        draft.provider === "cursor"
+                          ? { starting_ref: event.target.value }
+                          : { branch: event.target.value },
+                      )
+                    }
+                    onBlur={(event) =>
+                      void persist("cloud-agent", {
+                        ...draft,
+                        ...(draft.provider === "cursor"
+                          ? { starting_ref: event.currentTarget.value }
+                          : { branch: event.currentTarget.value }),
+                      })
+                    }
+                    placeholder="main"
+                    className="h-9 rounded-none text-xs"
+                  />
+                </div>
               )}
             </div>
 

@@ -257,4 +257,151 @@ describe("CloudAgentRunner", () => {
       );
     });
   });
+
+  it("lists repositories already authorized in Cursor and saves the selected codebase", async () => {
+    fetchMock.mockImplementation(async (url) => {
+      if (String(url).endsWith("/cloud-agents/cursor-repositories")) {
+        return response({
+          repositories: [
+            { url: "https://github.com/screenpipe/screenpipe" },
+            { url: "https://github.com/screenpipe/docs" },
+          ],
+        });
+      }
+      if (String(url).endsWith("/cloud-agents/cursor-agents")) {
+        return response({ agents: [] });
+      }
+      if (String(url).endsWith("/cloud-agents/status")) {
+        return response({
+          providers: [
+            {
+              provider: "cursor",
+              available: true,
+              configured: true,
+              detail: "connected to your Cursor Cloud Agents",
+            },
+          ],
+        });
+      }
+      return response({ ok: true });
+    });
+
+    render(
+      <CloudAgentRunner
+        pipeName="code-review"
+        agent="cloud-agent"
+        cloudAgent={{
+          provider: "cursor",
+          send_screenpipe_context: false,
+          context_lookback_hours: 8,
+          context_max_items: 80,
+        }}
+        apiBase="http://localhost:3030"
+        onSaved={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("cloud-agent-codebase-select"));
+    fireEvent.click(await screen.findByText("screenpipe/screenpipe"));
+
+    await waitFor(() => {
+      const saveCall = fetchMock.mock.calls.find(([url, init]) => {
+        if (!String(url).includes("/pipes/code-review/config")) return false;
+        const payload = JSON.parse(String(init?.body));
+        return (
+          payload.cloud_agent.repository ===
+          "https://github.com/screenpipe/screenpipe"
+        );
+      });
+      expect(saveCall).toBeTruthy();
+    });
+  });
+
+  it("shows recent Codex environments as codebases while keeping manual entry available", async () => {
+    fetchMock.mockImplementation(async (url) => {
+      if (String(url).endsWith("/cloud-agents/codex-environments")) {
+        return response({
+          environments: [
+            { id: "env_screenpipe", label: "screenpipe/screenpipe" },
+          ],
+        });
+      }
+      if (String(url).endsWith("/cloud-agents/status")) {
+        return response({
+          providers: [
+            {
+              provider: "codex",
+              available: true,
+              configured: true,
+              detail: "connected to your ChatGPT account",
+            },
+          ],
+        });
+      }
+      return response({ ok: true });
+    });
+
+    render(
+      <CloudAgentRunner
+        pipeName="code-review"
+        agent="cloud-agent"
+        cloudAgent={{
+          provider: "codex",
+          send_screenpipe_context: false,
+          context_lookback_hours: 8,
+          context_max_items: 80,
+        }}
+        apiBase="http://localhost:3030"
+        onSaved={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("cloud-agent-codebase-select"));
+    fireEvent.click(await screen.findByText("screenpipe/screenpipe"));
+
+    await waitFor(() => {
+      const saveCall = fetchMock.mock.calls.find(([url, init]) => {
+        if (!String(url).includes("/pipes/code-review/config")) return false;
+        const payload = JSON.parse(String(init?.body));
+        return payload.cloud_agent.environment_id === "env_screenpipe";
+      });
+      expect(saveCall).toBeTruthy();
+    });
+  });
+
+  it("accepts a Claude codebase without asking screenpipe for GitHub OAuth", async () => {
+    render(
+      <CloudAgentRunner
+        pipeName="code-review"
+        agent="cloud-agent"
+        cloudAgent={{
+          provider: "claude",
+          send_screenpipe_context: false,
+          context_lookback_hours: 8,
+          context_max_items: 80,
+        }}
+        apiBase="http://localhost:3030"
+        onSaved={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("cloud-agent-codebase-select"));
+    fireEvent.change(
+      screen.getByPlaceholderText("search or enter owner/repo"),
+      {
+        target: { value: "screenpipe/screenpipe" },
+      },
+    );
+    fireEvent.click(await screen.findByText(/use “screenpipe\/screenpipe”/i));
+
+    await waitFor(() => {
+      const saveCall = fetchMock.mock.calls.find(([url, init]) => {
+        if (!String(url).includes("/pipes/code-review/config")) return false;
+        const payload = JSON.parse(String(init?.body));
+        return payload.cloud_agent.repository === "screenpipe/screenpipe";
+      });
+      expect(saveCall).toBeTruthy();
+    });
+    expect(screen.queryByText(/GitHub OAuth/i)).not.toBeInTheDocument();
+  });
 });
