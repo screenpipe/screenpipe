@@ -4,6 +4,89 @@
 
 export type BrowserDevScenario = "ready" | "empty" | "backend-error";
 
+type MockCloudAgentProvider = "codex" | "claude" | "cursor";
+
+interface MockCloudAgentConfig {
+  provider: MockCloudAgentProvider;
+  environment_id?: string;
+  session_id?: string;
+  agent_id?: string;
+  repository?: string;
+  starting_ref?: string;
+  send_screenpipe_context: boolean;
+  context_lookback_hours: number;
+  context_max_items: number;
+}
+
+const mockCloudConnections = new Set<MockCloudAgentProvider>();
+let mockCloudAgentConfig: MockCloudAgentConfig = {
+  provider: "codex",
+  environment_id: "screenpipe/screenpipe",
+  send_screenpipe_context: false,
+  context_lookback_hours: 24,
+  context_max_items: 80,
+};
+let mockPipeAgent = "cloud-agent";
+
+function mockCloudProviderStatuses() {
+  return (["codex", "claude", "cursor"] as const).map((provider) => ({
+    provider,
+    available: true,
+    configured: mockCloudConnections.has(provider),
+    detail:
+      provider === "codex"
+        ? mockCloudConnections.has(provider)
+          ? "uses your ChatGPT account"
+          : "connect your ChatGPT account"
+        : provider === "claude"
+          ? mockCloudConnections.has(provider)
+            ? "uses your Claude account"
+            : "connect your Claude account"
+          : mockCloudConnections.has(provider)
+            ? "uses your Cursor Cloud Agents API key"
+            : "add a Cursor Cloud Agents API key",
+  }));
+}
+
+function mockDailyRecapPipe() {
+  return {
+    config: {
+      name: "daily-recap",
+      description: "Summarize the day with relevant screenpipe memory.",
+      schedule: "0 17 * * *",
+      enabled: true,
+      agent: mockPipeAgent,
+      model: "default",
+      cloud_agent:
+        mockPipeAgent === "cloud-agent" ? mockCloudAgentConfig : null,
+      connections: [],
+    },
+    last_run: null,
+    last_success: null,
+    is_running: false,
+    is_bundled_builtin: false,
+    prompt_body:
+      "Summarize what I worked on today, the decisions I made, and the next actions.",
+    raw_content:
+      "---\nname: daily-recap\nschedule: 0 17 * * *\n---\n\nSummarize what I worked on today.",
+    last_error: null,
+    current_execution_id: null,
+    consecutive_failures: 0,
+    execution_count: 0,
+    next_run: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    recent_executions: [],
+  };
+}
+
+function parseJsonBody(init: RequestInit | undefined): Record<string, unknown> {
+  if (typeof init?.body !== "string") return {};
+  try {
+    return JSON.parse(init.body) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
 export function createMockHealth(scenario: BrowserDevScenario = "ready") {
   const now = new Date().toISOString();
   return {
@@ -150,6 +233,34 @@ export function mockLocalApiResponse(
   if (url.pathname === "/pipes/activity") {
     return Response.json({ data: [], has_more: false, next_before_id: null });
   }
+  if (url.pathname === "/cloud-agents/status") {
+    return Response.json({ providers: mockCloudProviderStatuses() });
+  }
+  if (url.pathname === "/cloud-agents/connect" && method === "POST") {
+    const provider = parseJsonBody(init).provider;
+    if (provider === "codex" || provider === "claude") {
+      mockCloudConnections.add(provider);
+    }
+    return Response.json({ providers: mockCloudProviderStatuses() });
+  }
+  if (url.pathname === "/cloud-agents/cursor-key" && method === "PUT") {
+    mockCloudConnections.add("cursor");
+    return Response.json({ success: true });
+  }
+  if (url.pathname === "/cloud-agents/cursor-agents") {
+    return Response.json({
+      agents: mockCloudConnections.has("cursor")
+        ? [
+            {
+              id: "bc-00000000-0000-0000-0000-000000000001",
+              name: "daily memory agent",
+              status: "ACTIVE",
+              url: "https://cursor.com/agents/bc-00000000-0000-0000-0000-000000000001",
+            },
+          ]
+        : [],
+    });
+  }
   if (url.pathname === "/search") {
     const appName = url.searchParams.get("app_name");
     // The meeting scrubber pages this endpoint for the meeting's transcript;
@@ -176,7 +287,34 @@ export function mockLocalApiResponse(
     }
     return Response.json(emptyPage);
   }
-  if (url.pathname === "/pipes") return Response.json(emptyPage);
+  if (url.pathname === "/pipes") {
+    return Response.json(
+      scenario === "empty"
+        ? emptyPage
+        : {
+            data: [mockDailyRecapPipe()],
+            pagination: { limit: 100, offset: 0, total: 1 },
+          },
+    );
+  }
+  if (url.pathname === "/pipes/daily-recap/config" && method === "POST") {
+    const body = parseJsonBody(init);
+    if (typeof body.agent === "string") mockPipeAgent = body.agent;
+    if (body.cloud_agent && typeof body.cloud_agent === "object") {
+      mockCloudAgentConfig = body.cloud_agent as MockCloudAgentConfig;
+    }
+    return Response.json({ success: true });
+  }
+  if (url.pathname === "/pipes/favorites") {
+    return Response.json({ data: [] });
+  }
+  if (url.pathname === "/pipes/store/check-updates") {
+    return Response.json({ data: [] });
+  }
+  if (url.pathname.endsWith("/logs")) return Response.json([]);
+  if (url.pathname.endsWith("/executions")) {
+    return Response.json({ data: [], has_more: false });
+  }
   if (method === "DELETE") return Response.json({ success: true });
   if (method !== "GET") return Response.json({ success: true });
   return Response.json(scenario === "empty" ? emptyPage : { data: [] });

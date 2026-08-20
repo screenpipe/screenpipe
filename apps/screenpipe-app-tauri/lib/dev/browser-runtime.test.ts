@@ -159,6 +159,42 @@ describe("browser development runtime", () => {
     });
   });
 
+  it("seeds a scheduled task for cloud-agent browser review", async () => {
+    const pipes = mockLocalApiResponse(
+      new URL("http://localhost:3030/pipes?include_executions=true"),
+      undefined,
+      "ready",
+    );
+    const status = mockLocalApiResponse(
+      new URL("http://localhost:3030/cloud-agents/status"),
+      undefined,
+      "ready",
+    );
+
+    expect(await pipes.json()).toMatchObject({
+      data: [
+        {
+          config: {
+            name: "daily-recap",
+            agent: "cloud-agent",
+            cloud_agent: {
+              provider: "codex",
+              send_screenpipe_context: false,
+            },
+          },
+        },
+      ],
+      pagination: { total: 1 },
+    });
+    expect(await status.json()).toMatchObject({
+      providers: [
+        { provider: "codex", configured: false },
+        { provider: "claude", configured: false },
+        { provider: "cursor", configured: false },
+      ],
+    });
+  });
+
   it("supports an explicit backend failure scenario", async () => {
     const response = mockLocalApiResponse(
       new URL("http://localhost:3030/health"),
