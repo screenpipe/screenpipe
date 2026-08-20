@@ -111,6 +111,36 @@ const CASES: EvalCase[] = [
     expect: { expectChart: true, expectTypes: ["grouped_bar", "bar"] },
   },
   {
+    id: "calendar-streak",
+    question:
+      "My focus hours by local date: 2026-08-01 2.1, 2026-08-02 3.8, 2026-08-03 0.5, 2026-08-04 4.2, 2026-08-05 5.1, 2026-08-06 3.4, 2026-08-07 4.8. Show the daily pattern.",
+    expect: { expectChart: true, expectTypes: ["calendar", "line"] },
+  },
+  {
+    id: "funnel-dropoff",
+    question:
+      "Activation stages: 100 people installed, 68 recorded, 41 asked a question, and 24 returned the next week. Where is the drop-off?",
+    expect: { expectChart: true, expectTypes: ["funnel"] },
+  },
+  {
+    id: "waterfall-change",
+    question:
+      "I worked 42 hours last week. This week deep work added 8 hours, meetings removed 5, and support added 3. Show what changed the total.",
+    expect: { expectChart: true, expectTypes: ["waterfall"] },
+  },
+  {
+    id: "range-variability",
+    question:
+      "Meeting duration in minutes: customer calls min 18 typical 31 max 54; team calls min 12 typical 24 max 41; sales calls min 22 typical 38 max 67. Compare the spread.",
+    expect: { expectChart: true, expectTypes: ["range"] },
+  },
+  {
+    id: "scatter-relationship",
+    question:
+      "Time spent vs value score: coding 12h/9, support 6h/8, meetings 9h/6, admin 5h/3, planning 3h/7. Is more time associated with more value?",
+    expect: { expectChart: true, expectTypes: ["scatter"] },
+  },
+  {
     id: "no-chart-two-numbers",
     question: "I had 2 meetings today totalling 45 minutes. How many meetings did I have?",
     // The other trap: two numbers is a sentence, not a chart.

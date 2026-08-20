@@ -61,6 +61,11 @@ describe("chart system prompt contract", () => {
       ["line", CHART_LIMITS.lineItems],
       ["proportion", CHART_LIMITS.proportionItems],
       ["timeline", CHART_LIMITS.timelineItems],
+      ["calendar", CHART_LIMITS.calendarItems],
+      ["funnel", CHART_LIMITS.funnelItems],
+      ["waterfall", CHART_LIMITS.waterfallItems],
+      ["range", CHART_LIMITS.rangeItems],
+      ["scatter", CHART_LIMITS.scatterItems],
     ];
     for (const [type, cap] of caps) {
       const row = section
@@ -91,8 +96,8 @@ describe("chart system prompt contract", () => {
 
   it("stays small enough to earn a permanent seat in context", () => {
     // Guard against the section growing back into a per-type example dump.
-    expect(section.length).toBeLessThan(2200);
-    expect(section.length / CHART_TYPES.length).toBeLessThan(300);
+    expect(section.length).toBeLessThan(2900);
+    expect(section.length / CHART_TYPES.length).toBeLessThan(225);
   });
 
   it("carries exactly one worked example, not one per type", () => {

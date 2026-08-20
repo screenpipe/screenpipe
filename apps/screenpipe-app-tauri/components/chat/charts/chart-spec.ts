@@ -42,6 +42,11 @@ export const CHART_LIMITS = {
   heatmapColumns: 24,
   heatmapRows: 14,
   timelineItems: 24,
+  calendarItems: 84,
+  funnelItems: 8,
+  waterfallItems: 10,
+  rangeItems: 20,
+  scatterItems: 40,
   titleChars: 120,
   labelChars: 48,
   unitChars: 12,
@@ -113,6 +118,62 @@ export type TimelineChartSpec = ChartSpecBase & {
   items: TimelineBlock[];
 };
 
+export type CalendarPoint = {
+  /** Local calendar date, normalized as YYYY-MM-DD. */
+  date: string;
+  value: number;
+};
+
+export type CalendarChartSpec = ChartSpecBase & {
+  type: "calendar";
+  items: CalendarPoint[];
+};
+
+export type FunnelChartSpec = ChartSpecBase & {
+  type: "funnel";
+  items: ChartPoint[];
+};
+
+export type WaterfallStart = {
+  label: string;
+  value: number;
+};
+
+export type WaterfallChartSpec = ChartSpecBase & {
+  type: "waterfall";
+  start: WaterfallStart;
+  /** Signed changes applied in order to the starting value. */
+  items: ChartPoint[];
+};
+
+export type RangePoint = {
+  label: string;
+  min: number;
+  max: number;
+  /** Optional typical or target value within the range. */
+  mid: number | null;
+};
+
+export type RangeChartSpec = ChartSpecBase & {
+  type: "range";
+  items: RangePoint[];
+};
+
+export type ScatterPoint = {
+  label: string;
+  x: number;
+  y: number;
+};
+
+export type ScatterChartSpec = ChartSpecBase & {
+  type: "scatter";
+  xLabel: string;
+  yLabel: string;
+  xUnit: string;
+  yUnit: string;
+  items: ScatterPoint[];
+};
+
 export type LineChartSpec = ChartSpecBase & {
   type: "line";
   items: ChartPoint[];
@@ -139,7 +200,12 @@ export type ChartSpec =
   | StackedBarChartSpec
   | ProportionChartSpec
   | HeatmapChartSpec
-  | TimelineChartSpec;
+  | TimelineChartSpec
+  | CalendarChartSpec
+  | FunnelChartSpec
+  | WaterfallChartSpec
+  | RangeChartSpec
+  | ScatterChartSpec;
 
 export type ChartType = ChartSpec["type"];
 
@@ -152,6 +218,11 @@ export const CHART_TYPES: readonly ChartType[] = [
   "proportion",
   "heatmap",
   "timeline",
+  "calendar",
+  "funnel",
+  "waterfall",
+  "range",
+  "scatter",
 ] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -173,6 +244,15 @@ function readOptionalString(value: unknown, maxChars: number): string {
 function readNumber(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
   return value;
+}
+
+function readDate(value: unknown): string | null {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString().slice(0, 10) === value ? value : null;
 }
 
 function readNumberArray(value: unknown, maxLength: number): number[] | null {
@@ -293,6 +373,121 @@ function parseTimeline(
     type: "timeline",
     items: out,
     truncatedNote: truncationNote(raw.items.length, out.length, "blocks"),
+  };
+}
+
+function parseCalendar(
+  raw: Record<string, unknown>,
+  base: ChartSpecBase,
+): CalendarChartSpec | null {
+  if (!Array.isArray(raw.items) || raw.items.length === 0) return null;
+  const out: CalendarPoint[] = [];
+  const dates = new Set<string>();
+  for (const entry of raw.items.slice(0, CHART_LIMITS.calendarItems)) {
+    if (!isRecord(entry)) return null;
+    const date = readDate(entry.date);
+    const value = readNumber(entry.value);
+    if (date === null || value === null || value < 0 || dates.has(date)) {
+      return null;
+    }
+    dates.add(date);
+    out.push({ date, value });
+  }
+  out.sort((a, b) => a.date.localeCompare(b.date));
+  return {
+    ...base,
+    type: "calendar",
+    items: out,
+    truncatedNote: truncationNote(raw.items.length, out.length, "days"),
+  };
+}
+
+function parseFunnel(
+  raw: Record<string, unknown>,
+  base: ChartSpecBase,
+): FunnelChartSpec | null {
+  const items = readPoints(raw.items, CHART_LIMITS.funnelItems);
+  if (items === null || items.length < 2 || items[0].value <= 0) return null;
+  for (let index = 0; index < items.length; index += 1) {
+    if (items[index].value < 0) return null;
+    if (index > 0 && items[index].value > items[index - 1].value) return null;
+  }
+  const received = Array.isArray(raw.items) ? raw.items.length : items.length;
+  return {
+    ...base,
+    type: "funnel",
+    items,
+    truncatedNote: truncationNote(received, items.length, "stages"),
+  };
+}
+
+function parseWaterfall(
+  raw: Record<string, unknown>,
+  base: ChartSpecBase,
+): WaterfallChartSpec | null {
+  if (!isRecord(raw.start)) return null;
+  const label = readString(raw.start.label, CHART_LIMITS.labelChars);
+  const value = readNumber(raw.start.value);
+  const items = readPoints(raw.items, CHART_LIMITS.waterfallItems);
+  if (label === null || value === null || items === null) return null;
+  const received = Array.isArray(raw.items) ? raw.items.length : items.length;
+  return {
+    ...base,
+    type: "waterfall",
+    start: { label, value },
+    items,
+    truncatedNote: truncationNote(received, items.length, "changes"),
+  };
+}
+
+function parseRange(
+  raw: Record<string, unknown>,
+  base: ChartSpecBase,
+): RangeChartSpec | null {
+  if (!Array.isArray(raw.items) || raw.items.length === 0) return null;
+  const out: RangePoint[] = [];
+  for (const entry of raw.items.slice(0, CHART_LIMITS.rangeItems)) {
+    if (!isRecord(entry)) return null;
+    const label = readString(entry.label, CHART_LIMITS.labelChars);
+    const min = readNumber(entry.min);
+    const max = readNumber(entry.max);
+    const mid = entry.mid === undefined ? null : readNumber(entry.mid);
+    if (label === null || min === null || max === null || max < min) return null;
+    if (entry.mid !== undefined && mid === null) return null;
+    if (mid !== null && (mid < min || mid > max)) return null;
+    out.push({ label, min, max, mid });
+  }
+  return {
+    ...base,
+    type: "range",
+    items: out,
+    truncatedNote: truncationNote(raw.items.length, out.length, "ranges"),
+  };
+}
+
+function parseScatter(
+  raw: Record<string, unknown>,
+  base: ChartSpecBase,
+): ScatterChartSpec | null {
+  if (!Array.isArray(raw.items) || raw.items.length === 0) return null;
+  const out: ScatterPoint[] = [];
+  for (const entry of raw.items.slice(0, CHART_LIMITS.scatterItems)) {
+    if (!isRecord(entry)) return null;
+    const label = readString(entry.label, CHART_LIMITS.labelChars);
+    const x = readNumber(entry.x);
+    const y = readNumber(entry.y);
+    if (label === null || x === null || y === null) return null;
+    out.push({ label, x, y });
+  }
+  return {
+    ...base,
+    type: "scatter",
+    xLabel: readOptionalString(raw.x_label, CHART_LIMITS.labelChars) || "x",
+    yLabel: readOptionalString(raw.y_label, CHART_LIMITS.labelChars) || "y",
+    xUnit: readOptionalString(raw.x_unit, CHART_LIMITS.unitChars),
+    yUnit: readOptionalString(raw.y_unit, CHART_LIMITS.unitChars),
+    items: out,
+    truncatedNote: truncationNote(raw.items.length, out.length, "points"),
   };
 }
 
@@ -445,6 +640,16 @@ export function parseChartSpec(source: string): ChartSpec | null {
       return parseHeatmap(raw, base);
     case "timeline":
       return parseTimeline(raw, base);
+    case "calendar":
+      return parseCalendar(raw, base);
+    case "funnel":
+      return parseFunnel(raw, base);
+    case "waterfall":
+      return parseWaterfall(raw, base);
+    case "range":
+      return parseRange(raw, base);
+    case "scatter":
+      return parseScatter(raw, base);
     default:
       return null;
   }

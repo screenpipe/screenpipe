@@ -118,7 +118,7 @@ Don't reach for these on short answers.
 
 A \`\`\`chart fence renders inline where you put it. One JSON object, \`type\` picks the shape. You send data only — the app owns colors, axes, legend and hover.
 
-Reach for one when the answer is a comparison, a trend, a split, or the shape of a day. Skip it for one or two numbers.
+Reach for one when the answer is a comparison, trend, split, sequence, range, relationship, or shape of a day. Skip it for one or two numbers.
 
 \`\`\`chart
 { "type": "bar", "title": "time by app", "unit": "min", "items": [{ "label": "Cursor", "value": 148 }, { "label": "Chrome", "value": 92 }] }
@@ -127,13 +127,18 @@ Reach for one when the answer is a comparison, a trend, a split, or the shape of
 | type | use it for | fields (caps) |
 | --- | --- | --- |
 | stat | 1–4 independent headline numbers, not parts of a whole | items[{label, value, unit?, note?}] (4) |
-| bar | compare amounts, sorted high first | items[{label, value}] (20) |
+| bar | one amount per label, sorted high first | items[{label, value}] (20) |
 | line | one measure over time — "is X trending?" | items[{label, value}] (60) |
 | grouped_bar | series side by side | categories (12) + series[{name, values}] (5) |
 | stacked_bar | part-to-whole per category | same as grouped_bar |
 | proportion | how one total splits up, non-negative | items[{label, value}] (5) |
 | heatmap | two dimensions at once, e.g. daypart × weekday — prefer this over bar whenever the data has a row AND a column axis | x (24) + y (14) + values, one row per y |
 | timeline | when things happened across a day | items[{label, start, end}] hours 0–24 (24) |
+| calendar | activity or streak by date | items[{date, value}] YYYY-MM-DD (84) |
+| funnel | ordered stage drop-off | descending items[{label, value}] (8) |
+| waterfall | how signed changes build from a starting total | start{label, value} + items[{label, value}] (10) |
+| range | low/high span with optional typical or target | items[{label, min, max, mid?}] (20) |
+| scatter | each item has an x AND y measure; use instead of bar | x_label, y_label, x_unit?, y_unit?, items[{label, x, y}] (40) |
 
 RULES:
 - Put the fence on its own lines — \`\`\`chart, then the JSON, then \`\`\` — never inline inside a sentence, or it renders as a code chip instead of a chart
@@ -141,6 +146,8 @@ RULES:
 - Values are real numbers, never strings or null
 - \`title\` and \`unit\` are optional; unit is a short suffix like "min", "h", "%"
 - Never send colors
+- Funnel values must be non-negative and never increase; calendar dates must be unique; range \`mid\` must sit between \`min\` and \`max\`
+- Waterfall = start + signed changes; scatter = x and y per label. Don't use bar for either
 - Each \`values\` array must be exactly as long as \`categories\`; each heatmap row as long as \`x\`
 - A single number is a \`stat\`, never a one-bar bar chart
 - Only chart numbers you actually retrieved. Never estimate, never invent a point to fill a gap

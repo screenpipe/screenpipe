@@ -242,6 +242,29 @@ describe("ChatChart — brand geometry", () => {
         type: "timeline",
         items: [{ label: "standup", start: 9, end: 9.5 }],
       },
+      {
+        type: "calendar",
+        items: [{ date: "2026-08-01", value: 3 }],
+      },
+      {
+        type: "funnel",
+        items: [{ label: "opened", value: 10 }, { label: "retained", value: 4 }],
+      },
+      {
+        type: "waterfall",
+        start: { label: "start", value: 10 },
+        items: [{ label: "new", value: 3 }, { label: "churn", value: -1 }],
+      },
+      {
+        type: "range",
+        items: [{ label: "meeting", min: 12, mid: 22, max: 38 }],
+      },
+      {
+        type: "scatter",
+        x_label: "time",
+        y_label: "value",
+        items: [{ label: "support", x: 4, y: 9 }],
+      },
     ];
 
     for (const payload of specs) {
@@ -329,5 +352,91 @@ describe("ChatChart — new mark types", () => {
     );
     expect(screen.getAllByText("this week").length).toBeGreaterThan(0);
     expect(screen.getAllByText("last week").length).toBeGreaterThan(0);
+  });
+
+  it("renders a calendar grid with its date span", () => {
+    render(
+      <ChatChart
+        spec={specFrom({
+          type: "calendar",
+          unit: "h",
+          items: [
+            { date: "2026-08-01", value: 2 },
+            { date: "2026-08-02", value: 4 },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText("2026-08-01 – 2026-08-02")).toBeInTheDocument();
+    expect(screen.getAllByText("4 h").length).toBeGreaterThan(0);
+  });
+
+  it("renders funnel stage values and conversion percentages", () => {
+    render(
+      <ChatChart
+        spec={specFrom({
+          type: "funnel",
+          items: [
+            { label: "opened", value: 100 },
+            { label: "activated", value: 42 },
+            { label: "retained", value: 18 },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getAllByText("activated").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("42%").length).toBeGreaterThan(0);
+  });
+
+  it("computes and exposes the waterfall running total", () => {
+    render(
+      <ChatChart
+        spec={specFrom({
+          type: "waterfall",
+          unit: "h",
+          start: { label: "planned", value: 10 },
+          items: [
+            { label: "added", value: 3 },
+            { label: "cut", value: -2 },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getAllByText("+3 h").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("11 h").length).toBeGreaterThan(0);
+  });
+
+  it("renders range endpoints and a middle marker", () => {
+    render(
+      <ChatChart
+        spec={specFrom({
+          type: "range",
+          unit: "min",
+          items: [{ label: "support call", min: 18, mid: 31, max: 54 }],
+        })}
+      />,
+    );
+    expect(screen.getAllByText("support call").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("31 min").length).toBeGreaterThan(0);
+  });
+
+  it("renders scatter axes and every labeled point in the data table", () => {
+    render(
+      <ChatChart
+        spec={specFrom({
+          type: "scatter",
+          x_label: "time",
+          y_label: "value",
+          x_unit: "h",
+          items: [
+            { label: "support", x: 4, y: 9 },
+            { label: "coding", x: 8, y: 7 },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText("time →")).toBeInTheDocument();
+    expect(screen.getAllByText("support").length).toBeGreaterThan(0);
+    expect(screen.getByText("2 points")).toBeInTheDocument();
   });
 });

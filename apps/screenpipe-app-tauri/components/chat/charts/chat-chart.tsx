@@ -18,13 +18,18 @@ import {
 import { useChartPalette } from "./chart-palette";
 import {
   BarChart,
+  CalendarChart,
+  FunnelChart,
   GroupedBarChart,
   HeatmapChart,
   LineChart,
   ProportionChart,
+  RangeChart,
+  ScatterChart,
   StackedBarChart,
   StatChart,
   TimelineChart,
+  WaterfallChart,
 } from "./chart-marks";
 
 export function ChatChart({ spec }: { spec: ChartSpec }) {
@@ -47,6 +52,16 @@ export function ChatChart({ spec }: { spec: ChartSpec }) {
       return <HeatmapChart spec={spec} palette={palette} />;
     case "timeline":
       return <TimelineChart spec={spec} palette={palette} />;
+    case "calendar":
+      return <CalendarChart spec={spec} palette={palette} />;
+    case "funnel":
+      return <FunnelChart spec={spec} palette={palette} />;
+    case "waterfall":
+      return <WaterfallChart spec={spec} palette={palette} />;
+    case "range":
+      return <RangeChart spec={spec} palette={palette} />;
+    case "scatter":
+      return <ScatterChart spec={spec} palette={palette} />;
   }
 }
 

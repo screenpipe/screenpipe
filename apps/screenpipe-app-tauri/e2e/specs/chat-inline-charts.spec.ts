@@ -47,6 +47,28 @@ function chartMessage(marker: string): string {
     '  "items": [{ "label": "standup", "start": 9.5, "end": 10 }, { "label": "deep work", "start": 10, "end": 12.5 }] }',
     "```",
     "",
+    "Five more patterns for the questions a work history creates:",
+    "",
+    "```chart",
+    '{ "type": "calendar", "title": "daily focus", "unit": "h", "items": [{ "date": "2026-08-03", "value": 2.1 }, { "date": "2026-08-04", "value": 4.8 }, { "date": "2026-08-05", "value": 3.2 }, { "date": "2026-08-06", "value": 5.1 }, { "date": "2026-08-07", "value": 4.4 }, { "date": "2026-08-08", "value": 1.2 }, { "date": "2026-08-09", "value": 0.8 }, { "date": "2026-08-10", "value": 3.9 }, { "date": "2026-08-11", "value": 5.6 }, { "date": "2026-08-12", "value": 4.7 }, { "date": "2026-08-13", "value": 6.1 }, { "date": "2026-08-14", "value": 4.2 }] }',
+    "```",
+    "",
+    "```chart",
+    '{ "type": "funnel", "title": "activation path", "unit": "users", "items": [{ "label": "installed", "value": 100 }, { "label": "recorded", "value": 68 }, { "label": "asked", "value": 41 }, { "label": "returned", "value": 24 }] }',
+    "```",
+    "",
+    "```chart",
+    '{ "type": "waterfall", "title": "weekly time change", "unit": "h", "start": { "label": "last week", "value": 42 }, "items": [{ "label": "deep work", "value": 8 }, { "label": "meetings", "value": -5 }, { "label": "support", "value": 3 }] }',
+    "```",
+    "",
+    "```chart",
+    '{ "type": "range", "title": "meeting duration", "unit": "min", "items": [{ "label": "customer", "min": 18, "mid": 31, "max": 54 }, { "label": "team", "min": 12, "mid": 24, "max": 41 }, { "label": "sales", "min": 22, "mid": 38, "max": 67 }] }',
+    "```",
+    "",
+    "```chart",
+    '{ "type": "scatter", "title": "time vs value", "x_label": "time", "y_label": "value", "x_unit": "h", "items": [{ "label": "coding", "x": 12, "y": 9 }, { "label": "support", "x": 6, "y": 8 }, { "label": "meetings", "x": 9, "y": 6 }, { "label": "admin", "x": 5, "y": 3 }, { "label": "planning", "x": 3, "y": 7 }] }',
+    "```",
+    "",
     "And one that is broken on purpose:",
     "",
     "```chart",
@@ -106,16 +128,16 @@ describe("Inline charts in chat", function () {
     marker = randomUUID().slice(0, 8);
     await seedAssistant(randomUUID(), chartMessage(marker));
 
-    // Both valid fences must have become charts before anything is asserted.
+    // All valid fences must have become charts before anything is asserted.
     await browser.waitUntil(
       async () =>
         (await browser.execute(
           () => document.querySelectorAll('[data-testid="chat-chart"]').length,
-        )) === 2,
+        )) === 7,
       {
         timeout: t(20_000),
         interval: 200,
-        timeoutMsg: "the two seeded charts never rendered",
+        timeoutMsg: "the seven seeded charts never rendered",
       },
     );
   });
@@ -146,7 +168,15 @@ describe("Inline charts in chat", function () {
     }, LEAD, TRAIL);
 
     expect(layout).not.toBe(null);
-    expect(layout!.types).toEqual(["bar", "timeline"]);
+    expect(layout!.types).toEqual([
+      "bar",
+      "timeline",
+      "calendar",
+      "funnel",
+      "waterfall",
+      "range",
+      "scatter",
+    ]);
     // The ordering assertion is the point: a chart sits where its fence sat.
     expect(layout!.leadAboveBar).toBe(true);
     expect(layout!.barAboveTrail).toBe(true);
@@ -224,11 +254,11 @@ describe("Inline charts in chat", function () {
     });
     expect(fallback).toBe(true);
 
-    // And it did not silently become a third chart.
+    // And it did not silently become an eighth chart.
     const chartCount = await browser.execute(
       () => document.querySelectorAll('[data-testid="chat-chart"]').length,
     );
-    expect(chartCount).toBe(2);
+    expect(chartCount).toBe(7);
   });
 
   it("uses sharp corners everywhere, per DESIGN.md", async () => {
@@ -264,9 +294,29 @@ describe("Inline charts in chat", function () {
     expect(tables).toEqual([
       { hasTable: true, rows: 3 },
       { hasTable: true, rows: 2 },
+      { hasTable: true, rows: 12 },
+      { hasTable: true, rows: 4 },
+      { hasTable: true, rows: 5 },
+      { hasTable: true, rows: 3 },
+      { hasTable: true, rows: 5 },
     ]);
 
-    const filepath = await saveScreenshot(`chat-inline-charts-${marker}`);
-    expect(existsSync(filepath)).toBe(true);
+    await browser.execute(() => {
+      document.querySelector('[data-chart-type="calendar"]')?.scrollIntoView({
+        block: "start",
+      });
+    });
+    await browser.pause(250);
+    const overview = await saveScreenshot(`chat-chart-patterns-overview-${marker}`);
+    expect(existsSync(overview)).toBe(true);
+
+    await browser.execute(() => {
+      document.querySelector('[data-chart-type="range"]')?.scrollIntoView({
+        block: "start",
+      });
+    });
+    await browser.pause(250);
+    const analysis = await saveScreenshot(`chat-chart-patterns-analysis-${marker}`);
+    expect(existsSync(analysis)).toBe(true);
   });
 });

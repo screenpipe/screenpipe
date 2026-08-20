@@ -7,7 +7,7 @@
 /**
  * The marks for each chart type.
  *
- * All eight consume typed values from `chart-spec.ts` and colours from
+ * All thirteen consume typed values from `chart-spec.ts` and colours from
  * `chart-palette.ts`. Text is rendered as React children, so model output is
  * escaped by construction; nothing here builds markup from a string.
  *
@@ -21,13 +21,18 @@ import {
   formatChartValue,
   formatClock,
   type BarChartSpec,
+  type CalendarChartSpec,
+  type FunnelChartSpec,
   type GroupedBarChartSpec,
   type HeatmapChartSpec,
   type LineChartSpec,
   type ProportionChartSpec,
+  type RangeChartSpec,
+  type ScatterChartSpec,
   type StackedBarChartSpec,
   type StatChartSpec,
   type TimelineChartSpec,
+  type WaterfallChartSpec,
 } from "./chart-spec";
 import {
   magnitudeColor,
@@ -775,6 +780,505 @@ export function TimelineChart({ spec, palette }: MarkProps<TimelineChartSpec>) {
             <span>{formatClock(axisEnd)}</span>
           </span>
         </div>
+      </div>
+    </ChartFrame>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// calendar — daily magnitude on a familiar Monday–Sunday grid
+// ---------------------------------------------------------------------------
+
+const WEEKDAYS = ["mo", "tu", "we", "th", "fr", "sa", "su"] as const;
+
+function isoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+export function CalendarChart({
+  spec,
+  palette,
+}: MarkProps<CalendarChartSpec>) {
+  const { tooltip, show, hide } = useChartHover();
+  const geometry = useMemo(() => {
+    const byDate = new Map(spec.items.map((item) => [item.date, item.value]));
+    const first = new Date(`${spec.items[0].date}T00:00:00Z`);
+    const last = new Date(`${spec.items[spec.items.length - 1].date}T00:00:00Z`);
+    const start = new Date(first);
+    start.setUTCDate(start.getUTCDate() - ((start.getUTCDay() + 6) % 7));
+    const end = new Date(last);
+    end.setUTCDate(end.getUTCDate() + (6 - ((end.getUTCDay() + 6) % 7)));
+    const cells: Array<{ date: string; value: number | null }> = [];
+    for (const cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+      const date = isoDate(cursor);
+      cells.push({ date, value: byDate.get(date) ?? null });
+    }
+    const values = spec.items.map((item) => item.value);
+    return {
+      cells,
+      minimum: Math.min(...values),
+      maximum: Math.max(...values),
+      span: `${spec.items[0].date} – ${spec.items[spec.items.length - 1].date}`,
+    };
+  }, [spec.items]);
+
+  return (
+    <ChartFrame
+      spec={spec}
+      palette={palette}
+      table={
+        <DataTable
+          caption={spec.title || "calendar"}
+          columns={["date", "value"]}
+          rows={spec.items.map((item) => ({
+            header: item.date,
+            cells: [formatChartValue(item.value, spec.unit)],
+          }))}
+        />
+      }
+    >
+      <ChartTooltip state={tooltip} />
+      <div className="mb-1.5 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+        <span>daily</span>
+        <span className="truncate tabular-nums">{geometry.span}</span>
+      </div>
+      <div className="grid grid-cols-7 gap-px text-center text-[10px] text-muted-foreground">
+        {WEEKDAYS.map((day, index) => (
+          <span key={`${day}-${index}`}>{day}</span>
+        ))}
+      </div>
+      <div className="mt-1 grid grid-cols-7 gap-px">
+        {geometry.cells.map((cell) => (
+          <span
+            key={cell.date}
+            className="h-5 transition-colors duration-150"
+            style={{
+              backgroundColor:
+                cell.value === null
+                  ? palette.track
+                  : magnitudeColor(
+                      palette,
+                      cell.value,
+                      geometry.minimum,
+                      geometry.maximum,
+                    ),
+            }}
+            onPointerMove={
+              cell.value === null
+                ? undefined
+                : (event) =>
+                    show(
+                      event,
+                      `${cell.date} · ${formatChartValue(cell.value!, spec.unit)}`,
+                      cell.date,
+                    )
+            }
+            onPointerLeave={cell.value === null ? undefined : hide}
+          />
+        ))}
+      </div>
+    </ChartFrame>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// funnel — ordered stages with honest conversion between each step
+// ---------------------------------------------------------------------------
+
+export function FunnelChart({ spec, palette }: MarkProps<FunnelChartSpec>) {
+  const { tooltip, activeKey, show, hide } = useChartHover();
+  const first = spec.items[0].value;
+
+  return (
+    <ChartFrame
+      spec={spec}
+      palette={palette}
+      table={
+        <DataTable
+          caption={spec.title || "funnel"}
+          columns={["stage", "value", "from prior", "from start"]}
+          rows={spec.items.map((item, index) => ({
+            header: item.label,
+            cells: [
+              formatChartValue(item.value, spec.unit),
+              index === 0
+                ? "100%"
+                : spec.items[index - 1].value <= 0
+                  ? "—"
+                  : `${Math.round((item.value / spec.items[index - 1].value) * 100)}%`,
+              `${Math.round((item.value / first) * 100)}%`,
+            ],
+          }))}
+        />
+      }
+    >
+      <ChartTooltip state={tooltip} />
+      <div className="space-y-2">
+        {spec.items.map((item, index) => {
+          const key = String(index);
+          const percent = (item.value / first) * 100;
+          return (
+            <div
+              key={`${item.label}-${index}`}
+              className="grid items-center gap-2.5"
+              style={{ gridTemplateColumns: `${LABEL_COL} 1fr 4.5rem` }}
+              onPointerMove={(event) =>
+                show(
+                  event,
+                  `${item.label} · ${formatChartValue(item.value, spec.unit)} · ${Math.round(percent)}% of start`,
+                  key,
+                )
+              }
+              onPointerLeave={hide}
+            >
+              <span className="truncate text-xs text-muted-foreground">
+                {item.label}
+              </span>
+              <span className="block h-3 w-full" style={{ backgroundColor: palette.track }}>
+                <span
+                  className="mx-auto block h-full transition-colors duration-150"
+                  style={{
+                    width: `${percent}%`,
+                    minWidth: item.value > 0 ? 2 : 0,
+                    backgroundColor:
+                      activeKey === key
+                        ? palette.focus
+                        : seriesColor(palette, index, spec.items.length),
+                  }}
+                />
+              </span>
+              <span className="text-right text-xs tabular-nums text-foreground">
+                {formatChartValue(item.value, spec.unit)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </ChartFrame>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// waterfall — starting total, signed changes, and the computed ending total
+// ---------------------------------------------------------------------------
+
+function signedChartValue(value: number, unit: string): string {
+  const formatted = formatChartValue(Math.abs(value), unit);
+  return value > 0 ? `+${formatted}` : value < 0 ? `−${formatted}` : formatted;
+}
+
+export function WaterfallChart({
+  spec,
+  palette,
+}: MarkProps<WaterfallChartSpec>) {
+  const { tooltip, activeKey, show, hide } = useChartHover();
+  const geometry = useMemo(() => {
+    let running = spec.start.value;
+    const steps = [
+      {
+        label: spec.start.label,
+        delta: spec.start.value,
+        from: 0,
+        to: spec.start.value,
+        total: spec.start.value,
+        kind: "total" as const,
+      },
+      ...spec.items.map((item) => {
+        const from = running;
+        running += item.value;
+        return {
+          label: item.label,
+          delta: item.value,
+          from,
+          to: running,
+          total: running,
+          kind: "change" as const,
+        };
+      }),
+      {
+        label: "total",
+        delta: running,
+        from: 0,
+        to: running,
+        total: running,
+        kind: "total" as const,
+      },
+    ];
+    const endpoints = steps.flatMap((step) => [step.from, step.to, 0]);
+    const minimum = Math.min(...endpoints);
+    const maximum = Math.max(...endpoints);
+    const spread = maximum > minimum ? maximum - minimum : 1;
+    const position = (value: number) => ((maximum - value) / spread) * 100;
+    return { steps, minimum, maximum, position };
+  }, [spec.items, spec.start]);
+
+  return (
+    <ChartFrame
+      spec={spec}
+      palette={palette}
+      table={
+        <DataTable
+          caption={spec.title || "waterfall"}
+          columns={["step", "change", "running total"]}
+          rows={geometry.steps.map((step) => ({
+            header: step.label,
+            cells: [
+              step.kind === "change"
+                ? signedChartValue(step.delta, spec.unit)
+                : "—",
+              formatChartValue(step.total, spec.unit),
+            ],
+          }))}
+        />
+      }
+    >
+      <ChartTooltip state={tooltip} />
+      <div className="mb-1 flex items-center justify-between text-[11px] tabular-nums text-muted-foreground">
+        <span>scale</span>
+        <span>
+          {formatChartValue(geometry.minimum, spec.unit)}–
+          {formatChartValue(geometry.maximum, spec.unit)}
+        </span>
+      </div>
+      <div className="relative flex h-36 items-stretch gap-1.5">
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 border-t border-border"
+          style={{ top: `${geometry.position(0)}%` }}
+        />
+        {geometry.steps.map((step, index) => {
+          const key = String(index);
+          const top = Math.min(geometry.position(step.from), geometry.position(step.to));
+          const bottom = Math.max(geometry.position(step.from), geometry.position(step.to));
+          return (
+            <div key={`${step.label}-${index}`} className="relative min-w-0 flex-1">
+              <span
+                data-waterfall-bar
+                className="absolute inset-x-1 transition-colors duration-150"
+                style={{
+                  top: `${top}%`,
+                  height: `${Math.max(bottom - top, 1.5)}%`,
+                  backgroundColor:
+                    activeKey === key
+                      ? palette.focus
+                      : step.kind === "total"
+                        ? seriesColor(palette, 0, 2)
+                        : palette.single,
+                }}
+                onPointerMove={(event) =>
+                  show(
+                    event,
+                    step.kind === "change"
+                      ? `${step.label} · ${signedChartValue(step.delta, spec.unit)} · total ${formatChartValue(step.total, spec.unit)}`
+                      : `${step.label} · ${formatChartValue(step.total, spec.unit)}`,
+                    key,
+                  )
+                }
+                onPointerLeave={hide}
+              />
+              <span className="absolute inset-x-0 bottom-0 translate-y-full truncate pt-1 text-center text-[10px] text-muted-foreground">
+                {step.label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-4 grid gap-1.5" style={{ gridTemplateColumns: `repeat(${geometry.steps.length}, minmax(0, 1fr))` }}>
+        {geometry.steps.map((step, index) => (
+          <span key={`${step.label}-value-${index}`} className="truncate text-center text-[10px] tabular-nums text-foreground">
+            {step.kind === "change"
+              ? signedChartValue(step.delta, spec.unit)
+              : formatChartValue(step.total, spec.unit)}
+          </span>
+        ))}
+      </div>
+    </ChartFrame>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// range — low/high interval with an optional typical or target marker
+// ---------------------------------------------------------------------------
+
+export function RangeChart({ spec, palette }: MarkProps<RangeChartSpec>) {
+  const { tooltip, activeKey, show, hide } = useChartHover();
+  const minimum = Math.min(...spec.items.map((item) => item.min));
+  const maximum = Math.max(...spec.items.map((item) => item.max));
+  const spread = maximum > minimum ? maximum - minimum : 1;
+  const position = (value: number) => ((value - minimum) / spread) * 100;
+
+  return (
+    <ChartFrame
+      spec={spec}
+      palette={palette}
+      table={
+        <DataTable
+          caption={spec.title || "range"}
+          columns={["label", "minimum", "middle", "maximum"]}
+          rows={spec.items.map((item) => ({
+            header: item.label,
+            cells: [
+              formatChartValue(item.min, spec.unit),
+              item.mid === null ? "—" : formatChartValue(item.mid, spec.unit),
+              formatChartValue(item.max, spec.unit),
+            ],
+          }))}
+        />
+      }
+    >
+      <ChartTooltip state={tooltip} />
+      <div className="space-y-2.5">
+        {spec.items.map((item, index) => {
+          const key = String(index);
+          const left = position(item.min);
+          const width = position(item.max) - left;
+          const text = `${item.label} · ${formatChartValue(item.min, spec.unit)}–${formatChartValue(item.max, spec.unit)}${item.mid === null ? "" : ` · middle ${formatChartValue(item.mid, spec.unit)}`}`;
+          return (
+            <div
+              key={`${item.label}-${index}`}
+              className="grid items-center gap-2.5"
+              style={{ gridTemplateColumns: `${LABEL_COL} 1fr 6rem` }}
+              onPointerMove={(event) => show(event, text, key)}
+              onPointerLeave={hide}
+            >
+              <span className="truncate text-xs text-muted-foreground">{item.label}</span>
+              <span className="relative block h-3">
+                <span className="absolute left-0 right-0 top-1/2 border-t border-border" />
+                <span
+                  className="absolute top-1/2 h-0.5 -translate-y-1/2 transition-colors duration-150"
+                  style={{
+                    left: `${left}%`,
+                    width: `${Math.max(width, 0.5)}%`,
+                    backgroundColor: activeKey === key ? palette.focus : palette.single,
+                  }}
+                />
+                <span className="absolute top-1/2 h-2 w-0.5 -translate-x-1/2 -translate-y-1/2" style={{ left: `${left}%`, backgroundColor: palette.single }} />
+                <span className="absolute top-1/2 h-2 w-0.5 -translate-x-1/2 -translate-y-1/2" style={{ left: `${left + width}%`, backgroundColor: palette.single }} />
+                {item.mid !== null ? (
+                  <span
+                    className="absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 border"
+                    style={{
+                      left: `${position(item.mid)}%`,
+                      borderColor: palette.surface,
+                      backgroundColor: activeKey === key ? palette.focus : seriesColor(palette, 0, 2),
+                    }}
+                  />
+                ) : null}
+              </span>
+              <span className="text-right text-[11px] tabular-nums text-foreground">
+                {formatChartValue(item.min, spec.unit)}–{formatChartValue(item.max, spec.unit)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </ChartFrame>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// scatter — two numeric dimensions with a nearest-point crosshair readout
+// ---------------------------------------------------------------------------
+
+export function ScatterChart({ spec, palette }: MarkProps<ScatterChartSpec>) {
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const geometry = useMemo(() => {
+    const xs = spec.items.map((item) => item.x);
+    const ys = spec.items.map((item) => item.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const spreadX = maxX > minX ? maxX - minX : 1;
+    const spreadY = maxY > minY ? maxY - minY : 1;
+    const coordinates = spec.items.map((item) => ({
+      x: 6 + ((item.x - minX) / spreadX) * 88,
+      y: 94 - ((item.y - minY) / spreadY) * 88,
+    }));
+    return { minX, maxX, minY, maxY, spreadX, spreadY, coordinates };
+  }, [spec.items]);
+  const active = activeIndex === null ? null : spec.items[activeIndex];
+  const activeCoordinate = activeIndex === null ? null : geometry.coordinates[activeIndex];
+
+  return (
+    <ChartFrame
+      spec={spec}
+      palette={palette}
+      table={
+        <DataTable
+          caption={spec.title || "scatter"}
+          columns={["label", spec.xLabel, spec.yLabel]}
+          rows={spec.items.map((item) => ({
+            header: item.label,
+            cells: [
+              formatChartValue(item.x, spec.xUnit),
+              formatChartValue(item.y, spec.yUnit),
+            ],
+          }))}
+        />
+      }
+    >
+      <div className="mb-1.5 flex min-h-5 items-baseline justify-between gap-3 text-xs">
+        <span className="truncate text-muted-foreground">
+          {active
+            ? active.label
+            : `${spec.yLabel} ${formatChartValue(geometry.minY, spec.yUnit)}–${formatChartValue(geometry.maxY, spec.yUnit)} ↑`}
+        </span>
+        <span className="shrink-0 tabular-nums text-foreground" aria-live="polite">
+          {active
+            ? `${formatChartValue(active.x, spec.xUnit)} · ${formatChartValue(active.y, spec.yUnit)}`
+            : `${spec.items.length} points`}
+        </span>
+      </div>
+      <div
+        className="relative h-40 w-full"
+        onPointerMove={(event) => {
+          const bounds = event.currentTarget.getBoundingClientRect();
+          if (bounds.width <= 0 || bounds.height <= 0) return;
+          const x = ((event.clientX - bounds.left) / bounds.width) * 100;
+          const y = ((event.clientY - bounds.top) / bounds.height) * 100;
+          let nearest = 0;
+          let distance = Number.POSITIVE_INFINITY;
+          geometry.coordinates.forEach((point, index) => {
+            const next = (point.x - x) ** 2 + (point.y - y) ** 2;
+            if (next < distance) {
+              nearest = index;
+              distance = next;
+            }
+          });
+          setActiveIndex(nearest);
+        }}
+        onPointerLeave={() => setActiveIndex(null)}
+      >
+        <svg role="img" aria-label={`${spec.title || "scatter"} plot`} viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full">
+          <line x1="6" x2="94" y1="94" y2="94" stroke={palette.grid} strokeWidth="1" vectorEffect="non-scaling-stroke" />
+          <line x1="6" x2="6" y1="6" y2="94" stroke={palette.grid} strokeWidth="1" vectorEffect="non-scaling-stroke" />
+          {activeCoordinate ? (
+            <>
+              <line x1={activeCoordinate.x} x2={activeCoordinate.x} y1="6" y2="94" stroke={palette.grid} strokeWidth="1" vectorEffect="non-scaling-stroke" />
+              <line x1="6" x2="94" y1={activeCoordinate.y} y2={activeCoordinate.y} stroke={palette.grid} strokeWidth="1" vectorEffect="non-scaling-stroke" />
+            </>
+          ) : null}
+        </svg>
+        {geometry.coordinates.map((point, index) => (
+          <span
+            key={`${spec.items[index].label}-${index}`}
+            aria-hidden="true"
+            className="pointer-events-none absolute h-2 w-2 -translate-x-1/2 -translate-y-1/2 border transition-colors duration-150"
+            style={{
+              left: `${point.x}%`,
+              top: `${point.y}%`,
+              borderColor: palette.surface,
+              backgroundColor:
+                activeIndex === index ? palette.focus : palette.single,
+            }}
+          />
+        ))}
+      </div>
+      <div className="mt-1 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+        <span>{formatChartValue(geometry.minX, spec.xUnit)}</span>
+        <span className="truncate">{spec.xLabel} →</span>
+        <span>{formatChartValue(geometry.maxX, spec.xUnit)}</span>
       </div>
     </ChartFrame>
   );

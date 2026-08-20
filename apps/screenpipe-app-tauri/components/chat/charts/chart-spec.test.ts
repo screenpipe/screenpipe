@@ -350,6 +350,134 @@ describe("parseChartSpec — grouped_bar", () => {
   });
 });
 
+describe("parseChartSpec — calendar", () => {
+  it("parses and sorts unique local dates", () => {
+    const spec = parseChartSpec(
+      '{"type":"calendar","unit":"h","items":[{"date":"2026-08-02","value":3},{"date":"2026-08-01","value":2}]}',
+    );
+    expect(spec?.type).toBe("calendar");
+    expect(spec && "items" in spec && spec.items[0]).toEqual({
+      date: "2026-08-01",
+      value: 2,
+    });
+  });
+
+  it("rejects invalid, duplicate, or negative day values", () => {
+    expect(
+      parseChartSpec(
+        '{"type":"calendar","items":[{"date":"2026-02-30","value":1}]}',
+      ),
+    ).toBeNull();
+    expect(
+      parseChartSpec(
+        '{"type":"calendar","items":[{"date":"2026-08-01","value":1},{"date":"2026-08-01","value":2}]}',
+      ),
+    ).toBeNull();
+    expect(
+      parseChartSpec(
+        '{"type":"calendar","items":[{"date":"2026-08-01","value":-1}]}',
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("parseChartSpec — funnel", () => {
+  it("parses ordered non-increasing stages", () => {
+    const spec = parseChartSpec(
+      '{"type":"funnel","items":[{"label":"opened","value":100},{"label":"activated","value":42},{"label":"retained","value":18}]}',
+    );
+    expect(spec?.type).toBe("funnel");
+  });
+
+  it("rejects a single stage, an increase, or a zero starting stage", () => {
+    expect(
+      parseChartSpec(
+        '{"type":"funnel","items":[{"label":"opened","value":100}]}',
+      ),
+    ).toBeNull();
+    expect(
+      parseChartSpec(
+        '{"type":"funnel","items":[{"label":"opened","value":10},{"label":"activated","value":11}]}',
+      ),
+    ).toBeNull();
+    expect(
+      parseChartSpec(
+        '{"type":"funnel","items":[{"label":"opened","value":0},{"label":"activated","value":0}]}',
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("parseChartSpec — waterfall", () => {
+  it("parses a starting total and signed changes", () => {
+    const spec = parseChartSpec(
+      '{"type":"waterfall","start":{"label":"start","value":120},"items":[{"label":"new","value":30},{"label":"churn","value":-20}]}',
+    );
+    expect(spec?.type).toBe("waterfall");
+    expect(spec && "start" in spec && spec.start.value).toBe(120);
+  });
+
+  it("rejects a missing start or an empty change list", () => {
+    expect(
+      parseChartSpec(
+        '{"type":"waterfall","items":[{"label":"new","value":30}]}',
+      ),
+    ).toBeNull();
+    expect(
+      parseChartSpec(
+        '{"type":"waterfall","start":{"label":"start","value":120},"items":[]}',
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("parseChartSpec — range", () => {
+  it("parses low, high, and an optional middle marker", () => {
+    const spec = parseChartSpec(
+      '{"type":"range","items":[{"label":"meeting","min":18,"mid":31,"max":54}]}',
+    );
+    expect(spec?.type).toBe("range");
+    expect(spec && "items" in spec && spec.items[0]).toEqual({
+      label: "meeting",
+      min: 18,
+      max: 54,
+      mid: 31,
+    });
+  });
+
+  it("rejects reversed bounds or a middle outside the range", () => {
+    expect(
+      parseChartSpec(
+        '{"type":"range","items":[{"label":"a","min":5,"max":2}]}',
+      ),
+    ).toBeNull();
+    expect(
+      parseChartSpec(
+        '{"type":"range","items":[{"label":"a","min":2,"mid":8,"max":5}]}',
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("parseChartSpec — scatter", () => {
+  it("parses axes and labeled points", () => {
+    const spec = parseChartSpec(
+      '{"type":"scatter","x_label":"time","y_label":"value","x_unit":"h","items":[{"label":"support","x":4,"y":9}]}',
+    );
+    expect(spec?.type).toBe("scatter");
+    expect(spec && "xLabel" in spec && spec.xLabel).toBe("time");
+    expect(spec && "yLabel" in spec && spec.yLabel).toBe("value");
+  });
+
+  it("rejects a point with a missing coordinate", () => {
+    expect(
+      parseChartSpec(
+        '{"type":"scatter","items":[{"label":"support","x":4}]}',
+      ),
+    ).toBeNull();
+  });
+});
+
 describe("formatClock", () => {
   it("renders hours since midnight as a clock time", () => {
     expect(formatClock(9)).toBe("9:00");
