@@ -9,12 +9,15 @@
 //! Screenpipe context is fetched locally, reduced to a bounded activity and
 //! memory capsule, and embedded in the remote prompt only after explicit opt-in.
 
-use super::{install_spawned_pid, AgentExecutor, AgentOutput, ExecutionHandle, SharedPid};
+use super::{
+    cloud_context, install_spawned_pid, AgentExecutor, AgentOutput, ExecutionHandle, SharedPid,
+};
 use anyhow::{anyhow, Context, Result};
-use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 #[cfg(feature = "secrets")]
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -24,14 +27,19 @@ use tokio::sync::Mutex as AsyncMutex;
 
 pub const CURSOR_CLOUD_API_KEY_SECRET: &str = "cloud_agents.cursor.api_key";
 const CURSOR_API_BASE: &str = "https://api.cursor.com";
-const MAX_CONTEXT_ITEMS: u32 = 200;
-const DEFAULT_CONTEXT_ITEMS: u32 = 80;
-const MAX_CONTEXT_CHARS: usize = 24_000;
 const CURSOR_REPOSITORY_CACHE_TTL: Duration = Duration::from_secs(60);
 
 static CURSOR_REPOSITORY_CACHE: LazyLock<
     AsyncMutex<Option<(Instant, Vec<CloudRepositorySummary>)>>,
 > = LazyLock::new(|| AsyncMutex::new(None));
+
+fn repository_label(url: &str) -> String {
+    let normalized = url.trim_end_matches('/').trim_end_matches(".git");
+    normalized
+        .strip_prefix("https://github.com/")
+        .unwrap_or(normalized)
+        .to_string()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -47,6 +55,19 @@ impl CloudAgentProvider {
             Self::Codex => "codex",
             Self::Claude => "claude",
             Self::Cursor => "cursor",
+        }
+    }
+}
+
+impl FromStr for CloudAgentProvider {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "codex" => Ok(Self::Codex),
+            "claude" => Ok(Self::Claude),
+            "cursor" => Ok(Self::Cursor),
+            _ => Err(anyhow!("unknown cloud-agent provider")),
         }
     }
 }
@@ -78,6 +99,21 @@ pub struct CloudAgentConfig {
     pub context_max_items: Option<u32>,
 }
 
+impl CloudAgentConfig {
+    pub fn executor_config(&self, task_instructions: &str) -> Value {
+        json!({
+            "cloud_agent": self,
+            "task_instructions": task_instructions,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct CloudAgentRunConfig {
+    cloud_agent: CloudAgentConfig,
+    task_instructions: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CloudAgentProviderStatus {
@@ -97,13 +133,13 @@ pub struct CursorCloudAgentSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct CloudRepositorySummary {
+struct CloudRepositorySummary {
     pub url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct CodexCloudEnvironmentSummary {
-    pub id: String,
+pub struct CloudCodebaseSummary {
+    pub value: String,
     pub label: String,
 }
 
@@ -239,19 +275,28 @@ impl CloudAgentExecutor {
     pub async fn provider_statuses(&self) -> Vec<CloudAgentProviderStatus> {
         let codex = Self::provider_binary(CloudAgentProvider::Codex);
         let claude = Self::provider_binary(CloudAgentProvider::Claude);
-        let (codex_authenticated, codex_chatgpt) = match codex.as_deref() {
-            Some(path) => Self::codex_auth_status(path).await,
-            None => (false, false),
-        };
-        let claude_cloud = match claude.as_deref() {
-            Some(path) => Self::claude_supports_cloud(path).await,
-            None => false,
-        };
-        let claude_authenticated = match claude.as_deref() {
-            Some(path) => Self::claude_is_authenticated(path).await,
-            None => false,
-        };
-        let cursor_configured = self.cursor_api_key().await.is_ok();
+        let (codex_status, claude_cloud, claude_authenticated, cursor_configured) = tokio::join!(
+            async {
+                match codex.as_deref() {
+                    Some(path) => Self::codex_auth_status(path).await,
+                    None => (false, false),
+                }
+            },
+            async {
+                match claude.as_deref() {
+                    Some(path) => Self::claude_supports_cloud(path).await,
+                    None => false,
+                }
+            },
+            async {
+                match claude.as_deref() {
+                    Some(path) => Self::claude_is_authenticated(path).await,
+                    None => false,
+                }
+            },
+            async { self.cursor_api_key().await.is_ok() },
+        );
+        let (codex_authenticated, codex_chatgpt) = codex_status;
 
         vec![
             CloudAgentProviderStatus {
@@ -344,32 +389,15 @@ impl CloudAgentExecutor {
     }
 
     pub async fn cursor_agents(&self) -> Result<Vec<CursorCloudAgentSummary>> {
-        let key = self.cursor_api_key().await?;
-        let response = self
-            .client
-            .get(format!("{CURSOR_API_BASE}/v1/agents"))
-            .query(&[("limit", "100"), ("includeArchived", "false")])
-            .bearer_auth(key)
-            .send()
-            .await
-            .context("failed to reach Cursor Cloud Agents")?;
-        let status = response.status();
-        let text = response.text().await?;
-        if !status.is_success() {
-            return Err(anyhow!(
-                "Cursor Cloud returned HTTP {status} while listing your agents: {text}"
-            ));
-        }
-        let value: Value = serde_json::from_str(&text)?;
-        value
-            .get("items")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()?
-            .ok_or_else(|| anyhow!("Cursor Cloud returned no agent list"))
+        self.cursor_items(
+            "agents",
+            &[("limit", "100"), ("includeArchived", "false")],
+            "agents",
+        )
+        .await
     }
 
-    pub async fn cursor_repositories(&self) -> Result<Vec<CloudRepositorySummary>> {
+    async fn cursor_repositories(&self) -> Result<Vec<CloudRepositorySummary>> {
         {
             let cache = CURSOR_REPOSITORY_CACHE.lock().await;
             if let Some((loaded_at, repositories)) = cache.as_ref() {
@@ -379,38 +407,48 @@ impl CloudAgentExecutor {
             }
         }
 
-        let key = self.cursor_api_key().await?;
+        let repositories = self
+            .cursor_items("repositories", &[], "repositories")
+            .await?;
+        *CURSOR_REPOSITORY_CACHE.lock().await = Some((Instant::now(), repositories.clone()));
+        Ok(repositories)
+    }
+
+    async fn cursor_items<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+        resource: &str,
+    ) -> Result<Vec<T>> {
         let response = self
             .client
-            .get(format!("{CURSOR_API_BASE}/v1/repositories"))
-            .bearer_auth(key)
+            .get(format!("{CURSOR_API_BASE}/v1/{path}"))
+            .query(query)
+            .bearer_auth(self.cursor_api_key().await?)
             .timeout(Duration::from_secs(30))
             .send()
             .await
-            .context("failed to list repositories from Cursor")?;
+            .with_context(|| format!("failed to list {resource} from Cursor"))?;
         let status = response.status();
         let text = response.text().await?;
         if !status.is_success() {
             return Err(anyhow!(
-                "Cursor Cloud returned HTTP {status} while listing repositories: {text}"
+                "Cursor Cloud returned HTTP {status} while listing {resource}: {text}"
             ));
         }
-        let value: Value = serde_json::from_str(&text)?;
-        let repositories: Vec<CloudRepositorySummary> = value
+        serde_json::from_str::<Value>(&text)?
             .get("items")
             .cloned()
             .map(serde_json::from_value)
             .transpose()?
-            .ok_or_else(|| anyhow!("Cursor Cloud returned no repository list"))?;
-        *CURSOR_REPOSITORY_CACHE.lock().await = Some((Instant::now(), repositories.clone()));
-        Ok(repositories)
+            .ok_or_else(|| anyhow!("Cursor Cloud returned no {resource} list"))
     }
 
     pub async fn clear_cursor_repository_cache() {
         *CURSOR_REPOSITORY_CACHE.lock().await = None;
     }
 
-    pub async fn codex_environments(&self) -> Result<Vec<CodexCloudEnvironmentSummary>> {
+    async fn codex_environments(&self) -> Result<Vec<CloudCodebaseSummary>> {
         let path = Self::provider_binary(CloudAgentProvider::Codex)
             .ok_or_else(|| anyhow!("Codex CLI is not installed"))?;
         let output = Self::run_cli(
@@ -434,7 +472,26 @@ impl CloudAgentExecutor {
         Self::parse_codex_environments(&output.stdout)
     }
 
-    fn parse_codex_environments(body: &str) -> Result<Vec<CodexCloudEnvironmentSummary>> {
+    pub async fn codebases(
+        &self,
+        provider: CloudAgentProvider,
+    ) -> Result<Vec<CloudCodebaseSummary>> {
+        match provider {
+            CloudAgentProvider::Codex => self.codex_environments().await,
+            CloudAgentProvider::Claude => Ok(Vec::new()),
+            CloudAgentProvider::Cursor => Ok(self
+                .cursor_repositories()
+                .await?
+                .into_iter()
+                .map(|repository| CloudCodebaseSummary {
+                    label: repository_label(&repository.url),
+                    value: repository.url,
+                })
+                .collect()),
+        }
+    }
+
+    fn parse_codex_environments(body: &str) -> Result<Vec<CloudCodebaseSummary>> {
         let value: Value = serde_json::from_str(body)
             .context("Codex returned an invalid recent cloud-task list")?;
         let tasks = value
@@ -453,7 +510,7 @@ impl CloudAgentExecutor {
             };
             if environments
                 .iter()
-                .any(|environment: &CodexCloudEnvironmentSummary| environment.id == id)
+                .any(|environment: &CloudCodebaseSummary| environment.value == id)
             {
                 continue;
             }
@@ -463,8 +520,8 @@ impl CloudAgentExecutor {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .unwrap_or(id);
-            environments.push(CodexCloudEnvironmentSummary {
-                id: id.to_string(),
+            environments.push(CloudCodebaseSummary {
+                value: id.to_string(),
                 label: label.to_string(),
             });
         }
@@ -492,132 +549,17 @@ impl CloudAgentExecutor {
         Ok(format!("https://github.com/{}/{}", parts[0], parts[1]))
     }
 
-    fn truncate_context(body: String) -> String {
-        if body.len() <= MAX_CONTEXT_CHARS {
-            return body;
-        }
-        let mut end = MAX_CONTEXT_CHARS;
-        while !body.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!(
-            "{}\n[screenpipe context truncated at {} characters]",
-            &body[..end],
-            MAX_CONTEXT_CHARS
-        )
-    }
-
-    fn sanitize_activity_capsule(body: &str) -> Result<String> {
-        let mut capsule: Value = serde_json::from_str(body)
-            .context("local screenpipe activity capsule returned invalid JSON")?;
-        if let Some(object) = capsule.as_object_mut() {
-            // Absolute local paths are useful on-device but cannot be opened by
-            // the cloud runner and should not cross the provider boundary.
-            object.remove("edited_files");
-        }
-        Ok(serde_json::to_string(&capsule)?)
-    }
-
-    async fn fetch_activity_capsule(&self, config: &CloudAgentConfig) -> Result<String> {
-        let hours = config.context_lookback_hours.unwrap_or(24).clamp(1, 24 * 7);
-        let end = Utc::now();
-        let start = end - ChronoDuration::hours(i64::from(hours));
-        let url = format!("http://localhost:{}/activity-summary", self.api_port);
-        let mut request = self.client.get(url).query(&[
-            (
-                "start_time",
-                start.to_rfc3339_opts(SecondsFormat::Secs, true),
-            ),
-            ("end_time", end.to_rfc3339_opts(SecondsFormat::Secs, true)),
-            ("include_recording", "false".to_string()),
-            ("include_key_texts", "false".to_string()),
-            ("include_memories", "true".to_string()),
-            ("include_snippets", "true".to_string()),
-            ("include_guidance", "true".to_string()),
-            ("max_snippets", "12".to_string()),
-            ("max_snippet_chars", "700".to_string()),
-            ("max_memories", "20".to_string()),
-        ]);
-        if let Some(key) = self.api_auth_key.as_deref() {
-            request = request.bearer_auth(key);
-        }
-        let response = request
-            .send()
-            .await
-            .context("failed to build local screenpipe activity capsule")?;
-        let status = response.status();
-        let body = response.text().await?;
-        if !status.is_success() {
-            return Err(anyhow!(
-                "local screenpipe activity capsule failed with HTTP {status}"
-            ));
-        }
-        Ok(Self::truncate_context(Self::sanitize_activity_capsule(
-            &body,
-        )?))
-    }
-
-    async fn fetch_search_snapshot(&self, config: &CloudAgentConfig) -> Result<String> {
-        let hours = config.context_lookback_hours.unwrap_or(24).clamp(1, 24 * 7);
-        let limit = config
-            .context_max_items
-            .unwrap_or(DEFAULT_CONTEXT_ITEMS)
-            .clamp(1, MAX_CONTEXT_ITEMS);
-        let end = Utc::now();
-        let start = end - ChronoDuration::hours(i64::from(hours));
-        let url = format!("http://localhost:{}/search", self.api_port);
-        let mut request = self.client.get(url).query(&[
-            ("content_type", "all".to_string()),
-            ("limit", limit.to_string()),
-            (
-                "start_time",
-                start.to_rfc3339_opts(SecondsFormat::Secs, true),
-            ),
-            (
-                "end_time",
-                end.to_rfc3339_opts(SecondsFormat::Secs, true),
-            ),
-            ("max_content_length", "800".to_string()),
-            (
-                "fields",
-                "type,content.timestamp,content.app_name,content.window_name,content.text,content.transcription,content.name"
-                    .to_string(),
-            ),
-        ]);
-        if let Some(key) = self.api_auth_key.as_deref() {
-            request = request.bearer_auth(key);
-        }
-        let response = request
-            .send()
-            .await
-            .context("failed to read local screenpipe context")?;
-        let status = response.status();
-        let body = response.text().await?;
-        if !status.is_success() {
-            return Err(anyhow!(
-                "local screenpipe context request failed with HTTP {status}"
-            ));
-        }
-        Ok(Self::truncate_context(body))
-    }
-
-    async fn fetch_context_capsule(&self, config: &CloudAgentConfig) -> Result<String> {
-        match self.fetch_activity_capsule(config).await {
-            Ok(capsule) => Ok(capsule),
-            Err(activity_error) => self
-                .fetch_search_snapshot(config)
-                .await
-                .with_context(|| format!("{activity_error}; raw search fallback also failed")),
-        }
-    }
-
-    async fn remote_prompt(
-        &self,
-        task_prompt: &str,
-        config: &CloudAgentConfig,
-    ) -> Result<String> {
+    async fn remote_prompt(&self, task_prompt: &str, config: &CloudAgentConfig) -> Result<String> {
         let context = if config.send_screenpipe_context {
-            Some(self.fetch_context_capsule(config).await?)
+            Some(
+                cloud_context::fetch(
+                    &self.client,
+                    self.api_port,
+                    self.api_auth_key.as_deref(),
+                    config,
+                )
+                .await?,
+            )
         } else {
             None
         };
@@ -641,18 +583,25 @@ impl CloudAgentExecutor {
         args: Vec<String>,
         shared_pid: Option<SharedPid>,
     ) -> Result<AgentOutput> {
-        let mut std_command = std::process::Command::new(path);
-        std_command.args(args);
+        let mut command = std::process::Command::new(path);
+        command.args(args);
+        Self::run_command(command, shared_pid).await
+    }
+
+    async fn run_command(
+        mut command: std::process::Command,
+        shared_pid: Option<SharedPid>,
+    ) -> Result<AgentOutput> {
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
-            std_command.process_group(0);
+            command.process_group(0);
         }
-        std_command
+        command
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-        let child = Command::from(std_command).spawn()?;
+        let child = Command::from(command).spawn()?;
         let pid = child.id();
         if let (Some(pid), Some(shared)) = (pid, shared_pid.as_ref()) {
             if install_spawned_pid(shared, pid) {
@@ -789,8 +738,8 @@ impl CloudAgentExecutor {
             Some(session_id) => vec!["-p", prompt.as_str(), "--cloud", session_id],
             None => vec!["--cloud", prompt.as_str()],
         };
-        let mut std_command = std::process::Command::new(&path);
-        std_command.args(args).current_dir(temp.path());
+        let mut command = std::process::Command::new(&path);
+        command.args(args).current_dir(temp.path());
         if existing_session.is_none()
             && config
                 .repository
@@ -801,38 +750,13 @@ impl CloudAgentExecutor {
         {
             // This workspace contains only one empty commit. Force Claude to
             // bundle it so no unrelated local checkout is inferred or sent.
-            std_command.env("CCR_FORCE_BUNDLE", "1");
+            command.env("CCR_FORCE_BUNDLE", "1");
         }
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            std_command.process_group(0);
+        let mut output = Self::run_command(command, shared_pid).await?;
+        if output.success {
+            output.stdout = format!("launched in Claude Cloud\n{}", output.stdout);
         }
-        std_command
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-        let child = Command::from(std_command).spawn()?;
-        let pid = child.id();
-        if let (Some(pid), Some(shared)) = (pid, shared_pid.as_ref()) {
-            if install_spawned_pid(shared, pid) {
-                let _ = super::pi::kill_process_group(pid);
-                return Err(anyhow!("cloud-agent submission was cancelled"));
-            }
-        }
-        let result = child.wait_with_output().await?;
-        let raw_stdout = String::from_utf8_lossy(&result.stdout).trim().to_string();
-        let stdout = if result.status.success() {
-            format!("launched in Claude Cloud\n{raw_stdout}")
-        } else {
-            raw_stdout
-        };
-        Ok(AgentOutput {
-            stdout,
-            stderr: String::from_utf8_lossy(&result.stderr).trim().to_string(),
-            success: result.status.success(),
-            pid,
-        })
+        Ok(output)
     }
 
     async fn launch_cursor(
@@ -931,7 +855,7 @@ impl CloudAgentExecutor {
 impl AgentExecutor for CloudAgentExecutor {
     async fn run(
         &self,
-        prompt: &str,
+        _prompt: &str,
         _model: &str,
         _working_dir: &Path,
         _provider: Option<&str>,
@@ -947,7 +871,7 @@ impl AgentExecutor for CloudAgentExecutor {
 
     async fn run_streaming(
         &self,
-        prompt: &str,
+        _prompt: &str,
         _model: &str,
         _working_dir: &Path,
         _provider: Option<&str>,
@@ -962,20 +886,24 @@ impl AgentExecutor for CloudAgentExecutor {
         _session_owner: Option<&str>,
         executor_config: Option<&serde_json::Value>,
     ) -> Result<AgentOutput> {
-        let config = executor_config
+        let run = executor_config
             .cloned()
-            .map(serde_json::from_value::<CloudAgentConfig>)
+            .map(serde_json::from_value::<CloudAgentRunConfig>)
             .transpose()?
             .ok_or_else(|| anyhow!("choose a cloud-agent provider first"))?;
-        let remote_prompt = self.remote_prompt(prompt, &config).await?;
-        let output = match config.provider {
+        let remote_prompt = self
+            .remote_prompt(&run.task_instructions, &run.cloud_agent)
+            .await?;
+        let output = match run.cloud_agent.provider {
             CloudAgentProvider::Codex => {
-                self.launch_codex(&config, remote_prompt, shared_pid).await
+                self.launch_codex(&run.cloud_agent, remote_prompt, shared_pid)
+                    .await
             }
             CloudAgentProvider::Claude => {
-                self.launch_claude(&config, remote_prompt, shared_pid).await
+                self.launch_claude(&run.cloud_agent, remote_prompt, shared_pid)
+                    .await
             }
-            CloudAgentProvider::Cursor => self.launch_cursor(&config, remote_prompt).await,
+            CloudAgentProvider::Cursor => self.launch_cursor(&run.cloud_agent, remote_prompt).await,
         }?;
         for line in output.stdout.lines() {
             let _ = line_tx.send(line.to_string());
@@ -1026,6 +954,11 @@ mod tests {
         let json = serde_json::to_value(&config).unwrap();
         assert_eq!(json["provider"], "cursor");
         assert!(json.get("api_key").is_none());
+
+        let run: CloudAgentRunConfig =
+            serde_json::from_value(config.executor_config("summarize my day")).unwrap();
+        assert_eq!(run.task_instructions, "summarize my day");
+        assert_eq!(run.cloud_agent, config);
     }
 
     #[test]
@@ -1046,7 +979,7 @@ mod tests {
 
     #[test]
     fn cloud_capsule_strips_local_file_paths() {
-        let capsule = CloudAgentExecutor::sanitize_activity_capsule(
+        let capsule = cloud_context::sanitize_activity_capsule(
             r#"{"apps":[{"name":"Code"}],"edited_files":[{"path":"/Users/me/secret.txt"}]}"#,
         )
         .unwrap();
@@ -1070,12 +1003,12 @@ mod tests {
         assert_eq!(
             environments,
             vec![
-                CodexCloudEnvironmentSummary {
-                    id: "env_1".into(),
+                CloudCodebaseSummary {
+                    value: "env_1".into(),
                     label: "screenpipe/screenpipe".into(),
                 },
-                CodexCloudEnvironmentSummary {
-                    id: "env_2".into(),
+                CloudCodebaseSummary {
+                    value: "env_2".into(),
                     label: "env_2".into(),
                 },
             ]

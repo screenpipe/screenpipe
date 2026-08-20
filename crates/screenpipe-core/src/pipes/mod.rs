@@ -395,7 +395,10 @@ struct CloudAgentRunSettings {
     executor_config: serde_json::Value,
 }
 
-fn cloud_agent_run_settings(config: &PipeConfig) -> Result<CloudAgentRunSettings> {
+fn cloud_agent_run_settings(
+    config: &PipeConfig,
+    task_instructions: &str,
+) -> Result<CloudAgentRunSettings> {
     let cloud = config
         .cloud_agent
         .as_ref()
@@ -406,7 +409,7 @@ fn cloud_agent_run_settings(config: &PipeConfig) -> Result<CloudAgentRunSettings
             .clone()
             .unwrap_or_else(|| "provider-default".into()),
         provider: cloud.provider.as_str().to_string(),
-        executor_config: serde_json::to_value(cloud)?,
+        executor_config: cloud.executor_config(task_instructions),
     })
 }
 
@@ -3513,7 +3516,7 @@ impl PipeManager {
             run_agent,
             run_executor_config,
         ) = if config.agent == "cloud-agent" {
-            let cloud = cloud_agent_run_settings(&config)
+            let cloud = cloud_agent_run_settings(&config, &body)
                 .map_err(|error| anyhow!("pipe '{}': {error}", name))?;
             (
                 cloud.model,
@@ -4105,7 +4108,7 @@ impl PipeManager {
                 run_agent,
                 run_executor_config,
             ) = if config.agent == "cloud-agent" {
-                let cloud = cloud_agent_run_settings(&config)
+                let cloud = cloud_agent_run_settings(&config, &body)
                     .map_err(|error| anyhow!("pipe '{}': {error}", name))?;
                 (
                     cloud.model,
@@ -5738,7 +5741,7 @@ impl PipeManager {
                         run_agent,
                         executor_config,
                     ) = if config.agent == "cloud-agent" {
-                        let cloud = match cloud_agent_run_settings(config) {
+                        let cloud = match cloud_agent_run_settings(config, body) {
                             Ok(cloud) => cloud,
                             Err(error) => {
                                 warn!("scheduler: pipe '{}': {error}", name);

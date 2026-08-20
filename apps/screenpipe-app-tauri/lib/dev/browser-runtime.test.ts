@@ -188,7 +188,7 @@ describe("browser development runtime", () => {
     });
     expect(await status.json()).toMatchObject({
       providers: [
-        { provider: "codex", configured: false },
+        { provider: "codex", configured: true },
         { provider: "claude", configured: false },
         { provider: "cursor", configured: false },
       ],

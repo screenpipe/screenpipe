@@ -19,7 +19,9 @@ interface MockCloudAgentConfig {
   context_max_items: number;
 }
 
-const mockCloudConnections = new Set<MockCloudAgentProvider>();
+// The ready fixture starts with Codex already authenticated, matching the
+// normal returning-user state where the CLI session survives app restarts.
+const mockCloudConnections = new Set<MockCloudAgentProvider>(["codex"]);
 let mockCloudAgentConfig: MockCloudAgentConfig = {
   provider: "codex",
   environment_id: "screenpipe/screenpipe",
@@ -237,8 +239,11 @@ export function mockLocalApiResponse(
   if (url.pathname === "/cloud-agents/status") {
     return Response.json({ providers: mockCloudProviderStatuses() });
   }
-  if (url.pathname === "/cloud-agents/connect" && method === "POST") {
-    const provider = parseJsonBody(init).provider;
+  const cloudConnect = url.pathname.match(
+    /^\/cloud-agents\/(codex|claude|cursor)\/connect$/,
+  );
+  if (cloudConnect && method === "POST") {
+    const provider = cloudConnect[1];
     if (provider === "codex" || provider === "claude") {
       mockCloudConnections.add(provider);
     }
@@ -262,21 +267,23 @@ export function mockLocalApiResponse(
         : [],
     });
   }
-  if (url.pathname === "/cloud-agents/codex-environments") {
+  const cloudCodebases = url.pathname.match(
+    /^\/cloud-agents\/(codex|claude|cursor)\/codebases$/,
+  );
+  if (cloudCodebases) {
+    const values =
+      cloudCodebases[1] === "claude"
+        ? []
+        : [
+            "https://github.com/screenpipe/screenpipe",
+            "https://github.com/screenpipe/docs",
+            "https://github.com/example/product-app",
+          ];
     return Response.json({
-      environments: [
-        { id: "screenpipe/screenpipe", label: "screenpipe/screenpipe" },
-        { id: "screenpipe/docs", label: "screenpipe/docs" },
-      ],
-    });
-  }
-  if (url.pathname === "/cloud-agents/cursor-repositories") {
-    return Response.json({
-      repositories: [
-        { url: "https://github.com/screenpipe/screenpipe" },
-        { url: "https://github.com/screenpipe/docs" },
-        { url: "https://github.com/example/product-app" },
-      ],
+      codebases: values.map((value) => ({
+        value,
+        label: value.replace("https://github.com/", ""),
+      })),
     });
   }
   if (url.pathname === "/search") {

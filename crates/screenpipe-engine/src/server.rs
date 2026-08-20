@@ -973,7 +973,7 @@ impl SCServer {
                 crate::routes::cloud_agents::cloud_agent_status,
             )
             .post(
-                "/cloud-agents/connect",
+                "/cloud-agents/:provider/connect",
                 crate::routes::cloud_agents::connect_cloud_agent,
             )
             .get(
@@ -981,12 +981,8 @@ impl SCServer {
                 crate::routes::cloud_agents::list_cursor_cloud_agents,
             )
             .get(
-                "/cloud-agents/cursor-repositories",
-                crate::routes::cloud_agents::list_cursor_repositories,
-            )
-            .get(
-                "/cloud-agents/codex-environments",
-                crate::routes::cloud_agents::list_codex_environments,
+                "/cloud-agents/:provider/codebases",
+                crate::routes::cloud_agents::list_cloud_agent_codebases,
             )
             .put(
                 "/cloud-agents/cursor-key",

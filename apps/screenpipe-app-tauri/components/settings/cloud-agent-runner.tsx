@@ -8,7 +8,6 @@ import React from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Check,
-  ChevronsUpDown,
   Cloud,
   ExternalLink,
   KeyRound,
@@ -17,14 +16,6 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
 import {
   Dialog,
   DialogContent,
@@ -36,260 +27,104 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { localFetch } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import {
+  CLOUD_AGENT_PROVIDERS,
+  CURSOR_KEYS_URL,
+  createCloudAgentApi,
+  displayCodebase,
+  newCloudAgentConfig,
+  type CloudAgentConfig,
+  type CloudAgentProvider,
+  type CodebaseOption,
+  type CursorAgentSummary,
+  type ProviderStatus,
+} from "@/lib/cloud-agents";
 
-export type CloudAgentProvider = "codex" | "claude" | "cursor";
+export type { CloudAgentConfig, CloudAgentProvider } from "@/lib/cloud-agents";
 
-export interface CloudAgentConfig {
-  provider: CloudAgentProvider;
-  environment_id?: string;
-  branch?: string;
-  session_id?: string;
-  agent_id?: string;
-  repository?: string;
-  starting_ref?: string;
-  model?: string;
-  send_screenpipe_context: boolean;
-  context_lookback_hours?: number;
-  context_max_items?: number;
-}
-
-interface ProviderStatus {
-  provider: CloudAgentProvider;
-  available: boolean;
-  configured: boolean;
-  detail: string;
-}
-
-interface CursorAgentSummary {
-  id: string;
-  name: string;
-  status: string;
-  url: string;
-}
-
-interface CodebaseOption {
-  value: string;
-  label: string;
-}
-
-type CodebaseStatus = "idle" | "loading" | "ready" | "error";
-
-const PROVIDER_NAMES: Record<CloudAgentProvider, string> = {
-  codex: "Codex",
-  claude: "Claude",
-  cursor: "Cursor",
-};
-
-const CURSOR_KEYS_URL = "https://cursor.com/dashboard?tab=integrations";
-const PROVIDER_DESTINATIONS_URL: Record<CloudAgentProvider, string> = {
-  codex: "https://chatgpt.com/codex/settings/environments",
-  claude: "https://claude.ai/code",
-  cursor: CURSOR_KEYS_URL,
-};
-
-function displayCodebase(value: string) {
-  return value
-    .replace(/^https?:\/\/github\.com\//, "")
-    .replace(/\.git$/, "")
-    .replace(/\/$/, "");
-}
-
-function CodebasePicker({
+function CodebaseField({
   provider,
   value,
   options,
-  status,
-  errorMessage,
-  required,
-  onOpen,
+  loading,
+  inputRef,
+  onRefresh,
   onValueChange,
+  onCommit,
 }: {
   provider: CloudAgentProvider;
   value: string;
   options: CodebaseOption[];
-  status: CodebaseStatus;
-  errorMessage: string | null;
-  required: boolean;
-  onOpen: () => void;
+  loading: boolean;
+  inputRef: React.RefObject<HTMLInputElement>;
+  onRefresh: () => void;
   onValueChange: (value: string) => void;
+  onCommit: (value: string) => void;
 }) {
-  const [open, setOpen] = React.useState(false);
-  const [search, setSearch] = React.useState("");
-  const allOptions = React.useMemo(() => {
-    const unique = new Map(options.map((option) => [option.value, option]));
-    if (value && !unique.has(value)) {
-      unique.set(value, { value, label: displayCodebase(value) });
-    }
-    return Array.from(unique.values());
-  }, [options, value]);
-  const normalizedSearch = search.trim();
-  const exactMatch = allOptions.some(
-    (option) =>
-      option.value.toLowerCase() === normalizedSearch.toLowerCase() ||
-      option.label.toLowerCase() === normalizedSearch.toLowerCase(),
-  );
-  const providerName = PROVIDER_NAMES[provider];
-  const searchPlaceholder =
-    provider === "codex"
-      ? "search or enter environment ID"
-      : "search or enter owner/repo";
-
-  const choose = (next: string) => {
-    onValueChange(next);
-    setSearch("");
-    setOpen(false);
+  const definition = CLOUD_AGENT_PROVIDERS[provider];
+  const displayValue =
+    options.find((option) => option.value === value)?.label ??
+    displayCodebase(value);
+  const resolveValue = (input: string) => {
+    const typed = input.trim();
+    const option = options.find(
+      (candidate) =>
+        candidate.label.toLowerCase() === typed.toLowerCase() ||
+        candidate.value.toLowerCase() === typed.toLowerCase(),
+    );
+    return option?.value ?? typed;
   };
 
   return (
-    <Popover
-      open={open}
-      onOpenChange={(nextOpen) => {
-        setOpen(nextOpen);
-        if (nextOpen) onOpen();
-        else setSearch("");
-      }}
-    >
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          role="combobox"
-          aria-label="codebase"
-          aria-expanded={open}
-          className={cn(
-            "h-9 w-full justify-between rounded-none px-3 text-xs font-normal normal-case tracking-normal",
-            !value && "text-muted-foreground",
-          )}
-          data-testid="cloud-agent-codebase-select"
-        >
-          <span className="truncate">
-            {value
-              ? allOptions.find((option) => option.value === value)?.label ||
-                displayCodebase(value)
-              : required
-                ? "choose codebase"
-                : "no codebase · summary task"}
-          </span>
-          {status === "loading" ? (
-            <Loader2 className="ml-2 h-3.5 w-3.5 shrink-0 animate-spin" />
-          ) : (
-            <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
-          )}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        className="w-[--radix-popover-trigger-width] rounded-none p-0"
+    <div className="flex min-w-0 gap-1">
+      <Input
+        ref={inputRef}
+        list={`cloud-agent-codebases-${provider}`}
+        value={displayValue}
+        onChange={(event) => onValueChange(resolveValue(event.target.value))}
+        onFocus={onRefresh}
+        onBlur={(event) => onCommit(resolveValue(event.currentTarget.value))}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+        }}
+        placeholder={definition.codebasePlaceholder}
+        aria-label="codebase"
+        data-testid="cloud-agent-codebase-select"
+        className="h-9 min-w-0 rounded-none text-xs"
+      />
+      <datalist id={`cloud-agent-codebases-${provider}`}>
+        {options.map((option) => (
+          <option key={option.value} value={option.label}>
+            {option.value}
+          </option>
+        ))}
+      </datalist>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="h-9 w-9 shrink-0 rounded-none"
+        onClick={() => void openUrl(definition.manageUrl)}
+        aria-label={`manage ${definition.label} codebases`}
       >
-        <Command label="choose codebase" className="rounded-none">
-          <CommandInput
-            value={search}
-            onValueChange={setSearch}
-            placeholder={searchPlaceholder}
-            aria-label="search codebases"
-          />
-          <CommandList>
-            {status === "error" && (
-              <div className="border-b px-3 py-2 text-[11px] text-muted-foreground">
-                {errorMessage || "Could not load codebases. Enter one below."}
-              </div>
-            )}
-            {status === "loading" && allOptions.length === 0 ? (
-              <CommandGroup>
-                <CommandItem disabled value="loading-codebases">
-                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                  loading codebases...
-                </CommandItem>
-              </CommandGroup>
-            ) : (
-              <>
-                <CommandEmpty>
-                  {provider === "codex"
-                    ? "Enter a Codex environment ID."
-                    : "Enter a GitHub codebase as owner/repository."}
-                </CommandEmpty>
-                {!required && (
-                  <CommandGroup heading="without code">
-                    <CommandItem
-                      value="no codebase summary task"
-                      className="rounded-none"
-                      onSelect={() => choose("")}
-                    >
-                      <Check
-                        className={cn(
-                          "mr-2 h-3.5 w-3.5",
-                          value ? "opacity-0" : "opacity-100",
-                        )}
-                      />
-                      no codebase · summary task
-                    </CommandItem>
-                  </CommandGroup>
-                )}
-                {allOptions.length > 0 && (
-                  <CommandGroup heading="codebases">
-                    {allOptions.map((option) => (
-                      <CommandItem
-                        key={option.value}
-                        value={`${option.label} ${option.value}`}
-                        className="rounded-none"
-                        onSelect={() => choose(option.value)}
-                      >
-                        <Check
-                          className={cn(
-                            "mr-2 h-3.5 w-3.5",
-                            value === option.value
-                              ? "opacity-100"
-                              : "opacity-0",
-                          )}
-                        />
-                        <span className="truncate">{option.label}</span>
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                )}
-              </>
-            )}
-            {normalizedSearch && !exactMatch && (
-              <CommandGroup heading="use another">
-                <CommandItem
-                  value={`manual ${normalizedSearch}`}
-                  className="rounded-none"
-                  onSelect={() => choose(normalizedSearch)}
-                >
-                  use “{displayCodebase(normalizedSearch)}”
-                </CommandItem>
-              </CommandGroup>
-            )}
-          </CommandList>
-          <div className="border-t p-1">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-8 w-full justify-start rounded-none text-[11px]"
-              onClick={() => void openUrl(PROVIDER_DESTINATIONS_URL[provider])}
-            >
-              manage in {providerName}
-              <ExternalLink className="ml-auto h-3 w-3" />
-            </Button>
-          </div>
-        </Command>
-      </PopoverContent>
-    </Popover>
+        {loading ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <ExternalLink className="h-3.5 w-3.5" />
+        )}
+      </Button>
+    </div>
   );
+}
+
+function errorMessage(cause: unknown, fallback: string) {
+  return cause instanceof Error ? cause.message : fallback;
 }
 
 export function CloudAgentRunner({
@@ -305,21 +140,19 @@ export function CloudAgentRunner({
   apiBase: string;
   onSaved: (agent: string, cloudAgent: CloudAgentConfig | null) => void;
 }) {
-  const selected =
-    agent === "cloud-agent" ? (cloudAgent?.provider ?? "codex") : "local";
-  const [draft, setDraft] = React.useState<CloudAgentConfig | null>(
-    cloudAgent ?? null,
-  );
+  const api = React.useMemo(() => createCloudAgentApi(apiBase), [apiBase]);
+  const draft =
+    agent === "cloud-agent"
+      ? (cloudAgent ?? newCloudAgentConfig("codex"))
+      : null;
   const [statuses, setStatuses] = React.useState<ProviderStatus[]>([]);
   const [cursorAgents, setCursorAgents] = React.useState<CursorAgentSummary[]>(
     [],
   );
-  const [codebaseOptions, setCodebaseOptions] = React.useState<
-    CodebaseOption[]
-  >([]);
-  const [codebaseStatus, setCodebaseStatus] =
-    React.useState<CodebaseStatus>("idle");
-  const [codebaseError, setCodebaseError] = React.useState<string | null>(null);
+  const [codebasesByProvider, setCodebasesByProvider] = React.useState<
+    Partial<Record<CloudAgentProvider, CodebaseOption[]>>
+  >({});
+  const [loadingCodebases, setLoadingCodebases] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [connecting, setConnecting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -327,90 +160,48 @@ export function CloudAgentRunner({
   const [keySaved, setKeySaved] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [memoryOpen, setMemoryOpen] = React.useState(false);
-
-  React.useEffect(() => setDraft(cloudAgent ?? null), [cloudAgent]);
+  const codebaseInputRef = React.useRef<HTMLInputElement>(null);
+  const provider = draft?.provider;
 
   const loadStatuses = React.useCallback(async () => {
     try {
-      const response = await localFetch(`${apiBase}/cloud-agents/status`);
-      if (!response.ok) return;
-      const body = await response.json();
-      setStatuses(Array.isArray(body.providers) ? body.providers : []);
+      setStatuses(await api.statuses());
     } catch {
-      // Status is guidance only; a run still returns the exact provider error.
+      // Guidance only. A run still reports the exact provider failure.
     }
-  }, [apiBase]);
+  }, [api]);
 
-  React.useEffect(() => {
-    void loadStatuses();
-  }, [loadStatuses]);
-
-  const loadCursorAgents = React.useCallback(async () => {
-    try {
-      const response = await localFetch(
-        `${apiBase}/cloud-agents/cursor-agents`,
-      );
-      if (!response.ok) return;
-      const body = await response.json();
-      setCursorAgents(Array.isArray(body.agents) ? body.agents : []);
-    } catch {
-      // The run path still returns the exact provider error if listing fails.
-    }
-  }, [apiBase]);
-
-  React.useEffect(() => {
-    if (draft?.provider === "cursor") void loadCursorAgents();
-  }, [draft?.provider, loadCursorAgents]);
-
-  React.useEffect(() => {
-    setCodebaseOptions([]);
-    setCodebaseStatus(draft?.provider === "claude" ? "ready" : "idle");
-    setCodebaseError(null);
-  }, [draft?.provider]);
-
-  const loadCodebases = React.useCallback(async () => {
-    if (!draft || codebaseStatus === "loading" || codebaseStatus === "ready")
-      return;
-    if (draft.provider === "claude") {
-      setCodebaseStatus("ready");
-      return;
-    }
-    setCodebaseStatus("loading");
-    setCodebaseError(null);
-    const endpoint =
-      draft.provider === "codex" ? "codex-environments" : "cursor-repositories";
-    try {
-      const response = await localFetch(`${apiBase}/cloud-agents/${endpoint}`);
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${response.status}`);
+  const loadCodebases = React.useCallback(
+    async (provider: CloudAgentProvider) => {
+      setLoadingCodebases(true);
+      try {
+        const codebases = await api.codebases(provider);
+        setCodebasesByProvider((current) => ({
+          ...current,
+          [provider]: codebases,
+        }));
+      } catch {
+        setCodebasesByProvider((current) => ({
+          ...current,
+          [provider]: [], // Manual entry remains available.
+        }));
+      } finally {
+        setLoadingCodebases(false);
       }
-      const body = await response.json();
-      const options: CodebaseOption[] =
-        draft.provider === "codex"
-          ? (Array.isArray(body.environments) ? body.environments : []).map(
-              (environment: { id: string; label: string }) => ({
-                value: environment.id,
-                label: environment.label || environment.id,
-              }),
-            )
-          : (Array.isArray(body.repositories) ? body.repositories : []).map(
-              (repository: { url: string }) => ({
-                value: repository.url,
-                label: displayCodebase(repository.url),
-              }),
-            );
-      setCodebaseOptions(options);
-      setCodebaseStatus("ready");
-    } catch (cause) {
-      setCodebaseStatus("error");
-      setCodebaseError(
-        cause instanceof Error
-          ? cause.message
-          : "Could not load provider codebases",
-      );
+    },
+    [api],
+  );
+
+  React.useEffect(() => void loadStatuses(), [loadStatuses]);
+  React.useEffect(() => {
+    if (provider) void loadCodebases(provider);
+    if (provider === "cursor") {
+      void api
+        .cursorAgents()
+        .then(setCursorAgents)
+        .catch(() => undefined);
     }
-  }, [apiBase, codebaseStatus, draft]);
+  }, [api, loadCodebases, provider]);
 
   const persist = React.useCallback(
     async (nextAgent: string, nextCloud: CloudAgentConfig | null) => {
@@ -418,87 +209,32 @@ export function CloudAgentRunner({
       setError(null);
       onSaved(nextAgent, nextCloud);
       try {
-        const response = await localFetch(
-          `${apiBase}/pipes/${encodeURIComponent(pipeName)}/config`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ agent: nextAgent, cloud_agent: nextCloud }),
-          },
-        );
-        if (!response.ok) {
-          const body = await response.json().catch(() => ({}));
-          throw new Error(body.error || `HTTP ${response.status}`);
-        }
+        await api.savePipe(pipeName, nextAgent, nextCloud);
       } catch (cause) {
-        setError(
-          cause instanceof Error ? cause.message : "couldn't save cloud runner",
-        );
+        setError(errorMessage(cause, "couldn't save cloud runner"));
       } finally {
         setSaving(false);
       }
     },
-    [apiBase, onSaved, pipeName],
+    [api, onSaved, pipeName],
   );
 
   const chooseRunner = (value: string) => {
     if (value === "local") {
-      setDraft(null);
       void persist("pi", null);
       return;
     }
-    const provider = value as CloudAgentProvider;
-    const next: CloudAgentConfig = {
-      provider,
-      send_screenpipe_context: false,
-      context_lookback_hours: 24,
-      context_max_items: 80,
-    };
-    setDraft(next);
+    const next = newCloudAgentConfig(value as CloudAgentProvider);
     void persist("cloud-agent", next);
   };
 
-  const patchDraft = (patch: Partial<CloudAgentConfig>, save = false) => {
+  const patchDraft = (patch: Partial<CloudAgentConfig>, save = true) => {
     if (!draft) return;
     const next = { ...draft, ...patch };
-    setDraft(next);
-    if (save) void persist("cloud-agent", next);
-  };
-
-  const chooseCodebase = (value: string) => {
-    if (!draft) return;
-    if (draft.provider === "codex") {
-      patchDraft({ environment_id: value || undefined }, true);
+    if (save) {
+      void persist("cloud-agent", next);
     } else {
-      patchDraft({ repository: value || undefined }, true);
-    }
-  };
-
-  const saveCursorKey = async () => {
-    if (!cursorKey.trim()) return;
-    setSaving(true);
-    setError(null);
-    setKeySaved(false);
-    try {
-      const response = await localFetch(`${apiBase}/cloud-agents/cursor-key`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: cursorKey.trim() }),
-      });
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${response.status}`);
-      }
-      setCursorKey("");
-      setKeySaved(true);
-      await loadStatuses();
-      await loadCursorAgents();
-    } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "couldn't save Cursor key",
-      );
-    } finally {
-      setSaving(false);
+      onSaved("cloud-agent", next);
     }
   };
 
@@ -511,39 +247,53 @@ export function CloudAgentRunner({
     setConnecting(true);
     setError(null);
     try {
-      const response = await localFetch(`${apiBase}/cloud-agents/connect`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: draft.provider }),
-      });
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${response.status}`);
-      }
-      const body = await response.json();
-      setStatuses(Array.isArray(body.providers) ? body.providers : []);
+      setStatuses(await api.connect(draft.provider));
     } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "couldn't connect provider",
-      );
+      setError(errorMessage(cause, "couldn't connect provider"));
     } finally {
       setConnecting(false);
     }
   };
 
+  const saveCursorKey = async () => {
+    const key = cursorKey.trim();
+    if (!key) return;
+    setSaving(true);
+    setError(null);
+    setKeySaved(false);
+    try {
+      await api.saveCursorKey(key);
+      setCursorKey("");
+      setKeySaved(true);
+      const [nextStatuses, nextAgents] = await Promise.all([
+        api.statuses(),
+        api.cursorAgents(),
+      ]);
+      setStatuses(nextStatuses);
+      setCursorAgents(nextAgents);
+    } catch (cause) {
+      setError(errorMessage(cause, "couldn't save Cursor key"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const selected = draft?.provider ?? "local";
+  const codebases = draft ? (codebasesByProvider[draft.provider] ?? []) : [];
+  const definition = draft ? CLOUD_AGENT_PROVIDERS[draft.provider] : null;
   const status = draft
     ? statuses.find((candidate) => candidate.provider === draft.provider)
     : null;
-  const providerName = draft ? PROVIDER_NAMES[draft.provider] : "";
-  const needsDestinationSetup =
-    draft?.provider === "codex" && !draft.environment_id?.trim();
+  const codebaseField = definition?.codebaseField;
   const codebaseValue =
-    draft?.provider === "codex"
-      ? (draft.environment_id ?? "")
-      : (draft?.repository ?? "");
-  const destinationComesFromConversation =
-    (draft?.provider === "claude" && Boolean(draft.session_id?.trim())) ||
-    (draft?.provider === "cursor" && Boolean(draft.agent_id?.trim()));
+    draft && codebaseField ? (draft[codebaseField] ?? "") : "";
+  const needsCodebase = Boolean(
+    draft && definition?.codebaseRequired && !codebaseValue.trim(),
+  );
+  const usesExistingConversation = Boolean(
+    (draft?.provider === "claude" && draft.session_id?.trim()) ||
+    (draft?.provider === "cursor" && draft.agent_id?.trim()),
+  );
   const contextLabel = draft?.send_screenpipe_context
     ? `shared · ${draft.context_lookback_hours ?? 24}h`
     : "not shared";
@@ -581,38 +331,38 @@ export function CloudAgentRunner({
           </Select>
         </div>
 
-        {draft && (
+        {draft && definition && (
           <>
             <div className="grid gap-3 p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
-              <div className="hidden h-8 w-8 shrink-0 items-center justify-center border border-border bg-muted/30 sm:flex">
+              <div className="hidden h-8 w-8 items-center justify-center border border-border bg-muted/30 sm:flex">
                 <Cloud className="h-4 w-4" />
               </div>
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <p className="truncate text-xs font-medium">
-                    {providerName} in the cloud
+                    {definition.label} in the cloud
                   </p>
-                  {status?.configured && !needsDestinationSetup && (
+                  {status?.configured && !needsCodebase && (
                     <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
                       <Check className="h-3 w-3" /> connected
                     </span>
                   )}
                 </div>
                 <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                  {needsDestinationSetup && status?.configured
-                    ? "choose your Codex environment once"
+                  {needsCodebase && status?.configured
+                    ? `choose your ${definition.label} codebase once`
                     : (status?.detail ?? "checking connection...")}
                 </p>
               </div>
               <div className="flex items-center gap-1">
-                {(!status?.configured || needsDestinationSetup) && (
+                {(!status?.configured || needsCodebase) && (
                   <Button
                     type="button"
                     size="sm"
                     className="h-8 rounded-none text-xs"
                     onClick={() =>
-                      needsDestinationSetup
-                        ? setSettingsOpen(true)
+                      needsCodebase
+                        ? codebaseInputRef.current?.focus()
                         : void connectProvider()
                     }
                     disabled={connecting}
@@ -620,8 +370,8 @@ export function CloudAgentRunner({
                   >
                     {connecting ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : needsDestinationSetup ? (
-                      "finish setup"
+                    ) : needsCodebase ? (
+                      "choose codebase"
                     ) : draft.provider === "claude" &&
                       status &&
                       !status.available ? (
@@ -637,32 +387,41 @@ export function CloudAgentRunner({
                   size="icon"
                   className="h-8 w-8 rounded-none"
                   onClick={() => setSettingsOpen(true)}
-                  aria-label={`${providerName} settings`}
+                  aria-label={`${definition.label} settings`}
                 >
                   <Settings2 className="h-3.5 w-3.5" />
                 </Button>
               </div>
             </div>
 
-            {!destinationComesFromConversation && (
+            {!usesExistingConversation && (
               <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_15rem] sm:items-center">
                 <div>
                   <Label className="text-xs font-medium">codebase</Label>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
-                    {draft.provider === "codex"
-                      ? "the Codex environment this task works in."
-                      : "choose code when this task should make changes."}
+                    {definition.codebaseHelp}
                   </p>
                 </div>
-                <CodebasePicker
+                <CodebaseField
                   provider={draft.provider}
                   value={codebaseValue}
-                  options={codebaseOptions}
-                  status={codebaseStatus}
-                  errorMessage={codebaseError}
-                  required={draft.provider === "codex"}
-                  onOpen={() => void loadCodebases()}
-                  onValueChange={chooseCodebase}
+                  options={codebases}
+                  loading={loadingCodebases}
+                  inputRef={codebaseInputRef}
+                  onRefresh={() => void loadCodebases(draft.provider)}
+                  onValueChange={(value) =>
+                    patchDraft(
+                      {
+                        [definition.codebaseField]: value || undefined,
+                      },
+                      false,
+                    )
+                  }
+                  onCommit={(value) =>
+                    patchDraft({
+                      [definition.codebaseField]: value || undefined,
+                    })
+                  }
                 />
               </div>
             )}
@@ -678,10 +437,9 @@ export function CloudAgentRunner({
                 <Select
                   value={draft.agent_id || "new"}
                   onValueChange={(value) =>
-                    patchDraft(
-                      { agent_id: value === "new" ? undefined : value },
-                      true,
-                    )
+                    patchDraft({
+                      agent_id: value === "new" ? undefined : value,
+                    })
                   }
                 >
                   <SelectTrigger
@@ -692,9 +450,9 @@ export function CloudAgentRunner({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="new">a new agent each run</SelectItem>
-                    {cursorAgents.map((agentOption) => (
-                      <SelectItem key={agentOption.id} value={agentOption.id}>
-                        {agentOption.name} · {agentOption.status.toLowerCase()}
+                    {cursorAgents.map((candidate) => (
+                      <SelectItem key={candidate.id} value={candidate.id}>
+                        {candidate.name} · {candidate.status.toLowerCase()}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -705,7 +463,7 @@ export function CloudAgentRunner({
             <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_15rem] sm:items-center">
               <div className="flex min-w-0 items-start gap-3">
                 <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
-                <div className="min-w-0">
+                <div>
                   <Label className="text-xs font-medium">
                     screenpipe context
                   </Label>
@@ -718,10 +476,9 @@ export function CloudAgentRunner({
                 <Select
                   value={draft.send_screenpipe_context ? "relevant" : "none"}
                   onValueChange={(value) =>
-                    patchDraft(
-                      { send_screenpipe_context: value === "relevant" },
-                      true,
-                    )
+                    patchDraft({
+                      send_screenpipe_context: value === "relevant",
+                    })
                   }
                 >
                   <SelectTrigger
@@ -741,7 +498,7 @@ export function CloudAgentRunner({
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="h-9 w-9 shrink-0 rounded-none"
+                  className="h-9 w-9 rounded-none"
                   onClick={() => setMemoryOpen(true)}
                   aria-label="review shared context"
                 >
@@ -766,11 +523,13 @@ export function CloudAgentRunner({
         )}
       </section>
 
-      {draft && (
+      {draft && definition && (
         <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
-              <DialogTitle className="text-base">{providerName}</DialogTitle>
+              <DialogTitle className="text-base">
+                {definition.label}
+              </DialogTitle>
               <DialogDescription className="text-xs">
                 Connect once. This task reuses your account for future runs.
               </DialogDescription>
@@ -815,14 +574,9 @@ export function CloudAgentRunner({
                   <Input
                     value={draft.session_id ?? ""}
                     onChange={(event) =>
-                      patchDraft({ session_id: event.target.value })
+                      patchDraft({ session_id: event.target.value }, false)
                     }
-                    onBlur={(event) =>
-                      void persist("cloud-agent", {
-                        ...draft,
-                        session_id: event.currentTarget.value,
-                      })
-                    }
+                    onBlur={() => void persist("cloud-agent", draft)}
                     placeholder="leave blank to start a new conversation"
                     className="h-9 rounded-none text-xs"
                   />
@@ -833,63 +587,61 @@ export function CloudAgentRunner({
               )}
 
               {draft.provider === "cursor" && (
-                <>
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between gap-3">
-                      <Label className="text-xs">Cursor Cloud API key</Label>
-                      <button
-                        type="button"
-                        className="flex items-center gap-1 text-[11px] text-muted-foreground underline-offset-4 hover:underline"
-                        onClick={() => void openUrl(CURSOR_KEYS_URL)}
-                      >
-                        create key <ExternalLink className="h-3 w-3" />
-                      </button>
-                    </div>
-                    <div className="flex gap-2">
-                      <div className="relative min-w-0 flex-1">
-                        <KeyRound className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                        <Input
-                          type="password"
-                          value={cursorKey}
-                          onChange={(event) => {
-                            setCursorKey(event.target.value);
-                            setKeySaved(false);
-                          }}
-                          placeholder={
-                            status?.configured
-                              ? "saved in encrypted storage"
-                              : "paste API key"
-                          }
-                          className="h-9 rounded-none pl-8 text-xs"
-                          autoComplete="off"
-                        />
-                      </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-9 rounded-none"
-                        disabled={!cursorKey.trim() || saving}
-                        onClick={() => void saveCursorKey()}
-                      >
-                        {saving ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : keySaved ? (
-                          <Check className="h-3.5 w-3.5" />
-                        ) : (
-                          "save key"
-                        )}
-                      </Button>
-                    </div>
-                    <p className="text-[11px] text-muted-foreground">
-                      Stored in screenpipe&apos;s encrypted secret store, never
-                      in the scheduled task.
-                    </p>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs">Cursor Cloud API key</Label>
+                    <button
+                      type="button"
+                      className="flex items-center gap-1 text-[11px] text-muted-foreground underline-offset-4 hover:underline"
+                      onClick={() => void openUrl(CURSOR_KEYS_URL)}
+                    >
+                      create key <ExternalLink className="h-3 w-3" />
+                    </button>
                   </div>
-                </>
+                  <div className="flex gap-2">
+                    <div className="relative min-w-0 flex-1">
+                      <KeyRound className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        type="password"
+                        value={cursorKey}
+                        onChange={(event) => {
+                          setCursorKey(event.target.value);
+                          setKeySaved(false);
+                        }}
+                        placeholder={
+                          status?.configured
+                            ? "saved in encrypted storage"
+                            : "paste API key"
+                        }
+                        className="h-9 rounded-none pl-8 text-xs"
+                        autoComplete="off"
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-9 rounded-none"
+                      disabled={!cursorKey.trim() || saving}
+                      onClick={() => void saveCursorKey()}
+                    >
+                      {saving ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : keySaved ? (
+                        <Check className="h-3.5 w-3.5" />
+                      ) : (
+                        "save key"
+                      )}
+                    </Button>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    Stored in screenpipe&apos;s encrypted secret store, never in
+                    the scheduled task.
+                  </p>
+                </div>
               )}
 
-              {codebaseValue && !destinationComesFromConversation && (
+              {codebaseValue && !usesExistingConversation && (
                 <div className="space-y-1.5">
                   <Label className="text-xs">branch · optional</Label>
                   <Input
@@ -903,16 +655,10 @@ export function CloudAgentRunner({
                         draft.provider === "cursor"
                           ? { starting_ref: event.target.value }
                           : { branch: event.target.value },
+                        false,
                       )
                     }
-                    onBlur={(event) =>
-                      void persist("cloud-agent", {
-                        ...draft,
-                        ...(draft.provider === "cursor"
-                          ? { starting_ref: event.currentTarget.value }
-                          : { branch: event.currentTarget.value }),
-                      })
-                    }
+                    onBlur={() => void persist("cloud-agent", draft)}
                     placeholder="main"
                     className="h-9 rounded-none text-xs"
                   />
@@ -935,13 +681,13 @@ export function CloudAgentRunner({
         </Dialog>
       )}
 
-      {draft && (
+      {draft && definition && (
         <Dialog open={memoryOpen} onOpenChange={setMemoryOpen}>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
               <DialogTitle className="text-base">shared context</DialogTitle>
               <DialogDescription className="text-xs">
-                Control what screenpipe may send to {providerName} for this
+                Control what screenpipe may send to {definition.label} for this
                 task.
               </DialogDescription>
             </DialogHeader>
@@ -961,7 +707,7 @@ export function CloudAgentRunner({
                 <Select
                   value={String(draft.context_lookback_hours ?? 24)}
                   onValueChange={(value) =>
-                    patchDraft({ context_lookback_hours: Number(value) }, true)
+                    patchDraft({ context_lookback_hours: Number(value) })
                   }
                 >
                   <SelectTrigger className="h-9 rounded-none text-xs">

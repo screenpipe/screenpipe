@@ -5,7 +5,7 @@
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CloudAgentRunner } from "../cloud-agent-runner";
+import { CloudAgentRunner, type CloudAgentConfig } from "../cloud-agent-runner";
 import { localFetch } from "@/lib/api";
 
 vi.mock("@/lib/api", () => ({
@@ -20,6 +20,40 @@ function response(body: unknown, ok = true) {
     status: ok ? 200 : 400,
     json: async () => body,
   } as Response;
+}
+
+function renderRunner(
+  config: Partial<CloudAgentConfig> | null,
+  pipeName = "day-recap",
+) {
+  const initialCloudAgent = config
+    ? ({
+        provider: "codex",
+        send_screenpipe_context: false,
+        context_lookback_hours: 8,
+        context_max_items: 80,
+        ...config,
+      } as CloudAgentConfig)
+    : null;
+
+  function RunnerHarness() {
+    const [runner, setRunner] = React.useState({
+      agent: initialCloudAgent ? "cloud-agent" : "pi",
+      cloudAgent: initialCloudAgent,
+    });
+
+    return (
+      <CloudAgentRunner
+        pipeName={pipeName}
+        agent={runner.agent}
+        cloudAgent={runner.cloudAgent}
+        apiBase="http://localhost:3030"
+        onSaved={(agent, cloudAgent) => setRunner({ agent, cloudAgent })}
+      />
+    );
+  }
+
+  return render(<RunnerHarness />);
 }
 
 describe("CloudAgentRunner", () => {
@@ -47,22 +81,9 @@ describe("CloudAgentRunner", () => {
   });
 
   it("requires an explicit memory choice before screenpipe context is shared", async () => {
-    const onSaved = vi.fn();
-    render(
-      <CloudAgentRunner
-        pipeName="day-recap"
-        agent="cloud-agent"
-        cloudAgent={{
-          provider: "codex",
-          environment_id: "screenpipe/screenpipe",
-          send_screenpipe_context: false,
-          context_lookback_hours: 8,
-          context_max_items: 80,
-        }}
-        apiBase="http://localhost:3030"
-        onSaved={onSaved}
-      />,
-    );
+    renderRunner({
+      environment_id: "screenpipe/screenpipe",
+    });
 
     expect(screen.getByTestId("cloud-agent-memory-select")).toHaveTextContent(
       "not shared",
@@ -91,20 +112,7 @@ describe("CloudAgentRunner", () => {
   });
 
   it("keeps the Cursor key out of pipe config and stores it through the secret endpoint", async () => {
-    render(
-      <CloudAgentRunner
-        pipeName="day-recap"
-        agent="cloud-agent"
-        cloudAgent={{
-          provider: "cursor",
-          send_screenpipe_context: true,
-          context_lookback_hours: 8,
-          context_max_items: 80,
-        }}
-        apiBase="http://localhost:3030"
-        onSaved={vi.fn()}
-      />,
-    );
+    renderRunner({ provider: "cursor", send_screenpipe_context: true });
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -133,15 +141,7 @@ describe("CloudAgentRunner", () => {
   });
 
   it("uses one plain-language choice for where a task runs", async () => {
-    render(
-      <CloudAgentRunner
-        pipeName="day-recap"
-        agent="pi"
-        cloudAgent={null}
-        apiBase="http://localhost:3030"
-        onSaved={vi.fn()}
-      />,
-    );
+    renderRunner(null);
 
     expect(screen.getByText("runs with")).toBeInTheDocument();
     await waitFor(() =>
@@ -169,33 +169,17 @@ describe("CloudAgentRunner", () => {
       return response({ providers: [] });
     });
 
-    render(
-      <CloudAgentRunner
-        pipeName="day-recap"
-        agent="cloud-agent"
-        cloudAgent={{
-          provider: "codex",
-          environment_id: "screenpipe",
-          send_screenpipe_context: false,
-          context_lookback_hours: 24,
-          context_max_items: 80,
-        }}
-        apiBase="http://localhost:3030"
-        onSaved={vi.fn()}
-      />,
-    );
+    renderRunner({ environment_id: "screenpipe" });
 
     await screen.findByText("connect your ChatGPT account");
     fireEvent.click(screen.getByTestId("cloud-agent-connect"));
 
     await waitFor(() => {
       const connectCall = fetchMock.mock.calls.find(([url]) =>
-        String(url).endsWith("/cloud-agents/connect"),
+        String(url).endsWith("/cloud-agents/codex/connect"),
       );
       expect(connectCall).toBeTruthy();
-      expect(JSON.parse(String(connectCall?.[1]?.body))).toEqual({
-        provider: "codex",
-      });
+      expect(connectCall?.[1]?.method).toBe("POST");
     });
   });
 
@@ -228,20 +212,7 @@ describe("CloudAgentRunner", () => {
       return response({ ok: true });
     });
 
-    render(
-      <CloudAgentRunner
-        pipeName="day-recap"
-        agent="cloud-agent"
-        cloudAgent={{
-          provider: "cursor",
-          send_screenpipe_context: true,
-          context_lookback_hours: 8,
-          context_max_items: 80,
-        }}
-        apiBase="http://localhost:3030"
-        onSaved={vi.fn()}
-      />,
-    );
+    renderRunner({ provider: "cursor", send_screenpipe_context: true });
 
     fireEvent.click(await screen.findByTestId("cursor-existing-agent-select"));
     fireEvent.click(await screen.findByText("daily memory agent · active"));
@@ -260,11 +231,17 @@ describe("CloudAgentRunner", () => {
 
   it("lists repositories already authorized in Cursor and saves the selected codebase", async () => {
     fetchMock.mockImplementation(async (url) => {
-      if (String(url).endsWith("/cloud-agents/cursor-repositories")) {
+      if (String(url).endsWith("/cloud-agents/cursor/codebases")) {
         return response({
-          repositories: [
-            { url: "https://github.com/screenpipe/screenpipe" },
-            { url: "https://github.com/screenpipe/docs" },
+          codebases: [
+            {
+              value: "https://github.com/screenpipe/screenpipe",
+              label: "screenpipe/screenpipe",
+            },
+            {
+              value: "https://github.com/screenpipe/docs",
+              label: "screenpipe/docs",
+            },
           ],
         });
       }
@@ -286,23 +263,18 @@ describe("CloudAgentRunner", () => {
       return response({ ok: true });
     });
 
-    render(
-      <CloudAgentRunner
-        pipeName="code-review"
-        agent="cloud-agent"
-        cloudAgent={{
-          provider: "cursor",
-          send_screenpipe_context: false,
-          context_lookback_hours: 8,
-          context_max_items: 80,
-        }}
-        apiBase="http://localhost:3030"
-        onSaved={vi.fn()}
-      />,
-    );
+    renderRunner({ provider: "cursor" }, "code-review");
 
-    fireEvent.click(screen.getByTestId("cloud-agent-codebase-select"));
-    fireEvent.click(await screen.findByText("screenpipe/screenpipe"));
+    const codebase = screen.getByTestId("cloud-agent-codebase-select");
+    await waitFor(() =>
+      expect(
+        document.querySelector('option[value="screenpipe/screenpipe"]'),
+      ).toBeTruthy(),
+    );
+    fireEvent.change(codebase, {
+      target: { value: "screenpipe/screenpipe" },
+    });
+    fireEvent.blur(codebase);
 
     await waitFor(() => {
       const saveCall = fetchMock.mock.calls.find(([url, init]) => {
@@ -319,10 +291,10 @@ describe("CloudAgentRunner", () => {
 
   it("shows recent Codex environments as codebases while keeping manual entry available", async () => {
     fetchMock.mockImplementation(async (url) => {
-      if (String(url).endsWith("/cloud-agents/codex-environments")) {
+      if (String(url).endsWith("/cloud-agents/codex/codebases")) {
         return response({
-          environments: [
-            { id: "env_screenpipe", label: "screenpipe/screenpipe" },
+          codebases: [
+            { value: "env_screenpipe", label: "screenpipe/screenpipe" },
           ],
         });
       }
@@ -341,23 +313,22 @@ describe("CloudAgentRunner", () => {
       return response({ ok: true });
     });
 
-    render(
-      <CloudAgentRunner
-        pipeName="code-review"
-        agent="cloud-agent"
-        cloudAgent={{
-          provider: "codex",
-          send_screenpipe_context: false,
-          context_lookback_hours: 8,
-          context_max_items: 80,
-        }}
-        apiBase="http://localhost:3030"
-        onSaved={vi.fn()}
-      />,
-    );
+    renderRunner({}, "code-review");
 
-    fireEvent.click(screen.getByTestId("cloud-agent-codebase-select"));
-    fireEvent.click(await screen.findByText("screenpipe/screenpipe"));
+    const codebase = screen.getByTestId("cloud-agent-codebase-select");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "choose codebase" }),
+    );
+    expect(codebase).toHaveFocus();
+    await waitFor(() =>
+      expect(
+        document.querySelector('option[value="screenpipe/screenpipe"]'),
+      ).toBeTruthy(),
+    );
+    fireEvent.change(codebase, {
+      target: { value: "screenpipe/screenpipe" },
+    });
+    fireEvent.blur(codebase);
 
     await waitFor(() => {
       const saveCall = fetchMock.mock.calls.find(([url, init]) => {
@@ -370,29 +341,13 @@ describe("CloudAgentRunner", () => {
   });
 
   it("accepts a Claude codebase without asking screenpipe for GitHub OAuth", async () => {
-    render(
-      <CloudAgentRunner
-        pipeName="code-review"
-        agent="cloud-agent"
-        cloudAgent={{
-          provider: "claude",
-          send_screenpipe_context: false,
-          context_lookback_hours: 8,
-          context_max_items: 80,
-        }}
-        apiBase="http://localhost:3030"
-        onSaved={vi.fn()}
-      />,
-    );
+    renderRunner({ provider: "claude" }, "code-review");
 
-    fireEvent.click(screen.getByTestId("cloud-agent-codebase-select"));
-    fireEvent.change(
-      screen.getByPlaceholderText("search or enter owner/repo"),
-      {
-        target: { value: "screenpipe/screenpipe" },
-      },
-    );
-    fireEvent.click(await screen.findByText(/use “screenpipe\/screenpipe”/i));
+    const codebase = screen.getByTestId("cloud-agent-codebase-select");
+    fireEvent.change(codebase, {
+      target: { value: "screenpipe/screenpipe" },
+    });
+    fireEvent.blur(codebase);
 
     await waitFor(() => {
       const saveCall = fetchMock.mock.calls.find(([url, init]) => {

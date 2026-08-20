@@ -4357,7 +4357,6 @@ mod tests {
                 None,
                 None,
                 false,
-                None,
             )
             .await
             .expect("run parent Pi agent");
