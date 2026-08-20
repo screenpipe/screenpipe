@@ -7369,6 +7369,9 @@ error: InstallFailed extracting tarball"#;
             "Qwen3-32B",
             "deepseek-r1:70b",
             "my-thinking-model",
+            "qwq-32b",
+            "gpt-oss-120b",
+            "magistral-small-2509",
         ] {
             let mut pc = make_provider_config("custom", model);
             pc.url = "http://127.0.0.1:8188/v1".to_string();
