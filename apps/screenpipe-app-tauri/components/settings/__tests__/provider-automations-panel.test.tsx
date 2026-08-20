@@ -87,6 +87,9 @@ describe("ProviderAutomationsPanel", () => {
     expect(screen.queryByText(/view only here/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/managed in Claude/i)).not.toBeInTheDocument();
     expect(screen.queryByText("read only")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "open Claude schedules" }),
+    ).toBeInTheDocument();
   });
 
   it("uses the scheduled-task search for native provider rows", async () => {
@@ -113,7 +116,7 @@ describe("ProviderAutomationsPanel", () => {
     expect(providerManagementUrl("claude")).toBeNull();
   });
 
-  it("keeps Claude cloud schedules visible as a provider boundary", async () => {
+  it("keeps Claude cloud schedules inside the Claude view", async () => {
     const onOpenProvider = vi.fn().mockResolvedValue(undefined);
     vi.mocked(commands.listProviderAutomations).mockResolvedValue({
       status: "ok",
@@ -124,13 +127,9 @@ describe("ProviderAutomationsPanel", () => {
 
     expect(await screen.findByText("Daily review")).toBeInTheDocument();
     expect(screen.getByTestId("provider-heading")).toHaveTextContent("Codex1");
-    expect(screen.getByText("Claude cloud")).toBeInTheDocument();
-    expect(screen.queryByText("stay in Claude")).not.toBeInTheDocument();
-
-    const openClaude = screen.getByRole("button", { name: "open Claude" });
-    expect(openClaude).toHaveTextContent("Claude cloud");
-    fireEvent.click(openClaude);
-    expect(onOpenProvider).toHaveBeenCalledWith("https://claude.ai");
+    expect(
+      screen.queryByRole("button", { name: "open Claude schedules" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows the Claude cloud boundary when no local agent tasks exist", async () => {
@@ -141,7 +140,9 @@ describe("ProviderAutomationsPanel", () => {
 
     render(<ProviderAutomationsPanel />);
 
-    expect(await screen.findByText("Claude cloud")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "open Claude schedules" }),
+    ).toBeInTheDocument();
     expect(screen.queryByText("agent schedules")).not.toBeInTheDocument();
   });
 

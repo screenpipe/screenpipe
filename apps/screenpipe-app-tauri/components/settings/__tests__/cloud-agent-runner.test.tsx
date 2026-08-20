@@ -65,19 +65,19 @@ describe("CloudAgentRunner", () => {
     );
 
     expect(screen.getByTestId("cloud-agent-memory-select")).toHaveTextContent(
-      "none",
+      "not shared",
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "review memory access" }),
+      screen.getByRole("button", { name: "review shared context" }),
     );
     expect(
-      await screen.findByText(/screenshots, audio files, local file paths/i),
+      await screen.findByText(/screenshots, audio files, local paths/i),
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
     fireEvent.click(screen.getByTestId("cloud-agent-memory-select"));
-    fireEvent.click(await screen.findByText("relevant context"));
+    fireEvent.click(await screen.findByText("share relevant context"));
 
     await waitFor(() => {
       const saveCall = fetchMock.mock.calls.find(([url]) =>
@@ -108,7 +108,7 @@ describe("CloudAgentRunner", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Cursor Cloud Agent settings",
+        name: "Cursor settings",
       }),
     );
     fireEvent.change(await screen.findByPlaceholderText("paste API key"), {
@@ -130,6 +130,26 @@ describe("CloudAgentRunner", () => {
       String(url).includes("/pipes/day-recap/config"),
     );
     expect(configCalls).toHaveLength(0);
+  });
+
+  it("uses one plain-language choice for where a task runs", async () => {
+    render(
+      <CloudAgentRunner
+        pipeName="day-recap"
+        agent="pi"
+        cloudAgent={null}
+        apiBase="http://localhost:3030"
+        onSaved={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("runs with")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("cloud-agent-provider-select"),
+      ).toHaveTextContent("screenpipe on this device"),
+    );
+    expect(screen.queryByText("run in")).not.toBeInTheDocument();
   });
 
   it("starts the provider account flow from one connect button", async () => {

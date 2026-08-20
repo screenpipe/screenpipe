@@ -66,9 +66,9 @@ interface CursorAgentSummary {
 }
 
 const PROVIDER_NAMES: Record<CloudAgentProvider, string> = {
-  codex: "Codex Cloud",
-  claude: "Claude Code Cloud",
-  cursor: "Cursor Cloud Agent",
+  codex: "Codex",
+  claude: "Claude",
+  cursor: "Cursor",
 };
 
 const CURSOR_KEYS_URL = "https://cursor.com/dashboard?tab=integrations";
@@ -253,21 +253,21 @@ export function CloudAgentRunner({
   const providerName = draft ? PROVIDER_NAMES[draft.provider] : "";
   const needsDestinationSetup =
     draft?.provider === "codex" && !draft.environment_id?.trim();
-  const memoryLabel = draft?.send_screenpipe_context
-    ? `relevant context · ${draft.context_lookback_hours ?? 24}h`
-    : "none";
+  const contextLabel = draft?.send_screenpipe_context
+    ? `shared · ${draft.context_lookback_hours ?? 24}h`
+    : "not shared";
 
   return (
     <>
       <section
-        className="divide-y divide-border border border-border"
+        className="divide-y divide-border"
         data-testid="cloud-agent-runner"
       >
         <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_15rem] sm:items-center">
           <div>
-            <Label className="text-xs font-medium">run in</Label>
+            <Label className="text-xs font-medium">runs with</Label>
             <p className="mt-0.5 text-[11px] text-muted-foreground">
-              choose where this scheduled task runs.
+              choose who handles each run.
             </p>
           </div>
           <Select
@@ -282,23 +282,25 @@ export function CloudAgentRunner({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="local">screenpipe · on this device</SelectItem>
-              <SelectItem value="codex">Codex Cloud</SelectItem>
-              <SelectItem value="claude">Claude Code Cloud</SelectItem>
-              <SelectItem value="cursor">Cursor Cloud Agent</SelectItem>
+              <SelectItem value="local">screenpipe on this device</SelectItem>
+              <SelectItem value="codex">Codex in the cloud</SelectItem>
+              <SelectItem value="claude">Claude in the cloud</SelectItem>
+              <SelectItem value="cursor">Cursor in the cloud</SelectItem>
             </SelectContent>
           </Select>
         </div>
 
         {draft && (
           <>
-            <div className="flex items-center gap-3 p-4">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center border border-border bg-muted/30">
+            <div className="grid gap-3 p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
+              <div className="hidden h-8 w-8 shrink-0 items-center justify-center border border-border bg-muted/30 sm:flex">
                 <Cloud className="h-4 w-4" />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <p className="truncate text-xs font-medium">{providerName}</p>
+                  <p className="truncate text-xs font-medium">
+                    {providerName} in the cloud
+                  </p>
                   {status?.configured && !needsDestinationSetup && (
                     <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
                       <Check className="h-3 w-3" /> connected
@@ -311,50 +313,52 @@ export function CloudAgentRunner({
                     : (status?.detail ?? "checking connection...")}
                 </p>
               </div>
-              {(!status?.configured || needsDestinationSetup) && (
+              <div className="flex items-center gap-1">
+                {(!status?.configured || needsDestinationSetup) && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-8 rounded-none text-xs"
+                    onClick={() =>
+                      needsDestinationSetup
+                        ? setSettingsOpen(true)
+                        : void connectProvider()
+                    }
+                    disabled={connecting}
+                    data-testid="cloud-agent-connect"
+                  >
+                    {connecting ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : needsDestinationSetup ? (
+                      "finish setup"
+                    ) : draft.provider === "claude" &&
+                      status &&
+                      !status.available ? (
+                      "update"
+                    ) : (
+                      "connect"
+                    )}
+                  </Button>
+                )}
                 <Button
                   type="button"
-                  size="sm"
-                  className="h-8 rounded-none text-xs"
-                  onClick={() =>
-                    needsDestinationSetup
-                      ? setSettingsOpen(true)
-                      : void connectProvider()
-                  }
-                  disabled={connecting}
-                  data-testid="cloud-agent-connect"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 rounded-none"
+                  onClick={() => setSettingsOpen(true)}
+                  aria-label={`${providerName} settings`}
                 >
-                  {connecting ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : needsDestinationSetup ? (
-                    "finish setup"
-                  ) : draft.provider === "claude" &&
-                    status &&
-                    !status.available ? (
-                    "update"
-                  ) : (
-                    "connect"
-                  )}
+                  <Settings2 className="h-3.5 w-3.5" />
                 </Button>
-              )}
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 rounded-none"
-                onClick={() => setSettingsOpen(true)}
-                aria-label={`${providerName} settings`}
-              >
-                <Settings2 className="h-3.5 w-3.5" />
-              </Button>
+              </div>
             </div>
 
             {draft.provider === "cursor" && status?.configured && (
               <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_15rem] sm:items-center">
                 <div>
-                  <Label className="text-xs font-medium">agent</Label>
+                  <Label className="text-xs font-medium">use</Label>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
-                    reuse its cloud workspace and conversation.
+                    start fresh or continue an existing Cursor agent.
                   </p>
                 </div>
                 <Select
@@ -373,7 +377,7 @@ export function CloudAgentRunner({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="new">new agent each run</SelectItem>
+                    <SelectItem value="new">a new agent each run</SelectItem>
                     {cursorAgents.map((agentOption) => (
                       <SelectItem key={agentOption.id} value={agentOption.id}>
                         {agentOption.name} · {agentOption.status.toLowerCase()}
@@ -388,9 +392,11 @@ export function CloudAgentRunner({
               <div className="flex min-w-0 items-start gap-3">
                 <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
                 <div className="min-w-0">
-                  <Label className="text-xs font-medium">memory</Label>
+                  <Label className="text-xs font-medium">
+                    screenpipe context
+                  </Label>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
-                    grant a bounded context capsule for each run.
+                    choose whether this agent can use your recent activity.
                   </p>
                 </div>
               </div>
@@ -408,11 +414,13 @@ export function CloudAgentRunner({
                     className="h-9 min-w-0 flex-1 rounded-none text-xs"
                     data-testid="cloud-agent-memory-select"
                   >
-                    <SelectValue>{memoryLabel}</SelectValue>
+                    <SelectValue>{contextLabel}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">none</SelectItem>
-                    <SelectItem value="relevant">relevant context</SelectItem>
+                    <SelectItem value="none">don&apos;t share</SelectItem>
+                    <SelectItem value="relevant">
+                      share relevant context
+                    </SelectItem>
                   </SelectContent>
                 </Select>
                 <Button
@@ -421,7 +429,7 @@ export function CloudAgentRunner({
                   size="icon"
                   className="h-9 w-9 shrink-0 rounded-none"
                   onClick={() => setMemoryOpen(true)}
-                  aria-label="review memory access"
+                  aria-label="review shared context"
                 >
                   <ShieldCheck className="h-3.5 w-3.5" />
                 </Button>
@@ -436,7 +444,7 @@ export function CloudAgentRunner({
             role={error ? "alert" : "status"}
           >
             {saving ? (
-              "saving runner..."
+              "saving..."
             ) : (
               <span className="text-destructive">{error}</span>
             )}
@@ -450,8 +458,7 @@ export function CloudAgentRunner({
             <DialogHeader>
               <DialogTitle className="text-base">{providerName}</DialogTitle>
               <DialogDescription className="text-xs">
-                Connect once. Scheduled tasks reuse this account without storing
-                credentials in each task.
+                Connect once. This task reuses your account for future runs.
               </DialogDescription>
             </DialogHeader>
 
@@ -489,7 +496,7 @@ export function CloudAgentRunner({
               {draft.provider === "codex" && (
                 <>
                   <div className="space-y-1.5">
-                    <Label className="text-xs">cloud environment ID</Label>
+                    <Label className="text-xs">Codex environment</Label>
                     <Input
                       value={draft.environment_id ?? ""}
                       onChange={(event) =>
@@ -501,13 +508,13 @@ export function CloudAgentRunner({
                           environment_id: event.currentTarget.value,
                         })
                       }
-                      placeholder="choose in `codex cloud`"
+                      placeholder="paste environment ID"
                       className="h-9 rounded-none text-xs"
                       data-testid="codex-cloud-environment"
                     />
                     <p className="text-[11px] text-muted-foreground">
-                      Codex does not expose environment discovery to third-party
-                      apps yet. screenpipe remembers this once.
+                      Copy this from Codex once. screenpipe remembers it for
+                      future runs.
                     </p>
                   </div>
                   <div className="space-y-1.5">
@@ -533,7 +540,7 @@ export function CloudAgentRunner({
               {draft.provider === "claude" && (
                 <div className="space-y-1.5">
                   <Label className="text-xs">
-                    existing session ID · optional
+                    Claude conversation · optional
                   </Label>
                   <Input
                     value={draft.session_id ?? ""}
@@ -546,11 +553,11 @@ export function CloudAgentRunner({
                         session_id: event.currentTarget.value,
                       })
                     }
-                    placeholder="blank starts a new cloud session"
+                    placeholder="leave blank to start a new conversation"
                     className="h-9 rounded-none text-xs"
                   />
                   <p className="text-[11px] text-muted-foreground">
-                    Claude does not expose a third-party session picker yet.
+                    To continue one, paste its session ID here.
                   </p>
                 </div>
               )}
@@ -673,21 +680,21 @@ export function CloudAgentRunner({
         <Dialog open={memoryOpen} onOpenChange={setMemoryOpen}>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
-              <DialogTitle className="text-base">memory access</DialogTitle>
+              <DialogTitle className="text-base">shared context</DialogTitle>
               <DialogDescription className="text-xs">
-                Control exactly what this scheduled task may send to{" "}
-                {providerName}.
+                Control what screenpipe may send to {providerName} for this
+                task.
               </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-4">
               <div className="border border-border bg-muted/20 p-3">
-                <p className="text-xs font-medium">relevant context capsule</p>
+                <p className="text-xs font-medium">what gets shared</p>
                 <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                  At run time, screenpipe builds a bounded summary with app and
-                  window activity, relevant screen text, transcript excerpts,
-                  and curated memories. Screenshots, audio files, local file
-                  paths, the raw database, and live device access stay private.
+                  A short, relevant summary of app activity, screen text,
+                  transcript excerpts, and saved memories. Screenshots, audio
+                  files, local paths, the raw database, and live access stay
+                  private.
                 </p>
               </div>
               <div className="space-y-1.5">
@@ -710,9 +717,8 @@ export function CloudAgentRunner({
                 </Select>
               </div>
               <p className="text-[11px] text-muted-foreground">
-                The grant is evaluated separately on every run. Full-context
-                recall can later use the same permission through second brain
-                retrieval without copying your full history into the provider.
+                screenpipe rebuilds this summary for every run. Your full
+                history is never copied into the provider.
               </p>
             </div>
 

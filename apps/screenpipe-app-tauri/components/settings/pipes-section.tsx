@@ -1040,7 +1040,7 @@ function errorTypeBadge(errorType: string | null) {
   );
 }
 
-/** Primary + fallback AI preset selector for a pipe. */
+/** Primary + backup model selector for a locally-run pipe. */
 function PipePresetSelector({
   pipe,
   setPipes,
@@ -1098,13 +1098,20 @@ function PipePresetSelector({
   };
 
   return (
-    <div className="space-y-2">
-      <div>
-        <Label className="text-xs">primary ai preset</Label>
+    <div className="space-y-3 p-4">
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_15rem] sm:items-center">
+        <div>
+          <Label className="text-xs font-medium">AI model</Label>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            used when screenpipe handles the run.
+          </p>
+        </div>
         <AIPresetsSelector
           compact
           allowNone
+          noneLabel="use task default"
           controlledPresetId={primaryPreset}
+          triggerAriaLabel="AI model"
           onControlledSelect={(preset) =>
             savePresets(preset?.id ?? null, fallbackPreset)
           }
@@ -1112,9 +1119,14 @@ function PipePresetSelector({
       </div>
 
       {showFallback ? (
-        <div>
+        <div className="grid gap-3 border-t border-border pt-3 sm:grid-cols-[minmax(0,1fr)_15rem] sm:items-start">
           <div className="flex items-center justify-between">
-            <Label className="text-xs">fallback ai preset</Label>
+            <div>
+              <Label className="text-xs font-medium">backup model</Label>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                used if the first model is unavailable.
+              </p>
+            </div>
             <button
               className="text-[10px] text-muted-foreground hover:text-foreground"
               onClick={() => {
@@ -1128,21 +1140,20 @@ function PipePresetSelector({
           <AIPresetsSelector
             compact
             allowNone
+            noneLabel="no backup"
             controlledPresetId={fallbackPreset}
+            triggerAriaLabel="Backup model"
             onControlledSelect={(preset) =>
               savePresets(primaryPreset, preset?.id ?? null)
             }
           />
-          <p className="text-[10px] text-muted-foreground mt-1">
-            used when primary hits rate limit
-          </p>
         </div>
       ) : (
         <button
           className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
           onClick={() => setShowFallback(true)}
         >
-          + add fallback preset
+          + add a backup model
         </button>
       )}
       <p className="text-[10px] text-muted-foreground">
@@ -3566,43 +3577,43 @@ export function PipesSection() {
                         </div>
 
                         <div className="p-4">
-                          <CloudAgentRunner
-                            pipeName={pipe.config.name}
-                            agent={pipe.config.agent}
-                            cloudAgent={pipe.config.cloud_agent}
-                            apiBase={apiBase}
-                            onSaved={(agent, cloudAgent) => {
-                              setPipes((previous) =>
-                                previous.map((candidate) =>
-                                  candidate.config.name === pipe.config.name
-                                    ? {
-                                        ...candidate,
-                                        is_bundled_builtin: false,
-                                        config: {
-                                          ...candidate.config,
-                                          agent,
-                                          cloud_agent: cloudAgent,
-                                        },
-                                      }
-                                    : candidate,
-                                ),
-                              );
-                            }}
-                          />
-                        </div>
-
-                        {/* Model — only the local runner consumes AI presets. */}
-                        {pipe.config.agent !== "cloud-agent" && (
-                          <div className="p-4">
-                            <PipePresetSelector
-                              pipe={pipe}
-                              setPipes={setPipes}
-                              fetchPipes={fetchPipes}
-                              pendingConfigSaves={pendingConfigSaves}
+                          <div className="divide-y divide-border border border-border">
+                            <CloudAgentRunner
+                              pipeName={pipe.config.name}
+                              agent={pipe.config.agent}
+                              cloudAgent={pipe.config.cloud_agent}
                               apiBase={apiBase}
+                              onSaved={(agent, cloudAgent) => {
+                                setPipes((previous) =>
+                                  previous.map((candidate) =>
+                                    candidate.config.name === pipe.config.name
+                                      ? {
+                                          ...candidate,
+                                          is_bundled_builtin: false,
+                                          config: {
+                                            ...candidate.config,
+                                            agent,
+                                            cloud_agent: cloudAgent,
+                                          },
+                                        }
+                                      : candidate,
+                                  ),
+                                );
+                              }}
                             />
+
+                            {/* Only the on-device runner consumes model presets. */}
+                            {pipe.config.agent !== "cloud-agent" && (
+                              <PipePresetSelector
+                                pipe={pipe}
+                                setPipes={setPipes}
+                                fetchPipes={fetchPipes}
+                                pendingConfigSaves={pendingConfigSaves}
+                                apiBase={apiBase}
+                              />
+                            )}
                           </div>
-                        )}
+                        </div>
 
                           </div>
                         )}

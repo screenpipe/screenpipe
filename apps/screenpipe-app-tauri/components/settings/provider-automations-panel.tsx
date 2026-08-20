@@ -398,16 +398,16 @@ export function ProviderAutomationsPanel({
     [load, onManageTask],
   );
 
-  const claudeCloudBoundary = (
+  const claudeCloudLink = (
     <button
       type="button"
-      aria-label="open Claude"
-      title="open Claude cloud schedules"
+      aria-label="open Claude schedules"
+      title="open schedules in Claude"
       className="flex min-h-10 w-full items-center gap-2 border-t border-border px-3 py-2 text-left transition-colors first:border-t-0 hover:bg-background/70"
       onClick={() => void openClaudeCloud()}
     >
       <ProviderIcon provider="claude" />
-      <span className="text-xs font-medium">Claude cloud</span>
+      <span className="text-xs font-medium">open Claude schedules</span>
       <div className="flex-1" />
       <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
     </button>
@@ -420,7 +420,7 @@ export function ProviderAutomationsPanel({
         className="overflow-hidden border border-border bg-muted/10"
         data-testid="provider-automations-panel"
       >
-        {claudeCloudBoundary}
+        {claudeCloudLink}
         {openError && (
           <p
             className="border-t border-border px-4 py-2 text-xs text-destructive"
@@ -638,7 +638,7 @@ export function ProviderAutomationsPanel({
         </div>
       )}
 
-      {!query && claudeCloudBoundary}
+      {!query && activeProvider === "claude" && claudeCloudLink}
 
       {openError && (
         <p
