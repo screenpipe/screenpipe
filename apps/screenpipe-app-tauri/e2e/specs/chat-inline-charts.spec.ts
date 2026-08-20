@@ -30,6 +30,14 @@ import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
 
 const LEAD = "Here is where your time went";
 const TRAIL = "Slack stayed quiet all afternoon";
+const CALENDAR_VALUES = [
+  2.1, 4.8, 3.2, 5.1, 4.4, 1.2, 0.8, 3.9, 5.6, 4.7, 6.1, 4.2, 1.5, 0.6,
+  4.4, 5.2, 3.8, 6.4, 5.7, 1.8, 0.9, 4.9, 6.2, 5.4, 6.8, 5.1, 2.2, 1.1,
+];
+const CALENDAR_ITEMS = CALENDAR_VALUES.map((value, index) => {
+  const date = new Date(Date.UTC(2026, 7, 3 + index));
+  return { date: date.toISOString().slice(0, 10), value };
+});
 
 function chartMessage(marker: string): string {
   return [
@@ -50,7 +58,12 @@ function chartMessage(marker: string): string {
     "Five more patterns for the questions a work history creates:",
     "",
     "```chart",
-    '{ "type": "calendar", "title": "daily focus", "unit": "h", "items": [{ "date": "2026-08-03", "value": 2.1 }, { "date": "2026-08-04", "value": 4.8 }, { "date": "2026-08-05", "value": 3.2 }, { "date": "2026-08-06", "value": 5.1 }, { "date": "2026-08-07", "value": 4.4 }, { "date": "2026-08-08", "value": 1.2 }, { "date": "2026-08-09", "value": 0.8 }, { "date": "2026-08-10", "value": 3.9 }, { "date": "2026-08-11", "value": 5.6 }, { "date": "2026-08-12", "value": 4.7 }, { "date": "2026-08-13", "value": 6.1 }, { "date": "2026-08-14", "value": 4.2 }] }',
+    JSON.stringify({
+      type: "calendar",
+      title: "deep work rhythm",
+      unit: "h",
+      items: CALENDAR_ITEMS,
+    }),
     "```",
     "",
     "```chart",
@@ -294,7 +307,7 @@ describe("Inline charts in chat", function () {
     expect(tables).toEqual([
       { hasTable: true, rows: 3 },
       { hasTable: true, rows: 2 },
-      { hasTable: true, rows: 12 },
+      { hasTable: true, rows: 28 },
       { hasTable: true, rows: 4 },
       { hasTable: true, rows: 5 },
       { hasTable: true, rows: 3 },

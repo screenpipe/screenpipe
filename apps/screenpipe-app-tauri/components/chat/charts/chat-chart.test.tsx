@@ -368,6 +368,10 @@ describe("ChatChart — new mark types", () => {
       />,
     );
     expect(screen.getByText("2026-08-01 – 2026-08-02")).toBeInTheDocument();
+    expect(screen.getByText("2 recorded days")).toBeInTheDocument();
+    expect(screen.getByText("average")).toBeInTheDocument();
+    expect(screen.getByText("peak")).toBeInTheDocument();
+    expect(screen.getByText("total")).toBeInTheDocument();
     expect(screen.getAllByText("4 h").length).toBeGreaterThan(0);
   });
 
@@ -386,10 +390,12 @@ describe("ChatChart — new mark types", () => {
     );
     expect(screen.getAllByText("activated").length).toBeGreaterThan(0);
     expect(screen.getAllByText("42%").length).toBeGreaterThan(0);
+    expect(screen.getByText("42% prior")).toBeInTheDocument();
+    expect(screen.getByText("43% prior")).toBeInTheDocument();
   });
 
   it("computes and exposes the waterfall running total", () => {
-    render(
+    const { container } = render(
       <ChatChart
         spec={specFrom({
           type: "waterfall",
@@ -404,6 +410,10 @@ describe("ChatChart — new mark types", () => {
     );
     expect(screen.getAllByText("+3 h").length).toBeGreaterThan(0);
     expect(screen.getAllByText("11 h").length).toBeGreaterThan(0);
+    expect(screen.getByText("+1 h net")).toBeInTheDocument();
+    expect(
+      container.querySelectorAll("[data-waterfall-connector]"),
+    ).toHaveLength(3);
   });
 
   it("renders range endpoints and a middle marker", () => {
@@ -417,7 +427,7 @@ describe("ChatChart — new mark types", () => {
       />,
     );
     expect(screen.getAllByText("support call").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("31 min").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("31 min")).toHaveLength(2);
   });
 
   it("renders scatter axes and every labeled point in the data table", () => {
@@ -436,7 +446,8 @@ describe("ChatChart — new mark types", () => {
       />,
     );
     expect(screen.getByText("time →")).toBeInTheDocument();
-    expect(screen.getAllByText("support").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("support")).toHaveLength(2);
+    expect(screen.getByText("4 h · 9")).toBeInTheDocument();
     expect(screen.getByText("2 points")).toBeInTheDocument();
   });
 });
