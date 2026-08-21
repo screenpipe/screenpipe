@@ -5,8 +5,8 @@
 # Meeting chat — spec and 100 edge cases
 
 <!-- doc-covers: apps/screenpipe-app-tauri/components/meeting-notes -->
-<!-- doc-verified: e72b0132b -->
-> **Current.** Last verified against e72b0132b (2026-08-16).
+<!-- doc-verified: 52fe15363 -->
+> **Current.** Last verified against 52fe15363 (2026-08-21).
 
 The file keeps its `RAIL` name because the case numbers below are referenced
 from the source comments; the shape it specifies is a panel, for the reasons in
