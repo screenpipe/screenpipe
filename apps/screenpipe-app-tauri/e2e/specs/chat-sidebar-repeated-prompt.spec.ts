@@ -41,18 +41,22 @@ async function readForeground(): Promise<string | null> {
 
 async function pressNewChat(): Promise<void> {
   await browser.execute(() => {
+    const isMac = /mac/i.test(navigator.platform || navigator.userAgent);
     window.dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "n",
-        metaKey: true,
-        ctrlKey: true,
+        code: "KeyN",
+        metaKey: isMac,
+        ctrlKey: !isMac,
         bubbles: true,
       }),
     );
   });
 }
 
-async function waitForDifferentForeground(previousId?: string): Promise<string> {
+async function waitForDifferentForeground(
+  previousId?: string,
+): Promise<string> {
   let found: string | null = null;
   await browser.waitUntil(
     async () => {
@@ -91,27 +95,28 @@ async function visibleRows(ids: string[]): Promise<string[]> {
 }
 
 async function emitDeleted(ids: string[]): Promise<void> {
-  await browser.executeAsync(
-    (sessionIds: string[], done: () => void) => {
-      const g = globalThis as unknown as {
-        __TAURI__?: { event?: { emit: (name: string, payload: unknown) => Promise<unknown> } };
-        __TAURI_INTERNALS__?: { invoke: (cmd: string, args: object) => Promise<unknown> };
+  await browser.executeAsync((sessionIds: string[], done: () => void) => {
+    const g = globalThis as unknown as {
+      __TAURI__?: {
+        event?: { emit: (name: string, payload: unknown) => Promise<unknown> };
       };
-      const emit = g.__TAURI__?.event?.emit;
-      const tasks = sessionIds.map((id) => {
-        if (emit) return emit("chat-deleted", { id });
-        if (g.__TAURI_INTERNALS__) {
-          return g.__TAURI_INTERNALS__.invoke("plugin:event|emit", {
-            event: "chat-deleted",
-            payload: { id },
-          });
-        }
-        return Promise.resolve();
-      });
-      void Promise.allSettled(tasks).then(() => done());
-    },
-    ids,
-  );
+      __TAURI_INTERNALS__?: {
+        invoke: (cmd: string, args: object) => Promise<unknown>;
+      };
+    };
+    const emit = g.__TAURI__?.event?.emit;
+    const tasks = sessionIds.map((id) => {
+      if (emit) return emit("chat-deleted", { id });
+      if (g.__TAURI_INTERNALS__) {
+        return g.__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+          event: "chat-deleted",
+          payload: { id },
+        });
+      }
+      return Promise.resolve();
+    });
+    void Promise.allSettled(tasks).then(() => done());
+  }, ids);
 }
 
 describe("Repeated prompts stay in the chat sidebar", function () {
@@ -135,22 +140,29 @@ describe("Repeated prompts stay in the chat sidebar", function () {
     createdIds.push(firstId);
     await seedUserMessage(firstId);
 
-    await browser.waitUntil(async () => (await visibleRows([firstId])).length === 1, {
-      timeout: t(10_000),
-      interval: 200,
-      timeoutMsg: "first sent chat never appeared in the sidebar",
-    });
+    await browser.waitUntil(
+      async () => (await visibleRows([firstId])).length === 1,
+      {
+        timeout: t(10_000),
+        interval: 200,
+        timeoutMsg: "first sent chat never appeared in the sidebar",
+      },
+    );
 
     await pressNewChat();
     const secondId = await waitForDifferentForeground(firstId);
     createdIds.push(secondId);
     await seedUserMessage(secondId);
 
-    await browser.waitUntil(async () => (await visibleRows(createdIds)).length === 2, {
-      timeout: t(10_000),
-      interval: 200,
-      timeoutMsg: "one same-prompt chat disappeared from the sidebar after send",
-    });
+    await browser.waitUntil(
+      async () => (await visibleRows(createdIds)).length === 2,
+      {
+        timeout: t(10_000),
+        interval: 200,
+        timeoutMsg:
+          "one same-prompt chat disappeared from the sidebar after send",
+      },
+    );
 
     expect(await visibleRows(createdIds)).toEqual(createdIds);
     const screenshot = await saveScreenshot("chat-sidebar-repeated-prompt");
