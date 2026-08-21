@@ -121,7 +121,7 @@ describe("Chat tool activity progressive disclosure", function () {
           toolCall: {
             id: "read-skill",
             toolName: "read",
-            args: { path: "/private/workspace/SKILL.md" },
+            args: { path: "/private/workspace/skills/pdf/SKILL.md" },
             result: "private instructions",
             isRunning: false,
             startedAtMs,
@@ -215,7 +215,7 @@ describe("Chat tool activity progressive disclosure", function () {
     const list = await $('[data-testid="tool-activity-list"]');
     await list.waitForExist({ timeout: t(5_000) });
     const listText = await list.getText();
-    expect(listText).toContain("Reviewed instructions");
+    expect(listText).toContain("Loaded PDF skill");
     expect(listText).toContain("Checked available automations");
     expect(listText).toContain("Analyzed information");
     expect(listText).toContain("Checking the work");
@@ -225,6 +225,9 @@ describe("Chat tool activity progressive disclosure", function () {
     expect(body).not.toContain("node -e");
     expect(body).not.toContain(RAW_PYTHON_MARKER);
     expect(body).not.toContain(RAW_JAVASCRIPT_MARKER);
+
+    const skillIcon = await list.$('[data-activity-kind="skill"]');
+    expect(await skillIcon.isDisplayed()).toBe(true);
 
     await browser.pause(500);
     const filepath = await saveScreenshot("chat-tool-activity-running-expanded");

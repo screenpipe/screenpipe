@@ -199,6 +199,7 @@ describe("presentToolActivity", () => {
     expect(python).toEqual({
       runningLabel: "Analyzing information",
       completedLabel: "Analyzed information",
+      icon: "thinking",
     });
     expect(javascript).toEqual(python);
     expect(JSON.stringify([python, javascript])).not.toContain("PRIVATE_");
@@ -213,6 +214,7 @@ describe("presentToolActivity", () => {
     expect(presentation).toEqual({
       runningLabel: "Checking the work",
       completedLabel: "Checked the work",
+      icon: "test",
     });
     expect(JSON.stringify(presentation)).not.toContain("secret-regression-file");
   });
@@ -226,6 +228,7 @@ describe("presentToolActivity", () => {
     ).toEqual({
       runningLabel: "Searching Slack",
       completedLabel: "Searched Slack",
+      icon: "search",
     });
 
     expect(
@@ -236,6 +239,7 @@ describe("presentToolActivity", () => {
     ).toEqual({
       runningLabel: "Reviewing your information",
       completedLabel: "Reviewed your information",
+      icon: "database",
     });
   });
 
@@ -248,6 +252,7 @@ describe("presentToolActivity", () => {
     expect(command).toEqual({
       runningLabel: "Working on your request",
       completedLabel: "Completed a background step",
+      icon: "work",
     });
 
     // A tool with no `kind` and no mcp__ prefix keeps the coarse generic label,
@@ -259,6 +264,7 @@ describe("presentToolActivity", () => {
     expect(tool).toEqual({
       runningLabel: "Working on your request",
       completedLabel: "Completed a background step",
+      icon: "work",
     });
 
     // An agent-provided tool (carries a `kind`) surfaces its humanized name,
@@ -271,6 +277,7 @@ describe("presentToolActivity", () => {
     expect(acpTool).toEqual({
       runningLabel: "Unfamiliar internal tool",
       completedLabel: "Unfamiliar internal tool",
+      icon: "work",
     });
 
     // None of the paths leak the args into the label.
@@ -284,8 +291,9 @@ describe("presentToolActivity", () => {
         args: { path: "/private/customer/path/SKILL.md" },
       }),
     ).toEqual({
-      runningLabel: "Reviewing instructions",
-      completedLabel: "Reviewed instructions",
+      runningLabel: "Loading a skill",
+      completedLabel: "Loaded a skill",
+      icon: "skill",
     });
     expect(
       presentToolActivity({
@@ -295,7 +303,31 @@ describe("presentToolActivity", () => {
     ).toEqual({
       runningLabel: "Updating files",
       completedLabel: "Updated files",
+      icon: "edit",
     });
+  });
+
+  it("names manifest-style skills without exposing their path", () => {
+    const read = presentToolActivity({
+      toolName: "read",
+      args: { path: "/Users/private/.codex/skills/pdf/SKILL.md" },
+    });
+    const command = presentToolActivity({
+      toolName: "bash",
+      args: { command: "sed -n '1,200p' /Users/private/.codex/skills/app-ux-research/SKILL.md" },
+    });
+
+    expect(read).toEqual({
+      runningLabel: "Loading PDF skill",
+      completedLabel: "Loaded PDF skill",
+      icon: "skill",
+    });
+    expect(command).toEqual({
+      runningLabel: "Loading app UX research skill",
+      completedLabel: "Loaded app UX research skill",
+      icon: "skill",
+    });
+    expect(JSON.stringify([read, command])).not.toContain("/Users/private");
   });
 });
 
@@ -312,7 +344,7 @@ describe("presentToolActivityStatus", () => {
         ],
         true,
       ),
-    ).toBe("Reviewed instructions");
+    ).toBe("Loaded a skill");
 
     expect(
       presentToolActivityStatus(
@@ -423,7 +455,7 @@ describe("presentToolActivity — ACP tool calls", () => {
   it("detects a skill read via kind", () => {
     expect(
       presentToolActivity({ toolName: "Read", kind: "read", args: { path: "/x/SKILL.md" } }).completedLabel,
-    ).toBe("Reviewed instructions");
+    ).toBe("Loaded a skill");
   });
 
   it("humanizes an unknown tool name instead of a generic step", () => {

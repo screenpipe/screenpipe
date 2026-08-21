@@ -479,15 +479,95 @@ export interface PresentableToolCall {
 export interface ToolActivityPresentation {
   runningLabel: string;
   completedLabel: string;
+  icon: ToolActivityIcon;
 }
+
+export type ToolActivityIcon =
+  | "work"
+  | "skill"
+  | "search"
+  | "file"
+  | "edit"
+  | "delete"
+  | "terminal"
+  | "test"
+  | "web"
+  | "screenpipe"
+  | "database"
+  | "memory"
+  | "meeting"
+  | "connection"
+  | "automation"
+  | "export"
+  | "subagent"
+  | "thinking"
+  | "approval";
 
 const GENERIC_ACTIVITY: ToolActivityPresentation = {
   runningLabel: "Working on your request",
   completedLabel: "Completed a background step",
+  icon: "work",
 };
 
-function activity(runningLabel: string, completedLabel: string): ToolActivityPresentation {
-  return { runningLabel, completedLabel };
+function activity(
+  runningLabel: string,
+  completedLabel: string,
+  icon: ToolActivityIcon = "work",
+): ToolActivityPresentation {
+  return { runningLabel, completedLabel, icon };
+}
+
+const SKILL_FILE_RE = /(?:^|[\\/])skill\.md$/i;
+const SAFE_SKILL_NAME_RE = /^[a-z0-9][a-z0-9_.:@-]{0,63}$/i;
+
+function humanizeSkillName(name: string): string {
+  const acronyms: Record<string, string> = {
+    api: "API",
+    mcp: "MCP",
+    pdf: "PDF",
+    sql: "SQL",
+    ui: "UI",
+    ux: "UX",
+  };
+  return name
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => acronyms[part.toLowerCase()] ?? part.toLowerCase())
+    .join(" ");
+}
+
+/** Return only a manifest-style skill name. A random parent directory is not
+ *  safe to expose just because it happens to contain a SKILL.md file. */
+function skillNameFromPath(path: string): string | null {
+  const normalized = path.replace(/\\/g, "/").replace(/["'`]+$/g, "");
+  const parts = normalized.split("/").filter(Boolean);
+  let skillFileIndex = -1;
+  for (let index = parts.length - 1; index >= 0; index--) {
+    if (parts[index].toLowerCase() === "skill.md") {
+      skillFileIndex = index;
+      break;
+    }
+  }
+  if (skillFileIndex < 2 || parts[skillFileIndex - 2].toLowerCase() !== "skills") {
+    return null;
+  }
+  const rawName = parts[skillFileIndex - 1];
+  if (!SAFE_SKILL_NAME_RE.test(rawName)) return null;
+  return humanizeSkillName(rawName);
+}
+
+function skillActivity(pathOrCommand: string): ToolActivityPresentation | null {
+  if (!/skill\.md/i.test(pathOrCommand)) return null;
+
+  const pathMatch = pathOrCommand.match(
+    /(?:^|[\s'"`])([^\s'"`]*[\\/]skills[\\/][^\s'"`\\/]+[\\/]SKILL\.md)(?=$|[\s'"`])/i,
+  );
+  const candidate = pathMatch?.[1] ?? pathOrCommand.trim();
+  if (!SKILL_FILE_RE.test(candidate) && !pathMatch) return null;
+
+  const name = skillNameFromPath(candidate);
+  const noun = name ? `${name} skill` : "a skill";
+  return activity(`Loading ${noun}`, `Loaded ${noun}`, "skill");
 }
 
 function connectionActivity(
@@ -499,16 +579,16 @@ function connectionActivity(
 
   if (normalized === "google-calendar") {
     return isChange
-      ? activity("Updating your calendar", "Updated your calendar")
-      : activity("Checking your calendar", "Checked your calendar");
+      ? activity("Updating your calendar", "Updated your calendar", "connection")
+      : activity("Checking your calendar", "Checked your calendar", "connection");
   }
   if (normalized === "google-docs") {
     return isChange
-      ? activity("Updating a document", "Updated a document")
-      : activity("Reviewing a document", "Reviewed a document");
+      ? activity("Updating a document", "Updated a document", "edit")
+      : activity("Reviewing a document", "Reviewed a document", "file");
   }
   if (normalized === "browsers" || normalized === "browser") {
-    return activity("Using the browser", "Used the browser");
+    return activity("Using the browser", "Used the browser", "web");
   }
 
   const displayName = normalized === "slack"
@@ -522,15 +602,15 @@ function connectionActivity(
           : "a connected app";
 
   return isChange
-    ? activity(`Updating ${displayName}`, `Updated ${displayName}`)
-    : activity(`Checking ${displayName}`, `Checked ${displayName}`);
+    ? activity(`Updating ${displayName}`, `Updated ${displayName}`, "connection")
+    : activity(`Checking ${displayName}`, `Checked ${displayName}`, "connection");
 }
 
 function curlActivity(command: string): ToolActivityPresentation | null {
   const search = parseSearchCommand(command);
   if (search) {
     const target = search.appName || search.windowName || search.contentType || "your history";
-    return activity(`Searching ${target}`, `Searched ${target}`);
+    return activity(`Searching ${target}`, `Searched ${target}`, "search");
   }
 
   if (!/\bcurl\b/i.test(command)) return null;
@@ -543,42 +623,42 @@ function curlActivity(command: string): ToolActivityPresentation | null {
     const target = firstExternalWebTarget(command, "fetch");
     if (!target) return null;
     return method === "GET" || method === "HEAD"
-      ? activity(`Checking ${target.domain}`, `Checked ${target.domain}`)
-      : activity(`Updating ${target.domain}`, `Updated ${target.domain}`);
+      ? activity(`Checking ${target.domain}`, `Checked ${target.domain}`, "web")
+      : activity(`Updating ${target.domain}`, `Updated ${target.domain}`, "web");
   }
 
   const path = localUrl.pathname.replace(/\/$/, "") || "/";
   if (path === "/raw_sql") {
-    return activity("Reviewing your information", "Reviewed your information");
+    return activity("Reviewing your information", "Reviewed your information", "database");
   }
   if (path === "/activity-summary" || path === "/search") {
-    return activity("Reviewing your activity", "Reviewed your activity");
+    return activity("Reviewing your activity", "Reviewed your activity", "screenpipe");
   }
   if (path === "/memories" || path.startsWith("/memories/")) {
     return method === "GET"
-      ? activity("Reviewing memories", "Reviewed memories")
-      : activity("Updating memory", "Updated memory");
+      ? activity("Reviewing memories", "Reviewed memories", "memory")
+      : activity("Updating memory", "Updated memory", "memory");
   }
   if (path === "/meetings" || path.startsWith("/meetings/")) {
     return method === "GET"
-      ? activity("Reviewing meetings", "Reviewed meetings")
-      : activity("Updating a meeting", "Updated a meeting");
+      ? activity("Reviewing meetings", "Reviewed meetings", "meeting")
+      : activity("Updating a meeting", "Updated a meeting", "meeting");
   }
   if (path.startsWith("/speakers")) {
     return method === "GET"
-      ? activity("Reviewing speakers", "Reviewed speakers")
-      : activity("Updating a speaker", "Updated a speaker");
+      ? activity("Reviewing speakers", "Reviewed speakers", "meeting")
+      : activity("Updating a speaker", "Updated a speaker", "meeting");
   }
   if (path === "/connections") {
-    return activity("Checking connected apps", "Checked connected apps");
+    return activity("Checking connected apps", "Checked connected apps", "connection");
   }
   if (path.startsWith("/connections/")) {
     return connectionActivity(path.split("/")[2] || "", method);
   }
   if (path === "/pipes" || path.startsWith("/pipes/")) {
     return method === "GET"
-      ? activity("Checking available automations", "Checked available automations")
-      : activity("Updating an automation", "Updated an automation");
+      ? activity("Checking available automations", "Checked available automations", "automation")
+      : activity("Updating an automation", "Updated an automation", "automation");
   }
   if (
     path === "/health" ||
@@ -586,18 +666,21 @@ function curlActivity(command: string): ToolActivityPresentation | null {
     path === "/list-audio-devices" ||
     path === "/tags"
   ) {
-    return activity("Checking Screenpipe", "Checked Screenpipe");
+    return activity("Checking screenpipe", "Checked screenpipe", "screenpipe");
   }
   if (path === "/export") {
-    return activity("Preparing an export", "Prepared an export");
+    return activity("Preparing an export", "Prepared an export", "export");
   }
 
-  return activity("Working in Screenpipe", "Completed work in Screenpipe");
+  return activity("Working in screenpipe", "Completed work in screenpipe", "screenpipe");
 }
 
 function commandActivity(command: string): ToolActivityPresentation {
   const curl = curlActivity(command);
   if (curl) return curl;
+
+  const skill = skillActivity(command);
+  if (skill) return skill;
 
   const normalized = command.toLowerCase();
   if (
@@ -605,22 +688,22 @@ function commandActivity(command: string): ToolActivityPresentation {
     /\b(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?test\b/.test(normalized) ||
     /\bcargo\s+(?:nextest\s+run|test|check|clippy)\b/.test(normalized)
   ) {
-    return activity("Checking the work", "Checked the work");
+    return activity("Checking the work", "Checked the work", "test");
   }
   if (/\bgit\s+(?:status|diff|log|show)\b/.test(normalized)) {
-    return activity("Reviewing changes", "Reviewed changes");
+    return activity("Reviewing changes", "Reviewed changes", "search");
   }
   if (/\bgit\s+(?:commit|push|merge|rebase)\b/.test(normalized)) {
-    return activity("Saving changes", "Saved changes");
+    return activity("Saving changes", "Saved changes", "edit");
   }
   if (/\b(?:python(?:3)?|node|deno|ruby|perl|jq|awk)\b/.test(normalized)) {
-    return activity("Analyzing information", "Analyzed information");
+    return activity("Analyzing information", "Analyzed information", "thinking");
   }
   if (/\b(?:rg|grep|find|ls|sed|cat|head|tail)\b/.test(normalized)) {
-    return activity("Finding relevant information", "Found relevant information");
+    return activity("Finding relevant information", "Found relevant information", "search");
   }
   if (/\b(?:mkdir|touch|cp|mv|apply_patch)\b/.test(normalized)) {
-    return activity("Updating files", "Updated files");
+    return activity("Updating files", "Updated files", "edit");
   }
 
   return GENERIC_ACTIVITY;
@@ -827,21 +910,21 @@ export function mcpScreenpipeCommand(
 function kindActivity(kind: string): ToolActivityPresentation | null {
   switch (kind.toLowerCase()) {
     case "read":
-      return activity("Reviewing a file", "Reviewed a file");
+      return activity("Reviewing a file", "Reviewed a file", "file");
     case "edit":
-      return activity("Updating files", "Updated files");
+      return activity("Updating files", "Updated files", "edit");
     case "delete":
-      return activity("Removing files", "Removed files");
+      return activity("Removing files", "Removed files", "delete");
     case "move":
-      return activity("Moving files", "Moved files");
+      return activity("Moving files", "Moved files", "edit");
     case "search":
-      return activity("Finding relevant information", "Found relevant information");
+      return activity("Finding relevant information", "Found relevant information", "search");
     case "execute":
-      return activity("Running a command", "Ran a command");
+      return activity("Running a command", "Ran a command", "terminal");
     case "fetch":
-      return activity("Fetching content", "Fetched content");
+      return activity("Fetching content", "Fetched content", "web");
     case "think":
-      return activity("Thinking it through", "Thought it through");
+      return activity("Thinking it through", "Thought it through", "thinking");
     default:
       return null;
   }
@@ -881,7 +964,7 @@ export function presentToolActivity(toolCall: PresentableToolCall): ToolActivity
         : type
           ? `${type} subagent`
           : "subagent";
-    return activity(title, title);
+    return activity(title, title, "subagent");
   }
 
   // An MCP server that failed to start is a setup problem, not a step the agent
@@ -896,6 +979,7 @@ export function presentToolActivity(toolCall: PresentableToolCall): ToolActivity
       toolCall.isError
         ? `${mcpStartupServer} MCP server failed to start`
         : `Started the ${mcpStartupServer} MCP server`,
+      "connection",
     );
   }
 
@@ -907,10 +991,9 @@ export function presentToolActivity(toolCall: PresentableToolCall): ToolActivity
     return commandActivity(String(args.command ?? args.cmd ?? ""));
   }
   if (toolName === "read" || toolName === "read_file" || toolName === "open_file" || kind === "read") {
-    const path = String(args.path ?? args.file ?? args.abs_path ?? "").toLowerCase();
-    return path.endsWith("skill.md")
-      ? activity("Reviewing instructions", "Reviewed instructions")
-      : activity("Reviewing a file", "Reviewed a file");
+    const path = String(args.path ?? args.file_path ?? args.file ?? args.abs_path ?? "");
+    const skill = skillActivity(path) ?? skillActivity(rawName);
+    return skill ?? activity("Reviewing a file", "Reviewed a file", "file");
   }
   if (
     toolName === "grep" ||
@@ -919,7 +1002,7 @@ export function presentToolActivity(toolCall: PresentableToolCall): ToolActivity
     toolName === "search" ||
     toolName === "search_files"
   ) {
-    return activity("Finding relevant information", "Found relevant information");
+    return activity("Finding relevant information", "Found relevant information", "search");
   }
   if (
     toolName === "edit" ||
@@ -927,16 +1010,16 @@ export function presentToolActivity(toolCall: PresentableToolCall): ToolActivity
     toolName === "write_file" ||
     toolName === "apply_patch"
   ) {
-    return activity("Updating files", "Updated files");
+    return activity("Updating files", "Updated files", "edit");
   }
   if (toolName.includes("browser")) {
-    return activity("Using the browser", "Used the browser");
+    return activity("Using the browser", "Used the browser", "web");
   }
   if (toolName.includes("web") && toolName.includes("search")) {
-    return activity("Searching the web", "Searched the web");
+    return activity("Searching the web", "Searched the web", "web");
   }
   if (toolName === "ask_user") {
-    return activity("Waiting for your input", "Asked for your input");
+    return activity("Waiting for your input", "Asked for your input", "approval");
   }
 
   // ACP native tools carry a `kind`; use it before the generic fallback.
@@ -952,7 +1035,7 @@ export function presentToolActivity(toolCall: PresentableToolCall): ToolActivity
   if (kind || MCP_PREFIX_RE.test(rawName)) {
     const humanized = humanizeToolName(rawName);
     if (humanized && humanized !== "Unknown" && humanized !== "Tool") {
-      return activity(humanized, humanized);
+      return activity(humanized, humanized, "work");
     }
   }
   return GENERIC_ACTIVITY;
