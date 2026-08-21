@@ -77,6 +77,10 @@ for UI validation. Drive the real app only when the change crosses a native
 boundary listed there. Put before/after visuals in every issue and PR body:
 screen recording, screenshots, HTML mockup screenshot, or ASCII.
 
+Before opening or updating a PR, run every eval relevant to the changed behavior
+locally and put the exact commands and results in the PR body. CI is a second
+signal, not a substitute.
+
 ## git
 
 Many agents work this repo in parallel. Never `git reset`, never delete local
