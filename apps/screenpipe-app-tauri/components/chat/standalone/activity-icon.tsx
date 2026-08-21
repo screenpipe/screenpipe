@@ -73,8 +73,8 @@ export function ActivityIcon({
         "relative flex h-5 w-5 shrink-0 items-center justify-center border bg-background text-foreground/55",
         state === "running" && "border-phosphor bg-phosphor text-phosphor-ink",
         state === "completed" && "border-border/80 text-foreground/55",
-        state === "error" && "border-foreground/45 text-foreground/60",
-        state === "waiting" && "border-dashed border-foreground/45 text-foreground/65",
+        state === "error" && "border-destructive bg-destructive text-destructive-foreground",
+        state === "waiting" && "border-signal bg-signal text-signal-foreground",
         className,
       )}
       data-activity-kind={kind}
@@ -88,13 +88,13 @@ export function ActivityIcon({
       </span>
       {state === "running" && (
         <span
-          className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 animate-pulse border border-background bg-foreground motion-reduce:animate-none"
+          className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 animate-pulse border border-background bg-phosphor-ink motion-reduce:animate-none"
           aria-hidden="true"
         />
       )}
       {state === "error" && (
         <span
-          className="absolute -right-1 -top-1 flex h-2.5 w-2.5 items-center justify-center border border-background bg-foreground text-background"
+          className="absolute -right-1 -top-1 flex h-2.5 w-2.5 items-center justify-center border border-background bg-destructive-foreground text-destructive"
           aria-hidden="true"
         >
           <X className="h-2 w-2" strokeWidth={2.5} />

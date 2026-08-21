@@ -372,6 +372,7 @@ function ToolCallRailItem({
   isLast,
   childToolCalls,
   errorRecovered = false,
+  waitingForUser = false,
   onAskUserReply,
 }: {
   toolCall: ToolCall;
@@ -381,6 +382,7 @@ function ToolCallRailItem({
   // leaving the children as always-on siblings that clutter the rail.
   childToolCalls?: ToolCall[];
   errorRecovered?: boolean;
+  waitingForUser?: boolean;
   onAskUserReply?: (reply: string, displayLabel: string) => void | Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -395,11 +397,13 @@ function ToolCallRailItem({
   const connectionIconName = extractConnectionIconFromToolCall(toolCall);
   const webTarget = extractWebTargetFromToolCall(toolCall);
   const isAskUser = isAskUserToolCall(toolCall);
-  const state: ActivityIconState = toolCall.isRunning
-    ? "running"
-    : showError
-      ? "error"
-      : "completed";
+  const state: ActivityIconState = toolCall.isRunning && (waitingForUser || isAskUser)
+    ? "waiting"
+    : toolCall.isRunning
+      ? "running"
+      : showError
+        ? "error"
+        : "completed";
   const brandedIcon = connectionIconName ? (
     <ConnectionToolIcon name={connectionIconName} />
   ) : webTarget ? (
@@ -438,7 +442,7 @@ function ToolCallRailItem({
               {label}
             </span>
             {showError && (
-              <span className="shrink-0 border border-foreground/25 px-1 font-mono text-[9px] uppercase tracking-wide text-foreground/55">
+              <span className="shrink-0 border border-destructive/40 px-1 font-mono text-[9px] uppercase tracking-wide text-destructive">
                 failed
               </span>
             )}
@@ -502,6 +506,7 @@ function ToolCallRailItem({
                         toolCall={child}
                         isLast={j === childToolCalls!.length - 1}
                         errorRecovered={errorRecovered}
+                        waitingForUser={waitingForUser}
                         onAskUserReply={onAskUserReply}
                       />
                     ))}
@@ -1284,6 +1289,7 @@ function ToolActivityGroup({
   // While blocked on the user's approval the turn is still live, not done.
   const isWorking = hasRunningTool || isGenerating || waitingForApproval;
   const hasInteractiveTool = toolCalls.some(isAskUserToolCall);
+  const waitingForUser = waitingForApproval || hasInteractiveTool;
   const hasError = toolCalls.some((tc) => tc.isError);
   const allDone = !isWorking;
   const total = toolCalls.length;
@@ -1314,7 +1320,7 @@ function ToolActivityGroup({
     : summaryToolCall
       ? presentToolActivity(summaryToolCall).icon
       : "work";
-  const widgetState: ActivityIconState = waitingForApproval
+  const widgetState: ActivityIconState = waitingForUser
     ? "waiting"
     : isWorking
       ? "running"
@@ -1414,7 +1420,7 @@ function ToolActivityGroup({
                 <>
                   <WorkSummaryText text={summary || `${total} steps`} animateRunningDuration={false} />
                   {hasError && !recoveredWithAnswer && (
-                    <span className="ml-1.5 text-foreground/50">· {toolCalls.filter(tc => tc.isError).length} failed</span>
+                    <span className="ml-1.5 text-destructive">· {toolCalls.filter(tc => tc.isError).length} failed</span>
                   )}
                 </>
               )}
@@ -1487,6 +1493,7 @@ function ToolActivityGroup({
                         isLast={isLastTop}
                         childToolCalls={children}
                         errorRecovered={recoveredWithAnswer}
+                        waitingForUser={waitingForUser}
                         onAskUserReply={onAskUserReply}
                       />
                     </motion.div>

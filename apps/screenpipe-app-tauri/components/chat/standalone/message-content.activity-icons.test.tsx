@@ -76,12 +76,14 @@ describe("MessageContent — semantic activity widget", () => {
     expect(
       list.querySelector('[data-activity-kind="search"][data-activity-state="completed"]'),
     ).toBeTruthy();
-    expect(
-      list.querySelector('[data-activity-kind="web"][data-activity-state="error"]'),
-    ).toBeTruthy();
-    expect(
-      list.querySelector('[data-activity-kind="test"][data-activity-state="running"]'),
-    ).toBeTruthy();
+    const errorIcon = list.querySelector(
+      '[data-activity-kind="web"][data-activity-state="error"]',
+    );
+    const runningIcon = list.querySelector(
+      '[data-activity-kind="test"][data-activity-state="running"]',
+    );
+    expect(errorIcon).toHaveClass("bg-destructive");
+    expect(runningIcon).toHaveClass("bg-phosphor");
     expect(screen.getByText("Loaded PDF skill")).toBeTruthy();
     expect(screen.getByText("failed")).toBeTruthy();
   });
@@ -130,6 +132,36 @@ describe("MessageContent — semantic activity widget", () => {
     expect(screen.getByTestId("tool-activity-summary")).toHaveTextContent(
       "Waiting for your approval",
     );
+    fireEvent.click(screen.getByTestId("tool-activity-summary"));
+    const list = screen.getByTestId("tool-activity-list");
+    expect(
+      list.querySelector('[role="img"][data-activity-state="waiting"]'),
+    ).toHaveClass("bg-signal");
+    expect(list.querySelector('[data-activity-state="running"]')).toBeNull();
+  });
+
+  it("uses neutral waiting signals instead of phosphor while input is required", () => {
+    render(
+      <MessageContent
+        message={messageWithTools([
+          tool("question", "ask_user", {
+            args: { prompt: "Which result should I keep?" },
+            isRunning: true,
+          }),
+        ])}
+        isGenerating
+      />,
+    );
+
+    expect(screen.getByTestId("tool-activity-widget")).toHaveAttribute(
+      "data-activity-state",
+      "waiting",
+    );
+    const list = screen.getByTestId("tool-activity-list");
+    expect(
+      list.querySelector('[role="img"][data-activity-state="waiting"]'),
+    ).toHaveClass("bg-signal");
+    expect(list.querySelector('[data-activity-state="running"]')).toBeNull();
   });
 
   it("keeps a forced collapsed receipt visibly disabled", () => {
