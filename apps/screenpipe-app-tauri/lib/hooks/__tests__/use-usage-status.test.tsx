@@ -74,6 +74,17 @@ function usageResponse(upgradeEligible: boolean): Promise<Response> {
         ],
         frontier_models: ["gpt-5.6-sol", "claude-opus-5"],
       },
+      background_pipe_advisory: {
+        should_notify: true,
+        reason: "background_pipe_allowance_low",
+        lane: "auto",
+        remaining_percent: 18,
+        reset_at: "2026-08-17T00:00:00.000Z",
+        hours_until_reset: 36,
+        cooldown_hours: 48,
+        notification_id: "background-pipe-allowance:auto:2026-08-17",
+        message: "Background Pipes are close to their hosted-AI allowance.",
+      },
     }),
   } as Response);
 }
@@ -143,6 +154,12 @@ describe("useUsageStatus", () => {
       requiredPlan: "business",
       upgradeUrl: "https://screenpi.pe/account/billing",
       resetsAt: null,
+    });
+    expect(result.current?.background_pipe_advisory).toMatchObject({
+      should_notify: true,
+      lane: "auto",
+      remaining_percent: 18,
+      notification_id: "background-pipe-allowance:auto:2026-08-17",
     });
     expect(result.current?.cost_limit_reached).toBe(false);
     expect(hostedAiAllowanceForModel(result.current, "gpt-5.6-sol")).toMatchObject({

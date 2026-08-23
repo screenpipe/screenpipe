@@ -21,6 +21,7 @@ import { AppEntitlementGate } from "@/components/app-entitlement-gate";
 import { DeeplinkHandler } from "@/components/deeplink-handler";
 import { registerAppVersionProperty } from "@/lib/analytics/app-version-property";
 import { LiveViewOnboardingFollowUp } from "@/components/live-view-onboarding-follow-up";
+import { BackgroundPipeAllowanceNotifier } from "@/components/background-pipe-allowance-notifier";
 import { usePathname } from "next/navigation";
 import { readCachedAnalyticsId, readCachedAnalyticsEnabled } from "@/lib/analytics-id";
 import { resolveTelemetryDisabledByEnv } from "@/lib/telemetry-env";
@@ -148,6 +149,7 @@ export const Providers = forwardRef<
                               <DesktopRemoteControl enabled={posthogReady} />
                               {!isOverlay && <DeeplinkHandler />}
                               {!isOverlay && <LiveViewOnboardingFollowUp />}
+                              {!isOverlay && <BackgroundPipeAllowanceNotifier />}
                               <AppEntitlementGate>{children}</AppEntitlementGate>
                             </>
                           ) : null}

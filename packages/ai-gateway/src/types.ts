@@ -283,6 +283,12 @@ export interface Env {
 	LIMIT_SUBSCRIBED_FREE_RPM?: string;
 	LIMIT_BUSINESS_MAX_FREE_RPM?: string;
 	LIMIT_BUSINESS_ULTRA_FREE_RPM?: string;
+	/** Proactive background-Pipe allowance warning thresholds. Percentages and
+	 * timing are UX knobs only; internal cost/margin numbers never leave the
+	 * Worker. */
+	PIPE_ALLOWANCE_WARN_REMAINING_PERCENT?: string;
+	PIPE_ALLOWANCE_WARN_MIN_RESET_HOURS?: string;
+	PIPE_ALLOWANCE_WARN_COOLDOWN_HOURS?: string;
 }
 
 // User tier for rate limiting and model access

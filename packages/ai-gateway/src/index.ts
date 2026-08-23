@@ -102,6 +102,7 @@ import { getCloudflareHostedChatUsage } from './services/cloudflare-ai-gateway-u
 import {
 	resolveBackgroundFallbackBody,
 } from './services/background-limit-fallback';
+import { buildBackgroundPipeAllowanceAdvisory } from './services/background-pipe-advisory';
 import { logApiAuthAudit, logApiRouteAudit } from './services/api-audit';
 // import { handleTTSWebSocketUpgrade } from './handlers/voice-ws';
 
@@ -423,6 +424,10 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						can_buy_credits: false,
 						byok_supported: true,
 					},
+					background_pipe_advisory: buildBackgroundPipeAllowanceAdvisory({
+						env,
+						allowances: cloudflareUsage?.allowances ?? null,
+					}),
 				};
 				return addCorsHeaders(createSuccessResponse(enriched));
 			}
@@ -488,6 +493,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					can_buy_credits: false,
 					byok_supported: true,
 				},
+				background_pipe_advisory: null,
 			};
 			return addCorsHeaders(createSuccessResponse(enriched));
 		}

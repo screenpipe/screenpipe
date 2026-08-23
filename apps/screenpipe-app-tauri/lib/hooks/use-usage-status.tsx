@@ -49,6 +49,18 @@ export interface HostedAiUsage {
   upgrade: QuotaUpgradeAction | null;
 }
 
+export interface BackgroundPipeAllowanceAdvisory {
+  should_notify: boolean;
+  reason: "background_pipe_allowance_low";
+  lane: HostedAiLane;
+  remaining_percent: number;
+  reset_at: string | null;
+  hours_until_reset: number | null;
+  cooldown_hours: number;
+  notification_id: string;
+  message: string;
+}
+
 export interface UsageStatus {
   tier: UsageTier;
   used_today: number;
@@ -66,6 +78,8 @@ export interface UsageStatus {
   cost_limit_reached: boolean | null;
   /** Cloudflare allowance utilization for the authenticated user's metadata. */
   hosted_ai?: HostedAiUsage;
+  /** Gateway advisory for a throttled local /notify about background Pipe burn. */
+  background_pipe_advisory?: BackgroundPipeAllowanceAdvisory | null;
 }
 
 export interface UsageStatusQuery {
@@ -155,6 +169,40 @@ function parseHostedAiUsage(value: unknown): HostedAiUsage | undefined {
   };
 }
 
+function parseBackgroundPipeAllowanceAdvisory(
+  value: unknown,
+): BackgroundPipeAllowanceAdvisory | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<BackgroundPipeAllowanceAdvisory>;
+  if (
+    candidate.should_notify !== true ||
+    candidate.reason !== "background_pipe_allowance_low" ||
+    (candidate.lane !== "auto" &&
+      candidate.lane !== "explicit" &&
+      candidate.lane !== "frontier" &&
+      candidate.lane !== "combined") ||
+    (candidate.reset_at !== null && typeof candidate.reset_at !== "string") ||
+    (candidate.hours_until_reset !== null &&
+      (typeof candidate.hours_until_reset !== "number" ||
+        !Number.isFinite(candidate.hours_until_reset) ||
+        candidate.hours_until_reset < 0)) ||
+    typeof candidate.notification_id !== "string" ||
+    candidate.notification_id.length === 0 ||
+    typeof candidate.message !== "string" ||
+    candidate.message.length === 0 ||
+    typeof candidate.remaining_percent !== "number" ||
+    !Number.isFinite(candidate.remaining_percent) ||
+    candidate.remaining_percent < 0 ||
+    candidate.remaining_percent > 100 ||
+    typeof candidate.cooldown_hours !== "number" ||
+    !Number.isFinite(candidate.cooldown_hours) ||
+    candidate.cooldown_hours <= 0
+  ) {
+    return null;
+  }
+  return candidate as BackgroundPipeAllowanceAdvisory;
+}
+
 async function fetchUsageStatus(token: string | undefined): Promise<UsageStatus> {
   const res = await fetchAiGateway("/usage", {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -180,6 +228,9 @@ async function fetchUsageStatus(token: string | undefined): Promise<UsageStatus>
         ? json.cost_limit_reached
         : null,
     hosted_ai: parseHostedAiUsage(json.hosted_ai),
+    background_pipe_advisory: parseBackgroundPipeAllowanceAdvisory(
+      json.background_pipe_advisory,
+    ),
   };
 }
 
