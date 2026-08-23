@@ -58,6 +58,17 @@ describe("resolveCitationTime", () => {
     expect(new Date(at!).getDate()).toBe(15);
   });
 
+  it("resolves bare 12 as midnight when the meeting window is after midnight", () => {
+    const w = {
+      startMs: new Date(2026, 7, 14, 23, 50).getTime(),
+      endMs: new Date(2026, 7, 15, 0, 20).getTime(),
+    };
+    const at = resolveCitationTime(12, 5, 0, null, w);
+    expect(at).not.toBeNull();
+    expect(new Date(at!).getHours()).toBe(0);
+    expect(new Date(at!).getDate()).toBe(15);
+  });
+
   it("case 80: rejects a time outside the window", () => {
     expect(resolveCitationTime(9, 15, 0, null, WINDOW)).toBeNull();
   });

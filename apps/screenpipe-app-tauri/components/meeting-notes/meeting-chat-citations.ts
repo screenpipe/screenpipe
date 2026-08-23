@@ -90,6 +90,7 @@ export function resolveCitationTime(
   } else {
     // No meridiem: try the literal hour and its 12h counterpart.
     push(hours);
+    if (hours === 12) push(0);
     if (hours < 12) push(hours + 12);
   }
 
