@@ -146,6 +146,22 @@ export const NOTIFICATION_CATEGORIES: NotificationCategory[] = [
     keywords: ["pipe alerts", "automations", "per-pipe", "mute pipe"],
   },
   {
+    id: "pipeAllowanceWarnings",
+    label: "Scheduled task allowance warnings",
+    description:
+      "Warn before background scheduled tasks use most of your hosted-AI allowance while the reset is still far away",
+    group: "automation",
+    default: true,
+    keywords: [
+      "pipe credits",
+      "ai allowance",
+      "tokens",
+      "quota",
+      "usage",
+      "scheduled task limit",
+    ],
+  },
+  {
     id: "appUpdates",
     label: "App updates",
     description: "New version available",

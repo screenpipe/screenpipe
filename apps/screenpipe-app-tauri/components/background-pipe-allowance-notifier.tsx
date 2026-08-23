@@ -5,6 +5,7 @@
 
 import { useEffect } from "react";
 import { useUsageStatusQuery } from "@/lib/hooks/use-usage-status";
+import { useSettings } from "@/lib/hooks/use-settings";
 import { appServerFetch } from "@/lib/notifications/app-server";
 
 const STORAGE_PREFIX = "screenpipe.background-pipe-allowance-notify";
@@ -66,10 +67,15 @@ export function shouldSendBackgroundPipeAllowanceNotification(input: {
  * gate. This is intentionally not shown for interactive chat.
  */
 export function BackgroundPipeAllowanceNotifier() {
+  const { settings, isSettingsLoaded } = useSettings();
   const { usage } = useUsageStatusQuery(true);
   const advisory = usage?.background_pipe_advisory;
+  const prefs = settings?.notificationPrefs;
+  const allowanceWarningsEnabled =
+    isSettingsLoaded && prefs?.pipeAllowanceWarnings !== false;
 
   useEffect(() => {
+    if (!allowanceWarningsEnabled) return;
     if (!advisory?.should_notify) return;
     const nowMs = Date.now();
     if (
@@ -110,7 +116,7 @@ export function BackgroundPipeAllowanceNotifier() {
     }).catch(() => {
       // Avoid a retry loop that would make an allowance incident noisier.
     });
-  }, [advisory]);
+  }, [advisory, allowanceWarningsEnabled]);
 
   return null;
 }

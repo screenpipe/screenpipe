@@ -53,6 +53,15 @@ describe("notification registry", () => {
     expect(categoryValuesForPreset("recommended").captureStalls).toBe(false);
   });
 
+  it("defaults scheduled task allowance warnings on", () => {
+    expect(NOTIFICATION_CATEGORY_BY_ID.pipeAllowanceWarnings).toMatchObject({
+      group: "automation",
+      default: true,
+    });
+    expect(DEFAULT_NOTIFICATION_PREFS.pipeAllowanceWarnings).toBe(true);
+    expect(categoryValuesForPreset("recommended").pipeAllowanceWarnings).toBe(true);
+  });
+
   it("indexes categories by id", () => {
     for (const c of NOTIFICATION_CATEGORIES) {
       expect(NOTIFICATION_CATEGORY_BY_ID[c.id]).toBe(c);
