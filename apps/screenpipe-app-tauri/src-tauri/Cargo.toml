@@ -30,7 +30,7 @@ cc = "1"
 
 [dependencies]
 tauri-helper = { git = "https://github.com/screenpipe/tauri-helper", rev = "e25ff1d2c5026189305a0251a1e06788efe1d2b3" }
-tauri = { version = "=2.11.2", features = [
+tauri = { version = "=2.11.5", features = [
   "protocol-asset",
   "macos-private-api",
   "tray-icon",
@@ -335,7 +335,7 @@ serial_test = "3"
 tower = { version = "0.4", features = ["util"] }
 # MockRuntime for store.rs recovery tests that must exercise the real
 # tauri-plugin-store registry (state + resources table).
-tauri = { version = "=2.11.2", features = ["test"] }
+tauri = { version = "=2.11.5", features = ["test"] }
 # staged_update tests: sign fake update archives with a throwaway key
 minisign = "0.7"
 
