@@ -995,11 +995,15 @@ function collapseHiddenWorkGroups(grouped: GroupedBlock[]): GroupedBlock[] {
 
 /**
  * Merge all tool/work groups into a single "Worked for Xs" rail at the top.
- * Intermediate narration text between tool calls is dropped — only the
- * final text block (the actual response after all tools finish) renders
- * as visible prose. Connection-action blocks always render outside.
+ * Intermediate narration text between tool calls is dropped. Prefer prose
+ * after the final tool; when a completed turn ends on a tool, keep its last
+ * non-empty text block so the assistant answer does not disappear.
+ * Connection-action blocks always render outside.
  */
-function mergeWorkAndIntermediateText(groups: GroupedBlock[]): GroupedBlock[] {
+function mergeWorkAndIntermediateText(
+  groups: GroupedBlock[],
+  promoteLastTextFallback: boolean,
+): GroupedBlock[] {
   // Find the last work/tool group — everything up to that boundary is
   // "work". Text after is the final response.
   let lastWorkIdx = -1;
@@ -1019,6 +1023,7 @@ function mergeWorkAndIntermediateText(groups: GroupedBlock[]): GroupedBlock[] {
   let totalDurationMs = 0;
   let firstKey: number | null = null;
   const finalBlocks: GroupedBlock[] = [];
+  let lastTextFallback: Extract<GroupedBlock, { type: "text" }> | null = null;
 
   for (let i = 0; i <= lastWorkIdx; i++) {
     const g = groups[i];
@@ -1029,6 +1034,8 @@ function mergeWorkAndIntermediateText(groups: GroupedBlock[]): GroupedBlock[] {
     } else if (g.type === "tool-group") {
       firstKey ??= g.key;
       allToolCalls.push(...g.toolCalls);
+    } else if (g.type === "text") {
+      lastTextFallback = g;
     } else if (
       g.type === "connection-action" ||
       g.type === "agent-action" ||
@@ -1040,7 +1047,7 @@ function mergeWorkAndIntermediateText(groups: GroupedBlock[]): GroupedBlock[] {
     ) {
       finalBlocks.push(g);
     }
-    // text and thinking blocks before the boundary are dropped
+    // thinking blocks and all but the last text fallback are dropped
   }
 
   // Build the merged work group
@@ -1056,6 +1063,11 @@ function mergeWorkAndIntermediateText(groups: GroupedBlock[]): GroupedBlock[] {
   // Everything after lastWorkIdx is the final response
   for (let i = lastWorkIdx + 1; i < groups.length; i++) {
     finalBlocks.push(groups[i]);
+  }
+
+  const hasFinalText = finalBlocks.some((group) => group.type === "text");
+  if (promoteLastTextFallback && !hasFinalText && lastTextFallback) {
+    finalBlocks.push(lastTextFallback);
   }
 
   return finalBlocks;
@@ -1874,7 +1886,7 @@ export function MessageContent({
   if (message.contentBlocks && message.contentBlocks.length > 0) {
     const grouped = groupContentBlocks(message.contentBlocks);
     const collapsed = collapseHiddenWorkGroups(grouped);
-    const displayGroups = mergeWorkAndIntermediateText(collapsed);
+    const displayGroups = mergeWorkAndIntermediateText(collapsed, !isGenerating);
     const parsedTextByKey = new Map<number, ReturnType<typeof parseChatRichResults>>();
     const directiveResults: ChatRichResult[] = [];
     for (const group of displayGroups) {

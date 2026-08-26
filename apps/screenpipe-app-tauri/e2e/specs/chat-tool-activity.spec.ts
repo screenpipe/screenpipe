@@ -344,6 +344,64 @@ describe("Chat tool activity progressive disclosure", function () {
     expect(existsSync(filepath)).toBe(true);
   });
 
+  it("keeps the final assistant answer visible when a tool finishes afterward", async () => {
+    const startedAtMs = Date.now() - 8_000;
+    const finalAnswer =
+      "The renderer now keeps the assistant’s final answer visible, even when a completed tool event arrives afterward.";
+
+    await seedConversation(randomUUID(), "Summarize the files you checked.", {
+      content: finalAnswer,
+      contentBlocks: [
+        {
+          type: "text",
+          text: "I will inspect the relevant files before answering.",
+        },
+        {
+          type: "tool",
+          toolCall: {
+            id: "inspect-files",
+            toolName: "read",
+            args: { path: "/private/workspace/src" },
+            result: "files inspected",
+            isRunning: false,
+            startedAtMs,
+            endedAtMs: startedAtMs + 3_000,
+          },
+        },
+        { type: "text", text: finalAnswer },
+        {
+          type: "tool",
+          toolCall: {
+            id: "verify-answer",
+            toolName: "bash",
+            args: { command: "git diff --check" },
+            result: "",
+            isRunning: false,
+            startedAtMs: startedAtMs + 3_100,
+            endedAtMs: startedAtMs + 8_000,
+          },
+        },
+      ],
+    });
+
+    await browser.waitUntil(
+      async () => (await visibleBodyText()).includes(finalAnswer),
+      {
+        timeout: t(5_000),
+        timeoutMsg: "assistant answer disappeared behind the trailing tool event",
+      },
+    );
+
+    const body = await visibleBodyText();
+    expect(body).toContain(finalAnswer);
+    expect(body).not.toContain("I will inspect the relevant files before answering.");
+
+    const filepath = await saveScreenshot(
+      "chat-tool-activity-trailing-tool-answer",
+    );
+    expect(existsSync(filepath)).toBe(true);
+  });
+
   it("keeps MCP startup health out of the chat transcript", async () => {
     const startup = (
       server: string,
