@@ -20,7 +20,8 @@ export interface AIProviderCardProps {
     | "custom"
     | "embedded"
     | "screenpipe-cloud"
-    | "acp";
+    | "acp"
+    | "orcarouter";
   title: string;
   description: string;
   imageSrc: string;
@@ -113,6 +114,7 @@ export function AIProviderChoices({
     selectedProvider === "openai-chatgpt" ||
     selectedProvider === "anthropic" ||
     selectedProvider === "native-ollama" ||
+    selectedProvider === "orcarouter" ||
     (selectedProvider === "acp" && selectedAcpAgentId === "custom");
   const [showAdvanced, setShowAdvanced] = useState(advancedSelected);
 
@@ -199,6 +201,15 @@ export function AIProviderChoices({
                 imageSrc="/images/ollama.png"
                 selected={selectedProvider === "native-ollama"}
                 onClick={() => onSelectProvider("native-ollama")}
+              />
+
+              <AIProviderCard
+                type="orcarouter"
+                title="OrcaRouter"
+                description="Use any model through the OrcaRouter gateway."
+                imageSrc="/images/orcarouter.svg"
+                selected={selectedProvider === "orcarouter"}
+                onClick={() => onSelectProvider("orcarouter")}
               />
 
               <AIProviderCard

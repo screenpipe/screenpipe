@@ -41,7 +41,7 @@ export const userSchema = z.object({
   entitlement: z.any().nullable().optional(),
 });
 
-export const aiProviderTypeSchema = z.enum(["openai", "openai-chatgpt", "native-ollama", "custom", "screenpipe-cloud", "pi", "anthropic", "acp"]);
+export const aiProviderTypeSchema = z.enum(["openai", "openai-chatgpt", "native-ollama", "custom", "screenpipe-cloud", "pi", "anthropic", "acp", "orcarouter"]);
 
 export const aiPresetSchema = z.object({
   id: z.string().min(1, "Preset name is required").regex(/^[a-zA-Z0-9\s\-_]+$/, "Only letters, numbers, spaces, hyphens, and underscores allowed").refine(
@@ -254,6 +254,7 @@ export const isAiApiKeyRequired = (preset: AiPresetConnectionInput): boolean => 
   switch (preset.provider) {
     case "openai":
     case "anthropic":
+    case "orcarouter":
       return true;
     case "custom":
       return isGeminiApiUrl(preset.url);
@@ -309,6 +310,7 @@ export const requiresAiPresetConnectionTest = (
 ): boolean =>
   provider === "openai" ||
   provider === "anthropic" ||
+  provider === "orcarouter" ||
   provider === "custom" ||
   provider === "native-ollama";
 

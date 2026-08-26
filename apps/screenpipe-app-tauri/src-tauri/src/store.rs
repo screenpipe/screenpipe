@@ -1220,6 +1220,8 @@ pub enum AIProviderType {
     Pi,
     #[serde(rename = "anthropic")]
     Anthropic,
+    #[serde(rename = "orcarouter")]
+    OrcaRouter,
 }
 
 #[derive(Serialize, Deserialize, Type, Clone, Default)]

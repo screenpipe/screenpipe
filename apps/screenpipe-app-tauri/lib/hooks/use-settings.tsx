@@ -68,7 +68,8 @@ export type AIProviderType =
 	| "embedded"
 	| "screenpipe-cloud"
 	| "acp"
-	| "pi";
+	| "pi"
+	| "orcarouter";
 
 export type AcpAgentPresetConfig = {
 	/** Stable adapter id from the ACP registry, or "custom". */
@@ -136,6 +137,10 @@ export type AIPreset = {
 	  }
 	| {
 			provider: "openai-chatgpt";
+	  }
+	| {
+			provider: "orcarouter";
+			apiKey: string;
 	  }
 );
 

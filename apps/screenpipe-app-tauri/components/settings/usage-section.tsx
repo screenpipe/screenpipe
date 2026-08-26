@@ -462,6 +462,8 @@ export function UsageSection() {
         return "OpenAI";
       case "anthropic":
         return "Anthropic";
+      case "orcarouter":
+        return "OrcaRouter";
       default:
         return p;
     }

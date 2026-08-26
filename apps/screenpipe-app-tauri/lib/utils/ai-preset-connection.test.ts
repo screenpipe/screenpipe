@@ -182,4 +182,32 @@ describe("testAiPresetConnection", () => {
       max_completion_tokens: 50,
     });
   });
+
+  it("tests an OrcaRouter preset against the gateway chat endpoint", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ choices: [{ message: { content: "hi" } }] }),
+          { status: 200 },
+        ),
+      );
+
+    await testAiPresetConnection(
+      {
+        provider: "orcarouter",
+        model: "orcarouter/free",
+        apiKey: "sk-orca-test",
+      },
+      { fetch: request },
+    );
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0][0]).toBe(
+      "https://api.orcarouter.ai/v1/chat/completions",
+    );
+    expect(request.mock.calls[0][1]!.headers).toMatchObject({
+      Authorization: "Bearer sk-orca-test",
+    });
+  });
 });

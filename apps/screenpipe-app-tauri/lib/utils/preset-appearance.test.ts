@@ -47,9 +47,21 @@ describe("presetImageSrc", () => {
   it("maps providers and falls back to the custom icon", () => {
     expect(presetImageSrc("openai-chatgpt")).toBe("/images/openai.svg");
     expect(presetImageSrc("screenpipe-cloud")).toBe("/images/screenpipe.png");
+    expect(presetImageSrc("orcarouter")).toBe("/images/orcarouter.svg");
     expect(presetImageSrc("acp")).not.toBe("/images/screenpipe.png");
     expect(presetImageSrc("never-heard-of-it")).toBe("/images/custom.png");
     expect(presetImageSrc(undefined)).toBe("/images/custom.png");
+  });
+
+  it("recognizes the OrcaRouter base URL for custom presets", () => {
+    expect(
+      presetImageSrc(
+        "custom",
+        undefined,
+        "orcarouter/free",
+        "https://api.orcarouter.ai/v1",
+      ),
+    ).toBe("/images/orcarouter.svg");
   });
 
   it("uses the model maker for hosted models", () => {

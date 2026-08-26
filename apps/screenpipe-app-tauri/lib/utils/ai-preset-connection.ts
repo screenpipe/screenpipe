@@ -34,6 +34,8 @@ const endpointForPreset = (preset: AiPresetConnectionInput): string => {
       return "https://api.openai.com/v1/chat/completions";
     case "anthropic":
       return "https://api.anthropic.com/v1/messages";
+    case "orcarouter":
+      return "https://api.orcarouter.ai/v1/chat/completions";
     case "native-ollama":
       return aiEndpointUrl(preset.url || "http://localhost:11434/v1", "chat/completions");
     case "custom":

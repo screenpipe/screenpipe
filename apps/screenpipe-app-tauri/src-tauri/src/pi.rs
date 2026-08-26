@@ -2046,7 +2046,7 @@ fn apply_pi_tool_allowlist(command: &mut Command, provider_config: Option<&PiPro
 fn model_supports_reasoning(provider: &str, model: &str) -> bool {
     let model = model.to_ascii_lowercase();
     match provider {
-        "openai-byok" | "openai-chatgpt" | "custom" => {
+        "openai-byok" | "openai-chatgpt" | "custom" | "orcarouter" => {
             model.starts_with("gpt-5")
                 || model.starts_with("o1")
                 || model.starts_with("o3")
@@ -2136,6 +2136,7 @@ async fn build_models_json_with_api_url(
             "openai-chatgpt" => "openai-chatgpt",
             "native-ollama" => "ollama",
             "anthropic" => "anthropic-byok",
+            "orcarouter" => "orcarouter",
             "custom" => "custom",
             _ => "", // screenpipe-cloud already added above
         };
@@ -2149,6 +2150,8 @@ async fn build_models_json_with_api_url(
                 "https://api.anthropic.com".to_string()
             } else if config.provider == "openai" && config.url.is_empty() {
                 "https://api.openai.com/v1".to_string()
+            } else if config.provider == "orcarouter" && config.url.is_empty() {
+                "https://api.orcarouter.ai/v1".to_string()
             } else {
                 config.url.clone()
             };
@@ -2167,6 +2170,7 @@ async fn build_models_json_with_api_url(
                     "openai" => "$OPENAI_API_KEY".to_string(),
                     "openai-chatgpt" => "$OPENAI_CHATGPT_TOKEN".to_string(),
                     "anthropic" => "$ANTHROPIC_API_KEY".to_string(),
+                    "orcarouter" => "$ORCAROUTER_API_KEY".to_string(),
                     "custom" => "$CUSTOM_API_KEY".to_string(),
                     _ => "".to_string(),
                 };
@@ -2546,6 +2550,7 @@ fn pi_registry_provider(provider: &str, url: &str) -> Result<&'static str, Strin
         "openai-chatgpt" => "openai-chatgpt",
         "native-ollama" => "ollama",
         "anthropic" => "anthropic-byok",
+        "orcarouter" => "orcarouter",
         // "custom" requires a valid URL; fall back to screenpipe cloud if missing
         "custom" if !url.is_empty() => "custom",
         "acp" => return Err(ACP_PRESET_WITHOUT_BACKEND.to_string()),
@@ -3365,6 +3370,9 @@ pub async fn pi_start_inner(
                     }
                     "anthropic" => {
                         cmd.env("ANTHROPIC_API_KEY", api_key);
+                    }
+                    "orcarouter" => {
+                        cmd.env("ORCAROUTER_API_KEY", api_key);
                     }
                     "custom" => {
                         cmd.env("CUSTOM_API_KEY", api_key);
@@ -7312,6 +7320,29 @@ error: InstallFailed extracting tarball"#;
             pi_registry_provider("screenpipe-cloud", "").unwrap(),
             "screenpipe"
         );
+        assert_eq!(
+            pi_registry_provider("orcarouter", "").unwrap(),
+            "orcarouter"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_orcarouter_provider() {
+        // OrcaRouter is an OpenAI-compatible gateway exposed as a first-class
+        // named provider: default base URL, Bearer env-var key, and the
+        // standard chat-completions wire API.
+        let pc = make_provider_config("orcarouter", "orcarouter/free");
+        let config = build_models_json(None, Some(&pc)).await;
+        let providers = config["providers"].as_object().unwrap();
+        assert!(providers.contains_key("orcarouter"));
+        assert_eq!(
+            providers["orcarouter"]["baseUrl"],
+            "https://api.orcarouter.ai/v1"
+        );
+        assert_eq!(providers["orcarouter"]["api"], "openai-completions");
+        assert_eq!(providers["orcarouter"]["apiKey"], "$ORCAROUTER_API_KEY");
+        let model = &providers["orcarouter"]["models"][0];
+        assert_eq!(model["id"], "orcarouter/free");
     }
 
     #[tokio::test]
@@ -7474,6 +7505,7 @@ error: InstallFailed extracting tarball"#;
             ("openai", "openai-byok", "$OPENAI_API_KEY"),
             ("openai-chatgpt", "openai-chatgpt", "$OPENAI_CHATGPT_TOKEN"),
             ("anthropic", "anthropic-byok", "$ANTHROPIC_API_KEY"),
+            ("orcarouter", "orcarouter", "$ORCAROUTER_API_KEY"),
             ("custom", "custom", "$CUSTOM_API_KEY"),
         ] {
             let mut pc = make_provider_config(provider, "some-model");

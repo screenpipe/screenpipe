@@ -164,6 +164,7 @@ export const PROVIDER_IMAGE_SRC: Record<string, string> = {
   screenpipe: "/images/screenpipe.png",
   "screenpipe-cloud": "/images/screenpipe.png",
   acp: "/images/acp.svg",
+  orcarouter: "/images/orcarouter.svg",
 };
 
 /** Resolve the company/model mark a person actually picked, rather than the
@@ -198,6 +199,7 @@ function modelImageSrc(
   }
   if (normalizedUrl.includes("anthropic.com")) return "/images/claude-ai.svg";
   if (normalizedUrl.includes("openai.com")) return "/images/openai.svg";
+  if (normalizedUrl.includes("orcarouter.ai")) return "/images/orcarouter.svg";
   if (normalizedUrl.includes("localhost:11434") || normalizedUrl.includes("ollama")) {
     return "/images/ollama.png";
   }
@@ -242,6 +244,7 @@ const PROVIDER_PRESET_NAMES: Record<string, string> = {
   "native-ollama": "ollama",
   "screenpipe-cloud": "screenpipe-cloud",
   custom: "custom",
+  orcarouter: "orcarouter",
 };
 
 /** Reduce any string to the allowed preset name characters. */

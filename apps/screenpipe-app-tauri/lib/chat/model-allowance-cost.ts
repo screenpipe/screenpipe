@@ -88,6 +88,7 @@ const OWN_ACCOUNT_PROVIDER_NAMES: Record<string, string> = {
   openai: "OpenAI",
   "openai-chatgpt": "ChatGPT",
   anthropic: "Anthropic",
+  orcarouter: "OrcaRouter",
   custom: "custom provider",
 };
 

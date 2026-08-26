@@ -42,6 +42,10 @@ describe("aiProviderTypeSchema", () => {
     expect(aiProviderTypeSchema.parse("acp")).toBe("acp");
   });
 
+  it("accepts the named OrcaRouter provider", () => {
+    expect(aiProviderTypeSchema.parse("orcarouter")).toBe("orcarouter");
+  });
+
   it("warns about a suspicious Gemini key without blocking the live test", () => {
     expect(
       validateApiKey("not-a-google-key", "custom", GEMINI_OPENAI_BASE_URL),
@@ -137,6 +141,14 @@ describe("BYOK connection validation", () => {
         provider: "openai",
         url: "https://api.openai.com/v1",
         model: "gpt-5",
+        apiKey: "",
+      }),
+    ).toEqual({ apiKey: "API key is required" });
+    expect(
+      validateAiPresetConnectionFields({
+        provider: "orcarouter",
+        url: "https://api.orcarouter.ai/v1",
+        model: "orcarouter/free",
         apiKey: "",
       }),
     ).toEqual({ apiKey: "API key is required" });

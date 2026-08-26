@@ -570,6 +570,10 @@ const AISection = ({
         newUrl = "https://api.anthropic.com";
         newModel = "claude-sonnet-5";
         break;
+      case "orcarouter":
+        newUrl = "https://api.orcarouter.ai/v1";
+        newModel = "orcarouter/free";
+        break;
       case "screenpipe-cloud":
         newUrl = ""; // Pi uses RPC mode, not HTTP
         newModel = "auto";
@@ -772,6 +776,8 @@ const AISection = ({
       modelsUrl = "https://api.openai.com/v1/models";
     } else if (isAnthropic) {
       modelsUrl = "https://api.anthropic.com/v1/models";
+    } else if (settingsPreset?.provider === "orcarouter") {
+      modelsUrl = "https://api.orcarouter.ai/v1/models";
     } else {
       modelsUrl = aiEndpointUrl(settingsPreset?.url, "models");
     }

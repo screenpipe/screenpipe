@@ -10,7 +10,8 @@ export type EnterpriseAiPresetProvider =
   | "anthropic"
   | "native-ollama"
   | "custom"
-  | "screenpipe-cloud";
+  | "screenpipe-cloud"
+  | "orcarouter";
 
 export interface EnterpriseManagedAiPreset {
   id: string;
@@ -48,6 +49,7 @@ const VALID_PROVIDERS = new Set<EnterpriseAiPresetProvider>([
   "native-ollama",
   "custom",
   "screenpipe-cloud",
+  "orcarouter",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {

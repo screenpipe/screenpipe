@@ -525,6 +525,39 @@ export function AIProviderConfig({
       !connectionFieldErrors.url
     ) {
       fetchOpenAIModels(formData.url, formData.apiKey);
+    } else if (selectedProvider === "orcarouter" && formData.apiKey) {
+      // OrcaRouter exposes the OpenAI-compatible /v1/models surface. Try the
+      // live catalog first, then fall back to a small known list so the
+      // dropdown never comes back empty on a bad key or offline run.
+      (async () => {
+        setModelDiscoveryStatus("loading");
+        try {
+          const resp = await tauriFetchWithDeadline("https://api.orcarouter.ai/v1/models", {
+            headers: {
+              Authorization: `Bearer ${formData.apiKey}`,
+              "Content-Type": "application/json",
+            },
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            setOpenAIModels(data?.data || []);
+            setModelDiscoveryStatus("ready");
+            return;
+          }
+        } catch {
+          /* fall through to fallback */
+        }
+        setOpenAIModels([
+          { id: "orcarouter/free" },
+          { id: "openai/gpt-5.6" },
+          { id: "anthropic/claude-sonnet-5" },
+          { id: "anthropic/claude-opus-5" },
+        ]);
+        setModelDiscoveryStatus("error");
+        setModelDiscoveryError(
+          "couldn't load live models — showing known models",
+        );
+      })();
     } else if (selectedProvider === "openai-chatgpt") {
       // Try fetching from API, fall back to known models
       (async () => {
@@ -657,6 +690,7 @@ export function AIProviderConfig({
       selectedProvider === "openai-chatgpt" ||
       selectedProvider === "anthropic" ||
       selectedProvider === "native-ollama" ||
+      selectedProvider === "orcarouter" ||
       (selectedProvider === "acp" && formData.acpAgent?.id === "custom"),
   );
 
@@ -890,6 +924,55 @@ export function AIProviderConfig({
                 placeholder="type or select model"
                 emptyMessage="no models discovered — type a model name manually"
                 allowManualEntry
+              />
+            </div>
+          </div>
+        )}
+
+        {selectedProvider === "orcarouter" && (
+          <div className="space-y-1">
+            <div className="space-y-1">
+              <Label htmlFor="orcarouterApiKey" className="text-xs">
+                api key{apiKeyRequired && <span className="text-destructive"> *</span>}
+              </Label>
+              <div className="relative">
+                <Input
+                  id="orcarouterApiKey"
+                  type={showApiKey ? "text" : "password"}
+                  placeholder="sk-orca-..."
+                  value={formData.apiKey || ""}
+                  onChange={(e) =>
+                    setFormData({ ...formData, apiKey: e.target.value })
+                  }
+                  className="pr-10 h-8 text-sm"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                >
+                  {showApiKey ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="model" className="text-xs">model</Label>
+              <ModelPicker
+                id="model"
+                value={formData.model}
+                models={openaiModels.map((model) => model.id)}
+                onValueChange={(model) => setFormData({ ...formData, model })}
+                status={modelDiscoveryStatus}
+                errorMessage={modelDiscoveryError}
+                idleMessage="enter an API key to discover models"
+                emptyMessage="no models available for this API key"
+                disabled={!formData.apiKey}
               />
             </div>
           </div>
@@ -1157,6 +1240,28 @@ export function AIProviderConfig({
                     className="h-3.5 w-3.5 object-contain dark:invert"
                   />
                   <span>ollama</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant={selectedProvider === "orcarouter" ? "default" : "outline"}
+                  className="flex h-8 items-center justify-center gap-1.5 px-3 text-xs"
+                  onClick={() => {
+                    setSelectedProvider("orcarouter");
+                    setFormData({
+                      ...formData,
+                      provider: "orcarouter",
+                      url: "https://api.orcarouter.ai/v1",
+                      model: "orcarouter/free",
+                    });
+                  }}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src="/images/orcarouter.svg"
+                    alt=""
+                    className="h-3.5 w-3.5 object-contain"
+                  />
+                  <span>OrcaRouter</span>
                 </Button>
                 <Button
                   type="button"
