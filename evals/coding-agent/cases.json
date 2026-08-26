@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite": "screenpipe-app-coding-agent-regressions",
-  "dataset_version": "2026-08-26.1",
+  "dataset_version": "2026-08-26.2",
   "suite_type": "regression",
   "owner": "screenpipe engineering",
   "policy": {
@@ -624,6 +624,39 @@
           { "source_path": "apps/screenpipe-app-tauri/lib/hooks/__tests__/use-keyword-search-store.test.ts" }
         ],
         "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts lib/hooks/__tests__/use-keyword-search-store.test.ts"
+      }
+    },
+    {
+      "id": "app-chat-jump-to-latest",
+      "name": "Replace the chat new-content pill with a quiet jump control",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "9d2f04ae98a63f086ae963a65ea881eaae233eef",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/6690"
+      },
+      "base_ref": "48ee5b6cf0c65de997d88cb6dd23577964b78dc1",
+      "oracle_ref": "9d2f04ae98a63f086ae963a65ea881eaae233eef",
+      "gate": "advisory",
+      "trigger_paths": [
+        "apps/screenpipe-app-tauri/components/chat/standalone/chat-main-pane.tsx",
+        "apps/screenpipe-app-tauri/components/chat/standalone/chat-composer.tsx",
+        "apps/screenpipe-app-tauri/components/chat/standalone/chat-jump-to-latest.tsx",
+        "apps/screenpipe-app-tauri/components/chat/standalone/hooks/use-chat-scroll.ts"
+      ],
+      "tags": ["regression", "escaped-failure", "chat", "scroll", "disclosure"],
+      "prompt": "When a chat is long enough to scroll, the control that appears after the user moves up says \"new content\" even when nothing new arrived. Replace that labeled notification with a quiet jump-to-latest control parked on the composer: icon only, sharp corners, no visible copy, stay mounted and faded while the viewport is already at the latest message, and keep stick-to-bottom while reading unchanged. Do not show the control as interactive on a short chat that cannot scroll.",
+      "agent_timeout_seconds": 900,
+      "grader_dependency_links": [
+        { "source_path": "apps/screenpipe-app-tauri/node_modules", "destination_path": "apps/screenpipe-app-tauri/node_modules" }
+      ],
+      "grader": {
+        "timeout_seconds": 300,
+        "fixtures": [
+          { "source_path": "apps/screenpipe-app-tauri/components/chat/standalone/chat-jump-to-latest.test.tsx" },
+          { "source_path": "apps/screenpipe-app-tauri/components/chat/standalone/chat-main-pane.test.tsx" },
+          { "source_path": "apps/screenpipe-app-tauri/components/chat/standalone/hooks/use-chat-scroll.test.tsx" }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts components/chat/standalone/chat-jump-to-latest.test.tsx components/chat/standalone/chat-main-pane.test.tsx components/chat/standalone/hooks/use-chat-scroll.test.tsx"
       }
     }
   ]
