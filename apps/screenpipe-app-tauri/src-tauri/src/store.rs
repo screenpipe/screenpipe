@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use specta::Type;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreBuilder;
@@ -189,7 +190,6 @@ fn store_json_has_presets(data: &[u8]) -> bool {
 /// crash can never destroy both the live file and its backup at once.
 pub(crate) fn durable_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     // The temp name must be unique per call. It used to be a fixed
     // `<path>.durable.tmp`, which two concurrent writers to the same target
@@ -248,6 +248,32 @@ pub(crate) fn durable_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Like [`durable_write`], but skip the temp/fsync/rename if `path` already
+/// holds exactly `bytes`. Identical re-encrypt IPC used to fsync a 262KB
+/// store.bin onto itself on the AppKit main thread (~100% of a core).
+///
+/// Production `reencrypt_store_at` uses more specific skip logic (ciphertext
+/// header / last-good equality) so this helper is currently test-facing.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn durable_write_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<bool> {
+    match read_store_file(path) {
+        Ok(existing) if existing.as_slice() == bytes => return Ok(false),
+        _ => {}
+    }
+    durable_write(path, bytes)?;
+    Ok(true)
+}
+
+fn store_encryption_opted_in(store_path: &Path) -> bool {
+    std::env::var("SCREENPIPE_ENCRYPT_STORE")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+        || store_path
+            .parent()
+            .map(|p| p.join(".encrypt-store").exists())
+            .unwrap_or(false)
+}
+
 /// L1 — copy `store.bin` → `store.bin.last-good` if the current file parses
 /// and has aiPresets. Skipped silently otherwise so we never freeze a wiped
 /// state as the recovery source. Called after every successful save.
@@ -265,7 +291,12 @@ pub fn snapshot_last_good(store_path: &Path) {
     }
     let last_good = store_path.with_extension(LAST_GOOD_SUFFIX);
     if let Ok(existing) = read_store_file(&last_good) {
-        if existing != data && store_json_has_presets(&existing) {
+        if existing == data {
+            // Already snapshotted this exact document. Rewriting it used to
+            // fsync ~262KB on every settings IPC even when nothing changed.
+            return;
+        }
+        if store_json_has_presets(&existing) {
             let prev = store_path.with_extension(LAST_GOOD_PREV_SUFFIX);
             if let Err(e) = durable_write(&prev, &existing) {
                 tracing::warn!(
@@ -496,15 +527,7 @@ fn decrypt_store_file(path: &Path) -> DecryptOutcome {
 ///
 /// To opt in: create ~/.screenpipe/.encrypt-store or set SCREENPIPE_ENCRYPT_STORE=1.
 fn encrypt_store_file(path: &Path) {
-    // Check opt-in flag
-    let opted_in = std::env::var("SCREENPIPE_ENCRYPT_STORE")
-        .map(|v| v == "1")
-        .unwrap_or(false)
-        || path
-            .parent()
-            .map(|p| p.join(".encrypt-store").exists())
-            .unwrap_or(false);
-    if !opted_in {
+    if !store_encryption_opted_in(path) {
         return;
     }
 
@@ -555,64 +578,100 @@ fn encrypt_store_file(path: &Path) {
     }
 }
 
+/// Re-encrypt / durably flush store.bin after the Tauri store plugin writes
+/// plain JSON. Disk-only so tests can exercise it without an AppHandle.
+///
+/// Fast paths (the 2026-08-26 main-thread CPU spike):
+/// - already ciphertext → return without fsync
+/// - plaintext identical to last-good → skip JSON parse + snapshot fsync
+/// - encryption opted in → skip a redundant plaintext durable_write of
+///   store.bin (ciphertext overwrite is the durable copy; last-good holds
+///   the plaintext recovery snapshot)
+pub(crate) fn reencrypt_store_at(store_path: &Path) {
+    let Some(base_dir) = store_path.parent() else {
+        return;
+    };
+    let flag_path = base_dir.join(".encrypt-store");
+
+    let bytes = match read_store_file(store_path) {
+        Ok(b) if !b.is_empty() => b,
+        _ => return,
+    };
+
+    // Second IPC after saveAndEncrypt used to fsync 262KB of SPSTORE1 bytes
+    // onto themselves on the AppKit main thread. Snapshot is a no-op
+    // (ciphertext has no aiPresets). Encrypt is a no-op. Leave the opt-in
+    // flag alone — encryptStore cannot be parsed from ciphertext.
+    if is_encrypted_bytes(&bytes) {
+        return;
+    }
+
+    let last_good = store_path.with_extension(LAST_GOOD_SUFFIX);
+    let last_good_bytes = read_store_file(&last_good).ok();
+    if last_good_bytes.as_deref() == Some(bytes.as_slice()) {
+        // Identical to the durable snapshot. The encryptStore flag was synced
+        // on the save that produced last-good; skip JSON parse + snapshot.
+        // If encryption is on, the plugin just replaced ciphertext with this
+        // same plaintext and we still need to wrap it.
+        if store_encryption_opted_in(store_path) {
+            encrypt_store_file(store_path);
+        }
+        return;
+    }
+
+    let encrypt_enabled = serde_json::from_slice::<Value>(&bytes)
+        .ok()
+        .and_then(|json| {
+            json.get("settings")
+                .and_then(|s| s.get("encryptStore"))
+                .and_then(|v| v.as_bool())
+        });
+
+    if let Some(encrypt_enabled) = encrypt_enabled {
+        if encrypt_enabled && !flag_path.exists() {
+            let _ = std::fs::write(&flag_path, b"");
+        } else if !encrypt_enabled && flag_path.exists() {
+            let _ = std::fs::remove_file(&flag_path);
+        }
+    }
+
+    // Durably flush the plugin's non-atomic write only on a *real* save:
+    // last-good missing or different. `durable_write_if_changed(store, bytes)`
+    // where `bytes` was just read from `store` is a tautology and would skip
+    // the fsync that exists to flush the plugin's dirty pages. When encryption
+    // is on, skip this plaintext rewrite — last-good is the durable plaintext
+    // and encrypt_store_file fsyncs the ciphertext over store.bin.
+    if !store_encryption_opted_in(store_path) {
+        if let Err(e) = durable_write(store_path, &bytes) {
+            tracing::warn!("durable flush of store.bin failed: {}", e);
+        }
+    }
+
+    snapshot_last_good(store_path);
+    encrypt_store_file(store_path);
+}
+
 /// Re-encrypt store.bin on disk. Called after the Tauri store plugin writes plain JSON.
 /// Also syncs the .encrypt-store flag file from the encryptStore setting.
 pub fn reencrypt_store_file(app: &AppHandle) {
     if let Ok(base_dir) = get_base_dir(app, None) {
-        // Sync the flag file from the store's encryptStore setting
-        let flag_path = base_dir.join(".encrypt-store");
-        let store_path = base_dir.join("store.bin");
-
-        // Read the setting from the store JSON on disk. If the file is missing,
-        // encrypted, or temporarily unparsable, leave the flag unchanged; defaulting
-        // to "on" here silently opts users into repeated re-encryption churn.
-        let encrypt_enabled = std::fs::read(&store_path)
-            .ok()
-            .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok())
-            .and_then(|json| {
-                json.get("settings")
-                    .and_then(|s| s.get("encryptStore"))
-                    .and_then(|v| v.as_bool())
-            });
-
-        if let Some(encrypt_enabled) = encrypt_enabled {
-            if encrypt_enabled && !flag_path.exists() {
-                let _ = std::fs::write(&flag_path, b"");
-            } else if !encrypt_enabled && flag_path.exists() {
-                let _ = std::fs::remove_file(&flag_path);
-            }
-        }
-
-        // Durably flush the plugin's non-atomic write of store.bin before we
-        // snapshot or encrypt it. tauri-plugin-store saves via fs::write
-        // (O_TRUNC, no fsync), leaving a window where a power loss truncates
-        // the file to zero/partial; rewriting it atomically + fsync closes that
-        // window so the on-disk store is always a complete document. Guarded on
-        // non-empty so a transient empty read never clobbers a good file.
-        if let Ok(bytes) = std::fs::read(&store_path) {
-            if !bytes.is_empty() {
-                if let Err(e) = durable_write(&store_path, &bytes) {
-                    tracing::warn!("durable flush of store.bin failed: {}", e);
-                }
-            }
-        }
-
-        // L1 — snapshot the current state to .last-good IFF it's healthy
-        // (parses + has aiPresets). Runs BEFORE encryption so the snapshot
-        // is plain JSON and recoverable even if keychain access is lost on
-        // the next update. No-op for degraded states so we never freeze
-        // bad data as the recovery source.
-        snapshot_last_good(&store_path);
-
-        encrypt_store_file(&store_path);
+        reencrypt_store_at(&base_dir.join("store.bin"));
     }
 }
 
 /// Tauri command: re-encrypt store.bin after frontend saves.
+///
+/// Runs on a blocking worker. The previous sync command ran `fsync` of a
+/// ~262KB store on the AppKit main thread and stalled every other IPC
+/// (sampled 2026-08-26: 186% screenpipe-app + 93% Web Content).
 #[tauri::command]
 #[specta::specta]
-pub fn reencrypt_store(app: AppHandle) -> Result<(), String> {
-    reencrypt_store_file(&app);
+pub async fn reencrypt_store(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        reencrypt_store_file(&app);
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -4612,6 +4671,287 @@ mod tests {
                 .and_then(|policy| policy.pointer("/boolean/coreAudioSystemAudio/defaultEnabled"))
                 .and_then(Value::as_bool),
             Some(true),
+        );
+    }
+
+    fn mtime(path: &std::path::Path) -> std::time::SystemTime {
+        std::fs::metadata(path).unwrap().modified().unwrap()
+    }
+
+    fn production_sized_store(pad_bytes: usize) -> Value {
+        json!({
+            "settings": {
+                "aiPresets": presets_n(8),
+                "encryptStore": false,
+                "padding": "x".repeat(pad_bytes),
+            }
+        })
+    }
+
+    #[test]
+    fn durable_write_if_changed_skips_identical_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("store.bin");
+        let payload = serde_json::to_vec(&production_sized_store(262_144)).unwrap();
+        durable_write(&p, &payload).unwrap();
+        let before = mtime(&p);
+
+        let changed = durable_write_if_changed(&p, &payload).unwrap();
+        assert!(!changed, "identical bytes must not fsync");
+        assert_eq!(mtime(&p), before, "mtime must not move on a skip");
+
+        let mut next = payload.clone();
+        next.push(b'!');
+        let changed = durable_write_if_changed(&p, &next).unwrap();
+        assert!(changed);
+        assert_eq!(std::fs::read(&p).unwrap(), next);
+        assert!(mtime(&p) >= before);
+    }
+
+    #[test]
+    fn snapshot_last_good_skips_identical_fsync() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store_path = write_store(
+            tmp.path(),
+            &json!({"settings": {"aiPresets": presets_n(2)}}),
+        );
+        snapshot_last_good(&store_path);
+        let last_good = store_path.with_extension(LAST_GOOD_SUFFIX);
+        let before = mtime(&last_good);
+        snapshot_last_good(&store_path);
+        assert_eq!(
+            mtime(&last_good),
+            before,
+            "identical last-good must not fsync"
+        );
+        assert!(
+            !store_path.with_extension(LAST_GOOD_PREV_SUFFIX).exists(),
+            "identical snapshot must not churn .prev"
+        );
+    }
+
+    #[test]
+    fn reencrypt_already_encrypted_is_a_no_op_fsync() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store_path = tmp.path().join("store.bin");
+        let mut blob = STORE_MAGIC.to_vec();
+        blob.extend(vec![0xAA; 262_144]);
+        std::fs::write(&store_path, &blob).unwrap();
+        let before = mtime(&store_path);
+
+        reencrypt_store_at(&store_path);
+
+        assert_eq!(std::fs::read(&store_path).unwrap(), blob);
+        assert_eq!(
+            mtime(&store_path),
+            before,
+            "ciphertext must not be rewritten onto itself"
+        );
+    }
+
+    #[test]
+    fn reencrypt_plaintext_without_encryption_fsyncs_at_most_snapshot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let contents = production_sized_store(262_144);
+        let store_path = write_store(tmp.path(), &contents);
+
+        reencrypt_store_at(&store_path);
+        let last_good = store_path.with_extension(LAST_GOOD_SUFFIX);
+        assert!(last_good.exists(), "first pass must snapshot");
+        let store_m = mtime(&store_path);
+        let snap_m = mtime(&last_good);
+
+        reencrypt_store_at(&store_path);
+        assert_eq!(
+            mtime(&store_path),
+            store_m,
+            "second identical plaintext pass must not rewrite store.bin"
+        );
+        assert_eq!(
+            mtime(&last_good),
+            snap_m,
+            "second identical plaintext pass must not rewrite last-good"
+        );
+        assert!(store_json_has_presets(&std::fs::read(&store_path).unwrap()));
+    }
+
+    #[test]
+    fn reencrypt_creates_encrypt_flag_and_still_snapshots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store_path = write_store(
+            tmp.path(),
+            &json!({
+                "settings": {
+                    "aiPresets": presets_n(2),
+                    "encryptStore": true,
+                }
+            }),
+        );
+
+        reencrypt_store_at(&store_path);
+
+        assert!(
+            tmp.path().join(".encrypt-store").exists(),
+            "encryptStore: true must create the opt-in flag"
+        );
+        let last_good = store_path.with_extension(LAST_GOOD_SUFFIX);
+        assert!(last_good.exists(), "first save still snapshots plaintext");
+        assert!(store_json_has_presets(&std::fs::read(&last_good).unwrap()));
+
+        let snap_m = mtime(&last_good);
+        reencrypt_store_at(&store_path);
+        assert_eq!(
+            mtime(&last_good),
+            snap_m,
+            "unchanged encrypt-on save must not rewrite last-good"
+        );
+    }
+
+    #[test]
+    fn reencrypt_encryption_opted_in_skips_plaintext_store_rewrite() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store_path = write_store(
+            tmp.path(),
+            &json!({
+                "settings": {
+                    "aiPresets": presets_n(2),
+                    "encryptStore": true,
+                    "padding": "x".repeat(4096),
+                }
+            }),
+        );
+        std::fs::write(tmp.path().join(".encrypt-store"), b"").unwrap();
+        let before = mtime(&store_path);
+
+        reencrypt_store_at(&store_path);
+
+        let now = std::fs::read(&store_path).unwrap();
+        if !is_encrypted_bytes(&now) {
+            assert_eq!(
+                mtime(&store_path),
+                before,
+                "encryption-on must not rewrite plaintext store.bin when keychain can't encrypt"
+            );
+        }
+        assert!(
+            store_path.with_extension(LAST_GOOD_SUFFIX).exists(),
+            "last-good remains the durable plaintext recovery copy"
+        );
+    }
+
+    fn percentile(sorted: &[u128], p: f64) -> u128 {
+        if sorted.is_empty() {
+            return 0;
+        }
+        let idx = ((sorted.len() as f64 - 1.0) * p).round() as usize;
+        sorted[idx.min(sorted.len() - 1)]
+    }
+
+    /// Deep benchmark of the path sampled on 2026-08-26: 200 IPC-style
+    /// reencrypts of a 262KB store. The old code fsynced on every call
+    /// (~1–3ms each on APFS, 200–600ms total, on the UI thread). The new
+    /// already-encrypted / identical-plaintext paths must stay well under
+    /// 50ms total with zero fsyncs after warmup.
+    #[test]
+    fn reencrypt_hot_path_benchmark() {
+        let tmp = tempfile::tempdir().unwrap();
+        let contents = production_sized_store(262_144);
+        let store_path = write_store(tmp.path(), &contents);
+        let payload = std::fs::read(&store_path).unwrap();
+        eprintln!(
+            "reencrypt_hot_path_benchmark: payload {} bytes",
+            payload.len()
+        );
+
+        // --- baseline: old behavior (unconditional durable_write) ---
+        let baseline_iters = 40;
+        let mut baseline_ns = Vec::with_capacity(baseline_iters);
+        for _ in 0..baseline_iters {
+            let t0 = std::time::Instant::now();
+            durable_write(&store_path, &payload).unwrap();
+            baseline_ns.push(t0.elapsed().as_nanos());
+        }
+        let baseline_syncs = baseline_iters as u64;
+        baseline_ns.sort_unstable();
+        let baseline_total_ms: f64 =
+            baseline_ns.iter().sum::<u128>() as f64 / 1_000_000.0;
+        let baseline_p50 = percentile(&baseline_ns, 0.50) as f64 / 1_000.0;
+        let baseline_p99 = percentile(&baseline_ns, 0.99) as f64 / 1_000.0;
+
+        // Restore the pretty JSON file after the baseline stomped it with
+        // compact-equivalent bytes (same content).
+        write_store(tmp.path(), &contents);
+
+        // --- warmup new path (snapshot once) ---
+        reencrypt_store_at(&store_path);
+        let store_m = mtime(&store_path);
+        let snap_m = mtime(&store_path.with_extension(LAST_GOOD_SUFFIX));
+
+        let hot_iters = 200;
+        let mut hot_ns = Vec::with_capacity(hot_iters);
+        for _ in 0..hot_iters {
+            let t0 = std::time::Instant::now();
+            reencrypt_store_at(&store_path);
+            hot_ns.push(t0.elapsed().as_nanos());
+        }
+        hot_ns.sort_unstable();
+        let hot_total_ms: f64 = hot_ns.iter().sum::<u128>() as f64 / 1_000_000.0;
+        let hot_p50 = percentile(&hot_ns, 0.50) as f64 / 1_000.0;
+        let hot_p99 = percentile(&hot_ns, 0.99) as f64 / 1_000.0;
+        assert_eq!(
+            mtime(&store_path),
+            store_m,
+            "identical-plaintext loop must not rewrite store.bin"
+        );
+        assert_eq!(
+            mtime(&store_path.with_extension(LAST_GOOD_SUFFIX)),
+            snap_m,
+            "identical-plaintext loop must not rewrite last-good"
+        );
+
+        // --- ciphertext IPC retry storm (the sampled case) ---
+        let mut blob = STORE_MAGIC.to_vec();
+        blob.extend(vec![0xAB; 262_144]);
+        std::fs::write(&store_path, &blob).unwrap();
+        let enc_m = mtime(&store_path);
+        let mut enc_ns = Vec::with_capacity(hot_iters);
+        for _ in 0..hot_iters {
+            let t0 = std::time::Instant::now();
+            reencrypt_store_at(&store_path);
+            enc_ns.push(t0.elapsed().as_nanos());
+        }
+        enc_ns.sort_unstable();
+        let enc_total_ms: f64 = enc_ns.iter().sum::<u128>() as f64 / 1_000_000.0;
+        let enc_p50 = percentile(&enc_ns, 0.50) as f64 / 1_000.0;
+        let enc_p99 = percentile(&enc_ns, 0.99) as f64 / 1_000.0;
+        assert_eq!(mtime(&store_path), enc_m, "ciphertext loop must not rewrite");
+
+        eprintln!(
+            "\n=== store reencrypt CPU benchmark ===\n\
+             payload: {} bytes\n\
+             OLD unconditional durable_write x{baseline_iters}: total {baseline_total_ms:.2}ms, p50 {baseline_p50:.1}µs, p99 {baseline_p99:.1}µs, fsyncs {baseline_syncs}\n\
+             NEW identical-plaintext reencrypt x{hot_iters}: total {hot_total_ms:.2}ms, p50 {hot_p50:.1}µs, p99 {hot_p99:.1}µs, fsyncs 0\n\
+             NEW already-encrypted IPC retry x{hot_iters}: total {enc_total_ms:.2}ms, p50 {enc_p50:.1}µs, p99 {enc_p99:.1}µs, fsyncs 0\n",
+            payload.len(),
+        );
+
+        assert_eq!(baseline_syncs, baseline_iters as u64);
+        // Loaded-machine budget: 200 cached reads of 262KB must stay far below
+        // the old 200-fsync cost. The sampled bug was the ciphertext IPC retry
+        // storm, so that loop is the strict one.
+        assert!(
+            hot_total_ms < 150.0,
+            "identical-plaintext 200x should be <150ms, got {hot_total_ms:.2}ms"
+        );
+        assert!(
+            enc_total_ms < 50.0,
+            "already-encrypted 200x should be <50ms, got {enc_total_ms:.2}ms"
+        );
+        let old_per = baseline_total_ms / baseline_iters as f64;
+        let enc_per = enc_total_ms / hot_iters as f64;
+        assert!(
+            enc_per * 5.0 < old_per || enc_per < 0.05,
+            "ciphertext IPC retry must be ≥5x cheaper than unconditional fsync (old {old_per:.3}ms/call, new {enc_per:.3}ms/call)"
         );
     }
 }
