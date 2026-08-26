@@ -197,6 +197,22 @@ async function scrollMessageRail(position: "top" | "bottom"): Promise<void> {
   );
 }
 
+async function waitForRailNearBottom(): Promise<void> {
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute(() => {
+        const viewport = document.querySelector<HTMLElement>('[data-testid="chat-message-scroll"]');
+        if (!viewport) return false;
+        return viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 150;
+      })) as boolean,
+    {
+      timeout: t(5_000),
+      interval: 50,
+      timeoutMsg: "message rail did not reach the latest message after the jump",
+    },
+  );
+}
+
 describe("chat jump to latest", function () {
   this.timeout(90_000);
 
@@ -244,12 +260,7 @@ describe("chat jump to latest", function () {
 
     const afterClick = await waitForJumpState(false);
     expect(afterClick.opacity).toBeLessThan(0.1);
-    const nearBottom = (await browser.execute(() => {
-      const viewport = document.querySelector<HTMLElement>('[data-testid="chat-message-scroll"]');
-      if (!viewport) return false;
-      return viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 150;
-    })) as boolean;
-    expect(nearBottom).toBe(true);
+    await waitForRailNearBottom();
     await saveScreenshot("chat-jump-to-latest-after-click");
   });
 });
