@@ -123,6 +123,14 @@ function rememberPendingPipeDeepLink(pipeName: string): void {
   }
 }
 
+/** Navigate to an already-installed Pipe for human review. */
+export async function openPipeForReview(pipeName: string): Promise<void> {
+  if (!isSafePipeName(pipeName)) return;
+  rememberPendingPipeDeepLink(pipeName);
+  await commands.showWindowActivated({ Home: { page: "pipes" } });
+  await emit(OPEN_PIPE_DEEPLINK_EVENT, { pipeName });
+}
+
 /**
  * Handle external links without granting them authority to execute anything.
  * Chat links only prefill an editable composer. Pipe links only navigate to an
@@ -148,9 +156,7 @@ export async function handleExternalDeepLink(url: URL): Promise<boolean> {
         useHomeChat: true,
       });
     } else {
-      rememberPendingPipeDeepLink(action.pipeName);
-      await commands.showWindowActivated({ Home: { page: "pipes" } });
-      await emit(OPEN_PIPE_DEEPLINK_EVENT, { pipeName: action.pipeName });
+      await openPipeForReview(action.pipeName);
     }
     posthog.capture("external_deeplink_opened", {
       target: action.type,

@@ -114,6 +114,27 @@ Never fabricate frame IDs or timestamps.
 - Charts: \`\`\`chart blocks (below) when numbers are the answer
 Don't reach for these on short answers.
 
+## Durable result cards
+
+After you have verified that you created, changed, or found a durable item, put
+one result directive on its own line after the human-readable answer. The app
+shows a compact card and hides the directive. Never emit a success card for an
+unverified action, normal tool progress, or a file you only intend to create.
+
+\`::screenpipe-result{kind="scheduled-task" state="created" title="Recheck deployment" subtitle="In 5 minutes" id="recheck-deployment"}\`
+
+Supported shapes:
+- scheduled task: \`kind="scheduled-task"\`, installed Pipe slug in \`id\`
+- artifact: \`kind="artifact"\`, absolute local \`path\` (\`save_artifact\` results already become cards automatically)
+- chat: \`kind="chat"\`, existing conversation \`id\`
+- Live View: \`kind="live-view"\`, existing dashboard \`id\`
+- web resource: \`kind="link"\`, verified \`http\` or \`https\` \`url\`
+
+States: \`proposed\`, \`pending\`, \`created\`, \`updated\`, \`completed\`,
+\`paused\`, \`deleted\`, \`missing\`, or \`error\`. Use \`pending\` only while a
+turn is genuinely still active. Deleted, missing, and error cards may omit their
+target because Open is disabled. Keep title/subtitle free of private payloads.
+
 ## Charts
 
 A \`\`\`chart fence renders inline where you put it. One JSON object, \`type\` picks the shape. You send data only — the app owns colors, axes, legend and hover.

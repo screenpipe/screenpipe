@@ -26,6 +26,7 @@ import {
   handleExternalDeepLink,
   MAX_EXTERNAL_PROMPT_BYTES,
   OPEN_PIPE_DEEPLINK_EVENT,
+  openPipeForReview,
   parseExternalDeepLink,
   readPendingPipeDeepLink,
 } from "../external-deeplink";
@@ -135,6 +136,22 @@ describe("external deep-link contract", () => {
 
     clearPendingPipeDeepLink();
     expect(readPendingPipeDeepLink()).toBeNull();
+  });
+
+  it("reuses the same review-only navigation for in-chat result cards", async () => {
+    await openPipeForReview("daily-summary");
+    expect(readPendingPipeDeepLink()).toBe("daily-summary");
+    expect(mocks.showWindowActivated).toHaveBeenCalledWith({
+      Home: { page: "pipes" },
+    });
+    expect(mocks.emit).toHaveBeenCalledWith(OPEN_PIPE_DEEPLINK_EVENT, {
+      pipeName: "daily-summary",
+    });
+
+    vi.clearAllMocks();
+    await openPipeForReview("../unsafe");
+    expect(mocks.showWindowActivated).not.toHaveBeenCalled();
+    expect(mocks.emit).not.toHaveBeenCalled();
   });
 
   it("does not put rejected prompt content into analytics", async () => {

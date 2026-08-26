@@ -11,6 +11,14 @@ import { buildAppAwarenessContext, buildSystemPrompt, buildConnectionsContext } 
 describe("buildSystemPrompt", () => {
   const prompt = buildSystemPrompt();
 
+  it("documents durable result cards without weakening verification", () => {
+    expect(prompt).toContain("::screenpipe-result");
+    expect(prompt).toContain("Never emit a success card");
+    expect(prompt).toContain("unverified action");
+    expect(prompt).toContain('kind="scheduled-task"');
+    expect(prompt).toContain('kind="live-view"');
+  });
+
   it("opens by establishing the Screenpipe assistant role", () => {
     expect(prompt.startsWith("You are the user's screenpipe assistant.")).toBe(true);
   });

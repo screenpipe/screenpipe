@@ -36,6 +36,7 @@ import type { ContentBlock, Message } from "@/lib/chat/types";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import type { InlineConnectStatus } from "@/lib/connections/inline-connect";
 import type { MarkdownCitationPlan } from "@/lib/chat/markdown-export";
+import type { ChatRichResult } from "@/lib/chat/rich-results";
 
 const MAX_MESSAGE_EDIT_HEIGHT_PX = 240;
 
@@ -98,6 +99,7 @@ export interface ChatMessageListProps {
   onOpenScheduleDialog: (messageId: string) => void;
   sendMessage: (message: string, displayLabel?: string, imageDataUrls?: string[]) => Promise<void>;
   openFilePreview: (path: string) => void;
+  onOpenRichResult?: (result: ChatRichResult) => void | Promise<void>;
   branchConversation: (messageId: string) => Promise<void> | void;
   connectionItems?: ConnectionListItem[];
   onOpenConnectionSetup?: (connectionId: string) => void | Promise<void>;
@@ -138,6 +140,7 @@ export function ChatMessageList({
   onOpenScheduleDialog,
   sendMessage,
   openFilePreview,
+  onOpenRichResult,
   branchConversation,
   connectionItems = [],
   onOpenConnectionSetup,
@@ -444,6 +447,7 @@ export function ChatMessageList({
                           onImageClick={onOpenImageViewer}
                           onRetry={(prompt) => sendMessage(prompt)}
                           onOpenViewerPath={openFilePreview}
+                          onOpenRichResult={onOpenRichResult}
                           connectionItems={connectionItems}
                           onOpenConnectionSetup={onOpenConnectionSetup}
                           onConnectConnectionAction={onConnectConnectionAction}
