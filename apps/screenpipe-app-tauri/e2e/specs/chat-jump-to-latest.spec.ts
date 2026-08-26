@@ -13,7 +13,14 @@
 
 import { randomUUID } from "node:crypto";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
-import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
+import {
+  openHomeWindow,
+  reloadAndWaitForHome,
+  waitForAppReady,
+  t,
+} from "../helpers/test-utils.js";
+
+const LEARNING_STORAGE_KEY = "screenpipe.first-run.learning-window.v1";
 
 type JumpMetrics = {
   opacity: number;
@@ -55,6 +62,25 @@ async function waitForChatSeedHooks(): Promise<void> {
       timeoutMsg: "chat seed hooks did not mount",
     },
   );
+}
+
+async function settleFirstRunLearningWindow(): Promise<void> {
+  await browser.execute((key: string) => {
+    window.localStorage.setItem(
+      key,
+      JSON.stringify({
+        phase: "done",
+        startedAt: new Date().toISOString(),
+        showProgress: false,
+        seededAt: null,
+        chatId: null,
+        summaryOpenedAt: null,
+        emptyReason: null,
+        pendingEmptyReport: false,
+      }),
+    );
+  }, LEARNING_STORAGE_KEY);
+  await reloadAndWaitForHome();
 }
 
 async function seedLongConversation(sessionId: string): Promise<void> {
@@ -108,9 +134,7 @@ async function readJumpMetrics(): Promise<JumpMetrics | null> {
   return (await browser.execute(() => {
     const button = document.querySelector<HTMLButtonElement>('[data-testid="chat-jump-to-latest"]');
     if (!button) return null;
-    const composerRoot =
-      button.parentElement?.parentElement ??
-      document.querySelector<HTMLElement>('[data-firstrun-target="composer"]');
+    const composerRoot = document.querySelector<HTMLElement>('[data-testid="chat-composer"]');
     const style = getComputedStyle(button);
     const rect = button.getBoundingClientRect();
     const composerRect = composerRoot?.getBoundingClientRect();
@@ -177,6 +201,7 @@ describe("chat jump to latest", function () {
   before(async () => {
     await waitForAppReady();
     await openHomeWindow();
+    await settleFirstRunLearningWindow();
     await waitForChatSeedHooks();
   });
 

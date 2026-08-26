@@ -58,6 +58,7 @@ export function ChatComposer({
   return (
     <div
       ref={input.sectionRef}
+      data-testid="chat-composer"
       className="relative border-t border-border/60 bg-background"
     >
       {jumpToLatest && <ChatJumpToLatest {...jumpToLatest} />}
