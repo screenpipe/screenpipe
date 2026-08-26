@@ -253,8 +253,8 @@ pub(crate) fn durable_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// store.bin onto itself on the AppKit main thread (~100% of a core).
 ///
 /// Production `reencrypt_store_at` uses more specific skip logic (ciphertext
-/// header / last-good equality) so this helper is currently test-facing.
-#[cfg_attr(not(test), allow(dead_code))]
+/// header / last-good equality) so this helper is test-facing.
+#[cfg(test)]
 pub(crate) fn durable_write_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<bool> {
     match read_store_file(path) {
         Ok(existing) if existing.as_slice() == bytes => return Ok(false),
@@ -531,11 +531,11 @@ fn encrypt_store_file(path: &Path) {
         return;
     }
 
-    let data = match std::fs::read(path) {
+    let data = match read_store_file(path) {
         Ok(d) => d,
         Err(_) => return,
     };
-    if data.len() >= 8 && &data[..8] == STORE_MAGIC {
+    if is_encrypted_bytes(&data) {
         return; // already encrypted
     }
     // Use read-only get_key() instead of get_or_create_key() to avoid triggering
@@ -584,9 +584,9 @@ fn encrypt_store_file(path: &Path) {
 /// Fast paths (the 2026-08-26 main-thread CPU spike):
 /// - already ciphertext → return without fsync
 /// - plaintext identical to last-good → skip JSON parse + snapshot fsync
-/// - encryption opted in → skip a redundant plaintext durable_write of
-///   store.bin (ciphertext overwrite is the durable copy; last-good holds
-///   the plaintext recovery snapshot)
+/// - encryption succeeded → ciphertext fsync is the durable store.bin;
+///   last-good holds the plaintext recovery snapshot
+/// - encryption opted in but keychain cannot encrypt → still fsync plaintext
 pub(crate) fn reencrypt_store_at(store_path: &Path) {
     let Some(base_dir) = store_path.parent() else {
         return;
@@ -612,7 +612,8 @@ pub(crate) fn reencrypt_store_at(store_path: &Path) {
         // Identical to the durable snapshot. The encryptStore flag was synced
         // on the save that produced last-good; skip JSON parse + snapshot.
         // If encryption is on, the plugin just replaced ciphertext with this
-        // same plaintext and we still need to wrap it.
+        // same plaintext and we still need to wrap it. Do not fsync plaintext
+        // here: last-good already holds the durable recovery copy.
         if store_encryption_opted_in(store_path) {
             encrypt_store_file(store_path);
         }
@@ -635,20 +636,32 @@ pub(crate) fn reencrypt_store_at(store_path: &Path) {
         }
     }
 
-    // Durably flush the plugin's non-atomic write only on a *real* save:
-    // last-good missing or different. `durable_write_if_changed(store, bytes)`
-    // where `bytes` was just read from `store` is a tautology and would skip
-    // the fsync that exists to flush the plugin's dirty pages. When encryption
-    // is on, skip this plaintext rewrite — last-good is the durable plaintext
-    // and encrypt_store_file fsyncs the ciphertext over store.bin.
-    if !store_encryption_opted_in(store_path) {
-        if let Err(e) = durable_write(store_path, &bytes) {
-            tracing::warn!("durable flush of store.bin failed: {}", e);
-        }
-    }
-
+    // Snapshot plaintext first so last-good exists before we rewrite store.bin.
+    // Then encrypt (durable ciphertext). The plugin save is a non-atomic
+    // unflushed write — if encryption did not replace store.bin, fsync the
+    // plaintext. Skipping that flush when `.encrypt-store` is set but
+    // keychain cannot encrypt was a settings-loss window on power loss.
     snapshot_last_good(store_path);
     encrypt_store_file(store_path);
+    durable_flush_if_still_plaintext(store_path, &bytes);
+}
+
+/// Plugin `save()` is `fs::write` with no fsync. After a real change, either
+/// ciphertext (encrypt path) or this plaintext flush is the durable store.bin.
+fn durable_flush_if_still_plaintext(store_path: &Path, plaintext: &[u8]) {
+    match read_store_file(store_path) {
+        Ok(now) if is_encrypted_bytes(&now) => {}
+        Ok(now) => {
+            if let Err(e) = durable_write(store_path, &now) {
+                tracing::warn!("durable flush of store.bin failed: {}", e);
+            }
+        }
+        Err(_) => {
+            if let Err(e) = durable_write(store_path, plaintext) {
+                tracing::warn!("durable flush of store.bin failed: {}", e);
+            }
+        }
+    }
 }
 
 /// Re-encrypt store.bin on disk. Called after the Tauri store plugin writes plain JSON.
@@ -4808,35 +4821,39 @@ mod tests {
     }
 
     #[test]
-    fn reencrypt_encryption_opted_in_skips_plaintext_store_rewrite() {
+    fn reencrypt_encryption_opted_in_still_flushes_if_keychain_cannot_encrypt() {
         let tmp = tempfile::tempdir().unwrap();
-        let store_path = write_store(
-            tmp.path(),
-            &json!({
-                "settings": {
-                    "aiPresets": presets_n(2),
-                    "encryptStore": true,
-                    "padding": "x".repeat(4096),
-                }
-            }),
-        );
+        let contents = json!({
+            "settings": {
+                "aiPresets": presets_n(2),
+                "encryptStore": true,
+                "padding": "x".repeat(4096),
+            }
+        });
+        let store_path = write_store(tmp.path(), &contents);
         std::fs::write(tmp.path().join(".encrypt-store"), b"").unwrap();
-        let before = mtime(&store_path);
 
         reencrypt_store_at(&store_path);
 
+        let last_good = store_path.with_extension(LAST_GOOD_SUFFIX);
+        assert!(last_good.exists(), "last-good is the plaintext recovery copy");
+        assert!(store_json_has_presets(&std::fs::read(&last_good).unwrap()));
+
         let now = std::fs::read(&store_path).unwrap();
-        if !is_encrypted_bytes(&now) {
-            assert_eq!(
-                mtime(&store_path),
-                before,
-                "encryption-on must not rewrite plaintext store.bin when keychain can't encrypt"
-            );
+        if is_encrypted_bytes(&now) {
+            return; // keychain encrypted; ciphertext is the durable store.bin
         }
         assert!(
-            store_path.with_extension(LAST_GOOD_SUFFIX).exists(),
-            "last-good remains the durable plaintext recovery copy"
+            store_json_has_presets(&now),
+            "without a key, store.bin must stay readable plaintext"
         );
+
+        // Second identical pass must not fsync again (the CPU bug).
+        let store_m = mtime(&store_path);
+        let snap_m = mtime(&last_good);
+        reencrypt_store_at(&store_path);
+        assert_eq!(mtime(&store_path), store_m);
+        assert_eq!(mtime(&last_good), snap_m);
     }
 
     fn percentile(sorted: &[u128], p: f64) -> u128 {
