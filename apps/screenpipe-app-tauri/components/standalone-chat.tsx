@@ -2136,11 +2136,15 @@ export function StandaloneChat({
           onRefresh: refreshVisibleSuggestions,
         }}
         messageListProps={messageListProps}
-        isUserScrolledUp={isUserScrolledUp}
-        scrollToBottom={scrollToBottom}
       />
 
       <ChatComposer
+        jumpToLatest={{
+          hasMessages: messages.length > 0,
+          scrolledUp: isUserScrolledUp,
+          live: isLoading || isStreaming,
+          onJump: scrollToBottom,
+        }}
         prefill={{
           context: prefillContext,
           frameId: prefillFrameId,

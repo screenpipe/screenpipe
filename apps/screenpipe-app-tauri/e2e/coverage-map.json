@@ -830,7 +830,26 @@
       "criticality": "medium",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "A real Tauri chat session keeps a short answer at the top of the message rail without exposing a false new-content state."
+      "notes": "A real Tauri chat session keeps a short answer at the top of the message rail without exposing an interactive jump-to-latest control."
+    },
+    {
+      "spec": "chat-jump-to-latest.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat"
+      ],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "A long real Tauri chat fades a quiet composer-anchored jump control at the latest message, reveals it after scrolling up, and returns to the bottom on click."
     },
     {
       "spec": "chat-hosted-retry-feedback.spec.ts",

@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 125
-- Declared test blocks: 366
-- Weighted coverage points: 289.0
+- Mapped specs: 126
+- Declared test blocks: 367
+- Weighted coverage points: 289.7
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 95 | 311 | 255.3 | 15 | 105 | 92% |
-| macos | 121 | 328 | 258.8 | 17 | 114 | 90% |
-| linux | 84 | 269 | 224.7 | 14 | 102 | 89% |
+| windows | 96 | 312 | 256.0 | 15 | 105 | 92% |
+| macos | 122 | 329 | 259.5 | 17 | 114 | 90% |
+| linux | 85 | 270 | 225.4 | 14 | 102 | 89% |
 
 ## Runtime Results
 
@@ -37,7 +37,7 @@ pass/fail/skip counts.
 | auth | - | 1 specs / 1 tests / 1.0 pts | - |
 | billing | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts |
 | capture-ocr | 2 specs / 16 tests / 6.4 pts | 8 specs / 12 tests / 4.8 pts | 1 specs / 3 tests / 1.2 pts |
-| chat-ai | 28 specs / 64 tests / 49.5 pts | 41 specs / 91 tests / 67.7 pts | 27 specs / 63 tests / 49.0 pts |
+| chat-ai | 29 specs / 65 tests / 50.2 pts | 42 specs / 92 tests / 68.4 pts | 28 specs / 64 tests / 49.7 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
 | local-api | 27 specs / 116 tests / 97.0 pts | 36 specs / 109 tests / 92.5 pts | 22 specs / 84 tests / 75.2 pts |
 | notifications | 4 specs / 26 tests / 17.3 pts | 3 specs / 5 tests / 3.4 pts | 2 specs / 4 tests / 3.1 pts |
@@ -45,7 +45,7 @@ pass/fail/skip counts.
 | os-integration | 7 specs / 32 tests / 26.9 pts | 14 specs / 29 tests / 17.4 pts | 2 specs / 15 tests / 10.8 pts |
 | performance | 3 specs / 45 tests / 45.0 pts | 5 specs / 35 tests / 31.5 pts | 2 specs / 30 tests / 30.0 pts |
 | pipes | 6 specs / 20 tests / 20.0 pts | 8 specs / 26 tests / 26.0 pts | 6 specs / 20 tests / 20.0 pts |
-| real-ui-e2e | 69 specs / 210 tests / 174.5 pts | 84 specs / 223 tests / 184.5 pts | 64 specs / 186 tests / 160.6 pts |
+| real-ui-e2e | 70 specs / 211 tests / 175.2 pts | 85 specs / 224 tests / 185.3 pts | 65 specs / 187 tests / 161.3 pts |
 | settings | 14 specs / 40 tests / 37.0 pts | 16 specs / 34 tests / 29.7 pts | 13 specs / 31 tests / 28.0 pts |
 | storage-privacy | 9 specs / 42 tests / 33.3 pts | 9 specs / 27 tests / 26.1 pts | 6 specs / 20 tests / 19.1 pts |
 | tauri-command | 19 specs / 54 tests / 41.5 pts | 28 specs / 71 tests / 53.8 pts | 18 specs / 55 tests / 42.3 pts |
@@ -125,9 +125,10 @@ pass/fail/skip counts.
 | chat-context-usage-providers.spec.ts | macos | chat-ai, real-ui-e2e, tauri-command | chat, context-usage, acp-backend, agent-streaming | medium | strong | real-user-flow | 3 | The composer's context reading, once per harness class that can report one. Native Pi answers a real OpenAI-compatible turn whose stream carries usage, and the project-local context-usage extension publishes a per-category breakdown that must sum to the model's own total and must keep non-empty rules/skills buckets, which is what guards the classifier's coupling to pi's prompt section markers. A deterministic stdio ACP adapter reports only the protocol usage_update pair and must render one bar plus the line saying no breakdown is available. Also covers the pre-first-turn state, where the panel says nothing rather than estimating. |
 | chat-cost-limit-upgrade.spec.ts | macos | chat-ai, real-ui-e2e, tauri-command | chat | high | strong | real-user-flow | 1 | A local provider returns the gateway's structured daily-limit rejection across the four self-serve upgrade targets; each request crosses the real Pi and foreground-event path, then the UI asserts the phosphor primary CTA, captures a screenshot, and opens the exact billing URL. |
 | chat-cross-window-transcript-sync.spec.ts | windows, macos, linux | chat-ai, window-lifecycle, real-ui-e2e | chat, chat-streaming, window-lifecycle | high | strong | mixed | 1 | Both Home and standalone Chat show persistent pending feedback, then hydrate a completed disk transcript and clear stop state from the real cross-window save event without calling a provider. |
-| chat-empty-space.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat | medium | strong | real-user-flow | 1 | A real Tauri chat session keeps a short answer at the top of the message rail without exposing a false new-content state. |
+| chat-empty-space.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat | medium | strong | real-user-flow | 1 | A real Tauri chat session keeps a short answer at the top of the message rail without exposing an interactive jump-to-latest control. |
 | chat-hosted-retry-feedback.spec.ts | macos | chat-ai, real-ui-e2e, tauri-command | chat, chat-streaming | high | strong | real-user-flow | 1 | A local provider returns priced_request_in_flight twice; Pi retries while the UI remains active, a real composer follow-up enters the Rust queue, and both turns recover without the misleading mid-response error. |
 | chat-inline-charts.spec.ts | windows, macos, linux | real-ui-e2e | chat, markdown, charts | medium | strong | real-user-flow | 9 | Seeds an assistant message containing ```chart fences and asserts the charts render inline between the surrounding paragraphs, bar widths are proportional to the data, hover shows a tooltip and recolours the mark, a malformed fence degrades to a readable code block, every chart exposes a screen-reader table, and no chart uses a rounded corner (DESIGN.md). |
+| chat-jump-to-latest.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat | medium | strong | real-user-flow | 1 | A long real Tauri chat fades a quiet composer-anchored jump control at the latest message, reveals it after scrolling up, and returns to the bottom on click. |
 | chat-local-ai-gateway.spec.ts | macos | chat-ai, real-ui-e2e, tauri-command | chat, chat-streaming | high | strong | real-user-flow | 1 | Opt-in full-stack hosted-AI path: the E2E app and real Pi route through the Rust-validated loopback URL into the production Worker bundle under Miniflare, with migrated local D1 and network-closed fake provider egress, then the streamed answer reaches the real chat UI. |
 | chat-new-chat-first-message-ux.spec.ts | macos | chat-ai, real-ui-e2e | chat, chat-background-readiness, chat-first-message-ux, chat-turn-status | medium | partial | real-user-flow | 1 | Real + new chat through the first assistant token over a cold Pi start: holds the runtime-readiness gate while typing and submitting, pins that the early send waits with its message visible, that the message and cleared composer land in the send frame, that only one status element is ever mounted, and that the pane never snaps alignment. Opt-in (SCREENPIPE_E2E_LOCAL_AI_GATEWAY). |
 | chat-new-session-stale-save.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e, storage-privacy | chat, chat-drafts | high | strong | synthetic | 1 | Switching to a new Pi session binds its echoed user turn to the new conversation file and leaves the previous chat intact. |

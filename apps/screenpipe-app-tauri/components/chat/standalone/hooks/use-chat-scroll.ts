@@ -13,6 +13,8 @@ interface UseChatScrollOptions {
   messagesEndRef: RefObject<HTMLDivElement | null>;
 }
 
+const JUMP_SETTLE_MS = 500;
+
 export function useChatScroll({
   conversationId,
   messages,
@@ -23,6 +25,8 @@ export function useChatScroll({
 }: UseChatScrollOptions) {
   const stickToBottomRef = useRef(true);
   const autoScrollFrameRef = useRef<number | null>(null);
+  const jumpInFlightRef = useRef(false);
+  const jumpSettleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
 
   const isNearScrollBottom = useCallback((container: HTMLDivElement) => {
@@ -35,6 +39,14 @@ export function useChatScroll({
     setIsUserScrolledUp((previous) => previous === !nearBottom ? previous : !nearBottom);
     return nearBottom;
   }, [isNearScrollBottom]);
+
+  const finishJump = useCallback(() => {
+    jumpInFlightRef.current = false;
+    if (jumpSettleTimeoutRef.current != null) {
+      clearTimeout(jumpSettleTimeoutRef.current);
+      jumpSettleTimeoutRef.current = null;
+    }
+  }, []);
 
   const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     const container = scrollContainerRef.current;
@@ -64,8 +76,19 @@ export function useChatScroll({
     const container = scrollContainerRef.current;
     if (!container) return;
 
+    // A programmatic jump keeps the control faded even while the viewport is
+    // still traveling. Intermediate scroll events would otherwise look like
+    // the user moved up again.
+    if (jumpInFlightRef.current) {
+      if (isNearScrollBottom(container)) {
+        finishJump();
+        syncScrollState(container);
+      }
+      return;
+    }
+
     syncScrollState(container);
-  }, [scrollContainerRef, syncScrollState]);
+  }, [finishJump, isNearScrollBottom, scrollContainerRef, syncScrollState]);
 
   const markUserScrolledUp = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -74,7 +97,7 @@ export function useChatScroll({
     // Message focusing calls this before scrollIntoView. Only show the jump
     // control when there is actually content below the current viewport; a
     // short chat has no meaningful "up" state and used to create a false
-    // new-content control in the middle of an otherwise empty viewport.
+    // jump control in the middle of an otherwise empty viewport.
     syncScrollState(container);
   }, [scrollContainerRef, syncScrollState]);
 
@@ -82,9 +105,10 @@ export function useChatScroll({
   // panel pinned while markdown media loads and changes the message height.
   useEffect(() => {
     stickToBottomRef.current = true;
+    finishJump();
     setIsUserScrolledUp(false);
     scheduleScrollToBottom("auto");
-  }, [conversationId, scheduleScrollToBottom]);
+  }, [conversationId, finishJump, scheduleScrollToBottom]);
 
   // Smart auto-scroll: only follow new content while the user remains near the
   // bottom. Once they scroll upward, leave the viewport alone. If folding tool
@@ -131,14 +155,26 @@ export function useChatScroll({
       if (autoScrollFrameRef.current != null) {
         cancelAnimationFrame(autoScrollFrameRef.current);
       }
+      finishJump();
     };
-  }, []);
+  }, [finishJump]);
 
   const scrollToBottom = useCallback(() => {
     stickToBottomRef.current = true;
-    scheduleScrollToBottom("smooth");
+    finishJump();
+    jumpInFlightRef.current = true;
     setIsUserScrolledUp(false);
-  }, [scheduleScrollToBottom]);
+    scheduleScrollToBottom("smooth");
+    // If a browser drops the terminal scroll event or the user interrupts the
+    // motion, resume normal scroll tracking instead of hiding the control
+    // forever. Reaching the bottom clears this timeout early.
+    jumpSettleTimeoutRef.current = setTimeout(() => {
+      jumpInFlightRef.current = false;
+      jumpSettleTimeoutRef.current = null;
+      const container = scrollContainerRef.current;
+      if (container) syncScrollState(container);
+    }, JUMP_SETTLE_MS);
+  }, [finishJump, scheduleScrollToBottom, scrollContainerRef, syncScrollState]);
 
   return {
     isUserScrolledUp,

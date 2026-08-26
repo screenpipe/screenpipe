@@ -188,6 +188,13 @@ export interface ComposerConnectBannerProps {
   onDismiss: () => void;
 }
 
+export interface ComposerJumpToLatestProps {
+  hasMessages: boolean;
+  scrolledUp: boolean;
+  live: boolean;
+  onJump: () => void;
+}
+
 export interface ChatComposerProps {
   prefill: PrefillComposerProps;
   suggestions: ComposerSuggestionsProps;
@@ -199,5 +206,6 @@ export interface ChatComposerProps {
   modelControls: ComposerModelControlsProps;
   codingWorkspace: ComposerCodingWorkspaceProps;
   connectBanner: ComposerConnectBannerProps;
+  jumpToLatest?: ComposerJumpToLatestProps;
   onStop: () => void | Promise<void>;
 }

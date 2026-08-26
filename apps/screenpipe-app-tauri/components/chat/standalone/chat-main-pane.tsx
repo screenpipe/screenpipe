@@ -4,7 +4,7 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDown, Settings, Workflow } from "lucide-react";
+import { Settings, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SummaryCards } from "@/components/chat/summary-cards";
 import { FirstRunLearningBanner } from "@/components/first-run/learning-banner";
@@ -73,8 +73,6 @@ interface ChatMainPaneProps {
    * user's bubble so the transcript is never empty during the preflight.
    */
   pendingSend?: { text: string; displayLabel?: string } | null;
-  isUserScrolledUp: boolean;
-  scrollToBottom: () => void;
 }
 
 export function ChatMainPane({
@@ -110,8 +108,6 @@ export function ChatMainPane({
   homeStarterProps,
   messageListProps,
   pendingSend,
-  isUserScrolledUp,
-  scrollToBottom,
   firstRunAiPreset,
   firstRunUserToken,
   firstRunAiSettingsLoaded,
@@ -305,17 +301,6 @@ export function ChatMainPane({
             <div ref={messagesEndRef} />
           </div>
         </div>
-
-        {isUserScrolledUp && messages.length > 0 && (
-          <button
-            onClick={scrollToBottom}
-            data-testid="chat-new-content"
-            className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary text-primary-foreground shadow-lg text-xs font-medium hover:bg-primary/90 transition-opacity animate-in fade-in slide-in-from-bottom-2 duration-200"
-          >
-            <ChevronDown className="h-3.5 w-3.5" />
-            new content
-          </button>
-        )}
       </div>
     </div>
   );

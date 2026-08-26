@@ -74,8 +74,6 @@ function paneProps(conversationId: string, messages: Message[]) {
     onOpenPipeSettings: vi.fn(),
     summaryCardsProps: {},
     messageListProps: { messages },
-    isUserScrolledUp: false,
-    scrollToBottom: vi.fn(),
   } as React.ComponentProps<typeof ChatMainPane>;
 }
 

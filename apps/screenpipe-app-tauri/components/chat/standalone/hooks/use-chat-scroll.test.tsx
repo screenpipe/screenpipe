@@ -10,12 +10,19 @@ import { useChatScroll } from "./use-chat-scroll";
 function defineScrollGeometry(
   element: HTMLDivElement,
   geometry: { scrollHeight: number; clientHeight: number; scrollTop: number },
+  options: { freezeScrollTo?: boolean } = {},
 ) {
   Object.defineProperties(element, {
     scrollHeight: { configurable: true, value: geometry.scrollHeight },
     clientHeight: { configurable: true, value: geometry.clientHeight },
     scrollTop: { configurable: true, writable: true, value: geometry.scrollTop },
   });
+  if (options.freezeScrollTo) {
+    element.scrollTo = () => {
+      // The caller owns intermediate geometry while a jump is in flight.
+    };
+    return;
+  }
   element.scrollTo = ({ top }: ScrollToOptions) => {
     if (typeof top === "number") element.scrollTop = top;
   };
@@ -60,7 +67,7 @@ describe("useChatScroll", () => {
     expect(result.current.isUserScrolledUp).toBe(false);
   });
 
-  it("preserves the new-content state when the viewport is genuinely above the bottom", () => {
+  it("preserves the scrolled-up state when the viewport is genuinely above the bottom", () => {
     const container = document.createElement("div");
     container.append(document.createElement("div"));
     defineScrollGeometry(container, {
@@ -80,7 +87,7 @@ describe("useChatScroll", () => {
     expect(result.current.isUserScrolledUp).toBe(true);
   });
 
-  it("clears a stale new-content state after message content shrinks into the viewport", async () => {
+  it("clears a stale scrolled-up state after message content shrinks into the viewport", async () => {
     const container = document.createElement("div");
     container.append(document.createElement("div"));
     defineScrollGeometry(container, {
@@ -108,5 +115,73 @@ describe("useChatScroll", () => {
     rerender({ messages: [{ id: "message-1" }, { id: "message-2" }] });
 
     await waitFor(() => expect(result.current.isUserScrolledUp).toBe(false));
+  });
+
+  it("keeps the jump control faded while a programmatic jump is still traveling", async () => {
+    const container = document.createElement("div");
+    container.append(document.createElement("div"));
+    defineScrollGeometry(container, {
+      scrollHeight: 1_400,
+      clientHeight: 600,
+      scrollTop: 100,
+    });
+    const { result } = renderChatScroll(container);
+
+    defineScrollGeometry(container, {
+      scrollHeight: 1_400,
+      clientHeight: 600,
+      scrollTop: 100,
+    });
+    act(() => result.current.handleMessagesScroll());
+    expect(result.current.isUserScrolledUp).toBe(true);
+
+    act(() => result.current.scrollToBottom());
+    expect(result.current.isUserScrolledUp).toBe(false);
+
+    defineScrollGeometry(container, {
+      scrollHeight: 1_400,
+      clientHeight: 600,
+      scrollTop: 400,
+    });
+    act(() => result.current.handleMessagesScroll());
+    expect(result.current.isUserScrolledUp).toBe(false);
+
+    defineScrollGeometry(container, {
+      scrollHeight: 1_400,
+      clientHeight: 600,
+      scrollTop: 1_400 - 600,
+    });
+    act(() => result.current.handleMessagesScroll());
+    expect(result.current.isUserScrolledUp).toBe(false);
+  });
+
+  it("restores scroll tracking if a programmatic jump is interrupted", async () => {
+    const container = document.createElement("div");
+    container.append(document.createElement("div"));
+    defineScrollGeometry(container, {
+      scrollHeight: 1_400,
+      clientHeight: 600,
+      scrollTop: 100,
+    }, { freezeScrollTo: true });
+    const { result } = renderChatScroll(container);
+
+    defineScrollGeometry(container, {
+      scrollHeight: 1_400,
+      clientHeight: 600,
+      scrollTop: 100,
+    }, { freezeScrollTo: true });
+    act(() => result.current.handleMessagesScroll());
+    expect(result.current.isUserScrolledUp).toBe(true);
+
+    act(() => result.current.scrollToBottom());
+    defineScrollGeometry(container, {
+      scrollHeight: 1_400,
+      clientHeight: 600,
+      scrollTop: 400,
+    }, { freezeScrollTo: true });
+    act(() => result.current.handleMessagesScroll());
+    expect(result.current.isUserScrolledUp).toBe(false);
+
+    await waitFor(() => expect(result.current.isUserScrolledUp).toBe(true));
   });
 });
