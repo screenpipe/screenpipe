@@ -5,7 +5,22 @@
 // Pure policy parsing and enforcement. Keep this module import-free so the
 // website contract can be mirrored in focused tests without loading Tauri.
 
-export type ManagedSettingValue = boolean | string | number | string[];
+export type ManagedDomainRule = {
+  [key: string]: string | boolean | string[];
+  domain: string;
+  includeSubdomains: boolean;
+  excludedSubdomains: string[];
+};
+
+export type ManagedUrlRule = string | ManagedDomainRule;
+
+export type ManagedSettingValue =
+  | boolean
+  | string
+  | number
+  | string[]
+  | ManagedDomainRule[]
+  | ManagedUrlRule[];
 
 type ManagedSettingDefinition = {
   policyKey: string;
@@ -17,6 +32,8 @@ type ManagedSettingDefinition = {
   | { kind: "enum"; values: readonly string[] }
   | { kind: "number"; min: number; max: number; integer?: boolean }
   | { kind: "string-array"; requiredValues?: readonly string[] }
+  | { kind: "url-rule-array" }
+  | { kind: "domain-rule-array" }
 );
 
 export const ALLOWED_TRANSCRIPTION_ENGINES = [
@@ -101,6 +118,22 @@ const stringArray = (
   requiredValues,
 });
 
+const domainRuleArray = (policyKey: string): ManagedSettingDefinition => ({
+  policyKey,
+  deviceKey: policyKey,
+  apply: "engine",
+  kind: "domain-rule-array",
+  defaultValue: [],
+});
+
+const urlRuleArray = (policyKey: string): ManagedSettingDefinition => ({
+  policyKey,
+  deviceKey: policyKey,
+  apply: "engine",
+  kind: "url-rule-array",
+  defaultValue: [],
+});
+
 /**
  * Settings that are safe and meaningful to enforce across a fleet. Hardware
  * selectors, secrets, account state, shortcuts, and personal appearance stay
@@ -156,7 +189,8 @@ export const MANAGED_SETTING_DEFINITIONS: readonly ManagedSettingDefinition[] = 
 
   stringArray("ignoredWindows", []),
   stringArray("includedWindows", []),
-  stringArray("ignoredUrls", []),
+  urlRuleArray("ignoredUrls"),
+  domainRuleArray("includedUrls"),
   bool("ignoreIncognitoWindows", true),
   bool("enhancedIncognitoDetection", false),
   bool("pauseOnDrmContent", false),
@@ -219,6 +253,62 @@ function parseStringArray(raw: unknown, requiredValues: readonly string[] = []):
   return unique;
 }
 
+function normalizeManagedHostname(raw: unknown): string | undefined {
+  if (typeof raw !== "string" || raw.trim() === "") return undefined;
+  try {
+    const input = raw.trim();
+    const url = new URL(input.includes("://") ? input : `https://${input}`);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
+    return hostname.includes(".") ? hostname : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseDomainRuleArray(raw: unknown): ManagedDomainRule[] | undefined {
+  if (!Array.isArray(raw) || raw.length > 100) return undefined;
+  const parsed: ManagedDomainRule[] = [];
+  for (const value of raw) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const candidate = value as Record<string, unknown>;
+    const allowedKeys = new Set(["domain", "includeSubdomains", "excludedSubdomains"]);
+    if (Object.keys(candidate).some((key) => !allowedKeys.has(key))) return undefined;
+    const domain = normalizeManagedHostname(candidate.domain);
+    if (!domain || typeof candidate.includeSubdomains !== "boolean") return undefined;
+    const rawExcluded = candidate.excludedSubdomains ?? [];
+    if (!Array.isArray(rawExcluded) || (!candidate.includeSubdomains && rawExcluded.length > 0)) {
+      return undefined;
+    }
+    const excludedSubdomains: string[] = [];
+    for (const rawException of rawExcluded) {
+      const exception = normalizeManagedHostname(rawException);
+      if (!exception || !exception.endsWith(`.${domain}`)) return undefined;
+      if (!excludedSubdomains.includes(exception)) excludedSubdomains.push(exception);
+    }
+    parsed.push({ domain, includeSubdomains: candidate.includeSubdomains, excludedSubdomains });
+  }
+  return parsed;
+}
+
+function parseUrlRuleArray(raw: unknown): ManagedUrlRule[] | undefined {
+  if (!Array.isArray(raw) || raw.length > 100) return undefined;
+  const parsed: ManagedUrlRule[] = [];
+  for (const value of raw) {
+    if (typeof value === "string") {
+      const normalized = value.trim();
+      if (!normalized || normalized.length > 200) continue;
+      if (!parsed.includes(normalized)) parsed.push(normalized);
+      continue;
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const structured = parseDomainRuleArray([value]);
+    if (!structured) return undefined;
+    parsed.push(structured[0]);
+  }
+  return parsed;
+}
+
 function parseManagedValue(
   definition: ManagedSettingDefinition,
   raw: unknown,
@@ -241,6 +331,10 @@ function parseManagedValue(
     }
     case "string-array":
       return parseStringArray(raw, definition.requiredValues);
+    case "url-rule-array":
+      return parseUrlRuleArray(raw);
+    case "domain-rule-array":
+      return parseDomainRuleArray(raw);
   }
 }
 
@@ -248,7 +342,11 @@ function equalManagedValues(left: unknown, right: ManagedSettingValue): boolean 
   if (Array.isArray(right)) {
     return Array.isArray(left) &&
       left.length === right.length &&
-      left.every((value, index) => value === right[index]);
+      left.every((value, index) =>
+        typeof value === "object" || typeof right[index] === "object"
+          ? JSON.stringify(value) === JSON.stringify(right[index])
+          : value === right[index],
+      );
   }
   return left === right;
 }

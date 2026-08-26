@@ -1647,6 +1647,7 @@ export function PrivacySection() {
         <ContentFiltersCard
           rules={windowRules}
           ignoredUrls={settings.ignoredUrls || []}
+          includedUrls={settings.includedUrls || []}
           categoryOwned={settings.categoryOwnedFilters}
           observedWindows={windowItems || []}
           observedDomains={urlItems || []}
@@ -1655,6 +1656,9 @@ export function PrivacySection() {
           onRulesChange={handleWindowRulesChange}
           onIgnoredUrlsChange={(next) =>
             handleSettingsChange({ ignoredUrls: next }, true)
+          }
+          onIncludedUrlsChange={(next) =>
+            handleSettingsChange({ includedUrls: next }, true)
           }
           onTargetsChange={(next) =>
             handleSettingsChange(

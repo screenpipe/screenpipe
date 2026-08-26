@@ -1837,6 +1837,8 @@ async fn main() -> anyhow::Result<()> {
                 capture_trigger_tx,
                 linker_tx,
                 config.ignored_windows.clone(),
+                config.ignored_urls.clone(),
+                config.included_urls.clone(),
                 true, // CLI: show native TCC dialogs for accessibility + input monitoring
             )
             .await

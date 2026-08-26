@@ -22,6 +22,8 @@
  * believe the engine.
  */
 
+import type { UrlRule } from "@/lib/utils/tauri";
+
 /** A parsed capture rule. `app === null` means the rule is unscoped. */
 export interface CaptureRule {
 	/** Lowercased app constraint, or `null` for an unscoped rule. */
@@ -40,6 +42,9 @@ export interface WindowRules {
 	ignored: string[];
 	included: string[];
 }
+
+/** Browser rule types generated from the Rust capture policy. */
+export type { DomainRule, UrlRule } from "@/lib/utils/tauri";
 
 /**
  * What the recorder will do with an app, as far as we can tell from the rules
@@ -526,6 +531,51 @@ export function normalizeDomain(input: string): string {
 		.replace(LEADING_WWW, "")
 		.replace(/:\d+$/, "")
 		.trim();
+}
+
+/**
+ * Normalize a strict hostname rule. Unlike the legacy domain helper, this
+ * preserves a leading `www` because it may be the exact subdomain intended.
+ * Bare labels are rejected so a rule cannot unexpectedly span every TLD.
+ */
+export function normalizeRuleDomain(input: string): string {
+	const trimmed = input.trim();
+	if (trimmed === "") return "";
+
+	try {
+		const parsed = new URL(LEADING_SCHEME.test(trimmed) ? trimmed : `https://${trimmed}`);
+		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
+		const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+		return hostname.includes(".") ? hostname : "";
+	} catch {
+		return "";
+	}
+}
+
+/** The normalized hostname represented by either URL-rule shape. */
+export function urlRuleDomain(rule: UrlRule): string {
+	return typeof rule === "string" ? normalizeDomain(rule) : normalizeRuleDomain(rule.domain);
+}
+
+/** True only for a descendant label boundary, never a lookalike suffix. */
+export function isSubdomainOf(host: string, domain: string): boolean {
+	return host.length > domain.length && host.endsWith(`.${domain}`);
+}
+
+/** Normalize, validate, and de-duplicate exception entries for one rule. */
+export function normalizeDomainExceptions(
+	domain: string,
+	values: readonly string[],
+): string[] {
+	const normalizedDomain = normalizeRuleDomain(domain);
+	if (normalizedDomain === "") return [];
+	return [
+		...new Set(
+			values
+				.map(normalizeRuleDomain)
+				.filter((value) => value !== "" && isSubdomainOf(value, normalizedDomain)),
+		),
+	];
 }
 
 /**

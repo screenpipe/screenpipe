@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use dashmap::{DashMap, DashSet};
-use screenpipe_config::SemanticContextMode;
+use screenpipe_config::{DomainRule, SemanticContextMode, UrlRule};
 use screenpipe_db::DatabaseManager;
 use screenpipe_screen::monitor::{get_monitor_by_id, list_monitors};
 use screenpipe_screen::PipelineMetrics;
@@ -38,7 +38,8 @@ pub struct VisionManagerConfig {
     pub output_path: String,
     pub ignored_windows: Vec<String>,
     pub included_windows: Vec<String>,
-    pub ignored_urls: Vec<String>,
+    pub ignored_urls: Vec<UrlRule>,
+    pub included_urls: Vec<DomainRule>,
     pub vision_metrics: Arc<PipelineMetrics>,
     pub use_pii_removal: bool,
     /// Stable IDs of monitors the user selected for recording (e.g. "MSI G271_1920x1080_2002,-1080").
@@ -646,6 +647,7 @@ impl VisionManager {
             ignored_windows: self.config.ignored_windows.clone(),
             included_windows: self.config.included_windows.clone(),
             ignored_urls: self.config.ignored_urls.clone(),
+            included_urls: self.config.included_urls.clone(),
             monitor_x: monitor.x() as f64,
             monitor_y: monitor.y() as f64,
             monitor_width: monitor.width() as f64,
@@ -721,6 +723,7 @@ impl VisionManager {
                 ignored_windows: self.config.ignored_windows.clone(),
                 included_windows: self.config.included_windows.clone(),
                 ignored_urls: self.config.ignored_urls.clone(),
+                included_urls: self.config.included_urls.clone(),
                 ignore_incognito_windows: self.config.ignore_incognito_windows,
                 enhanced_incognito_detection: self.config.enhanced_incognito_detection,
             };
@@ -1022,6 +1025,7 @@ mod tests {
             ignored_windows: vec![],
             included_windows: vec![],
             ignored_urls: vec![],
+            included_urls: vec![],
             vision_metrics: Arc::new(PipelineMetrics::default()),
             use_pii_removal: false,
             monitor_ids,

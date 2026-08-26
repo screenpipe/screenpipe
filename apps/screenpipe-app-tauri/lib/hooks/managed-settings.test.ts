@@ -123,6 +123,77 @@ describe("computeManagedSettingUpdates", () => {
     });
   });
 
+  it("normalizes structured domain policies and preserves subdomain exceptions", () => {
+    const r = computeManagedSettingUpdates(
+      {
+        includedUrls: [
+          {
+            domain: " HTTPS://WorkTrace.AI/path ",
+            includeSubdomains: true,
+            excludedSubdomains: ["ABC.worktrace.ai", "abc.worktrace.ai"],
+          },
+        ],
+      },
+      {},
+    );
+    expect(r.engineUpdates.includedUrls).toEqual([
+      {
+        domain: "worktrace.ai",
+        includeSubdomains: true,
+        excludedSubdomains: ["abc.worktrace.ai"],
+      },
+    ]);
+    expect(r.engineChanged).toBe(true);
+  });
+
+  it("accepts legacy and structured block rules in the same ignoredUrls list", () => {
+    const r = computeManagedSettingUpdates(
+      {
+        ignoredUrls: [
+          " legacy.example ",
+          {
+            domain: "Admin.WorkTrace.AI",
+            includeSubdomains: true,
+            excludedSubdomains: [],
+          },
+        ],
+      },
+      {},
+    );
+    expect(r.engineUpdates.ignoredUrls).toEqual([
+      "legacy.example",
+      {
+        domain: "admin.worktrace.ai",
+        includeSubdomains: true,
+        excludedSubdomains: [],
+      },
+    ]);
+  });
+
+  it("rejects malformed structured domain policies", () => {
+    for (const includedUrls of [
+      [{ domain: "worktrace", includeSubdomains: true, excludedSubdomains: [] }],
+      [
+        {
+          domain: "worktrace.ai",
+          includeSubdomains: false,
+          excludedSubdomains: ["abc.worktrace.ai"],
+        },
+      ],
+      [
+        {
+          domain: "worktrace.ai",
+          includeSubdomains: true,
+          excludedSubdomains: ["example.com"],
+        },
+      ],
+    ]) {
+      expect(computeManagedSettingUpdates({ includedUrls }, {}).engineUpdates).not.toHaveProperty(
+        "includedUrls",
+      );
+    }
+  });
+
   it("rejects invalid or out-of-range managed values", () => {
     const r = computeManagedSettingUpdates(
       {

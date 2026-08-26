@@ -4,7 +4,7 @@
 
 //! The core recording settings type shared across all screenpipe components.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Older desktop builds persisted a single selected monitor as a string, while
 /// current builds persist an array. Accept both shapes so an upgrade preserves
@@ -125,6 +125,87 @@ impl SemanticContextMode {
     pub const fn includes_computer_use(self) -> bool {
         matches!(self, Self::ComputerUse | Self::Both)
     }
+}
+
+/// One strict hostname rule used by browser capture allowlists and blocklists.
+///
+/// `domain` is normalized by the capture policy before matching. The rule
+/// always matches the domain itself; `include_subdomains` extends the match to
+/// descendant hosts, except descendants rooted at `excluded_subdomains`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct DomainRule {
+    pub domain: String,
+    #[serde(default)]
+    pub include_subdomains: bool,
+    #[serde(default)]
+    pub excluded_subdomains: Vec<String>,
+}
+
+/// A browser URL block rule.
+///
+/// Strings are the legacy `ignoredUrls` format and keep their historical
+/// domain matching behavior. Structured rules provide explicit exact-domain,
+/// subdomain, and exception semantics without introducing a second setting.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(untagged)]
+pub enum UrlRule {
+    Legacy(String),
+    Structured(DomainRule),
+}
+
+fn invalid_domain_rule() -> DomainRule {
+    DomainRule {
+        domain: String::new(),
+        include_subdomains: false,
+        excluded_subdomains: Vec::new(),
+    }
+}
+
+/// Preserve malformed structured policies as an invalid sentinel. The runtime
+/// policy compiler recognizes the empty hostname and fails capture closed;
+/// rejecting the whole settings store here could make a caller fall back to
+/// defaults and accidentally widen capture.
+fn deserialize_domain_rules_fail_closed<'de, D>(
+    deserializer: D,
+) -> Result<Vec<DomainRule>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let Some(values) = value.as_array() else {
+        return Ok(vec![invalid_domain_rule()]);
+    };
+    Ok(values
+        .iter()
+        .map(|value| {
+            serde_json::from_value::<DomainRule>(value.clone())
+                .unwrap_or_else(|_| invalid_domain_rule())
+        })
+        .collect())
+}
+
+/// Accept both the historical string array and structured rules in the same
+/// `ignoredUrls` field. Invalid structured values become a sentinel so the
+/// runtime fails capture closed instead of silently discarding a privacy rule.
+fn deserialize_url_rules_fail_closed<'de, D>(deserializer: D) -> Result<Vec<UrlRule>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let Some(values) = value.as_array() else {
+        return Ok(vec![UrlRule::Structured(invalid_domain_rule())]);
+    };
+
+    Ok(values
+        .iter()
+        .map(|value| {
+            serde_json::from_value::<UrlRule>(value.clone())
+                .unwrap_or_else(|_| UrlRule::Structured(invalid_domain_rule()))
+        })
+        .collect())
 }
 
 /// The single source of truth for recording/capture configuration.
@@ -457,9 +538,23 @@ pub struct RecordingSettings {
     #[serde(rename = "includedWindows")]
     pub included_windows: Vec<String>,
 
-    /// URLs to exclude from capture.
-    #[serde(rename = "ignoredUrls", default)]
-    pub ignored_urls: Vec<String>,
+    /// Browser URLs to exclude from capture. Existing string entries remain
+    /// supported; new entries can use explicit structured domain rules.
+    #[serde(
+        rename = "ignoredUrls",
+        default,
+        deserialize_with = "deserialize_url_rules_fail_closed"
+    )]
+    pub ignored_urls: Vec<UrlRule>,
+
+    /// Strict browser hostname allowlist. When non-empty, native apps and
+    /// browser windows without a positively detected matching URL are skipped.
+    #[serde(
+        rename = "includedUrls",
+        default,
+        deserialize_with = "deserialize_domain_rules_fail_closed"
+    )]
+    pub included_urls: Vec<DomainRule>,
 
     /// Automatically detect and skip incognito / private browsing windows.
     #[serde(rename = "ignoreIncognitoWindows")]
@@ -811,6 +906,7 @@ impl Default for RecordingSettings {
             ignored_windows: vec![],
             included_windows: vec![],
             ignored_urls: vec![],
+            included_urls: vec![],
             ignore_incognito_windows: true,
             enhanced_incognito_detection: false,
             pause_on_drm_content: false,
@@ -960,6 +1056,73 @@ mod tests {
         assert!(!settings.macos_input_vpio_enabled);
         assert_eq!(settings.aec_mode, AecMode::Off);
         assert_eq!(settings.effective_aec_flags(), (false, false, false));
+        assert!(settings.ignored_urls.is_empty());
+        assert!(settings.included_urls.is_empty());
+    }
+
+    #[test]
+    fn structured_domain_rules_deserialize_and_round_trip() {
+        let settings: RecordingSettings = serde_json::from_str(
+            r#"{
+                "ignoredUrls": ["legacy.example", {
+                    "domain": "admin.worktrace.ai",
+                    "includeSubdomains": true,
+                    "excludedSubdomains": []
+                }],
+                "includedUrls": [{
+                    "domain": "worktrace.ai",
+                    "includeSubdomains": true,
+                    "excludedSubdomains": ["abc.worktrace.ai"]
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            settings.ignored_urls[0],
+            UrlRule::Legacy("legacy.example".to_string())
+        );
+        assert_eq!(
+            settings.ignored_urls[1],
+            UrlRule::Structured(DomainRule {
+                domain: "admin.worktrace.ai".to_string(),
+                include_subdomains: true,
+                excluded_subdomains: vec![],
+            })
+        );
+        assert_eq!(settings.included_urls[0].domain, "worktrace.ai");
+        assert_eq!(
+            settings.included_urls[0].excluded_subdomains,
+            vec!["abc.worktrace.ai"]
+        );
+
+        let round_trip: RecordingSettings =
+            serde_json::from_value(serde_json::to_value(settings).unwrap()).unwrap();
+        assert_eq!(round_trip.included_urls[0].domain, "worktrace.ai");
+    }
+
+    #[test]
+    fn malformed_domain_rule_survives_as_fail_closed_sentinel() {
+        let json = r#"{"includedUrls":[{"domain":"worktrace.ai","includeSubdomains":"yes"}]}"#;
+        let settings = serde_json::from_str::<RecordingSettings>(json).unwrap();
+        assert_eq!(settings.included_urls, vec![invalid_domain_rule()]);
+
+        let wrong_shape =
+            serde_json::from_str::<RecordingSettings>(r#"{"includedUrls":"worktrace.ai"}"#)
+                .unwrap();
+        assert_eq!(wrong_shape.included_urls, vec![invalid_domain_rule()]);
+
+        let malformed_block = serde_json::from_str::<RecordingSettings>(
+            r#"{"ignoredUrls":["legacy.example",{"domain":12}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            malformed_block.ignored_urls,
+            vec![
+                UrlRule::Legacy("legacy.example".to_string()),
+                UrlRule::Structured(invalid_domain_rule())
+            ]
+        );
     }
 
     #[test]

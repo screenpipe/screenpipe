@@ -45,6 +45,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+use screenpipe_config::{DomainRule, UrlRule};
 use screenpipe_db::DatabaseManager;
 use screenpipe_screen::monitor::SafeMonitor;
 
@@ -63,7 +64,10 @@ pub struct HdRecorderConfig {
     pub included_windows: Vec<String>,
     /// Ignored-URL patterns — windows showing a blocked URL are excluded from
     /// HD capture too (URL privacy parity with the event-driven capture loop).
-    pub ignored_urls: Vec<String>,
+    pub ignored_urls: Vec<UrlRule>,
+    /// Strict URL allowlist. HD capture is suppressed while this is active,
+    /// because an encoded stream cannot prove a fresh tab URL for every frame.
+    pub included_urls: Vec<DomainRule>,
     /// Exclude browser private/incognito windows from HD capture. Without this
     /// the HD stream keeps recording a private window that the event-driven
     /// loop excludes, since HD frames bypass the a11y gates entirely.
@@ -308,6 +312,17 @@ mod macos {
     ) {
         info!("hd recorder ready for monitor {monitor_id} (device {device_name})");
 
+        let url_policy = screenpipe_a11y::url_filter::UrlPolicy::new(
+            &config.ignored_urls,
+            &config.included_urls,
+        );
+        if url_policy.is_active() {
+            info!(
+                "hd recorder disabled for monitor {monitor_id}: URL filters require per-frame tab verification"
+            );
+            return;
+        }
+
         loop {
             if stop_signal.load(Ordering::Relaxed) {
                 break;
@@ -359,10 +374,11 @@ mod macos {
 
         // Privacy: exclude ignored windows and blocked-URL windows at the OS
         // level (parity with capture).
-        let filters = WindowFilters::new(
+        let filters = WindowFilters::with_url_rules(
             &config.ignored_windows,
             &config.included_windows,
             &config.ignored_urls,
+            &config.included_urls,
         );
         let mut excluded = get_excluded_sck_window_ids(
             &filters,

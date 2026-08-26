@@ -304,6 +304,23 @@ describe("a category never deletes the user's own work", () => {
 		for (const d of banking.domains.slice(1)) expect(off.ignoredUrls).not.toContain(d);
 	});
 
+	it("keeps an equivalent structured domain rule that a category also ships", () => {
+		const domain = banking.domains[0];
+		const structured = {
+			domain,
+			includeSubdomains: false,
+			excludedSubdomains: [],
+		};
+		const mine: CategoryTargets = {
+			rules: { ignored: [], included: [] },
+			ignoredUrls: [structured],
+		};
+
+		const on = enableCategory(mine, banking);
+		expect(on.owned?.domains ?? []).not.toContain(domain);
+		expect(disableCategory(on, banking).ignoredUrls).toContain(structured);
+	});
+
 	it("keeps a hand-written app rule that a category also ships", () => {
 		const userTyped = passwords.apps[0];
 		const mine: CategoryTargets = {

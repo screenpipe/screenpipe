@@ -282,6 +282,7 @@ fn extract_browser_url(
     pid: i32,
     app_name: &str,
     window_name: &str,
+    require_fresh: bool,
 ) -> Option<String> {
     // Tier 1: AXDocument attribute on the window.
     if let Some(url) = get_string_attr(window, ax::attr::document()) {
@@ -308,7 +309,12 @@ fn extract_browser_url(
     // Tier 3: Arc-only in-process AppleScript fallback (no web area found yet).
     let app_lower = app_name.to_lowercase();
     if app_lower.contains("arc") {
-        if let Some(url) = get_arc_url_cached(pid, window_name) {
+        let arc_url = if require_fresh {
+            run_arc_url_applescript()
+        } else {
+            get_arc_url_cached(pid, window_name)
+        };
+        if let Some(url) = arc_url {
             debug!("browser_url: tier3 Arc AppleScript hit: {}", url);
             return Some(url);
         }
@@ -1026,7 +1032,13 @@ impl MacosTreeWalker {
 
         // Extract browser URL (runs after tree walk to avoid affecting walk timeout)
         let browser_url = if is_browser(&app_lower) {
-            extract_browser_url(window, pid, &app_name, &window_name)
+            extract_browser_url(
+                window,
+                pid,
+                &app_name,
+                &window_name,
+                !self.config.included_urls.is_empty(),
+            )
         } else {
             None
         };

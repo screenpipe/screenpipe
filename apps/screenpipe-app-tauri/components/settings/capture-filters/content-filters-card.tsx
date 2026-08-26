@@ -20,6 +20,8 @@ import {
 	replaceAdvancedRules,
 	setAppCaptured,
 	type ObservedWindow,
+	type DomainRule,
+	type UrlRule,
 	type RuleList,
 	type WindowRules,
 } from "@/lib/settings/capture-filters";
@@ -32,11 +34,12 @@ import {
 import { AppFilterList } from "./app-filter-list";
 import { CategorySwitches } from "./category-switches";
 import { appIconUrl } from "./icon-urls";
-import { WebsiteFilterList, type ObservedDomain } from "./website-filter-list";
+import { WebsiteRuleList, type ObservedDomain } from "./website-filter-list";
 
 export interface ContentFiltersCardProps {
 	rules: WindowRules;
-	ignoredUrls: string[];
+	ignoredUrls: UrlRule[];
+	includedUrls: DomainRule[];
 	/** Entries the category switches created, so turning one off spares the user's own. */
 	categoryOwned?: CategoryOwnedFilters;
 	observedWindows: ObservedWindow[];
@@ -44,7 +47,8 @@ export interface ContentFiltersCardProps {
 	installedApps: string[];
 	isLoadingApps: boolean;
 	onRulesChange: (next: WindowRules) => void;
-	onIgnoredUrlsChange: (next: string[]) => void;
+	onIgnoredUrlsChange: (next: UrlRule[]) => void;
+	onIncludedUrlsChange: (next: DomainRule[]) => void;
 	/** Category switches change both lists at once, so they are written together. */
 	onTargetsChange: (next: CategoryTargets) => void;
 	onBrowse: (list: RuleList) => void;
@@ -64,6 +68,7 @@ export interface ContentFiltersCardProps {
 export function ContentFiltersCard({
 	rules,
 	ignoredUrls,
+	includedUrls,
 	categoryOwned,
 	observedWindows,
 	observedDomains,
@@ -71,6 +76,7 @@ export function ContentFiltersCard({
 	isLoadingApps,
 	onRulesChange,
 	onIgnoredUrlsChange,
+	onIncludedUrlsChange,
 	onTargetsChange,
 	onBrowse,
 }: ContentFiltersCardProps) {
@@ -181,7 +187,10 @@ export function ContentFiltersCard({
 							className="text-[12px]"
 							data-testid="privacy-tab-websites"
 						>
-							Websites{ignoredUrls.length > 0 ? ` (${ignoredUrls.length})` : ""}
+							Websites
+							{ignoredUrls.length + includedUrls.length > 0
+								? ` (${ignoredUrls.length + includedUrls.length})`
+								: ""}
 						</TabsTrigger>
 					</TabsList>
 
@@ -283,15 +292,33 @@ export function ContentFiltersCard({
 					</TabsContent>
 
 					<TabsContent value="websites" className="mt-0 space-y-2">
-						<p className="text-[11px] text-muted-foreground">
-							Browser tabs on these sites are not recorded. Suggestions come from sites this
-							machine has visited.
-						</p>
-						<WebsiteFilterList
-							domains={ignoredUrls}
-							observed={observedDomains}
-							onChange={onIgnoredUrlsChange}
-						/>
+						<div className="space-y-1.5">
+							<h4 className="text-[12px] font-medium">Only record these websites</h4>
+							<p className="text-[11px] text-muted-foreground">
+								When this list is non-empty, browser capture is restricted to matching hostnames.
+								Native apps and tabs whose URL cannot be verified are not recorded.
+							</p>
+							<WebsiteRuleList
+								rules={includedUrls}
+								observed={observedDomains}
+								mode="allow"
+								onChange={onIncludedUrlsChange}
+							/>
+						</div>
+
+						<div className="space-y-1.5 border-t border-border pt-2">
+							<h4 className="text-[12px] font-medium">Always skip these websites</h4>
+							<p className="text-[11px] text-muted-foreground">
+								Block rules take priority over the allowlist. Choose exact domain matching or
+								include its subdomains; optional exceptions stay visible on the rule.
+							</p>
+							<WebsiteRuleList
+								rules={ignoredUrls}
+								observed={observedDomains}
+								mode="block"
+								onChange={onIgnoredUrlsChange}
+							/>
+						</div>
 					</TabsContent>
 				</Tabs>
 			</CardContent>

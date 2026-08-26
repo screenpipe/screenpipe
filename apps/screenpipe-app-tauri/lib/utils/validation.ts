@@ -6,7 +6,12 @@ import { z } from "zod";
 import { SettingsStore, AIPreset, AIProviderType, EmbeddedLLM, User, Credits } from "./tauri";
 
 // Extended settings type that includes fields not yet in generated SettingsStore
-type ExtendedSettingsKeys = keyof SettingsStore | "ignoredUrls" | "deviceId" | "updateChannel";
+type ExtendedSettingsKeys =
+  | keyof SettingsStore
+  | "ignoredUrls"
+  | "includedUrls"
+  | "deviceId"
+  | "updateChannel";
 
 // Zod schemas for validation
 export const creditsSchema = z.object({
@@ -58,6 +63,11 @@ export const aiPresetSchema = z.object({
 });
 
 const aecModeSchema = z.enum(["off", "screenpipe", "macos", "windows"]);
+const domainRuleSchema = z.object({
+  domain: z.string().min(3),
+  includeSubdomains: z.boolean(),
+  excludedSubdomains: z.array(z.string()),
+}).strict();
 const booleanRemotePolicySchema = z.object({
   defaultEnabled: z.boolean(),
   forceDisabled: z.boolean(),
@@ -106,7 +116,8 @@ export const settingsStoreSchema = z.object({
   monitorIds: z.array(z.string()),
   ignoredWindows: z.array(z.string()),
   includedWindows: z.array(z.string()),
-  ignoredUrls: z.array(z.string()),
+  ignoredUrls: z.array(z.union([z.string(), domainRuleSchema])),
+  includedUrls: z.array(domainRuleSchema).optional(),
   disableVision: z.boolean(),
   disableScreenshots: z.boolean().optional(),
   enableSemanticContext: z.boolean().optional(),
@@ -421,6 +432,9 @@ export const sanitizeValue = (field: ExtendedSettingsKeys, value: any): any => {
     case "monitorIds":
     case "languages":
       return Array.isArray(value) ? value.filter(Boolean) : [];
+
+    case "includedUrls":
+      return Array.isArray(value) ? value : [];
       
     default:
       return value;

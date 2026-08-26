@@ -326,7 +326,6 @@ export type Settings = SettingsStore & {
 	remoteControlPolicy?: DesktopRemotePolicySnapshot;
 	updateChannel?: UpdateChannel;
 	chatHistory?: ChatHistoryStore;
-	ignoredUrls?: string[];
 	/**
 	 * Entries the capture-category switches created, so turning a category off
 	 * removes only those and never a rule the user wrote by hand.
@@ -754,6 +753,7 @@ let DEFAULT_SETTINGS: Settings = {
 			],
 			includedWindows: [],
 			ignoredUrls: [],
+			includedUrls: [],
 			ignoredMeetingApps: [],
 			teamFilters: { ignoredWindows: [], includedWindows: [], ignoredUrls: [] },
 

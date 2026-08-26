@@ -37,8 +37,22 @@ use screenpipe_audio::{
     audio_manager::builder::TranscriptionMode,
     core::engine::AudioTranscriptionEngine as CoreAudioTranscriptionEngine,
 };
+use screenpipe_config::{DomainRule, UrlRule};
 use screenpipe_core::Language;
 use std::path::{Path, PathBuf};
+
+fn parse_domain_rule(value: &str) -> Result<DomainRule, String> {
+    let (domain, include_subdomains) = match value.strip_suffix(":subdomains") {
+        Some(domain) => (domain, true),
+        None => (value, false),
+    };
+    let domain = screenpipe_a11y::url_filter::normalize_rule_hostname(domain)?;
+    Ok(DomainRule {
+        domain,
+        include_subdomains,
+        excluded_subdomains: Vec::new(),
+    })
+}
 
 #[derive(Clone, Debug, ValueEnum, PartialEq)]
 pub enum CliAudioTranscriptionEngine {
@@ -624,9 +638,21 @@ pub struct RecordArgs {
     #[arg(long)]
     pub included_windows: Vec<String>,
 
-    /// URLs to ignore for browser privacy filtering
+    /// Legacy browser URL block patterns. Prefer `--url-block` for explicit
+    /// exact-domain and subdomain behavior.
     #[arg(long)]
     pub ignored_urls: Vec<String>,
+
+    /// Block a browser domain. Repeat for multiple domains. A bare domain
+    /// matches exactly; append `:subdomains` to include all descendants.
+    #[arg(long, value_parser = parse_domain_rule)]
+    pub url_block: Vec<DomainRule>,
+
+    /// Allow only a browser domain. Repeat for multiple domains. A bare domain
+    /// matches exactly; append `:subdomains` to include all descendants. To
+    /// exclude one branch, combine it with a more specific `--url-block`.
+    #[arg(long, value_parser = parse_domain_rule)]
+    pub url_allow: Vec<DomainRule>,
 
     /// Automatically detect and skip incognito / private browsing windows.
     /// Pass `--ignore-incognito-windows=false` to record them.
@@ -889,6 +915,8 @@ pub struct RecordArgSources {
     pub ignored_windows: bool,
     pub included_windows: bool,
     pub ignored_urls: bool,
+    pub url_block: bool,
+    pub url_allow: bool,
     pub ignore_incognito_windows: bool,
     pub enhanced_incognito_detection: bool,
     pub ignored_meeting_apps: bool,
@@ -953,6 +981,8 @@ impl RecordArgSources {
             ignored_windows: from_command_line(record, "ignored_windows"),
             included_windows: from_command_line(record, "included_windows"),
             ignored_urls: from_command_line(record, "ignored_urls"),
+            url_block: from_command_line(record, "url_block"),
+            url_allow: from_command_line(record, "url_allow"),
             ignore_incognito_windows: from_command_line(record, "ignore_incognito_windows"),
             enhanced_incognito_detection: from_command_line(record, "enhanced_incognito_detection"),
             ignored_meeting_apps: from_command_line(record, "ignored_meeting_apps"),
@@ -1006,6 +1036,8 @@ impl RecordArgSources {
             || self.ignored_windows
             || self.included_windows
             || self.ignored_urls
+            || self.url_block
+            || self.url_allow
             || self.ignore_incognito_windows
             || self.enhanced_incognito_detection
             || self.ignored_meeting_apps
@@ -1079,6 +1111,15 @@ fn parse_schedule_rule(s: &str) -> Result<screenpipe_config::ScheduleRule, Strin
 }
 
 impl RecordArgs {
+    fn combined_ignored_urls(&self) -> Vec<UrlRule> {
+        self.ignored_urls
+            .iter()
+            .cloned()
+            .map(UrlRule::Legacy)
+            .chain(self.url_block.iter().cloned().map(UrlRule::Structured))
+            .collect()
+    }
+
     pub fn unique_languages(&self) -> Result<Vec<Language>, String> {
         let mut unique_langs = std::collections::HashSet::new();
         for lang in &self.language {
@@ -1186,7 +1227,8 @@ impl RecordArgs {
             use_all_monitors: self.use_all_monitors && self.monitor_id.is_empty(),
             ignored_windows: self.ignored_windows.clone(),
             included_windows: self.included_windows.clone(),
-            ignored_urls: self.ignored_urls.clone(),
+            ignored_urls: self.combined_ignored_urls(),
+            included_urls: self.url_allow.clone(),
             ignored_meeting_apps: self.ignored_meeting_apps.clone(),
             languages: self
                 .language
@@ -1506,8 +1548,11 @@ impl RecordArgs {
         if sources.included_windows {
             settings.included_windows = self.included_windows.clone();
         }
-        if sources.ignored_urls {
-            settings.ignored_urls = self.ignored_urls.clone();
+        if sources.ignored_urls || sources.url_block {
+            settings.ignored_urls = self.combined_ignored_urls();
+        }
+        if sources.url_allow {
+            settings.included_urls = self.url_allow.clone();
         }
         if sources.ignore_incognito_windows {
             settings.ignore_incognito_windows = self.ignore_incognito_windows;
@@ -3279,6 +3324,77 @@ mod tests {
         ]);
         assert!(args.use_pii_removal);
         assert!(args.api_auth);
+    }
+
+    #[test]
+    fn url_rule_flags_make_exact_and_subdomain_behavior_explicit() {
+        let args = record_args([
+            "screenpipe",
+            "record",
+            "--ignored-urls",
+            "legacy.example",
+            "--url-block",
+            "admin.worktrace.ai:subdomains",
+            "--url-allow",
+            "https://WorkTrace.AI/path",
+        ]);
+        let settings = args.to_recording_settings();
+
+        assert_eq!(
+            settings.ignored_urls,
+            vec![
+                UrlRule::Legacy("legacy.example".to_string()),
+                UrlRule::Structured(DomainRule {
+                    domain: "admin.worktrace.ai".to_string(),
+                    include_subdomains: true,
+                    excluded_subdomains: vec![],
+                }),
+            ]
+        );
+        assert_eq!(
+            settings.included_urls,
+            vec![DomainRule {
+                domain: "worktrace.ai".to_string(),
+                include_subdomains: false,
+                excluded_subdomains: vec![],
+            }]
+        );
+    }
+
+    #[test]
+    fn url_rule_flags_reject_bare_labels() {
+        let result = Cli::try_parse_from([
+            "screenpipe",
+            "record",
+            "--url-allow",
+            "worktrace:subdomains",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn explicit_url_rule_flags_replace_persisted_policy() {
+        let cli_args = [
+            "screenpipe",
+            "record",
+            "--url-block",
+            "private.example.com",
+            "--url-allow",
+            "example.com:subdomains",
+        ];
+        let args = record_args(cli_args);
+        let sources = record_sources(cli_args);
+        let mut settings = screenpipe_config::RecordingSettings {
+            ignored_urls: vec![UrlRule::Legacy("old.example".to_string())],
+            included_urls: vec![],
+            ..Default::default()
+        };
+
+        args.apply_explicit_overrides(&mut settings, &sources);
+
+        assert_eq!(settings.ignored_urls.len(), 1);
+        assert!(matches!(settings.ignored_urls[0], UrlRule::Structured(_)));
+        assert!(settings.included_urls[0].include_subdomains);
     }
 
     #[test]

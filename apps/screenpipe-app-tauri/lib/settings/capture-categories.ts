@@ -33,11 +33,11 @@
  */
 
 import {
-	addDomain,
 	addRule,
 	normalizeDomain,
-	removeDomain,
 	removeRule,
+	urlRuleDomain,
+	type UrlRule,
 	type WindowRules,
 } from "./capture-filters";
 
@@ -162,9 +162,17 @@ const hasRule = (list: readonly string[], raw: string): boolean => {
 	return list.some((entry) => entry.trim().toLowerCase() === needle);
 };
 
-const hasDomain = (list: readonly string[], domain: string): boolean => {
+const hasDomain = (list: readonly UrlRule[], domain: string): boolean => {
 	const needle = normalizeDomain(domain);
-	return list.some((entry) => normalizeDomain(entry) === needle);
+	return list.some((entry) => urlRuleDomain(entry) === needle);
+};
+
+const addUrlDomain = (list: readonly UrlRule[], domain: string): UrlRule[] =>
+	hasDomain(list, domain) ? [...list] : [...list, normalizeDomain(domain)];
+
+const removeUrlDomain = (list: readonly UrlRule[], domain: string): UrlRule[] => {
+	const needle = normalizeDomain(domain);
+	return list.filter((entry) => urlRuleDomain(entry) !== needle);
 };
 
 /**
@@ -178,7 +186,7 @@ const hasDomain = (list: readonly string[], domain: string): boolean => {
 export function categoryState(
 	category: CaptureCategory,
 	rules: WindowRules,
-	ignoredUrls: readonly string[],
+	ignoredUrls: readonly UrlRule[],
 ): CategoryState {
 	const total = categorySize(category);
 	if (total === 0) return "off";
@@ -212,7 +220,7 @@ export type CategoryOwnedFilters = {
 
 export interface CategoryTargets {
 	rules: WindowRules;
-	ignoredUrls: string[];
+	ignoredUrls: UrlRule[];
 	/** Absent on state written before provenance was recorded — see `disableCategory`. */
 	owned?: CategoryOwnedFilters;
 }
@@ -241,7 +249,7 @@ export function enableCategory(
 
 	for (const domain of category.domains) {
 		const userAlreadyHadIt = hasDomain(ignoredUrls, domain);
-		ignoredUrls = addDomain(ignoredUrls, domain);
+		ignoredUrls = addUrlDomain(ignoredUrls, domain);
 		if (!userAlreadyHadIt && !domains.includes(domain)) domains.push(domain);
 	}
 
@@ -279,7 +287,7 @@ export function disableCategory(
 	let ignoredUrls = [...targets.ignoredUrls];
 	for (const domain of category.domains) {
 		if (!legacyStateWithoutProvenance && !domains.has(domain)) continue;
-		ignoredUrls = removeDomain(ignoredUrls, domain);
+		ignoredUrls = removeUrlDomain(ignoredUrls, domain);
 		domains.delete(domain);
 	}
 
@@ -301,7 +309,7 @@ export function setCategoryEnabled(
 /** Categories currently on or partly on, for the summary count on the tab. */
 export function activeCategories(
 	rules: WindowRules,
-	ignoredUrls: readonly string[],
+	ignoredUrls: readonly UrlRule[],
 ): CaptureCategory[] {
 	return CAPTURE_CATEGORIES.filter(
 		(category) => categoryState(category, rules, ignoredUrls) !== "off",

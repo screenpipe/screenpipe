@@ -255,6 +255,8 @@ impl CaptureSession {
                 capture_trigger_tx,
                 linker_tx,
                 config.ignored_windows.clone(),
+                config.ignored_urls.clone(),
+                config.included_urls.clone(),
                 cfg!(debug_assertions), // debug: dragflow unavailable, fall back to native dialog; release: dragflow handles it
             )
             .await

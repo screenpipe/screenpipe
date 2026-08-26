@@ -2685,39 +2685,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
     }
   };
 
-  const handleIgnoredUrlsChange = (values: string[]) => {
-    const currentUrls = settings.ignoredUrls || [];
-    const lowerCaseValues = values.map((v) => v.toLowerCase());
-    const currentLowerCase = currentUrls.map((v) => v.toLowerCase());
-
-    // Find added values
-    const addedValues = values.filter(
-      (v) => !currentLowerCase.includes(v.toLowerCase())
-    );
-    // Find removed values
-    const removedValues = currentUrls.filter(
-      (v) => !lowerCaseValues.includes(v.toLowerCase())
-    );
-
-    if (addedValues.length > 0) {
-      const newValue = addedValues[0];
-      handleSettingsChange(
-        {
-          ignoredUrls: [...currentUrls, newValue],
-        },
-        true
-      );
-    } else if (removedValues.length > 0) {
-      const removedValue = removedValues[0];
-      handleSettingsChange(
-        {
-          ignoredUrls: currentUrls.filter((u) => u !== removedValue),
-        },
-        true
-      );
-    }
-  };
-
   // Toggle one app in/out of the meeting-detection ignore list (used by the
   // MeetingAppsPicker rows and chips). Case-insensitive; stores the trimmed
   // label the user picked.

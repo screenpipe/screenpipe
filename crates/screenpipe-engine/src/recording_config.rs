@@ -9,7 +9,7 @@ use screenpipe_audio::meeting_streaming::MeetingStreamingConfig;
 use screenpipe_audio::transcription::deepgram::DeepgramTranscriptionConfig;
 use screenpipe_audio::transcription::VocabularyEntry;
 use screenpipe_audio::vad::VadEngineEnum;
-use screenpipe_config::{ChannelConfig, DbConfig, SemanticContextMode};
+use screenpipe_config::{ChannelConfig, DbConfig, DomainRule, SemanticContextMode, UrlRule};
 use screenpipe_core::Language;
 use screenpipe_screen::PipelineMetrics;
 use std::path::PathBuf;
@@ -114,7 +114,8 @@ pub struct RecordingConfig {
     // Filters
     pub ignored_windows: Vec<String>,
     pub included_windows: Vec<String>,
-    pub ignored_urls: Vec<String>,
+    pub ignored_urls: Vec<UrlRule>,
+    pub included_urls: Vec<DomainRule>,
     /// Automatically detect and skip incognito / private browsing windows.
     pub ignore_incognito_windows: bool,
     /// Use browser-native APIs for more reliable incognito detection on macOS.
@@ -353,6 +354,7 @@ impl RecordingConfig {
             ignored_windows: settings.ignored_windows.clone(),
             included_windows: settings.included_windows.clone(),
             ignored_urls: settings.ignored_urls.clone(),
+            included_urls: settings.included_urls.clone(),
             ignore_incognito_windows: settings.ignore_incognito_windows,
             enhanced_incognito_detection: settings.enhanced_incognito_detection,
             pause_on_drm_content: settings.pause_on_drm_content,
@@ -535,6 +537,7 @@ impl RecordingConfig {
             ignored_windows: self.ignored_windows.clone(),
             included_windows: self.included_windows.clone(),
             ignored_urls: self.ignored_urls.clone(),
+            included_urls: self.included_urls.clone(),
             vision_metrics,
             use_pii_removal: self.use_pii_removal,
             monitor_ids: self.monitor_ids.clone(),
@@ -780,7 +783,19 @@ mod tests {
         let settings = screenpipe_config::RecordingSettings {
             ignored_windows: vec!["Streaming App".to_string()],
             included_windows: vec!["Editor".to_string()],
-            ignored_urls: vec!["https://private.example".to_string()],
+            ignored_urls: vec![
+                UrlRule::Legacy("https://private.example".to_string()),
+                UrlRule::Structured(DomainRule {
+                    domain: "admin.example.com".to_string(),
+                    include_subdomains: true,
+                    excluded_subdomains: vec![],
+                }),
+            ],
+            included_urls: vec![DomainRule {
+                domain: "work.example.com".to_string(),
+                include_subdomains: false,
+                excluded_subdomains: vec![],
+            }],
             ignore_incognito_windows: true,
             enhanced_incognito_detection: true,
             pause_on_drm_content: true,
@@ -803,9 +818,12 @@ mod tests {
         );
 
         assert_eq!(config.ignored_urls, settings.ignored_urls);
+        assert_eq!(config.included_urls, settings.included_urls);
         assert_eq!(vision.output_path, "capture-output");
         assert_eq!(vision.ignored_windows, settings.ignored_windows);
         assert_eq!(vision.included_windows, settings.included_windows);
+        assert_eq!(vision.ignored_urls, settings.ignored_urls);
+        assert_eq!(vision.included_urls, settings.included_urls);
         assert_eq!(vision.monitor_ids, settings.monitor_ids);
         assert!(!vision.use_all_monitors);
         assert!(vision.ignore_incognito_windows);

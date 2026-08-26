@@ -14,7 +14,7 @@ import {
 	type CaptureCategory,
 	type CategoryState,
 } from "@/lib/settings/capture-categories";
-import type { WindowRules } from "@/lib/settings/capture-filters";
+import type { UrlRule, WindowRules } from "@/lib/settings/capture-filters";
 
 interface CategoryRowProps {
 	category: CaptureCategory;
@@ -77,7 +77,7 @@ function CategoryRow({ category, state, onToggle }: CategoryRowProps) {
 
 export interface CategorySwitchesProps {
 	rules: WindowRules;
-	ignoredUrls: string[];
+	ignoredUrls: UrlRule[];
 	onToggle: (category: CaptureCategory, enabled: boolean) => void;
 }
 

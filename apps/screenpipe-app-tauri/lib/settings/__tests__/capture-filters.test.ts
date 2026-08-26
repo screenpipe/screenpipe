@@ -16,6 +16,8 @@ import {
 	isAllowlistActive,
 	isOverBroadDomain,
 	normalizeDomain,
+	normalizeDomainExceptions,
+	normalizeRuleDomain,
 	overBroadDomains,
 	parseRule,
 	parseRules,
@@ -541,6 +543,33 @@ describe("normalizeDomain", () => {
 
 	it("leaves a subdomain intact, since it is a distinct host", () => {
 		expect(normalizeDomain("secure.chase.com")).toBe("secure.chase.com");
+	});
+});
+
+describe("strict domain rules", () => {
+	it.each([
+		[" HTTPS://WWW.Example.COM:8443/path?q=1#x ", "www.example.com"],
+		["docs.google.com/document/1", "docs.google.com"],
+		["worktrace.ai.", "worktrace.ai"],
+	])("normalizes %s to %s while preserving exact www", (input, expected) => {
+		expect(normalizeRuleDomain(input)).toBe(expected);
+	});
+
+	it.each(["", "localhost", "about:blank", "chrome://settings", "not a url"])(
+		"rejects unsupported or over-broad input %s",
+		(input) => expect(normalizeRuleDomain(input)).toBe(""),
+	);
+
+	it("keeps only descendant exceptions and de-duplicates them", () => {
+		expect(
+			normalizeDomainExceptions("worktrace.ai", [
+				"ABC.worktrace.ai",
+				"deep.abc.worktrace.ai",
+				"abc.worktrace.ai",
+				"notworktrace.ai",
+				"worktrace.ai",
+			]),
+		).toEqual(["abc.worktrace.ai", "deep.abc.worktrace.ai"]);
 	});
 });
 

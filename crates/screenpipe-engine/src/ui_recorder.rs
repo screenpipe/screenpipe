@@ -8,6 +8,7 @@
 
 use anyhow::Result;
 use screenpipe_a11y::{ExtractionThreadPriority, UiCaptureConfig, UiRecorder};
+use screenpipe_config::{DomainRule, UrlRule};
 use screenpipe_core::window_pattern::{self, WindowPattern};
 use screenpipe_db::{DatabaseManager, InsertUiEvent};
 use std::collections::VecDeque;
@@ -637,6 +638,21 @@ pub struct UiRecorderHandle {
     tree_walker_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
+fn ui_event_is_ignored(
+    event: &InsertUiEvent,
+    ignored_patterns: &[WindowPattern],
+    url_policy: &screenpipe_a11y::url_filter::UrlPolicy,
+) -> bool {
+    let app_lower = event.app_name.as_deref().unwrap_or_default().to_lowercase();
+    let title_lower = event
+        .window_title
+        .as_deref()
+        .unwrap_or_default()
+        .to_lowercase();
+    window_pattern::matches_any(ignored_patterns, &app_lower, &title_lower)
+        || !url_policy.should_capture(event.browser_url.as_deref())
+}
+
 impl UiRecorderHandle {
     /// Stop the UI recorder
     pub fn stop(&self) {
@@ -689,6 +705,8 @@ pub async fn start_ui_recording(
     capture_trigger_tx: Option<crate::event_driven_capture::TriggerSender>,
     linker_tx: Option<LinkerSender>,
     ignored_windows: Vec<String>,
+    ignored_urls: Vec<UrlRule>,
+    included_urls: Vec<DomainRule>,
     prompt_permissions: bool,
 ) -> Result<UiRecorderHandle> {
     if !config.enabled {
@@ -813,6 +831,7 @@ pub async fn start_ui_recording(
     // storms. Supports both legacy unscoped strings and `App::Title` scoped
     // patterns (see `screenpipe-core::window_pattern`).
     let ignored_patterns = WindowPattern::parse_list(&ignored_windows);
+    let url_policy = screenpipe_a11y::url_filter::UrlPolicy::new(&ignored_urls, &included_urls);
 
     // Spawn the event processing task
     let task_handle = tokio::spawn(async move {
@@ -853,21 +872,7 @@ pub async fn start_ui_recording(
             match handle.recv_timeout(recv_timeout) {
                 Some(event) => {
                     let db_event = event.to_db_insert(Some(session_id.clone()));
-                    let is_ignored = if ignored_patterns.is_empty() {
-                        false
-                    } else {
-                        let app_lower = db_event
-                            .app_name
-                            .as_deref()
-                            .unwrap_or_default()
-                            .to_lowercase();
-                        let title_lower = db_event
-                            .window_title
-                            .as_deref()
-                            .unwrap_or_default()
-                            .to_lowercase();
-                        window_pattern::matches_any(&ignored_patterns, &app_lower, &title_lower)
-                    };
+                    let is_ignored = ui_event_is_ignored(&db_event, &ignored_patterns, &url_policy);
                     let should_record_event = record_input_events
                         && !is_ignored
                         && should_record_input_event(
@@ -1813,6 +1818,28 @@ mod capture_trigger_kind_tests {
             element_ancestors: None,
             frame_id: None,
         }
+    }
+
+    #[test]
+    fn url_allowlist_filters_ui_event_rows_and_triggers() {
+        let policy = screenpipe_a11y::url_filter::UrlPolicy::new(
+            &[],
+            &[DomainRule {
+                domain: "worktrace.ai".to_string(),
+                include_subdomains: true,
+                excluded_subdomains: vec!["private.worktrace.ai".to_string()],
+            }],
+        );
+        let mut allowed = evt(UiEventType::Click);
+        allowed.browser_url = Some("https://app.worktrace.ai".to_string());
+        assert!(!ui_event_is_ignored(&allowed, &[], &policy));
+
+        let mut excepted = evt(UiEventType::Click);
+        excepted.browser_url = Some("https://deep.private.worktrace.ai".to_string());
+        assert!(ui_event_is_ignored(&excepted, &[], &policy));
+
+        let native = evt(UiEventType::Click);
+        assert!(ui_event_is_ignored(&native, &[], &policy));
     }
 
     fn gates(_keystroke: bool, _clipboard: bool) -> TriggerGates {
