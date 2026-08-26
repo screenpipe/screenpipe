@@ -23,6 +23,7 @@ import {
 const LEARNING_STORAGE_KEY = "screenpipe.first-run.learning-window.v1";
 
 type JumpMetrics = {
+  className: string;
   opacity: number;
   pointerEvents: string;
   borderRadius: string;
@@ -139,6 +140,7 @@ async function readJumpMetrics(): Promise<JumpMetrics | null> {
     const rect = button.getBoundingClientRect();
     const composerRect = composerRoot?.getBoundingClientRect();
     return {
+      className: button.className,
       opacity: Number(style.opacity),
       pointerEvents: style.pointerEvents,
       borderRadius: style.borderRadius,
@@ -205,7 +207,7 @@ describe("chat jump to latest", function () {
     await waitForChatSeedHooks();
   });
 
-  it("fades a quiet composer-anchored control until the user scrolls up, then jumps back", async () => {
+  it("hides a quiet composer-anchored control until the user scrolls up, then jumps back", async () => {
     const sessionId = randomUUID();
     await seedLongConversation(sessionId);
     await waitForForegroundSession(sessionId);

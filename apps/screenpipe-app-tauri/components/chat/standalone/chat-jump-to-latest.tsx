@@ -36,7 +36,7 @@ export function ChatJumpToLatest({
         tabIndex={visible ? 0 : -1}
         onClick={onJump}
         className={cn(
-          "absolute left-1/2 bottom-2 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-none border bg-background text-foreground shadow-none transition-opacity duration-150 motion-reduce:transition-none",
+          "absolute left-1/2 bottom-2 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-none border bg-background text-foreground shadow-none",
           "hover:bg-foreground hover:text-background",
           "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground",
           liveVisible

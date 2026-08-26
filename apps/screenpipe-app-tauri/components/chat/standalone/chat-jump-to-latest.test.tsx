@@ -46,6 +46,7 @@ describe("ChatJumpToLatest", () => {
     expect(button.className).toContain("bottom-2");
     expect(button.className).toContain("rounded-none");
     expect(button.className).toContain("shadow-none");
+    expect(button.className).not.toContain("transition-opacity");
     expect(button).toHaveAttribute("data-live", "false");
     fireEvent.click(button);
     expect(onJump).toHaveBeenCalledOnce();
