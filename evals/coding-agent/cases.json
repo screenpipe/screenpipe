@@ -631,11 +631,11 @@
       "name": "Replace the chat new-content pill with a quiet jump control",
       "source": {
         "kind": "git_regression",
-        "fix_commit": "9d2f04ae98a63f086ae963a65ea881eaae233eef",
+        "fix_commit": "e60ca3456109ab490520ce1ed9b460a8cd5576a0",
         "pull_request": "https://github.com/screenpipe/screenpipe/pull/6690"
       },
-      "base_ref": "48ee5b6cf0c65de997d88cb6dd23577964b78dc1",
-      "oracle_ref": "9d2f04ae98a63f086ae963a65ea881eaae233eef",
+      "base_ref": "fed5c6e37603a3fc8aeb0b6fd1b4ef2b041ebd60",
+      "oracle_ref": "e60ca3456109ab490520ce1ed9b460a8cd5576a0",
       "gate": "advisory",
       "trigger_paths": [
         "apps/screenpipe-app-tauri/components/chat/standalone/chat-main-pane.tsx",
