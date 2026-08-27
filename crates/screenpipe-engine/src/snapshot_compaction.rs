@@ -17,7 +17,9 @@ use anyhow::Result;
 use chrono::{Duration, Utc};
 use screenpipe_db::DatabaseManager;
 use std::collections::BTreeMap;
+use std::fs::File;
 use std::future::Future;
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -85,6 +87,100 @@ fn next_poll_delay_secs(frames_found: usize, state: &PowerState) -> u64 {
 }
 
 type CacheUpdates = Vec<(i64, String, i64, f64)>;
+type SnapshotFrame = (i64, String, String);
+
+#[derive(Debug)]
+struct PreparedSnapshotBatch {
+    frames: Vec<SnapshotFrame>,
+    invalid_ids: Vec<i64>,
+    retryable_count: usize,
+    first_dimensions: Option<(u32, u32)>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SnapshotJpegState {
+    Ready((u32, u32)),
+    Invalid,
+    Retryable,
+}
+
+/// Validate enough of a JPEG to keep a malformed leading snapshot from
+/// poisoning the whole image2pipe stream. `into_dimensions` alone only reads
+/// the header, so explicitly require both the SOI and EOI markers as well.
+fn inspect_snapshot_jpeg(path: &Path) -> SnapshotJpegState {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return SnapshotJpegState::Invalid;
+        }
+        Err(_) => return SnapshotJpegState::Retryable,
+    };
+    let file_len = match file.metadata() {
+        Ok(metadata) => metadata.len(),
+        Err(_) => return SnapshotJpegState::Retryable,
+    };
+    if file_len < 4 {
+        return SnapshotJpegState::Invalid;
+    }
+
+    let mut marker = [0_u8; 2];
+    if let Err(error) = file.read_exact(&mut marker) {
+        return if error.kind() == std::io::ErrorKind::UnexpectedEof {
+            SnapshotJpegState::Invalid
+        } else {
+            SnapshotJpegState::Retryable
+        };
+    }
+    if marker != [0xff, 0xd8] {
+        return SnapshotJpegState::Invalid;
+    }
+    if file.seek(SeekFrom::End(-2)).is_err() {
+        return SnapshotJpegState::Retryable;
+    }
+    if let Err(error) = file.read_exact(&mut marker) {
+        return if error.kind() == std::io::ErrorKind::UnexpectedEof {
+            SnapshotJpegState::Invalid
+        } else {
+            SnapshotJpegState::Retryable
+        };
+    }
+    if marker != [0xff, 0xd9] {
+        return SnapshotJpegState::Invalid;
+    }
+    if file.seek(SeekFrom::Start(0)).is_err() {
+        return SnapshotJpegState::Retryable;
+    }
+
+    match image::ImageReader::with_format(BufReader::new(file), image::ImageFormat::Jpeg)
+        .into_dimensions()
+    {
+        Ok((width, height)) if width > 0 && height > 0 => SnapshotJpegState::Ready((width, height)),
+        Err(image::ImageError::IoError(_)) => SnapshotJpegState::Retryable,
+        _ => SnapshotJpegState::Invalid,
+    }
+}
+
+fn prepare_snapshot_batch(frames: &[SnapshotFrame]) -> PreparedSnapshotBatch {
+    let mut prepared = PreparedSnapshotBatch {
+        frames: Vec::with_capacity(frames.len()),
+        invalid_ids: Vec::new(),
+        retryable_count: 0,
+        first_dimensions: None,
+    };
+
+    for frame in frames {
+        match inspect_snapshot_jpeg(Path::new(&frame.1)) {
+            SnapshotJpegState::Ready(dimensions) => {
+                prepared.first_dimensions.get_or_insert(dimensions);
+                prepared.frames.push(frame.clone());
+            }
+            SnapshotJpegState::Invalid => prepared.invalid_ids.push(frame.0),
+            SnapshotJpegState::Retryable => prepared.retryable_count += 1,
+        }
+    }
+
+    prepared
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CompactionPauseReason {
@@ -409,7 +505,7 @@ async fn run_compaction_cycle(
 async fn compact_chunk(
     db: &DatabaseManager,
     device_name: &str,
-    frames: &[(i64, String, String)], // (frame_id, snapshot_path, timestamp_str)
+    frames: &[SnapshotFrame], // (frame_id, snapshot_path, timestamp_str)
     video_quality: &str,
     power_manager: &PowerManagerHandle,
 ) -> Result<CompactChunkOutcome> {
@@ -420,6 +516,32 @@ async fn compact_chunk(
     if let Some(reason) = current_pause_reason(power_manager).await {
         return Ok(CompactChunkOutcome::Paused(reason));
     }
+
+    // image2pipe treats the batch as one byte stream. A malformed first JPEG
+    // prevents ffmpeg from discovering dimensions even when later snapshots
+    // are valid, so validate every candidate before spawning the encoder and
+    // permanently clear pointers to files that cannot be displayed or encoded.
+    let prepared = prepare_snapshot_batch(frames);
+    if !prepared.invalid_ids.is_empty() {
+        warn!(
+            "snapshot compaction: clearing {} invalid snapshot pointers for {}",
+            prepared.invalid_ids.len(),
+            device_name
+        );
+        for batch in prepared.invalid_ids.chunks(100) {
+            let _ = db.clear_snapshot_paths_queued(batch.to_vec()).await;
+        }
+    }
+    if prepared.retryable_count > 0 {
+        debug!(
+            "snapshot compaction: deferring {} temporarily unreadable snapshots for {}",
+            prepared.retryable_count, device_name
+        );
+    }
+    if prepared.frames.is_empty() {
+        return Ok(CompactChunkOutcome::Completed(None));
+    }
+    let frames = prepared.frames.as_slice();
 
     let first_path = Path::new(&frames[0].1);
     let parent_dir = first_path
@@ -442,36 +564,9 @@ async fn compact_chunk(
         .filter_map(|(_, p, _)| std::fs::metadata(p).ok().map(|m| m.len()))
         .sum();
 
-    // Step 1: Confirm at least one JPEG is readable (and grab dimensions for
-    // the log line). Header-only read — ffmpeg does the actual decoding, so
-    // fully decoding a frame here would be pure waste.
-    let (frame_w, frame_h) = {
-        let mut dims = None;
-        for (_, snapshot_path, _) in frames {
-            dims = image::ImageReader::open(Path::new(snapshot_path))
-                .ok()
-                .and_then(|r| r.into_dimensions().ok());
-            if dims.is_some() {
-                break;
-            }
-        }
-        match dims {
-            Some(d) => d,
-            None => {
-                // All JPEGs gone/unreadable — clear stale DB pointers so we don't retry
-                let ids: Vec<i64> = frames.iter().map(|(id, _, _)| *id).collect();
-                debug!(
-                    "snapshot compaction: clearing {} stale snapshot_path entries for {} (files missing)",
-                    ids.len(),
-                    device_name
-                );
-                for batch in ids.chunks(100) {
-                    let _ = db.clear_snapshot_paths_queued(batch.to_vec()).await;
-                }
-                return Ok(CompactChunkOutcome::Completed(None));
-            }
-        }
-    };
+    let (frame_w, frame_h) = prepared
+        .first_dimensions
+        .expect("a non-empty prepared batch has dimensions");
 
     debug!(
         "compacting {} frames for {} into {} (fps={:.2}, {}x{}, source={:.1}MB)",
@@ -554,6 +649,15 @@ async fn compact_chunk(
                 continue;
             }
         }
+    }
+
+    // Every file can still disappear between preflight and the async read.
+    // Do not ask ffmpeg to finalize an empty image2pipe stream: it produces the
+    // noisy "unspecified size / output contains no stream" failure and turns a
+    // stale snapshot into an endless five-minute retry loop.
+    if encoded_frames.is_empty() {
+        abort_ffmpeg_for_pause(child, stdin).await;
+        return Ok(CompactChunkOutcome::Completed(None));
     }
 
     let exit_status =
@@ -872,6 +976,39 @@ mod tests {
         drop(guard);
 
         assert!(mp4.exists(), "DB-owned MP4 must survive guard cleanup");
+    }
+
+    #[test]
+    fn snapshot_batch_skips_truncated_leading_jpeg() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let valid_path = dir.path().join("valid.jpg");
+        let truncated_path = dir.path().join("truncated.jpg");
+        image::DynamicImage::new_rgb8(4, 3)
+            .save_with_format(&valid_path, image::ImageFormat::Jpeg)
+            .expect("write valid JPEG");
+
+        let mut truncated = std::fs::read(&valid_path).expect("read valid JPEG");
+        truncated.truncate(truncated.len() - 2);
+        std::fs::write(&truncated_path, truncated).expect("write truncated JPEG");
+
+        let frames = vec![
+            make_frame(
+                1,
+                truncated_path.to_str().expect("UTF-8 path"),
+                "2025-01-01T00:00:00Z",
+            ),
+            make_frame(
+                2,
+                valid_path.to_str().expect("UTF-8 path"),
+                "2025-01-01T00:00:01Z",
+            ),
+        ];
+
+        let prepared = prepare_snapshot_batch(&frames);
+        assert_eq!(prepared.invalid_ids, vec![1]);
+        assert_eq!(prepared.retryable_count, 0);
+        assert_eq!(prepared.frames, vec![frames[1].clone()]);
+        assert_eq!(prepared.first_dimensions, Some((4, 3)));
     }
 
     #[test]
