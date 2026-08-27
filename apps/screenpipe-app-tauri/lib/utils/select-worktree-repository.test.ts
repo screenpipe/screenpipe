@@ -148,14 +148,14 @@ describe("selectWorktreeRepository", () => {
     expect(mocks.stop).toHaveBeenCalledWith(sessionId);
   });
 
-  it("does not guess when two candidates share the explicitly named repository", () => {
+  it("prefers the first ranked checkout when candidates share an explicit repository name", () => {
     expect(
       deterministicRepositoryCandidate({
         task: "fix the screenpipe repo",
         candidates: ["/repos/one/screenpipe", "/repos/two/screenpipe"],
         startingPath: "/tmp/task",
       }),
-    ).toBeNull();
+    ).toBe("/repos/one/screenpipe");
   });
 
   it("does not partially match a related repository name", () => {

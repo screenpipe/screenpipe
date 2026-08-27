@@ -162,6 +162,7 @@ export function useCodingWorkspace({
           generation === requestGenerationRef.current &&
           conversationIdRef.current === requestConversationId
         ) {
+          setEnabled(false);
           setError(message);
           toast({
             title: "could not create coding workspace",
@@ -259,6 +260,7 @@ export function useCodingWorkspace({
             generation === requestGenerationRef.current &&
             conversationIdRef.current === requestConversationId
           ) {
+            setEnabled(false);
             setError(message);
             toast({
               title: "could not resolve a coding repository",
@@ -294,6 +296,7 @@ export function useCodingWorkspace({
           generation === requestGenerationRef.current &&
           conversationIdRef.current === requestConversationId
         ) {
+          setEnabled(false);
           setError(message);
           toast({
             title: "could not create coding workspace",

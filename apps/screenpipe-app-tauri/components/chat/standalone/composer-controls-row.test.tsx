@@ -116,10 +116,64 @@ describe("ComposerControlsRow", () => {
     );
 
     expect(screen.getByText("preparing worktree")).toBeInTheDocument();
-    expect(screen.getByLabelText("worktree")).toHaveAttribute(
-      "title",
-      "run this task in its own isolated Git worktree",
+    expect(
+      screen.getByRole("status", { name: "preparing worktree" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("coding-workspace-checkbox"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps a failed worktree explanation out of the compact controls row", () => {
+    render(
+      <ComposerControlsRow
+        canChat
+        filters={
+          {
+            activeFilterCount: 0,
+            activeFilters: [],
+            activeFilterLabels: [],
+            hasActiveFilters: false,
+            appFilterOpen: false,
+            onFilterMenuOpenChange: vi.fn(),
+          } as any
+        }
+        modelControls={{
+          settings: { aiPresets: [] },
+          activePreset: null,
+          activePipeExecution: null,
+          currentQueueSessionId: null,
+          onSelectPreset: vi.fn(),
+          onPresetSaved: vi.fn(),
+        }}
+        codingWorkspace={{
+          ...idleCodingWorkspace,
+          error: "The AI did not choose a repository in time",
+        }}
+        isStreaming={false}
+        sendButton={{
+          isStopMode: false,
+          hasPendingDocs: false,
+          sendDisabled: false,
+          onStop: vi.fn(),
+        }}
+      />,
     );
+
+    expect(screen.getByLabelText("worktree")).not.toBeChecked();
+    expect(
+      screen.getByRole("button", { name: "worktree setup failed" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("The AI did not choose a repository in time"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "worktree setup failed" }),
+    );
+    expect(
+      screen.getByText("The AI did not choose a repository in time"),
+    ).toBeInTheDocument();
   });
 
   it("uses an upward arrow for the send action", () => {

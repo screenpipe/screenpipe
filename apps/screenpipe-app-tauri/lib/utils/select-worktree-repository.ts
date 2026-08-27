@@ -37,8 +37,10 @@ function repositoryName(repositoryPath: string): string {
  *
  * The starting directory owns the strongest signal: a coding task launched
  * from inside a repository belongs to that repository. Outside a repository,
- * accept only one exact, full repository-name mention. Partial keyword scoring
- * stays deliberately out of this path so "screenpipe" cannot silently choose
+ * accept an exact, full repository-name mention and preserve discovery order
+ * when multiple checkouts share that name. Discovery already ranks the current
+ * and most recently active repositories first. Partial keyword scoring stays
+ * deliberately out of this path so "screenpipe" cannot silently choose
  * "website-screenpipe", and ambiguous requests still reach the constrained
  * router agent.
  */
@@ -77,9 +79,7 @@ export function deterministicRepositoryCandidate({
     .sort((left, right) => right.name.length - left.name.length);
   if (matches.length === 0) return null;
 
-  const bestName = matches[0].name;
-  const bestMatches = matches.filter(({ name }) => name === bestName);
-  return bestMatches.length === 1 ? bestMatches[0].candidate : null;
+  return matches[0].candidate;
 }
 
 function routerPrompt(

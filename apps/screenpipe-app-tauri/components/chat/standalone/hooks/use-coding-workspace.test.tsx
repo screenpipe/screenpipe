@@ -348,4 +348,39 @@ describe("useCodingWorkspace", () => {
     expect(hook.result.current.enabled).toBe(true);
     expect(hook.result.current.error).toBeNull();
   });
+
+  it("disarms worktree mode when repository selection fails", async () => {
+    mocks.get.mockResolvedValue({ status: "ok", data: null });
+    mocks.prepare.mockResolvedValue({
+      status: "ok",
+      data: {
+        status: "select",
+        workspace: null,
+        candidates: ["/repos/screenpipe"],
+        reason: "agent repository selection required",
+        routeSessionId: "__worktree-route:conversation-a:route-3",
+      },
+    });
+    mocks.route.mockRejectedValue(
+      new Error("The AI did not choose a repository"),
+    );
+
+    const hook = renderHook(() =>
+      useCodingWorkspace({ conversationId: "conversation-a", locked: false }),
+    );
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+    await act(async () => {
+      await hook.result.current.toggleWorktree(true);
+    });
+
+    await act(async () => {
+      await hook.result.current.prepareForPrompt("make the button blue", router);
+    });
+
+    expect(hook.result.current.enabled).toBe(false);
+    expect(hook.result.current.isLoading).toBe(false);
+    expect(hook.result.current.error).toBe(
+      "The AI did not choose a repository",
+    );
+  });
 });
