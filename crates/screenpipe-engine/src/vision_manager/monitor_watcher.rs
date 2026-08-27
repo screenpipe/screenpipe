@@ -185,6 +185,45 @@ fn vision_capture_wedged(
     )
 }
 
+
+/// Pure decision: is the active capture task for a monitor stale relative to a
+/// fresh enumeration of the same display? Two shapes (both macOS):
+/// - **backend**: the task still holds the bounded CoreGraphics fallback while
+///   ScreenCaptureKit has recovered (pre-existing upgrade path).
+/// - **dimensions** (#6650): the task was started from a monitor handle
+///   enumerated mid lock/display-layout transition, carrying a stale display
+///   mode (e.g. 1920x1080 on a 3008x1692 display, or a previous scaled mode
+///   such as 1728x1117 on a 2056x1329 built-in panel). The pinned size is
+///   never re-checked by the stream itself, so every frame stays downscaled
+///   and OCR quality collapses until the task is restarted.
+///
+/// `active_*` values are `None` when the monitor has no active task; that is
+/// never stale — the regular hot-plug path handles starting it.
+/// Clock-free for unit testing, mirroring [`vision_capture_wedged`].
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn stale_capture_task_reason(
+    active_uses_sck: Option<bool>,
+    fresh_uses_sck: bool,
+    active_dimensions: Option<(u32, u32)>,
+    fresh_dimensions: (u32, u32),
+) -> Option<&'static str> {
+    if !fresh_uses_sck {
+        // Mid-transition enumerations can come from the bounded CoreGraphics
+        // recovery path with unreliable geometry; never chase dimensions (or
+        // restart at all) until a healthy SCK enumeration is available.
+        return None;
+    }
+    if active_uses_sck == Some(false) {
+        return Some("CoreGraphics fallback while ScreenCaptureKit recovered");
+    }
+    match active_dimensions {
+        Some(active) if active != fresh_dimensions => {
+            Some("started with stale display mode dimensions")
+        }
+        _ => None,
+    }
+}
+
 fn vision_capture_wedged_with(
     config: &VisionWatchdogConfig,
     uptime_secs: f64,
@@ -1102,28 +1141,35 @@ pub async fn start_monitor_watcher(
             // otherwise excluded-window capture keeps failing closed forever.
             #[cfg(target_os = "macos")]
             for monitor in &current_monitors {
-                if monitor.uses_sck_backend()
-                    && vision_manager.active_monitor_uses_sck(monitor.id()) == Some(false)
-                {
-                    info!(
-                        "ScreenCaptureKit recovered for monitor {}; replacing temporary CoreGraphics fallback",
-                        monitor.id()
+                let Some(reason) = stale_capture_task_reason(
+                    vision_manager.active_monitor_uses_sck(monitor.id()),
+                    monitor.uses_sck_backend(),
+                    vision_manager.active_monitor_started_dimensions(monitor.id()),
+                    monitor.dimensions(),
+                ) else {
+                    continue;
+                };
+                info!(
+                    "monitor {} capture task is stale ({}); restarting with fresh handle ({}x{})",
+                    monitor.id(),
+                    reason,
+                    monitor.width(),
+                    monitor.height()
+                );
+                if let Err(e) = vision_manager.stop_monitor(monitor.id()).await {
+                    warn!(
+                        "failed to stop stale capture task for monitor {}: {:?}",
+                        monitor.id(),
+                        e
                     );
-                    if let Err(e) = vision_manager.stop_monitor(monitor.id()).await {
-                        warn!(
-                            "failed to stop CoreGraphics fallback for monitor {}: {:?}",
-                            monitor.id(),
-                            e
-                        );
-                        continue;
-                    }
-                    if let Err(e) = vision_manager.start_monitor_handle(monitor.clone()).await {
-                        warn!(
-                            "failed to upgrade monitor {} back to ScreenCaptureKit: {:?}",
-                            monitor.id(),
-                            e
-                        );
-                    }
+                    continue;
+                }
+                if let Err(e) = vision_manager.start_monitor_handle(monitor.clone()).await {
+                    warn!(
+                        "failed to restart monitor {} with fresh handle: {:?}",
+                        monitor.id(),
+                        e
+                    );
                 }
             }
 
@@ -1818,4 +1864,51 @@ mod tests {
             "re-arrangement with unchanged ids must change the canonical json"
         );
     }
+
+    #[test]
+    fn stale_task_detects_fallback_display_mode_dimensions() {
+        // #6650: stream created mid lock/dock transition pinned 1920x1080
+        // while the display's real mode is 3008x1692.
+        assert_eq!(
+            stale_capture_task_reason(Some(true), true, Some((1920, 1080)), (3008, 1692)),
+            Some("started with stale display mode dimensions")
+        );
+        // Built-in panel variant: previous scaled mode 1728x1117 vs 2056x1329.
+        assert_eq!(
+            stale_capture_task_reason(Some(true), true, Some((1728, 1117)), (2056, 1329)),
+            Some("started with stale display mode dimensions")
+        );
+    }
+
+    #[test]
+    fn stale_task_ignores_matching_dimensions_and_inactive_monitors() {
+        // Matching dimensions: healthy, nothing to do.
+        assert_eq!(
+            stale_capture_task_reason(Some(true), true, Some((3008, 1692)), (3008, 1692)),
+            None
+        );
+        // No active task for this monitor: hot-plug path owns it, never stale.
+        assert_eq!(stale_capture_task_reason(None, true, None, (3008, 1692)), None);
+    }
+
+    #[test]
+    fn stale_task_still_detects_coregraphics_fallback_backend() {
+        // Pre-existing upgrade path keeps priority over the dimension check.
+        assert_eq!(
+            stale_capture_task_reason(Some(false), true, Some((3008, 1692)), (3008, 1692)),
+            Some("CoreGraphics fallback while ScreenCaptureKit recovered")
+        );
+        // Fresh handle itself still on CG fallback: no upgrade available yet,
+        // and dimension differences are ignored too — CG-recovery geometry is
+        // unreliable mid-transition, so no restart is chased until SCK is back.
+        assert_eq!(
+            stale_capture_task_reason(Some(false), false, Some((3008, 1692)), (3008, 1692)),
+            None
+        );
+        assert_eq!(
+            stale_capture_task_reason(Some(true), false, Some((1920, 1080)), (3008, 1692)),
+            None
+        );
+    }
+
 }

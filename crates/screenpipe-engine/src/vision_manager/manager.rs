@@ -119,6 +119,13 @@ pub struct VisionManager {
     /// to upgrade the running task after SCK recovers.
     #[cfg(target_os = "macos")]
     monitor_sck_backends: Arc<DashMap<u32, bool>>,
+    /// Dimensions the active capture task was started with. A monitor handle
+    /// enumerated mid lock/display-layout transition can carry a stale display
+    /// mode (issue #6650: e.g. 1920x1080 on a 3008x1692 display) and the
+    /// stream then keeps that size forever. The watcher compares this against
+    /// fresh enumerations to restart the task once the real mode is visible.
+    #[cfg(target_os = "macos")]
+    monitor_started_dimensions: Arc<DashMap<u32, (u32, u32)>>,
     /// Per-monitor pipeline heartbeat. Aggregate metrics remain in `config` for
     /// `/health`; these independent clocks are exclusively the recovery source
     /// so partial multi-display stalls are observable.
@@ -229,6 +236,8 @@ impl VisionManager {
             recording_tasks: Arc::new(DashMap::new()),
             #[cfg(target_os = "macos")]
             monitor_sck_backends: Arc::new(DashMap::new()),
+            #[cfg(target_os = "macos")]
+            monitor_started_dimensions: Arc::new(DashMap::new()),
             monitor_liveness: Arc::new(DashMap::new()),
             hd_recording_tasks: Arc::new(DashMap::new()),
             trigger_tx,
@@ -573,6 +582,8 @@ impl VisionManager {
 
         #[cfg(target_os = "macos")]
         let uses_sck_backend = monitor.uses_sck_backend();
+        #[cfg(target_os = "macos")]
+        let started_dimensions = monitor.dimensions();
         let liveness = Arc::new(PipelineMetrics::new());
         let handle = self
             .start_event_driven_monitor(monitor_id, monitor, liveness.clone())
@@ -582,6 +593,9 @@ impl VisionManager {
         #[cfg(target_os = "macos")]
         self.monitor_sck_backends
             .insert(monitor_id, uses_sck_backend);
+        #[cfg(target_os = "macos")]
+        self.monitor_started_dimensions
+            .insert(monitor_id, started_dimensions);
         self.recording_tasks.insert(monitor_id, handle);
 
         Ok(())
@@ -788,6 +802,8 @@ impl VisionManager {
         self.monitor_liveness.remove(&monitor_id);
         #[cfg(target_os = "macos")]
         self.monitor_sck_backends.remove(&monitor_id);
+        #[cfg(target_os = "macos")]
+        self.monitor_started_dimensions.remove(&monitor_id);
         // Stop the HD recorder first. Aborting drops its ffmpeg stdin, which
         // sends EOF so ffmpeg finalizes the .mp4 (moov atom) on its own.
         if let Some((_, hd_handle)) = self.hd_recording_tasks.remove(&monitor_id) {
@@ -839,6 +855,8 @@ impl VisionManager {
             self.monitor_liveness.remove(id);
             #[cfg(target_os = "macos")]
             self.monitor_sck_backends.remove(id);
+            #[cfg(target_os = "macos")]
+            self.monitor_started_dimensions.remove(id);
             if let Some((_, handle)) = self.recording_tasks.remove(id) {
                 // Await to clean up the JoinHandle and capture exit reason
                 match handle.await {
@@ -871,6 +889,18 @@ impl VisionManager {
     #[cfg(target_os = "macos")]
     pub(crate) fn active_monitor_uses_sck(&self, monitor_id: u32) -> Option<bool> {
         self.monitor_sck_backends
+            .get(&monitor_id)
+            .map(|entry| *entry.value())
+    }
+
+    /// Return the dimensions the active capture task for a macOS monitor was
+    /// started with, so the watcher can detect a stale display mode (#6650).
+    #[cfg(target_os = "macos")]
+    pub(crate) fn active_monitor_started_dimensions(
+        &self,
+        monitor_id: u32,
+    ) -> Option<(u32, u32)> {
+        self.monitor_started_dimensions
             .get(&monitor_id)
             .map(|entry| *entry.value())
     }
