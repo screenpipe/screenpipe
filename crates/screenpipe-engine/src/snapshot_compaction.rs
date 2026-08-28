@@ -155,6 +155,11 @@ fn inspect_snapshot_jpeg(path: &Path) -> SnapshotJpegState {
         .into_dimensions()
     {
         Ok((width, height)) if width > 0 && height > 0 => SnapshotJpegState::Ready((width, height)),
+        Err(image::ImageError::IoError(error))
+            if error.kind() == std::io::ErrorKind::UnexpectedEof =>
+        {
+            SnapshotJpegState::Invalid
+        }
         Err(image::ImageError::IoError(_)) => SnapshotJpegState::Retryable,
         _ => SnapshotJpegState::Invalid,
     }
@@ -1009,6 +1014,33 @@ mod tests {
         assert_eq!(prepared.retryable_count, 0);
         assert_eq!(prepared.frames, vec![frames[1].clone()]);
         assert_eq!(prepared.first_dimensions, Some((4, 3)));
+    }
+
+    #[test]
+    fn snapshot_inspection_rejects_marker_only_and_missing_files() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let marker_only_path = dir.path().join("marker-only.jpg");
+        std::fs::write(&marker_only_path, [0xff, 0xd8, 0xff, 0xd9])
+            .expect("write marker-only JPEG");
+
+        assert_eq!(
+            inspect_snapshot_jpeg(&marker_only_path),
+            SnapshotJpegState::Invalid
+        );
+        assert_eq!(
+            inspect_snapshot_jpeg(&dir.path().join("missing.jpg")),
+            SnapshotJpegState::Invalid
+        );
+    }
+
+    #[test]
+    fn snapshot_inspection_defers_non_file_io_failures() {
+        let dir = tempfile::tempdir().expect("temp dir");
+
+        assert_eq!(
+            inspect_snapshot_jpeg(dir.path()),
+            SnapshotJpegState::Retryable
+        );
     }
 
     #[test]
