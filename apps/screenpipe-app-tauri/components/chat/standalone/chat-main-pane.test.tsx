@@ -140,4 +140,35 @@ describe("ChatMainPane", () => {
     render(<ChatMainPane {...paneProps("chat", [])} />);
     expect(screen.queryByTestId("first-run-banner")).not.toBeInTheDocument();
   });
+
+  it("renders pendingSend after the message list in the DOM hierarchy", () => {
+    const existingMessage: Message = {
+      id: "existing-message",
+      role: "user",
+      content: "first message",
+      timestamp: Date.now(),
+    };
+    render(
+      <ChatMainPane
+        {...paneProps("chat", [existingMessage])}
+        pendingSend={{ text: "follow-up message" }}
+      />,
+    );
+
+    const messageList = screen.getByTestId("message-list");
+    const pendingBubble = screen.getByTestId("chat-pending-user-message");
+
+    expect(messageList).toBeInTheDocument();
+    expect(pendingBubble).toBeInTheDocument();
+    expect(pendingBubble).toHaveTextContent("follow-up message");
+
+    // pendingSend must follow messageList in the DOM order so follow-up sends do not jump to the top
+    expect(
+      Boolean(
+        messageList.compareDocumentPosition(pendingBubble) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ),
+    ).toBe(true);
+  });
 });
+

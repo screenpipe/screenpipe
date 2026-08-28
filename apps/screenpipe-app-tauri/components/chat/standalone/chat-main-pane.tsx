@@ -251,6 +251,14 @@ export function ChatMainPane({
               <FirstRunLearningBanner fallback={homeStarter} />
             )}
             {!firstRunLearningEnabled && homeStarter}
+            {/* A conversation switch is a hard visual boundary. Remounting the
+                list prevents AnimatePresence from carrying an outgoing chat's
+                exit nodes into the new chat's empty state. */}
+            <ChatMessageList
+              key={conversationId ?? "blank-chat"}
+              {...messageListProps}
+            />
+
             {/* The message the user just sent, shown from the send frame until
                 the durable row replaces it. Same geometry as a real user row so
                 nothing moves when the swap happens. */}
@@ -268,13 +276,6 @@ export function ChatMainPane({
                 </div>
               </div>
             )}
-            {/* A conversation switch is a hard visual boundary. Remounting the
-                list prevents AnimatePresence from carrying an outgoing chat's
-                exit nodes into the new chat's empty state. */}
-            <ChatMessageList
-              key={conversationId ?? "blank-chat"}
-              {...messageListProps}
-            />
 
             <div ref={messagesEndRef} />
           </div>
