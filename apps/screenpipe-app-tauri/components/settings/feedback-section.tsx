@@ -95,7 +95,12 @@ export function FeedbackSection() {
           </div>
         </button>
 
-        <div className="px-3 py-2.5 bg-card border border-border">
+        <button
+          type="button"
+          data-testid="help-docs-link"
+          onClick={() => open("https://docs.screenpi.pe")}
+          className="group w-full text-left px-3 py-2.5 bg-card border border-border hover:border-foreground transition-colors duration-150"
+        >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <BookOpen className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -104,16 +109,18 @@ export function FeedbackSection() {
                 <p className="text-xs text-muted-foreground">guides, API reference, integrations</p>
               </div>
             </div>
-            <button
-              onClick={() => open("https://docs.screenpi.pe")}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors duration-150"
-            >
+            <span className="text-xs text-muted-foreground group-hover:text-foreground transition-colors duration-150 shrink-0">
               docs.screenpi.pe →
-            </button>
+            </span>
           </div>
-        </div>
+        </button>
 
-        <div className="px-3 py-2.5 bg-card border border-border">
+        <button
+          type="button"
+          data-testid="help-youtube-link"
+          onClick={() => open("https://www.youtube.com/@screen_pipe/videos")}
+          className="group w-full text-left px-3 py-2.5 bg-card border border-border hover:border-foreground transition-colors duration-150"
+        >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <Youtube className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -122,16 +129,18 @@ export function FeedbackSection() {
                 <p className="text-xs text-muted-foreground">watch demos and walkthroughs</p>
               </div>
             </div>
-            <button
-              onClick={() => open("https://www.youtube.com/@screen_pipe/videos")}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors duration-150"
-            >
+            <span className="text-xs text-muted-foreground group-hover:text-foreground transition-colors duration-150 shrink-0">
               youtube →
-            </button>
+            </span>
           </div>
-        </div>
+        </button>
 
-        <div className="px-3 py-2.5 bg-card border border-border">
+        <button
+          type="button"
+          data-testid="help-ideas-link"
+          onClick={() => open(screenpipeWebUrl("/ideas", "https://screenpipe.com"))}
+          className="group w-full text-left px-3 py-2.5 bg-card border border-border hover:border-foreground transition-colors duration-150"
+        >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <Lightbulb className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -140,16 +149,18 @@ export function FeedbackSection() {
                 <p className="text-xs text-muted-foreground">vote or submit requests</p>
               </div>
             </div>
-            <button
-              onClick={() => open(screenpipeWebUrl("/ideas", "https://screenpipe.com"))}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors duration-150"
-            >
+            <span className="text-xs text-muted-foreground group-hover:text-foreground transition-colors duration-150 shrink-0">
               screenpipe.com/ideas →
-            </button>
+            </span>
           </div>
-        </div>
+        </button>
 
-        <div className="px-3 py-2.5 bg-card border border-border">
+        <button
+          type="button"
+          data-testid="help-github-link"
+          onClick={() => open("https://github.com/screenpipe/screenpipe/issues")}
+          className="group w-full text-left px-3 py-2.5 bg-card border border-border hover:border-foreground transition-colors duration-150"
+        >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <Github className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -158,16 +169,18 @@ export function FeedbackSection() {
                 <p className="text-xs text-muted-foreground">bugs & technical issues</p>
               </div>
             </div>
-            <button
-              onClick={() => open("https://github.com/screenpipe/screenpipe/issues")}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors duration-150"
-            >
+            <span className="text-xs text-muted-foreground group-hover:text-foreground transition-colors duration-150 shrink-0">
               open →
-            </button>
+            </span>
           </div>
-        </div>
+        </button>
 
-        <div className="px-3 py-2.5 bg-card border border-border">
+        <button
+          type="button"
+          data-testid="help-discord-link"
+          onClick={() => open("https://discord.com/invite/screenpipe")}
+          className="group w-full text-left px-3 py-2.5 bg-card border border-border hover:border-foreground transition-colors duration-150"
+        >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <DiscordIcon className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -176,17 +189,18 @@ export function FeedbackSection() {
                 <p className="text-xs text-muted-foreground">community support and discussion</p>
               </div>
             </div>
-            <button
-              data-testid="help-discord-link"
-              onClick={() => open("https://discord.com/invite/screenpipe")}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors duration-150"
-            >
+            <span className="text-xs text-muted-foreground group-hover:text-foreground transition-colors duration-150 shrink-0">
               join →
-            </button>
+            </span>
           </div>
-        </div>
+        </button>
 
-        <div className="px-3 py-2.5 bg-card border border-border">
+        <button
+          type="button"
+          data-testid="help-changelog-link"
+          onClick={() => open(screenpipeWebUrl("/changelog", "https://screenpipe.com"))}
+          className="group w-full text-left px-3 py-2.5 bg-card border border-border hover:border-foreground transition-colors duration-150"
+        >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -195,14 +209,11 @@ export function FeedbackSection() {
                 <p className="text-xs text-muted-foreground">what&apos;s new in each version</p>
               </div>
             </div>
-            <button
-              onClick={() => open(screenpipeWebUrl("/changelog", "https://screenpipe.com"))}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors duration-150"
-            >
+            <span className="text-xs text-muted-foreground group-hover:text-foreground transition-colors duration-150 shrink-0">
               screenpipe.com/changelog →
-            </button>
+            </span>
           </div>
-        </div>
+        </button>
 
       </div>
     </div>
