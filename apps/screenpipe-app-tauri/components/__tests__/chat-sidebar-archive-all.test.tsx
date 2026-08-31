@@ -45,6 +45,10 @@ vi.mock("@/lib/hooks/use-tauri-event", () => ({
   useTauriEvent: vi.fn(),
 }));
 
+vi.mock("@/lib/hooks/use-settings", () => ({
+  useSettings: () => ({ settings: { externalChatImportEnabled: true } }),
+}));
+
 vi.mock("@/lib/chat/external-chat-sync", () => ({
   startExternalChatSync: vi.fn(async () => ({
     stop: vi.fn(),

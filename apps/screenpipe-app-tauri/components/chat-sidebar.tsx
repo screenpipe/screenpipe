@@ -141,6 +141,7 @@ import {
   uniquePipeExecutionConversations,
 } from "@/lib/pipe-execution-status";
 import { parsePipeSessionId } from "@/lib/events/types";
+import { useSettings } from "@/lib/hooks/use-settings";
 import type { ChatConversation } from "@/lib/hooks/use-settings";
 import {
   startExternalChatSync,
@@ -681,6 +682,13 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   // Local Codex and Claude histories are part of the chat index, not a
   // separate import workflow. Watch their native transcripts while the app is
   // open; a bounded focus reconciliation recovers any events the OS dropped.
+  //
+  // Gated on externalChatImportEnabled: these transcripts are written by another
+  // agent, so the user can stop the watcher and every further copy. The flag is
+  // in the dependency list, so turning it off tears the watcher down through the
+  // existing cleanup instead of waiting for a restart.
+  const { settings } = useSettings();
+  const externalChatImportEnabled = settings.externalChatImportEnabled ?? true;
   useEffect(() => {
     let cancelled = false;
     let controller: ExternalChatSyncController | null = null;
@@ -692,6 +700,13 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     };
     const start = async () => {
       try {
+        // Hydration is not part of the import. Opting out stops screenpipe
+        // reading another agent's transcripts; it must not stop the sidebar
+        // loading the user's own saved chats from disk.
+        if (!externalChatImportEnabled) {
+          await hydrate();
+          return;
+        }
         const nextController = await startExternalChatSync();
         if (cancelled) {
           nextController.stop();
@@ -718,7 +733,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       controller?.stop();
       window.removeEventListener("focus", onFocus);
     };
-  }, [actions]);
+  }, [actions, externalChatImportEnabled]);
 
   const { pinned, recents, pipes, archived } = useVisibleChatSections();
   const [hiddenRecentSources, setHiddenRecentSources] = useState<Set<RecentSource>>(

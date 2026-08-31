@@ -44,6 +44,7 @@ import {
   ClipboardX,
   Keyboard,
   MousePointerClick,
+  MessagesSquare,
   ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -1611,8 +1612,35 @@ export function PrivacySection() {
 
       <div className="space-y-2">
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
-          Agent logs
+          Coding agents
         </h2>
+
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <MessagesSquare className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    Import local agent chats
+                    <HelpTooltip text="Reads Claude Code transcripts from ~/.claude/projects and Codex transcripts from ~/.codex/sessions while the app is open, and copies them into your screenpipe chat history. Turning this off stops the watcher and any further copies. Conversations already imported stay in your history; delete or archive them individually if you want them gone." />
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Copy Claude Code and Codex transcripts into chat history
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="externalChatImportEnabled"
+                checked={settings.externalChatImportEnabled ?? true}
+                onCheckedChange={(checked) =>
+                  handleSettingsChange({ externalChatImportEnabled: checked }, false)
+                }
+                data-testid="privacy-external-chat-import-switch"
+              />
+            </div>
+          </CardContent>
+        </Card>
 
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">

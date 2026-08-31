@@ -327,6 +327,12 @@ export type Settings = SettingsStore & {
 	updateChannel?: UpdateChannel;
 	chatHistory?: ChatHistoryStore;
 	/**
+	 * Import local Claude Code and Codex transcripts into chat history.
+	 * Default true, so existing installs keep the behavior they already have.
+	 * Turning it off stops the watcher and any further copies.
+	 */
+	externalChatImportEnabled?: boolean;
+	/**
 	 * Entries the capture-category switches created, so turning a category off
 	 * removes only those and never a rule the user wrote by hand.
 	 */
@@ -712,6 +718,7 @@ const applyProCloudAudioDefaults = (settings: Settings): Settings => {
 
 let DEFAULT_SETTINGS: Settings = {
 			dataSyncEnabled: false,
+			externalChatImportEnabled: true,
 			activitiesEnabled: false,
 			activitiesIntervalMinutes: 15,
 			aiPresets: makeDefaultPresets(false) as any,
