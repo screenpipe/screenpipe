@@ -563,6 +563,11 @@ export type Settings = SettingsStore & {
 	 * window) has been completed or skipped. Stored here so it persists in the
 	 * normal settings store with no bindings regen. Default off. */
 	firstRunGuideDone?: boolean;
+	/** Auto-import local Claude Code (~/.claude/projects/**.jsonl) and Codex
+	 * (~/.codex/sessions/**.jsonl) transcripts into the chat index. Default on
+	 * so the Recents list shows those chats next to screenpipe chats; flip
+	 * off to stop the file watcher and any further copies (#6696). */
+	importExternalChatsEnabled?: boolean;
 }
 
 export function getEffectiveFilters(settings: Settings) {
@@ -819,6 +824,7 @@ let DEFAULT_SETTINGS: Settings = {
 			hideAppInScreenShare: true,
 			disableTimeline: false,
 			firstRunGuideDone: false,
+			importExternalChatsEnabled: true,
 			videoQuality: "balanced",
 			transcriptionMode: "batch",
 			cloudArchiveEnabled: false,

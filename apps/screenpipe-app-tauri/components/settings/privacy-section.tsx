@@ -23,6 +23,10 @@ export const searchIndex: SettingsField[] = [
   },
   { label: "PII masking", keywords: ["mask", "redact", "columns", "url", "fields"] },
   {
+    label: "Import local Claude Code / Codex chats",
+    keywords: ["claude", "codex", "agent", "import", "sync", "transcript"],
+  },
+  {
     label: "Remote support logs",
     keywords: ["support", "diagnostic", "troubleshooting", "remote", "logs"],
   },
@@ -177,18 +181,18 @@ const REDACTION_PREVIEW_PARTS: (
   | { text: string }
   | { cat: string; value: string; ph: string }
 )[] = [
-  { text: "hi, i'm " },
-  { cat: "person", value: "Jordan Lee", ph: "[PERSON]" },
-  { text: " — email " },
-  { cat: "email", value: "jordan@example.com", ph: "[EMAIL]" },
-  { text: ", cell " },
-  { cat: "phone", value: "(555) 010-2983", ph: "[PHONE]" },
-  { text: ", ssn " },
-  { cat: "id", value: "412-09-1764", ph: "[ID]" },
-  { text: ", key " },
-  { cat: "secret", value: "AKIA…X7Q", ph: "[SECRET]" },
-  { text: "." },
-];
+    { text: "hi, i'm " },
+    { cat: "person", value: "Jordan Lee", ph: "[PERSON]" },
+    { text: " — email " },
+    { cat: "email", value: "jordan@example.com", ph: "[EMAIL]" },
+    { text: ", cell " },
+    { cat: "phone", value: "(555) 010-2983", ph: "[PHONE]" },
+    { text: ", ssn " },
+    { cat: "id", value: "412-09-1764", ph: "[ID]" },
+    { text: ", key " },
+    { cat: "secret", value: "AKIA…X7Q", ph: "[SECRET]" },
+    { text: "." },
+  ];
 
 function RedactionExamplePreview({ labels }: { labels: string[] }) {
   const isOn = (cat: string) => cat === "secret" || labels.includes(cat);
@@ -250,7 +254,7 @@ function RedactionWherePreview({
       className={cn(
         "relative inline-block rounded-sm align-baseline",
         hovered === r &&
-          "outline outline-2 outline-foreground outline-offset-2",
+        "outline outline-2 outline-foreground outline-offset-2",
       )}
     >
       <span className={cn(mono && "font-mono", on(r) && "invisible")}>
@@ -596,16 +600,16 @@ export function PrivacySection() {
     desc: string;
     always?: boolean;
   }[] = [
-    { value: "secret", label: "Passwords & keys", desc: "passwords, API keys, tokens", always: true },
-    { value: "id", label: "ID numbers", desc: "SSNs, credit cards, account & license numbers" },
-    { value: "person", label: "Names", desc: "people's names" },
-    { value: "email", label: "Email addresses", desc: "email addresses" },
-    { value: "phone", label: "Phone numbers", desc: "phone numbers" },
-    { value: "address", label: "Mailing addresses", desc: "postal addresses" },
-    { value: "url", label: "Links with tokens", desc: "links carrying tokens or session IDs" },
-    { value: "date", label: "Dates", desc: "dates of birth, timestamps" },
-    { value: "sensitive", label: "Health & financial details", desc: "health, financial, identity context" },
-  ];
+      { value: "secret", label: "Passwords & keys", desc: "passwords, API keys, tokens", always: true },
+      { value: "id", label: "ID numbers", desc: "SSNs, credit cards, account & license numbers" },
+      { value: "person", label: "Names", desc: "people's names" },
+      { value: "email", label: "Email addresses", desc: "email addresses" },
+      { value: "phone", label: "Phone numbers", desc: "phone numbers" },
+      { value: "address", label: "Mailing addresses", desc: "postal addresses" },
+      { value: "url", label: "Links with tokens", desc: "links carrying tokens or session IDs" },
+      { value: "date", label: "Dates", desc: "dates of birth, timestamps" },
+      { value: "sensitive", label: "Health & financial details", desc: "health, financial, identity context" },
+    ];
 
   const piiRedactionLabels = useMemo<string[]>(() => {
     const raw = (settings.piiRedactionLabels as string[] | undefined) ?? ["secret"];
@@ -652,6 +656,16 @@ export function PrivacySection() {
     );
   };
 
+  const importExternalChatsEnabled = Boolean(
+    settings.importExternalChatsEnabled ?? true,
+  );
+  const handleImportExternalChatsToggle = (checked: boolean) => {
+    handleSettingsChange(
+      { importExternalChatsEnabled: checked } as Partial<Settings>,
+      false,
+    );
+  };
+
   // WHICH captured columns get scrubbed (orthogonal to the categories
   // above). Typed text / clipboard / transcripts / window titles /
   // on-screen text are always redacted; these extra surfaces are opt-in.
@@ -683,33 +697,33 @@ export function PrivacySection() {
     desc: string;
     recommended?: boolean;
   }[] = [
-    {
-      value: "element_properties",
-      label: "Form field values",
-      desc: "what you type into forms — catches passwords and field contents that on-screen text misses",
-      recommended: true,
-    },
-    {
-      value: "browser_url",
-      label: "Web addresses",
-      desc: "the address bar — usually not private, and hiding them breaks links",
-    },
-    {
-      value: "ui_element_name",
-      label: "Button & menu labels",
-      desc: "names like “Submit” or “Search” — rarely private",
-    },
-    {
-      value: "ui_element_description",
-      label: "Help text on controls",
-      desc: "the longer description some buttons and menus expose",
-    },
-    {
-      value: "a11y_url_field",
-      label: "Links inside app data",
-      desc: "URLs embedded in an app’s underlying structure",
-    },
-  ];
+      {
+        value: "element_properties",
+        label: "Form field values",
+        desc: "what you type into forms — catches passwords and field contents that on-screen text misses",
+        recommended: true,
+      },
+      {
+        value: "browser_url",
+        label: "Web addresses",
+        desc: "the address bar — usually not private, and hiding them breaks links",
+      },
+      {
+        value: "ui_element_name",
+        label: "Button & menu labels",
+        desc: "names like “Submit” or “Search” — rarely private",
+      },
+      {
+        value: "ui_element_description",
+        label: "Help text on controls",
+        desc: "the longer description some buttons and menus expose",
+      },
+      {
+        value: "a11y_url_field",
+        label: "Links inside app data",
+        desc: "URLs embedded in an app’s underlying structure",
+      },
+    ];
 
   const piiRedactionColumns = useMemo<string[]>(() => {
     return (
@@ -744,9 +758,9 @@ export function PrivacySection() {
       checked
         ? { ignoreIncognitoWindows: true }
         : {
-            ignoreIncognitoWindows: false,
-            enhancedIncognitoDetection: false,
-          },
+          ignoreIncognitoWindows: false,
+          enhancedIncognitoDetection: false,
+        },
       true,
     );
   };
@@ -901,22 +915,22 @@ export function PrivacySection() {
       </p>
 
       <div className="flex items-center justify-end">
-          {hasUnsavedChanges && (
-            <Button
-              onClick={handleUpdate}
-              disabled={isUpdating || Object.keys(validationErrors).length > 0}
-              size="sm"
-              data-testid="privacy-apply-restart"
-              className="flex items-center gap-1.5 h-7 text-xs bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150"
-            >
-              {isUpdating ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <RefreshCw className="h-3 w-3" />
-              )}
-              Apply & Restart
-            </Button>
-          )}
+        {hasUnsavedChanges && (
+          <Button
+            onClick={handleUpdate}
+            disabled={isUpdating || Object.keys(validationErrors).length > 0}
+            size="sm"
+            data-testid="privacy-apply-restart"
+            className="flex items-center gap-1.5 h-7 text-xs bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150"
+          >
+            {isUpdating ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3 w-3" />
+            )}
+            Apply & Restart
+          </Button>
+        )}
       </div>
 
       {/* Security */}
@@ -925,147 +939,147 @@ export function PrivacySection() {
           Security
         </h2>
         <LockedSetting settingKey="api_auth">
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground">
-                    Require API Authentication
-                  </h3>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    All API requests require a valid token when enabled — including local ones. Most apps pair automatically; use this key only for manual API clients and troubleshooting.
-                  </p>
+          <Card className="border-border bg-card">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground">
+                      Require API Authentication
+                    </h3>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      All API requests require a valid token when enabled — including local ones. Most apps pair automatically; use this key only for manual API clients and troubleshooting.
+                    </p>
+                  </div>
                 </div>
-              </div>
-              <Switch
-                checked={settings.apiAuth ?? true}
-                onCheckedChange={(checked) => {
-                  handleSettingsChange({ apiAuth: checked });
-                }}
-                data-testid="privacy-api-auth-switch"
-              />
-            </div>
-            {hasUnsavedChanges && (
-              <p className="text-xs text-amber-600 dark:text-amber-400 mt-2 flex items-center gap-1">
-                <RefreshCw className="h-3 w-3 shrink-0" />
-                click &quot;Apply &amp; Restart&quot; above for auth changes to take effect; existing browser connections keep using the old key until then
-              </p>
-            )}
-            <LockedSetting settingKey="api_key">
-            {(settings.apiAuth ?? true) && (
-              <div className="mt-2.5 flex items-center space-x-2.5 pl-6.5">
-                <Input
-                  type="text"
-                  readOnly={!revealApiKey}
-                  placeholder="e.g. sp-abc12345"
-                  data-testid="privacy-api-key-input"
-                  value={
-                    liveApiKey
-                      ? revealApiKey
-                        ? liveApiKey
-                        : "•".repeat(Math.min(liveApiKey.length, 32))
-                      : ""
-                  }
-                  onChange={(e) => {
-                    if (!revealApiKey) return;
-                    const val = e.target.value;
-                    setLiveApiKey(val);
-                    setPendingApiKey(val);
-                    if (!val.trim()) {
-                      setValidationErrors((prev) => ({ ...prev, apiKey: "API key cannot be empty" }));
-                    } else {
-                      setValidationErrors(({ apiKey: _, ...rest }) => rest);
-                    }
-                    setHasUnsavedChanges(true);
+                <Switch
+                  checked={settings.apiAuth ?? true}
+                  onCheckedChange={(checked) => {
+                    handleSettingsChange({ apiAuth: checked });
                   }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && pendingApiKey && pendingApiKey.trim()) {
-                      handleUpdate();
-                    }
-                  }}
-                  onClick={(e) => (e.target as HTMLInputElement).select()}
-                  className="h-8 text-xs font-mono cursor-text select-all"
+                  data-testid="privacy-api-auth-switch"
                 />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 px-2 shrink-0"
-                  title={revealApiKey ? "Hide key" : "Reveal key"}
-                  onClick={() => setRevealApiKey((v) => !v)}
-                  disabled={!liveApiKey}
-                  data-testid="privacy-api-key-reveal"
-                >
-                  {revealApiKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 px-2 shrink-0"
-                  title="Copy key"
-                  disabled={!liveApiKey}
-                  data-testid="privacy-api-key-copy"
-                  onClick={async () => {
-                    if (!liveApiKey) return;
-                    try {
-                      await commands.copyTextToClipboard(liveApiKey);
-                      toast({ title: "API key copied to clipboard" });
-                    } catch (error) {
-                      toast({
-                        title: "couldn't copy API key",
-                        description: error instanceof Error ? error.message : String(error),
-                        variant: "destructive",
-                      });
-                    }
-                  }}
-                >
-                  <Copy className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 px-2 shrink-0"
-                  title="Regenerate key"
-                  disabled={regeneratingKey}
-                  data-testid="privacy-api-key-regenerate"
-                  onClick={async () => {
-                    const { confirm } = await import("@tauri-apps/plugin-dialog");
-                    const confirmed = await confirm(
-                      "Regenerate API key? Existing browser extensions stay connected until you Apply & Restart, then they must reconnect with the new key.",
-                      { title: "screenpipe", kind: "info" },
-                    );
-                    if (!confirmed) return;
-                    setRegeneratingKey(true);
-                    try {
-                      const res = await commands.regenerateApiAuthKey();
-                      if (res.status === "error") throw new Error(res.error);
-                      const newKey = res.data;
-                      setLiveApiKey(newKey);
-                      setRevealApiKey(true);
-                      setHasUnsavedChanges(true);
-                      toast({
-                        title: "API key regenerated",
-                        description: "Click Apply & Restart. Browser extensions will need to reconnect after restart.",
-                      });
-                    } catch (e: any) {
-                      toast({
-                        title: "Failed to regenerate API key",
-                        description: String(e?.message ?? e),
-                        variant: "destructive",
-                      });
-                    } finally {
-                      setRegeneratingKey(false);
-                    }
-                  }}
-                >
-                  <RefreshCw className={cn("h-3.5 w-3.5", regeneratingKey && "animate-spin")} />
-                </Button>
               </div>
-            )}
-            </LockedSetting>
-          </CardContent>
-        </Card>
+              {hasUnsavedChanges && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 mt-2 flex items-center gap-1">
+                  <RefreshCw className="h-3 w-3 shrink-0" />
+                  click &quot;Apply &amp; Restart&quot; above for auth changes to take effect; existing browser connections keep using the old key until then
+                </p>
+              )}
+              <LockedSetting settingKey="api_key">
+                {(settings.apiAuth ?? true) && (
+                  <div className="mt-2.5 flex items-center space-x-2.5 pl-6.5">
+                    <Input
+                      type="text"
+                      readOnly={!revealApiKey}
+                      placeholder="e.g. sp-abc12345"
+                      data-testid="privacy-api-key-input"
+                      value={
+                        liveApiKey
+                          ? revealApiKey
+                            ? liveApiKey
+                            : "•".repeat(Math.min(liveApiKey.length, 32))
+                          : ""
+                      }
+                      onChange={(e) => {
+                        if (!revealApiKey) return;
+                        const val = e.target.value;
+                        setLiveApiKey(val);
+                        setPendingApiKey(val);
+                        if (!val.trim()) {
+                          setValidationErrors((prev) => ({ ...prev, apiKey: "API key cannot be empty" }));
+                        } else {
+                          setValidationErrors(({ apiKey: _, ...rest }) => rest);
+                        }
+                        setHasUnsavedChanges(true);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && pendingApiKey && pendingApiKey.trim()) {
+                          handleUpdate();
+                        }
+                      }}
+                      onClick={(e) => (e.target as HTMLInputElement).select()}
+                      className="h-8 text-xs font-mono cursor-text select-all"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 px-2 shrink-0"
+                      title={revealApiKey ? "Hide key" : "Reveal key"}
+                      onClick={() => setRevealApiKey((v) => !v)}
+                      disabled={!liveApiKey}
+                      data-testid="privacy-api-key-reveal"
+                    >
+                      {revealApiKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 px-2 shrink-0"
+                      title="Copy key"
+                      disabled={!liveApiKey}
+                      data-testid="privacy-api-key-copy"
+                      onClick={async () => {
+                        if (!liveApiKey) return;
+                        try {
+                          await commands.copyTextToClipboard(liveApiKey);
+                          toast({ title: "API key copied to clipboard" });
+                        } catch (error) {
+                          toast({
+                            title: "couldn't copy API key",
+                            description: error instanceof Error ? error.message : String(error),
+                            variant: "destructive",
+                          });
+                        }
+                      }}
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 px-2 shrink-0"
+                      title="Regenerate key"
+                      disabled={regeneratingKey}
+                      data-testid="privacy-api-key-regenerate"
+                      onClick={async () => {
+                        const { confirm } = await import("@tauri-apps/plugin-dialog");
+                        const confirmed = await confirm(
+                          "Regenerate API key? Existing browser extensions stay connected until you Apply & Restart, then they must reconnect with the new key.",
+                          { title: "screenpipe", kind: "info" },
+                        );
+                        if (!confirmed) return;
+                        setRegeneratingKey(true);
+                        try {
+                          const res = await commands.regenerateApiAuthKey();
+                          if (res.status === "error") throw new Error(res.error);
+                          const newKey = res.data;
+                          setLiveApiKey(newKey);
+                          setRevealApiKey(true);
+                          setHasUnsavedChanges(true);
+                          toast({
+                            title: "API key regenerated",
+                            description: "Click Apply & Restart. Browser extensions will need to reconnect after restart.",
+                          });
+                        } catch (e: any) {
+                          toast({
+                            title: "Failed to regenerate API key",
+                            description: String(e?.message ?? e),
+                            variant: "destructive",
+                          });
+                        } finally {
+                          setRegeneratingKey(false);
+                        }
+                      }}
+                    >
+                      <RefreshCw className={cn("h-3.5 w-3.5", regeneratingKey && "animate-spin")} />
+                    </Button>
+                  </div>
+                )}
+              </LockedSetting>
+            </CardContent>
+          </Card>
         </LockedSetting>
 
         {isManagedDeployment && <AdminTeamTokenCard />}
@@ -1074,38 +1088,38 @@ export function PrivacySection() {
             (the backend mirrors this guard in RecordingConfig::from_settings
             so the API is never exposed to the network unauthenticated). */}
         <LockedSetting settingKey="listen_on_lan">
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground">
-                    Allow LAN access
-                  </h3>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    Bind the API to <code className="text-[10px]">0.0.0.0</code> so other devices on your local
-                    network can query it. API authentication is force-enabled
-                    whenever this is on. Restart the app to apply.
-                  </p>
+          <Card className="border-border bg-card">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground">
+                      Allow LAN access
+                    </h3>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Bind the API to <code className="text-[10px]">0.0.0.0</code> so other devices on your local
+                      network can query it. API authentication is force-enabled
+                      whenever this is on. Restart the app to apply.
+                    </p>
+                  </div>
                 </div>
+                <Switch
+                  checked={settings.listenOnLan ?? false}
+                  onCheckedChange={(checked) => {
+                    // Keep the UI consistent with the backend guard: flipping
+                    // LAN on also flips api_auth on, so the user can't
+                    // accidentally leave themselves open.
+                    if (checked) {
+                      handleSettingsChange({ listenOnLan: true, apiAuth: true });
+                    } else {
+                      handleSettingsChange({ listenOnLan: false });
+                    }
+                  }}
+                />
               </div>
-              <Switch
-                checked={settings.listenOnLan ?? false}
-                onCheckedChange={(checked) => {
-                  // Keep the UI consistent with the backend guard: flipping
-                  // LAN on also flips api_auth on, so the user can't
-                  // accidentally leave themselves open.
-                  if (checked) {
-                    handleSettingsChange({ listenOnLan: true, apiAuth: true });
-                  } else {
-                    handleSettingsChange({ listenOnLan: false });
-                  }
-                }}
-              />
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
         </LockedSetting>
 
         <EncryptDataCard
@@ -1122,491 +1136,491 @@ export function PrivacySection() {
           Capture rules
         </h2>
 
-      {/* Incognito Detection */}
-      <Card className="border-border bg-card">
-        <CardContent className="px-3 py-2.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2.5">
-              <EyeOff className="h-4 w-4 text-muted-foreground shrink-0" />
-              <div>
-                <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                  Ignore Incognito Windows
-                  <HelpTooltip text="automatically detects and skips private/incognito browser windows in 20+ languages without extra access. on macOS, enhance enables browser-native detection for supported Chromium browsers." />
-                </h3>
-                <p className="text-xs text-muted-foreground">
-                  Skip private browsing sessions
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5">
-              {isMacOS && Boolean(settings.ignoreIncognitoWindows ?? true) && (
-                <Button
-                  type="button"
-                  variant={enhancedIncognitoDetection ? "outline" : "ghost"}
-                  size="sm"
-                  className="h-7 px-2 text-[10px] uppercase tracking-wide"
-                  onClick={handleEnhancedIncognitoDetection}
-                  disabled={isEnhancingIncognito}
-                  aria-pressed={enhancedIncognitoDetection}
-                  title="use browser-native detection; requires macOS Automation access"
-                >
-                  {isEnhancingIncognito ? (
-                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                  ) : (
-                    <Shield className="mr-1 h-3 w-3" />
-                  )}
-                  {enhancedIncognitoDetection ? "enhanced" : "enhance"}
-                </Button>
-              )}
-              <Switch
-                id="ignoreIncognitoWindows"
-                checked={Boolean(settings.ignoreIncognitoWindows ?? true)}
-                onCheckedChange={handleIncognitoToggle}
-              />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Window Filtering */}
-      {/* Pause for content-protected apps (DRM streaming + remote desktop) */}
-      <Card>
-        <CardContent className="px-3 py-2.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2.5">
-              <Tv className="h-4 w-4 text-muted-foreground shrink-0" />
-              <div>
-                <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                  Pause for DRM & Remote Desktop
-                  <HelpTooltip text="pauses all screen capture when a DRM-protected streaming app (netflix, disney+, hulu, prime video, apple tv, etc.) or a remote-desktop client (Omnissa/VMware Horizon) is focused. these apps blank their windows when any app is recording the screen — pausing capture while they're focused keeps them usable. capture resumes automatically when you switch away." />
-                </h3>
-                <p className="text-xs text-muted-foreground">
-                  Avoid DRM black screens (Netflix, Disney+) and gray Horizon windows.
-                </p>
-              </div>
-            </div>
-            <Switch
-              id="pauseOnDrmContent"
-              checked={Boolean(settings.pauseOnDrmContent ?? false)}
-              onCheckedChange={handleDrmPauseToggle}
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Clipboard capture toggle */}
-      <Card>
-        <CardContent className="px-3 py-2.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2.5">
-              <ClipboardX className="h-4 w-4 text-muted-foreground shrink-0" />
-              <div>
-                <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                  Capture clipboard
-                  <HelpTooltip text="when on, screenpipe records clipboard copy/paste events and contents. turn off if you ship ~/.screenpipe to a remote LLM or share it — passwords, API keys, and private keys frequently pass through the clipboard." />
-                </h3>
-                <p className="text-xs text-muted-foreground">
-                  Skip if your data leaves the machine (passwords, keys often
-                  pass through copy/paste).
-                </p>
-              </div>
-            </div>
-            <Switch
-              id="captureClipboard"
-              checked={!(settings.disableClipboardCapture ?? true)}
-              onCheckedChange={handleClipboardCaptureToggle}
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Keyboard capture toggle */}
-      <Card>
-        <CardContent className="px-3 py-2.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2.5">
-              <Keyboard className="h-4 w-4 text-muted-foreground shrink-0" />
-              <div>
-                <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                  Capture keyboard
-                  <HelpTooltip text="when on, screenpipe records what you type (your keystrokes). off by default. the accessibility tree and OCR still capture on-screen text either way, so Rewind and Ask keep working — this only controls the raw keystroke stream, where passwords, API keys, and secrets you type would otherwise be logged." />
-                </h3>
-                <p className="text-xs text-muted-foreground">
-                  {managedKeyboardCapture !== undefined
-                    ? "Managed by your organization."
-                    : "Off by default. Records the raw keystroke stream (secrets often get typed). On-screen text is still captured."}
-                </p>
-              </div>
-            </div>
-            <Switch
-              id="captureKeyboard"
-              checked={
-                managedKeyboardCapture !== undefined
-                  ? managedKeyboardCapture === "false"
-                  : !(settings.disableKeyboardCapture ?? true)
-              }
-              disabled={managedKeyboardCapture !== undefined}
-              onCheckedChange={handleKeyboardCaptureToggle}
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Click capture toggle */}
-      <Card>
-        <CardContent className="px-3 py-2.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2.5">
-              <MousePointerClick className="h-4 w-4 text-muted-foreground shrink-0" />
-              <div>
-                <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                  Capture clicks
-                  <HelpTooltip text="when on, screenpipe records mouse click events (where and what you clicked). on by default — clicks carry no text payload and power workflow analysis and task mining. turning this off only skips the click rows; clicks still trigger screen captures." />
-                </h3>
-                <p className="text-xs text-muted-foreground">
-                  {managedClickCapture !== undefined
-                    ? "Managed by your organization."
-                    : "On by default. Click events power workflow analysis; no text is recorded."}
-                </p>
-              </div>
-            </div>
-            <Switch
-              id="captureClicks"
-              checked={
-                managedClickCapture !== undefined
-                  ? managedClickCapture === "false"
-                  : !(settings.disableClickCapture ?? false)
-              }
-              disabled={managedClickCapture !== undefined}
-              onCheckedChange={handleClickCaptureToggle}
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Input Monitoring permission (macOS) — the OS-level TCC grant that
-          lets the keyboard/click capture toggles above actually record.
-          Lives here, next to those toggles, instead of under Connections. */}
-      {isMacOS && (
-        <Card>
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center space-x-2.5">
-              <Keyboard className="h-4 w-4 text-muted-foreground shrink-0" />
-              <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                Input Monitoring permission
-                <HelpTooltip text="macOS permission that lets screenpipe capture keystrokes and mouse clicks. without it, capture runs in reduced mode — clipboard and app/window switches still work, but keyboard and click recording is dropped." />
-              </h3>
-            </div>
-            <div className="mt-2 ml-[26px]">
-              <InputMonitoringPanel />
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Record While Locked */}
-      <Card>
-        <CardContent className="px-3 py-2.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2.5">
-              <Lock className="h-4 w-4 text-muted-foreground shrink-0" />
-              <div>
-                <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                  Record Audio While Locked
-                  <HelpTooltip text="when enabled, audio recording continues even when your screen is locked. by default, audio recording pauses when the screen is locked to save resources and protect privacy." />
-                </h3>
-                <p className="text-xs text-muted-foreground">
-                  Continue audio capture when screen is locked
-                </p>
-              </div>
-            </div>
-            <Switch
-              id="recordWhileLocked"
-              checked={Boolean(settings.recordWhileLocked ?? false)}
-              onCheckedChange={handleRecordWhileLockedToggle}
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Recording Schedule */}
-      <ScheduleSettings
-        enabled={settings.scheduleEnabled ?? false}
-        rules={(settings.scheduleRules as any[]) ?? []}
-        onChange={(enabled, rules) => {
-          handleSettingsChange({ scheduleEnabled: enabled, scheduleRules: rules } as any);
-        }}
-      />
-      </div>
-
-      {/* Data Protection */}
-      <LockedSetting settingKey="pii_removal">
-      <div className="space-y-2">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
-          Data protection
-        </h2>
-        {/* One PII Removal section with two modes — Basic (regex on the
-            hot path) and Smart (regex + AI background worker, also
-            covers images). Smart progressively discloses backend +
-            field selection. See piiMode comment above for the
-            three-flag mapping. */}
+        {/* Incognito Detection */}
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
-                <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
+                <EyeOff className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
                   <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                    PII Removal
-                    <HelpTooltip text="Redacts emails, phones, secrets, and more from captures. Smart mode adds names, addresses, and image redaction." />
+                    Ignore Incognito Windows
+                    <HelpTooltip text="automatically detects and skips private/incognito browser windows in 20+ languages without extra access. on macOS, enhance enables browser-native detection for supported Chromium browsers." />
                   </h3>
                   <p className="text-xs text-muted-foreground">
-                    {piiMode === "off"
-                      ? "Off — captures store raw text and pixels."
-                      : piiMode === "basic"
-                      ? "Basic — regex on capture. Emails, phones, SSNs, cards, API keys."
-                      : "Smart — AI background worker. Adds names, addresses, image redaction."}
+                    Skip private browsing sessions
                   </p>
                 </div>
               </div>
-              <ManagedSwitch
-                settingKey="usePiiRemoval"
-                id="usePiiRemoval"
-                checked={piiMode !== "off"}
-                onCheckedChange={(checked) =>
-                  handlePiiModeChange(checked ? "basic" : "off")
-                }
-              />
+              <div className="flex items-center gap-1.5">
+                {isMacOS && Boolean(settings.ignoreIncognitoWindows ?? true) && (
+                  <Button
+                    type="button"
+                    variant={enhancedIncognitoDetection ? "outline" : "ghost"}
+                    size="sm"
+                    className="h-7 px-2 text-[10px] uppercase tracking-wide"
+                    onClick={handleEnhancedIncognitoDetection}
+                    disabled={isEnhancingIncognito}
+                    aria-pressed={enhancedIncognitoDetection}
+                    title="use browser-native detection; requires macOS Automation access"
+                  >
+                    {isEnhancingIncognito ? (
+                      <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                    ) : (
+                      <Shield className="mr-1 h-3 w-3" />
+                    )}
+                    {enhancedIncognitoDetection ? "enhanced" : "enhance"}
+                  </Button>
+                )}
+                <Switch
+                  id="ignoreIncognitoWindows"
+                  checked={Boolean(settings.ignoreIncognitoWindows ?? true)}
+                  onCheckedChange={handleIncognitoToggle}
+                />
+              </div>
             </div>
-            {piiMode !== "off" && (
-              <div className="mt-3 ml-6 space-y-3 border-l-2 border-border pl-3">
-                <div className="space-y-2">
-                  <p className="text-xs font-medium text-foreground">Mode</p>
-                  <label className="flex cursor-pointer items-start gap-2 text-xs">
-                    <input
-                      type="radio"
-                      name="piiMode"
-                      className="mt-0.5"
-                      checked={piiMode === "basic"}
-                      onChange={() => handlePiiModeChange("basic")}
-                    />
-                    <span>
-                      <span className="font-medium text-foreground">Basic</span>
-                      <span className="text-muted-foreground">
-                        {" "}— regex on capture. Free, instant, deterministic.
-                        Catches emails, phones, SSNs, cards, JWTs, API keys,
-                        private keys, connection strings.
-                      </span>
-                    </span>
-                  </label>
-                  <label className="flex cursor-pointer items-start gap-2 text-xs">
-                    <input
-                      type="radio"
-                      name="piiMode"
-                      className="mt-0.5"
-                      checked={piiMode === "smart"}
-                      onChange={() => handlePiiModeChange("smart")}
-                    />
-                    <span>
-                      <span className="font-medium text-foreground">Smart</span>
-                      <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted px-1.5 py-0.5 rounded ml-1">
-                        Experimental
-                      </span>
-                      <span className="text-muted-foreground">
-                        {" "}— includes Basic, plus an AI background worker
-                        for semantic PII (names, addresses, sensitive context)
-                        and image redaction on screen frames. Downloads a
-                        ~100 MB model on first run.
-                      </span>
-                    </span>
-                  </label>
+          </CardContent>
+        </Card>
 
-                  {piiMode === "smart" && (
-                    <div className="ml-6 space-y-1.5 pt-1">
-                      <p className="text-xs font-medium text-foreground">
-                        Apply to
-                      </p>
-                      <label className="flex items-start gap-2 text-xs cursor-pointer">
-                        <input
-                          type="checkbox"
-                          className="mt-0.5"
-                          checked={textRedactionOn}
-                          onChange={(e) =>
-                            handleModalityToggle("text", e.target.checked)
-                          }
-                        />
-                        <span>
-                          <span className="font-medium text-foreground">
-                            Text
-                          </span>
-                          <span className="text-muted-foreground">
-                            {" "}— scrub captured text (OCR, accessibility,
-                            transcripts, typed &amp; clipboard input)
-                          </span>
-                        </span>
-                      </label>
-                      <label className="flex items-start gap-2 text-xs cursor-pointer">
-                        <input
-                          type="checkbox"
-                          className="mt-0.5"
-                          checked={imageRedactionOn}
-                          onChange={(e) =>
-                            handleModalityToggle("image", e.target.checked)
-                          }
-                        />
-                        <span>
-                          <span className="font-medium text-foreground">
-                            Images
-                          </span>
-                          <span className="text-muted-foreground">
-                            {" "}— black out PII in screenshot frames (on-device
-                            vision model)
-                          </span>
-                        </span>
-                      </label>
-                    </div>
-                  )}
+        {/* Window Filtering */}
+        {/* Pause for content-protected apps (DRM streaming + remote desktop) */}
+        <Card>
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Tv className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    Pause for DRM & Remote Desktop
+                    <HelpTooltip text="pauses all screen capture when a DRM-protected streaming app (netflix, disney+, hulu, prime video, apple tv, etc.) or a remote-desktop client (Omnissa/VMware Horizon) is focused. these apps blank their windows when any app is recording the screen — pausing capture while they're focused keeps them usable. capture resumes automatically when you switch away." />
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Avoid DRM black screens (Netflix, Disney+) and gray Horizon windows.
+                  </p>
                 </div>
               </div>
-            )}
-            {aiPiiRemovalEnabled && (
-              <div className="mt-3 ml-6 space-y-2 border-l-2 border-border pl-3">
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-                  <span className="font-medium text-foreground">Where it runs</span>
-                  <label className={`flex items-center gap-1.5 ${managedPiiBackend ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
-                    <input
-                      type="radio"
-                      name="piiBackend"
-                      checked={piiBackend === "local"}
-                      disabled={!!managedPiiBackend}
-                      onChange={() => handlePiiBackendChange("local")}
-                    />
-                    <span className="text-foreground">Local</span>
-                  </label>
-                  <label className={`flex items-center gap-1.5 ${managedPiiBackend ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
-                    <input
-                      type="radio"
-                      name="piiBackend"
-                      checked={piiBackend === "tinfoil"}
-                      disabled={!!managedPiiBackend}
-                      onChange={() => handlePiiBackendChange("tinfoil")}
-                    />
-                    <span className="text-foreground">Cloud (enclave)</span>
-                  </label>
-                </div>
-                <p className="text-[11px] text-muted-foreground">
-                  Local stays on-device — strongest privacy, slower on weak
-                  hardware. Cloud uses screenpipe&apos;s attested
-                  confidential-compute enclave — fast everywhere; your device
-                  verifies the open-source build before sending anything.
-                </p>
+              <Switch
+                id="pauseOnDrmContent"
+                checked={Boolean(settings.pauseOnDrmContent ?? false)}
+                onCheckedChange={handleDrmPauseToggle}
+              />
+            </div>
+          </CardContent>
+        </Card>
 
-                {/* Axis 1 — WHAT to hide (PII categories). The primary knob:
-                    content-type, applies wherever it's found. */}
-                <p className="text-xs font-medium text-foreground pt-2">
-                  What to hide
-                </p>
-                {PII_FIELD_OPTIONS.map((opt) => {
-                  const checked =
-                    opt.always || piiRedactionLabels.includes(opt.value);
-                  return (
-                    <label
-                      key={opt.value}
-                      className={cn(
-                        "flex items-start gap-2 text-xs",
-                        opt.always ? "cursor-default" : "cursor-pointer",
-                      )}
-                    >
+        {/* Clipboard capture toggle */}
+        <Card>
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <ClipboardX className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    Capture clipboard
+                    <HelpTooltip text="when on, screenpipe records clipboard copy/paste events and contents. turn off if you ship ~/.screenpipe to a remote LLM or share it — passwords, API keys, and private keys frequently pass through the clipboard." />
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Skip if your data leaves the machine (passwords, keys often
+                    pass through copy/paste).
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="captureClipboard"
+                checked={!(settings.disableClipboardCapture ?? true)}
+                onCheckedChange={handleClipboardCaptureToggle}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Keyboard capture toggle */}
+        <Card>
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Keyboard className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    Capture keyboard
+                    <HelpTooltip text="when on, screenpipe records what you type (your keystrokes). off by default. the accessibility tree and OCR still capture on-screen text either way, so Rewind and Ask keep working — this only controls the raw keystroke stream, where passwords, API keys, and secrets you type would otherwise be logged." />
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    {managedKeyboardCapture !== undefined
+                      ? "Managed by your organization."
+                      : "Off by default. Records the raw keystroke stream (secrets often get typed). On-screen text is still captured."}
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="captureKeyboard"
+                checked={
+                  managedKeyboardCapture !== undefined
+                    ? managedKeyboardCapture === "false"
+                    : !(settings.disableKeyboardCapture ?? true)
+                }
+                disabled={managedKeyboardCapture !== undefined}
+                onCheckedChange={handleKeyboardCaptureToggle}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Click capture toggle */}
+        <Card>
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <MousePointerClick className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    Capture clicks
+                    <HelpTooltip text="when on, screenpipe records mouse click events (where and what you clicked). on by default — clicks carry no text payload and power workflow analysis and task mining. turning this off only skips the click rows; clicks still trigger screen captures." />
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    {managedClickCapture !== undefined
+                      ? "Managed by your organization."
+                      : "On by default. Click events power workflow analysis; no text is recorded."}
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="captureClicks"
+                checked={
+                  managedClickCapture !== undefined
+                    ? managedClickCapture === "false"
+                    : !(settings.disableClickCapture ?? false)
+                }
+                disabled={managedClickCapture !== undefined}
+                onCheckedChange={handleClickCaptureToggle}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Input Monitoring permission (macOS) — the OS-level TCC grant that
+          lets the keyboard/click capture toggles above actually record.
+          Lives here, next to those toggles, instead of under Connections. */}
+        {isMacOS && (
+          <Card>
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center space-x-2.5">
+                <Keyboard className="h-4 w-4 text-muted-foreground shrink-0" />
+                <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                  Input Monitoring permission
+                  <HelpTooltip text="macOS permission that lets screenpipe capture keystrokes and mouse clicks. without it, capture runs in reduced mode — clipboard and app/window switches still work, but keyboard and click recording is dropped." />
+                </h3>
+              </div>
+              <div className="mt-2 ml-[26px]">
+                <InputMonitoringPanel />
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Record While Locked */}
+        <Card>
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Lock className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    Record Audio While Locked
+                    <HelpTooltip text="when enabled, audio recording continues even when your screen is locked. by default, audio recording pauses when the screen is locked to save resources and protect privacy." />
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Continue audio capture when screen is locked
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="recordWhileLocked"
+                checked={Boolean(settings.recordWhileLocked ?? false)}
+                onCheckedChange={handleRecordWhileLockedToggle}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Recording Schedule */}
+        <ScheduleSettings
+          enabled={settings.scheduleEnabled ?? false}
+          rules={(settings.scheduleRules as any[]) ?? []}
+          onChange={(enabled, rules) => {
+            handleSettingsChange({ scheduleEnabled: enabled, scheduleRules: rules } as any);
+          }}
+        />
+      </div>
+
+      {/* Data Protection */}
+      <LockedSetting settingKey="pii_removal">
+        <div className="space-y-2">
+          <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+            Data protection
+          </h2>
+          {/* One PII Removal section with two modes — Basic (regex on the
+            hot path) and Smart (regex + AI background worker, also
+            covers images). Smart progressively discloses backend +
+            field selection. See piiMode comment above for the
+            three-flag mapping. */}
+          <Card className="border-border bg-card">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                      PII Removal
+                      <HelpTooltip text="Redacts emails, phones, secrets, and more from captures. Smart mode adds names, addresses, and image redaction." />
+                    </h3>
+                    <p className="text-xs text-muted-foreground">
+                      {piiMode === "off"
+                        ? "Off — captures store raw text and pixels."
+                        : piiMode === "basic"
+                          ? "Basic — regex on capture. Emails, phones, SSNs, cards, API keys."
+                          : "Smart — AI background worker. Adds names, addresses, image redaction."}
+                    </p>
+                  </div>
+                </div>
+                <ManagedSwitch
+                  settingKey="usePiiRemoval"
+                  id="usePiiRemoval"
+                  checked={piiMode !== "off"}
+                  onCheckedChange={(checked) =>
+                    handlePiiModeChange(checked ? "basic" : "off")
+                  }
+                />
+              </div>
+              {piiMode !== "off" && (
+                <div className="mt-3 ml-6 space-y-3 border-l-2 border-border pl-3">
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-foreground">Mode</p>
+                    <label className="flex cursor-pointer items-start gap-2 text-xs">
                       <input
-                        type="checkbox"
+                        type="radio"
+                        name="piiMode"
                         className="mt-0.5"
-                        checked={checked}
-                        disabled={opt.always}
-                        onChange={(e) =>
-                          handlePiiLabelToggle(opt.value, e.target.checked)
-                        }
+                        checked={piiMode === "basic"}
+                        onChange={() => handlePiiModeChange("basic")}
                       />
                       <span>
-                        <span className="font-medium text-foreground">
-                          {opt.label}
-                        </span>
-                        {opt.always && (
-                          <span className="text-muted-foreground">
-                            {" "}(always on)
-                          </span>
-                        )}
+                        <span className="font-medium text-foreground">Basic</span>
                         <span className="text-muted-foreground">
-                          {" "}— {opt.desc}
+                          {" "}— regex on capture. Free, instant, deterministic.
+                          Catches emails, phones, SSNs, cards, JWTs, API keys,
+                          private keys, connection strings.
                         </span>
                       </span>
                     </label>
-                  );
-                })}
-                {textRedactionOn && (
-                  <RedactionExamplePreview labels={piiRedactionLabels} />
-                )}
-                <p className="text-[11px] text-muted-foreground pt-0.5">
-                  Unselected types stay visible so your timeline remains
-                  searchable. Secrets are always removed in both modes.
-                </p>
+                    <label className="flex cursor-pointer items-start gap-2 text-xs">
+                      <input
+                        type="radio"
+                        name="piiMode"
+                        className="mt-0.5"
+                        checked={piiMode === "smart"}
+                        onChange={() => handlePiiModeChange("smart")}
+                      />
+                      <span>
+                        <span className="font-medium text-foreground">Smart</span>
+                        <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted px-1.5 py-0.5 rounded ml-1">
+                          Experimental
+                        </span>
+                        <span className="text-muted-foreground">
+                          {" "}— includes Basic, plus an AI background worker
+                          for semantic PII (names, addresses, sensitive context)
+                          and image redaction on screen frames. Downloads a
+                          ~100 MB model on first run.
+                        </span>
+                      </span>
+                    </label>
 
-                {/* Axis 2 — WHERE to look (captured surfaces). Advanced and
+                    {piiMode === "smart" && (
+                      <div className="ml-6 space-y-1.5 pt-1">
+                        <p className="text-xs font-medium text-foreground">
+                          Apply to
+                        </p>
+                        <label className="flex items-start gap-2 text-xs cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5"
+                            checked={textRedactionOn}
+                            onChange={(e) =>
+                              handleModalityToggle("text", e.target.checked)
+                            }
+                          />
+                          <span>
+                            <span className="font-medium text-foreground">
+                              Text
+                            </span>
+                            <span className="text-muted-foreground">
+                              {" "}— scrub captured text (OCR, accessibility,
+                              transcripts, typed &amp; clipboard input)
+                            </span>
+                          </span>
+                        </label>
+                        <label className="flex items-start gap-2 text-xs cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5"
+                            checked={imageRedactionOn}
+                            onChange={(e) =>
+                              handleModalityToggle("image", e.target.checked)
+                            }
+                          />
+                          <span>
+                            <span className="font-medium text-foreground">
+                              Images
+                            </span>
+                            <span className="text-muted-foreground">
+                              {" "}— black out PII in screenshot frames (on-device
+                              vision model)
+                            </span>
+                          </span>
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              {aiPiiRemovalEnabled && (
+                <div className="mt-3 ml-6 space-y-2 border-l-2 border-border pl-3">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                    <span className="font-medium text-foreground">Where it runs</span>
+                    <label className={`flex items-center gap-1.5 ${managedPiiBackend ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
+                      <input
+                        type="radio"
+                        name="piiBackend"
+                        checked={piiBackend === "local"}
+                        disabled={!!managedPiiBackend}
+                        onChange={() => handlePiiBackendChange("local")}
+                      />
+                      <span className="text-foreground">Local</span>
+                    </label>
+                    <label className={`flex items-center gap-1.5 ${managedPiiBackend ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
+                      <input
+                        type="radio"
+                        name="piiBackend"
+                        checked={piiBackend === "tinfoil"}
+                        disabled={!!managedPiiBackend}
+                        onChange={() => handlePiiBackendChange("tinfoil")}
+                      />
+                      <span className="text-foreground">Cloud (enclave)</span>
+                    </label>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    Local stays on-device — strongest privacy, slower on weak
+                    hardware. Cloud uses screenpipe&apos;s attested
+                    confidential-compute enclave — fast everywhere; your device
+                    verifies the open-source build before sending anything.
+                  </p>
+
+                  {/* Axis 1 — WHAT to hide (PII categories). The primary knob:
+                    content-type, applies wherever it's found. */}
+                  <p className="text-xs font-medium text-foreground pt-2">
+                    What to hide
+                  </p>
+                  {PII_FIELD_OPTIONS.map((opt) => {
+                    const checked =
+                      opt.always || piiRedactionLabels.includes(opt.value);
+                    return (
+                      <label
+                        key={opt.value}
+                        className={cn(
+                          "flex items-start gap-2 text-xs",
+                          opt.always ? "cursor-default" : "cursor-pointer",
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={checked}
+                          disabled={opt.always}
+                          onChange={(e) =>
+                            handlePiiLabelToggle(opt.value, e.target.checked)
+                          }
+                        />
+                        <span>
+                          <span className="font-medium text-foreground">
+                            {opt.label}
+                          </span>
+                          {opt.always && (
+                            <span className="text-muted-foreground">
+                              {" "}(always on)
+                            </span>
+                          )}
+                          <span className="text-muted-foreground">
+                            {" "}— {opt.desc}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                  {textRedactionOn && (
+                    <RedactionExamplePreview labels={piiRedactionLabels} />
+                  )}
+                  <p className="text-[11px] text-muted-foreground pt-0.5">
+                    Unselected types stay visible so your timeline remains
+                    searchable. Secrets are always removed in both modes.
+                  </p>
+
+                  {/* Axis 2 — WHERE to look (captured surfaces). Advanced and
                     orthogonal to the categories above; collapsed by default so
                     most users only deal with "What to hide". Text-only, so
                     hide it entirely when text redaction is off (Images-only
                     Smart mode). */}
-                {textRedactionOn && (
-                  <details className="group pt-3 mt-1.5 border-t border-border">
-                    <summary className="flex cursor-pointer select-none items-center gap-1.5 text-xs font-medium text-foreground list-none [&::-webkit-details-marker]:hidden">
-                      <ChevronRight className="h-3 w-3 shrink-0 transition-transform group-open:rotate-90" />
-                      Where we look
-                      <span className="font-normal text-muted-foreground">
-                        — advanced
-                      </span>
-                    </summary>
-                    <div className="mt-2 space-y-1.5">
-                      <p className="text-[11px] text-muted-foreground">
-                        We always scan what you type, your clipboard,
-                        transcripts, window titles, and on-screen text. Turn on
-                        any of these extra places the same info can hide —
-                        hover a row to see what it covers.
-                      </p>
-                      <RedactionWherePreview
-                        options={PII_COLUMN_OPTIONS}
-                        selected={piiRedactionColumns}
-                        onToggle={handlePiiColumnToggle}
-                      />
-                    </div>
-                  </details>
-                )}
+                  {textRedactionOn && (
+                    <details className="group pt-3 mt-1.5 border-t border-border">
+                      <summary className="flex cursor-pointer select-none items-center gap-1.5 text-xs font-medium text-foreground list-none [&::-webkit-details-marker]:hidden">
+                        <ChevronRight className="h-3 w-3 shrink-0 transition-transform group-open:rotate-90" />
+                        Where we look
+                        <span className="font-normal text-muted-foreground">
+                          — advanced
+                        </span>
+                      </summary>
+                      <div className="mt-2 space-y-1.5">
+                        <p className="text-[11px] text-muted-foreground">
+                          We always scan what you type, your clipboard,
+                          transcripts, window titles, and on-screen text. Turn on
+                          any of these extra places the same info can hide —
+                          hover a row to see what it covers.
+                        </p>
+                        <RedactionWherePreview
+                          options={PII_COLUMN_OPTIONS}
+                          selected={piiRedactionColumns}
+                          onToggle={handlePiiColumnToggle}
+                        />
+                      </div>
+                    </details>
+                  )}
 
-                <label className="flex items-start gap-2 text-xs cursor-pointer pt-2 mt-1.5 border-t border-border">
-                  <input
-                    type="checkbox"
-                    className="mt-0.5"
-                    checked={piiRedactionPseudonyms}
-                    onChange={(e) => handlePseudonymsToggle(e.target.checked)}
-                  />
-                  <span>
-                    <span className="font-medium text-foreground">
-                      Consistent pseudonyms
+                  <label className="flex items-start gap-2 text-xs cursor-pointer pt-2 mt-1.5 border-t border-border">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={piiRedactionPseudonyms}
+                      onChange={(e) => handlePseudonymsToggle(e.target.checked)}
+                    />
+                    <span>
+                      <span className="font-medium text-foreground">
+                        Consistent pseudonyms
+                      </span>
+                      <span className="text-muted-foreground">
+                        {" "}— replace each value with a stable token like{" "}
+                        <code>[PERSON_1a2b3c4d5e6f]</code> instead of a generic{" "}
+                        <code>[PERSON]</code>, so the same person or value stays
+                        linkable across your timeline without being exposed.
+                        One-way and on-device — the original can&apos;t be
+                        recovered. Applies to newly-recorded activity going
+                        forward.
+                      </span>
                     </span>
-                    <span className="text-muted-foreground">
-                      {" "}— replace each value with a stable token like{" "}
-                      <code>[PERSON_1a2b3c4d5e6f]</code> instead of a generic{" "}
-                      <code>[PERSON]</code>, so the same person or value stays
-                      linkable across your timeline without being exposed.
-                      One-way and on-device — the original can&apos;t be
-                      recovered. Applies to newly-recorded activity going
-                      forward.
-                    </span>
-                  </span>
-                </label>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+                  </label>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       </LockedSetting>
 
       <div className="space-y-2">
@@ -1637,6 +1651,43 @@ export function PrivacySection() {
                 </span>
               </span>
             </label>
+          </CardContent>
+        </Card>
+
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-start justify-between gap-3">
+              <label
+                htmlFor="importExternalChatsEnabled"
+                className="flex flex-1 items-start gap-2 text-xs cursor-pointer"
+              >
+                <input
+                  id="importExternalChatsEnabled"
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={importExternalChatsEnabled}
+                  onChange={(e) =>
+                    handleImportExternalChatsToggle(e.target.checked)
+                  }
+                  data-testid="privacy-import-external-chats-checkbox"
+                />
+                <span>
+                  <h3 className="font-medium text-foreground">
+                    Import local Claude Code / Codex chats
+                  </h3>
+                  <span className="text-muted-foreground">
+                    {" "}— the chat sidebar watches Claude Code
+                    (<code className="text-[10px]">~/.claude/projects</code>)
+                    and Codex
+                    (<code className="text-[10px]">~/.codex/sessions</code>)
+                    transcripts and copies them into your local chat index so
+                    they appear in Recents. Flip off to stop the watcher and
+                    prevent any further copies. Already-imported chats stay
+                    visible — delete them individually if you want them gone.
+                  </span>
+                </span>
+              </label>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -1685,30 +1736,30 @@ export function PrivacySection() {
           Telemetry
         </h2>
         <LockedSetting settingKey="telemetry">
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                    Analytics
-                    <HelpTooltip text="Product usage events only — features used, errors, performance. Never your screen recordings, audio, transcripts, or OCR text. Signed out, events carry only a random device ID. Signed in, they are linked to your account, including your email." />
-                  </h3>
-                  <p className="text-xs text-muted-foreground">
-                    Usage data, linked to your account when signed in
-                  </p>
+          <Card className="border-border bg-card">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                      Analytics
+                      <HelpTooltip text="Product usage events only — features used, errors, performance. Never your screen recordings, audio, transcripts, or OCR text. Signed out, events carry only a random device ID. Signed in, they are linked to your account, including your email." />
+                    </h3>
+                    <p className="text-xs text-muted-foreground">
+                      Usage data, linked to your account when signed in
+                    </p>
+                  </div>
                 </div>
+                <ManagedSwitch
+                  settingKey="analyticsEnabled"
+                  id="analyticsEnabled"
+                  checked={settings.analyticsEnabled}
+                  onCheckedChange={handleAnalyticsToggle}
+                />
               </div>
-              <ManagedSwitch
-                settingKey="analyticsEnabled"
-                id="analyticsEnabled"
-                checked={settings.analyticsEnabled}
-                onCheckedChange={handleAnalyticsToggle}
-              />
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
         </LockedSetting>
       </div>
 
@@ -1834,10 +1885,10 @@ function AdminTeamTokenCard() {
     pendingToken !== null
       ? pendingToken
       : liveToken
-      ? revealToken
-        ? liveToken
-        : "•".repeat(Math.min(liveToken.length, 32))
-      : "";
+        ? revealToken
+          ? liveToken
+          : "•".repeat(Math.min(liveToken.length, 32))
+        : "";
   const hasPending = pendingToken !== null && pendingToken !== (liveToken ?? "");
 
   return (

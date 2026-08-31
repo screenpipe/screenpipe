@@ -188,4 +188,23 @@ describe("external chat live sync", () => {
     expect(mocks.watch).toHaveBeenCalledTimes(2);
     controller.stop();
   });
+
+  it("does not watch or import anything when disabled (#6696)", async () => {
+    const controller = await startExternalChatSync({
+      home: "/fixture",
+      enabled: false,
+    });
+
+    expect(mocks.watch).not.toHaveBeenCalled();
+    expect(mocks.scanExternalChatHistory).not.toHaveBeenCalled();
+    expect(mocks.importExternalChatHistory).not.toHaveBeenCalled();
+    expect(mocks.exists).not.toHaveBeenCalled();
+
+    await controller.syncNow();
+    await controller.syncNow(true);
+    expect(mocks.scanExternalChatHistory).not.toHaveBeenCalled();
+    expect(mocks.importExternalChatHistory).not.toHaveBeenCalled();
+
+    controller.stop();
+  });
 });

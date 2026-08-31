@@ -97,13 +97,20 @@ function candidatesFromScan(scan: Awaited<ReturnType<typeof scanExternalChatHist
 }
 
 export async function startExternalChatSync(
-  options: { home?: string } = {},
+  options: { home?: string; enabled?: boolean } = {},
 ): Promise<ExternalChatSyncController> {
+  if (options.enabled === false) {
+    return {
+      syncNow: async () => { },
+      stop: () => { },
+    };
+  }
+
   const home = await resolveExternalChatHome(options.home);
   if (!home) {
     return {
-      syncNow: async () => {},
-      stop: () => {},
+      syncNow: async () => { },
+      stop: () => { },
     };
   }
 
@@ -117,7 +124,7 @@ export async function startExternalChatSync(
     const next = operationQueue.then(async () => {
       if (!stopped) await operation();
     });
-    operationQueue = next.catch(() => {});
+    operationQueue = next.catch(() => { });
     return next;
   };
 

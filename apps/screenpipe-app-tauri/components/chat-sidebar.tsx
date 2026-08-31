@@ -64,6 +64,7 @@ import {
   sessionRecordFromMeta,
   type SessionRecord,
 } from "@/lib/stores/chat-store";
+import { useSettings } from "@/lib/hooks/use-settings";
 import {
   conversationMetaFromJson,
   deleteConversationFile,
@@ -292,8 +293,8 @@ export function hiddenRecentSourcesFromStoredValue(
     return new Set(
       Array.isArray(parsed)
         ? parsed.filter((source): source is RecentSource =>
-            source === "screenpipe" || source === "codex" || source === "claude-code",
-          )
+          source === "screenpipe" || source === "codex" || source === "claude-code",
+        )
         : [],
     );
   } catch {
@@ -530,19 +531,19 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
               : {}),
             ...(hasContentAt
               ? {
-                  lastContentAt: Math.max(
-                    existing.lastContentAt ?? 0,
-                    meta.lastContentAt ?? 0,
-                  ),
-                }
+                lastContentAt: Math.max(
+                  existing.lastContentAt ?? 0,
+                  meta.lastContentAt ?? 0,
+                ),
+              }
               : {}),
             ...(hasViewedAt
               ? {
-                  lastViewedAt: Math.max(
-                    existing.lastViewedAt ?? 0,
-                    meta.lastViewedAt ?? 0,
-                  ),
-                }
+                lastViewedAt: Math.max(
+                  existing.lastViewedAt ?? 0,
+                  meta.lastViewedAt ?? 0,
+                ),
+              }
               : {}),
             updatedAt: Math.max(existing.updatedAt, meta.updatedAt),
             kind: meta.kind,
@@ -673,6 +674,8 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   // Local Codex and Claude histories are part of the chat index, not a
   // separate import workflow. Watch their native transcripts while the app is
   // open; a bounded focus reconciliation recovers any events the OS dropped.
+  const { settings } = useSettings();
+  const importExternalChatsEnabled = settings.importExternalChatsEnabled ?? true;
   useEffect(() => {
     let cancelled = false;
     let controller: ExternalChatSyncController | null = null;
@@ -682,7 +685,9 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     };
     const start = async () => {
       try {
-        const nextController = await startExternalChatSync();
+        const nextController = await startExternalChatSync({
+          enabled: importExternalChatsEnabled,
+        });
         if (cancelled) {
           nextController.stop();
           return;
@@ -706,7 +711,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
       controller?.stop();
       window.removeEventListener("focus", onFocus);
     };
-  }, [actions]);
+  }, [actions, importExternalChatsEnabled]);
 
   const { pinned, recents, pipes, archived } = useVisibleChatSections();
   const [hiddenRecentSources, setHiddenRecentSources] = useState<Set<RecentSource>>(
@@ -752,28 +757,28 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   const groupedSections = useMemo(
     () => recentLayout === "source"
       ? RECENT_SOURCE_OPTIONS.flatMap(({ source, label }) => {
-          const sessions = visibleRecents.filter((session) => recentSource(session) === source);
-          return sessions.length === 0
-            ? []
-            : [{
-                key: `source:${source}`,
-                title: label,
-                items: buildGroupedRecents(
-                  sessions,
-                  Number.POSITIVE_INFINITY,
-                  () => null,
-                ),
-              }];
-        })
+        const sessions = visibleRecents.filter((session) => recentSource(session) === source);
+        return sessions.length === 0
+          ? []
+          : [{
+            key: `source:${source}`,
+            title: label,
+            items: buildGroupedRecents(
+              sessions,
+              Number.POSITIVE_INFINITY,
+              () => null,
+            ),
+          }];
+      })
       : [{
-          key: "all-recents",
-          title: "",
-          items: buildGroupedRecents(
-            visibleRecents,
-            Number.POSITIVE_INFINITY,
-            () => null,
-          ),
-        }],
+        key: "all-recents",
+        title: "",
+        items: buildGroupedRecents(
+          visibleRecents,
+          Number.POSITIVE_INFINITY,
+          () => null,
+        ),
+      }],
     [recentLayout, visibleRecents],
   );
 
@@ -1368,7 +1373,7 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
     }
     // Stop any active session first to avoid immediate row resurrection
     // from trailing stream events.
-    commands.piAbort(id).catch(() => {});
+    commands.piAbort(id).catch(() => { });
     actions.patch(id, { hidden: true, pinned: false, unread: false });
     // Archiving should tuck chats away immediately; users can reopen
     // the bucket manually when they want to review archived items.
@@ -1800,8 +1805,8 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                   {recents.length > 0
                     ? "no chats match filters"
                     : pinned.length === 0 && pipes.length === 0
-                    ? "no chats yet — click + to start"
-                    : "no recent chats"}
+                      ? "no chats yet — click + to start"
+                      : "no recent chats"}
                 </div>
               ) : (
                 <RecentsBody
@@ -1830,63 +1835,63 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
           </div>
 
           <div className="group/pipes min-h-0 flex flex-col shrink-0">
-              <Section
-                title="automations"
-                collapsed={pipesCollapsed}
-                onCollapsedChange={updatePipesCollapsed}
-                headerAction={
-                  <Timer className="h-3 w-3 sidebar-text-tertiary" aria-hidden />
-                }
-                bodyClassName=""
-              >
-                {!pipeInventoryLoaded && pipeItems.length === 0 ? (
-                  <div className="px-2.5 py-2 space-y-1.5">
-                    {Array.from({ length: 3 }).map((_, i) => (
-                      <Skeleton key={i} className="h-6 w-full rounded-md" />
-                    ))}
-                  </div>
-                ) : pipeItems.length === 0 ? (
-                  <div className="px-2.5 py-2 text-xs sidebar-text-secondary italic">
-                    no automation runs yet
-                  </div>
-                ) : pipeItems.map((item) => (
-                    <PipeGroupRow
-                      key={item.key}
-                      item={item}
-                      lastRun={pipeLastRuns[item.title]}
-                      runsLoading={loadingPipeRuns.has(item.title)}
-                      runsLoaded={loadedPipeRuns[item.title] != null}
-                      hasMoreRuns={pipeRunsHaveMore[item.title] === true}
-                      expanded={expandedGroups.has(item.key)}
-                      onToggleExpand={() => toggleGroupExpanded(item.key)}
-                      onLoadMore={() => void loadPipeRuns(item.title, true)}
-                      currentId={currentId}
-                      queueDepths={queueDepths}
-                      onSelect={handleSelect}
-                      onArchive={handleArchive}
-                      onUnarchive={handleUnarchive}
-                      onDeleteRequest={setDeletingSessionId}
-                      onTogglePin={handleTogglePin}
-                      onRenameRequest={handleRenameRequest}
-                      onBranch={handleBranch}
-                      onMoveToGroup={handleMoveToGroup}
-                      onNewGroupRequest={setNewGroupSessionId}
-                      existingGroups={existingGroups}
-                      openConversationMenuId={openConversationMenuId}
-                      setOpenConversationMenuId={setOpenConversationMenuId}
-                    />
-                ))}
-                {pipeInventoryHasMore && (
-                  <button
-                    type="button"
-                    className="w-full px-2.5 py-1.5 text-left text-[10px] uppercase tracking-wider sidebar-text-secondary hover:text-foreground transition-colors"
-                    onClick={() => void fetchPipeInventory(true)}
-                    disabled={pipeInventoryLoadingMore}
-                  >
-                    {pipeInventoryLoadingMore ? "loading…" : "show more automation runs"}
-                  </button>
-                )}
-              </Section>
+            <Section
+              title="automations"
+              collapsed={pipesCollapsed}
+              onCollapsedChange={updatePipesCollapsed}
+              headerAction={
+                <Timer className="h-3 w-3 sidebar-text-tertiary" aria-hidden />
+              }
+              bodyClassName=""
+            >
+              {!pipeInventoryLoaded && pipeItems.length === 0 ? (
+                <div className="px-2.5 py-2 space-y-1.5">
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <Skeleton key={i} className="h-6 w-full rounded-md" />
+                  ))}
+                </div>
+              ) : pipeItems.length === 0 ? (
+                <div className="px-2.5 py-2 text-xs sidebar-text-secondary italic">
+                  no automation runs yet
+                </div>
+              ) : pipeItems.map((item) => (
+                <PipeGroupRow
+                  key={item.key}
+                  item={item}
+                  lastRun={pipeLastRuns[item.title]}
+                  runsLoading={loadingPipeRuns.has(item.title)}
+                  runsLoaded={loadedPipeRuns[item.title] != null}
+                  hasMoreRuns={pipeRunsHaveMore[item.title] === true}
+                  expanded={expandedGroups.has(item.key)}
+                  onToggleExpand={() => toggleGroupExpanded(item.key)}
+                  onLoadMore={() => void loadPipeRuns(item.title, true)}
+                  currentId={currentId}
+                  queueDepths={queueDepths}
+                  onSelect={handleSelect}
+                  onArchive={handleArchive}
+                  onUnarchive={handleUnarchive}
+                  onDeleteRequest={setDeletingSessionId}
+                  onTogglePin={handleTogglePin}
+                  onRenameRequest={handleRenameRequest}
+                  onBranch={handleBranch}
+                  onMoveToGroup={handleMoveToGroup}
+                  onNewGroupRequest={setNewGroupSessionId}
+                  existingGroups={existingGroups}
+                  openConversationMenuId={openConversationMenuId}
+                  setOpenConversationMenuId={setOpenConversationMenuId}
+                />
+              ))}
+              {pipeInventoryHasMore && (
+                <button
+                  type="button"
+                  className="w-full px-2.5 py-1.5 text-left text-[10px] uppercase tracking-wider sidebar-text-secondary hover:text-foreground transition-colors"
+                  onClick={() => void fetchPipeInventory(true)}
+                  disabled={pipeInventoryLoadingMore}
+                >
+                  {pipeInventoryLoadingMore ? "loading…" : "show more automation runs"}
+                </button>
+              )}
+            </Section>
           </div>
         </div>
       </div>
@@ -2216,11 +2221,11 @@ function CompactDrawerList({
             isCurrent={session.id === currentId}
             queuedCount={0}
             onSelect={onSelect}
-            onArchive={() => {}}
-            onUnarchive={() => {}}
-            onDeleteRequest={() => {}}
-            onTogglePin={() => {}}
-            onRenameRequest={() => {}}
+            onArchive={() => { }}
+            onUnarchive={() => { }}
+            onDeleteRequest={() => { }}
+            onTogglePin={() => { }}
+            onRenameRequest={() => { }}
             showActions={false}
           />
         ))}
@@ -3006,141 +3011,141 @@ export function SidebarChatRow({
       }}
     >
       <ContextMenuTrigger asChild disabled={!canShowActions}>
-    <div
-      className={cn(
-        "group relative flex items-center gap-2 border-l-2 px-2.5 py-1 rounded-md select-none",
-        "transition-colors",
-        isCurrent
-          ? "border-foreground bg-foreground/[0.08] text-foreground"
-          : disableHover
-            ? tone === "subtle"
-              ? "border-transparent sidebar-text-tertiary"
-              : "border-transparent sidebar-text-secondary"
-            : tone === "subtle"
-              ? "border-transparent sidebar-text-tertiary hover:bg-muted/12"
-              : "border-transparent sidebar-text-secondary hover:bg-muted/20"
-      )}
-      data-testid={`chat-row-${session.id}`}
-      data-current={isCurrent ? "true" : undefined}
-      title={isError && session.lastError ? session.lastError : undefined}
-    >
-      <button
-        type="button"
-        className="min-w-0 flex-1 flex items-center gap-2 text-left"
-        aria-current={isCurrent ? "page" : undefined}
-        onClick={() => {
-          setOpenConversationMenuId?.(null);
-          onSelect(session.id);
-        }}
-      >
-        <span
-          className="flex h-5 w-5 shrink-0 items-center justify-center"
-          aria-label={harnessLabel ? `${harnessLabel} harness` : `${sourceLabel} source`}
-          title={harnessLabel ? `${harnessLabel}${sourceLabel ? ` · ${sourceLabel}` : ""}` : sourceLabel ?? undefined}
-        >
-          {harnessIcon ? (
-            <Image
-              src={harnessIcon}
-              alt=""
-              width={17}
-              height={17}
-              className="h-[17px] w-[17px] rounded-sm object-contain"
-              unoptimized
-            />
-          ) : (
-            <Terminal className="h-4 w-4 sidebar-text-tertiary" aria-hidden />
-          )}
-        </span>
-        {!insideGroup && (session.kind === "pipe-run" || session.kind === "pipe-watch") && (
-          <Timer className="h-3 w-3 shrink-0 sidebar-text-tertiary" aria-hidden />
-        )}
-        <span className="min-w-0 flex-1">
-          <span
-            className={cn(
-            "block truncate text-xs font-normal",
-            isUnread
-              ? "font-medium text-foreground"
-              : isCurrent
-                ? "font-medium text-foreground"
+        <div
+          className={cn(
+            "group relative flex items-center gap-2 border-l-2 px-2.5 py-1 rounded-md select-none",
+            "transition-colors",
+            isCurrent
+              ? "border-foreground bg-foreground/[0.08] text-foreground"
+              : disableHover
+                ? tone === "subtle"
+                  ? "border-transparent sidebar-text-tertiary"
+                  : "border-transparent sidebar-text-secondary"
                 : tone === "subtle"
-                  ? "sidebar-text-tertiary"
-                : "sidebar-text-secondary"
+                  ? "border-transparent sidebar-text-tertiary hover:bg-muted/12"
+                  : "border-transparent sidebar-text-secondary hover:bg-muted/20"
           )}
-          >
-            {session.streamingTitle || (isInjectedTitle(session.title) ? undefined : session.title) || "untitled"}
-          </span>
-        </span>
-        <span className="ml-1 h-4 w-10 shrink-0 relative flex items-center justify-end">
-          <span
-            className={cn(
-              "absolute inset-y-0 right-0 flex items-center justify-end transition-opacity duration-150",
-              canShowActions && "group-hover:opacity-0",
-              menuOpen && "opacity-0"
-            )}
-          >
-            {showCurrentLabel ? (
-              <span className="text-[9px] font-medium uppercase tracking-[0.08em] text-foreground/70">
-                current
-              </span>
-            ) : (
-              <RowRightSignal
-                isLive={isLive}
-                isError={isError}
-                isUnread={isUnread}
-                queuedCount={queuedCount}
-                status={session.status}
-                age={age}
-              />
-            )}
-          </span>
-        </span>
-      </button>
-
-      {canShowActions && (
-        // Absolute so the menu overlays the age slot instead of reserving
-        // its own column. Without this, recents rows sit ~28px further from
-        // the right edge than scheduled rows (gap-2 + w-5) and read as
-        // misaligned even when the menu is invisible.
-        <div className="absolute right-2.5 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-end">
-          <DropdownMenu
-            open={menuOpen}
-            onOpenChange={(open) => {
-              setOpenConversationMenuId?.(open ? session.id : null);
+          data-testid={`chat-row-${session.id}`}
+          data-current={isCurrent ? "true" : undefined}
+          title={isError && session.lastError ? session.lastError : undefined}
+        >
+          <button
+            type="button"
+            className="min-w-0 flex-1 flex items-center gap-2 text-left"
+            aria-current={isCurrent ? "page" : undefined}
+            onClick={() => {
+              setOpenConversationMenuId?.(null);
+              onSelect(session.id);
             }}
           >
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => e.stopPropagation()}
-                className={cn(
-                  "p-0.5 rounded hover:bg-muted transition-opacity duration-150 inline-flex items-center justify-center",
-                  menuOpen
-                    ? "opacity-100 visible"
-                    : "opacity-0 invisible group-hover:opacity-100 group-hover:visible"
-                )}
-                aria-label="conversation actions"
-              >
-                <MoreVertical className="h-3.5 w-3.5 text-muted-foreground" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              alignOffset={2}
-              side="bottom"
-              sideOffset={4}
-              collisionPadding={8}
-              className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none"
-              onClick={(e) => e.stopPropagation()}
-              onPointerDown={(e) => e.stopPropagation()}
-              onKeyDown={handleRowMenuShortcut}
+            <span
+              className="flex h-5 w-5 shrink-0 items-center justify-center"
+              aria-label={harnessLabel ? `${harnessLabel} harness` : `${sourceLabel} source`}
+              title={harnessLabel ? `${harnessLabel}${sourceLabel ? ` · ${sourceLabel}` : ""}` : sourceLabel ?? undefined}
             >
-              <RowMenuItems variant="dropdown" session={session} {...rowMenuActions} />
-            </DropdownMenuContent>
-          </DropdownMenu>
+              {harnessIcon ? (
+                <Image
+                  src={harnessIcon}
+                  alt=""
+                  width={17}
+                  height={17}
+                  className="h-[17px] w-[17px] rounded-sm object-contain"
+                  unoptimized
+                />
+              ) : (
+                <Terminal className="h-4 w-4 sidebar-text-tertiary" aria-hidden />
+              )}
+            </span>
+            {!insideGroup && (session.kind === "pipe-run" || session.kind === "pipe-watch") && (
+              <Timer className="h-3 w-3 shrink-0 sidebar-text-tertiary" aria-hidden />
+            )}
+            <span className="min-w-0 flex-1">
+              <span
+                className={cn(
+                  "block truncate text-xs font-normal",
+                  isUnread
+                    ? "font-medium text-foreground"
+                    : isCurrent
+                      ? "font-medium text-foreground"
+                      : tone === "subtle"
+                        ? "sidebar-text-tertiary"
+                        : "sidebar-text-secondary"
+                )}
+              >
+                {session.streamingTitle || (isInjectedTitle(session.title) ? undefined : session.title) || "untitled"}
+              </span>
+            </span>
+            <span className="ml-1 h-4 w-10 shrink-0 relative flex items-center justify-end">
+              <span
+                className={cn(
+                  "absolute inset-y-0 right-0 flex items-center justify-end transition-opacity duration-150",
+                  canShowActions && "group-hover:opacity-0",
+                  menuOpen && "opacity-0"
+                )}
+              >
+                {showCurrentLabel ? (
+                  <span className="text-[9px] font-medium uppercase tracking-[0.08em] text-foreground/70">
+                    current
+                  </span>
+                ) : (
+                  <RowRightSignal
+                    isLive={isLive}
+                    isError={isError}
+                    isUnread={isUnread}
+                    queuedCount={queuedCount}
+                    status={session.status}
+                    age={age}
+                  />
+                )}
+              </span>
+            </span>
+          </button>
+
+          {canShowActions && (
+            // Absolute so the menu overlays the age slot instead of reserving
+            // its own column. Without this, recents rows sit ~28px further from
+            // the right edge than scheduled rows (gap-2 + w-5) and read as
+            // misaligned even when the menu is invisible.
+            <div className="absolute right-2.5 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-end">
+              <DropdownMenu
+                open={menuOpen}
+                onOpenChange={(open) => {
+                  setOpenConversationMenuId?.(open ? session.id : null);
+                }}
+              >
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                    className={cn(
+                      "p-0.5 rounded hover:bg-muted transition-opacity duration-150 inline-flex items-center justify-center",
+                      menuOpen
+                        ? "opacity-100 visible"
+                        : "opacity-0 invisible group-hover:opacity-100 group-hover:visible"
+                    )}
+                    aria-label="conversation actions"
+                  >
+                    <MoreVertical className="h-3.5 w-3.5 text-muted-foreground" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="end"
+                  alignOffset={2}
+                  side="bottom"
+                  sideOffset={4}
+                  collisionPadding={8}
+                  className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none"
+                  onClick={(e) => e.stopPropagation()}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onKeyDown={handleRowMenuShortcut}
+                >
+                  <RowMenuItems variant="dropdown" session={session} {...rowMenuActions} />
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )}
         </div>
-      )}
-    </div>
       </ContextMenuTrigger>
       {canShowActions && (
         <ContextMenuContent
@@ -3181,8 +3186,8 @@ function RowRightSignal({
     if (isLive) {
       const live =
         status === "thinking" ? "thinking" :
-        status === "tool" ? "using tool" :
-        "streaming";
+          status === "tool" ? "using tool" :
+            "streaming";
       return { content: <LiveSignal ariaLabel={live} />, label: live };
     }
     if (queuedCount > 0) {
