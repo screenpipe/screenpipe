@@ -9,15 +9,16 @@
 //! confirmation, and the final OS notification run in the app process, so
 //! hiding, navigating, or recreating the report dialog cannot cancel the job.
 
-use std::time::Duration;
+use std::{sync::atomic::Ordering, time::Duration};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bytes::Bytes;
 use futures::stream::{self, StreamExt};
 use reqwest::{Client, Response};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use specta::Type;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 use tokio::time::{timeout, Instant};
 use tracing::{info, warn};
@@ -29,6 +30,7 @@ const MAX_LOG_BYTES: u64 = 100 * 1024;
 const MAX_ATTACHMENT_BYTES: usize = 50 * 1024 * 1024;
 const API_TIMEOUT: Duration = Duration::from_secs(30);
 const LOG_READ_TIMEOUT: Duration = Duration::from_secs(60);
+const DIAGNOSTIC_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const VIDEO_UPLOAD_TIMEOUT: Duration = Duration::from_secs(280);
 
@@ -286,6 +288,68 @@ async fn collect_log_text(app: &AppHandle) -> String {
         .collect()
 }
 
+async fn probe_recording_endpoint(client: &Client, url: String) -> Value {
+    match timeout(DIAGNOSTIC_PROBE_TIMEOUT, client.get(url).send()).await {
+        Ok(Ok(response)) => json!({
+            "ok": response.status().is_success(),
+            "status": response.status().as_u16(),
+        }),
+        Ok(Err(error)) => json!({ "ok": false, "error": error.to_string() }),
+        Err(_) => json!({ "ok": false, "error": "timeout" }),
+    }
+}
+
+async fn collect_recording_diagnostics(app: &AppHandle) -> String {
+    let recording_state = if let Some(state) = app.try_state::<crate::recording::RecordingState>() {
+        let (server, capture) = tokio::join!(
+            timeout(DIAGNOSTIC_PROBE_TIMEOUT, state.server.lock()),
+            timeout(DIAGNOSTIC_PROBE_TIMEOUT, state.capture.lock()),
+        );
+        json!({
+            "captureIntended": state.capture_intended(),
+            "capturePresent": capture.ok().map(|guard| guard.is_some()),
+            "isStarting": state.is_starting.load(Ordering::SeqCst),
+            "isStartingCapture": state.is_starting_capture.load(Ordering::SeqCst),
+            "serverPresent": server.ok().map(|guard| guard.is_some()),
+        })
+    } else {
+        Value::Null
+    };
+
+    let port = crate::store::SettingsStore::get(app)
+        .ok()
+        .flatten()
+        .map(|settings| settings.recording.port)
+        .unwrap_or(3030);
+    let base_url = format!("http://127.0.0.1:{port}");
+    let client = Client::builder()
+        .connect_timeout(DIAGNOSTIC_PROBE_TIMEOUT)
+        .build();
+    let probes = match client {
+        Ok(client) => {
+            let (health, audio, vision) = tokio::join!(
+                probe_recording_endpoint(&client, format!("{base_url}/health")),
+                probe_recording_endpoint(&client, format!("{base_url}/audio/device/status")),
+                probe_recording_endpoint(&client, format!("{base_url}/vision/device/status")),
+            );
+            json!({
+                "health": health,
+                "audioDeviceStatus": audio,
+                "visionDeviceStatus": vision,
+            })
+        }
+        Err(error) => json!({ "error": error.to_string() }),
+    };
+
+    serde_json::to_string_pretty(&json!({
+        "bootPhase": crate::health::get_boot_phase_snapshot(),
+        "recordingState": recording_state,
+        "recordingStatus": format!("{:?}", crate::health::get_recording_status()).to_lowercase(),
+        "probes": probes,
+    }))
+    .unwrap_or_else(|error| format!(r#"{{"error":"{error}"}}"#))
+}
+
 async fn checked_response(
     request: reqwest::RequestBuilder,
     label: &'static str,
@@ -537,9 +601,10 @@ async fn run_feedback_upload(
     let screenshot = prepare_screenshot(request.screenshot_data_url.as_deref())?;
     let video = prepare_video(request)?;
     let logs = collect_log_text(app).await;
+    let recording_diagnostics = collect_recording_diagnostics(app).await;
     let raw_bundle = format!(
-        "{}{}\n\n=== Browser Console Logs ===\n{}",
-        request.chat_history, logs, request.console_log
+        "{}{}\n\n=== Browser Console Logs ===\n{}\n\n=== Recording Diagnostics ===\n{}",
+        request.chat_history, logs, request.console_log, recording_diagnostics
     );
     let redacted_logs =
         crate::feedback_redact::redact_pii_for_feedback(raw_bundle, request.settings_json.clone())
