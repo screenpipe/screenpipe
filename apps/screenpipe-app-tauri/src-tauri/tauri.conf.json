@@ -10,11 +10,11 @@
   },
   "bundle": {
     "active": true,
-    "publisher": "Mediar, Inc.",
+    "publisher": "Negentropy Labs, Inc.",
     "category": "DeveloperTool",
     "shortDescription": "24/7 memory for your desktop",
     "longDescription": "24/7 memory for your desktop. 100% local. You own your data.",
-    "copyright": "",
+    "copyright": "Copyright © 2024-2026 Negentropy Labs, Inc. All rights reserved.",
     "targets": [
       "app",
       "dmg",

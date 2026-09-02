@@ -375,7 +375,7 @@ Each pipe supports YAML frontmatter fields (allow-apps, deny-apps, deny-windows,
 
 ## Company
 
-Built by screenpipe (Mediar, Inc.). Founded 2024. Based in San Francisco, CA.
+Built by screenpipe (Negentropy Labs, Inc.). Founded 2024. Based in San Francisco, CA.
 
 - Founder: Louis Beaumont (@louis030195)
 - Twitter: @screenpipe

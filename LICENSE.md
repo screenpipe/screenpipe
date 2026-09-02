@@ -1,6 +1,6 @@
 # Screenpipe Commercial License
 
-Copyright (c) 2024-2026 Mediar, Inc. (dba Screenpipe). All rights reserved.
+Copyright (c) 2024-2026 Negentropy Labs, Inc. (dba Screenpipe). All rights reserved.
 
 ## 1. Definitions
 
@@ -8,7 +8,7 @@ Copyright (c) 2024-2026 Mediar, Inc. (dba Screenpipe). All rights reserved.
 including its source code and documentation, and any binaries built from
 that source code.
 
-"Licensor" means Mediar, Inc. (dba Screenpipe).
+"Licensor" means Negentropy Labs, Inc. (dba Screenpipe).
 
 "You" means the individual or entity exercising rights under this license.
 

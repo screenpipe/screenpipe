@@ -1,6 +1,6 @@
 {
     "bundle": {
-        "publisher": "Mediar, Inc.",
+        "publisher": "Negentropy Labs, Inc.",
         "macOS": {
             "entitlements": "entitlements.plist",
             "hardenedRuntime": true,
