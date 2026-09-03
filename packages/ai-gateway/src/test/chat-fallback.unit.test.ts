@@ -78,6 +78,15 @@ describe('chat handler — oversized-input classification (SCREENPIPE-AI-PROXY-C
 		expect(isUserInputTooLarge(400, 'prompt is too long: 250000 tokens > 200000 maximum')).toBe(true);
 	});
 
+	it('matches the Anthropic request-too-large 413 response', () => {
+		expect(
+			isUserInputTooLarge(
+				413,
+				'413 {"error":{"type":"request_too_large","message":"Request exceeds the maximum size"}}',
+			),
+		).toBe(true);
+	});
+
 	it('ignores unrelated 400s and non-4xx statuses', () => {
 		expect(isUserInputTooLarge(400, 'invalid tool schema')).toBe(false);
 		expect(isUserInputTooLarge(500, 'maximum context length exceeded')).toBe(false);

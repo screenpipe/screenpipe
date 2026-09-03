@@ -123,6 +123,7 @@ const USER_INPUT_TOO_LARGE_PATTERNS = [
   /maximum context length/i,
   /context length.*exceeded/i,
   /request payload size exceeds/i,
+  /request exceeds the maximum size/i,
   // Vertex MaaS (glm-5 etc): "The input (325052 tokens) is longer than the
   // model's context length (202752 tokens)" — SCREENPIPE-AI-PROXY-C, 28 users.
   /longer than the model'?s context length/i,
