@@ -10,6 +10,7 @@ export interface MeetingRecord {
   title: string | null;
   attendees: string | null;
   note: string | null;
+  hidden: boolean;
   detection_source: string;
   created_at: string;
 }

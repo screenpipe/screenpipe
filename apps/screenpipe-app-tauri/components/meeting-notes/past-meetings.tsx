@@ -4,7 +4,7 @@
 "use client";
 
 import React from "react";
-import { Check, Copy, FileText, Loader2, Phone, Trash2 } from "lucide-react";
+import { Check, Copy, EyeOff, FileText, Loader2, Phone } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { localFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
@@ -321,16 +321,19 @@ function PastMeetingRow({
     }
   };
 
-  const handleDelete = async () => {
+  const handleHide = async () => {
     try {
       const res = await localFetch(`/meetings/${meeting.id}`, {
-        method: "DELETE",
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hidden: true }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       onDelete(meeting.id);
+      toast({ title: "meeting hidden" });
     } catch (err) {
       toast({
-        title: "couldn't delete meeting",
+        title: "couldn't hide meeting",
         description: String(err),
         variant: "destructive",
       });
@@ -424,25 +427,24 @@ function PastMeetingRow({
               <AlertDialogTrigger asChild>
                 <button
                   className="opacity-0 group-hover:opacity-100 transition-opacity h-7 w-7 flex items-center justify-center bg-transparent text-muted-foreground hover:text-destructive"
-                  title="delete meeting"
+                  title="hide meeting"
                 >
-                  <Trash2 className="h-3 w-3" />
+                  <EyeOff className="h-3 w-3" />
                 </button>
               </AlertDialogTrigger>
               <AlertDialogContent>
                 <AlertDialogHeader>
-                  <AlertDialogTitle>delete meeting</AlertDialogTitle>
+                  <AlertDialogTitle>hide meeting</AlertDialogTitle>
                   <AlertDialogDescription>
-                    your notes and transcript will be permanently deleted.
+                    this meeting will disappear from the list. your notes and transcript will be kept.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel>cancel</AlertDialogCancel>
                   <AlertDialogAction
-                    variant="destructive"
-                    onClick={() => void handleDelete()}
+                    onClick={() => void handleHide()}
                   >
-                    delete
+                    hide
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>

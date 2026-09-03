@@ -350,6 +350,7 @@ pub(crate) async fn apply_state_action(
                                             calendar.attendees.as_deref(),
                                             None,
                                             None,
+                                            None,
                                         )
                                         .await
                                     {

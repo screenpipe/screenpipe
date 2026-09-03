@@ -425,6 +425,7 @@ mod db_tests {
             &store,
             &format!("{}@2026-08-25T20:17:43.382Z", meeting_id),
             &agent_end_stdout("## Summary\nGeneration-keyed run body long enough to persist."),
+            None,
         )
         .await;
 
@@ -508,6 +509,7 @@ mod db_tests {
             None,
             Some("prep\n\n## Summary\nthe agent-saved one"),
             None,
+            None,
         )
         .await
         .unwrap();
@@ -558,6 +560,7 @@ mod db_tests {
             None,
             None,
             Some("## Summary\nalready here"),
+            None,
             None,
         )
         .await

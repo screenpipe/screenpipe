@@ -36,6 +36,7 @@ pub struct UpdateMeetingRequest {
     pub attendees: Option<String>,
     pub note: Option<String>,
     pub meeting_app: Option<String>,
+    pub hidden: Option<bool>,
     /// Set when `title`/`attendees` come from a calendar event. The event is
     /// claimed for this meeting first; if another meeting already owns it, the
     /// calendar-derived fields are dropped and the rest of the update applies.
@@ -677,6 +678,8 @@ pub(crate) async fn update_meeting_handler(
             attendees,
             body.note.as_deref(),
             body.meeting_app.as_deref(),
+            body.hidden,
+            None,
         )
         .await
         .map_err(|e| {
@@ -958,6 +961,7 @@ pub(crate) async fn start_meeting_handler(
                         attendees_update,
                         None,
                         None,
+                        None,
                     )
                     .await
                 {
@@ -986,6 +990,7 @@ pub(crate) async fn start_meeting_handler(
                         None,
                         title_update,
                         attendees_update,
+                        None,
                         None,
                         None,
                     )

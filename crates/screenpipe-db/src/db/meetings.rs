@@ -530,8 +530,8 @@ impl DatabaseManager {
         for attempt in 1..=max_retries {
             let mut conn = self.pool.acquire().await?;
             match sqlx::query_as::<_, MeetingRecord>(
-                "SELECT id, meeting_start, meeting_end, meeting_app, title, attendees, note, \
-                 detection_source, created_at FROM meetings WHERE id = ?1 AND meeting_end IS NULL",
+                "SELECT id, meeting_start, meeting_end, meeting_app, title, attendees, note, hidden, \
+                 detection_source, created_at FROM meetings WHERE id = ?1 AND hidden = 0 AND meeting_end IS NULL",
             )
             .bind(id)
             .fetch_optional(&mut *conn)
@@ -594,8 +594,8 @@ impl DatabaseManager {
         for attempt in 1..=max_retries {
             let mut conn = self.pool.acquire().await?;
             match sqlx::query_as::<_, MeetingRecord>(
-                "SELECT id, meeting_start, meeting_end, meeting_app, title, attendees, note, \
-                 detection_source, created_at FROM meetings WHERE meeting_end IS NULL \
+                "SELECT id, meeting_start, meeting_end, meeting_app, title, attendees, note, hidden, \
+                 detection_source, created_at FROM meetings WHERE hidden = 0 AND meeting_end IS NULL \
                  ORDER BY id DESC LIMIT 1",
             )
             .fetch_optional(&mut *conn)
@@ -630,8 +630,8 @@ impl DatabaseManager {
         offset: u32,
     ) -> Result<Vec<MeetingRecord>, SqlxError> {
         let mut sql = String::from(
-            "SELECT id, meeting_start, meeting_end, meeting_app, title, attendees, note, \
-             detection_source, created_at FROM meetings WHERE 1=1",
+            "SELECT id, meeting_start, meeting_end, meeting_app, title, attendees, note, hidden, \
+             detection_source, created_at FROM meetings WHERE hidden = 0",
         );
         if start_time.is_some() {
             sql.push_str(" AND meeting_start >= ?");
@@ -697,7 +697,7 @@ impl DatabaseManager {
         for attempt in 1..=max_retries {
             let mut conn = self.pool.acquire().await?;
             match sqlx::query_as::<_, MeetingRecord>(
-                "SELECT id, meeting_start, meeting_end, meeting_app, title, attendees, note, \
+                "SELECT id, meeting_start, meeting_end, meeting_app, title, attendees, note, hidden, \
                  detection_source, created_at FROM meetings WHERE id = ?1",
             )
             .bind(id)
@@ -1401,6 +1401,7 @@ impl DatabaseManager {
         attendees: Option<&str>,
         note: Option<&str>,
         meeting_app: Option<&str>,
+        hidden: Option<bool>,
     ) -> Result<(), SqlxError> {
         let mut sets: Vec<&str> = Vec::new();
         if meeting_start.is_some() {
@@ -1420,6 +1421,9 @@ impl DatabaseManager {
         }
         if meeting_app.is_some() {
             sets.push("meeting_app = ?");
+        }
+        if hidden.is_some() {
+            sets.push("hidden = ?");
         }
         if sets.is_empty() {
             return Ok(());
@@ -1453,6 +1457,9 @@ impl DatabaseManager {
             query = query.bind(v);
         }
         if let Some(v) = meeting_app {
+            query = query.bind(v);
+        }
+        if let Some(v) = hidden {
             query = query.bind(v);
         }
         query.bind(id).execute(&mut **tx.conn()).await?;

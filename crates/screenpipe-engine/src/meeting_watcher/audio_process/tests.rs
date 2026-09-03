@@ -2988,6 +2988,7 @@ async fn manually_started_meeting_claims_its_calendar_event() {
         binding.attendees.as_deref(),
         None,
         None,
+        None,
     )
     .await
     .unwrap();

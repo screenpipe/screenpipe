@@ -205,7 +205,7 @@ pub(crate) async fn start_or_adopt_auto_meeting_guarded(
                             if recent.title.as_ref().is_none_or(|t| t.is_empty()) {
                                 if let Err(e) = db
                                     .update_meeting(
-                                        recent.id, None, None, title, attendees, None, None,
+                                        recent.id, None, None, title, attendees, None, None, None,
                                     )
                                     .await
                                 {
