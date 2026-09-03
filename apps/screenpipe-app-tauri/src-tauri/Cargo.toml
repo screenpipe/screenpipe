@@ -30,7 +30,7 @@ cc = "1"
 
 [dependencies]
 tauri-helper = { git = "https://github.com/screenpipe/tauri-helper", rev = "e25ff1d2c5026189305a0251a1e06788efe1d2b3" }
-tauri = { version = "=2.11.2", features = [
+tauri = { version = "=2.11.5", features = [
   "protocol-asset",
   "macos-private-api",
   "tray-icon",
@@ -101,7 +101,7 @@ sha2 = "0.10"
 # 0.2.189 sizes vm_statistics64 for macOS 27. sysinfo 0.29 forwards that
 # 104-word size to macOS 26, whose libsystem maximum is 62, on every memory
 # refresh. Keep the pre-macOS-27 layout until the caller is version-aware.
-libc = "=0.2.186"
+libc = "=0.2.189"
 anyhow = "1.0.71"
 arboard = "3.4"
 
@@ -340,7 +340,7 @@ serial_test = "3"
 tower = { version = "0.4", features = ["util"] }
 # MockRuntime for store.rs recovery tests that must exercise the real
 # tauri-plugin-store registry (state + resources table).
-tauri = { version = "=2.11.2", features = ["test"] }
+tauri = { version = "=2.11.5", features = ["test"] }
 # staged_update tests: sign fake update archives with a throwaway key
 minisign = "0.7"
 
