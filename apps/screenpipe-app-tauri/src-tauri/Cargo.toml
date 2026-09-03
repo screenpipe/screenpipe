@@ -42,14 +42,14 @@ tauri = { version = "=2.11.2", features = [
 ] }
 tauri-utils = { version = "=2.9.3", features = [] }
 # plugins
-tauri-plugin-fs = { version = "=2.4.5", features = ["watch"] }
+tauri-plugin-fs = { version = "=2.5.1", features = ["watch"] }
 tauri-plugin-notification = "=2.3.3"
 tauri-plugin-updater = "=2.10.1"
 # version ordering for the updater's newer-version promotion (#5784 double update)
 semver = "1"
 # staged-update signature re-verification (same crate/version the updater plugin uses)
 minisign-verify = "0.2"
-tauri-plugin-dialog = "=2.6.0"
+tauri-plugin-dialog = "=2.7.2"
 tauri-plugin-os = "=2.3.2"
 tauri-plugin-process = "=2.3.1"
 tauri-plugin-autostart = "=2.5.1"
