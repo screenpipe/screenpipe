@@ -7,6 +7,7 @@ import type { AuthResult, Env } from '../types';
 import spendLimitFixture from './fixtures/cloudflare-spend-limit-429.json';
 import {
 	buildHostedChatGatewayContext,
+	bedrockModelForClaude,
 	cloudflareSpendLimitRuleId,
 	gatewayProviderForModel,
 	getHostedChatGatewayConnection,
@@ -131,6 +132,32 @@ describe('Cloudflare provider-native connection', () => {
 		expect(connection.baseURL).toBe(
 			'https://gateway.ai.cloudflare.com/v1/account-id/gateway-staging/anthropic',
 		);
+	});
+
+	it('uses the OpenAI-compatible endpoint for Bedrock BYOK', async () => {
+		const env = {
+			CLOUDFLARE_AI_GATEWAY_ID: 'gateway-staging',
+			CLOUDFLARE_AI_GATEWAY_BASE_URL:
+				'https://gateway.ai.cloudflare.com/v1/account-id/gateway-staging/compat/chat/completions',
+			CLOUDFLARE_AI_GATEWAY_TOKEN: 'local-gateway-token',
+		} as unknown as Env;
+		const context = await buildHostedChatGatewayContext(auth(), 'claude-sonnet-5', 'background');
+		const connection = await getHostedChatGatewayConnection(env, 'compat', context);
+
+		expect(connection.baseURL).toBe(
+			'https://gateway.ai.cloudflare.com/v1/account-id/gateway-staging/compat',
+		);
+		expect(connection.defaultHeaders.Authorization).toBeNull();
+		expect(JSON.parse(connection.defaultHeaders['cf-aig-metadata']!)).toMatchObject({
+			workload: 'background',
+		});
+	});
+
+	it('maps current Claude models to the identical Bedrock global profile', () => {
+		expect(bedrockModelForClaude('claude-sonnet-5')).toBe('aws-bedrock/global.anthropic.claude-sonnet-5');
+		expect(bedrockModelForClaude('claude-opus-5')).toBe('aws-bedrock/global.anthropic.claude-opus-5');
+		expect(bedrockModelForClaude('claude-fable-5')).toBe('aws-bedrock/global.anthropic.claude-fable-5');
+		expect(bedrockModelForClaude('gpt-5.6-luna')).toBeNull();
 	});
 
 	it('routes only OpenAI and Anthropic hosted models through the Gateway', () => {

@@ -11,7 +11,7 @@ export type HostedChatPlan = 'free' | 'basic' | 'business' | 'business_max' | 'b
 export type HostedChatLane = 'auto' | 'explicit' | 'frontier';
 export type HostedChatRequestLane = Exclude<HostedChatLane, 'frontier'>;
 export type HostedChatWorkload = 'interactive' | 'background';
-export type CloudflareGatewayProvider = 'openai' | 'anthropic';
+export type CloudflareGatewayProvider = 'openai' | 'anthropic' | 'compat';
 export type HostedChatLimitScope = 'combined' | 'frontier' | 'unknown';
 
 const SUPER_ADMIN_ACTOR_ID = 'f0d67846f15d207818a4016c5f12edac415d35adf8084792fec508554def5906';
@@ -155,6 +155,17 @@ export function gatewayProviderForModel(model: string): CloudflareGatewayProvide
 	return null;
 }
 
+const BEDROCK_CLAUDE_MODELS: Record<string, string> = {
+	'claude-fable-5': 'aws-bedrock/global.anthropic.claude-fable-5',
+	'claude-opus-5': 'aws-bedrock/global.anthropic.claude-opus-5',
+	'claude-sonnet-5': 'aws-bedrock/global.anthropic.claude-sonnet-5',
+};
+
+/** Map a first-party Claude model to the same model through Bedrock's global inference profile. */
+export function bedrockModelForClaude(model: string): string | null {
+	return BEDROCK_CLAUDE_MODELS[model.toLowerCase()] ?? null;
+}
+
 function localGatewayProviderUrl(baseUrl: string, gatewayId: string, provider: CloudflareGatewayProvider): string {
 	const url = new URL(baseUrl);
 	if (url.protocol !== 'https:' || url.hostname !== 'gateway.ai.cloudflare.com') {
@@ -200,8 +211,8 @@ export async function getHostedChatGatewayConnection(
 			? localGatewayToken
 			: `Bearer ${localGatewayToken}`;
 	}
-	if (provider === 'openai') defaultHeaders.Authorization = null;
-	else defaultHeaders['x-api-key'] = null;
+	if (provider === 'anthropic') defaultHeaders['x-api-key'] = null;
+	else defaultHeaders.Authorization = null;
 	return {
 		baseURL: localBaseUrl
 			? localGatewayProviderUrl(localBaseUrl, gatewayId, provider)
