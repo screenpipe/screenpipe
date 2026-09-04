@@ -20,3 +20,17 @@ export function aiEndpointUrl(
 ): string {
   return `${normalizeAiBaseUrl(baseUrl)}/${path.replace(/^\/+/, "")}`;
 }
+
+export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1";
+
+/**
+ * Root for Ollama-native `/api/*` routes (`/api/tags`, `/api/show`), derived
+ * from the preset's OpenAI-style base URL. Honouring the configured URL lets
+ * the Ollama preset target any Ollama-API server, e.g. a remote Ollama or
+ * llmman (https://github.com/llmmanorg/llmman) on `http://localhost:17434/v1`.
+ */
+export function ollamaApiRoot(baseUrl: string | null | undefined): string {
+  return (baseUrl || DEFAULT_OLLAMA_BASE_URL)
+    .replace(/\/v1\/?$/, "")
+    .replace(/\/$/, "");
+}

@@ -48,6 +48,19 @@ ollama pull <model-name>
 - at least one model pulled
 - screenpipe running
 
+## using llmman
+
+[llmman](https://github.com/llmmanorg/llmman) is a local model runner that serves the Ollama API (alongside OpenAI- and Anthropic-compatible ones) on port `17434`. models are pulled as OCI artifacts or straight from Hugging Face and served by upstream `llama.cpp`, `vllm`, or `mlx-lm`. no API key is needed.
+
+```bash
+# linux / macOS
+curl -fsSL https://raw.githubusercontent.com/llmmanorg/llmman/main/install.sh | sh
+llmman pull gemma4
+llmman serve
+```
+
+then in the screenpipe **AI preset selector** pick **Ollama** and set the base url to `http://localhost:17434/v1`. screenpipe then talks to llmman exactly as it does to Ollama — only the port differs. if you changed `LLMMAN_HOST`, use that host and port instead.
+
 ## custom OpenAI-compatible endpoints
 
 if you're running a custom LLM server (Qwen, vLLM, Text Generation WebUI, etc.), screenpipe auto-detects the endpoint format:

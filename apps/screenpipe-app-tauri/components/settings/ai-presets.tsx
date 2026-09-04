@@ -94,7 +94,7 @@ import {
   rectSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { aiEndpointUrl } from "@/lib/utils/ai-endpoint-url";
+import { aiEndpointUrl, ollamaApiRoot } from "@/lib/utils/ai-endpoint-url";
 import { fetchAiGateway } from "@/lib/ai-gateway-url";
 import {
   Tooltip,
@@ -701,9 +701,7 @@ const AISection = ({
   useEffect(() => {
     if (settingsPreset?.provider !== "native-ollama" || !settingsPreset.model) return;
     let cancelled = false;
-    const ollamaBaseUrl = (settingsPreset.url || "http://localhost:11434/v1")
-      .replace(/\/v1\/?$/, "")
-      .replace(/\/$/, "");
+    const ollamaBaseUrl = ollamaApiRoot(settingsPreset.url);
     void tauriFetchWithDeadline(`${ollamaBaseUrl}/api/show`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -767,7 +765,7 @@ const AISection = ({
     const isAnthropic = settingsPreset?.provider === "anthropic";
     let modelsUrl: string;
     if (settingsPreset?.provider === "native-ollama") {
-      modelsUrl = "http://localhost:11434/api/tags";
+      modelsUrl = `${ollamaApiRoot(settingsPreset?.url)}/api/tags`;
     } else if (settingsPreset?.provider === "openai" || settingsPreset?.provider === "openai-chatgpt") {
       modelsUrl = "https://api.openai.com/v1/models";
     } else if (isAnthropic) {
@@ -1028,7 +1026,9 @@ const AISection = ({
           // Use native HTTP (Rust-side) — a browser fetch from the
           // tauri://localhost webview to http://localhost:11434 is blocked by
           // WKWebView (mixed-content / cross-origin), leaving the model list empty.
-          const ollamaResponse = await tauriFetchWithDeadline("http://localhost:11434/api/tags");
+          const ollamaResponse = await tauriFetchWithDeadline(
+            `${ollamaApiRoot(settingsPreset?.url)}/api/tags`,
+          );
           if (!ollamaResponse.ok)
             throw new Error("Failed to fetch Ollama models");
           const ollamaData = (await ollamaResponse.json()) as {
