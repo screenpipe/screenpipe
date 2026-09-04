@@ -219,12 +219,139 @@ describe('OpenAI API accounting and routing', () => {
 		const model = 'glm-5.3-flash-reap50-iq3m';
 		const provider = createProvider(model, env({ TINFOIL_GLM_API_KEY: 'glm-container-secret' }));
 		expect(provider).toBeInstanceOf(ScreenpipeGlmProvider);
-		expect(provider.supportsTools).toBe(false);
+		expect(provider.supportsTools).toBe(true);
 		expect(provider.supportsVision).toBe(false);
 		expect(inferProvider(model)).toBe('screenpipe-tinfoil');
 		expect(isZeroCostModel(model)).toBe(true);
 		expect(isModelAllowed(model, 'logged_in')).toBe(false);
 		expect(isModelAllowed(model, 'subscribed')).toBe(true);
+	});
+
+	it('forwards Pi function tools to the Screenpipe GLM enclave', async () => {
+		const provider = new ScreenpipeGlmProvider('glm-container-secret') as any;
+		const tools = [{
+			type: 'function',
+			function: {
+				name: 'read',
+				description: 'Read a local file',
+				parameters: {
+					type: 'object',
+					properties: { file_path: { type: 'string' } },
+					required: ['file_path'],
+				},
+			},
+		}];
+		let capturedParams: Record<string, unknown> | null = null;
+		provider.client.chat.completions.create = mock(async (params: Record<string, unknown>) => {
+			capturedParams = params;
+			return { choices: [{ message: { role: 'assistant', content: null, tool_calls: [] } }] };
+		});
+
+		await provider.createCompletion({
+			model: 'glm-5.3-flash-reap50-iq3m',
+			messages: [{ role: 'user', content: 'Read the screenpipe skill.' }],
+			tools,
+			tool_choice: 'required',
+		});
+
+		expect(capturedParams).not.toBeNull();
+		expect(capturedParams!['tools']).toEqual(tools);
+		expect(capturedParams!['tool_choice']).toBe('required');
+	});
+
+	it('normalizes GLM native tagged content into an executable Pi tool call', async () => {
+		const provider = new ScreenpipeGlmProvider('glm-container-secret') as any;
+		provider.client.chat.completions.create = mock(async () => ({
+			choices: [{
+				message: {
+					role: 'assistant',
+					content: '<tool_call>read<arg_key>path</arg_key><arg_value>/tmp/pi-tool-test</arg_value></tool_call>',
+				},
+			}],
+		}));
+
+		const response = await provider.createCompletion({
+			model: 'glm-5.3-flash-reap50-iq3m',
+			messages: [{ role: 'user', content: 'Read the test file.' }],
+			tools: [{
+				type: 'function',
+				function: {
+					name: 'read',
+					description: 'Read a local file',
+					parameters: {
+						type: 'object',
+						properties: { path: { type: 'string' } },
+						required: ['path'],
+					},
+				},
+			}],
+			tool_choice: 'required',
+		});
+		const payload: any = await response.json();
+
+		expect(payload.choices[0].message.content).toBeNull();
+		expect(payload.choices[0].message.tool_calls).toHaveLength(1);
+		expect(payload.choices[0].message.tool_calls[0].function.name).toBe('read');
+		expect(JSON.parse(payload.choices[0].message.tool_calls[0].function.arguments)).toEqual({
+			path: '/tmp/pi-tool-test',
+		});
+		expect(payload.choices[0].finish_reason).toBe('tool_calls');
+	});
+
+	it('normalizes GLM bare JSON content into an executable Pi tool call', async () => {
+		const provider = new ScreenpipeGlmProvider('glm-container-secret') as any;
+		provider.client.chat.completions.create = mock(async () => ({
+			choices: [{
+				message: {
+					role: 'assistant',
+					content: '{"name":"read","arguments":{"path":"/tmp/pi-tool-test"}}',
+				},
+			}],
+		}));
+
+		const response = await provider.createCompletion({
+			model: 'glm-5.3-flash-reap50-iq3m',
+			messages: [{ role: 'user', content: 'Read the test file.' }],
+			tools: [{
+				type: 'function',
+				function: {
+					name: 'read',
+					description: 'Read a local file',
+					parameters: { type: 'object', properties: { path: { type: 'string' } } },
+				},
+			}],
+		});
+		const payload: any = await response.json();
+
+		expect(payload.choices[0].message.content).toBeNull();
+		expect(payload.choices[0].message.tool_calls[0].function.name).toBe('read');
+		expect(JSON.parse(payload.choices[0].message.tool_calls[0].function.arguments)).toEqual({
+			path: '/tmp/pi-tool-test',
+		});
+	});
+
+	it('does not promote unknown GLM tags into executable tool calls', async () => {
+		const provider = new ScreenpipeGlmProvider('glm-container-secret') as any;
+		provider.client.chat.completions.create = mock(async () => ({
+			choices: [{ message: { role: 'assistant', content: '<tool_call>delete_everything{}' } }],
+		}));
+
+		const response = await provider.createCompletion({
+			model: 'glm-5.3-flash-reap50-iq3m',
+			messages: [{ role: 'user', content: 'Say hello.' }],
+			tools: [{
+				type: 'function',
+				function: {
+					name: 'read',
+					description: 'Read a local file',
+					parameters: { type: 'object', properties: { path: { type: 'string' } } },
+				},
+			}],
+		});
+		const payload: any = await response.json();
+
+		expect(payload.choices[0].message.content).toBe('<tool_call>delete_everything{}');
+		expect(payload.choices[0].message.tool_calls).toBeUndefined();
 	});
 
 	it('keeps Argus internal and sends the non-thinking tool-compatible template option', async () => {
