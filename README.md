@@ -157,6 +157,7 @@ Thanks to all contributors:
 - [Українська (Ukrainian)](docs/translations/README-uk.md)
 - [한국어 (Korean)](docs/translations/README-ko.md)
 - [Русский (Russian)](docs/translations/README-ru.md)
+- [Bahasa Indonesia (Indonesian)](docs/translations/README-id.md)
 
 Want to translate screenpipe into another language? See [`docs/translations/`](docs/translations/README.md).
 
