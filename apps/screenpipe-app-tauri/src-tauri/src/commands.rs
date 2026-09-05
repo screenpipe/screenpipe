@@ -2835,10 +2835,20 @@ pub async fn reset_onboarding(app_handle: tauri::AppHandle) -> Result<(), String
 #[tauri::command]
 #[specta::specta]
 pub async fn set_onboarding_step(app_handle: tauri::AppHandle, step: String) -> Result<(), String> {
-    let previous_step = OnboardingStore::get(&app_handle)
+    let previous_onboarding = OnboardingStore::get(&app_handle)
         .ok()
         .flatten()
-        .and_then(|onboarding| onboarding.current_step);
+        .unwrap_or_default();
+    let previous_step = previous_onboarding.current_step.clone();
+    let previous_trial_activation_locked = previous_onboarding.blocks_trial_activation_app();
+    let mut updated_onboarding = previous_onboarding.clone();
+    updated_onboarding.current_step = Some(step.clone());
+    if step == TRIAL_ACTIVATION_SUMMARY_STEP && crate::store::trial_activation_dev_force_enabled() {
+        updated_onboarding.trial_activation_fresh_install = true;
+    }
+    let trial_activation_lock_changed =
+        previous_trial_activation_locked != updated_onboarding.blocks_trial_activation_app();
+
     OnboardingStore::update(&app_handle, |onboarding| {
         onboarding.current_step = Some(step.clone());
         if step == TRIAL_ACTIVATION_SUMMARY_STEP
@@ -2847,7 +2857,15 @@ pub async fn set_onboarding_step(app_handle: tauri::AppHandle, step: String) -> 
             onboarding.trial_activation_fresh_install = true;
         }
     })?;
-    let _ = refresh_tray_menu(app_handle.clone()).await;
+
+    // The tray only reads onboarding completion and the post-onboarding trial
+    // lock. Rebuilding it for ordinary setup slides adds synchronous native UI
+    // work to every Next click and can stall Windows while the app is still
+    // initializing. Completion has its own refresh; update here only when the
+    // current step actually changes the visible trial lock.
+    if trial_activation_lock_changed {
+        let _ = refresh_tray_menu(app_handle.clone()).await;
+    }
 
     if !crate::should_skip_onboarding() && step == TRIAL_ACTIVATION_PAYWALL_STEP {
         let state = app_handle.state::<crate::recording::RecordingState>();
