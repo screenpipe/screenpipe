@@ -2,13 +2,37 @@
 // https://screenpipe.com
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { WorkProfile, WorkflowsPlatform } from "@screenpipe/workflows-ui";
+import type { WorkProfile, WorkflowAnalysis, WorkflowsPlatform } from "@screenpipe/workflows-ui";
 import { commands } from "@/lib/utils/tauri";
 import { analyzeCapturedWork, ensureWorkflowRuntime } from "./runtime";
+import {
+  isStoredWorkflowAnalysis,
+  loadWorkflowAnalysisFromDisk,
+  loadWorkProfileFromDisk,
+  saveWorkflowAnalysisToDisk,
+  saveWorkProfileToDisk,
+} from "./disk-storage";
 
 const WORK_PROFILE_KEY = "screenpipe-workflows:work-profile:v1";
+const BROWSER_ANALYSIS_KEY = "screenpipe-workflows:last-analysis-v2";
+const LEGACY_ANALYSIS_KEYS = [BROWSER_ANALYSIS_KEY, "screenpipe-workflows:last-analysis"] as const;
+const browserPreview = Boolean(process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV);
 
-function readWorkProfile(): WorkProfile | null {
+function readBrowserAnalysis(): WorkflowAnalysis | null {
+  for (const key of LEGACY_ANALYSIS_KEYS) {
+    try {
+      const value = window.localStorage.getItem(key);
+      if (!value) continue;
+      const parsed = JSON.parse(value) as unknown;
+      if (isStoredWorkflowAnalysis(parsed)) return parsed;
+    } catch {
+      // Keep checking older keys. Never delete a migration source on failure.
+    }
+  }
+  return null;
+}
+
+function readBrowserWorkProfile(): WorkProfile | null {
   try {
     const value = window.localStorage.getItem(WORK_PROFILE_KEY);
     if (!value) return null;
@@ -44,14 +68,50 @@ function readWorkProfile(): WorkProfile | null {
   }
 }
 
+async function loadSavedAnalysis() {
+  if (browserPreview) return readBrowserAnalysis();
+  const saved = await loadWorkflowAnalysisFromDisk();
+  if (saved) return saved;
+  const legacy = readBrowserAnalysis();
+  if (!legacy) return null;
+  await saveWorkflowAnalysisToDisk(legacy);
+  return legacy;
+}
+
+async function saveAnalysis(analysis: WorkflowAnalysis) {
+  if (browserPreview) {
+    window.localStorage.setItem(BROWSER_ANALYSIS_KEY, JSON.stringify(analysis));
+    return;
+  }
+  await saveWorkflowAnalysisToDisk(analysis);
+}
+
+async function loadSavedWorkProfile() {
+  if (browserPreview) return readBrowserWorkProfile();
+  const saved = await loadWorkProfileFromDisk();
+  if (saved) return saved;
+  const legacy = readBrowserWorkProfile();
+  if (!legacy) return null;
+  await saveWorkProfileToDisk(legacy);
+  return legacy;
+}
+
+async function saveWorkProfile(profile: WorkProfile) {
+  if (browserPreview) {
+    window.localStorage.setItem(WORK_PROFILE_KEY, JSON.stringify(profile));
+    return profile;
+  }
+  await saveWorkProfileToDisk(profile);
+  return profile;
+}
+
 export const desktopWorkflowsPlatform: WorkflowsPlatform = {
   ensureRuntime: ensureWorkflowRuntime,
   analyzeCapturedWork: (days, options) => analyzeCapturedWork(days, options?.workProfile),
-  loadWorkProfile: async () => readWorkProfile(),
-  saveWorkProfile: async (profile) => {
-    window.localStorage.setItem(WORK_PROFILE_KEY, JSON.stringify(profile));
-    return profile;
-  },
+  loadCapturedWork: () => loadSavedAnalysis(),
+  saveCapturedWork: (analysis) => saveAnalysis(analysis),
+  loadWorkProfile: () => loadSavedWorkProfile(),
+  saveWorkProfile,
   openAccount: async () => {
     const result = await commands.openLoginWindow(null, "sign-up");
     if (result.status !== "ok") throw new Error(result.error);

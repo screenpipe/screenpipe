@@ -20,6 +20,7 @@ export type WorkflowsPlatform = {
   ensureRuntime: () => Promise<WorkflowRuntime>;
   analyzeCapturedWork: (days: number, options?: WorkflowAnalysisOptions) => Promise<WorkflowAnalysis>;
   loadCapturedWork?: (days: number, options?: WorkflowAnalysisOptions) => Promise<WorkflowAnalysis | null>;
+  saveCapturedWork?: (analysis: WorkflowAnalysis, options?: WorkflowAnalysisOptions) => Promise<void>;
   startAnalysisJob?: (days: number, options?: WorkflowAnalysisOptions) => Promise<WorkflowAnalysisJob>;
   getAnalysisJob?: (jobId: string) => Promise<WorkflowAnalysisJob>;
   loadWorkProfile?: (scope?: WorkflowScope) => Promise<WorkProfile | null>;

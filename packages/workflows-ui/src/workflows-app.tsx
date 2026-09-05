@@ -1042,10 +1042,9 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
           if (parsed?.schemaVersion === 5 && Array.isArray(parsed?.analysis?.workflows)) {
             setAnalysis(parsed);
           }
-          else window.localStorage.removeItem(storageKey);
         }
       } catch {
-        window.localStorage.removeItem(storageKey);
+        // Never destroy an unreadable cache. A future migration may recover it.
       }
     }
     refreshRuntime();
@@ -1127,10 +1126,14 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
         : nextAnalysis;
       setAnalysis(mergedAnalysis);
       setSelectedWorkflow(0);
-      try {
-        if (storageKey) window.localStorage.setItem(storageKey, JSON.stringify(withoutScreenshotCopies(mergedAnalysis)));
-      } catch {
-        // The in-memory map remains usable even when browser storage is full.
+      if (platform.saveCapturedWork) {
+        await platform.saveCapturedWork(mergedAnalysis, { scope: requestedScope, workProfile });
+      } else if (storageKey) {
+        try {
+          window.localStorage.setItem(storageKey, JSON.stringify(withoutScreenshotCopies(mergedAnalysis)));
+        } catch {
+          throw new Error("The work map was built, but could not be saved.");
+        }
       }
     } catch (error) {
       setAnalysisError(error instanceof Error ? error.message : String(error || "Work map analysis failed."));
