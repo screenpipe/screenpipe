@@ -110,7 +110,7 @@ function fixtureWorkflow(input: FixtureWorkflow, index: number): WorkflowMap {
   };
 }
 
-function allocation(label: string, description: string, minutes: number, percentage: number, apps: string[], day: number): TimeAllocationItem {
+function allocation(label: string, description: string, minutes: number, percentage: number, apps: string[], day: number, basis: "recorder-app" | "explicit-project" = "explicit-project"): TimeAllocationItem {
   return {
     label,
     description,
@@ -120,6 +120,7 @@ function allocation(label: string, description: string, minutes: number, percent
     distinctDays: 8,
     apps,
     evidence: [evidence(day, apps[0], `${label} was visible in this fictional preview workspace.`)],
+    basis,
   };
 }
 
@@ -168,10 +169,10 @@ export const fixtureWorkflowAnalysis: WorkflowAnalysis = {
     days: 90,
     totalMinutes,
     categories: dimension([
-      allocation("Product and planning", "Product decisions, prioritization, and review", 510, 27, ["Linear", "Notion"], 1),
-      allocation("Communication", "Customer, partner, and team communication", 430, 23, ["Slack", "Gmail"], 2),
-      allocation("Research", "Reading, comparison, and synthesis", 345, 19, ["Chrome", "Docs"], 3),
-      allocation("Operations", "Recurring coordination and release work", 260, 14, ["Calendar", "GitHub"], 4),
+      allocation("Linear", "", 510, 27, ["Linear"], 1, "recorder-app"),
+      allocation("Slack", "", 430, 23, ["Slack"], 2, "recorder-app"),
+      allocation("Chrome", "", 345, 19, ["Chrome"], 3, "recorder-app"),
+      allocation("GitHub", "", 260, 14, ["GitHub"], 4, "recorder-app"),
     ], totalMinutes),
     projects: dimension([
       allocation("Northstar launch", "Website, release, and launch coordination", 470, 25, ["Figma", "GitHub"], 1),
@@ -183,34 +184,8 @@ export const fixtureWorkflowAnalysis: WorkflowAnalysis = {
       allocation("Partner program", "Partner qualification and enablement", 95, 5, ["Gmail", "Docs"], 7),
       allocation("Support quality", "Customer issue review and response improvement", 70, 4, ["Intercom", "Linear"], 8),
     ], totalMinutes),
-    people: dimension([
-      allocation("Maya Chen", "Planning, product review, and decision follow-up", 245, 13, ["Slack", "Calendar"], 1),
-      allocation("Alex Rivera", "Customer learning and partner preparation", 190, 10, ["Gmail", "Docs"], 2),
-      allocation("Priya Shah", "Enterprise onboarding and privacy review", 145, 8, ["Calendar", "Docs"], 3),
-      allocation("Jordan Lee", "Product feedback and customer follow-up", 120, 6, ["Intercom", "Gmail"], 4),
-      allocation("Sam Wilson", "Desktop reliability and release review", 105, 6, ["GitHub", "Slack"], 5),
-      allocation("Nora Kim", "Investor conversations and diligence", 90, 5, ["Calendar", "Gmail"], 6),
-      allocation("Omar Haddad", "Partner qualification and pilot planning", 75, 4, ["Gmail", "Docs"], 7),
-      allocation("Elena Rossi", "Customer research and workflow review", 68, 4, ["Calendar", "Docs"], 8),
-      allocation("Theo Martin", "Security review and deployment planning", 60, 3, ["Slack", "Docs"], 9),
-      allocation("Aisha Patel", "Commercial planning and account follow-up", 54, 3, ["Gmail", "Calendar"], 10),
-      allocation("Ben Carter", "Support escalation and product context", 48, 3, ["Intercom", "Linear"], 11),
-      allocation("Lina Park", "Research synthesis and market context", 42, 2, ["Chrome", "Docs"], 12),
-      allocation("Marcus Green", "Pilot success review", 38, 2, ["Calendar", "Slack"], 13),
-      allocation("Sofia Alvarez", "Website and launch review", 34, 2, ["Figma", "Gmail"], 14),
-    ], totalMinutes),
-    companies: dimension([
-      allocation("Northstar Labs", "Internal product and operating work", 690, 37, ["Linear", "Slack"], 1),
-      allocation("Atlas Group", "Partner coordination and account review", 205, 11, ["Gmail", "Calendar"], 2),
-      allocation("Juniper Co.", "Customer feedback and follow-up", 155, 8, ["Intercom", "Slack"], 3),
-      allocation("Harbor Systems", "Enterprise pilot and security review", 135, 7, ["Docs", "Calendar"], 4),
-      allocation("Meridian Ventures", "Fundraising and diligence conversations", 105, 6, ["Gmail", "Calendar"], 5),
-      allocation("Copperfield", "Customer workflow research", 90, 5, ["Intercom", "Docs"], 6),
-      allocation("Pine Labs", "Product feedback and partner planning", 75, 4, ["Slack", "Gmail"], 7),
-      allocation("Relay Works", "Deployment and onboarding coordination", 62, 3, ["Docs", "Calendar"], 8),
-      allocation("Acorn Capital", "Investor updates and follow-up", 48, 3, ["Gmail", "Calendar"], 9),
-      allocation("Brightpath", "Support and account review", 40, 2, ["Intercom", "Gmail"], 10),
-    ], totalMinutes),
+    people: dimension([], totalMinutes),
+    companies: dimension([], totalMinutes),
   },
 };
 

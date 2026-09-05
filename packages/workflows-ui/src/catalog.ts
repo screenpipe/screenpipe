@@ -98,6 +98,29 @@ function deduplicateWorkflows(workflows: WorkflowMap[]) {
   return kept.map((workflow, index) => ({ ...workflow, rank: index + 1 }));
 }
 
+function trustedTimeProfile(analysis: WorkflowAnalysis) {
+  const profile = analysis.timeProfile;
+  if (!profile) return profile;
+  const trustedApplications = profile.categories.items.filter((item) => item.basis === "recorder-app");
+  if (profile.categories.items.length > 0 && trustedApplications.length === 0) return null;
+  const dimension = (items: typeof profile.categories.items) => {
+    const attributedMinutes = Math.min(profile.totalMinutes, items.reduce((sum, item) => sum + item.minutes, 0));
+    return {
+      items,
+      attributedMinutes,
+      unattributedMinutes: Math.max(0, profile.totalMinutes - attributedMinutes),
+      coveragePercent: profile.totalMinutes > 0 ? Math.min(100, Math.round((attributedMinutes / profile.totalMinutes) * 100)) : 0,
+    };
+  };
+  return {
+    ...profile,
+    categories: dimension(trustedApplications),
+    projects: dimension(profile.projects.items.filter((item) => item.basis === "explicit-project")),
+    people: dimension([]),
+    companies: dimension([]),
+  };
+}
+
 export function sanitizeWorkflowAnalysis(analysis: WorkflowAnalysis): WorkflowAnalysis {
   const provenanceChecked = analysis.analysis.workflows.map((workflow) => {
     const durationIsMeasured = workflow.durationSource === "measured-meeting"
@@ -137,6 +160,7 @@ export function sanitizeWorkflowAnalysis(analysis: WorkflowAnalysis): WorkflowAn
   const workflows = deduplicateWorkflows(provenanceChecked);
   return {
     ...analysis,
+    timeProfile: trustedTimeProfile(analysis),
     analysis: { workflows },
     quality: {
       ...analysis.quality,
@@ -154,7 +178,7 @@ export function mergeWorkflowCatalog(
   const sanitized = sanitizeWorkflowAnalysis(next);
   return {
     ...sanitized,
-    timeProfile: sanitized.timeProfile ?? previous?.timeProfile,
+    timeProfile: sanitized.timeProfile ?? (previous ? sanitizeWorkflowAnalysis(previous).timeProfile : null),
   };
 }
 

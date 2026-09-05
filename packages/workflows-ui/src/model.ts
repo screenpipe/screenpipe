@@ -162,6 +162,7 @@ export type TimeAllocationItem = {
   distinctDays: number;
   apps: string[];
   evidence: WorkflowEvidence[];
+  basis?: "recorder-app" | "explicit-project";
 };
 
 export type TimeProfileDimension = {

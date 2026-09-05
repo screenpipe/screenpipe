@@ -37,7 +37,7 @@ Map how work actually happens across the complete requested period. Find distinc
 
 Audio may contain the user, another participant, media playback, or an unknown speaker. It can support the topic of a captured meeting, but it cannot by itself prove what the user did, who said something, a trigger, an outcome, or elapsed time. A meeting workflow covers only work performed inside the meeting; preparation and follow-up are separate workflows when independently supported. For meeting workflows, cite only exact supplied meeting records at their meeting_start; only their meeting_start and meeting_end can measure meeting length. Never add stage estimates or sum loosely related observations into a duration. The app computes duration only when the whole workflow is supported by at least two exact meeting records and no scattered screen, parsed, or audio observations.
 
-Classify bottlenecks as direct, influence, external, or required based on who controls them. Never blame the user for external dependencies or required safeguards. Build the general time profile independently across categories, projects, people, and companies. Use only recorder-owned app/window minutes for time allocation, never counts or snippets. Do not infer a person or company from an app name alone.
+Classify bottlenecks as direct, influence, external, or required based on who controls them. Never blame the user for external dependencies or required safeguards. Do not estimate or allocate time. The app calculates recorder-measured application time separately from your workflow analysis.
 
 Return only the requested JSON. Copy exact supplied timestamps and apps for evidence. Use each evidence point for only one workflow and one stage. Do not invent identities, durations, apps, events, sequences, frequency, or evidence. Keep unsupported time unattributed. The work profile is context for vocabulary and priorities only, never evidence."#;
 
@@ -1219,375 +1219,6 @@ fn normalize_analysis(
     Ok(json!({ "workflows": normalized }))
 }
 
-fn normalize_time_dimension(
-    profile: &Value,
-    key: &str,
-    total_minutes: u64,
-    catalog: &EvidenceCatalog,
-) -> Value {
-    let mut seen = HashSet::new();
-    let mut items = profile
-        .get(key)
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| {
-            let label = non_empty_string(item, "label")?;
-            let normalized_label = label.trim().to_lowercase();
-            if matches!(
-                normalized_label.as_str(),
-                "unattributed"
-                    | "unknown"
-                    | "other"
-                    | "misc"
-                    | "miscellaneous"
-                    | "uncategorized"
-                    | "unclassified"
-            ) || normalized_label.starts_with("unattributed ")
-                || normalized_label.starts_with("unknown ")
-            {
-                return None;
-            }
-            if !seen.insert(label.to_lowercase()) {
-                return None;
-            }
-            let confidence = bounded_number(item, "confidence", 100);
-            let minutes = bounded_number(item, "minutes", total_minutes);
-            let evidence = clean_evidence(
-                item.get("evidence").unwrap_or(&Value::Null),
-                4,
-                catalog,
-            );
-            if confidence < 50 || minutes == 0 || evidence.is_empty() {
-                return None;
-            }
-            let mut apps = canonical_app_list(item, "apps", 8, catalog);
-            for app in evidence
-                .iter()
-                .filter_map(|entry| entry.get("app").and_then(Value::as_str))
-            {
-                if !apps
-                    .iter()
-                    .any(|candidate| candidate.eq_ignore_ascii_case(app))
-                {
-                    apps.push(app.to_string());
-                }
-            }
-            let distinct_days = evidence_day_count(&evidence);
-            Some(json!({
-                "label": label,
-                "description": non_empty_string(item, "description").unwrap_or_else(|| "Supported by captured activity in this period.".to_string()),
-                "minutes": minutes,
-                "percentage": 0,
-                "confidence": confidence,
-                "distinctDays": distinct_days,
-                "apps": apps,
-                "evidence": evidence,
-            }))
-        })
-        .collect::<Vec<_>>();
-
-    items.sort_by_key(|item| {
-        std::cmp::Reverse(item.get("minutes").and_then(Value::as_u64).unwrap_or(0))
-    });
-    items.truncate(match key {
-        "categories" => 20,
-        "projects" => 80,
-        "people" => 200,
-        "companies" => 100,
-        _ => 40,
-    });
-
-    let raw_sum = items
-        .iter()
-        .filter_map(|item| item.get("minutes").and_then(Value::as_u64))
-        .sum::<u64>();
-    if raw_sum > total_minutes && total_minutes > 0 {
-        let mut scaled_sum = 0u64;
-        for item in &mut items {
-            let minutes = item.get("minutes").and_then(Value::as_u64).unwrap_or(0);
-            let scaled = minutes.saturating_mul(total_minutes) / raw_sum;
-            item["minutes"] = json!(scaled);
-            scaled_sum = scaled_sum.saturating_add(scaled);
-        }
-        let mut remainder = total_minutes.saturating_sub(scaled_sum);
-        for item in &mut items {
-            if remainder == 0 {
-                break;
-            }
-            let minutes = item.get("minutes").and_then(Value::as_u64).unwrap_or(0);
-            item["minutes"] = json!(minutes + 1);
-            remainder -= 1;
-        }
-        items.retain(|item| item.get("minutes").and_then(Value::as_u64).unwrap_or(0) > 0);
-    }
-    let attributed_minutes = items
-        .iter()
-        .filter_map(|item| item.get("minutes").and_then(Value::as_u64))
-        .sum::<u64>()
-        .min(total_minutes);
-    for item in &mut items {
-        let minutes = item.get("minutes").and_then(Value::as_u64).unwrap_or(0);
-        item["percentage"] = json!(if total_minutes == 0 {
-            0
-        } else {
-            ((minutes as f64 * 100.0 / total_minutes as f64).round() as u64).min(100)
-        });
-    }
-    let coverage_percent = if total_minutes == 0 {
-        0
-    } else {
-        ((attributed_minutes as f64 * 100.0 / total_minutes as f64).round() as u64).min(100)
-    };
-    json!({
-        "items": items,
-        "attributedMinutes": attributed_minutes,
-        "unattributedMinutes": total_minutes.saturating_sub(attributed_minutes),
-        "coveragePercent": coverage_percent,
-    })
-}
-
-#[derive(Default)]
-struct MeetingEntity {
-    label: String,
-    minutes: f64,
-    apps: Vec<String>,
-    evidence: Vec<Value>,
-}
-
-fn attendee_label(raw: &str) -> Option<String> {
-    let raw = raw
-        .trim()
-        .trim_matches(|character| matches!(character, '"' | '\''));
-    if raw.is_empty() || raw.len() > 180 {
-        return None;
-    }
-    if let Some((name, address)) = raw.split_once('<') {
-        let name = name
-            .trim()
-            .trim_matches(|character| matches!(character, '"' | '\''));
-        if !name.is_empty() {
-            return Some(name.to_string());
-        }
-        let address = address.trim().trim_end_matches('>').trim();
-        if !address.is_empty() {
-            return Some(address.to_lowercase());
-        }
-    }
-    Some(if raw.contains('@') {
-        raw.to_lowercase()
-    } else {
-        raw.to_string()
-    })
-}
-
-fn attendee_domain(raw: &str) -> Option<String> {
-    let address = raw
-        .split_once('<')
-        .map(|(_, address)| address.trim_end_matches('>'))
-        .unwrap_or(raw)
-        .trim();
-    let domain = address
-        .rsplit_once('@')?
-        .1
-        .trim()
-        .trim_matches(|character| matches!(character, '>' | '.' | ',' | ';'))
-        .to_lowercase();
-    if domain.is_empty()
-        || [
-            "gmail.com",
-            "googlemail.com",
-            "hotmail.com",
-            "icloud.com",
-            "live.com",
-            "me.com",
-            "outlook.com",
-            "pm.me",
-            "proton.me",
-            "protonmail.com",
-            "yahoo.com",
-        ]
-        .contains(&domain.as_str())
-    {
-        return None;
-    }
-    Some(domain)
-}
-
-fn remember_meeting_entity(
-    entities: &mut HashMap<String, MeetingEntity>,
-    label: String,
-    minutes: f64,
-    app: &str,
-    evidence: &Value,
-) {
-    let entity = entities
-        .entry(label.to_lowercase())
-        .or_insert_with(|| MeetingEntity {
-            label,
-            ..MeetingEntity::default()
-        });
-    entity.minutes += minutes;
-    if !entity
-        .apps
-        .iter()
-        .any(|known| known.eq_ignore_ascii_case(app))
-    {
-        entity.apps.push(app.to_string());
-    }
-    let evidence_day = evidence
-        .get("timestamp")
-        .and_then(Value::as_str)
-        .and_then(|value| value.get(..10));
-    let already_has_day = evidence_day.is_some_and(|day| {
-        entity.evidence.iter().any(|known| {
-            known
-                .get("timestamp")
-                .and_then(Value::as_str)
-                .is_some_and(|value| value.starts_with(day))
-        })
-    });
-    if entity.evidence.len() < 4 && !already_has_day {
-        entity.evidence.push(evidence.clone());
-    }
-}
-
-fn meeting_identity_profile(daily: &[Value]) -> Value {
-    let mut people = HashMap::<String, MeetingEntity>::new();
-    let mut companies = HashMap::<String, MeetingEntity>::new();
-
-    for meeting in daily
-        .iter()
-        .filter_map(|bundle| bundle.get("meetings").and_then(Value::as_array))
-        .flatten()
-    {
-        let Some(start) = meeting
-            .get("meeting_start")
-            .and_then(Value::as_str)
-            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-            .map(|value| value.with_timezone(&Utc))
-        else {
-            continue;
-        };
-        let Some(end) = meeting
-            .get("meeting_end")
-            .and_then(Value::as_str)
-            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-            .map(|value| value.with_timezone(&Utc))
-        else {
-            continue;
-        };
-        let duration = (end - start).num_seconds().max(60) as f64 / 60.0;
-        let duration = duration.min(480.0);
-        let app = meeting
-            .get("meeting_app")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("Meeting");
-        let title = meeting
-            .get("title")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("Recorded meeting");
-        let evidence = json!({
-            "timestamp": start.to_rfc3339(),
-            "app": app,
-            "detail": format!("Meeting: {title}").chars().take(400).collect::<String>(),
-        });
-        let raw_attendees = meeting
-            .get("attendees")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let mut attendees = HashMap::<String, (String, String)>::new();
-        for raw in raw_attendees.split(',') {
-            if let Some(label) = attendee_label(raw) {
-                attendees
-                    .entry(label.to_lowercase())
-                    .or_insert_with(|| (label, raw.trim().to_string()));
-            }
-        }
-        if !attendees.is_empty() {
-            let share = duration / attendees.len() as f64;
-            for (label, _) in attendees.values() {
-                remember_meeting_entity(&mut people, label.clone(), share, app, &evidence);
-            }
-        }
-        let domains = attendees
-            .values()
-            .filter_map(|(_, raw)| attendee_domain(raw))
-            .collect::<HashSet<_>>();
-        if !domains.is_empty() {
-            let share = duration / domains.len() as f64;
-            for domain in domains {
-                remember_meeting_entity(&mut companies, domain, share, app, &evidence);
-            }
-        }
-    }
-
-    let values = |entities: HashMap<String, MeetingEntity>, kind: &str| {
-        entities
-            .into_values()
-            .map(|entity| {
-                json!({
-                    "label": entity.label,
-                    "description": format!("Observed {kind} across recorded meetings in this period."),
-                    "minutes": entity.minutes.round().max(1.0) as u64,
-                    "confidence": 100,
-                    "apps": entity.apps,
-                    "evidence": entity.evidence,
-                })
-            })
-            .collect::<Vec<_>>()
-    };
-    json!({
-        "people": values(people, "collaboration"),
-        "companies": values(companies, "company-related meeting work"),
-    })
-}
-
-fn add_meeting_identities(profile: &mut Value, daily: &[Value]) {
-    let identities = meeting_identity_profile(daily);
-    for key in ["people", "companies"] {
-        let additions = identities
-            .get(key)
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        if !profile.get(key).is_some_and(Value::is_array) {
-            profile[key] = json!([]);
-        }
-        if let Some(items) = profile[key].as_array_mut() {
-            items.extend(additions);
-        }
-    }
-}
-
-fn normalize_time_profile(
-    profile: Value,
-    days: u16,
-    total_minutes: u64,
-    catalog: &EvidenceCatalog,
-) -> Result<Value, String> {
-    let categories = normalize_time_dimension(&profile, "categories", total_minutes, catalog);
-    if categories
-        .get("items")
-        .and_then(Value::as_array)
-        .map_or(true, Vec::is_empty)
-    {
-        return Err("The time profile did not include supported categories".to_string());
-    }
-    Ok(json!({
-        "days": days,
-        "totalMinutes": total_minutes,
-        "categories": categories,
-        "projects": normalize_time_dimension(&profile, "projects", total_minutes, catalog),
-        "people": normalize_time_dimension(&profile, "people", total_minutes, catalog),
-        "companies": normalize_time_dimension(&profile, "companies", total_minutes, catalog),
-    }))
-}
-
 async fn stage_screenshot(endpoint: &RecorderEndpoint, stage: &Value) -> Option<Value> {
     let evidence = stage.get("evidence")?.as_array()?;
     let mut candidate_apps = Vec::new();
@@ -1936,12 +1567,12 @@ fn workflow_analysis_prompt(
     profile: Option<&Value>,
 ) -> String {
     format!(
-        r#"Map the supplied captured period into a complete workflow catalog and general time profile.
+        r#"Map the supplied captured period into a complete workflow catalog.
 
 Use this agent loop before answering:
 1. Inventory the whole period and its usable coverage.
 2. Form narrow workflow hypotheses with a trigger, ordered stages, and outcome.
-3. Test every hypothesis against separate captured days. A mention of work is not proof that the work happened.
+3. Test every hypothesis against separate captured days. A mention of work is not proof that the work happened. A label visible in one tab, task, or document is not a project or workflow name.
 4. Reject hypotheses whose stages are assembled from unrelated observations, whose only support is audio, or whose trigger/outcome is inferred from another participant's words.
 5. Split broad umbrella hypotheses when they combine different triggers, ordered stages, systems, or outcomes. Preparing a meeting, conducting it, and following up are not one measured occurrence. Creating a deck, editing a video, sending an email, and publishing a social post are not one workflow merely because they are marketing.
 6. Compare every surviving pair and merge or remove only true aliases, parent/child variants, and different labels supported by substantially the same evidence.
@@ -1953,10 +1584,8 @@ Never estimate time inside a workflow. Do not output stage minutes, waiting minu
 
 Audio transcripts can establish meeting topic only. They may contain the user, another person, unknown speakers, or playback. Never use audio alone to claim that the user performed an action, said a statement, initiated a trigger, completed an outcome, or spent a duration.
 
-For timeProfile, allocate only the authoritative RECORDER_MEASURED_ACTIVE_MINUTES using supplied apps[].minutes and windows[].minutes. Do not derive minutes from frame counts, text counts, evidence counts, or conversation length. If project, person, or company attribution is not directly supported, leave that time unattributed.
-
 Return one JSON object and no Markdown with this exact shape:
-{{"workflows":[{{"title":string,"description":string,"trigger":string,"outcome":string,"confidence":integer,"apps":[string],"people":[string],"teams":[string],"handoffs":[string],"variations":[string],"stages":[{{"name":string,"description":string,"confidence":integer,"apps":[string],"evidence":[{{"timestamp":string,"app":string}}]}}],"bottlenecks":[{{"label":string,"stage":string,"type":"waiting"|"switching"|"rework"|"handoff"|"unclear","control":"direct"|"influence"|"external"|"required","controlReason":string,"detail":string,"confidence":integer}}],"evidence":[{{"timestamp":string,"app":string}}]}}],"timeProfile":{{"categories":[{{"label":string,"description":string,"minutes":integer,"confidence":integer,"apps":[string],"evidence":[{{"timestamp":string,"app":string}}]}}],"projects":[same item shape],"people":[same item shape],"companies":[same item shape]}}}}.
+{{"workflows":[{{"title":string,"description":string,"trigger":string,"outcome":string,"confidence":integer,"apps":[string],"people":[string],"teams":[string],"handoffs":[string],"variations":[string],"stages":[{{"name":string,"description":string,"confidence":integer,"apps":[string],"evidence":[{{"timestamp":string,"app":string}}]}}],"bottlenecks":[{{"label":string,"stage":string,"type":"waiting"|"switching"|"rework"|"handoff"|"unclear","control":"direct"|"influence"|"external"|"required","controlReason":string,"detail":string,"confidence":integer}}],"evidence":[{{"timestamp":string,"app":string}}]}}]}}.
 
 DAYS
 {days}
@@ -2020,9 +1649,7 @@ async fn request_workflow_analysis(
         )
     })?;
     let value = parse_agent_json(&raw)?;
-    if !value.get("workflows").is_some_and(Value::is_array)
-        || !value.get("timeProfile").is_some_and(Value::is_object)
-    {
+    if !value.get("workflows").is_some_and(Value::is_array) {
         return Err("Work map processing returned an incomplete map".to_string());
     }
     Ok(value)
@@ -2195,34 +1822,8 @@ pub async fn analyze_workflows(
     )?;
     attach_stage_screenshots(&mut analysis, &recorder).await;
     attach_screenshot_quality(&mut analysis);
-    let mut quality = analysis_quality(&daily, days, &analysis);
-    let time_profile = match raw.get("timeProfile").cloned() {
-        Some(mut raw_profile) => {
-            add_meeting_identities(&mut raw_profile, &daily);
-            match normalize_time_profile(raw_profile, days, observed_active_minutes, &catalog) {
-                Ok(profile) => Some(profile),
-                Err(error) => {
-                    if let Some(warnings) =
-                        quality.get_mut("warnings").and_then(Value::as_array_mut)
-                    {
-                        warnings.push(json!(format!(
-                            "The general time profile could not be verified; workflow maps remain available ({})",
-                            error.chars().take(160).collect::<String>()
-                        )));
-                    }
-                    None
-                }
-            }
-        }
-        None => {
-            if let Some(warnings) = quality.get_mut("warnings").and_then(Value::as_array_mut) {
-                warnings.push(json!(
-                    "The general time profile was unavailable; workflow maps remain available"
-                ));
-            }
-            None
-        }
-    };
+    let quality = analysis_quality(&daily, days, &analysis);
+    let time_profile = measured_time_profile(&daily, days, observed_active_minutes);
     let usable_days = quality
         .get("usableDays")
         .cloned()
@@ -2446,87 +2047,6 @@ mod tests {
     }
 
     #[test]
-    fn time_profile_keeps_lenses_independent_and_unattributed_time_visible() {
-        let daily = vec![
-            json!({"apps": [{"name": "Cursor"}, {"name": "Meet"}], "snippets": [
-                {"source": "parsed", "timestamp": "2026-09-01T10:00:00Z", "app_name": "Cursor", "text": "Worked on the desktop reliability project"},
-                {"source": "parsed", "timestamp": "2026-09-02T10:00:00Z", "app_name": "Cursor", "text": "Continued the desktop reliability project"},
-                {"source": "parsed", "timestamp": "2026-09-02T11:00:00Z", "app_name": "Meet", "text": "Discussed product work with a customer"}
-            ]}),
-        ];
-        let catalog = EvidenceCatalog::from_daily(&daily);
-        let cursor_evidence = json!([
-            {"timestamp": "2026-09-01T10:00:00Z", "app": "Cursor", "detail": "model paraphrase"},
-            {"timestamp": "2026-09-02T10:00:00Z", "app": "Cursor", "detail": "model paraphrase"}
-        ]);
-        let profile = json!({
-            "categories": [
-                {"label": "Product", "description": "Building the product.", "minutes": 80, "confidence": 90, "apps": ["Cursor"], "evidence": cursor_evidence},
-                {"label": "Meetings", "description": "Customer meetings.", "minutes": 80, "confidence": 80, "apps": ["Meet"], "evidence": [{"timestamp": "2026-09-02T11:00:00Z", "app": "Meet", "detail": "model paraphrase"}]},
-                {"label": "Unattributed", "description": "Unsupported remainder.", "minutes": 50, "confidence": 100, "apps": ["Cursor"], "evidence": cursor_evidence}
-            ],
-            "projects": [{"label": "Desktop reliability", "description": "Reliability work.", "minutes": 25, "confidence": 88, "apps": ["Cursor"], "evidence": cursor_evidence}],
-            "people": [{"label": "Invented Person", "description": "Unsupported identity.", "minutes": 30, "confidence": 90, "apps": ["Meet"], "evidence": []}],
-            "companies": []
-        });
-
-        let normalized = normalize_time_profile(profile, 90, 100, &catalog).unwrap();
-
-        assert_eq!(normalized["categories"]["attributedMinutes"], 100);
-        assert_eq!(normalized["categories"]["unattributedMinutes"], 0);
-        assert_eq!(
-            normalized["categories"]["items"].as_array().unwrap().len(),
-            2
-        );
-        assert_eq!(normalized["categories"]["items"][0]["minutes"], 50);
-        assert_eq!(normalized["categories"]["items"][1]["minutes"], 50);
-        assert_eq!(normalized["projects"]["attributedMinutes"], 25);
-        assert_eq!(normalized["projects"]["unattributedMinutes"], 75);
-        assert_eq!(normalized["people"]["items"].as_array().unwrap().len(), 0);
-        assert_eq!(
-            normalized["projects"]["items"][0]["evidence"][0]["detail"],
-            "Worked on the desktop reliability project"
-        );
-    }
-
-    #[test]
-    fn meeting_history_adds_all_explicit_people_and_corporate_domains() {
-        let daily = vec![json!({
-            "meetings": [{
-                "meeting_start": "2026-09-01T10:00:00Z",
-                "meeting_end": "2026-09-01T11:00:00Z",
-                "meeting_app": "Google Meet",
-                "title": "Product review",
-                "attendees": "Maya Chen <maya@atlas.example>, jordan@atlas.example, friend@gmail.com"
-            }],
-            "key_texts": [{
-                "timestamp": "2026-09-01T12:00:00Z",
-                "app_name": "Linear",
-                "window_name": "Planning",
-                "text": "Northstar launch plan"
-            }]
-        })];
-        let catalog = EvidenceCatalog::from_daily(&daily);
-        let identities = meeting_identity_profile(&daily);
-        let people = normalize_time_dimension(&identities, "people", 120, &catalog);
-        let companies = normalize_time_dimension(&identities, "companies", 120, &catalog);
-
-        assert_eq!(people["items"].as_array().unwrap().len(), 3);
-        assert_eq!(people["attributedMinutes"], 60);
-        assert_eq!(companies["items"].as_array().unwrap().len(), 1);
-        assert_eq!(companies["items"][0]["label"], "atlas.example");
-        assert_eq!(companies["attributedMinutes"], 60);
-        assert!(catalog
-            .resolve(
-                DateTime::parse_from_rfc3339("2026-09-01T12:00:00Z")
-                    .unwrap()
-                    .with_timezone(&Utc),
-                "Linear"
-            )
-            .is_some());
-    }
-
-    #[test]
     fn rejects_invented_or_single_day_evidence() {
         let catalog = EvidenceCatalog::from_daily(&[json!({"snippets": [
             {"source": "parsed", "timestamp": "2026-09-01T10:00:00Z", "app_name": "GitHub", "text": "Reviewed a pull request with enough captured detail"},
@@ -2718,7 +2238,7 @@ mod tests {
 
     #[test]
     fn workflow_agent_json_accepts_a_plain_or_fenced_object() {
-        let expected = json!({"workflows": [], "timeProfile": {}});
+        let expected = json!({"workflows": []});
 
         assert_eq!(parse_agent_json(&expected.to_string()).unwrap(), expected);
         assert_eq!(
@@ -2740,13 +2260,47 @@ mod tests {
         assert!(prompt.contains("Transcript timestamps do not measure call duration"));
         assert!(prompt.contains("A captured day is not automatically an occurrence"));
         assert!(prompt.contains(
+            "A label visible in one tab, task, or document is not a project or workflow name"
+        ));
+        assert!(prompt.contains(
             "Each exact timestamp+app evidence point may appear in only one workflow and one stage"
         ));
         assert!(prompt.contains("Never estimate time inside a workflow"));
         assert!(prompt.contains("If the evidence genuinely supports 12 to 30 narrow workflows"));
         assert!(prompt.contains("Creating a deck, editing a video, sending an email"));
         assert!(prompt.contains("at least two exact meeting_start and meeting_end records"));
+        assert!(!prompt.contains("For timeProfile"));
+        assert!(!prompt.contains("\"companies\":[same item shape]"));
         assert!(prompt.contains("2026-06-01T00:00:00Z"));
         assert!(prompt.contains("\n90\n"));
+    }
+
+    #[test]
+    fn time_profile_uses_only_recorder_measured_application_minutes() {
+        let daily = vec![
+            json!({
+                "apps": [
+                    {"name": "Arc", "minutes": 35.4},
+                    {"name": "Cursor", "minutes": 20.2}
+                ]
+            }),
+            json!({
+                "apps": [
+                    {"name": "arc", "minutes": 10.4},
+                    {"name": "Slack", "minutes": 5.1}
+                ]
+            }),
+        ];
+
+        let profile = measured_time_profile(&daily, 90, 72);
+
+        assert_eq!(profile["categories"]["items"][0]["label"], "Arc");
+        assert_eq!(profile["categories"]["items"][0]["minutes"], 46);
+        assert_eq!(profile["categories"]["items"][0]["basis"], "recorder-app");
+        assert_eq!(profile["categories"]["attributedMinutes"], 71);
+        assert_eq!(profile["categories"]["unattributedMinutes"], 1);
+        assert_eq!(profile["projects"]["items"], json!([]));
+        assert_eq!(profile["people"]["items"], json!([]));
+        assert_eq!(profile["companies"]["items"], json!([]));
     }
 }

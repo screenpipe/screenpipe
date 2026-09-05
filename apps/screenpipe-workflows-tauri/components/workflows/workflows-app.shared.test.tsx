@@ -24,8 +24,10 @@ describe("shared workflows experience", () => {
     expect(screen.queryByText(/never performs|does not run anything/i)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /^time$/i }));
-    expect(screen.getByRole("heading", { name: "Where your time goes" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /categories/i })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("heading", { name: "Recorded active time" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /applications/i })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByText(/why this time was attributed/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/evidence day|confidence/i)).not.toBeInTheDocument();
 
     const scrollRegion = container.querySelector<HTMLElement>("[data-workflows-scroll-region]");
     expect(scrollRegion).not.toBeNull();
@@ -36,7 +38,7 @@ describe("shared workflows experience", () => {
     expect(screen.getByText("5 of 5 shown")).toBeInTheDocument();
   });
 
-  it("keeps the time view focused on categories and projects", async () => {
+  it("keeps the time view focused on measured applications and supported projects", async () => {
     render(
       <WorkflowsApp
         platform={createFixtureWorkflowsPlatform()}
@@ -47,7 +49,7 @@ describe("shared workflows experience", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /^time$/i }));
     expect(screen.getAllByRole("tab")).toHaveLength(2);
-    expect(screen.getByRole("tab", { name: /categories.*4/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /applications.*4/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /projects.*8/i })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: /people/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: /companies/i })).not.toBeInTheDocument();
@@ -75,11 +77,11 @@ describe("shared workflows experience", () => {
     const commandSearch = screen.getByRole("textbox", { name: "Search commands and workflows" });
     fireEvent.change(commandSearch, { target: { value: "Projects time profile" } });
     fireEvent.keyDown(commandSearch, { key: "Enter" });
-    expect(screen.getByRole("heading", { name: "Where your time goes" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Recorded active time" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /projects.*8/i })).toHaveAttribute("aria-selected", "true");
 
     fireEvent.keyDown(window, { key: "1" });
-    expect(screen.getByRole("tab", { name: /categories/i })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /applications/i })).toHaveAttribute("aria-selected", "true");
     fireEvent.keyDown(window, { key: "g" });
     fireEvent.keyDown(window, { key: "w" });
     expect(screen.getByRole("heading", { name: "Your workflows" })).toBeInTheDocument();

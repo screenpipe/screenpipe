@@ -160,6 +160,58 @@ describe("workflow catalog", () => {
     expect(sanitized.durationSampleCount).toBe(0);
   });
 
+  it("hides legacy semantic time guesses and identity dimensions", () => {
+    const legacy = analysis([workflow("Review customer feedback", "2026-09-01T10:00:00Z")]);
+    const item = {
+      label: "Sales",
+      description: "A broad model-made bucket",
+      minutes: 100,
+      percentage: 100,
+      confidence: 90,
+      distinctDays: 1,
+      apps: ["Browser"],
+      evidence: [{ timestamp: "2026-09-01T10:00:00Z", app: "Browser", detail: "one sample" }],
+    };
+    legacy.timeProfile = {
+      days: 90,
+      totalMinutes: 100,
+      categories: { items: [item], attributedMinutes: 100, unattributedMinutes: 0, coveragePercent: 100 },
+      projects: { items: [{ ...item, label: "evals mining for enterprise tiktok bot" }], attributedMinutes: 100, unattributedMinutes: 0, coveragePercent: 100 },
+      people: { items: [{ ...item, label: "self@example.com" }], attributedMinutes: 100, unattributedMinutes: 0, coveragePercent: 100 },
+      companies: { items: [{ ...item, label: "example.com" }], attributedMinutes: 100, unattributedMinutes: 0, coveragePercent: 100 },
+    };
+
+    expect(sanitizeWorkflowAnalysis(legacy).timeProfile).toBeNull();
+  });
+
+  it("keeps recorder-measured application time and removes unsupported identities", () => {
+    const current = analysis([workflow("Review customer feedback", "2026-09-01T10:00:00Z")]);
+    const measured = {
+      label: "Arc",
+      description: "",
+      minutes: 80,
+      percentage: 80,
+      confidence: 100,
+      distinctDays: 0,
+      apps: ["Arc"],
+      evidence: [],
+      basis: "recorder-app" as const,
+    };
+    current.timeProfile = {
+      days: 90,
+      totalMinutes: 100,
+      categories: { items: [measured], attributedMinutes: 80, unattributedMinutes: 20, coveragePercent: 80 },
+      projects: { items: [], attributedMinutes: 0, unattributedMinutes: 100, coveragePercent: 0 },
+      people: { items: [{ ...measured, label: "self@example.com" }], attributedMinutes: 80, unattributedMinutes: 20, coveragePercent: 80 },
+      companies: { items: [{ ...measured, label: "example.com" }], attributedMinutes: 80, unattributedMinutes: 20, coveragePercent: 80 },
+    };
+
+    const sanitized = sanitizeWorkflowAnalysis(current).timeProfile!;
+    expect(sanitized.categories.items.map((item) => item.label)).toEqual(["Arc"]);
+    expect(sanitized.people.items).toEqual([]);
+    expect(sanitized.companies.items).toEqual([]);
+  });
+
   it("uses recent periods as a lens without deleting older workflows", () => {
     const known = [
       workflow("Recent workflow", "2026-09-02T10:00:00Z"),

@@ -740,7 +740,7 @@ function WorkflowDetail({ workflow, navigate }: { workflow: WorkflowMap | null; 
 }
 
 const timeLensOptions = [
-  ["categories", ChartPie, "Categories"],
+  ["categories", ChartPie, "Applications"],
   ["projects", FolderKanban, "Projects"],
 ] as const;
 
@@ -748,8 +748,8 @@ function TimeAllocationList({ items, lens, query }: { items: TimeAllocationItem[
   if (!items.length) {
     return <section className={styles.timeLensEmpty}>
       <FileCheck2 size={21} />
-      <h2>{query ? `No ${lens} match this filter` : `No supported ${lens} identified`}</h2>
-      <p>{query ? "Try another name or clear the filter." : `This captured history did not provide enough evidence to name any ${lens}. The app leaves that time unattributed instead of guessing.`}</p>
+      <h2>{query ? "No matches" : lens === "projects" ? "No measured project time yet" : "No recorded application time yet"}</h2>
+      <p>{query ? "Try another name or clear the filter." : lens === "projects" ? "Project time stays hidden until it can be tied to measured activity." : "Refresh after Screenpipe has captured some active work."}</p>
     </section>;
   }
 
@@ -757,13 +757,8 @@ function TimeAllocationList({ items, lens, query }: { items: TimeAllocationItem[
     {items.map((item, index) => <article key={`${lens}-${item.label}`} className={styles.timeAllocationItem}>
       <div className={styles.timeAllocationRank}>{String(index + 1).padStart(2, "0")}</div>
       <div className={styles.timeAllocationBody}>
-        <div className={styles.timeAllocationHead}><div><h2>{item.label}</h2><p>{item.description}</p></div><div><strong>{formatMinutes(item.minutes)}</strong><span>{item.percentage}% of captured time</span></div></div>
+        <div className={styles.timeAllocationHead}><div><h2>{item.label}</h2>{item.description && <p>{item.description}</p>}</div><div><strong>{formatMinutes(item.minutes)}</strong><span>{item.percentage}% of active time</span></div></div>
         <div className={styles.timeAllocationBar} aria-label={`${item.percentage}% of captured time`}><i style={{ width: `${Math.max(1, Math.min(100, item.percentage))}%` }} /></div>
-        <div className={styles.timeAllocationMeta}><span>{item.distinctDays} evidence day{item.distinctDays === 1 ? "" : "s"}</span><span>{item.confidence}% confidence</span><span>{item.apps.length ? item.apps.join(" · ") : "Apps not clear"}</span></div>
-        <details className={styles.timeEvidence}>
-          <summary><FileCheck2 size={12} />Why this time was attributed here <ChevronDown size={12} /></summary>
-          <ul>{item.evidence.map((evidence, evidenceIndex) => <li key={`${evidence.timestamp}-${evidenceIndex}`}><strong>{formatEvidenceTimestamp(evidence.timestamp)} · {evidence.app}</strong><p>{evidence.detail}</p></li>)}</ul>
-        </details>
       </div>
     </article>)}
   </section>;
@@ -788,27 +783,28 @@ function TimeView({ analysis, analyze, analyzing, workProfile, lens, setLens }: 
   }, [lens]);
   if (!profile) {
     return <>
-      <div className={styles.pageHeader}><div><h1>Where your time goes</h1></div></div>
-      {analyzing ? <ProcessingView /> : <section className={styles.emptyState}><ChartPie size={23} /><h2>Build your time profile</h2><p>Organize the last {WORKFLOW_CATALOG_DAYS} days by category and project.</p><button className={styles.primaryButton} onClick={analyze}><RefreshCw size={14} />Map where my time goes</button></section>}
+      <div className={styles.pageHeader}><div><h1>Recorded active time</h1></div></div>
+      {analyzing ? <ProcessingView /> : <section className={styles.emptyState}><ChartPie size={23} /><h2>Measure your active time</h2><p>Use Screenpipe's recorded application totals for the last {WORKFLOW_CATALOG_DAYS} days.</p><button className={styles.primaryButton} onClick={analyze}><RefreshCw size={14} />Refresh time</button></section>}
     </>;
   }
   if (!dimension) return null;
   const usableDays = analysis?.quality.usableDays ?? 0;
   const visibleItems = matchingItems.slice(0, visibleCount);
   const hiddenCount = matchingItems.length - visibleItems.length;
+  const lensName = lens === "categories" ? "applications" : "projects";
   const resultLabel = matchingItems.length === 1
-    ? ({ categories: "category", projects: "project" } as const)[lens]
-    : lens;
+    ? ({ categories: "application", projects: "project" } as const)[lens]
+    : ({ categories: "applications", projects: "projects" } as const)[lens];
 
   return <>
     <div className={styles.pageHeader}>
-      <div><h1>Where your time goes</h1></div>
+      <div><h1>Recorded active time</h1></div>
       <button className={styles.primaryButton} onClick={analyze} disabled={analyzing}>{analyzing ? <><span className={styles.spinnerSmall} />Refreshing…</> : <><RefreshCw size={14} />Refresh profile</>}</button>
     </div>
     <section className={styles.timeSummary} aria-label="Time profile summary">
-      <div><span>Active time</span><strong>{formatMinutes(profile.totalMinutes)}</strong></div>
-      <div><span>History</span><strong>{usableDays} days</strong></div>
-      <div><span>{lens} coverage</span><strong>{dimension.coveragePercent}%</strong></div>
+      <div><span>Captured active time</span><strong>{formatMinutes(profile.totalMinutes)}</strong></div>
+      <div><span>History reviewed</span><strong>{usableDays} days</strong></div>
+      <div><span>{lens === "categories" ? "Application" : "Project"} coverage</span><strong>{dimension.coveragePercent}%</strong></div>
       <div><span>Unattributed</span><strong>{formatMinutes(dimension.unattributedMinutes)}</strong></div>
     </section>
     {workProfile?.hourlyValue && workProfile.hourlyValue.amount > 0 && <section className={styles.timeValueNotice}>
@@ -819,7 +815,7 @@ function TimeView({ analysis, analyze, analyzing, workProfile, lens, setLens }: 
       {timeLensOptions.map(([target, Icon, label]) => <button key={target} role="tab" aria-selected={lens === target} className={lens === target ? styles.timeLensActive : ""} onClick={() => setLens(target)}><Icon size={15} /><span>{label}</span><strong>{profile[target].items.length}</strong></button>)}
     </div>
     <div className={styles.timeLensTools}>
-      <label><Search size={13} /><input aria-label={`Filter ${lens}`} value={query} onChange={(event) => { setQuery(event.target.value); setVisibleCount(12); }} placeholder={`Filter ${lens}…`} /></label>
+      <label><Search size={13} /><input aria-label={`Filter ${lensName}`} value={query} onChange={(event) => { setQuery(event.target.value); setVisibleCount(12); }} placeholder={`Filter ${lensName}…`} /></label>
       <strong>{matchingItems.length} {resultLabel}</strong>
     </div>
     <TimeAllocationList items={visibleItems} lens={lens} query={query} />

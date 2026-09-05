@@ -405,18 +405,6 @@
 .timeAllocationHead span { display: block; margin-top: 4px; color: #888c82; font-size: 8px; }
 .timeAllocationBar { height: 7px; margin: 14px 0 10px; overflow: hidden; border-radius: 999px; background: #eceee7; }
 .timeAllocationBar i { display: block; height: 100%; border-right: 2px solid #769b17; background: var(--lime); }
-.timeAllocationMeta { display: flex; flex-wrap: wrap; gap: 7px 16px; color: #81857b; font-size: 8px; }
-.timeAllocationMeta span + span { position: relative; }
-.timeAllocationMeta span + span::before { content: ""; position: absolute; top: 3px; left: -9px; width: 2px; height: 2px; border-radius: 50%; background: #aeb1a8; }
-.timeEvidence { margin-top: 13px; border-top: 1px solid #ecece7; }
-.timeEvidence summary { width: fit-content; display: flex; align-items: center; gap: 6px; padding: 10px 0 0; color: #62675d; font-size: 8px; font-weight: 680; list-style: none; cursor: pointer; }
-.timeEvidence summary::-webkit-details-marker { display: none; }
-.timeEvidence summary svg:last-child { transition: transform .15s ease; }
-.timeEvidence[open] summary svg:last-child { transform: rotate(180deg); }
-.timeEvidence ul { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; margin: 10px 0 0; padding: 0; list-style: none; }
-.timeEvidence li { padding: 10px; border: 1px solid #e3e5dd; border-radius: 7px; background: #fafbf7; }
-.timeEvidence li strong { color: #62675c; font-size: 8px; }
-.timeEvidence li p { margin: 4px 0 0; color: #777c71; font-size: 8px; line-height: 1.45; }
 .timeShowMore { width: 100%; min-height: 42px; display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 9px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: #575d50; font-size: 9px; font-weight: 690; cursor: pointer; }
 .timeShowMore:hover { background: #f5f7f0; }
 .timeShowMore span { color: #92968c; font-weight: 560; }
@@ -719,7 +707,6 @@
   .timeLensTools { grid-template-columns: 1fr; }
   .timeLensTools > strong { justify-self: start; }
   .timeAllocationHead > div:last-child { padding: 0; border: 0; text-align: left; }
-  .timeEvidence ul { grid-template-columns: 1fr; }
   .profileCard { padding: 18px; }
   .profileKpiRow, .profileKpiDetails { grid-template-columns: 1fr; }
   .profileKpiRow > button { justify-self: end; }
