@@ -47,7 +47,7 @@
     "test:e2e:onboarding-redirect": "SCREENPIPE_E2E_SEED=no-recording bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/onboarding-redirect.spec.ts",
     "test:e2e:first-run-learning-window": "SCREENPIPE_E2E_SEED=onboarding,no-recording SCREENPIPE_PORT=3048 bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/first-run-learning-window.spec.ts",
     "test:e2e:onboarding-first-run": "SCREENPIPE_E2E_SEED=no-recording SCREENPIPE_PORT=3047 bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/onboarding-first-run.spec.ts",
-    "test:e2e:onboarding-free-no-card": "SCREENPIPE_E2E_SEED=no-recording SCREENPIPE_PORT=3047 bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/onboarding-first-run.spec.ts --mochaOpts.grep \"continues from a verified Free account without asking for a card\"",
+    "test:e2e:onboarding-free-no-card": "SCREENPIPE_E2E_FOCUSED_CANARY=true SCREENPIPE_E2E_SEED=no-recording SCREENPIPE_PORT=3047 bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/onboarding-first-run.spec.ts --mochaOpts.grep \"continues from a verified Free account without asking for a card\"",
     "test:e2e:onboarding-h1-follow-up": "SCREENPIPE_E2E_SEED=onboarding,no-recording SCREENPIPE_PORT=3046 bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/onboarding-h1-follow-up.spec.ts",
     "test:e2e:onboarding-background-ai-tools": "SCREENPIPE_E2E_SEED=no-recording,background-ai-tools,cloud-authenticated SCREENPIPE_PORT=3045 bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/onboarding-background-ai-tools.spec.ts",
     "test:e2e:screen-recording-restart:macos": "SCREENPIPE_E2E_SEED=onboarding,no-recording bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/screen-recording-restart.spec.ts",

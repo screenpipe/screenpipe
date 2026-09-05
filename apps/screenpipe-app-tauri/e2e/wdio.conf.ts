@@ -28,6 +28,8 @@ const sessionRecorder = shouldRecordDesktopSession ? new TestRecorder() : null;
 const sessionVideoDir = resolve(__dirname, 'videos', 'session');
 const isCi = Boolean(process.env.CI);
 const isWindowsCi = isCi && process.platform === 'win32';
+const isFocusedCanaryRun =
+  process.env.SCREENPIPE_E2E_FOCUSED_CANARY === 'true';
 const isDestructiveDbFaultRun = (process.env.SCREENPIPE_E2E_SEED ?? '')
   .split(',')
   .some((flag) => flag.trim().toLowerCase() === 'db-hard-fault');
@@ -199,8 +201,15 @@ export const config: TestrunnerConfig = {
   path: '/',
   logLevel: 'warn',
   waitforTimeout: isCi ? 20000 : 10000,
-  connectionRetryTimeout: isWindowsCi ? 180000 : 60000,
-  connectionRetryCount: isWindowsCi ? 12 : 3,
+  // A focused canary exists to return one direct verdict. Letting it inherit
+  // the broad Windows suite's 12 long connection retries and three whole-file
+  // retries can occupy a runner for tens of minutes without producing one.
+  connectionRetryTimeout: isFocusedCanaryRun
+    ? 60000
+    : isWindowsCi
+      ? 180000
+      : 60000,
+  connectionRetryCount: isFocusedCanaryRun ? 2 : isWindowsCi ? 12 : 3,
   // CI-only: retry a whole spec file on transient WebDriver glitches
   // (e.g. "Session not found" on WebKit) before failing the run. The suite has
   // a distributed ~1-flaky-failure-per-run rate spread across different specs
@@ -211,7 +220,8 @@ export const config: TestrunnerConfig = {
   // Local runs skip retries so flakes surface immediately during development.
   // A destructive DB-fault spec cannot reuse the same quarantined process for
   // a file retry. Focused fault runs start clean once and fail directly.
-  specFileRetries: isCi && !isDestructiveDbFaultRun ? 3 : 0,
+  specFileRetries:
+    isCi && !isDestructiveDbFaultRun && !isFocusedCanaryRun ? 3 : 0,
   specFileRetriesDelay: 5,
   framework: 'mocha',
   reporters: getReporters() as Options.Testrunner['reporters'],
