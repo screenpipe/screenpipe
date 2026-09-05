@@ -23,6 +23,8 @@ function workflow(overrides: Partial<WorkflowMap> = {}): WorkflowMap {
     totalMinutes: 32,
     activeMinutes: 25,
     waitingMinutes: 7,
+    durationSource: "measured-meeting",
+    durationSampleCount: 2,
     appSwitches: 4,
     confidence: 82,
     apps: ["GitHub", "Terminal"],
@@ -103,6 +105,13 @@ describe("workflow filters", () => {
     });
     expect(filtered.map((item) => item.title)).toEqual(["Review a release"]);
     expect(activeFilterCount({ ...defaultWorkflowFilters, duration: "medium", quality: "good" })).toBe(2);
+  });
+
+  it("does not put unmeasured workflows into a duration bucket", () => {
+    const unmeasured = workflow({ title: "Untimed work", durationSource: "unknown", totalMinutes: 0 });
+
+    expect(filterWorkflows([unmeasured], { ...defaultWorkflowFilters, duration: "short" })).toEqual([]);
+    expect(filterWorkflows([unmeasured], defaultWorkflowFilters)).toEqual([unmeasured]);
   });
 
   it("filters by local screenshot coverage", () => {

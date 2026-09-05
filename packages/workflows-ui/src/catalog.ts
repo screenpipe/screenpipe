@@ -56,6 +56,20 @@ function tokenSimilarity(left: string[], right: string[]) {
   return intersection / Math.max(left.length, right.length);
 }
 
+function evidenceKeys(workflow: WorkflowMap) {
+  return new Set(workflow.evidence.map((item) => `${item.timestamp}|${item.app.toLocaleLowerCase()}`));
+}
+
+function evidenceContainment(left: WorkflowMap, right: WorkflowMap) {
+  const leftEvidence = evidenceKeys(left);
+  const rightEvidence = evidenceKeys(right);
+  const smaller = Math.min(leftEvidence.size, rightEvidence.size);
+  if (!smaller) return 0;
+  let shared = 0;
+  for (const key of leftEvidence) if (rightEvidence.has(key)) shared += 1;
+  return shared / smaller;
+}
+
 export function workflowIdentity(workflow: WorkflowMap) {
   return identityTokens(workflow.title).join("-");
 }
@@ -69,18 +83,73 @@ function workflowsMatch(left: WorkflowMap, right: WorkflowMap) {
     right.apps.some((candidate) => candidate.toLocaleLowerCase() === app.toLocaleLowerCase()),
   );
   const similarity = tokenSimilarity(leftTokens, rightTokens);
-  return similarity >= 0.75 || (sharedApp && similarity >= 0.6);
+  return evidenceContainment(left, right) >= 0.5 || similarity >= 0.75 || (sharedApp && similarity >= 0.6);
 }
 
 function workflowScore(workflow: WorkflowMap) {
-  return workflow.totalMinutes * Math.max(1, workflow.repetitions);
+  return workflow.quality.evidenceCount * Math.max(1, workflow.quality.distinctDays) * Math.max(1, workflow.confidence);
+}
+
+function deduplicateWorkflows(workflows: WorkflowMap[]) {
+  const kept: WorkflowMap[] = [];
+  for (const workflow of [...workflows].sort((left, right) => workflowScore(right) - workflowScore(left))) {
+    if (!kept.some((candidate) => workflowsMatch(candidate, workflow))) kept.push(workflow);
+  }
+  return kept.map((workflow, index) => ({ ...workflow, rank: index + 1 }));
+}
+
+export function sanitizeWorkflowAnalysis(analysis: WorkflowAnalysis): WorkflowAnalysis {
+  const provenanceChecked = analysis.analysis.workflows.map((workflow) => {
+    const durationIsMeasured = workflow.durationSource === "measured-meeting"
+      && workflow.evidence.some((item) => item.source === "meeting");
+    const evidenceHasProvenance = workflow.evidence.length > 0 && workflow.evidence.every((item) => Boolean(item.source));
+    return {
+      ...workflow,
+      totalMinutes: durationIsMeasured ? workflow.totalMinutes : 0,
+      activeMinutes: 0,
+      waitingMinutes: 0,
+      durationSource: durationIsMeasured ? "measured-meeting" as const : "unknown" as const,
+      durationSampleCount: durationIsMeasured ? Math.max(1, workflow.durationSampleCount ?? 1) : 0,
+      appSwitches: 0,
+      frequency: `Observed on ${workflow.quality.distinctDays} captured day${workflow.quality.distinctDays === 1 ? "" : "s"} in a ${workflow.analysisDays}-day scan`,
+      stages: workflow.stages.map((stage) => ({
+        ...stage,
+        activeMinutes: 0,
+        waitingMinutes: 0,
+        durationSource: "unknown" as const,
+      })),
+      bottlenecks: workflow.bottlenecks.map((bottleneck) => ({
+        ...bottleneck,
+        estimatedMinutesPerRun: 0,
+      })),
+      quality: evidenceHasProvenance ? workflow.quality : {
+        ...workflow.quality,
+        grade: "limited" as const,
+        reasons: [
+          ...workflow.quality.reasons.filter((reason) => !reason.toLocaleLowerCase().includes("verified")),
+          "Refresh to recheck evidence type and speaker ambiguity",
+        ],
+      },
+    };
+  });
+  const workflows = deduplicateWorkflows(provenanceChecked);
+  return {
+    ...analysis,
+    analysis: { workflows },
+    quality: {
+      ...analysis.quality,
+      warnings: workflows.length === analysis.analysis.workflows.length
+        ? analysis.quality.warnings
+        : [...analysis.quality.warnings, "Overlapping workflow aliases were hidden"],
+    },
+  };
 }
 
 export function mergeWorkflowCatalog(
   previous: WorkflowAnalysis | null,
   next: WorkflowAnalysis,
 ): WorkflowAnalysis {
-  if (!previous) return next;
+  if (!previous) return sanitizeWorkflowAnalysis(next);
 
   const workflows = [...next.analysis.workflows];
   for (const priorWorkflow of previous.analysis.workflows) {
@@ -88,8 +157,7 @@ export function mergeWorkflowCatalog(
       workflows.push(priorWorkflow);
     }
   }
-  workflows.sort((left, right) => workflowScore(right) - workflowScore(left));
-  const rankedWorkflows = workflows.map((workflow, index) => ({ ...workflow, rank: index + 1 }));
+  const rankedWorkflows = deduplicateWorkflows(workflows);
   const stageCount = rankedWorkflows.reduce((sum, workflow) => sum + workflow.stages.length, 0);
   const screenshotCount = rankedWorkflows.reduce((sum, workflow) => sum + workflow.quality.screenshotCount, 0);
   const verifiedEvidenceCount = rankedWorkflows.reduce((sum, workflow) => sum + workflow.quality.evidenceCount, 0);

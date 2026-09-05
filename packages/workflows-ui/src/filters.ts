@@ -42,6 +42,7 @@ const qualityRank: Record<WorkflowQualityGrade, number> = {
 };
 
 function matchesDuration(workflow: WorkflowMap, filter: WorkflowDurationFilter) {
+  if (filter !== "all" && workflow.durationSource !== "measured-meeting") return false;
   if (filter === "short") return workflow.totalMinutes <= 15;
   if (filter === "medium") return workflow.totalMinutes > 15 && workflow.totalMinutes <= 45;
   if (filter === "long") return workflow.totalMinutes > 45;

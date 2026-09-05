@@ -20,6 +20,7 @@ function evidence(day: number, app: string, detail: string): WorkflowEvidence {
     timestamp: `2026-09-${String(day).padStart(2, "0")}T16:15:00.000Z`,
     app,
     detail,
+    source: "parsed",
   };
 }
 

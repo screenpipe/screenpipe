@@ -75,6 +75,8 @@ export type WorkflowEvidence = {
   timestamp: string;
   app: string;
   detail: string;
+  source?: "parsed" | "screen" | "audio" | "meeting" | string;
+  speaker?: string | null;
 };
 
 export type WorkflowScreenshot = {
@@ -90,6 +92,7 @@ export type WorkflowStage = {
   description: string;
   activeMinutes: number;
   waitingMinutes: number;
+  durationSource?: "unknown";
   apps: string[];
   confidence: number;
   observedOccurrences: number;
@@ -135,6 +138,8 @@ export type WorkflowMap = {
   totalMinutes: number;
   activeMinutes: number;
   waitingMinutes: number;
+  durationSource?: "measured-meeting" | "unknown";
+  durationSampleCount?: number;
   appSwitches: number;
   confidence: number;
   apps: string[];

@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   mergeWorkflowCatalog,
+  sanitizeWorkflowAnalysis,
   workflowsForActivityPeriod,
   workflowIdentity,
 } from "./catalog";
@@ -23,6 +24,8 @@ function workflow(title: string, timestamp: string, apps = ["Browser"]): Workflo
     totalMinutes: 10,
     activeMinutes: 10,
     waitingMinutes: 0,
+    durationSource: "measured-meeting",
+    durationSampleCount: 2,
     appSwitches: 1,
     confidence: 80,
     apps,
@@ -30,7 +33,7 @@ function workflow(title: string, timestamp: string, apps = ["Browser"]): Workflo
     variations: [],
     stages: [],
     bottlenecks: [],
-    evidence: [{ timestamp, app: apps[0], detail: title }],
+    evidence: [{ timestamp, app: apps[0], detail: title, source: "parsed" }],
     quality: {
       grade: "good",
       evidenceCount: 1,
@@ -106,6 +109,43 @@ describe("workflow catalog", () => {
     const merged = mergeWorkflowCatalog(analysis([prior]), analysis([next]));
 
     expect(merged.analysis.workflows).toHaveLength(1);
+  });
+
+  it("hides semantically different aliases that reuse most of the same evidence", () => {
+    const discovery = workflow("Run customer discovery demo", "2026-09-01T10:00:00Z", ["Meet"]);
+    discovery.evidence.push({ timestamp: "2026-09-02T10:00:00Z", app: "Meet", detail: "Second call" });
+    discovery.quality.evidenceCount = 2;
+    discovery.quality.distinctDays = 2;
+    const sales = workflow("Run enterprise sales calls", "2026-09-01T10:00:00Z", ["Meet"]);
+    sales.evidence.push({ timestamp: "2026-09-03T10:00:00Z", app: "Meet", detail: "Third call" });
+    sales.quality.evidenceCount = 2;
+    sales.quality.distinctDays = 2;
+
+    const sanitized = sanitizeWorkflowAnalysis(analysis([discovery, sales]));
+
+    expect(sanitized.analysis.workflows).toHaveLength(1);
+    expect(sanitized.quality.warnings).toContain("Overlapping workflow aliases were hidden");
+  });
+
+  it("does not display legacy model estimates as measured time", () => {
+    const legacy = workflow("Run customer discovery demo", "2026-09-01T10:00:00Z", ["Meet"]);
+    legacy.totalMinutes = 100;
+    legacy.activeMinutes = 80;
+    legacy.waitingMinutes = 20;
+    legacy.appSwitches = 3;
+    delete legacy.durationSource;
+    delete legacy.durationSampleCount;
+    delete legacy.evidence[0].source;
+
+    const sanitized = sanitizeWorkflowAnalysis(analysis([legacy])).analysis.workflows[0];
+
+    expect(sanitized.totalMinutes).toBe(0);
+    expect(sanitized.activeMinutes).toBe(0);
+    expect(sanitized.waitingMinutes).toBe(0);
+    expect(sanitized.durationSource).toBe("unknown");
+    expect(sanitized.appSwitches).toBe(0);
+    expect(sanitized.quality.grade).toBe("limited");
+    expect(sanitized.quality.reasons).toContain("Refresh to recheck evidence type and speaker ambiguity");
   });
 
   it("uses recent periods as a lens without deleting older workflows", () => {

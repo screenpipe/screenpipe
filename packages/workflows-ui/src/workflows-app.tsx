@@ -52,6 +52,7 @@ import {
 import {
   activityPeriodLabel,
   mergeWorkflowCatalog,
+  sanitizeWorkflowAnalysis,
   WORKFLOW_CATALOG_DAYS,
   workflowsForActivityPeriod,
   type WorkflowActivityPeriod,
@@ -78,9 +79,9 @@ import styles from "./workflows-app.module.css";
 
 const processingSteps = [
   ["Gathering the selected period", "Preparing a bounded view of your recent work"],
-  ["Finding repeated sequences", "Connecting actions that belong to the same workflow"],
-  ["Measuring each stage", "Separating hands-on work from waiting and switching"],
-  ["Classifying friction", "Separating what you can change from external constraints"],
+  ["Testing workflow hypotheses", "Checking each pattern against separate captured days"],
+  ["Removing overlaps", "Keeping aliases and related topics out of the catalog"],
+  ["Checking constraints", "Separating what you can change from external dependencies"],
 ] as const;
 
 const primaryNavigation = [
@@ -198,6 +199,14 @@ function formatEvidenceTimestamp(value: string) {
     hour: "numeric",
     minute: "2-digit",
   }).format(date);
+}
+
+function hasMeasuredDuration(workflow: WorkflowMap) {
+  return workflow.durationSource === "measured-meeting" && workflow.totalMinutes > 0;
+}
+
+function workflowDurationLabel(workflow: WorkflowMap) {
+  return hasMeasuredDuration(workflow) ? formatMinutes(workflow.totalMinutes) : "Not measured";
 }
 
 function formatAnalyzedAt(value: string) {
@@ -547,8 +556,8 @@ function OverviewView({
   openAccount?: () => Promise<void>;
 }) {
   const workflows = analysis?.analysis.workflows ?? [];
-  const mappedMinutes = workflows.reduce((sum, item) => sum + item.totalMinutes, 0);
-  const waitingMinutes = workflows.reduce((sum, item) => sum + item.waitingMinutes, 0);
+  const measuredWorkflowCount = workflows.filter(hasMeasuredDuration).length;
+  const unmeasuredWorkflowCount = workflows.length - measuredWorkflowCount;
   const friction = workflows.flatMap((workflow) => workflow.bottlenecks);
   const actionableCount = friction.filter(isActionableBottleneck).length;
   const constraintCount = friction.length - actionableCount;
@@ -587,21 +596,19 @@ function OverviewView({
       ) : (
         <>
           <section className={styles.statGrid} aria-label="Work map summary">
-            <div><span>Mapped time</span><strong>{formatMinutes(mappedMinutes)}</strong><small>one run of each workflow</small></div>
-            <div><span>Waiting</span><strong>{formatMinutes(waitingMinutes)}</strong><small>one run of each workflow</small></div>
+            <div><span>Measured durations</span><strong>{measuredWorkflowCount}</strong><small>from exact meeting windows</small></div>
+            <div><span>Timing not inferred</span><strong>{unmeasuredWorkflowCount}</strong><small>needs continuous evidence</small></div>
             <div><span>Friction you can affect</span><strong>{actionableCount}</strong><small>{constraintCount} other constraint{constraintCount === 1 ? "" : "s"}</small></div>
             <div><span>Workflows shown</span><strong>{workflows.length}</strong><small>{activityPeriodLabel(activityPeriod).toLocaleLowerCase()}</small></div>
           </section>
-          <div className={styles.sectionHeading}><div><span>Where time goes</span><h2>Your workflows, active time vs. waiting</h2></div><button className={styles.textButton} onClick={() => navigate("workflows")}>View all workflows <ArrowRight size={14} /></button></div>
+          <div className={styles.sectionHeading}><div><span>Repeated patterns</span><h2>Workflows supported by captured evidence</h2></div><button className={styles.textButton} onClick={() => navigate("workflows")}>View all workflows <ArrowRight size={14} /></button></div>
           <section className={styles.timeMap}>
             {workflows.map((workflow, index) => {
-              const total = Math.max(1, workflow.totalMinutes);
-              const activeWidth = Math.round((workflow.activeMinutes / total) * 100);
               return (
                 <button key={workflow.title} onClick={() => openWorkflow(index)}>
                   <div className={styles.timeMapTitle}><span>0{index + 1}</span><div><strong>{workflow.title}</strong><small>{workflow.frequency}</small></div></div>
-                  <div className={styles.timeBar}><i style={{ width: `${activeWidth}%` }} /><b style={{ width: `${100 - activeWidth}%` }} /></div>
-                  <div className={styles.timeLegend}><span><i />{formatMinutes(workflow.activeMinutes)} active</span><span><i />{formatMinutes(workflow.waitingMinutes)} waiting</span><strong>{formatMinutes(workflow.totalMinutes)} estimated occurrence</strong></div>
+                  <div className={styles.timeBar}><i style={{ width: hasMeasuredDuration(workflow) ? "100%" : "0%" }} /><b style={{ width: "0%" }} /></div>
+                  <div className={styles.timeLegend}><span>{workflow.quality.distinctDays} captured day{workflow.quality.distinctDays === 1 ? "" : "s"}</span><strong>{hasMeasuredDuration(workflow) ? `${workflowDurationLabel(workflow)} observed meeting` : "Duration not inferred"}</strong></div>
                   <ChevronRight size={16} />
                 </button>
               );
@@ -650,7 +657,7 @@ function WorkflowsView({ workflows, knownWorkflowCount, activityPeriod, filters,
               <div className={styles.workflowCardTop}><span>{String(workflow.rank).padStart(2, "0")}</span><div><Pill tone={qualityTone(workflow.quality.grade)}>{qualityLabel(workflow.quality.grade)}</Pill>{actionableCount > 0 && <Pill tone="warm">{actionableCount} actionable</Pill>}{constraintCount > 0 && <Pill>{constraintCount} constraint{constraintCount === 1 ? "" : "s"}</Pill>}</div></div>
               <h2>{workflow.title}</h2><p>{workflow.description}</p>
               <div className={styles.cardPath}><span>{workflow.trigger}</span><ArrowRight size={12} /><span>{workflow.outcome}</span></div>
-              <div className={styles.cardMetrics}><div><span>Per run</span><strong>{formatMinutes(workflow.totalMinutes)}</strong></div><div><span>Stages</span><strong>{workflow.stages.length}</strong></div><div><span>Evidence</span><strong>{workflow.quality.evidenceCount}</strong></div><div><span>Screenshots</span><strong>{workflow.quality.screenshotCount}/{workflow.stages.length}</strong></div></div>
+              <div className={styles.cardMetrics}><div><span>Duration</span><strong>{workflowDurationLabel(workflow)}</strong></div><div><span>Stages</span><strong>{workflow.stages.length}</strong></div><div><span>Evidence</span><strong>{workflow.quality.evidenceCount}</strong></div><div><span>Screenshots</span><strong>{workflow.quality.screenshotCount}/{workflow.stages.length}</strong></div></div>
               <div className={styles.cardFooter}><span>{workflow.frequency}</span><strong>Open map <ChevronRight size={14} /></strong></div>
             </button>
           );
@@ -664,8 +671,7 @@ function WorkflowDetail({ workflow, navigate }: { workflow: WorkflowMap | null; 
   const [expandedStages, setExpandedStages] = useState<Set<number>>(() => new Set([0]));
   useEffect(() => setExpandedStages(new Set([0])), [workflow?.title]);
   if (!workflow) return <section className={styles.emptyState}><ListTree size={23} /><h2>No workflow selected</h2><button className={styles.primaryButton} onClick={() => navigate("workflows")}>View workflows</button></section>;
-  const total = Math.max(1, workflow.totalMinutes);
-  const activeWidth = Math.round((workflow.activeMinutes / total) * 100);
+  const measuredDuration = hasMeasuredDuration(workflow);
   const allStagesOpen = expandedStages.size === workflow.stages.length;
   const actionableFriction = workflow.bottlenecks.filter(isActionableBottleneck);
   const constraints = workflow.bottlenecks.filter((item) => !isActionableBottleneck(item));
@@ -679,11 +685,11 @@ function WorkflowDetail({ workflow, navigate }: { workflow: WorkflowMap | null; 
     <>
       <button className={styles.backButton} onClick={() => navigate("workflows")}><ArrowLeft size={14} />All workflows</button>
       <section className={styles.detailHeader}>
-        <div><Pill>Evidence spans {workflow.repetitions} of {workflow.analysisDays} days</Pill><h1>{workflow.title}</h1><p>{workflow.description}</p></div>
-        <div className={styles.detailTotal}><span>Estimated time per occurrence</span><strong>{formatMinutes(workflow.totalMinutes)}</strong><small>{formatMinutes(workflow.activeMinutes)} active · {formatMinutes(workflow.waitingMinutes)} waiting</small></div>
+        <div><Pill>Evidence on {workflow.repetitions} captured day{workflow.repetitions === 1 ? "" : "s"}</Pill><h1>{workflow.title}</h1><p>{workflow.description}</p></div>
+        <div className={styles.detailTotal}><span>{measuredDuration ? "Observed meeting duration" : "Workflow duration"}</span><strong>{workflowDurationLabel(workflow)}</strong><small>{measuredDuration ? `${workflow.durationSampleCount ?? 1} exact meeting window${(workflow.durationSampleCount ?? 1) === 1 ? "" : "s"}` : "Not estimated from scattered observations"}</small></div>
       </section>
       <section className={styles.detailStats}>
-        <div><span>Frequency</span><strong>{workflow.frequency}</strong></div>
+        <div><span>Coverage</span><strong>{workflow.frequency}</strong></div>
         <div><span>App switches</span><strong>{workflow.appSwitches || "Not clear"}</strong></div>
         <div><span>Evidence</span><strong>{workflow.quality.evidenceCount}</strong></div>
         <div><span>Stage screenshots</span><strong>{workflow.quality.screenshotCount} of {workflow.stages.length}</strong></div>
@@ -698,11 +704,6 @@ function WorkflowDetail({ workflow, navigate }: { workflow: WorkflowMap | null; 
         <div className={styles.flowEndpoint}><span>Starts when</span><strong>{workflow.trigger}</strong></div>
         <div className={styles.stageList}>
           {workflow.stages.map((stage, index) => {
-            const inferredWait = workflow.bottlenecks
-              .filter((item) => item.stage.toLowerCase() === stage.name.toLowerCase() && (item.type === "waiting" || item.type === "handoff"))
-              .reduce((sum, item) => sum + item.estimatedMinutesPerRun, 0);
-            const stageWaiting = Math.max(stage.waitingMinutes, inferredWait);
-            const stageTotal = stage.activeMinutes + stageWaiting;
             const stageFriction = workflow.bottlenecks.filter((item) => item.stage.toLowerCase() === stage.name.toLowerCase());
             const actionableStageFriction = stageFriction.some(isActionableBottleneck);
             const constraint = stageFriction.find((item) => !isActionableBottleneck(item));
@@ -711,7 +712,7 @@ function WorkflowDetail({ workflow, navigate }: { workflow: WorkflowMap | null; 
               <button className={styles.stageSummary} onClick={() => toggleStage(index)} aria-expanded={open}>
                 <div className={styles.stageNumber}>{index + 1}</div>
                 <div className={styles.stageBody}><div><h3>{stage.name}</h3>{actionableStageFriction && <Pill tone="warm"><AlertTriangle size={11} />Actionable friction</Pill>}{!actionableStageFriction && constraint && <Pill><ShieldCheck size={11} />{controlLabel(constraint)}</Pill>}</div><p>{stage.description}</p><span>{stage.apps.join(" · ") || "App not clear"} · {stage.observedOccurrences} observation{stage.observedOccurrences === 1 ? "" : "s"} across {stage.observedDays} day{stage.observedDays === 1 ? "" : "s"}</span></div>
-                <div className={styles.stageTime}><strong>{formatMinutes(stageTotal)}</strong><span>{formatMinutes(stage.activeMinutes)} active</span><span>{formatMinutes(stageWaiting)} waiting</span></div>
+                <div className={styles.stageTime}><strong>Not timed</strong><span>Timing needs a continuous occurrence</span></div>
                 <ChevronDown className={styles.stageChevron} size={15} />
               </button>
               {open && <div className={styles.stageDisclosure}>
@@ -721,7 +722,7 @@ function WorkflowDetail({ workflow, navigate }: { workflow: WorkflowMap | null; 
                     <div><Camera size={12} /><span>{formatEvidenceTimestamp(stage.screenshot.timestamp)} · {stage.screenshot.app} · {screenshotMatchLabel(stage.screenshot.matchDistanceSeconds)}</span><a href={`screenpipe://frame/${stage.screenshot.frameId}`}>Open captured moment <ArrowRight size={11} /></a></div>
                   </> : <div className={styles.screenshotUnavailable}><Camera size={18} /><strong>No exact screenshot available</strong><span>Refresh the map to match a local frame. The text evidence remains available either way.</span></div>}
                 </div>
-                <div className={styles.stageEvidence}><span>Captured evidence</span>{stage.evidence.length ? <ul>{stage.evidence.map((item, evidenceIndex) => <li key={`${item.timestamp}-${evidenceIndex}`}><strong>{formatEvidenceTimestamp(item.timestamp)} · {item.app}</strong><p>{item.detail}</p></li>)}</ul> : <p>No direct observation was available for this stage.</p>}<small>{stage.confidence}% stage confidence · {stage.observedDays > 1 ? `repeated across ${stage.observedDays} days` : "not yet repeated across days"} · estimates are conservative</small></div>
+                <div className={styles.stageEvidence}><span>Captured evidence</span>{stage.evidence.length ? <ul>{stage.evidence.map((item, evidenceIndex) => <li key={`${item.timestamp}-${evidenceIndex}`}><strong>{formatEvidenceTimestamp(item.timestamp)} · {item.app}</strong><p>{item.detail}</p></li>)}</ul> : <p>No direct observation was available for this stage.</p>}<small>{stage.confidence}% stage confidence · {stage.observedDays > 1 ? `repeated across ${stage.observedDays} days` : "not yet repeated across days"} · timing is not inferred</small></div>
               </div>}
             </article>;
           })}
@@ -729,7 +730,7 @@ function WorkflowDetail({ workflow, navigate }: { workflow: WorkflowMap | null; 
         <div className={styles.flowEndpoint}><span>Ends with</span><strong>{workflow.outcome}</strong></div>
       </section>
       <section className={styles.detailColumns}>
-        <div className={styles.panel}><div className={styles.panelTitle}><div><span>Time split</span><h2>Hands-on work vs. waiting</h2></div><Clock3 size={18} /></div><div className={styles.bigTimeBar}><i style={{ width: `${activeWidth}%` }} /><b style={{ width: `${100 - activeWidth}%` }} /></div><div className={styles.splitLegend}><div><i /><span>Active work</span><strong>{formatMinutes(workflow.activeMinutes)}</strong></div><div><i /><span>Waiting</span><strong>{formatMinutes(workflow.waitingMinutes)}</strong></div></div></div>
+        <div className={styles.panel}><div className={styles.panelTitle}><div><span>Duration evidence</span><h2>{measuredDuration ? "Measured from meeting boundaries" : "Not enough continuous evidence"}</h2></div><Clock3 size={18} /></div><p className={styles.panelEmpty}>{measuredDuration ? `${workflowDurationLabel(workflow)} is the median of ${workflow.durationSampleCount ?? 1} exact meeting window${(workflow.durationSampleCount ?? 1) === 1 ? "" : "s"}. Stage timing remains unknown.` : "The map shows the repeated pattern without turning scattered screenshots or transcript excerpts into a made-up duration."}</p></div>
         <div className={styles.panel}><div className={styles.panelTitle}><div><span>Workflow variations</span><h2>What changes between runs</h2></div><GitBranch size={18} /></div>{workflow.variations.length ? <ul className={styles.plainList}>{workflow.variations.map((item) => <li key={item}>{item}</li>)}</ul> : <p className={styles.panelEmpty}>No clear variations were supported in this period.</p>}{!!workflow.handoffs.length && <div className={styles.handoffs}><strong>Handoffs observed</strong>{workflow.handoffs.map((item) => <span key={item}><ArrowRight size={11} />{item}</span>)}</div>}</div>
       </section>
       {!!actionableFriction.length && <><div className={styles.sectionHeading}><div><span>Within reach</span><h2>Friction you can affect</h2></div><button className={styles.textButton} onClick={() => navigate("bottlenecks")}>View all friction <ArrowRight size={14} /></button></div><BottleneckList items={actionableFriction.map((item) => ({ ...item, workflowTitle: workflow.title, repetitions: workflow.repetitions }))} /></>}
@@ -967,7 +968,7 @@ function PrivacyView({ runtime }: { runtime: WorkflowRuntime | null }) {
 
 export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "screenpipe-workflows:last-analysis-v2", initialScopeId, embedded = false }: WorkflowsAppProps) {
   const [runtime, setRuntime] = useState<WorkflowRuntime | null>(null);
-  const [analysis, setAnalysis] = useState<WorkflowAnalysis | null>(initialAnalysis);
+  const [analysis, setAnalysis] = useState<WorkflowAnalysis | null>(() => initialAnalysis ? sanitizeWorkflowAnalysis(initialAnalysis) : null);
   const [scopeId, setScopeId] = useState(initialScopeId ?? initialAnalysis?.scope?.id ?? "");
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState("");
@@ -1040,7 +1041,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
         if (saved) {
           const parsed = JSON.parse(saved) as WorkflowAnalysis;
           if (parsed?.schemaVersion === 5 && Array.isArray(parsed?.analysis?.workflows)) {
-            setAnalysis(parsed);
+            setAnalysis(sanitizeWorkflowAnalysis(parsed));
           }
         }
       } catch {
@@ -1057,7 +1058,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
     void platform.loadCapturedWork(WORKFLOW_CATALOG_DAYS, { scope: activeScope })
       .then((nextAnalysis) => {
         if (!cancelled && nextAnalysis) {
-          setAnalysis(nextAnalysis);
+          setAnalysis(sanitizeWorkflowAnalysis(nextAnalysis));
           setSelectedWorkflow(0);
         }
       })
@@ -1123,7 +1124,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
         : await platform.analyzeCapturedWork(WORKFLOW_CATALOG_DAYS, { scope: requestedScope, workProfile });
       const mergedAnalysis = requestedScope?.kind === "personal"
         ? mergeWorkflowCatalog(analysis, nextAnalysis)
-        : nextAnalysis;
+        : sanitizeWorkflowAnalysis(nextAnalysis);
       setAnalysis(mergedAnalysis);
       setSelectedWorkflow(0);
       if (platform.saveCapturedWork) {
@@ -1199,7 +1200,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
     const workflowCommands = workflows.slice(0, 80).map((workflow, index) => ({
       id: `workflow-${workflow.rank}-${index}`,
       label: workflow.title,
-      detail: `${workflow.repetitions} observed run${workflow.repetitions === 1 ? "" : "s"} · ${formatMinutes(workflow.totalMinutes)} total`,
+      detail: `${workflow.repetitions} captured day${workflow.repetitions === 1 ? "" : "s"} · ${workflowDurationLabel(workflow)}`,
       group: "Workflows" as const,
       icon: Workflow,
       keywords: `${workflow.apps.join(" ")} ${workflow.outcome}`,
