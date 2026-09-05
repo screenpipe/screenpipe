@@ -31,8 +31,6 @@ type LaunchState = "opening" | "opened" | "copied" | "unavailable";
 
 const SCREENPIPE_GITHUB_URL = "https://github.com/screenpipe/screenpipe";
 
-export const HOME_CARD_AGENT_TOOLTIP = "run this in your favorite agent";
-
 const SETUP_TARGETS: Record<HomeCardAgentId, string> = {
   claude: "claude-desktop",
   cursor: "cursor",
@@ -91,16 +89,8 @@ function AgentLogo({ id }: { id: HomeCardAgentId }) {
   if (id === "cursor") return <CursorLogo className={className} />;
   return (
     // eslint-disable-next-line @next/next/no-img-element
-    <img src="/images/openai.svg" alt="" className={className} />
+    <img src="/images/openai.svg" alt="" className={`${className} dark:invert`} />
   );
-}
-
-function statusLabel(state: LaunchState | null): string {
-  if (state === "opening") return "opening";
-  if (state === "opened") return "opened";
-  if (state === "copied") return "copied";
-  if (state === "unavailable") return "unavailable";
-  return "run in";
 }
 
 function resultDescription(state: LaunchState, label: string): string {
@@ -201,7 +191,7 @@ export function HomeCardAgentActions({
       data-placement={placement}
       role="group"
       aria-label={`Run ${pipe.title} in another agent`}
-      className={`absolute top-1/2 z-20 flex -translate-y-1/2 items-center gap-0.5 text-foreground transition-opacity duration-150 motion-reduce:transition-none ${
+      className={`absolute top-1/2 z-20 flex -translate-y-1/2 items-center gap-0.5 rounded-md border border-border bg-background px-0.5 text-foreground transition-opacity duration-150 motion-reduce:transition-none ${
         placement === "chip" ? "left-1/2 -translate-x-1/2" : "right-3"
       } ${
         state
@@ -214,9 +204,11 @@ export function HomeCardAgentActions({
         role="status"
         className="sr-only"
       >
-        {statusLabel(state)}
+        {state && activeAgent
+          ? resultDescription(state, AGENT_LABELS[activeAgent])
+          : ""}
       </span>
-      <TooltipProvider delayDuration={120}>
+      <TooltipProvider delayDuration={120} disableHoverableContent>
         {HOME_CARD_AGENT_TARGETS.map((target) => {
           const label = AGENT_LABELS[target.id];
           const isOpening = pending && activeAgent === target.id;
@@ -232,8 +224,8 @@ export function HomeCardAgentActions({
                   onPointerEnter={() => trackAgentViewed(target.id, "hover")}
                   onFocus={() => trackAgentViewed(target.id, "keyboard")}
                   onClick={() => void launch(target)}
-                  className={`flex h-5 w-5 items-center justify-center rounded-full opacity-75 transition-[color,background-color,opacity,transform] duration-150 hover:z-10 hover:scale-110 hover:bg-background/10 hover:opacity-100 focus-visible:z-10 focus-visible:bg-background/10 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-background disabled:cursor-wait disabled:opacity-50 motion-reduce:transform-none motion-reduce:transition-none ${
-                    isResult ? "z-10 text-signal opacity-100" : ""
+                  className={`flex h-5 w-5 items-center justify-center rounded-sm opacity-75 transition-[color,background-color,opacity,transform] duration-150 hover:z-10 hover:scale-110 hover:bg-foreground/10 hover:opacity-100 focus-visible:z-10 focus-visible:bg-foreground/10 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground disabled:cursor-wait disabled:opacity-50 motion-reduce:transform-none motion-reduce:transition-none ${
+                    isResult ? "z-10 opacity-100" : ""
                   }`}
                 >
                   {isOpening ? (
@@ -250,11 +242,13 @@ export function HomeCardAgentActions({
                 </button>
               </TooltipTrigger>
               <TooltipContent
-                side={placement === "chip" ? "bottom" : "right"}
+                side="bottom"
                 sideOffset={6}
                 className="rounded-md px-2.5 py-1.5 text-[11px] font-normal"
               >
-                {HOME_CARD_AGENT_TOOLTIP}
+                {state && activeAgent === target.id
+                  ? resultDescription(state, label)
+                  : `Run in ${label}`}
               </TooltipContent>
             </Tooltip>
           );

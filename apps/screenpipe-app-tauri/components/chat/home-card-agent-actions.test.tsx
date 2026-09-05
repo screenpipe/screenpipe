@@ -9,7 +9,6 @@ import tauriConfig from "../../src-tauri/tauri.conf.json";
 
 import {
   buildHomeCardAgentPrompt,
-  HOME_CARD_AGENT_TOOLTIP,
   HomeCardAgentActions,
 } from "./home-card-agent-actions";
 
@@ -68,10 +67,20 @@ describe("HomeCardAgentActions", () => {
         .getByRole("button", { name: "Run in Codex" })
         .querySelector("img"),
     ).toHaveAttribute("src", "/images/openai.svg");
-    expect(HOME_CARD_AGENT_TOOLTIP).toBe(
-      "run this in your favorite agent",
-    );
   });
+
+  it.each(["Claude", "Cursor", "Codex"])(
+    "identifies %s in its keyboard-accessible tooltip",
+    async (label) => {
+      render(<HomeCardAgentActions pipe={DAY_RECAP} />);
+
+      fireEvent.focus(screen.getByRole("button", { name: `Run in ${label}` }));
+
+      expect(await screen.findByRole("tooltip")).toHaveTextContent(
+        `Run in ${label}`,
+      );
+    },
+  );
 
   it("centers the action cluster over compact chips", () => {
     render(<HomeCardAgentActions pipe={DAY_RECAP} placement="chip" />);
@@ -130,7 +139,7 @@ describe("HomeCardAgentActions", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("opened"),
+      expect(screen.getByRole("status")).toHaveTextContent("Opened in Claude"),
     );
     const prompt = buildHomeCardAgentPrompt(DAY_RECAP, "claude");
     expect(mocks.copyTextToClipboard).toHaveBeenCalledWith(prompt);
@@ -176,7 +185,7 @@ describe("HomeCardAgentActions", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("opened"),
+      expect(screen.getByRole("status")).toHaveTextContent("Opened in Codex"),
     );
     expect(mocks.capture).toHaveBeenCalledWith(
       "home_card_agent_handoff_clicked",
@@ -210,6 +219,13 @@ describe("HomeCardAgentActions", () => {
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent("copied"),
     );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Codex could not open. Paste the copied prompt there.",
+    );
+    fireEvent.focus(screen.getByRole("button", { name: "Run in Codex" }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Codex could not open. Paste the copied prompt there.",
+    );
     expect(mocks.capture).toHaveBeenCalledWith(
       "home_card_agent_handoff_completed",
       expect.objectContaining({
@@ -236,7 +252,9 @@ describe("HomeCardAgentActions", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("unavailable"),
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Could not open Cursor or copy the prompt.",
+      ),
     );
     const prompt = buildHomeCardAgentPrompt(DAY_RECAP, "cursor");
     expect(mocks.openUrl).toHaveBeenCalledWith(
