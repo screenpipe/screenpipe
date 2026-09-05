@@ -47,6 +47,7 @@ const seedFlags = E2E_SEED_FLAGS.split(",")
 const canRun = !seedFlags.includes("onboarding");
 
 const LEARNING_STORAGE_KEY = "screenpipe.first-run.learning-window.v1";
+const FORCE_BILLING_GATE_KEY = "screenpipe_e2e_force_billing_gate";
 
 const bodyText = async (): Promise<string> =>
   (
@@ -288,46 +289,66 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
       },
     });
 
-    await gotoSlide("plan");
-    await waitForTestId("onboarding-plan-selection", 30_000);
+    // E2E builds normally bypass the post-onboarding entitlement gate so the
+    // broad suite can exercise paid surfaces. Force that real gate back on
+    // before Home mounts; otherwise reaching Home would only prove the
+    // onboarding half of the Free path.
+    await browser.execute((key: string) => {
+      window.localStorage.setItem(key, "1");
+    }, FORCE_BILLING_GATE_KEY);
 
-    const before = await bodyText();
-    expect(before).not.toContain("opening secure checkout");
-    expect(
-      await browser.execute(
-        () =>
-          !!document.querySelector('[data-testid="onboarding-card-capture"]'),
-      ),
-    ).toBe(false);
+    try {
+      await gotoSlide("plan");
+      await waitForTestId("onboarding-plan-selection", 30_000);
 
-    const continueFree = await waitForTestId("onboarding-plan-free");
-    await continueFree.waitForExist({ timeout: t(20_000) });
-    await continueFree.click();
+      const before = await bodyText();
+      expect(before).not.toContain("opening secure checkout");
+      expect(
+        await browser.execute(
+          () =>
+            !!document.querySelector(
+              '[data-testid="onboarding-card-capture"]',
+            ),
+        ),
+      ).toBe(false);
 
-    await waitForTestId("onboarding-final-setup", 30_000);
-    const after = await bodyText();
-    expect(after).toContain("connect gmail");
-    expect(after).not.toContain("opening secure checkout");
-    expect(
-      await browser.execute(
-        () =>
-          !!document.querySelector('[data-testid="onboarding-card-capture"]'),
-      ),
-    ).toBe(false);
+      const continueFree = await waitForTestId("onboarding-plan-free");
+      await continueFree.waitForExist({ timeout: t(20_000) });
+      await continueFree.click();
 
-    const filepath = await saveScreenshot("onboarding-free-no-card");
-    expect(existsSync(filepath)).toBe(true);
+      await waitForTestId("onboarding-final-setup", 30_000);
+      const after = await bodyText();
+      expect(after).toContain("connect gmail");
+      expect(after).not.toContain("opening secure checkout");
+      expect(
+        await browser.execute(
+          () =>
+            !!document.querySelector(
+              '[data-testid="onboarding-card-capture"]',
+            ),
+        ),
+      ).toBe(false);
 
-    const finishSetup = await $("button*=continue");
-    await finishSetup.waitForExist({ timeout: t(20_000) });
-    await finishSetup.click();
+      const filepath = await saveScreenshot("onboarding-free-no-card");
+      expect(existsSync(filepath)).toBe(true);
 
-    await waitForWindowClosed("onboarding", t(30_000));
-    await waitForWindowHandle("home", t(30_000));
-    await browser.switchToWindow("home");
-    const navHome = await $('[data-testid="nav-home"]');
-    await navHome.waitForExist({ timeout: t(30_000) });
-    expect(await navHome.isExisting()).toBe(true);
+      const finishSetup = await $("button*=continue");
+      await finishSetup.waitForExist({ timeout: t(20_000) });
+      await finishSetup.click();
+
+      await waitForWindowClosed("onboarding", t(30_000));
+      await waitForWindowHandle("home", t(30_000));
+      await browser.switchToWindow("home");
+      const navHome = await $('[data-testid="nav-home"]');
+      await navHome.waitForExist({ timeout: t(30_000) });
+      expect(await navHome.isExisting()).toBe(true);
+    } finally {
+      await browser
+        .execute((key: string) => {
+          window.localStorage.removeItem(key);
+        }, FORCE_BILLING_GATE_KEY)
+        .catch(() => {});
+    }
   });
 
   it("keeps lifetime ownership out of mandatory checkout", async () => {
