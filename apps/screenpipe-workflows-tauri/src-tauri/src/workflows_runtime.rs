@@ -368,6 +368,12 @@ fn runtime_payload(recorder: Option<&RecorderEndpoint>, has_cloud_token: bool) -
         "captureLocation": "device",
         "processingLocation": "cloud",
         "syncState": "local-only",
+        "availableScopes": [{
+            "id": "personal",
+            "kind": "personal",
+            "label": "My work",
+            "detail": "Only on this device"
+        }],
         "dataBoundary": {
             "owner": "employee",
             "rawHistory": "device-only",
@@ -2445,6 +2451,14 @@ mod tests {
         assert_eq!(config.model, "gpt-5.6-luna");
         assert_eq!(config.allowed_tools, Some(Vec::new()));
         assert!(config.unattended);
+    }
+
+    #[test]
+    fn native_runtime_exposes_the_local_personal_scope() {
+        let runtime = runtime_payload(None, false);
+
+        assert_eq!(runtime["availableScopes"][0]["id"], "personal");
+        assert_eq!(runtime["availableScopes"][0]["kind"], "personal");
     }
 
     #[test]
