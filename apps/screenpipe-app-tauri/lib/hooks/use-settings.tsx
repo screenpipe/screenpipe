@@ -1491,6 +1491,21 @@ function createSettingsStore() {
 
 const settingsStore = createSettingsStore();
 
+/**
+ * E2E account fixtures carry complete user and plan truth in the shared store.
+ * Read that authoritative state instead of a particular webview's React copy:
+ * Home and Onboarding can mount at different times, while either may initiate
+ * a background account verification.
+ */
+const hasPersistedE2EAccountFixture = async (): Promise<boolean> => {
+	if (process.env.NEXT_PUBLIC_SCREENPIPE_E2E !== "true") return false;
+	const persisted = await settingsStore.get();
+	return (
+		(persisted.user as User & { __e2eSkipAccountRefresh?: boolean })
+			?.__e2eSkipAccountRefresh === true
+	);
+};
+
 // Context for React
 interface SettingsContextType {
 	settings: Settings;
@@ -1581,8 +1596,28 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
 	useEffect(() => {
 		installAuthInterceptor(
-			() => settingsRef.current.user?.token ?? undefined,
+			() => {
+				const user = settingsRef.current.user as
+					| (User & { __e2eSkipAccountRefresh?: boolean })
+					| null
+					| undefined;
+				// Synthetic E2E sessions intentionally use tokens the production web
+				// service cannot verify. A background cloud request may still return
+				// 401 while the native onboarding flow is under test; do not let that
+				// unrelated response erase the fixture from every app window.
+				if (
+					process.env.NEXT_PUBLIC_SCREENPIPE_E2E === "true" &&
+					user?.__e2eSkipAccountRefresh === true
+				) {
+					return undefined;
+				}
+				return user?.token ?? undefined;
+			},
 			async () => {
+				// Any webview can observe a 401 from an unrelated cloud request. An
+				// E2E fixture is intentionally synthetic, so consult the shared store
+				// before allowing that response to erase the account across windows.
+				if (await hasPersistedE2EAccountFixture()) return;
 				// A response from the website auth surface definitively rejected the
 				// credential. Clear the account so it cannot be confused with a
 				// transient secret-store hydration miss.
@@ -1621,6 +1656,18 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		if (!isSettingsLoaded) return;
 		const token = settings.user?.token;
 		if (!token) return;
+		// E2E account seeds already contain the exact server response that their
+		// scenario is exercising. Sending their synthetic token to the production
+		// account API immediately converts a deterministic native-app test into a
+		// real-network 401. This branch is compiled into E2E bundles only; normal
+		// app authentication and refresh behavior are unchanged.
+		if (
+			process.env.NEXT_PUBLIC_SCREENPIPE_E2E === "true" &&
+			(settings.user as User & { __e2eSkipAccountRefresh?: boolean })
+				.__e2eSkipAccountRefresh === true
+		) {
+			return;
+		}
 
 		let cancelled = false;
 		const MAX_RETRIES = 3;
@@ -1883,6 +1930,17 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 	};
 
 	const loadUser = async (token: string, verify = false) => {
+		// Every background verifier funnels through loadUser. E2E account fixtures
+		// already contain their scenario's exact server response, and their tokens
+		// must never be sent to the production account API.
+		// Keep the environment check outside the await: production loadUser must
+		// snapshot authGeneration synchronously so a same-tick logout cannot race it.
+		if (
+			process.env.NEXT_PUBLIC_SCREENPIPE_E2E === "true" &&
+			(await hasPersistedE2EAccountFixture())
+		) {
+			return;
+		}
 		// Snapshot the auth generation at the start of the request. If the user
 		// signs out while this fetch is in flight, the generation changes and we
 		// abort the write below instead of resurrecting the cleared session.

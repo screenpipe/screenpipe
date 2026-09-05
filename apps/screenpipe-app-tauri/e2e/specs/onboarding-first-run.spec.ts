@@ -48,6 +48,8 @@ const canRun = !seedFlags.includes("onboarding");
 
 const LEARNING_STORAGE_KEY = "screenpipe.first-run.learning-window.v1";
 const FORCE_BILLING_GATE_KEY = "screenpipe_e2e_force_billing_gate";
+const E2E_ACCOUNT_USER_KEY = "screenpipe_e2e_account_user";
+const E2E_ACCOUNT_USER_EVENT = "screenpipe-e2e-seed-account-user";
 
 const bodyText = async (): Promise<string> =>
   (
@@ -105,8 +107,8 @@ const readSetting = async <T>(key: string): Promise<T | undefined> => {
   return settings[key] as T | undefined;
 };
 
-/** Persist account truth through the same store the onboarding window reads. */
-const seedOnboardingUser = async (user: Record<string, unknown>) => {
+/** Remove one persisted setting so a retried spec still starts from its premise. */
+const clearSetting = async (key: string) => {
   const rid = await invokeOrThrow<number | null>("plugin:store|get_store", {
     path: join(E2E_DATA_DIR, "store.bin"),
   });
@@ -115,12 +117,64 @@ const seedOnboardingUser = async (user: Record<string, unknown>) => {
     [Record<string, unknown>, boolean]
   >("plugin:store|get", { rid, key: "settings" });
   if (!exists || !settings) throw new Error("settings are not loaded");
+  const next = { ...settings };
+  delete next[key];
   await invokeOrThrow("plugin:store|set", {
     rid,
     key: "settings",
-    value: { ...settings, user },
+    value: next,
   });
   await invokeOrThrow("plugin:store|save", { rid });
+};
+
+/**
+ * Seed account truth through the app's E2E-only account hook.
+ *
+ * This uses SettingsProvider.updateSettings instead of editing store.bin: the
+ * token follows the real encrypted-secret path and every webview receives the
+ * settings broadcast. The marker is honored only by E2E bundles and prevents
+ * the synthetic token from being sent to the production account API.
+ */
+const seedOnboardingUser = async (user: Record<string, unknown>) => {
+  const seededUser = { ...user, __e2eSkipAccountRefresh: true };
+  await browser.execute(
+    (key: string, eventName: string, value: string) => {
+      window.localStorage.setItem(key, value);
+      window.dispatchEvent(new Event(eventName));
+    },
+    E2E_ACCOUNT_USER_KEY,
+    E2E_ACCOUNT_USER_EVENT,
+    JSON.stringify(seededUser),
+  );
+  await browser.waitUntil(
+    async () => {
+      const persisted = await readSetting<Record<string, unknown>>("user");
+      return (
+        persisted?.id === user.id &&
+        persisted?.__e2eSkipAccountRefresh === true
+      );
+    },
+    {
+      timeout: t(15_000),
+      timeoutMsg: `synthetic account ${String(user.id)} was not persisted`,
+    },
+  );
+};
+
+const clearOnboardingUser = async () => {
+  await browser.execute(
+    (key: string, eventName: string) => {
+      window.localStorage.setItem(key, "null");
+      window.dispatchEvent(new Event(eventName));
+    },
+    E2E_ACCOUNT_USER_KEY,
+    E2E_ACCOUNT_USER_EVENT,
+  );
+  await browser.waitUntil(async () => (await readSetting("user")) == null, {
+    timeout: t(15_000),
+    timeoutMsg: "synthetic onboarding account was not cleared",
+  });
+  await invokeOrThrow("set_cloud_token", { token: null });
 };
 
 /**
@@ -171,6 +225,10 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
     await waitForAppReady();
   });
 
+  after(async () => {
+    await clearOnboardingUser().catch(() => {});
+  });
+
   // ─── setup slides ──────────────────────────────────────────────────────
 
   it("opens setup on a fresh install", async () => {
@@ -218,6 +276,8 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
   // Skip runs before the answer case on purpose: it asserts that nothing was
   // written, which is only meaningful while the setting is still unset.
   it("lets the user skip without recording an answer", async () => {
+    await clearSetting("acquisitionSource");
+    await gotoSlide("acquisition");
     const skip = await waitForTestId("acquisition-skip");
     await skip.click();
 
@@ -269,6 +329,10 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
   });
 
   it("continues from a verified Free account without asking for a card", async () => {
+    // Tauri's encrypted token store survives the app-data reset used between
+    // local E2E runs. Clear any synthetic token from a previous run before
+    // installing this fixture so the native store and settings stay aligned.
+    await clearOnboardingUser();
     const checkedAt = new Date().toISOString();
     await seedOnboardingUser({
       id: "e2e-free-user",
@@ -356,9 +420,15 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
   });
 
   it("keeps lifetime ownership out of mandatory checkout", async () => {
+    // The preceding Free scenario installs a different synthetic token. Clear
+    // it first so changing fixtures exercises a clean account transition.
+    await clearOnboardingUser();
     await seedOnboardingUser({
       id: "e2e-lifetime-owner",
+      clerk_id: "e2e-lifetime-owner",
+      token: "e2e-lifetime-token",
       email: "lifetime-owner@screenpipe.test",
+      cloud_subscribed: false,
       app_entitled: true,
       subscription_plan: "lifetime",
       entitlement_source: "lifetime",
@@ -372,11 +442,27 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
     });
 
     // Simulate an upgrade from a build that had already persisted "plan".
+    // The preceding Free test completed setup and closed this window, so reset
+    // the native completion flag before restoring the older in-progress step.
+    await invokeOrThrow("reset_onboarding");
     // The current shipped route must map it back to engine instead of opening
     // a hosted checkout for an account that already has access.
     await gotoSlide("plan");
     await waitForTestId("onboarding-engine-startup", 30_000);
 
+    const engineText = await bodyText();
+    expect(engineText).not.toContain("opening secure checkout");
+    expect(
+      await browser.execute(
+        () =>
+          !!document.querySelector('[data-testid="onboarding-card-capture"]'),
+      ),
+    ).toBe(false);
+
+    // Engine is the compatibility landing point, not the end of setup. Once
+    // it verifies readiness, an existing owner must still receive the final
+    // connection step without ever passing through plan selection.
+    await waitForTestId("onboarding-final-setup", 30_000);
     const text = await bodyText();
     expect(text).not.toContain("opening secure checkout");
     expect(
