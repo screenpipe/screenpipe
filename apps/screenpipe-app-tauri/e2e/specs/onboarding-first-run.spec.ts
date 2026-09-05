@@ -50,6 +50,8 @@ const LEARNING_STORAGE_KEY = "screenpipe.first-run.learning-window.v1";
 const FORCE_BILLING_GATE_KEY = "screenpipe_e2e_force_billing_gate";
 const E2E_ACCOUNT_USER_KEY = "screenpipe_e2e_account_user";
 const E2E_ACCOUNT_USER_EVENT = "screenpipe-e2e-seed-account-user";
+const E2E_ACCOUNT_FIXTURE_ACTIVE_KEY =
+  "screenpipe_e2e_account_fixture_active";
 
 const bodyText = async (): Promise<string> =>
   (
@@ -127,6 +129,55 @@ const clearSetting = async (key: string) => {
   await invokeOrThrow("plugin:store|save", { rid });
 };
 
+/** Rebuild the native onboarding record as a genuinely fresh install. */
+const seedFreshOnboardingPremise = async () => {
+  const rid = await invokeOrThrow<number | null>("plugin:store|get_store", {
+    path: join(E2E_DATA_DIR, "store.bin"),
+  });
+  if (rid == null) throw new Error("settings store is not loaded");
+  const [value, exists] = await invokeOrThrow<
+    [Record<string, unknown>, boolean]
+  >("plugin:store|get", { rid, key: "onboarding" });
+  const onboarding = exists && value ? value : {};
+  await invokeOrThrow("plugin:store|set", {
+    rid,
+    key: "onboarding",
+    value: {
+      ...onboarding,
+      isCompleted: false,
+      completedAt: null,
+      currentStep: null,
+      trialActivationFreshInstall: true,
+      firstRunSummaryPhase: "idle",
+      firstRunSummaryStartedAt: null,
+      firstRunSummaryChatId: null,
+      firstRunSummaryNotificationSentAt: null,
+      firstRunSummaryNotificationId: null,
+      firstRunSummaryError: null,
+      firstRunSummaryTelemetryVersion: 0,
+    },
+  });
+  await invokeOrThrow("plugin:store|save", { rid });
+  await browser.waitUntil(
+    async () => {
+      const status = await invokeOrThrow<{
+        isCompleted: boolean;
+        currentStep: string | null;
+        trialActivationFreshInstall: boolean;
+      }>("get_onboarding_status");
+      return (
+        status.isCompleted === false &&
+        status.currentStep == null &&
+        status.trialActivationFreshInstall === true
+      );
+    },
+    {
+      timeout: t(10_000),
+      timeoutMsg: "fresh onboarding premise was not persisted",
+    },
+  );
+};
+
 /**
  * Seed account truth through the app's E2E-only account hook.
  *
@@ -138,13 +189,15 @@ const clearSetting = async (key: string) => {
 const seedOnboardingUser = async (user: Record<string, unknown>) => {
   const seededUser = { ...user, __e2eSkipAccountRefresh: true };
   await browser.execute(
-    (key: string, eventName: string, value: string) => {
+    (key: string, eventName: string, value: string, activeKey: string) => {
+      window.localStorage.setItem(activeKey, "1");
       window.localStorage.setItem(key, value);
       window.dispatchEvent(new Event(eventName));
     },
     E2E_ACCOUNT_USER_KEY,
     E2E_ACCOUNT_USER_EVENT,
     JSON.stringify(seededUser),
+    E2E_ACCOUNT_FIXTURE_ACTIVE_KEY,
   );
   await browser.waitUntil(
     async () => {
@@ -163,12 +216,14 @@ const seedOnboardingUser = async (user: Record<string, unknown>) => {
 
 const clearOnboardingUser = async () => {
   await browser.execute(
-    (key: string, eventName: string) => {
+    (key: string, eventName: string, activeKey: string) => {
+      window.localStorage.removeItem(activeKey);
       window.localStorage.setItem(key, "null");
       window.dispatchEvent(new Event(eventName));
     },
     E2E_ACCOUNT_USER_KEY,
     E2E_ACCOUNT_USER_EVENT,
+    E2E_ACCOUNT_FIXTURE_ACTIVE_KEY,
   );
   await browser.waitUntil(async () => (await readSetting("user")) == null, {
     timeout: t(15_000),
@@ -223,6 +278,25 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
 
   before(async () => {
     await waitForAppReady();
+
+    // CI runs this after two other onboarding canaries and retries the whole
+    // file in the same app/profile. Re-establish the fresh-install premise on
+    // every attempt so a prior synthetic account or completed retry cannot
+    // strand these assertions on Home or a later setup slide.
+    await showWindow({ Home: { page: null } });
+    await waitForWindowHandle("home", t(20_000));
+    await browser.switchToWindow("home");
+    await waitForAppReady();
+    await clearOnboardingUser();
+    await seedFreshOnboardingPremise();
+    await clearSetting("acquisitionSource");
+
+    await closeWindow("Onboarding").catch(() => {});
+    await waitForWindowClosed("onboarding", t(15_000)).catch(() => {});
+    await showWindow("Onboarding");
+    await waitForWindowHandle("onboarding", t(20_000));
+    await browser.switchToWindow("onboarding");
+    await waitForWindowUrl("/onboarding", undefined, t(20_000));
   });
 
   after(async () => {

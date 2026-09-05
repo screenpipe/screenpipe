@@ -1490,6 +1490,20 @@ function createSettingsStore() {
 }
 
 const settingsStore = createSettingsStore();
+const E2E_ACCOUNT_FIXTURE_ACTIVE_KEY =
+	"screenpipe_e2e_account_fixture_active";
+
+const hasActiveE2EAccountFixture = (): boolean => {
+	if (process.env.NEXT_PUBLIC_SCREENPIPE_E2E !== "true") return false;
+	try {
+		return (
+			typeof window !== "undefined" &&
+			window.localStorage?.getItem(E2E_ACCOUNT_FIXTURE_ACTIVE_KEY) === "1"
+		);
+	} catch {
+		return false;
+	}
+};
 
 /**
  * E2E account fixtures carry complete user and plan truth in the shared store.
@@ -1499,6 +1513,11 @@ const settingsStore = createSettingsStore();
  */
 const hasPersistedE2EAccountFixture = async (): Promise<boolean> => {
 	if (process.env.NEXT_PUBLIC_SCREENPIPE_E2E !== "true") return false;
+	// The fixture owner writes this sentinel before its asynchronous store
+	// update. localStorage is shared by the app's same-origin webviews, so stale
+	// Home/Onboarding copies can reject an old 401 without waiting for a store
+	// broadcast or racing the queued write.
+	if (hasActiveE2EAccountFixture()) return true;
 	const persisted = await settingsStore.get();
 	return (
 		(persisted.user as User & { __e2eSkipAccountRefresh?: boolean })
@@ -1607,7 +1626,8 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				// unrelated response erase the fixture from every app window.
 				if (
 					process.env.NEXT_PUBLIC_SCREENPIPE_E2E === "true" &&
-					user?.__e2eSkipAccountRefresh === true
+					(hasActiveE2EAccountFixture() ||
+						user?.__e2eSkipAccountRefresh === true)
 				) {
 					return undefined;
 				}
@@ -1932,12 +1952,18 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 	const loadUser = async (token: string, verify = false) => {
 		// Every background verifier funnels through loadUser. E2E account fixtures
 		// already contain their scenario's exact server response, and their tokens
-		// must never be sent to the production account API.
+		// must never be sent to the production account API. Check this webview's
+		// optimistic React state first: updateSettings publishes it before the
+		// queued durable write, so consulting only the store leaves a brief window
+		// where the auto-refresh effect can race the fixture persistence.
 		// Keep the environment check outside the await: production loadUser must
 		// snapshot authGeneration synchronously so a same-tick logout cannot race it.
 		if (
 			process.env.NEXT_PUBLIC_SCREENPIPE_E2E === "true" &&
-			(await hasPersistedE2EAccountFixture())
+			((settingsRef.current.user as User & {
+				__e2eSkipAccountRefresh?: boolean;
+			})?.__e2eSkipAccountRefresh === true ||
+				(await hasPersistedE2EAccountFixture()))
 		) {
 			return;
 		}
@@ -1979,6 +2005,16 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 			if (!response.ok) {
 				const body = await response.text().catch(() => "<no body>");
 				if (response.status === 401 || response.status === 403) {
+					// A peer webview can finish a request for the preceding CI seed
+					// after the shared store has installed a new E2E account. Its
+					// React ref may still name the old token, so recheck the durable
+					// fixture before clearing or surfacing a stale auth failure.
+					if (
+						process.env.NEXT_PUBLIC_SCREENPIPE_E2E === "true" &&
+						(await hasPersistedE2EAccountFixture())
+					) {
+						return;
+					}
 					await clearRejectedSession();
 				}
 				throw new Error(

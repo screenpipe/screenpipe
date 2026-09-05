@@ -213,6 +213,11 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       // must never clear the account. Anything else
       // (network blip, 5xx) is silent — retry on the next interval.
       if (msg.includes(" 401 ")) {
+        // The request may have started for account A and completed after a
+        // login/account switch installed account B. loadUser already refuses
+        // to clear a changed token; preserve that guarantee here instead of
+        // turning A's stale 401 into a logout of B.
+        if (tokenRef.current !== token) return;
         await handleSessionExpired({
           source: "verify_token",
           status: 401,
