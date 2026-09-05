@@ -35,8 +35,6 @@ while IFS= read -r lock; do
       echo "fresh: $lock"
     else
       echo "STALE: $lock"
-      (cd "$dir" && CARGO_TARGET_DIR=target cargo metadata --format-version 1 >/dev/null)
-      git --no-pager diff -- "$lock"
       STATUS=1
     fi
   else
