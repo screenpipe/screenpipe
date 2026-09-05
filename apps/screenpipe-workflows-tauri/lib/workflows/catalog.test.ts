@@ -73,7 +73,7 @@ function analysis(workflows: WorkflowMap[], analyzedAt = "2026-09-03T18:00:00Z")
 }
 
 describe("workflow catalog", () => {
-  it("keeps known workflows that are absent from the newest scan", () => {
+  it("replaces stale workflows instead of appending them to a complete refresh", () => {
     const older = workflow("Prepare investor updates", "2026-07-01T10:00:00Z");
     older.quality.grade = "limited";
     const prior = analysis([older]);
@@ -81,13 +81,9 @@ describe("workflow catalog", () => {
 
     const merged = mergeWorkflowCatalog(prior, next);
 
-    expect(merged.analysis.workflows.map((item) => item.title)).toEqual([
-      "Review support reports",
-      "Prepare investor updates",
-    ]);
-    expect(merged.quality.grade).toBe("limited");
-    expect(merged.quality.verifiedEvidenceCount).toBe(2);
-    expect(merged.quality.warnings).toContain("Known workflows not observed in the latest scan remain in the catalog");
+    expect(merged.analysis.workflows.map((item) => item.title)).toEqual(["Review support reports"]);
+    expect(merged.quality.grade).toBe("good");
+    expect(merged.quality.warnings).not.toContain("Known workflows not observed in the latest scan remain in the catalog");
   });
 
   it("replaces the previous version of the same workflow", () => {
@@ -146,6 +142,22 @@ describe("workflow catalog", () => {
     expect(sanitized.appSwitches).toBe(0);
     expect(sanitized.quality.grade).toBe("limited");
     expect(sanitized.quality.reasons).toContain("Refresh to recheck evidence type and speaker ambiguity");
+  });
+
+  it("does not label a mixed workflow with one meeting as measured", () => {
+    const mixed = workflow("Produce and distribute marketing assets", "2026-09-01T10:00:00Z", ["Meet"]);
+    mixed.evidence = [
+      { timestamp: "2026-09-01T10:00:00Z", app: "Meet", detail: "Planning meeting", source: "meeting" },
+      { timestamp: "2026-09-02T10:00:00Z", app: "Editor", detail: "Edited the asset", source: "screen" },
+    ];
+    mixed.totalMinutes = 9;
+    mixed.durationSampleCount = 1;
+
+    const sanitized = sanitizeWorkflowAnalysis(analysis([mixed])).analysis.workflows[0];
+
+    expect(sanitized.totalMinutes).toBe(0);
+    expect(sanitized.durationSource).toBe("unknown");
+    expect(sanitized.durationSampleCount).toBe(0);
   });
 
   it("uses recent periods as a lens without deleting older workflows", () => {

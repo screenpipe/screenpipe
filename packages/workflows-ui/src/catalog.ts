@@ -101,7 +101,9 @@ function deduplicateWorkflows(workflows: WorkflowMap[]) {
 export function sanitizeWorkflowAnalysis(analysis: WorkflowAnalysis): WorkflowAnalysis {
   const provenanceChecked = analysis.analysis.workflows.map((workflow) => {
     const durationIsMeasured = workflow.durationSource === "measured-meeting"
-      && workflow.evidence.some((item) => item.source === "meeting");
+      && (workflow.durationSampleCount ?? 0) >= 2
+      && workflow.evidence.length >= 2
+      && workflow.evidence.every((item) => item.source === "meeting");
     const evidenceHasProvenance = workflow.evidence.length > 0 && workflow.evidence.every((item) => Boolean(item.source));
     return {
       ...workflow,
@@ -149,43 +151,10 @@ export function mergeWorkflowCatalog(
   previous: WorkflowAnalysis | null,
   next: WorkflowAnalysis,
 ): WorkflowAnalysis {
-  if (!previous) return sanitizeWorkflowAnalysis(next);
-
-  const workflows = [...next.analysis.workflows];
-  for (const priorWorkflow of previous.analysis.workflows) {
-    if (!workflows.some((workflow) => workflowsMatch(priorWorkflow, workflow))) {
-      workflows.push(priorWorkflow);
-    }
-  }
-  const rankedWorkflows = deduplicateWorkflows(workflows);
-  const stageCount = rankedWorkflows.reduce((sum, workflow) => sum + workflow.stages.length, 0);
-  const screenshotCount = rankedWorkflows.reduce((sum, workflow) => sum + workflow.quality.screenshotCount, 0);
-  const verifiedEvidenceCount = rankedWorkflows.reduce((sum, workflow) => sum + workflow.quality.evidenceCount, 0);
-  const screenshotCoverage = stageCount ? Math.floor((screenshotCount * 100) / stageCount) : 0;
-  const gradeRank = { limited: 1, good: 2, strong: 3 } as const;
-  const weakestWorkflowGrade = rankedWorkflows.reduce<WorkflowAnalysis["quality"]["grade"]>(
-    (weakest, workflow) => gradeRank[workflow.quality.grade] < gradeRank[weakest] ? workflow.quality.grade : weakest,
-    next.quality.grade,
-  );
-  const retainedOlderWorkflows = rankedWorkflows.length > next.analysis.workflows.length;
-
+  const sanitized = sanitizeWorkflowAnalysis(next);
   return {
-    ...next,
-    timeProfile: next.timeProfile ?? previous.timeProfile,
-    analysis: {
-      workflows: rankedWorkflows,
-    },
-    quality: {
-      ...next.quality,
-      grade: weakestWorkflowGrade,
-      verifiedEvidenceCount,
-      screenshotCount,
-      screenshotCoverage,
-      warnings: [
-        ...next.quality.warnings,
-        ...(retainedOlderWorkflows ? ["Known workflows not observed in the latest scan remain in the catalog"] : []),
-      ],
-    },
+    ...sanitized,
+    timeProfile: sanitized.timeProfile ?? previous?.timeProfile,
   };
 }
 
