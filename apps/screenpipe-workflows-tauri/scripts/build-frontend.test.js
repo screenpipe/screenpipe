@@ -35,3 +35,20 @@ test('native backend changes do not invalidate the frontend input hash', async (
 		await fs.rm(root, { recursive: true, force: true })
 	}
 })
+
+test('shared workspace UI changes invalidate the frontend input hash', async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), 'screenpipe-frontend-app-'))
+	const shared = await fs.mkdtemp(path.join(os.tmpdir(), 'screenpipe-frontend-shared-'))
+	try {
+		await fs.writeFile(path.join(root, 'page.txt'), 'app source')
+		await fs.writeFile(path.join(shared, 'workflows-app.tsx'), 'shared source')
+
+		const initial = await computeInputHash(root, [shared])
+		await fs.writeFile(path.join(shared, 'workflows-app.tsx'), 'changed shared source')
+
+		expect(await computeInputHash(root, [shared])).not.toBe(initial)
+	} finally {
+		await fs.rm(root, { recursive: true, force: true })
+		await fs.rm(shared, { recursive: true, force: true })
+	}
+})

@@ -9,9 +9,9 @@
 // of a rebuild.
 //
 // How it works:
-//   1. Hash the frontend inputs — every file in the app package EXCEPT the
-//      native src-tauri tree and known build outputs / heavy artifacts
-//      (node_modules, .next, out, .git, ...).
+//   1. Hash the frontend inputs — every file in the app package plus shared
+//      workspace UI packages, EXCEPT the native src-tauri tree and known build
+//      outputs / heavy artifacts (node_modules, .next, out, .git, ...).
 //      This is an exclude-list, never an include-list: any new source file or
 //      dir is hashed automatically, so we can never silently miss an input and
 //      ship a stale UI. Over-inclusion only ever costs a redundant rebuild.
@@ -34,6 +34,7 @@ import path from 'path'
 
 const appRoot = path.resolve(__dirname, '..')
 const outDir = path.join(appRoot, 'out')
+const sharedFrontendRoots = [path.resolve(appRoot, '../../packages/workflows-ui')]
 
 // Global, per-machine artifact cache. Shared across every worktree/checkout on
 // this machine. Override with SCREENPIPE_FRONTEND_CACHE_DIR (set to '' or
@@ -93,9 +94,12 @@ async function walk(dir, files) {
 	}
 }
 
-export async function computeInputHash(root = appRoot) {
+export async function computeInputHash(
+	root = appRoot,
+	additionalRoots = path.resolve(root) === appRoot ? sharedFrontendRoots : [],
+) {
 	const files = []
-	await walk(root, files)
+	for (const inputRoot of [root, ...additionalRoots]) await walk(inputRoot, files)
 	files.sort() // deterministic regardless of readdir order
 
 	const hash = crypto.createHash('sha256')
@@ -204,9 +208,13 @@ async function main() {
 	)
 	await swapInOut(async (tmp) => {
 		// next writes the export to out/; build there, stamp the marker, and the
-		// swap moves it into place. Invoke via `bun x` so `next` resolves from
-		// node_modules/.bin (Bun's `$` does not add it to PATH like npm scripts).
+		// swap moves it into place. A changed input key must also start from a
+		// clean Next cache: Next can otherwise retain a stale compiled copy of a
+		// file: workspace dependency even though the source and outer key changed.
+		// Invoke via `bun x` so `next` resolves from node_modules/.bin (Bun's `$`
+		// does not add it to PATH like npm scripts).
 		await fs.rm(outDir, { recursive: true, force: true })
+		await fs.rm(path.join(appRoot, '.next'), { recursive: true, force: true })
 		await $`bun x next build`.cwd(appRoot)
 		if (!(await hasIndex(outDir))) throw new Error('[build-frontend] `next build` produced no out/index.html')
 		await fs.writeFile(path.join(outDir, MARKER), key)
