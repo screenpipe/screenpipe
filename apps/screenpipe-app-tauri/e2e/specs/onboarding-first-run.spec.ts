@@ -289,14 +289,6 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
       },
     });
 
-    // E2E builds normally bypass the post-onboarding entitlement gate so the
-    // broad suite can exercise paid surfaces. Force that real gate back on
-    // before Home mounts; otherwise reaching Home would only prove the
-    // onboarding half of the Free path.
-    await browser.execute((key: string) => {
-      window.localStorage.setItem(key, "1");
-    }, FORCE_BILLING_GATE_KEY);
-
     try {
       await gotoSlide("plan");
       await waitForTestId("onboarding-plan-selection", 30_000);
@@ -339,6 +331,18 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
       await waitForWindowClosed("onboarding", t(30_000));
       await waitForWindowHandle("home", t(30_000));
       await browser.switchToWindow("home");
+
+      // E2E builds normally bypass the post-onboarding entitlement gate so
+      // the broad suite can exercise paid surfaces. Force that real gate back
+      // on and reload the already-mounted Home webview before asserting its
+      // navigation; otherwise Home could remain visible through the bypass.
+      await browser.execute((key: string) => {
+        window.localStorage.setItem(key, "1");
+        window.location.reload();
+      }, FORCE_BILLING_GATE_KEY);
+      await browser.pause(t(2_500));
+      await browser.switchToWindow("home");
+
       const navHome = await $('[data-testid="nav-home"]');
       await navHome.waitForExist({ timeout: t(30_000) });
       expect(await navHome.isExisting()).toBe(true);
