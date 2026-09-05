@@ -1234,6 +1234,30 @@ fn empty_time_dimension(total_minutes: u64) -> Value {
     })
 }
 
+fn is_system_application_noise(label: &str) -> bool {
+    let normalized = label
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    matches!(
+        normalized.as_str(),
+        "characterpalette"
+            | "controlcenter"
+            | "dock"
+            | "emojiandsymbols"
+            | "followupui"
+            | "loginwindow"
+            | "notificationcenter"
+            | "problemreporter"
+            | "securityagent"
+            | "systemuiserver"
+            | "universalaccessauthwarn"
+            | "usernotificationcenter"
+            | "windowserver"
+    )
+}
+
 fn measured_application_dimension(daily: &[Value], total_minutes: u64) -> Value {
     let mut measured = HashMap::<String, MeasuredApplication>::new();
     for app in daily
@@ -1249,6 +1273,9 @@ fn measured_application_dimension(daily: &[Value], total_minutes: u64) -> Value 
         else {
             continue;
         };
+        if is_system_application_noise(label) {
+            continue;
+        }
         let minutes = app
             .get("minutes")
             .and_then(Value::as_f64)
@@ -2398,7 +2425,8 @@ mod tests {
             json!({
                 "apps": [
                     {"name": "Arc", "minutes": 35.4},
-                    {"name": "Cursor", "minutes": 20.2}
+                    {"name": "Cursor", "minutes": 20.2},
+                    {"name": "UserNotificationCenter", "minutes": 12.0}
                 ]
             }),
             json!({
@@ -2416,6 +2444,11 @@ mod tests {
         assert_eq!(profile["categories"]["items"][0]["basis"], "recorder-app");
         assert_eq!(profile["categories"]["attributedMinutes"], 71);
         assert_eq!(profile["categories"]["unattributedMinutes"], 1);
+        assert!(!profile["categories"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["label"] == "UserNotificationCenter"));
         assert_eq!(profile["projects"]["items"], json!([]));
         assert_eq!(profile["people"]["items"], json!([]));
         assert_eq!(profile["companies"]["items"], json!([]));

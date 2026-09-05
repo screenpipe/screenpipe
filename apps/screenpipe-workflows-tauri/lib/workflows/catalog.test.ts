@@ -200,7 +200,7 @@ describe("workflow catalog", () => {
     current.timeProfile = {
       days: 90,
       totalMinutes: 100,
-      categories: { items: [measured], attributedMinutes: 80, unattributedMinutes: 20, coveragePercent: 80 },
+      categories: { items: [measured, { ...measured, label: "UserNotificationCenter", minutes: 15 }], attributedMinutes: 95, unattributedMinutes: 5, coveragePercent: 95 },
       projects: { items: [], attributedMinutes: 0, unattributedMinutes: 100, coveragePercent: 0 },
       people: { items: [{ ...measured, label: "self@example.com" }], attributedMinutes: 80, unattributedMinutes: 20, coveragePercent: 80 },
       companies: { items: [{ ...measured, label: "example.com" }], attributedMinutes: 80, unattributedMinutes: 20, coveragePercent: 80 },
@@ -208,6 +208,7 @@ describe("workflow catalog", () => {
 
     const sanitized = sanitizeWorkflowAnalysis(current).timeProfile!;
     expect(sanitized.categories.items.map((item) => item.label)).toEqual(["Arc"]);
+    expect(sanitized.categories.coveragePercent).toBe(80);
     expect(sanitized.people.items).toEqual([]);
     expect(sanitized.companies.items).toEqual([]);
   });

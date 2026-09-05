@@ -101,7 +101,15 @@ function deduplicateWorkflows(workflows: WorkflowMap[]) {
 function trustedTimeProfile(analysis: WorkflowAnalysis) {
   const profile = analysis.timeProfile;
   if (!profile) return profile;
-  const trustedApplications = profile.categories.items.filter((item) => item.basis === "recorder-app");
+  const systemApplicationNoise = new Set([
+    "characterpalette", "controlcenter", "dock", "emojiandsymbols", "followupui", "loginwindow",
+    "notificationcenter", "problemreporter", "securityagent", "systemuiserver",
+    "universalaccessauthwarn", "usernotificationcenter", "windowserver",
+  ]);
+  const trustedApplications = profile.categories.items.filter((item) =>
+    item.basis === "recorder-app"
+    && !systemApplicationNoise.has(item.label.toLocaleLowerCase().replace(/[^a-z0-9]+/g, "")),
+  );
   if (profile.categories.items.length > 0 && trustedApplications.length === 0) return null;
   const dimension = (items: typeof profile.categories.items) => {
     const attributedMinutes = Math.min(profile.totalMinutes, items.reduce((sum, item) => sum + item.minutes, 0));
