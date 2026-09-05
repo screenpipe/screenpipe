@@ -289,7 +289,7 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
     });
 
     await gotoSlide("plan");
-    await waitForBodyText("plan selection", 30_000);
+    await waitForTestId("onboarding-plan-selection", 30_000);
 
     const before = await bodyText();
     expect(before).not.toContain("opening secure checkout");
@@ -300,7 +300,7 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
       ),
     ).toBe(false);
 
-    const continueFree = await $("button*=continue free plan");
+    const continueFree = await waitForTestId("onboarding-plan-free");
     await continueFree.waitForExist({ timeout: t(20_000) });
     await continueFree.click();
 

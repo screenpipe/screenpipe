@@ -290,6 +290,10 @@ describe("hosted onboarding checkout", () => {
     render(<PlanSelectionStep handleNextSlide={next} />);
 
     expect(screen.getByText("choose how to start")).toBeInTheDocument();
+    expect(screen.getByTestId("onboarding-plan-selection")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("onboarding-card-capture"),
+    ).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId("onboarding-plan-free"));
 
     expect(next).toHaveBeenCalledOnce();

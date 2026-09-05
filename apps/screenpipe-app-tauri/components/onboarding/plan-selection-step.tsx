@@ -287,7 +287,7 @@ export default function PlanSelectionStep({
   return (
     <div
       className="mx-auto w-full max-w-sm text-center"
-      data-testid="onboarding-card-capture"
+      data-testid="onboarding-plan-selection"
     >
       <h2 className="text-xl font-semibold lowercase">choose how to start</h2>
       <p className="mt-3 font-mono text-[11px] leading-relaxed text-muted-foreground">
