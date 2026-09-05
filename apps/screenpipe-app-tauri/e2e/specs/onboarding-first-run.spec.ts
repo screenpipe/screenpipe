@@ -240,8 +240,11 @@ const seedOnboardingUser = async (user: Record<string, unknown>) => {
 };
 
 const clearOnboardingUser = async () => {
+  // updateSettings({ user: null }) performs and awaits the production
+  // setCloudToken(null) cleanup before the E2E acknowledgement is written.
+  // Invoking the same native cleanup again can contend with the just-finished
+  // encrypted-store write on Windows and leaves WebDriver waiting forever.
   await applyOnboardingUser(null, false);
-  await invokeOrThrow("set_cloud_token", { token: null });
 };
 
 /**
