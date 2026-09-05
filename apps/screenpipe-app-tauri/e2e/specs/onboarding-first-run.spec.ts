@@ -426,7 +426,10 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
     await seedOnboardingUser({
       id: "e2e-free-user",
       clerk_id: "e2e-free-user",
-      token: "e2e-free-token",
+      // Native auth accepts synthetic credentials only under this explicit E2E
+      // prefix; using any other value leaves it in store.bin and does not seed
+      // the encrypted token path this scenario is meant to exercise.
+      token: "e2e-fake-token-onboarding-free",
       email: "free-user@screenpipe.test",
       cloud_subscribed: false,
       app_entitled: false,
@@ -515,7 +518,7 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
     await seedOnboardingUser({
       id: "e2e-lifetime-owner",
       clerk_id: "e2e-lifetime-owner",
-      token: "e2e-lifetime-token",
+      token: "e2e-fake-token-onboarding-lifetime",
       email: "lifetime-owner@screenpipe.test",
       cloud_subscribed: false,
       app_entitled: true,
