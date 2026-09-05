@@ -277,6 +277,11 @@ jobs:
       working-directory: ./apps/screenpipe-app-tauri
       run: bun run test:e2e:onboarding-background-ai-tools
 
+    - name: Verify clean Free onboarding without card capture
+      shell: pwsh
+      working-directory: ./apps/screenpipe-app-tauri
+      run: bun run test:e2e:onboarding-first-run
+
     - name: Run E2E Tests
       shell: pwsh
       working-directory: ./apps/screenpipe-app-tauri
@@ -635,6 +640,7 @@ jobs:
         export RECORD_VIDEO=1
 
         bun run test:e2e:onboarding-background-ai-tools
+        bun run test:e2e:onboarding-first-run
         rm -rf ./e2e/results
         bun run test:e2e
 
@@ -922,6 +928,11 @@ jobs:
       shell: bash
       working-directory: ./apps/screenpipe-app-tauri
       run: bun run test:e2e:onboarding-background-ai-tools
+
+    - name: Verify clean Free onboarding without card capture
+      shell: bash
+      working-directory: ./apps/screenpipe-app-tauri
+      run: bun run test:e2e:onboarding-first-run
 
     - name: Run E2E Tests
       # ADVISORY (non-blocking): the full serial suite (maxInstances:1) with

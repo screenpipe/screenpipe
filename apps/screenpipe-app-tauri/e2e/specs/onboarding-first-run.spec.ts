@@ -267,6 +267,69 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
     }
   });
 
+  it("continues from a verified Free account without asking for a card", async () => {
+    const checkedAt = new Date().toISOString();
+    await seedOnboardingUser({
+      id: "e2e-free-user",
+      clerk_id: "e2e-free-user",
+      token: "e2e-free-token",
+      email: "free-user@screenpipe.test",
+      cloud_subscribed: false,
+      app_entitled: false,
+      subscription_plan: "none",
+      entitlement_source: "none",
+      has_payment_method: false,
+      entitlement: {
+        active: false,
+        plan: "none",
+        source: "none",
+        checked_at: checkedAt,
+        features: { app: false, cloud: false },
+      },
+    });
+
+    await gotoSlide("plan");
+    await waitForBodyText("plan selection", 30_000);
+
+    const before = await bodyText();
+    expect(before).not.toContain("opening secure checkout");
+    expect(
+      await browser.execute(
+        () =>
+          !!document.querySelector('[data-testid="onboarding-card-capture"]'),
+      ),
+    ).toBe(false);
+
+    const continueFree = await $("button*=continue free plan");
+    await continueFree.waitForExist({ timeout: t(20_000) });
+    await continueFree.click();
+
+    await waitForTestId("onboarding-final-setup", 30_000);
+    const after = await bodyText();
+    expect(after).toContain("connect gmail");
+    expect(after).not.toContain("opening secure checkout");
+    expect(
+      await browser.execute(
+        () =>
+          !!document.querySelector('[data-testid="onboarding-card-capture"]'),
+      ),
+    ).toBe(false);
+
+    const filepath = await saveScreenshot("onboarding-free-no-card");
+    expect(existsSync(filepath)).toBe(true);
+
+    const finishSetup = await $("button*=continue");
+    await finishSetup.waitForExist({ timeout: t(20_000) });
+    await finishSetup.click();
+
+    await waitForWindowClosed("onboarding", t(30_000));
+    await waitForWindowHandle("home", t(30_000));
+    await browser.switchToWindow("home");
+    const navHome = await $('[data-testid="nav-home"]');
+    await navHome.waitForExist({ timeout: t(30_000) });
+    expect(await navHome.isExisting()).toBe(true);
+  });
+
   it("keeps lifetime ownership out of mandatory checkout", async () => {
     await seedOnboardingUser({
       id: "e2e-lifetime-owner",
