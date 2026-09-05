@@ -289,9 +289,6 @@ async fn fetch_health(base_url: &str) -> Option<Value> {
 
 async fn external_recorder() -> Option<RecorderEndpoint> {
     let health = fetch_health(EXTERNAL_API_BASE).await?;
-    if !health_has_fresh_capture(&health, Utc::now()) {
-        return None;
-    }
     let data_dir = production_data_dir()?;
     Some(RecorderEndpoint {
         source: "screenpipe",
@@ -322,12 +319,10 @@ async fn selected_recorder(app: &AppHandle) -> Option<RecorderEndpoint> {
     own_recorder(app).await
 }
 
-pub async fn external_recorder_is_fresh() -> bool {
-    let fresh = fetch_health(EXTERNAL_API_BASE)
-        .await
-        .is_some_and(|health| health_has_fresh_capture(&health, Utc::now()));
-    USING_EXTERNAL_RECORDER.store(fresh, Ordering::Relaxed);
-    fresh
+pub async fn external_recorder_is_available() -> bool {
+    let available = fetch_health(EXTERNAL_API_BASE).await.is_some();
+    USING_EXTERNAL_RECORDER.store(available, Ordering::Relaxed);
+    available
 }
 
 pub fn using_external_recorder() -> bool {
@@ -349,6 +344,7 @@ async fn cloud_token() -> Option<String> {
 }
 
 fn runtime_payload(recorder: Option<&RecorderEndpoint>, has_cloud_token: bool) -> Value {
+    let history_available = recorder.is_some();
     let recording = recorder
         .map(|endpoint| health_has_fresh_capture(&endpoint.health, Utc::now()))
         .unwrap_or(false);
@@ -364,7 +360,7 @@ fn runtime_payload(recorder: Option<&RecorderEndpoint>, has_cloud_token: bool) -
         "apiBaseUrl": recorder.map(|endpoint| endpoint.base_url.as_str()),
         "authenticatedLocalApi": authenticated_local_api,
         "cloudAuthAvailable": has_cloud_token,
-        "processingAvailable": recording && has_cloud_token && authenticated_local_api,
+        "processingAvailable": history_available && has_cloud_token && authenticated_local_api,
         "captureLocation": "device",
         "processingLocation": "cloud",
         "syncState": "local-only",
@@ -391,14 +387,14 @@ fn runtime_payload(recorder: Option<&RecorderEndpoint>, has_cloud_token: bool) -
             }
         },
         "health": recorder.map(|endpoint| &endpoint.health),
-        "reason": if recorder.is_none() {
+        "reason": if !history_available {
             "No fresh recorder is available yet."
-        } else if !recording {
-            "The local API is up, but capture is not fresh yet."
         } else if !authenticated_local_api {
-            "Capture is fresh, but its local API credential is unavailable."
+            "Your work history is available, but its local credential is unavailable."
         } else if !has_cloud_token {
             "Your work history is ready. Sign in to Screenpipe once to build a work map."
+        } else if !recording {
+            "Your captured history is ready. Live capture is paused."
         } else {
             "ready"
         },
@@ -418,7 +414,7 @@ pub async fn ensure_workflows_runtime(
     state: State<'_, RecordingState>,
     app: AppHandle,
 ) -> Result<Value, String> {
-    if external_recorder_is_fresh().await {
+    if external_recorder_is_available().await {
         return Ok(get_workflows_runtime(app).await);
     }
 
@@ -2459,6 +2455,25 @@ mod tests {
 
         assert_eq!(runtime["availableScopes"][0]["id"], "personal");
         assert_eq!(runtime["availableScopes"][0]["kind"], "personal");
+    }
+
+    #[test]
+    fn historical_processing_stays_available_when_live_capture_is_paused() {
+        let recorder = RecorderEndpoint {
+            source: "screenpipe",
+            base_url: EXTERNAL_API_BASE.to_string(),
+            api_key: Some("local-key".to_string()),
+            health: json!({"last_frame_timestamp": "2025-01-01T00:00:00Z"}),
+        };
+
+        let runtime = runtime_payload(Some(&recorder), true);
+
+        assert_eq!(runtime["recording"], false);
+        assert_eq!(runtime["processingAvailable"], true);
+        assert_eq!(
+            runtime["reason"],
+            "Your captured history is ready. Live capture is paused."
+        );
     }
 
     #[test]

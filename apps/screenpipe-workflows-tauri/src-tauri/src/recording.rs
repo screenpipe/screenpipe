@@ -956,9 +956,9 @@ pub async fn spawn_screenpipe(
     app: tauri::AppHandle,
     _override_args: Option<Vec<String>>,
 ) -> Result<(), String> {
-    if crate::workflows_runtime::external_recorder_is_fresh().await {
+    if crate::workflows_runtime::external_recorder_is_available().await {
         state.set_capture_intent(false);
-        info!("spawn_screenpipe: fresh installed Screenpipe recorder found; reusing it");
+        info!("spawn_screenpipe: installed Screenpipe recorder found; reusing it");
         return Ok(());
     }
     // A summary-paywall install still needs the long-lived local read server

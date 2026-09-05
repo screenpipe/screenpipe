@@ -484,9 +484,10 @@ async fn main() {
     dev_isolation::apply();
 
     // A second recorder wastes resources and can contend for macOS capture
-    // permissions. Reuse the installed Screenpipe recorder whenever it is
-    // producing fresh data; the isolated Workflows engine is the fallback.
-    let reuse_external_recorder = workflows_runtime::external_recorder_is_fresh().await;
+    // permissions. Reuse the installed Screenpipe recorder whenever its local
+    // service is available, including while the display is locked and capture
+    // is temporarily stale; the isolated Workflows engine is the fallback.
+    let reuse_external_recorder = workflows_runtime::external_recorder_is_available().await;
 
     #[cfg(target_os = "linux")]
     linux_webkit_env::configure();
@@ -1905,7 +1906,7 @@ async fn main() {
                     break 'start_server;
                 }
                 if reuse_external_recorder {
-                    info!("Workflows is using the fresh Screenpipe recorder on port 3030");
+                    info!("Workflows is using the Screenpipe recorder on port 3030");
                     crate::health::set_recording_status(crate::health::RecordingStatus::Paused);
                     break 'start_server;
                 }
