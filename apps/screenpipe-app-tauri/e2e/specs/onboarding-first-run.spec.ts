@@ -67,6 +67,36 @@ const waitForBodyText = async (needle: string, timeout = 10_000) => {
   });
 };
 
+/** Persist a synthetic starting slide without exercising a product action. */
+const persistOnboardingStepFixture = async (step: string) => {
+  const rid = await invokeOrThrow<number | null>("plugin:store|get_store", {
+    path: join(E2E_DATA_DIR, "store.bin"),
+  });
+  if (rid == null) throw new Error("settings store is not loaded");
+  const [value, exists] = await invokeOrThrow<
+    [Record<string, unknown>, boolean]
+  >("plugin:store|get", { rid, key: "onboarding" });
+  const onboarding = exists && value ? value : {};
+  await invokeOrThrow("plugin:store|set", {
+    rid,
+    key: "onboarding",
+    value: { ...onboarding, currentStep: step },
+  });
+  await invokeOrThrow("plugin:store|save", { rid });
+  await browser.waitUntil(
+    async () => {
+      const status = await invokeOrThrow<{ currentStep: string | null }>(
+        "get_onboarding_status",
+      );
+      return status.currentStep === step;
+    },
+    {
+      timeout: t(10_000),
+      timeoutMsg: `onboarding step "${step}" was not persisted`,
+    },
+  );
+};
+
 /**
  * Drive the setup flow to a specific slide without a real login round-trip.
  *
@@ -76,7 +106,7 @@ const waitForBodyText = async (needle: string, timeout = 10_000) => {
  * dependencies. Same shape as screen-recording-restart.spec.ts.
  */
 const gotoSlide = async (step: string) => {
-  await invokeOrThrow("set_onboarding_step", { step });
+  await persistOnboardingStepFixture(step);
 
   // Destroy and recreate rather than just showing: showWindow on a live
   // window only focuses it, so the mount-time restore effect never re-runs
