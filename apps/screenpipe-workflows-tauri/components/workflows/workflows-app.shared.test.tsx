@@ -21,7 +21,7 @@ describe("shared workflows experience", () => {
 
     expect(await screen.findByRole("heading", { name: /see how your work/i })).toBeInTheDocument();
     expect(screen.getByText("5 known workflows")).toBeInTheDocument();
-    expect(screen.getByText("Analysis only")).toBeInTheDocument();
+    expect(screen.queryByText(/never performs|does not run anything/i)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /^time$/i }));
     expect(screen.getByRole("heading", { name: "Where your time goes" })).toBeInTheDocument();
@@ -70,7 +70,7 @@ describe("shared workflows experience", () => {
     await screen.findByRole("heading", { name: /see how your work/i });
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     expect(screen.getByRole("dialog", { name: "Command palette" })).toBeInTheDocument();
-    expect(screen.getByText("Only while this app is focused")).toBeInTheDocument();
+    expect(screen.queryByText("Only while this app is focused")).not.toBeInTheDocument();
 
     const commandSearch = screen.getByRole("textbox", { name: "Search commands and workflows" });
     fireEvent.change(commandSearch, { target: { value: "People time profile" } });
@@ -89,7 +89,7 @@ describe("shared workflows experience", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
 
-    const workflowSearch = screen.getByLabelText("Search workflows, steps, and evidence");
+    const workflowSearch = screen.getByLabelText("Search workflows");
     fireEvent.focus(workflowSearch);
     fireEvent.keyDown(workflowSearch, { key: "g" });
     fireEvent.keyDown(workflowSearch, { key: "t" });
@@ -113,14 +113,14 @@ describe("shared workflows experience", () => {
     expect(screen.getByRole("heading", { name: "What this workspace can see" })).toBeInTheDocument();
     expect(screen.getByText("Managers cannot open raw employee history")).toBeInTheDocument();
     expect(screen.getByText("Approved outputs only")).toBeInTheDocument();
-    expect(screen.getByText("Showing the latest reports employees have approved for workspace use.")).toBeInTheDocument();
+    expect(screen.queryByText("Latest approved reports.")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^evidence$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /create automation|new automation/i })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /^time$/i }));
     fireEvent.click(screen.getByRole("tab", { name: /people.*14/i }));
     expect(screen.queryByText("Contributing seats")).not.toBeInTheDocument();
-    expect(screen.getByText(/external collaborators from approved aggregate reports/i)).toBeInTheDocument();
+    expect(screen.getByText(/only external collaborators appear here/i)).toBeInTheDocument();
   });
 
   it("keeps a simple personal work profile private and saves explicit context", async () => {
@@ -137,7 +137,7 @@ describe("shared workflows experience", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /^work profile$/i }));
     expect(screen.getByRole("heading", { name: "Teach Screenpipe what matters" })).toBeInTheDocument();
-    expect(screen.getAllByText("Private on this device")).toHaveLength(2);
+    expect(screen.queryByText("Private on this device")).not.toBeInTheDocument();
     expect((screen.getByLabelText("Role and responsibilities") as HTMLTextAreaElement).value).toContain("product");
 
     fireEvent.change(screen.getByLabelText("Current outcomes"), { target: { value: "Shorten pilot onboarding" } });

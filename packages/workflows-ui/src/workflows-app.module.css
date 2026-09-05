@@ -104,24 +104,6 @@
 .shortcutsButton:hover { border-color: #bfc2b8; background: rgba(255,255,255,.78); color: var(--ink); }
 .shortcutsButton span { flex: 1; text-align: left; }
 .shortcutsButton kbd { min-width: 19px; padding: 2px 5px; border: 1px solid #d5d7cf; border-radius: 4px; background: #fff; color: #6f7369; font: 700 8px/1.2 "IBM Plex Mono", monospace; text-align: center; }
-.learningStatus {
-  display: flex;
-  gap: 9px;
-  padding: 12px 10px;
-  border: 1px solid #d9dbd2;
-  border-radius: 8px;
-  background: rgba(255,255,255,.5);
-}
-
-.learningStatus > i { width: 7px; height: 7px; margin-top: 3px; border-radius: 50%; background: #75a600; box-shadow: 0 0 0 4px #dff5ad; }
-.learningStatus div { display: flex; flex-direction: column; gap: 3px; }
-.learningStatus strong { font-size: 10px; }
-.learningStatus span { color: var(--muted); font-size: 9px; }
-.readOnlyNote { display: flex; gap: 9px; align-items: flex-start; padding: 8px 10px; color: #777b71; font-size: 9px; line-height: 1.45; }
-.readOnlyNote svg { flex: 0 0 auto; margin-top: 1px; }
-.readOnlyNote span { display: flex; flex-direction: column; }
-.readOnlyNote strong { color: #3e413a; font-size: 9px; }
-
 .workspace {
   min-width: 0;
   min-height: 0;
@@ -250,7 +232,6 @@
 .commandFooter { min-height: 37px; display: flex; align-items: center; gap: 14px; padding: 0 14px; border-top: 1px solid #dedfd8; background: #f3f4ef; color: #7d8177; font-size: 8px; }
 .commandFooter span { display: flex; align-items: center; gap: 3px; }
 .commandFooter kbd { min-width: 17px; padding: 2px 4px; text-align: center; }
-.commandFooter strong { margin-left: auto; color: #666a60; font-size: 8px; font-weight: 700; }
 
 @keyframes commandBackdropIn { from { opacity: 0; } }
 @keyframes commandPaletteIn { from { opacity: 0; transform: translateY(-8px) scale(.99); } }
@@ -258,13 +239,10 @@
 .scopeControl select { max-width: 150px; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 700; cursor: pointer; text-overflow: ellipsis; }
 .scopeControl:focus-within { border-color: #8b9083; outline: 1px solid #8b9083; outline-offset: 1px; }
 .periodControl { height: 32px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: #72766c; font-size: 8px; white-space: nowrap; }
-.periodControl > span { font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
 .periodControl select { border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 700; cursor: pointer; }
-.periodControl small { padding-left: 6px; border-left: 1px solid #e1e3dc; color: #917228; }
 .periodControl:focus-within { border-color: #8b9083; outline: 1px solid #8b9083; outline-offset: 1px; }
 .profilePeriod { height: 32px; display: flex; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: #60655a; font-size: 8px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; white-space: nowrap; }
-.purposeBanner { height: 27px; display: flex; align-items: center; justify-content: center; gap: 6px; border-bottom: 1px solid #e0e8cb; background: #f3f8e6; color: #64743f; font-size: 9px; font-weight: 600; }
-.main { max-width: 1420px; min-height: calc(100vh - 86px); margin: 0 auto; padding: 38px clamp(28px, 4vw, 64px) 70px; }
+.main { max-width: 1420px; min-height: calc(100vh - 59px); margin: 0 auto; padding: 38px clamp(28px, 4vw, 64px) 70px; }
 
 .pill { display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; border: 1px solid #dadcd4; border-radius: 999px; background: #f6f6f2; color: #5f6259; font-size: 9px; font-weight: 680; white-space: nowrap; }
 .pill_green { border-color: #d0ed88; background: #ecffbc; color: #3d5600; }
@@ -315,7 +293,7 @@
 .statGrid small { display: block; overflow: hidden; color: #8d9087; font-size: 8px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
 
 .sectionHeading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin: 0 0 15px; }
-.sectionHeading > div > span, .pageHeader > div > span, .panelTitle > div > span { display: block; margin-bottom: 6px; color: #7b825d; font-size: 8px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.sectionHeading > div > span, .panelTitle > div > span { display: block; margin-bottom: 6px; color: #7b825d; font-size: 8px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
 .sectionHeading h2 { margin: 0; font-size: 17px; }
 .textButton, .backButton { display: inline-flex; align-items: center; gap: 6px; padding: 7px; border: 0; background: transparent; color: #60635b; font-size: 10px; font-weight: 650; cursor: pointer; }
 .textButton:hover, .backButton:hover { color: #111; }
@@ -393,8 +371,8 @@
 .qualityDetails ul { margin: 6px 0 0; padding-left: 14px; }
 
 .pageHeader { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; margin: 25px 0 42px; }
-.pageHeader h1 { margin: 0 0 9px; font-size: clamp(34px,3.8vw,50px); letter-spacing: -.052em; }
-.pageHeader p { max-width: 700px; margin: 0; color: #6e7269; font-size: 12px; line-height: 1.6; }
+.pageHeader h1 { margin: 0; font-size: clamp(34px,3.8vw,50px); letter-spacing: -.052em; }
+.pageHeader p { max-width: 700px; margin: 9px 0 0; color: #6e7269; font-size: 12px; line-height: 1.6; }
 .headerMetric { flex: 0 0 auto; min-width: 185px; padding: 16px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
 .headerMetric strong { display: block; margin-top: 7px; font-size: 24px; }
 
@@ -403,11 +381,7 @@
 .timeSummary > div:last-child { border-right: 0; }
 .timeSummary span { display: block; color: #898d83; font-size: 8px; font-weight: 720; letter-spacing: .07em; text-transform: uppercase; }
 .timeSummary strong { display: block; margin: 7px 0 4px; font-size: 21px; letter-spacing: -.035em; }
-.timeSummary small { display: block; overflow: hidden; color: #8b8f85; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .timeValueNotice { grid-template-columns: 26px minmax(0,1fr); margin: -21px 0 34px; }
-.timeLensHeader { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 13px; }
-.timeLensHeader > div > span { display: block; margin-bottom: 6px; color: #7b825d; font-size: 8px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
-.timeLensHeader h2 { margin: 0; font-size: 17px; }
 .timeLensTabs { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 7px; margin-bottom: 13px; }
 .timeLensTabs button { min-height: 43px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: #6d7167; font-size: 9px; font-weight: 670; cursor: pointer; }
 .timeLensTabs button:hover { background: #f4f5ef; color: var(--ink); }
@@ -444,10 +418,6 @@
 .timeEvidence li { padding: 10px; border: 1px solid #e3e5dd; border-radius: 7px; background: #fafbf7; }
 .timeEvidence li strong { color: #62675c; font-size: 8px; }
 .timeEvidence li p { margin: 4px 0 0; color: #777c71; font-size: 8px; line-height: 1.45; }
-.timeCoverageNote { display: flex; align-items: flex-start; gap: 10px; margin-top: 13px; padding: 14px 16px; border: 1px solid #dfe5d1; border-radius: 8px; background: #f7faef; color: #616b49; }
-.timeCoverageNote svg { flex: 0 0 auto; margin-top: 1px; }
-.timeCoverageNote strong { display: block; font-size: 9px; }
-.timeCoverageNote p { margin: 4px 0 0; color: #7a8169; font-size: 8px; line-height: 1.45; }
 .timeShowMore { width: 100%; min-height: 42px; display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 9px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: #575d50; font-size: 9px; font-weight: 690; cursor: pointer; }
 .timeShowMore:hover { background: #f5f7f0; }
 .timeShowMore span { color: #92968c; font-weight: 560; }
@@ -612,17 +582,7 @@
 .boundaryStatement strong { font-size: 11px; }
 .boundaryStatement p { margin: 4px 0 0; color: #6f7664; font-size: 9px; line-height: 1.5; }
 .boundaryStatement .pill { align-self: center; }
-.statusPanel { display: flex; align-items: center; justify-content: space-between; margin-top: 13px; padding: 18px 20px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
-.statusPanel > div { display: flex; align-items: flex-start; gap: 11px; }
-.statusPanel > div > span { width: 8px; height: 8px; margin-top: 3px; border-radius: 50%; background: #b1b4ab; }
-.statusPanel > div > .statusLive { background: #78a800; box-shadow: 0 0 0 4px #e3f5b9; }
-.statusPanel strong { font-size: 10px; }
-.statusPanel p { margin: 4px 0 0; color: #83877d; font-size: 9px; }
 
-.profileBoundary { display: grid; grid-template-columns: 26px minmax(0,1fr); gap: 12px; align-items: start; margin-bottom: 13px; padding: 16px 18px; border: 1px solid #d9ddd0; border-radius: 8px; background: #f7f8f3; }
-.profileBoundary > svg { color: #65704f; }
-.profileBoundary strong { font-size: 10px; }
-.profileBoundary p { margin: 4px 0 0; color: #777c71; font-size: 9px; line-height: 1.5; }
 .profileSteps { display: grid; gap: 13px; }
 .profileCard { padding: 24px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .profileCardHead { display: grid; grid-template-columns: 30px minmax(0,1fr); gap: 12px; margin-bottom: 18px; }
@@ -728,10 +688,8 @@
   .commandRow small, .commandRowActive small { display: none; }
   .commandFooter { gap: 8px; }
   .commandFooter strong { display: none; }
-  .periodControl > span, .periodControl small { display: none; }
   .scopeControl select { max-width: 105px; }
   .main { padding: 28px 18px 55px; }
-  .purposeBanner { padding: 0 10px; text-align: center; }
   .pageHeader { align-items: flex-start; flex-direction: column; }
   .timeMap > button { grid-template-columns: 1fr 20px; }
   .timeMap .timeBar { grid-column: 1; }

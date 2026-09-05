@@ -40,7 +40,7 @@ describe("Screenpipe Workflows onboarding", () => {
   it("opens with workflow mapping rather than an automation promise", () => {
     render(<OnboardingPage />);
     expect(screen.getByText("See how your work actually happens.")).toBeInTheDocument();
-    expect(screen.getByText("Analysis only.")).toBeInTheDocument();
+    expect(screen.queryByText(/analysis only|never performs|does not perform/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/agent/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/sign in/i)).not.toBeInTheDocument();
   });
@@ -54,8 +54,8 @@ describe("Screenpipe Workflows onboarding", () => {
 
   it("advances into the privacy contract", () => {
     render(<OnboardingPage />);
-    fireEvent.click(screen.getByRole("button", { name: /map my work privately/i }));
-    expect(screen.getByText("Understand your work without changing it.")).toBeInTheDocument();
-    expect(screen.getByText("Stay read-only")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /map my work/i }));
+    expect(screen.getByText("Your data stays yours.")).toBeInTheDocument();
+    expect(screen.getByText("Stay in control")).toBeInTheDocument();
   });
 });

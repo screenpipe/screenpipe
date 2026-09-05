@@ -328,7 +328,7 @@ function CommandPalette({ open, commands, close }: { open: boolean; commands: Pa
             </div>
           )) : <div className={styles.commandEmpty}><Search size={18} /><strong>No matching command</strong><span>Try a page, time lens, person, company, project, or workflow name.</span></div>}
         </div>
-        <footer className={styles.commandFooter}><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>?</kbd> shortcuts</span><strong>Only while this app is focused</strong></footer>
+        <footer className={styles.commandFooter}><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>?</kbd> shortcuts</span></footer>
       </section>
     </div>
   );
@@ -369,9 +369,12 @@ function AppShell({
 }) {
   const activeView = view === "workflow" ? "workflows" : view;
   const workspaceView = Boolean(runtime?.workspace);
-  const cloudProcessing = runtime?.processingLocation === "cloud" || runtime?.processingLocation === "confidential-cloud";
-  const recorderLabel = workspaceView ? (runtime?.recording ? "Approved reports ready" : "Loading approved reports") : runtime?.recording ? "Work history active" : "Preparing work history";
   const nav = primaryNavigation.filter(([target]) => target !== "evidence" || runtime?.dataBoundary?.workspaceVisibility !== "aggregate-only");
+  const statusLabel = workspaceView
+    ? runtime?.recording ? "Reports ready" : "Loading"
+    : runtime?.recording
+      ? runtime.source === "screenpipe" ? "Using Screenpipe" : "Recording"
+      : "Starting";
 
   return (
     <div className={`${styles.app} ${embedded ? styles.appEmbedded : ""}`}>
@@ -389,15 +392,13 @@ function AppShell({
           ))}
         </nav>
         <div className={styles.sidebarBottom}>
-          <div className={styles.learningStatus}><i /><div><strong>{recorderLabel}</strong><span>{workspaceView ? "Aggregate workspace view" : cloudProcessing ? "Private processing" : "Private on this device"}</span></div></div>
           <button className={styles.shortcutsButton} onClick={openCommandPalette}><Keyboard size={14} /><span>Keyboard shortcuts</span><kbd>?</kbd></button>
-          <div className={styles.readOnlyNote}><Eye size={14} /><span><strong>Analysis only</strong>Maps your work. Never performs it.</span></div>
         </div>
       </aside>
       <section className={styles.workspace} data-workflows-scroll-region>
         <header className={styles.topbar} data-tauri-drag-region>
           <div className={styles.dragRegion} data-tauri-drag-region aria-hidden="true" onMouseDown={(event) => handleWindowDrag(event, startWindowDrag)} />
-          <div className={styles.search}><Search size={15} /><input data-workflows-search value={query} onChange={(event) => setQuery(event.target.value)} onFocus={() => navigate("workflows")} placeholder="Search workflows, steps, and evidence" aria-label="Search workflows, steps, and evidence" />{query ? <button type="button" onClick={() => setQuery("")} aria-label="Clear search"><X size={12} /></button> : <button type="button" className={styles.commandTrigger} onMouseDown={(event) => event.preventDefault()} onClick={openCommandPalette} aria-label="Open command palette"><CommandIcon size={12} /><kbd>⌘ K</kbd></button>}</div>
+          <div className={styles.search}><Search size={15} /><input data-workflows-search value={query} onChange={(event) => setQuery(event.target.value)} onFocus={() => navigate("workflows")} placeholder="Search workflows" aria-label="Search workflows" />{query ? <button type="button" onClick={() => setQuery("")} aria-label="Clear search"><X size={12} /></button> : <button type="button" className={styles.commandTrigger} onMouseDown={(event) => event.preventDefault()} onClick={openCommandPalette} aria-label="Open command palette"><CommandIcon size={12} /><kbd>⌘ K</kbd></button>}</div>
           {scopes.length > 1 && <label className={styles.scopeControl}>
             {activeScope?.kind === "organization" ? <Building2 size={13} /> : <Users size={13} />}
             <select value={activeScope?.id ?? ""} onChange={(event) => setScope(event.target.value)} aria-label="Workflows scope">
@@ -407,7 +408,6 @@ function AppShell({
           {view === "time" ? <div className={styles.profilePeriod}><CalendarRange size={13} /><span>{WORKFLOW_CATALOG_DAYS}-day profile</span></div> :
             <label className={styles.periodControl}>
               <CalendarRange size={13} />
-              <span>Show</span>
               <select value={activityPeriod} onChange={(event) => setActivityPeriod(Number(event.target.value) as WorkflowActivityPeriod)} aria-label="Workflow activity period">
                 <option value={0}>All known</option>
                 <option value={7}>Active this week</option>
@@ -415,9 +415,8 @@ function AppShell({
                 <option value={90}>Active in 90 days</option>
               </select>
             </label>}
-          <Pill tone={runtime?.recording ? "green" : "plain"}><span className={styles.liveDot} />{workspaceView ? (runtime?.recording ? "Reports ready" : "Loading") : runtime?.recording ? "Recording" : "Starting"}</Pill>
+          <Pill tone={runtime?.recording ? "green" : "plain"}><span className={styles.liveDot} />{statusLabel}</Pill>
         </header>
-        <div className={styles.purposeBanner}><Eye size={13} />This app only maps and measures {workspaceView ? "work patterns" : "your work"}. It does not run anything.</div>
         {embedded && <nav className={styles.embeddedNav} aria-label="Workflows sections">
           {nav.map(([target, Icon, label]) => (
             <button key={target} className={activeView === target ? styles.embeddedNavActive : ""} onClick={() => navigate(target)}><Icon size={14} />{label}</button>
@@ -435,7 +434,7 @@ function EmptyWorkMap({ analyzing, analyze }: { analyzing: boolean; analyze: () 
     <section className={styles.emptyState}>
       <div className={styles.emptyMark}><Workflow size={23} /></div>
       <h2>Your first work map starts here</h2>
-      <p>Screenpipe will build a lasting catalog from the last {WORKFLOW_CATALOG_DAYS} days, then keep known workflows as new work is observed.</p>
+      <p>Build a catalog from the last {WORKFLOW_CATALOG_DAYS} days of captured work.</p>
       <button className={styles.primaryButton} onClick={analyze}>Build my workflow catalog <ArrowRight size={14} /></button>
     </section>
   );
@@ -449,7 +448,7 @@ function ProcessingView() {
   }, []);
   return (
     <section className={styles.processing}>
-      <div className={styles.processingHead}><span className={styles.spinner} /><div><h2>Building your workflow catalog</h2><p>Reviewing {WORKFLOW_CATALOG_DAYS} days in smaller periods can take a few minutes. Processing follows the boundary shown in Privacy.</p></div></div>
+      <div className={styles.processingHead}><span className={styles.spinner} /><div><h2>Building your workflow catalog</h2><p>Reviewing the last {WORKFLOW_CATALOG_DAYS} days. This can take a few minutes.</p></div></div>
       <div className={styles.processingSteps}>
         {processingSteps.map(([title, detail], index) => (
           <div key={title} className={index === active ? styles.processingActive : ""}>
@@ -560,7 +559,7 @@ function OverviewView({
         <div>
           <Pill><Workflow size={12} />{knownWorkflowCount ? `${knownWorkflowCount} known workflows` : "Ready to map your work"}</Pill>
           <h1>See how your work<br /><em>actually flows.</em></h1>
-          <p>A granular map of the work hidden across your day: what starts it, every stage, how long it takes, where you wait, and where it gets stuck.</p>
+          <p>Every step, handoff, wait, and bottleneck across your day.</p>
           <button className={styles.analyzeButton} onClick={analyze} disabled={analyzing || runtime?.processingAvailable === false}>{analyzing ? <><span className={styles.spinnerSmall} />Refreshing catalog…</> : <><RefreshCw size={14} />{knownWorkflowCount ? "Refresh workflow catalog" : `Analyze the last ${WORKFLOW_CATALOG_DAYS} days`}</>}</button>
         </div>
         <div className={styles.heroProof}>
@@ -568,7 +567,7 @@ function OverviewView({
           <strong>{formatMinutes(analysis?.observedActiveMinutes ?? 0)}</strong>
           <small>captured active time reviewed</small>
           <div><i style={{ width: `${Math.min(100, workflows.length * 18)}%` }} /></div>
-          <p>{analysis ? `${analysis.bundleCount} days with usable work history · ${formatAnalyzedAt(analysis.analyzedAt)}` : "No sample workflows—only your captured work"}</p>
+          {analysis && <p>{analysis.bundleCount} days with usable history · {formatAnalyzedAt(analysis.analyzedAt)}</p>}
         </div>
       </section>
       <RuntimeNotice runtime={runtime} refresh={refreshRuntime} openAccount={openAccount} />
@@ -588,9 +587,9 @@ function OverviewView({
       ) : (
         <>
           <section className={styles.statGrid} aria-label="Work map summary">
-            <div><span>Combined mapped duration</span><strong>{formatMinutes(mappedMinutes)}</strong><small>one conservative estimate per workflow</small></div>
-            <div><span>Combined waiting estimate</span><strong>{formatMinutes(waitingMinutes)}</strong><small>one estimated occurrence per workflow</small></div>
-            <div><span>Friction you can affect</span><strong>{actionableCount}</strong><small>{constraintCount} external or required constraint{constraintCount === 1 ? "" : "s"} separated</small></div>
+            <div><span>Mapped time</span><strong>{formatMinutes(mappedMinutes)}</strong><small>one run of each workflow</small></div>
+            <div><span>Waiting</span><strong>{formatMinutes(waitingMinutes)}</strong><small>one run of each workflow</small></div>
+            <div><span>Friction you can affect</span><strong>{actionableCount}</strong><small>{constraintCount} other constraint{constraintCount === 1 ? "" : "s"}</small></div>
             <div><span>Workflows shown</span><strong>{workflows.length}</strong><small>{activityPeriodLabel(activityPeriod).toLocaleLowerCase()}</small></div>
           </section>
           <div className={styles.sectionHeading}><div><span>Where time goes</span><h2>Your workflows, active time vs. waiting</h2></div><button className={styles.textButton} onClick={() => navigate("workflows")}>View all workflows <ArrowRight size={14} /></button></div>
@@ -626,7 +625,7 @@ function WorkflowsView({ workflows, knownWorkflowCount, activityPeriod, filters,
 
   return (
     <>
-      <div className={styles.pageHeader}><div><span>Process inventory</span><h1>Your workflows</h1><p>This catalog persists across refreshes. The activity selector narrows what you see without deleting workflows that were not repeated recently.</p></div><button className={styles.primaryButton} onClick={analyze} disabled={analyzing}><RefreshCw size={14} />Refresh catalog</button></div>
+      <div className={styles.pageHeader}><div><h1>Your workflows</h1></div><button className={styles.primaryButton} onClick={analyze} disabled={analyzing}><RefreshCw size={14} />Refresh catalog</button></div>
       {!knownWorkflowCount ? <EmptyWorkMap analyzing={analyzing} analyze={analyze} /> : !workflows.length ? <section className={styles.emptyState}><Clock3 size={23} /><h2>No known workflows were active in this period</h2><p>Your {knownWorkflowCount} known workflows are still in the catalog. Choose “All known” to see them.</p></section> : <>
         <section className={styles.filterBar} aria-label="Workflow filters">
           <div><strong>{visible.length} of {workflows.length} shown</strong><span>{filters.query ? `matching “${filters.query}”` : activityPeriodLabel(activityPeriod)}</span></div>
@@ -651,7 +650,7 @@ function WorkflowsView({ workflows, knownWorkflowCount, activityPeriod, filters,
               <div className={styles.workflowCardTop}><span>{String(workflow.rank).padStart(2, "0")}</span><div><Pill tone={qualityTone(workflow.quality.grade)}>{qualityLabel(workflow.quality.grade)}</Pill>{actionableCount > 0 && <Pill tone="warm">{actionableCount} actionable</Pill>}{constraintCount > 0 && <Pill>{constraintCount} constraint{constraintCount === 1 ? "" : "s"}</Pill>}</div></div>
               <h2>{workflow.title}</h2><p>{workflow.description}</p>
               <div className={styles.cardPath}><span>{workflow.trigger}</span><ArrowRight size={12} /><span>{workflow.outcome}</span></div>
-              <div className={styles.cardMetrics}><div><span>Per run</span><strong>{formatMinutes(workflow.totalMinutes)}</strong></div><div><span>Stages</span><strong>{workflow.stages.length}</strong></div><div><span>Verified observations</span><strong>{workflow.quality.evidenceCount}</strong></div><div><span>Screenshots</span><strong>{workflow.quality.screenshotCount}/{workflow.stages.length}</strong></div></div>
+              <div className={styles.cardMetrics}><div><span>Per run</span><strong>{formatMinutes(workflow.totalMinutes)}</strong></div><div><span>Stages</span><strong>{workflow.stages.length}</strong></div><div><span>Evidence</span><strong>{workflow.quality.evidenceCount}</strong></div><div><span>Screenshots</span><strong>{workflow.quality.screenshotCount}/{workflow.stages.length}</strong></div></div>
               <div className={styles.cardFooter}><span>{workflow.frequency}</span><strong>Open map <ChevronRight size={14} /></strong></div>
             </button>
           );
@@ -686,7 +685,7 @@ function WorkflowDetail({ workflow, navigate }: { workflow: WorkflowMap | null; 
       <section className={styles.detailStats}>
         <div><span>Frequency</span><strong>{workflow.frequency}</strong></div>
         <div><span>App switches</span><strong>{workflow.appSwitches || "Not clear"}</strong></div>
-        <div><span>Verified observations</span><strong>{workflow.quality.evidenceCount}</strong></div>
+        <div><span>Evidence</span><strong>{workflow.quality.evidenceCount}</strong></div>
         <div><span>Stage screenshots</span><strong>{workflow.quality.screenshotCount} of {workflow.stages.length}</strong></div>
         <div><span>Evidence quality</span><strong>{qualityLabel(workflow.quality.grade)}</strong></div>
       </section>
@@ -790,8 +789,8 @@ function TimeView({ analysis, analyze, analyzing, workProfile, workspaceView, le
   }, [lens]);
   if (!profile) {
     return <>
-      <div className={styles.pageHeader}><div><span>Time portfolio</span><h1>Where your time goes</h1><p>See captured time by category, project, person, and company—with traceable observations and explicit gaps.</p></div></div>
-      {analyzing ? <ProcessingView /> : <section className={styles.emptyState}><ChartPie size={23} /><h2>Build your time profile</h2><p>Refresh once to organize the same bounded {WORKFLOW_CATALOG_DAYS}-day work history into four independent views. Unsupported time stays unattributed.</p><button className={styles.primaryButton} onClick={analyze}><RefreshCw size={14} />Map where my time goes</button></section>}
+      <div className={styles.pageHeader}><div><h1>Where your time goes</h1></div></div>
+      {analyzing ? <ProcessingView /> : <section className={styles.emptyState}><ChartPie size={23} /><h2>Build your time profile</h2><p>Organize the last {WORKFLOW_CATALOG_DAYS} days by category, project, person, and company.</p><button className={styles.primaryButton} onClick={analyze}><RefreshCw size={14} />Map where my time goes</button></section>}
     </>;
   }
   if (!dimension) return null;
@@ -801,37 +800,35 @@ function TimeView({ analysis, analyze, analyzing, workProfile, workspaceView, le
   const resultLabel = matchingItems.length === 1
     ? ({ categories: "category", projects: "project", people: "person", companies: "company" } as const)[lens]
     : lens;
-  const lensPrivacy = workspaceView && lens === "people"
-    ? "People here are external collaborators from approved aggregate reports. Contributing employee identities stay private."
-    : "Filter the complete supported list; open an item only when you need its underlying observations.";
+  const lensNotice = workspaceView && lens === "people"
+    ? "Only external collaborators appear here. Employee identities stay private."
+    : null;
 
   return <>
     <div className={styles.pageHeader}>
-      <div><span>Time portfolio</span><h1>Where your time goes</h1><p>Captured active time organized four ways. Each lens stands alone, so category, project, person, and company totals are never added together.</p></div>
+      <div><h1>Where your time goes</h1></div>
       <button className={styles.primaryButton} onClick={analyze} disabled={analyzing}>{analyzing ? <><span className={styles.spinnerSmall} />Refreshing…</> : <><RefreshCw size={14} />Refresh profile</>}</button>
     </div>
     <section className={styles.timeSummary} aria-label="Time profile summary">
-      <div><span>Captured active time</span><strong>{formatMinutes(profile.totalMinutes)}</strong><small>measured across the profile window</small></div>
-      <div><span>Usable history</span><strong>{usableDays} days</strong><small>with captured activity</small></div>
-      <div><span>{lens} coverage</span><strong>{dimension.coveragePercent}%</strong><small>of captured time attributed</small></div>
-      <div><span>Still unattributed</span><strong>{formatMinutes(dimension.unattributedMinutes)}</strong><small>visible instead of guessed</small></div>
+      <div><span>Active time</span><strong>{formatMinutes(profile.totalMinutes)}</strong></div>
+      <div><span>History</span><strong>{usableDays} days</strong></div>
+      <div><span>{lens} coverage</span><strong>{dimension.coveragePercent}%</strong></div>
+      <div><span>Unattributed</span><strong>{formatMinutes(dimension.unattributedMinutes)}</strong></div>
     </section>
     {workProfile?.hourlyValue && workProfile.hourlyValue.amount > 0 && <section className={styles.timeValueNotice}>
       <BadgeDollarSign size={17} />
-      <div><strong>{formatCurrency((profile.totalMinutes / 60) * workProfile.hourlyValue.amount, workProfile.hourlyValue.currency)} estimated time value</strong><p>Captured active time multiplied by your work-profile estimate. This is directional, not payroll or billing data.</p></div>
+      <div><strong>{formatCurrency((profile.totalMinutes / 60) * workProfile.hourlyValue.amount, workProfile.hourlyValue.currency)} estimated time value</strong><p>Based on your hourly value.</p></div>
     </section>}
-    <div className={styles.timeLensHeader}><div><span>Choose a lens</span><h2>Understand time without mixing dimensions</h2></div><Pill>{profile.days}-day profile</Pill></div>
     <div className={styles.timeLensTabs} role="tablist" aria-label="Time profile lens">
       {timeLensOptions.map(([target, Icon, label]) => <button key={target} role="tab" aria-selected={lens === target} className={lens === target ? styles.timeLensActive : ""} onClick={() => setLens(target)}><Icon size={15} /><span>{label}</span><strong>{profile[target].items.length}</strong></button>)}
     </div>
     <div className={styles.timeLensTools}>
       <label><Search size={13} /><input aria-label={`Filter ${lens}`} value={query} onChange={(event) => { setQuery(event.target.value); setVisibleCount(12); }} placeholder={`Filter ${lens}…`} /></label>
-      <p>{lensPrivacy}</p>
+      {lensNotice && <p>{lensNotice}</p>}
       <strong>{matchingItems.length} {resultLabel}</strong>
     </div>
     <TimeAllocationList items={visibleItems} lens={lens} query={query} />
     {hiddenCount > 0 && <button className={styles.timeShowMore} onClick={() => setVisibleCount((count) => count + 24)}>Show {Math.min(hiddenCount, 24)} more <span>{hiddenCount} remaining</span></button>}
-    <div className={styles.timeCoverageNote}><Eye size={14} /><div><strong>{formatMinutes(dimension.attributedMinutes)} attributed · {formatMinutes(dimension.unattributedMinutes)} left open</strong><p>Amounts are conservative estimates from exact captured observations. Low-evidence labels are omitted.</p></div></div>
   </>;
 }
 
@@ -854,13 +851,13 @@ function BottlenecksView({ workflows, openWorkflow }: { workflows: WorkflowMap[]
   const constraints = items.filter((item) => !isActionableBottleneck(item)).sort((a, b) => b.estimatedMinutesPerRun - a.estimatedMinutesPerRun);
   const largestDelay = actionable.reduce((largest, item) => Math.max(largest, item.estimatedMinutesPerRun), 0);
   const openByTitle = (title: string) => openWorkflow(workflows.findIndex((workflow) => workflow.title === title));
-  return <><div className={styles.pageHeader}><div><span>Friction map</span><h1>What you can change</h1><p>Actionable friction is ranked first. Delays owned by other people, systems, or required controls are separated below.</p></div>{!!actionable.length && <div className={styles.headerMetric}><span>Largest addressable delay</span><strong>{formatMinutes(largestDelay)}</strong></div>}</div>{actionable.length ? <><div className={styles.sectionHeading}><div><span>Within reach</span><h2>Friction you can affect</h2></div></div><BottleneckList items={actionable} openWorkflow={openByTitle} /></> : <section className={styles.emptyState}><CheckCircle2 size={23} /><h2>No actionable friction identified</h2><p>The observed delays are outside your control or are deliberate safeguards.</p></section>}{!!constraints.length && <><div className={styles.sectionHeading}><div><span>Plan around</span><h2>External and required constraints</h2></div><Pill>{constraints.length} separated</Pill></div><BottleneckList items={constraints} openWorkflow={openByTitle} numbered={false} /></>}</>;
+  return <><div className={styles.pageHeader}><div><h1>Friction and constraints</h1><p>Focus on what you can affect. Plan around the rest.</p></div>{!!actionable.length && <div className={styles.headerMetric}><span>Largest addressable delay</span><strong>{formatMinutes(largestDelay)}</strong></div>}</div>{actionable.length ? <><div className={styles.sectionHeading}><div><span>Within reach</span><h2>Friction you can affect</h2></div></div><BottleneckList items={actionable} openWorkflow={openByTitle} /></> : <section className={styles.emptyState}><CheckCircle2 size={23} /><h2>No actionable friction identified</h2><p>Only external or required constraints were found.</p></section>}{!!constraints.length && <><div className={styles.sectionHeading}><div><span>Plan around</span><h2>External and required constraints</h2></div><Pill>{constraints.length}</Pill></div><BottleneckList items={constraints} openWorkflow={openByTitle} numbered={false} /></>}</>;
 }
 
 function EvidenceView({ workflows, openWorkflow, runtime }: { workflows: WorkflowMap[]; openWorkflow: (index: number) => void; runtime: WorkflowRuntime | null }) {
   const items = workflows.flatMap((workflow, workflowIndex) => workflow.evidence.map((evidence) => ({ ...evidence, workflowTitle: workflow.title, workflowIndex })));
   const evidenceBoundary = runtime?.processingLocation === "cloud" || runtime?.processingLocation === "confidential-cloud" ? "Workspace-controlled evidence" : "Raw recording stays local";
-  return <><div className={styles.pageHeader}><div><span>Verified observations</span><h1>Evidence behind the maps</h1><p>Every row matches an exact captured timestamp. Use it to challenge workflow stages, time estimates, and friction classifications.</p></div><Pill><LockKeyhole size={12} />{evidenceBoundary}</Pill></div>{items.length ? <section className={styles.evidenceList}>{items.map((item, index) => <button key={`${item.timestamp}-${index}`} onClick={() => openWorkflow(item.workflowIndex)}><span className={styles.evidenceIndex}>{String(index + 1).padStart(2, "0")}</span><div><span>{formatEvidenceTimestamp(item.timestamp)} · {item.app}</span><strong>{item.workflowTitle}</strong><p>{item.detail}</p></div><ChevronRight size={16} /></button>)}</section> : <section className={styles.emptyState}><FileCheck2 size={23} /><h2>No analyzed evidence yet</h2><p>Build your first work map to see the observations behind it.</p></section>}</>;
+  return <><div className={styles.pageHeader}><div><h1>Evidence behind the maps</h1><p>Exact captured moments for checking each map.</p></div><Pill><LockKeyhole size={12} />{evidenceBoundary}</Pill></div>{items.length ? <section className={styles.evidenceList}>{items.map((item, index) => <button key={`${item.timestamp}-${index}`} onClick={() => openWorkflow(item.workflowIndex)}><span className={styles.evidenceIndex}>{String(index + 1).padStart(2, "0")}</span><div><span>{formatEvidenceTimestamp(item.timestamp)} · {item.app}</span><strong>{item.workflowTitle}</strong><p>{item.detail}</p></div><ChevronRight size={16} /></button>)}</section> : <section className={styles.emptyState}><FileCheck2 size={23} /><h2>No evidence yet</h2><p>Build your first work map to see its captured moments.</p></section>}</>;
 }
 
 const EMPTY_PROFILE_KPI: WorkProfileKpi = {
@@ -888,7 +885,6 @@ function ProfileView({
   update: (profile: WorkProfile) => void;
   save: () => void;
 }) {
-  const completed = profileCompletion(profile);
   const updateKpi = (index: number, changes: Partial<WorkProfileKpi>) => update({
     ...profile,
     kpis: profile.kpis.map((kpi, kpiIndex) => kpiIndex === index ? { ...kpi, ...changes } : kpi),
@@ -900,24 +896,19 @@ function ProfileView({
 
   return <>
     <div className={styles.pageHeader}>
-      <div><span>Work profile</span><h1>Teach Screenpipe what matters</h1><p>{workspaceView ? "Set the outcomes, measures, and cost assumptions used to interpret approved aggregate work patterns." : "Add just enough context to make your workflow maps more relevant to your role and goals."}</p></div>
-      <Pill>{completed} of 2 essentials</Pill>
+      <div><h1>Teach Screenpipe what matters</h1><p>Add context for more relevant workflow maps.</p></div>
     </div>
-    <section className={styles.profileBoundary}>
-      <ShieldCheck size={18} />
-      <div><strong>{workspaceView ? "Used for aggregate reports" : "Private on this device"}</strong><p>{workspaceView ? "This context guides organization-level analysis. It does not give managers access to raw employee history." : "Your profile is sent only with the bounded context you choose to analyze. It is not shared with a workspace."}</p></div>
-    </section>
     <section className={styles.profileSteps}>
       <article className={styles.profileCard}>
-        <div className={styles.profileCardHead}><span>01</span><div><h2>{workspaceView ? "Describe the organization" : "Describe your work"}</h2><p>{workspaceView ? "What the company does and who it serves." : "Your role, responsibilities, and the work you own."}</p></div></div>
+        <div className={styles.profileCardHead}><span>01</span><div><h2>{workspaceView ? "Describe the organization" : "Describe your work"}</h2></div></div>
         <textarea value={profile.summary} onChange={(event) => update({ ...profile, summary: event.target.value })} maxLength={2_000} placeholder={workspaceView ? "We help operations teams understand and improve how work gets done." : "I lead product and customer development. I own prioritization, enterprise pilots, and fundraising."} aria-label={workspaceView ? "Organization overview" : "Role and responsibilities"} />
       </article>
       <article className={styles.profileCard}>
-        <div className={styles.profileCardHead}><span>02</span><div><h2>Choose the outcomes that matter now</h2><p>Keep this short. Priorities guide relevance; captured work remains the evidence.</p></div></div>
+        <div className={styles.profileCardHead}><span>02</span><div><h2>Choose the outcomes that matter now</h2></div></div>
         <textarea value={profile.priorities} onChange={(event) => update({ ...profile, priorities: event.target.value })} maxLength={1_000} placeholder="Reduce customer response time. Shorten enterprise onboarding. Increase successful weekly workflow reviews." aria-label="Current outcomes" />
       </article>
       <article className={styles.profileCard}>
-        <div className={styles.profileCardHead}><span>03</span><div><h2>Define success and the value of time</h2><p>Measures and cost are optional. Add only what helps a real decision.</p></div></div>
+        <div className={styles.profileCardHead}><span>03</span><div><h2>Define success and the value of time</h2></div></div>
         <div className={styles.profileKpiHeader}><div><Target size={15} /><strong>Success measures</strong></div><button type="button" onClick={() => update({ ...profile, kpis: [...profile.kpis, { ...EMPTY_PROFILE_KPI }] })} disabled={profile.kpis.length >= 6}><Plus size={13} />Add measure</button></div>
         {profile.kpis.length ? <div className={styles.profileKpis}>{profile.kpis.map((kpi, index) => <fieldset key={index}>
           <legend>Measure {index + 1}</legend>
@@ -931,14 +922,14 @@ function ProfileView({
             <label><span>Cadence</span><input value={kpi.cadence} onChange={(event) => updateKpi(index, { cadence: event.target.value })} maxLength={80} placeholder="Weekly" /></label>
             <label><span>Owner</span><input value={kpi.owner} onChange={(event) => updateKpi(index, { owner: event.target.value })} maxLength={120} placeholder={workspaceView ? "Customer success" : "Me"} /></label>
           </div></details>
-        </fieldset>)}</div> : <div className={styles.profileEmptyMeasure}>No success measures yet. Workflow mapping still works without them.</div>}
+        </fieldset>)}</div> : <div className={styles.profileEmptyMeasure}>No success measures yet.</div>}
         <div className={styles.profileValue}>
-          <div><BadgeDollarSign size={17} /><div><strong>{hourlyLabel}</strong><p>{workspaceView ? "Use a blended loaded cost, never an employee's salary." : "Use your own decision-making estimate, not a payroll number."}</p></div></div>
+          <div><BadgeDollarSign size={17} /><div><strong>{hourlyLabel}</strong><p>{workspaceView ? "Use a blended hourly cost." : "Optional estimate."}</p></div></div>
           <div className={styles.profileValueInputs}>
             <select value={profile.hourlyValue?.currency ?? "USD"} onChange={(event) => update({ ...profile, hourlyValue: { amount: profile.hourlyValue?.amount ?? 0, currency: event.target.value, basis: workspaceView ? "blended-cost" : "personal-estimate" } })} aria-label="Currency"><option>USD</option><option>EUR</option><option>GBP</option><option>CAD</option><option>AUD</option></select>
             <input type="number" min="0" max="10000" step="1" value={profile.hourlyValue?.amount || ""} onChange={(event) => update({ ...profile, hourlyValue: event.target.value ? { amount: Math.min(10_000, Math.max(0, Number(event.target.value))), currency: profile.hourlyValue?.currency ?? "USD", basis: workspaceView ? "blended-cost" : "personal-estimate" } : null })} placeholder="Optional" aria-label={hourlyLabel} />
           </div>
-          {estimatedPeriodValue && <small>At 40 hours, this is {estimatedPeriodValue}. Screenpipe will label all derived values as estimates.</small>}
+          {estimatedPeriodValue && <small>About {estimatedPeriodValue} per 40-hour week.</small>}
         </div>
       </article>
     </section>
@@ -950,7 +941,7 @@ function ProfileView({
       </div>
     </details>
     <section className={styles.profileSaveBar}>
-      <div>{error ? <strong className={styles.profileError}>{error}</strong> : <><strong>{saved ? "Profile saved" : "Ready when you are"}</strong><span>{workspaceView ? "Changes guide the next approved workspace report." : "Changes guide the next workflow refresh."}</span></>}</div>
+      <div>{error ? <strong className={styles.profileError}>{error}</strong> : saved ? <strong>Profile saved</strong> : null}</div>
       <button className={styles.primaryButton} type="button" onClick={save} disabled={saving}>{saving ? <><span className={styles.spinnerSmall} />Saving…</> : <><Save size={14} />Save profile</>}</button>
     </section>
   </>;
@@ -963,15 +954,14 @@ function PrivacyView({ runtime }: { runtime: WorkflowRuntime | null }) {
   const minimumDays = boundary?.retention.recommendedMinimumDays ?? 30;
   const maximumDays = boundary?.retention.recommendedMaximumDays ?? 90;
   return <>
-    <div className={styles.pageHeader}><div><span>Data controls</span><h1>{workspaceView ? "What this workspace can see" : "Your work stays yours"}</h1><p>{workspaceView ? "The workspace receives approved reports and aggregate patterns. Raw recordings, screenshots, and personal timelines remain under each employee's control." : "Raw recordings, screenshots, and the detailed workflow map remain on this device. Nothing is shared with a workspace unless you explicitly approve it."}</p></div></div>
-    <section className={styles.boundaryStatement}><ShieldCheck size={18} /><div><strong>{boundary?.managerRawAccess ? "Workspace raw access is enabled" : "Managers cannot open raw employee history"}</strong><p>{workspaceView ? "This dashboard is a control plane for approved reports, enrollment health, and aggregate patterns—not a hidden activity viewer." : "The app keeps raw media and granular evidence local. When you refresh a map, it sends bounded work context for processing; it does not upload the underlying video or audio."}</p></div><Pill tone="green">Employee controlled</Pill></section>
+    <div className={styles.pageHeader}><div><h1>{workspaceView ? "What this workspace can see" : "Your work stays yours"}</h1><p>{workspaceView ? "Approved reports and aggregate patterns only. Raw employee history stays private." : "Raw recordings and screenshots stay on this device."}</p></div></div>
+    {workspaceView && <section className={styles.boundaryStatement}><ShieldCheck size={18} /><div><strong>{boundary?.managerRawAccess ? "Workspace raw access is enabled" : "Managers cannot open raw employee history"}</strong><p>Employees control what they share.</p></div><Pill tone="green">Employee controlled</Pill></section>}
     <section className={styles.privacyGrid}>
-      <article><LockKeyhole size={21} /><h2>Raw history stays local</h2><p>Screen and audio history plus stage screenshots remain on the employee's device. The workspace does not receive them.</p><Pill tone="green">Device only</Pill></article>
-      <article><Clock3 size={21} /><h2>{minimumDays}–{maximumDays} day local window</h2><p>Retention is controlled by the employee. The local window can stay bounded while preserving a longer private archive.</p><Pill>Employee retention</Pill></article>
-      <article><ShieldCheck size={21} /><h2>{archiveOn ? "Encrypted private archive" : "Cloud archive is off"}</h2><p>{archiveOn ? "Archived history is end-to-end encrypted. Recovery stays with the employee, not a manager or workspace admin." : "No archive is connected. When enabled, it must be end-to-end encrypted with employee-controlled recovery."}</p><Pill>{archiveOn ? "Employee recovery" : "Not connected"}</Pill></article>
-      <article><Eye size={21} /><h2>{workspaceView ? "Approved outputs only" : "Sharing starts private"}</h2><p>{workspaceView ? "The workspace can use aggregate patterns and employee-approved summaries. Named raw observations stay out of this dashboard." : "Your organization sees nothing from this app by default. You choose whether to share a summary or contribute to an anonymous aggregate."}</p><Pill>{workspaceView ? "Aggregate only" : "Nothing shared"}</Pill></article>
+      <article><LockKeyhole size={21} /><h2>Raw history stays local</h2><p>Screen, audio, and screenshots stay on the employee's device.</p><Pill tone="green">Device only</Pill></article>
+      <article><Clock3 size={21} /><h2>{minimumDays}–{maximumDays} day local window</h2><p>The employee controls retention.</p><Pill>Employee retention</Pill></article>
+      <article><ShieldCheck size={21} /><h2>{archiveOn ? "Encrypted private archive" : "Cloud archive is off"}</h2><p>{archiveOn ? "End-to-end encrypted with employee recovery." : "No archive is connected."}</p><Pill>{archiveOn ? "Employee recovery" : "Not connected"}</Pill></article>
+      <article><Eye size={21} /><h2>{workspaceView ? "Approved outputs only" : "Sharing starts private"}</h2><p>{workspaceView ? "Only approved summaries and aggregate patterns are visible." : "Nothing is shared unless you choose it."}</p><Pill>{workspaceView ? "Aggregate only" : "Nothing shared"}</Pill></article>
     </section>
-    <section className={styles.statusPanel}><div><span className={runtime?.recording ? styles.statusLive : ""} /><div><strong>{workspaceView ? (runtime?.recording ? "Approved reports are ready" : "Loading approved reports") : runtime?.recording ? "Work history is active" : "Work history is starting"}</strong><p>{workspaceView ? "Showing the latest reports employees have approved for workspace use." : runtime?.source === "screenpipe" ? "Using the history already captured by Screenpipe without recording twice." : "Screenpipe Workflows is preparing its private work history."}</p></div></div><Pill tone={runtime?.recording ? "green" : "plain"}>{runtime?.recording ? "Ready" : "Checking"}</Pill></section>
   </>;
 }
 
