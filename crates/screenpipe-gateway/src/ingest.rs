@@ -30,6 +30,7 @@
 //! |---|---|---|
 //! | frame     | `video_chunks` (virtual, `gw://` path) + `frames` (`full_text`) | `frames.machine_id` |
 //! | parsed    | `gateway_parsed_records` + FTS (full wire payload retained) | `device_id` |
+//! | activity  | `gateway_activity_records` + FTS (full wire payload retained) | `device_id` |
 //! | audio     | `audio_chunks` (`gw://` path) + `audio_transcriptions` (+ speaker by name) | `audio_chunks.machine_id` |
 //! | ui        | `ui_events` | `ui_events.machine_id` |
 //! | snapshot  | JPEG on disk + `frames.snapshot_path` on the matching frame row | via frame row |
@@ -48,8 +49,8 @@ use base64::Engine;
 use screenpipe_db::DatabaseManager;
 use screenpipe_sync::{BlobSource, ListRequest};
 use screenpipe_telemetry_wire::{
-    org_telemetry_prefix, parse_jsonl, parse_telemetry_key, AudioRow, FeedbackRow, FrameRow,
-    MemoryRow, ParsedRow, SnapshotRow, TelemetryRecord, UiEventRow,
+    org_telemetry_prefix, parse_jsonl, parse_telemetry_key, ActivityRow, AudioRow, FeedbackRow,
+    FrameRow, MemoryRow, ParsedRow, SnapshotRow, TelemetryRecord, UiEventRow,
 };
 use tracing::{debug, info, warn};
 
@@ -201,6 +202,35 @@ pub async fn ensure_gateway_schema(db: &DatabaseManager) -> Result<(), GatewayEr
         r#"CREATE TRIGGER IF NOT EXISTS gateway_parsed_records_ai AFTER INSERT ON gateway_parsed_records BEGIN
              INSERT INTO gateway_parsed_records_fts(rowid, text, app_name, window_name)
              VALUES (new.rowid, new.text, new.app_name, new.window_name);
+           END"#,
+    )
+    .execute(&mut **tx.conn())
+    .await?;
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS gateway_activity_records (
+            sync_id TEXT PRIMARY KEY,
+            device_id TEXT NOT NULL,
+            device_label TEXT NOT NULL,
+            activity_id TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            start_at TEXT NOT NULL,
+            title TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            payload_json TEXT NOT NULL
+        )"#,
+    )
+    .execute(&mut **tx.conn())
+    .await?;
+    sqlx::query(
+        r#"CREATE VIRTUAL TABLE IF NOT EXISTS gateway_activity_records_fts
+           USING fts5(title, summary, content='gateway_activity_records', content_rowid='rowid')"#,
+    )
+    .execute(&mut **tx.conn())
+    .await?;
+    sqlx::query(
+        r#"CREATE TRIGGER IF NOT EXISTS gateway_activity_records_ai AFTER INSERT ON gateway_activity_records BEGIN
+             INSERT INTO gateway_activity_records_fts(rowid, title, summary)
+             VALUES (new.rowid, new.title, new.summary);
            END"#,
     )
     .execute(&mut **tx.conn())
@@ -456,6 +486,11 @@ impl Ingestor {
                     device_label,
                     parsed,
                 } => insert_parsed(conn, device_id, device_label, parsed).await?,
+                TelemetryRecord::Activity {
+                    device_id,
+                    device_label,
+                    activity,
+                } => insert_activity(conn, device_id, device_label, activity).await?,
                 TelemetryRecord::Audio {
                     device_id, audio, ..
                 } => insert_audio(conn, device_id, audio).await?,
@@ -544,6 +579,34 @@ async fn insert_parsed(
     .bind(&parsed.parser_id)
     .bind(&parsed.parser_version)
     .bind(i64::from(parsed.schema_version))
+    .bind(payload_json)
+    .execute(&mut **conn)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+async fn insert_activity(
+    conn: &mut Conn,
+    device_id: &str,
+    device_label: &str,
+    activity: &ActivityRow,
+) -> Result<bool, GatewayError> {
+    let sync_id = format!("{device_id}:activity:{}", activity.activity_id);
+    let payload_json = serde_json::to_string(activity)
+        .map_err(|error| GatewayError::DbWrite(format!("serialize activity row: {error}")))?;
+    let result = sqlx::query(
+        r#"INSERT OR IGNORE INTO gateway_activity_records
+           (sync_id, device_id, device_label, activity_id, timestamp, start_at, title, summary, payload_json)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"#,
+    )
+    .bind(sync_id)
+    .bind(device_id)
+    .bind(device_label)
+    .bind(&activity.activity_id)
+    .bind(&activity.end_at)
+    .bind(&activity.start_at)
+    .bind(&activity.title)
+    .bind(&activity.summary)
     .bind(payload_json)
     .execute(&mut **conn)
     .await?;

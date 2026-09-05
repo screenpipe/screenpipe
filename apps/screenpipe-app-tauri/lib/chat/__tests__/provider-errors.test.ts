@@ -171,6 +171,30 @@ describe("provider error copy", () => {
     expect(msg).toContain("Codex");
   });
 
+  it("reserves upgrade guidance for explicit hosted rate limits", () => {
+    for (const raw of ["rate-limited", "rate limit exceeded", "too many requests"]) {
+      const msg = buildProviderErrorMessage(raw, {
+        provider: "screenpipe-cloud",
+        model: "auto",
+      });
+
+      expect(msg).toContain("rate-limited");
+      expect(msg).toContain("upgrade");
+    }
+  });
+
+  it("maps hosted unavailability to outage copy without upgrade guidance", () => {
+    const msg = buildProviderErrorMessage("service temporarily unavailable", {
+      provider: "screenpipe-cloud",
+      model: "auto",
+    });
+
+    expect(msg).toContain("screenpipe cloud");
+    expect(msg).toContain("outage on our end");
+    expect(msg).not.toContain("rate-limited");
+    expect(msg).not.toContain("upgrade");
+  });
+
   it("maps the per-message tool-loop cap separately", () => {
     const msg = buildProviderErrorMessage(
       '{"error":"free_chat_turn_request_limit_exceeded"}',
@@ -256,6 +280,19 @@ describe("provider error copy", () => {
   it("maps only the full Codex usage-limit signature to sanitized recovery guidance", () => {
     const expected =
       "The AI provider usage limit has been reached. Wait for it to reset, or switch your AI preset or provider.";
+    const acpExpected =
+      "Your Codex usage limit has been reached. Wait for it to reset, upgrade your ChatGPT plan, or switch your Screenpipe AI preset.";
+
+    expect(
+      buildProviderErrorMessage(
+        `ACP request failed Internal error: {
+          "message": "You've hit your usage limit. attacker suffix",
+          "codexErrorInfo": "usageLimitExceeded"
+        }`,
+        { provider: "acp", model: "codex-acp" },
+      ),
+    ).toBe(acpExpected);
+    expect(acpExpected).not.toContain("attacker suffix");
 
     expect(
       buildProviderErrorMessage(
@@ -269,6 +306,8 @@ describe("provider error copy", () => {
       "The usage limit has been reached.",
       "Codex error: usage limit has been reached.",
       "Codex error: the usage limit was reached.",
+      '{"codexErrorInfo":"usageLimit"}',
+      '{"codexError":"usageLimitExceeded"}',
     ]) {
       expect(
         buildProviderErrorMessage(raw, {

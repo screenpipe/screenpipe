@@ -25,9 +25,10 @@ mod imp {
     use crate::recording::local_api_context_from_app;
     use base64::Engine;
     use ee_sync::{
-        AudioRow, EnterpriseSyncConfig, EnterpriseSyncError, FeedbackRow, FrameRow, LocalApiClient,
-        MemoryRow, ParsedRow, SnapshotRow, UiEventRow,
+        ActivityRow, AudioRow, EnterpriseSyncConfig, EnterpriseSyncError, FeedbackRow, FrameRow,
+        LocalApiClient, MemoryRow, ParsedRow, SnapshotRow, UiEventRow,
     };
+    use screenpipe_telemetry_wire::ActivityEvidenceRow;
     use serde::Deserialize;
     use sha2::{Digest, Sha256};
     use std::collections::HashMap;
@@ -329,6 +330,43 @@ mod imp {
                 .collect::<Vec<_>>();
             out.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
             Ok(out)
+        }
+
+        async fn fetch_activities_since(
+            &self,
+            since_ts: Option<&str>,
+        ) -> Result<Vec<ActivityRow>, EnterpriseSyncError> {
+            let since = since_ts
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| value.with_timezone(&chrono::Utc))
+                .unwrap_or_else(chrono::Utc::now);
+            let entries = crate::activity_history::entries_ending_after(&self.app, since)
+                .map_err(EnterpriseSyncError::LocalApi)?;
+            Ok(entries
+                .into_iter()
+                .map(|entry| ActivityRow {
+                    activity_id: entry.id,
+                    activity_kind: entry.kind,
+                    meeting_id: entry.meeting_id,
+                    timestamp: entry.end_at.clone(),
+                    start_at: entry.start_at,
+                    end_at: entry.end_at,
+                    title: entry.title,
+                    summary: entry.summary,
+                    evidence: entry
+                        .evidence
+                        .into_iter()
+                        .map(|evidence| ActivityEvidenceRow {
+                            kind: evidence.kind,
+                            at: evidence.at,
+                            frame_id: evidence.frame_id,
+                            meeting_id: evidence.meeting_id,
+                            app_name: evidence.app_name,
+                            label: evidence.label,
+                        })
+                        .collect(),
+                })
+                .collect())
         }
 
         async fn fetch_ui_events_since(
@@ -732,6 +770,8 @@ mod imp {
     }
     const HIDDEN_UI_POLICY_POLL_INTERVAL: std::time::Duration =
         std::time::Duration::from_secs(5 * 60);
+    const NATIVE_POLICY_RETRY_INTERVAL: std::time::Duration =
+        std::time::Duration::from_secs(30);
     const NATIVE_POLICY_STARTUP_DELAY: std::time::Duration = std::time::Duration::from_secs(15);
     const RECORDING_DISABLED_BY_ADMIN_CODE: &str = "recording_disabled_by_admin";
 
@@ -764,6 +804,8 @@ mod imp {
         frames: bool,
         #[serde(default)]
         parsed: bool,
+        #[serde(default)]
+        activities: bool,
         #[serde(default = "default_enabled_sync_stream")]
         audio: bool,
         #[serde(default = "default_enabled_sync_stream")]
@@ -783,6 +825,7 @@ mod imp {
             Self {
                 frames: true,
                 parsed: false,
+                activities: false,
                 audio: true,
                 ui_events: true,
                 memories: true,
@@ -824,6 +867,7 @@ mod imp {
                 self.feedback_mode(),
                 self.frame_images_mode(),
             );
+            crate::enterprise_policy::set_activity_sync_enabled(self.activities);
         }
     }
 
@@ -975,6 +1019,16 @@ mod imp {
         Rejected,
         Unavailable(String),
         NoCredential,
+    }
+
+    fn native_policy_poll_interval(
+        result: &NativeAuthorizationResult,
+    ) -> std::time::Duration {
+        if matches!(result, NativeAuthorizationResult::Unavailable(_)) {
+            NATIVE_POLICY_RETRY_INTERVAL
+        } else {
+            HIDDEN_UI_POLICY_POLL_INTERVAL
+        }
     }
 
     async fn fetch_hidden_ui_policy(
@@ -1367,9 +1421,11 @@ mod imp {
             loop {
                 let was_hidden = crate::enterprise_policy::is_app_ui_hidden();
                 let device_id = settings_device_id(&app).unwrap_or_else(|| "unknown".to_string());
-                match resolve_native_authorization(&http, &policy_url, &heartbeat_url, &device_id)
-                    .await
-                {
+                let authorization =
+                    resolve_native_authorization(&http, &policy_url, &heartbeat_url, &device_id)
+                        .await;
+                let next_poll = native_policy_poll_interval(&authorization);
+                match authorization {
                     NativeAuthorizationResult::Authorized(policy) => {
                         let was_authorized = crate::enterprise_policy::recording_authorized();
                         crate::enterprise_policy::update_recording_authorized(true);
@@ -1453,7 +1509,7 @@ mod imp {
                     }
                 }
 
-                tokio::time::sleep(HIDDEN_UI_POLICY_POLL_INTERVAL).await;
+                tokio::time::sleep(next_poll).await;
             }
         });
     }
@@ -1724,9 +1780,10 @@ mod imp {
             choose_device_id, classify_failed_enterprise_response, credential_authorizes_policy,
             enterprise_license_hash, exact_frame_url, explicitly_rejects_authorization,
             image_uploads_allowed, locked_setting_enforces_auto_start, native_policy_startup_delay,
-            sibling_heartbeat_url, EnterprisePolicyCredentialKind, HiddenUiPolicyResponse,
-            NativePolicyFetchError, NativeSyncStreams, NATIVE_POLICY_STARTUP_DELAY,
-            RECORDING_DISABLED_BY_ADMIN_CODE,
+            native_policy_poll_interval, sibling_heartbeat_url, EnterprisePolicyCredentialKind,
+            HiddenUiPolicyResponse, NativeAuthorizationResult, NativePolicyFetchError,
+            NativeSyncStreams, HIDDEN_UI_POLICY_POLL_INTERVAL, NATIVE_POLICY_RETRY_INTERVAL,
+            NATIVE_POLICY_STARTUP_DELAY, RECORDING_DISABLED_BY_ADMIN_CODE,
         };
         use std::collections::HashMap;
 
@@ -1746,6 +1803,20 @@ mod imp {
             assert_eq!(
                 native_policy_startup_delay(false),
                 NATIVE_POLICY_STARTUP_DELAY
+            );
+        }
+
+        #[test]
+        fn unavailable_native_authorization_retries_before_the_regular_poll() {
+            assert_eq!(
+                native_policy_poll_interval(&NativeAuthorizationResult::Unavailable(
+                    "temporary control-plane failure".to_string()
+                )),
+                NATIVE_POLICY_RETRY_INTERVAL
+            );
+            assert_eq!(
+                native_policy_poll_interval(&NativeAuthorizationResult::Rejected),
+                HIDDEN_UI_POLICY_POLL_INTERVAL
             );
         }
 
@@ -1809,6 +1880,7 @@ mod imp {
                 sync_streams: NativeSyncStreams {
                     frames: true,
                     parsed: true,
+                    activities: true,
                     audio: false,
                     ui_events: true,
                     memories: false,
@@ -1831,6 +1903,7 @@ mod imp {
             assert!(policy.require_account_login);
             assert!(!policy.recording_allowed);
             assert!(policy.sync_streams.parsed);
+            assert!(policy.sync_streams.activities);
             assert!(!policy.sync_streams.audio);
             assert_eq!(policy.sync_streams.feedback_mode(), "full");
             assert_eq!(policy.sync_streams.frame_images_mode(), "all");

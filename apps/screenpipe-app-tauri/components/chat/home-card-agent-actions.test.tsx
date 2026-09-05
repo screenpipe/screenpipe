@@ -5,6 +5,7 @@
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import tauriConfig from "../../src-tauri/tauri.conf.json";
 
 import {
   buildHomeCardAgentPrompt,
@@ -26,8 +27,8 @@ vi.mock("@/lib/utils/tauri", () => ({
   commands: { copyTextToClipboard: mocks.copyTextToClipboard },
 }));
 
-vi.mock("@tauri-apps/plugin-opener", () => ({
-  openUrl: mocks.openUrl,
+vi.mock("@/lib/open-external-url", () => ({
+  openExternalUrl: mocks.openUrl,
 }));
 
 const DAY_RECAP = {
@@ -185,6 +186,17 @@ describe("HomeCardAgentActions", () => {
       "home_card_agent_handoff_completed",
       expect.objectContaining({ agent: "codex", card: "custom" }),
     );
+    const prompt = buildHomeCardAgentPrompt(
+      {
+        name: "custom-tpl-1",
+        title: "Client recap",
+        previewPrompt: "Summarize my client work",
+      },
+      "codex",
+    );
+    expect(mocks.openUrl).toHaveBeenCalledWith(
+      `codex://threads/new?prompt=${encodeURIComponent(prompt)}`,
+    );
   });
 
   it("shows the copied fallback when the app cannot open", async () => {
@@ -226,6 +238,10 @@ describe("HomeCardAgentActions", () => {
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent("unavailable"),
     );
+    const prompt = buildHomeCardAgentPrompt(DAY_RECAP, "cursor");
+    expect(mocks.openUrl).toHaveBeenCalledWith(
+      `cursor://anysphere.cursor-deeplink/prompt?text=${encodeURIComponent(prompt)}`,
+    );
     expect(mocks.capture).toHaveBeenCalledWith(
       "home_card_agent_handoff_completed",
       expect.objectContaining({
@@ -235,5 +251,15 @@ describe("HomeCardAgentActions", () => {
         clipboard_copied: false,
       }),
     );
+  });
+
+  it("allows every agent deeplink through the cross-platform shell validator", () => {
+    const validator = new RegExp(`^${tauriConfig.plugins.shell.open}$`);
+
+    expect(validator.test("claude://claude.ai/new?q=test")).toBe(true);
+    expect(
+      validator.test("cursor://anysphere.cursor-deeplink/prompt?text=test"),
+    ).toBe(true);
+    expect(validator.test("codex://threads/new?prompt=test")).toBe(true);
   });
 });

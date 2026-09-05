@@ -298,6 +298,24 @@ const CURATED_MODELS: ModelEntry[] = [
     recommended_for: ['chat', 'analysis', 'coding'],
     warning: 'Very expensive Business model — use only when Sonnet or Opus is insufficient',
   },
+  {
+    id: 'glm-5.3-flash-reap50-iq3m',
+    object: 'model',
+    owned_by: 'screenpipe',
+    name: 'GLM-5.3 Flash REAP50 IQ3_M',
+    description: 'quantized text model running in Screenpipe\'s confidential Tinfoil container',
+    tags: ['business', 'confidential', 'text-only', 'experimental'],
+    free: false,
+    context_window: 32768,
+    max_output_tokens: 8192,
+    best_for: ['text extraction', 'summarization', 'analysis'],
+    speed: 'medium',
+    intelligence: 'high',
+    cost_tier: 'low',
+    recommended_for: ['chat', 'analysis'],
+    warning: 'Experimental single-slot, text-only model — requests may queue under load',
+    requires_env: 'TINFOIL_GLM_API_KEY',
+  },
 ];
 
 /**

@@ -4,9 +4,10 @@
 
 //! Enterprise telemetry sync.
 //!
-//! Periodically pulls new screen + audio + UI activity from the local screenpipe
-//! API and POSTs it as JSONL to the screenpipe enterprise ingest endpoint,
-//! authenticated with an org license key. Server-side it lands in R2 under
+//! Periodically pulls new screen, interpreted Activities, audio, and UI data
+//! from the local screenpipe API and POSTs it as JSONL to the screenpipe
+//! enterprise ingest endpoint, authenticated with an org license key.
+//! Server-side it lands in R2 under
 //! `enterprise-telemetry/{license_id}/{device_id}/{ts}.jsonl` and feeds the
 //! org's admin chat dashboard.
 //!
@@ -248,6 +249,7 @@ struct CursorBoundary {
     ui: u32,
     memories: u32,
     parsed: u32,
+    activity_ts: Option<String>,
     /// Feedback supports a true `(updated_at, id)` keyset cursor because its
     /// IDs are stable strings and its local route merges DB and legacy rows.
     feedback_id: Option<String>,
@@ -380,6 +382,14 @@ pub trait LocalApiClient: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Fetch AI-interpreted Activities ending after `since_ts`.
+    async fn fetch_activities_since(
+        &self,
+        _since_ts: Option<&str>,
+    ) -> Result<Vec<ActivityRow>, EnterpriseSyncError> {
+        Ok(Vec::new())
+    }
+
     /// Fetch one frame's full-resolution JPEG by id — the same image the
     /// local `/frames/{id}` route serves, which means capture-time PII
     /// redaction has already been applied when the org policy enables it.
@@ -401,7 +411,8 @@ pub trait LocalApiClient: Send + Sync {
 // same types — so it lives in `screenpipe-telemetry-wire`. Re-exported here
 // so the desktop shim keeps importing everything from `ee_sync::`.
 pub use screenpipe_telemetry_wire::{
-    AudioRow, FeedbackRow, FrameRow, MemoryRow, ParsedRow, SnapshotRow, TelemetryRecord, UiEventRow,
+    ActivityRow, AudioRow, FeedbackRow, FrameRow, MemoryRow, ParsedRow, SnapshotRow,
+    TelemetryRecord, UiEventRow,
 };
 
 // ─── Errors ─────────────────────────────────────────────────────────────────
@@ -596,6 +607,10 @@ async fn run_one_sync_inner(
         cursor.last_parsed_ts = Some(cutoff.to_rfc3339());
         cursor.boundary.parsed = 0;
     }
+    if cursor.boundary.activity_ts.is_none() {
+        let cutoff = chrono::Utc::now() - chrono::Duration::from_std(SAFE_BACKFILL).unwrap();
+        cursor.boundary.activity_ts = Some(cutoff.to_rfc3339());
+    }
 
     // Per-stream sync policy is fetched fresh on every tick — the admin can
     // flip toggles in the dashboard and the device picks them up on the next
@@ -728,6 +743,20 @@ async fn run_one_sync_inner(
     } else {
         Vec::new()
     };
+    let activities = if streams.activities {
+        match local
+            .fetch_activities_since(cursor.boundary.activity_ts.as_deref())
+            .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                warn!("enterprise sync: activity fetch failed (skipping): {}", error);
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
 
     if frames.is_empty()
         && audio.is_empty()
@@ -735,17 +764,19 @@ async fn run_one_sync_inner(
         && snapshots.is_empty()
         && memories.is_empty()
         && parsed.is_empty()
+        && activities.is_empty()
         && feedback.is_empty()
     {
         debug!("enterprise sync: nothing new since last tick");
         return Ok(SyncTickReport::default());
     }
 
-    let mut body = build_jsonl_with_parsed(
+    let mut body = screenpipe_telemetry_wire::build_jsonl_with_semantic_streams(
         &cfg.device_id,
         &cfg.device_label,
         &frames,
         &parsed,
+        &activities,
         &audio,
         &ui,
         &snapshots,
@@ -765,6 +796,9 @@ async fn run_one_sync_inner(
         &frames,
         |row| &row.timestamp,
     );
+    if let Some(latest) = activities.last() {
+        next_cursor.boundary.activity_ts = Some(latest.end_at.clone());
+    }
     advance_timestamp_boundary(
         &mut next_cursor.last_audio_ts,
         &mut next_cursor.boundary.audio,
@@ -804,6 +838,7 @@ async fn run_one_sync_inner(
             let counts = DirectUploadRecordCounts {
                 frames: frames.len(),
                 parsed: parsed.len(),
+                activities: activities.len(),
                 audio: audio.len(),
                 ui: ui.len(),
                 snapshots: snapshots.len(),
@@ -824,6 +859,7 @@ async fn run_one_sync_inner(
             let counts = DirectUploadRecordCounts {
                 frames: frames.len(),
                 parsed: parsed.len(),
+                activities: activities.len(),
                 audio: audio.len(),
                 ui: ui.len(),
                 snapshots: snapshots.len(),
@@ -852,6 +888,7 @@ async fn run_one_sync_inner(
     Ok(SyncTickReport {
         frames: frames.len(),
         parsed: parsed.len(),
+        activities: activities.len(),
         audio: audio.len(),
         ui: ui.len(),
         snapshots: snapshots.len(),
@@ -889,6 +926,7 @@ fn advance_timestamp_boundary<T>(
 pub struct SyncTickReport {
     pub frames: usize,
     pub parsed: usize,
+    pub activities: usize,
     pub audio: usize,
     pub ui: usize,
     pub snapshots: usize,
@@ -2174,6 +2212,20 @@ mod tests {
         }
     }
 
+    fn activity(id: &str, start: &str, end: &str) -> ActivityRow {
+        ActivityRow {
+            activity_id: id.to_string(),
+            activity_kind: "work".to_string(),
+            meeting_id: None,
+            timestamp: end.to_string(),
+            start_at: start.to_string(),
+            end_at: end.to_string(),
+            title: "Prepared enterprise rollout".to_string(),
+            summary: "Reviewed policy and completed the rollout checklist.".to_string(),
+            evidence: Vec::new(),
+        }
+    }
+
     // ─── truncate_on_char_boundary (UTF-8 safety) ───────────────────────
 
     #[test]
@@ -2601,11 +2653,13 @@ mod tests {
         memories_to_yield: Mutex<Vec<Vec<MemoryRow>>>,
         feedback_to_yield: Mutex<Vec<Vec<FeedbackRow>>>,
         parsed_to_yield: Mutex<Vec<Vec<ParsedRow>>>,
+        activities_to_yield: Mutex<Vec<Vec<ActivityRow>>>,
         last_frames_since: Mutex<Option<String>>,
         last_audio_since: Mutex<Option<String>>,
         last_memories_since: Mutex<Option<String>>,
         last_feedback_since: Mutex<Option<String>>,
         last_parsed_since: Mutex<Option<String>>,
+        last_activity_since: Mutex<Option<String>>,
     }
 
     impl MockLocal {
@@ -2616,11 +2670,13 @@ mod tests {
                 memories_to_yield: Mutex::new(Vec::new()),
                 feedback_to_yield: Mutex::new(Vec::new()),
                 parsed_to_yield: Mutex::new(Vec::new()),
+                activities_to_yield: Mutex::new(Vec::new()),
                 last_frames_since: Mutex::new(None),
                 last_audio_since: Mutex::new(None),
                 last_memories_since: Mutex::new(None),
                 last_feedback_since: Mutex::new(None),
                 last_parsed_since: Mutex::new(None),
+                last_activity_since: Mutex::new(None),
             }
         }
 
@@ -2636,6 +2692,11 @@ mod tests {
 
         fn with_parsed(mut self, parsed: Vec<Vec<ParsedRow>>) -> Self {
             self.parsed_to_yield = Mutex::new(parsed);
+            self
+        }
+
+        fn with_activities(mut self, activities: Vec<Vec<ActivityRow>>) -> Self {
+            self.activities_to_yield = Mutex::new(activities);
             self
         }
     }
@@ -2740,6 +2801,7 @@ mod tests {
                 "off".to_string(),
                 "off".to_string(),
             );
+            crate::enterprise_policy::set_activity_sync_enabled(false);
         }
     }
 
@@ -2814,6 +2876,18 @@ mod tests {
             *self.last_parsed_since.lock().unwrap() = since_ts.map(|s| s.to_string());
             Ok(self
                 .parsed_to_yield
+                .lock()
+                .unwrap()
+                .pop()
+                .unwrap_or_default())
+        }
+        async fn fetch_activities_since(
+            &self,
+            since_ts: Option<&str>,
+        ) -> Result<Vec<ActivityRow>, EnterpriseSyncError> {
+            *self.last_activity_since.lock().unwrap() = since_ts.map(str::to_string);
+            Ok(self
+                .activities_to_yield
                 .lock()
                 .unwrap()
                 .pop()
@@ -3853,6 +3927,60 @@ mod tests {
             "off".to_string(),
             "off".to_string(),
         );
+    }
+
+    #[tokio::test]
+    async fn activity_rows_upload_only_when_the_separate_stream_is_enabled() {
+        let _guard = crate::enterprise_policy::sync_streams_test_lock();
+        let _restore = RestoreDefaultSyncStreams;
+        crate::enterprise_policy::set_sync_streams(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            "off".to_string(),
+            "off".to_string(),
+        );
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/ingest"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dir = TempDir::new().unwrap();
+        let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
+        let mut cursor = Cursor::default();
+        cursor.boundary.activity_ts = Some("2026-09-02T18:00:00Z".to_string());
+        let local = MockLocal::new(vec![], vec![]).with_activities(vec![vec![activity(
+            "activity-1",
+            "2026-09-02T18:00:00Z",
+            "2026-09-02T18:15:00Z",
+        )]]);
+
+        let disabled_report =
+            run_one_sync(&cfg, &mut cursor, &local, &reqwest::Client::new())
+                .await
+                .unwrap();
+        assert_eq!(disabled_report.activities, 0);
+        assert!(local.last_activity_since.lock().unwrap().is_none());
+        assert!(server.received_requests().await.unwrap().is_empty());
+
+        crate::enterprise_policy::set_activity_sync_enabled(true);
+        let report = run_one_sync(&cfg, &mut cursor, &local, &reqwest::Client::new())
+            .await
+            .unwrap();
+        assert_eq!(report.activities, 1);
+        assert_eq!(
+            cursor.boundary.activity_ts.as_deref(),
+            Some("2026-09-02T18:15:00Z")
+        );
+        let requests = server.received_requests().await.unwrap();
+        let batch = screenpipe_telemetry_wire::parse_jsonl(&requests[0].body);
+        assert!(matches!(batch.records.as_slice(), [TelemetryRecord::Activity { .. }]));
     }
 
     #[tokio::test]

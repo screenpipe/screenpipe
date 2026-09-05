@@ -757,6 +757,71 @@ async fn query_parsed(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Va
         .collect())
 }
 
+async fn query_activities(
+    db: &DatabaseManager,
+    kq: &KindQuery<'_>,
+) -> Result<Vec<Value>, sqlx::Error> {
+    let fts = kq.q.and_then(fts_expression);
+    let order = if kq.newest_first { "DESC" } else { "ASC" };
+    let sql = format!(
+        r#"SELECT a.rowid, a.device_id, a.device_label, a.timestamp, a.title, a.summary,
+                  a.activity_id, a.payload_json
+           FROM gateway_activity_records a
+           {fts_join}
+           WHERE datetime(a.timestamp) >= datetime(?1) AND datetime(a.timestamp) <= datetime(?2)
+             AND (?3 IS NULL OR a.device_id = ?3)
+             AND (?4 IS NULL OR datetime(a.timestamp) {cmp} datetime(?4)
+                  OR (datetime(a.timestamp) = datetime(?4) AND printf('activity:%020d', a.rowid) {cmp} ?5))
+           ORDER BY datetime(a.timestamp) {order}, printf('activity:%020d', a.rowid) {order}
+           LIMIT ?6"#,
+        cmp = if kq.newest_first { "<" } else { ">" },
+        fts_join = if fts.is_some() {
+            "JOIN gateway_activity_records_fts fts ON fts.rowid = a.rowid AND gateway_activity_records_fts MATCH ?7"
+        } else {
+            ""
+        },
+    );
+    let mut query = sqlx::query_as::<
+        _,
+        (i64, String, String, String, String, String, String, String),
+    >(sqlx::AssertSqlSafe(sql))
+    .bind(&kq.since)
+    .bind(&kq.until)
+    .bind(kq.device_id)
+    .bind(kq.cursor_t)
+    .bind(kq.cursor_id)
+    .bind(kq.limit);
+    if let Some(expression) = fts {
+        query = query.bind(expression);
+    }
+    Ok(query
+        .fetch_all(&db.pool)
+        .await?
+        .into_iter()
+        .map(
+            |(rowid, device_id, label, timestamp, title, summary, activity_id, payload)| {
+                let activity =
+                    serde_json::from_str::<Value>(&payload).unwrap_or_else(|_| json!({}));
+                with_cursor_id(
+                    json!({
+                        "kind": "activity",
+                        "t": timestamp,
+                        "device": label,
+                        "device_id": device_id,
+                        "app": null,
+                        "window": null,
+                        "url": null,
+                        "text": format!("{title}\n{summary}"),
+                        "activity_id": activity_id,
+                        "activity": activity,
+                    }),
+                    format!("activity:{rowid:020}"),
+                )
+            },
+        )
+        .collect())
+}
+
 async fn query_audio(db: &DatabaseManager, kq: &KindQuery<'_>) -> Result<Vec<Value>, sqlx::Error> {
     let fts = kq.q.and_then(fts_expression);
     let order = if kq.newest_first { "DESC" } else { "ASC" };
@@ -1114,6 +1179,7 @@ async fn query_kinds(
         let mut part = match *kind {
             "frame" => query_frames(db, kq).await?,
             "parsed" => query_parsed(db, kq).await?,
+            "activity" => query_activities(db, kq).await?,
             "audio" => query_audio(db, kq).await?,
             "ui" => query_ui(db, kq).await?,
             "memory" => query_memories(db, kq).await?,
@@ -1283,7 +1349,9 @@ async fn search(
     };
     let mut results = match query_kinds(
         &state.db,
-        &["frame", "parsed", "audio", "ui", "memory", "feedback"],
+        &[
+            "frame", "parsed", "activity", "audio", "ui", "memory", "feedback",
+        ],
         &kq,
     )
     .await
@@ -1384,7 +1452,9 @@ async fn records(
         Err(resp) => return *resp,
     };
     let kinds: Vec<&str> = match kind_filter.as_str() {
-        "all" => vec!["frame", "parsed", "audio", "ui", "memory", "feedback"],
+        "all" => vec![
+            "frame", "parsed", "activity", "audio", "ui", "memory", "feedback",
+        ],
         k => vec![k],
     };
     let kq = KindQuery {
@@ -2439,6 +2509,55 @@ mod tests {
                 && record["parser_id"].is_null()
                 && record["text"].as_str().unwrap().contains("structured")
         }));
+    }
+
+    #[tokio::test]
+    async fn activity_records_are_searchable_and_kind_filterable() {
+        let dir = tempfile::tempdir().unwrap();
+        let router = seeded_router(&dir).await;
+        let writable = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(dir.path().join("gateway.db"))
+                    .read_only(false),
+            )
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"INSERT INTO gateway_activity_records
+               (sync_id, device_id, device_label, activity_id, timestamp, start_at, title, summary, payload_json)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"#,
+        )
+        .bind("dev-a:activity:activity-1")
+        .bind("dev-a")
+        .bind("Alice Mac")
+        .bind("activity-1")
+        .bind("2026-07-22T10:15:00Z")
+        .bind("2026-07-22T10:00:00Z")
+        .bind("Prepared enterprise rollout")
+        .bind("Completed the deployment checklist")
+        .bind(r#"{"activity_id":"activity-1","title":"Prepared enterprise rollout"}"#)
+        .execute(&writable)
+        .await
+        .unwrap();
+
+        let (status, body) = get_json(
+            &router,
+            "/api/enterprise/v1/search?q=deployment&since=2026-07-22T00:00:00Z",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["results"][0]["kind"], "activity");
+        assert_eq!(body["results"][0]["activity_id"], "activity-1");
+
+        let (status, body) = get_json(
+            &router,
+            "/api/enterprise/v1/records?kind=activity&since=2026-07-22T00:00:00Z",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["records"].as_array().unwrap().len(), 1);
     }
 
     #[tokio::test]

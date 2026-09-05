@@ -350,7 +350,12 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
                     {
                         use tauri_nspanel::ManagerExt;
                         if let Ok(panel) = app.get_webview_panel("chat") {
-                            if panel.is_visible() {
+                            // A panel on another Space is also "visible". Only toggle
+                            // it closed when it is on the Space the user is viewing;
+                            // otherwise the shared show path moves it to this Space.
+                            if panel.is_visible()
+                                && crate::window::panel_is_on_active_space(&*panel)
+                            {
                                 panel.order_out(None);
                                 return;
                             }

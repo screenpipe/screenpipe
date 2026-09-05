@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "test": "bun test --timeout=10000",
-    "bindings:required": "bunx wrangler secret list | bun scripts/required-bindings.ts",
+		"bindings:required": "bun scripts/check-required-bindings.ts",
     "db:migrate:required": "bash scripts/apply-required-migrations.sh --remote",
     "db:migrate:required:local": "bash scripts/apply-required-migrations.sh --local",
     "test:local-gateway": "bun test src/test/local-gateway-harness.integration.test.ts --timeout=30000",

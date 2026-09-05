@@ -479,47 +479,87 @@ impl WriteQueueHealth {
     }
 }
 
-/// Hook invoked once when writes have failed persistently — the seam the app uses
-/// to restart the engine (rebuilding every pool + the shared WAL-index).
+/// Why the database layer needs the owning process to rebuild every live pool.
+///
+/// A WAL backlog is intentionally handled at the same lifecycle boundary as a
+/// write wedge: only the owner can stop capture, drain readers, close every
+/// connection, and reopen SQLite against a fresh WAL-index generation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DatabaseRestartReason {
+    PersistentWriteFailure,
+    SqliteHardFault,
+    WalBacklog {
+        pending_pages: i32,
+        log_pages: i32,
+        checkpointed_pages: i32,
+    },
+}
+
+/// Hook used by the database layer to ask its owner for a full lifecycle
+/// restart (rebuilding every pool + the shared WAL-index).
+pub type DatabaseRestartHook = Arc<dyn Fn(DatabaseRestartReason) + Send + Sync>;
+
+/// Legacy write-wedge hook retained for source compatibility. New owners should
+/// install a [`DatabaseRestartHook`] so they can observe every restart reason.
 pub type PersistentFailureHook = Arc<dyn Fn() + Send + Sync>;
 
 /// A slot the app fills (after `DatabaseManager` is built) with the
 /// persistent-failure hook. Shared so the drain loop reads whatever the app
 /// last set; empty until wired.
 pub(crate) struct PersistentFailureState {
-    hook: std::sync::Mutex<Option<PersistentFailureHook>>,
+    hook: std::sync::Mutex<Option<DatabaseRestartHook>>,
     hard_fault_signaled: AtomicBool,
+    wal_backlog_signaled: AtomicBool,
 }
 
 pub(crate) type PersistentFailureSlot = Arc<PersistentFailureState>;
 
 impl PersistentFailureState {
-    pub(crate) fn hook(&self) -> Option<PersistentFailureHook> {
+    pub(crate) fn hook(&self) -> Option<DatabaseRestartHook> {
         self.hook.lock().unwrap().clone()
     }
 
-    pub(crate) fn set_hook(&self, hook: PersistentFailureHook) {
+    pub(crate) fn set_hook(&self, hook: DatabaseRestartHook) {
         *self.hook.lock().unwrap() = Some(hook);
     }
 
     /// Return the installed hook exactly once for a hard-fault generation.
     /// If no hook is installed yet, leave the gate open so late app wiring can
     /// deliver the already-observed startup fault.
-    pub(crate) fn take_hard_fault_hook(&self) -> Option<PersistentFailureHook> {
+    pub(crate) fn take_hard_fault_hook(&self) -> Option<DatabaseRestartHook> {
         let hook = self.hook()?;
         self.hard_fault_signaled
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .ok()
             .map(|_| hook)
     }
+
+    /// Deliver at most one WAL-backlog restart request for this manager.
+    /// Leave the gate open until a hook is installed so embedders that wire the
+    /// lifecycle after construction can still receive the request on a later
+    /// maintenance pass.
+    pub(crate) fn signal_wal_backlog_restart(&self, reason: DatabaseRestartReason) -> bool {
+        debug_assert!(matches!(reason, DatabaseRestartReason::WalBacklog { .. }));
+        let Some(hook) = self.hook() else {
+            return false;
+        };
+        if self
+            .wal_backlog_signaled
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return true;
+        }
+        hook(reason);
+        true
+    }
 }
 
-pub(crate) fn persistent_failure_slot(
-    hook: Option<PersistentFailureHook>,
-) -> PersistentFailureSlot {
+pub(crate) fn persistent_failure_slot(hook: Option<DatabaseRestartHook>) -> PersistentFailureSlot {
     Arc::new(PersistentFailureState {
         hook: std::sync::Mutex::new(hook),
         hard_fault_signaled: AtomicBool::new(false),
+        wal_backlog_signaled: AtomicBool::new(false),
     })
 }
 
@@ -1125,7 +1165,7 @@ async fn drain_loop(
                     );
                     let hook = on_persistent_failure.hook();
                     if let Some(hook) = hook {
-                        hook();
+                        hook(DatabaseRestartReason::PersistentWriteFailure);
                     }
                 }
             }
@@ -1180,7 +1220,7 @@ async fn drain_loop(
                     );
                     let hook = on_persistent_failure.hook();
                     if let Some(hook) = hook {
-                        hook();
+                        hook(DatabaseRestartReason::PersistentWriteFailure);
                     }
                 }
             }
@@ -1205,7 +1245,7 @@ async fn drain_loop(
                 shutdown.cancel();
                 let hook = on_persistent_failure.take_hard_fault_hook();
                 if let Some(hook) = hook {
-                    hook();
+                    hook(DatabaseRestartReason::SqliteHardFault);
                 }
                 write_pool.close().await;
                 return;
@@ -2769,7 +2809,7 @@ mod tests {
             Arc::from("sqlite::memory:"),
             WriteDrainOpts {
                 health: health.clone(),
-                on_persistent_failure: persistent_failure_slot(Some(Arc::new(move || {
+                on_persistent_failure: persistent_failure_slot(Some(Arc::new(move |_| {
                     hook_flag.store(true, AtomicOrdering::SeqCst);
                 }))),
                 // Escalate on the count rule so the test does not have to wait

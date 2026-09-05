@@ -5,7 +5,7 @@
 //! JSONL record schema for enterprise telemetry batches.
 //!
 //! One record per line, tagged by `kind` so mixed streams stay trivially
-//! parseable: `kind: "frame" | "parsed" | "audio" | "ui" | "snapshot" | "memory" | "feedback"`.
+//! parseable: `kind: "frame" | "parsed" | "activity" | "audio" | "ui" | "snapshot" | "memory" | "feedback"`.
 //! Every record carries the originating `device_id` + `device_label` at the
 //! top level (flattened next to the kind-specific row fields).
 //!
@@ -57,6 +57,31 @@ pub struct ParsedRow {
     /// enterprise client to the parser crate's internal Rust types.
     pub items: Vec<serde_json::Value>,
     pub actors: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ActivityEvidenceRow {
+    pub kind: String,
+    pub at: String,
+    pub frame_id: Option<i64>,
+    pub meeting_id: Option<i64>,
+    pub app_name: Option<String>,
+    pub label: String,
+}
+
+/// One AI-interpreted Activity persisted by the desktop scheduler.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ActivityRow {
+    pub activity_id: String,
+    pub activity_kind: String,
+    pub meeting_id: Option<i64>,
+    /// Primary record timestamp used by generic enterprise readers.
+    pub timestamp: String,
+    pub start_at: String,
+    pub end_at: String,
+    pub title: String,
+    pub summary: String,
+    pub evidence: Vec<ActivityEvidenceRow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -154,7 +179,7 @@ pub struct FeedbackRow {
 }
 
 /// One JSONL line. Tagged enum keeps mixed streams trivially parseable —
-/// `kind: "frame" | "parsed" | "audio" | "ui" | "snapshot" | "memory" | "feedback"`.
+/// `kind: "frame" | "parsed" | "activity" | "audio" | "ui" | "snapshot" | "memory" | "feedback"`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum TelemetryRecord {
@@ -169,6 +194,12 @@ pub enum TelemetryRecord {
         device_label: String,
         #[serde(flatten)]
         parsed: ParsedRow,
+    },
+    Activity {
+        device_id: String,
+        device_label: String,
+        #[serde(flatten)]
+        activity: ActivityRow,
     },
     Audio {
         device_id: String,
@@ -207,6 +238,7 @@ impl TelemetryRecord {
         match self {
             Self::Frame { device_id, .. }
             | Self::Parsed { device_id, .. }
+            | Self::Activity { device_id, .. }
             | Self::Audio { device_id, .. }
             | Self::Ui { device_id, .. }
             | Self::Snapshot { device_id, .. }
@@ -219,6 +251,7 @@ impl TelemetryRecord {
         match self {
             Self::Frame { device_label, .. }
             | Self::Parsed { device_label, .. }
+            | Self::Activity { device_label, .. }
             | Self::Audio { device_label, .. }
             | Self::Ui { device_label, .. }
             | Self::Snapshot { device_label, .. }
@@ -233,6 +266,7 @@ impl TelemetryRecord {
         match self {
             Self::Frame { frame, .. } => &frame.timestamp,
             Self::Parsed { parsed, .. } => &parsed.timestamp,
+            Self::Activity { activity, .. } => &activity.end_at,
             Self::Audio { audio, .. } => &audio.timestamp,
             Self::Ui { ui, .. } => &ui.timestamp,
             Self::Snapshot { snapshot, .. } => &snapshot.timestamp,
@@ -246,6 +280,7 @@ impl TelemetryRecord {
         match self {
             Self::Frame { .. } => "frame",
             Self::Parsed { .. } => "parsed",
+            Self::Activity { .. } => "activity",
             Self::Audio { .. } => "audio",
             Self::Ui { .. } => "ui",
             Self::Snapshot { .. } => "snapshot",
@@ -318,8 +353,34 @@ pub fn build_jsonl_with_parsed(
     snapshots: &[SnapshotRow],
     memories: &[MemoryRow],
 ) -> Vec<u8> {
+    build_jsonl_with_semantic_streams(
+        device_id,
+        device_label,
+        frames,
+        parsed,
+        &[],
+        audio,
+        ui,
+        snapshots,
+        memories,
+    )
+}
+
+/// Serialize a batch including all separately gated semantic streams.
+pub fn build_jsonl_with_semantic_streams(
+    device_id: &str,
+    device_label: &str,
+    frames: &[FrameRow],
+    parsed: &[ParsedRow],
+    activities: &[ActivityRow],
+    audio: &[AudioRow],
+    ui: &[UiEventRow],
+    snapshots: &[SnapshotRow],
+    memories: &[MemoryRow],
+) -> Vec<u8> {
     let mut out = Vec::with_capacity(
-        (frames.len() + parsed.len() + audio.len() + ui.len() + memories.len()) * 256
+        (frames.len() + parsed.len() + activities.len() + audio.len() + ui.len() + memories.len())
+            * 256
             + snapshots.len() * 50_000,
     );
     let mut push = |record: &TelemetryRecord, id: i64| match serde_json::to_vec(record) {
@@ -360,6 +421,14 @@ pub fn build_jsonl_with_parsed(
             },
             p.frame_id,
         );
+    }
+    for activity in activities {
+        let record = TelemetryRecord::Activity {
+            device_id: device_id.to_string(),
+            device_label: device_label.to_string(),
+            activity: activity.clone(),
+        };
+        push(&record, 0);
     }
     for a in audio {
         push(
@@ -458,6 +527,38 @@ mod tests {
             browser_url: None,
             text: Some(text.to_string()),
         }
+    }
+
+    #[test]
+    fn activity_stream_round_trips_as_its_own_kind() {
+        let activity = ActivityRow {
+            activity_id: "activity-1".to_string(),
+            activity_kind: "work".to_string(),
+            meeting_id: None,
+            timestamp: "2026-09-02T18:15:00Z".to_string(),
+            start_at: "2026-09-02T18:00:00Z".to_string(),
+            end_at: "2026-09-02T18:15:00Z".to_string(),
+            title: "Prepared rollout".to_string(),
+            summary: "Completed the deployment checklist".to_string(),
+            evidence: Vec::new(),
+        };
+        let body = build_jsonl_with_semantic_streams(
+            "dev-a",
+            "Alice Mac",
+            &[],
+            &[],
+            &[activity],
+            &[],
+            &[],
+            &[],
+            &[],
+        );
+        let parsed = parse_jsonl(&body);
+        assert_eq!(parsed.skipped_lines, 0);
+        assert!(matches!(
+            parsed.records.as_slice(),
+            [TelemetryRecord::Activity { activity, .. }] if activity.activity_id == "activity-1"
+        ));
     }
 
     #[test]

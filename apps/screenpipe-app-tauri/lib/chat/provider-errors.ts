@@ -306,11 +306,17 @@ function buildGenericProviderErrorMessage(
     if (
       normalized.includes("rate-limited") ||
       normalized.includes("rate limit") ||
-      normalized.includes("too many requests") ||
-      normalized.includes("unavailable")
+      normalized.includes("too many requests")
     ) {
-      return `You are currently rate-limited or the service is temporarily unavailable. Please wait a moment before trying again, or upgrade your plan for higher limits.`;
+      return `You are currently rate-limited. Please wait a moment before trying again, or upgrade your plan for higher limits.`;
     }
+    if (normalized.includes("unavailable")) {
+      return buildCloudConnectionMessage();
+    }
+  }
+
+  if (/"codexerrorinfo"\s*:\s*"usagelimitexceeded"/i.test(errorStr)) {
+    return "Your Codex usage limit has been reached. Wait for it to reset, upgrade your ChatGPT plan, or switch your Screenpipe AI preset.";
   }
 
   if (normalized.includes("codex error: the usage limit has been reached")) {

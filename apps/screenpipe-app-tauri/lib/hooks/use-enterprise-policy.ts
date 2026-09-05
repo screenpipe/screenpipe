@@ -985,6 +985,11 @@ export function useEnterprisePolicyRuntime() {
           ),
           LOCAL_POLICY_COMMAND_TIMEOUT_MS
         );
+        await withTimeout(
+          "enterprise setActivitySyncEnabled",
+          commands.setActivitySyncEnabled(streams.activities === true),
+          LOCAL_POLICY_COMMAND_TIMEOUT_MS
+        );
       } catch (e) {
         console.warn("[enterprise] failed to push sync streams to Rust:", e);
       }

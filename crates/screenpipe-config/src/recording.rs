@@ -84,12 +84,44 @@ impl<'de> Deserialize<'de> for VocabEntry {
     }
 }
 
+/// A production settings store contains a weekday name, while the current UI
+/// persists Monday as 0 through Sunday as 6. Accept the seven unambiguous names
+/// without weakening validation for other strings.
+fn deserialize_day_of_week<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum NumberOrName {
+        Number(u8),
+        Name(String),
+    }
+
+    match NumberOrName::deserialize(deserializer)? {
+        NumberOrName::Number(day) => Ok(day),
+        NumberOrName::Name(name) => match name.to_ascii_lowercase().as_str() {
+            "monday" => Ok(0),
+            "tuesday" => Ok(1),
+            "wednesday" => Ok(2),
+            "thursday" => Ok(3),
+            "friday" => Ok(4),
+            "saturday" => Ok(5),
+            "sunday" => Ok(6),
+            _ => Err(serde::de::Error::custom(format!(
+                "unknown weekday name {name:?}"
+            ))),
+        },
+    }
+}
+
 /// A single schedule rule: a day-of-week + time range + what to record.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "camelCase")]
 pub struct ScheduleRule {
     /// Day of week: 0 = Monday, 6 = Sunday
+    #[serde(deserialize_with = "deserialize_day_of_week")]
     pub day_of_week: u8,
     /// Start time in "HH:MM" (24h format, local time)
     pub start_time: String,
@@ -1234,6 +1266,23 @@ mod tests {
         json["monitorIds"] = serde_json::json!({"id": "DISPLAY1"});
 
         assert!(serde_json::from_value::<RecordingSettings>(json).is_err());
+    }
+
+    #[test]
+    fn persisted_schedule_accepts_weekday_name_but_rejects_unknown_name() {
+        let mut persisted = serde_json::to_value(RecordingSettings::default()).unwrap();
+        persisted["scheduleRules"] = serde_json::json!([{
+            "dayOfWeek": "friday",
+            "startTime": "09:00",
+            "endTime": "17:00",
+            "recordMode": "all"
+        }]);
+
+        let settings: RecordingSettings = serde_json::from_value(persisted.clone()).unwrap();
+        assert_eq!(settings.schedule_rules[0].day_of_week, 4);
+
+        persisted["scheduleRules"][0]["dayOfWeek"] = serde_json::json!("funday");
+        assert!(serde_json::from_value::<RecordingSettings>(persisted).is_err());
     }
 
     #[test]

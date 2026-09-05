@@ -80,6 +80,8 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   'step-3.5-flash': { input: 0.00, output: 0.00 },
   // Screenpipe internal models (self-hosted, zero cost)
   'screenpipe-event-classifier': { input: 0.00, output: 0.00 },
+  // Fixed-capacity Tinfoil H200; no marginal provider-token charge.
+  'glm-5.3-flash-reap50-iq3m': { input: 0.00, output: 0.00 },
   // Google Gemini
   // Gemini 3.x cache pricing unverified — no discount applied (conservative)
   'gemini-2.5-flash': { input: 0.15, output: 0.60, ...GEMINI25_CACHE },
@@ -771,6 +773,7 @@ export function inferProvider(model: string | null | undefined): string {
   if (lower.includes('gpt') || lower.includes('o1') || lower.includes('o3') || lower.includes('o4')) return 'openai';
   if (lower.includes('gemini')) return 'google';
   if (lower.includes('gemma4')) return 'tinfoil';
+  if (lower === 'glm-5.3-flash-reap50-iq3m') return 'screenpipe-tinfoil';
   if (lower.includes('glm-') || lower.includes('kimi-k')) return 'vertex-maas';
   if (lower.includes('llama') || lower.includes('qwen') || lower.includes('mistral') || lower.includes('step-3.5') || lower.includes('stepfun')) return 'openrouter';
   if (lower.includes('screenpipe-event')) return 'screenpipe-vllm';

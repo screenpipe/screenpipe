@@ -19,6 +19,10 @@ on:
         description: "Windows launch-smoke run only: build the Windows CLI package and run the native + Intel SDE (non-AVX2) probes; skip macOS/Linux builds, EV signing, Sentry symbols, npm publish, and the GitHub release (publish-npm/release skip via their skipped needs)"
         type: boolean
         default: false
+      npm_only:
+        description: "Build and publish the npm packages without creating or updating the rolling GitHub CLI release"
+        type: boolean
+        default: false
 
 concurrency:
   # Serialize releases — aborting a release mid-flight is worse than waiting.
@@ -986,6 +990,12 @@ jobs:
       # every error — versions 0.3.290..0.3.295 all "succeeded" without ever
       # publishing because the npm token had expired and nobody noticed.
       - name: Publish platform packages
+        # npm prefers the job's OIDC identity when a package has trusted
+        # publishing configured, then falls back to this shared release token.
+        # Keep the fallback until every platform package has its own trusted
+        # publisher configuration on npm.
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           for pkg in screenpipe-darwin-arm64 screenpipe-darwin-x64 screenpipe-linux-x64 screenpipe-win32-x64; do
             cd packages/cli/$pkg
@@ -1045,6 +1055,8 @@ jobs:
           done
 
       - name: Publish main package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           cd packages/cli/screenpipe
           err=$(mktemp)
@@ -1061,6 +1073,7 @@ jobs:
 
   release:
     runs-on: ubuntu-latest
+    if: ${{ !inputs.npm_only }}
     permissions:
       contents: write
     # smoke-windows: nothing ships unless the package launches + inits ONNX

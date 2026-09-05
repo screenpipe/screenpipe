@@ -50,11 +50,15 @@ export class OpenRouterProvider implements AIProvider {
 		switch (format.type) {
 			case 'json_object':
 				return { type: 'json_object' };
-			case 'json_schema':
-				if (!format.schema || !format.name) {
+			case 'json_schema': {
+				const schema = format.json_schema?.schema ?? format.schema;
+				const name = format.json_schema?.name ?? format.name;
+				const description = format.json_schema?.description ?? format.description;
+				if (!schema || !name) {
 					throw new Error('Schema and name are required for json_schema response format');
 				}
-				return this.createJSONSchemaFormat(format.schema, format.name, format.description);
+				return this.createJSONSchemaFormat(schema, name, description);
+			}
 			default:
 				return undefined;
 		}

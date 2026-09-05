@@ -6,6 +6,7 @@ import { describe, it, expect, mock } from 'bun:test';
 import { handleModelListing } from '../handlers/models';
 import { createProvider } from '../providers';
 import { OpenAIProvider, applyGpt56PromptCaching } from '../providers/openai';
+import { ScreenpipeGlmProvider } from '../providers/screenpipe-glm';
 import { getModelCost, inferProvider, isZeroCostModel } from '../services/cost-tracker';
 import { getModelWeight, isModelAllowed } from '../services/usage-tracker';
 
@@ -113,6 +114,19 @@ describe('OpenAI API model catalog', () => {
 		expect(ids).toContain('claude-fable-5');
 	});
 
+	it('advertises the exact quantized GLM model only when its container key exists', async () => {
+		const model = 'glm-5.3-flash-reap50-iq3m';
+		expect(await listedModelIds()).not.toContain(model);
+
+		const models = await listedModels({ TINFOIL_GLM_API_KEY: 'glm-container-secret' });
+		const glm = models.find(entry => entry.id === model);
+		expect(glm).toMatchObject({
+			owned_by: 'screenpipe',
+			context_window: 32768,
+			max_output_tokens: 8192,
+		});
+	});
+
 	it('publishes the full Claude 5 output budget for agent tool calls', async () => {
 		const models = await listedModels();
 		for (const id of ['claude-sonnet-5', 'claude-opus-5', 'claude-fable-5']) {
@@ -199,6 +213,240 @@ describe('OpenAI API accounting and routing', () => {
 		expect(inferProvider('gpt-5.4-mini')).toBe('openai');
 		expect(inferProvider('gpt-5.6-luna')).toBe('openai');
 		expect(inferProvider('o4-mini')).toBe('openai');
+	});
+
+	it('routes the active GLM model to the text-only Screenpipe enclave provider', () => {
+		const model = 'glm-5.3-flash-reap50-iq3m';
+		const provider = createProvider(model, env({ TINFOIL_GLM_API_KEY: 'glm-container-secret' }));
+		expect(provider).toBeInstanceOf(ScreenpipeGlmProvider);
+		expect(provider.supportsTools).toBe(true);
+		expect(provider.supportsVision).toBe(false);
+		expect(inferProvider(model)).toBe('screenpipe-tinfoil');
+		expect(isZeroCostModel(model)).toBe(true);
+		expect(isModelAllowed(model, 'logged_in')).toBe(false);
+		expect(isModelAllowed(model, 'subscribed')).toBe(true);
+	});
+
+	it('forwards Pi function tools to the Screenpipe GLM enclave', async () => {
+		const provider = new ScreenpipeGlmProvider('glm-container-secret') as any;
+		const tools = [{
+			type: 'function',
+			function: {
+				name: 'read',
+				description: 'Read a local file',
+				parameters: {
+					type: 'object',
+					properties: { file_path: { type: 'string' } },
+					required: ['file_path'],
+				},
+			},
+		}];
+		let capturedParams: Record<string, unknown> | null = null;
+		provider.client.chat.completions.create = mock(async (params: Record<string, unknown>) => {
+			capturedParams = params;
+			return { choices: [{ message: { role: 'assistant', content: null, tool_calls: [] } }] };
+		});
+
+		await provider.createCompletion({
+			model: 'glm-5.3-flash-reap50-iq3m',
+			messages: [{ role: 'user', content: 'Read the screenpipe skill.' }],
+			tools,
+			tool_choice: 'required',
+		});
+
+		expect(capturedParams).not.toBeNull();
+		expect(capturedParams!['tools']).toEqual(tools);
+		expect(capturedParams!['tool_choice']).toBe('required');
+	});
+
+	it('compacts the Pi catalog to fit GLM while preserving core Screenpipe capabilities', async () => {
+		const provider = new ScreenpipeGlmProvider('glm-container-secret') as any;
+		const coreSkill = `  <skill>\n    <name>screenpipe-api</name>\n    <description>Query local history</description>\n  </skill>`;
+		const unrelatedSkill = `  <skill>\n    <name>talking-head-recut</name>\n    <description>Edit a video</description>\n  </skill>`;
+		const readTool = {
+			type: 'function',
+			function: { name: 'read', description: 'Read a file', parameters: { type: 'object', properties: {} } },
+		};
+		const subagentTool = {
+			type: 'function',
+			function: { name: 'subagent', description: 'Large orchestration schema', parameters: { type: 'object', properties: {} } },
+		};
+		let capturedParams: Record<string, any> | null = null;
+		provider.client.chat.completions.create = mock(async (params: Record<string, any>) => {
+			capturedParams = params;
+			return { choices: [{ message: { role: 'assistant', content: 'done' } }] };
+		});
+
+		await provider.createCompletion({
+			model: 'glm-5.3-flash-reap50-iq3m',
+			messages: [{
+				role: 'system',
+				content: `Keep this system policy.\n<available_skills>\n${coreSkill}\n${unrelatedSkill}\n</available_skills>`,
+			}, { role: 'user', content: 'Summarize today.' }],
+			tools: [readTool, subagentTool],
+			max_completion_tokens: 1,
+		});
+
+		expect(capturedParams).not.toBeNull();
+		const system = capturedParams!.messages[0].content as string;
+		expect(system).toContain('Keep this system policy.');
+		expect(system).toContain('<name>screenpipe-api</name>');
+		expect(system).not.toContain('talking-head-recut');
+		expect(capturedParams!.tools).toEqual([readTool]);
+		expect(capturedParams!.max_completion_tokens).toBe(4096);
+	});
+
+	it('preserves an intentional small GLM output limit outside Pi context compaction', async () => {
+		const provider = new ScreenpipeGlmProvider('glm-container-secret') as any;
+		let capturedParams: Record<string, any> | null = null;
+		provider.client.chat.completions.create = mock(async (params: Record<string, any>) => {
+			capturedParams = params;
+			return { choices: [{ message: { role: 'assistant', content: 'ok' } }] };
+		});
+
+		await provider.createCompletion({
+			model: 'glm-5.3-flash-reap50-iq3m',
+			messages: [{ role: 'user', content: 'Reply with one token.' }],
+			max_tokens: 1,
+		});
+
+		expect(capturedParams).not.toBeNull();
+		expect(capturedParams!.max_tokens).toBe(1);
+	});
+
+	it('compacts oversized Pi tool results while retaining their beginning and end', async () => {
+		const provider = new ScreenpipeGlmProvider('glm-container-secret') as any;
+		let capturedParams: Record<string, any> | null = null;
+		provider.client.chat.completions.create = mock(async (params: Record<string, any>) => {
+			capturedParams = params;
+			return { choices: [{ message: { role: 'assistant', content: 'done' } }] };
+		});
+		const oversizedResult = `ACTIVITY SUMMARY\n${'evidence '.repeat(5000)}END OF RESULT`;
+
+		await provider.createCompletion({
+			model: 'glm-5.3-flash-reap50-iq3m',
+			messages: [{
+				role: 'system',
+				content: '<available_skills><skill><name>screenpipe-api</name></skill></available_skills>',
+			}, {
+				role: 'assistant',
+				content: '',
+				tool_calls: [{
+					id: 'call_screenpipe_activity',
+					type: 'function',
+					function: { name: 'read', arguments: '{"path":"screenpipe-api/SKILL.md"}' },
+				}],
+			}, {
+				role: 'tool',
+				tool_call_id: 'call_screenpipe_activity',
+				content: oversizedResult,
+			}],
+			max_completion_tokens: 1,
+		});
+
+		expect(capturedParams).not.toBeNull();
+		const toolMessage = capturedParams!.messages.find((message: { role?: string }) => message.role === 'tool');
+		const compacted = toolMessage.content as string;
+		expect(compacted).toHaveLength(8000);
+		expect(compacted).toStartWith('ACTIVITY SUMMARY');
+		expect(compacted).toContain('tool result compacted for GLM 32K context');
+		expect(compacted).toEndWith('END OF RESULT');
+		expect(toolMessage.tool_call_id).toBe('call_screenpipe_activity');
+	});
+
+	it('normalizes GLM native tagged content into an executable Pi tool call', async () => {
+		const provider = new ScreenpipeGlmProvider('glm-container-secret') as any;
+		provider.client.chat.completions.create = mock(async () => ({
+			choices: [{
+				message: {
+					role: 'assistant',
+					content: '<tool_call>read<arg_key>path</arg_key><arg_value>/tmp/pi-tool-test</arg_value></tool_call>',
+				},
+			}],
+		}));
+
+		const response = await provider.createCompletion({
+			model: 'glm-5.3-flash-reap50-iq3m',
+			messages: [{ role: 'user', content: 'Read the test file.' }],
+			tools: [{
+				type: 'function',
+				function: {
+					name: 'read',
+					description: 'Read a local file',
+					parameters: {
+						type: 'object',
+						properties: { path: { type: 'string' } },
+						required: ['path'],
+					},
+				},
+			}],
+			tool_choice: 'required',
+		});
+		const payload: any = await response.json();
+
+		expect(payload.choices[0].message.content).toBeNull();
+		expect(payload.choices[0].message.tool_calls).toHaveLength(1);
+		expect(payload.choices[0].message.tool_calls[0].function.name).toBe('read');
+		expect(JSON.parse(payload.choices[0].message.tool_calls[0].function.arguments)).toEqual({
+			path: '/tmp/pi-tool-test',
+		});
+		expect(payload.choices[0].finish_reason).toBe('tool_calls');
+	});
+
+	it('normalizes GLM bare JSON content into an executable Pi tool call', async () => {
+		const provider = new ScreenpipeGlmProvider('glm-container-secret') as any;
+		provider.client.chat.completions.create = mock(async () => ({
+			choices: [{
+				message: {
+					role: 'assistant',
+					content: '{"name":"read","arguments":{"path":"/tmp/pi-tool-test"}}',
+				},
+			}],
+		}));
+
+		const response = await provider.createCompletion({
+			model: 'glm-5.3-flash-reap50-iq3m',
+			messages: [{ role: 'user', content: 'Read the test file.' }],
+			tools: [{
+				type: 'function',
+				function: {
+					name: 'read',
+					description: 'Read a local file',
+					parameters: { type: 'object', properties: { path: { type: 'string' } } },
+				},
+			}],
+		});
+		const payload: any = await response.json();
+
+		expect(payload.choices[0].message.content).toBeNull();
+		expect(payload.choices[0].message.tool_calls[0].function.name).toBe('read');
+		expect(JSON.parse(payload.choices[0].message.tool_calls[0].function.arguments)).toEqual({
+			path: '/tmp/pi-tool-test',
+		});
+	});
+
+	it('does not promote unknown GLM tags into executable tool calls', async () => {
+		const provider = new ScreenpipeGlmProvider('glm-container-secret') as any;
+		provider.client.chat.completions.create = mock(async () => ({
+			choices: [{ message: { role: 'assistant', content: '<tool_call>delete_everything{}' } }],
+		}));
+
+		const response = await provider.createCompletion({
+			model: 'glm-5.3-flash-reap50-iq3m',
+			messages: [{ role: 'user', content: 'Say hello.' }],
+			tools: [{
+				type: 'function',
+				function: {
+					name: 'read',
+					description: 'Read a local file',
+					parameters: { type: 'object', properties: { path: { type: 'string' } } },
+				},
+			}],
+		});
+		const payload: any = await response.json();
+
+		expect(payload.choices[0].message.content).toBe('<tool_call>delete_everything{}');
+		expect(payload.choices[0].message.tool_calls).toBeUndefined();
 	});
 
 	it('keeps Argus internal and sends the non-thinking tool-compatible template option', async () => {
@@ -301,6 +549,32 @@ describe('OpenAI API accounting and routing', () => {
 		const params = capturedParams!;
 		expect(params['max_completion_tokens']).toBe(32);
 		expect(params['max_tokens']).toBeUndefined();
+	});
+
+	it('accepts nested and flattened json_schema response formats', async () => {
+		const formats = [
+			{ type: 'json_schema', json_schema: { name: 'answer', schema: { type: 'object' } } },
+			{ type: 'json_schema', name: 'answer', schema: { type: 'object' } },
+		];
+		for (const response_format of formats) {
+			const provider = new OpenAIProvider('sk-test') as any;
+			let capturedParams: any;
+			provider.client.chat.completions.create = mock(async (params: any) => {
+				capturedParams = params;
+				return { choices: [{ message: { content: 'ok' } }] };
+			});
+			await provider.createCompletion({
+				model: 'gpt-5.6-sol',
+				messages: [{ role: 'user', content: 'hello' }],
+				response_format,
+			} as any);
+			expect(capturedParams.response_format.json_schema).toEqual({
+				name: 'answer',
+				description: undefined,
+				schema: { type: 'object' },
+				strict: true,
+			});
+		}
 	});
 
 	it('adds stable GPT-5.6 explicit prompt-cache fields at the last leading system block', async () => {

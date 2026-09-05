@@ -418,6 +418,16 @@ fn read_all(app: &AppHandle) -> Result<PersistedActivityHistory, String> {
         .unwrap_or_default())
 }
 
+pub(crate) fn entries_ending_after(
+    app: &AppHandle,
+    since: DateTime<Utc>,
+) -> Result<Vec<ActivityHistoryEntry>, String> {
+    let mut entries = read_all(app)?.entries;
+    entries.retain(|entry| parse_time(&entry.end_at).is_some_and(|end| end > since));
+    entries.sort_by(|left, right| left.end_at.cmp(&right.end_at).then(left.id.cmp(&right.id)));
+    Ok(entries)
+}
+
 fn write_all(app: &AppHandle, history: &PersistedActivityHistory) -> Result<(), String> {
     let store = store::get_store(app, None).map_err(|error| error.to_string())?;
     store.set(

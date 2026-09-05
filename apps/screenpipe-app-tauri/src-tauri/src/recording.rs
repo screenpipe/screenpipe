@@ -299,7 +299,7 @@ const CAPTURE_RESTART_MEETING_REATTACH_WINDOW: Duration = Duration::from_secs(12
 
 mod db_wedge;
 pub use db_wedge::{
-    make_db_wedge_recovery_hook, new_db_wedge_breaker, DbWedgeBreaker, DbWedgeState,
+    make_database_restart_hook, new_db_wedge_breaker, DbWedgeBreaker, DbWedgeState,
 };
 
 #[derive(Clone, Debug)]
@@ -1466,7 +1466,7 @@ async fn spawn_screenpipe_inner(
                 let db_health = server.db.write_queue_health();
                 server
                     .db
-                    .set_persistent_failure_hook(make_db_wedge_recovery_hook(
+                    .set_database_restart_hook(make_database_restart_hook(
                         app_for_db_wedge.clone(),
                         db_wedge_breaker.clone(),
                         db_health,

@@ -2379,6 +2379,9 @@ async searchNavigateToTimeline(timestamp: string, frameId: number | null, search
     else return { status: "error", error: e  as any };
 }
 },
+async setActivitySyncEnabled(activities: boolean) : Promise<void> {
+    await TAURI_INVOKE("set_activity_sync_enabled", { activities });
+},
 /**
  * Persist the user's explicit Settings choice. Automatic launch reconciliation
  * skips opted-out targets until the user explicitly connects them again.

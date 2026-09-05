@@ -19,6 +19,16 @@ const RECREATE_DELAY: Duration = Duration::from_millis(250);
 const MAX_CONSECUTIVE_RECOVERIES: u8 = 2;
 const RECOVERABLE_LABELS: [&str; 5] = ["home", "chat", "search", "main", "main-window"];
 const RECOVERY_KEEPALIVE_LABEL: &str = "renderer-recovery-keepalive";
+const RETIRE_IPC_SCRIPT: &str = r#"
+(() => {
+  const activeFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url.startsWith("ipc://")) return new Promise(() => {});
+    return activeFetch(input, init);
+  };
+})();
+"#;
 
 #[derive(Debug, Clone)]
 struct ProbeTicket {
@@ -382,6 +392,18 @@ fn recover_on_main_thread(app: &AppHandle, target: ShowRewindWindow, failed_labe
     windows.sort_by_key(|(label, _)| label == "home");
 
     for (_, window) in &windows {
+        // WKWebView can keep the retired document alive briefly after its
+        // native window is destroyed. Stop that document at the transport
+        // boundary so its timers cannot send commands through protocol state
+        // that now belongs to the replacement webview.
+        if let Err(error) = window.eval(RETIRE_IPC_SCRIPT) {
+            warn!(
+                target: "screenpipe::renderer_watchdog",
+                label = window.label(),
+                %error,
+                "failed to retire stale webview IPC transport"
+            );
+        }
         let _ = window.hide();
     }
 

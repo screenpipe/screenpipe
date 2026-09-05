@@ -135,6 +135,10 @@ use app recording filters when you want to include or exclude specific apps, win
 - on macOS: grant microphone permission in System Settings → Privacy & Security → Microphone
 - verify audio is being recorded: `curl "http://localhost:3030/search?content_type=audio&limit=1"`
 
+### external soundcard or dock microphone is missing
+
+when a USB interface or dock is plugged in or removed, screenpipe may keep the previous device selection. Re-select the intended input in **settings → recording**, then unplug and reconnect the interface and restart screenpipe. If it still does not appear, verify the device is visible in the operating system's audio input settings and test the built-in microphone. Select only the input you need; duplicate or stale dock devices can result in silence or gaps. Include the exact device name and whether it was connected through a dock when reporting the issue.
+
 ### windows microphones record silence or near-silence
 
 on Windows 11 24H2, some USB and communications-class microphones can expose formats that look valid but produce unusably quiet audio. if transcripts are empty or audio is around silent:

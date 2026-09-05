@@ -31,14 +31,17 @@ function safeJson(value: unknown): string {
 }
 
 function safeToolInput(value: unknown): Record<string, any> {
+	let parsed = value;
 	if (typeof value === 'string') {
 		try {
-			return JSON.parse(value);
+			parsed = JSON.parse(value);
 		} catch {
 			return {};
 		}
 	}
-	return (value && typeof value === 'object') ? value as Record<string, any> : {};
+	return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+		? parsed as Record<string, any>
+		: {};
 }
 
 function anthropicStopReasonToOpenAI(reason: unknown): string {

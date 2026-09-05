@@ -1830,6 +1830,15 @@ impl RuntimeState {
     /// for a sign-in so the desktop drops the placeholder assistant bubble
     /// instead of rendering "No response from model" while the card is up.
     fn close_turn_ex(&self, stop_reason: &str, auth_pending: bool) {
+        self.close_turn_with_error(stop_reason, auth_pending, None);
+    }
+
+    fn close_turn_with_error(
+        &self,
+        stop_reason: &str,
+        auth_pending: bool,
+        error_message: Option<&str>,
+    ) {
         let Ok(mut turn) = self.turn.lock() else {
             return;
         };
@@ -1885,16 +1894,19 @@ impl RuntimeState {
             } else {
                 json!([])
             };
-            let message = json!({
+            let mut message = json!({
                 "role": "assistant",
                 "content": content,
                 "stopReason": stop_reason
             });
+            if let Some(error_message) = error_message {
+                message["errorMessage"] = json!(error_message);
+            }
             self.output.send(json!({
                 "type": "message_end",
                 "message": message.clone()
             }));
-            if has_terminal_text {
+            if has_terminal_text || error_message.is_some() {
                 terminal_message = Some(message);
             }
         }
@@ -4975,7 +4987,19 @@ async fn run_protocol(
                             Err(_) if recovered_completed_result => "end_turn".into(),
                             Err(_) => "error".into(),
                         };
-                        state.close_turn_ex(&effective_reason, is_auth_error);
+                        let prompt_error = if effective_reason == "error" {
+                            result.as_ref().err().map(ToString::to_string)
+                        } else {
+                            None
+                        };
+                        if let Some(message) = prompt_error.as_deref() {
+                            command_error(&state.output, message);
+                        }
+                        state.close_turn_with_error(
+                            &effective_reason,
+                            is_auth_error,
+                            prompt_error.as_deref(),
+                        );
                         // A prompt that failed for lack of a credential (Claude
                         // accepts session/new but rejects here): show the sign-in
                         // card. The prompt is already stuck in this session, which
@@ -5004,7 +5028,6 @@ async fn run_protocol(
                             }
                             Err(error) => {
                                 let message = error.to_string();
-                                command_error(&state.output, &message);
                                 parent_response(&state.output, &command_type, &command_id, Some(&message));
                             }
                         }
@@ -6489,9 +6512,10 @@ mod tests {
         }
     }
 
-    async fn protocol_events_after_late_http2_cancel(
+    async fn protocol_events_after_prompt_failure(
         assistant_chunks: &[&str],
         abort_after_stream: bool,
+        prompt_error: &str,
     ) -> Vec<Value> {
         let (client_transport, agent_transport) = Channel::duplex();
         let assistant_chunks: Vec<String> = assistant_chunks
@@ -6500,6 +6524,7 @@ mod tests {
             .collect();
         let cancel_signal = Arc::new(tokio::sync::Semaphore::new(0));
         let prompt_cancel_signal = cancel_signal.clone();
+        let prompt_error = prompt_error.to_owned();
         let agent = Agent
             .builder()
             .name("late-cancel-test-agent")
@@ -6522,6 +6547,7 @@ mod tests {
                 async move |_request: PromptRequest, responder, connection| {
                     let assistant_chunks = assistant_chunks.clone();
                     let prompt_cancel_signal = prompt_cancel_signal.clone();
+                    let prompt_error = prompt_error.clone();
                     let prompt_connection = connection.clone();
                     connection.spawn(async move {
                         for chunk in assistant_chunks {
@@ -6539,11 +6565,7 @@ mod tests {
                                 .map_err(Error::into_internal_error)?
                                 .forget();
                         }
-                        responder.respond_with_error(
-                            Error::internal_error().data(
-                                "RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)",
-                            ),
-                        )
+                        responder.respond_with_error(Error::internal_error().data(prompt_error))
                     })?;
                     Ok(())
                 },
@@ -6630,8 +6652,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn protocol_preserves_prompt_error_before_terminal_cleanup() {
+        let concrete_error = r#"usageLimitExceeded: {"resetsAt":1770000000}"#;
+        let preserves_concrete_error =
+            |error: &str| error.contains("usageLimitExceeded") && error.contains("resetsAt");
+        let events = protocol_events_after_prompt_failure(&[], false, concrete_error).await;
+
+        let error_index = events
+            .iter()
+            .position(|event| {
+                event["type"] == "message_update"
+                    && event["assistantMessageEvent"]["type"] == "error"
+                    && event["assistantMessageEvent"]["error"]
+                        .as_str()
+                        .is_some_and(preserves_concrete_error)
+            })
+            .unwrap_or_else(|| panic!("concrete prompt error update: {events:#?}"));
+        let message_end_index = events
+            .iter()
+            .position(|event| event["type"] == "message_end")
+            .expect("message_end");
+        let agent_end_index = events
+            .iter()
+            .position(|event| event["type"] == "agent_end")
+            .expect("agent_end");
+
+        assert!(error_index < message_end_index);
+        assert!(message_end_index < agent_end_index);
+        assert_eq!(
+            events[message_end_index]["message"]["stopReason"],
+            json!("error")
+        );
+        assert!(events[message_end_index]["message"]["errorMessage"]
+            .as_str()
+            .is_some_and(preserves_concrete_error));
+        assert_eq!(
+            events[agent_end_index]["messages"][0]["stopReason"],
+            json!("error")
+        );
+        assert!(events[agent_end_index]["messages"][0]["errorMessage"]
+            .as_str()
+            .is_some_and(preserves_concrete_error));
+    }
+
+    #[tokio::test]
     async fn protocol_keeps_verified_result_when_prompt_ends_with_late_http2_cancel() {
-        let events = protocol_events_after_late_http2_cancel(
+        let events = protocol_events_after_prompt_failure(
             &[
                 "Draft PR is up.",
                 "\n\n::screenpipe-result{kind=\"link\" state=\"cre",
@@ -6639,6 +6705,7 @@ mod tests {
                 "screenpipe/screenpipe/pull/1\"}",
             ],
             false,
+            "RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)",
         )
         .await;
 
@@ -6662,12 +6729,13 @@ mod tests {
 
     #[tokio::test]
     async fn protocol_keeps_late_http2_cancel_as_error_without_verified_result() {
-        let events = protocol_events_after_late_http2_cancel(
+        let events = protocol_events_after_prompt_failure(
             &[
                 "I started the fix, ",
                 "but the connection closed before I finished.",
             ],
             false,
+            "RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)",
         )
         .await;
 
@@ -6686,13 +6754,14 @@ mod tests {
 
     #[tokio::test]
     async fn protocol_rejects_pending_result_when_prompt_ends_with_late_http2_cancel() {
-        let events = protocol_events_after_late_http2_cancel(
+        let events = protocol_events_after_prompt_failure(
             &[
                 "Still working.\n",
                 "::screenpipe-result{kind=\"link\" state=\"pending\" ",
                 "title=\"Fix\" url=\"https://github.com/screenpipe/screenpipe/pull/1\"}",
             ],
             false,
+            "RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)",
         )
         .await;
 
@@ -6711,13 +6780,14 @@ mod tests {
 
     #[tokio::test]
     async fn protocol_never_recovers_a_late_cancel_after_local_abort() {
-        let events = protocol_events_after_late_http2_cancel(
+        let events = protocol_events_after_prompt_failure(
             &[
                 "Draft PR is up.\n\n",
                 "::screenpipe-result{kind=\"link\" state=\"created\" ",
                 "title=\"Fix\" url=\"https://github.com/screenpipe/screenpipe/pull/1\"}",
             ],
             true,
+            "RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)",
         )
         .await;
 

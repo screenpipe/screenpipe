@@ -69,6 +69,62 @@ fn read_store_file(path: &Path) -> std::io::Result<Vec<u8>> {
     retry_windows_store_io(|| std::fs::read(path))
 }
 
+#[cfg(windows)]
+fn reset_windows_store_file_permissions(path: &Path) -> anyhow::Result<()> {
+    use std::os::windows::process::CommandExt;
+
+    let mut permissions = match std::fs::metadata(path) {
+        Ok(metadata) => metadata.permissions(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if permissions.readonly() {
+        permissions.set_readonly(false);
+        std::fs::set_permissions(path, permissions)?;
+    }
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let status = std::process::Command::new("icacls.exe")
+        .arg(path)
+        .args(["/reset", "/Q"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()?;
+    if !status.success() {
+        return Err(anyhow::anyhow!(
+            "failed to reset settings permissions for {}: icacls exited with {}",
+            path.display(),
+            status
+        ));
+    }
+    Ok(())
+}
+
+/// Repair only the settings files whose permissions may have been carried
+/// forward from an older installation. The canonical bytes are captured
+/// before any mutation and atomically republished afterward so store.bin
+/// inherits the directory's current ACL without risking settings loss.
+#[cfg(windows)]
+fn normalize_windows_store_permissions(store_path: &Path) -> anyhow::Result<()> {
+    let canonical = match read_store_file(store_path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+
+    for path in [
+        store_path.to_path_buf(),
+        store_path.with_extension(LAST_GOOD_SUFFIX),
+        store_path.with_extension(LAST_GOOD_PREV_SUFFIX),
+    ] {
+        reset_windows_store_file_permissions(&path)?;
+    }
+
+    if let Some(bytes) = canonical {
+        durable_write(store_path, &bytes)?;
+    }
+    Ok(())
+}
+
 /// Process-lifetime cache for the resolved API auth key.
 ///
 /// `to_recording_config` is a sync function called many times per second
@@ -727,6 +783,15 @@ fn build_store_at<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     store_path: std::path::PathBuf,
 ) -> anyhow::Result<Arc<tauri_plugin_store::Store<R>>> {
+    #[cfg(windows)]
+    normalize_windows_store_permissions(&store_path).map_err(|error| {
+        anyhow::anyhow!(
+            "failed to repair settings store permissions at {}: {}",
+            store_path.display(),
+            error
+        )
+    })?;
+
     // A Windows sharing lock can make the plugin's load look like a successful
     // empty store because tauri-plugin-store swallows read errors. Do not let a
     // persistently unreadable canonical file reach that wipe-primed state.
@@ -3977,6 +4042,115 @@ mod tests {
     #[cfg(windows)]
     fn open_with_restrictive_sharing(path: &Path) -> std::fs::File {
         open_with_share_mode(path, 1) // FILE_SHARE_READ: deny writes and replacement.
+    }
+
+    #[cfg(windows)]
+    fn set_readonly(path: &Path) {
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_store_permission_repair_is_narrow_and_preserves_canonical_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store_path = tmp.path().join("store.bin");
+        let last_good = tmp.path().join("store.bin.last-good");
+        let last_good_prev = tmp.path().join("store.bin.last-good.prev");
+        let recording = tmp.path().join("recording.mp4");
+        let canonical = b"canonical settings bytes";
+
+        for (path, bytes) in [
+            (&store_path, canonical.as_slice()),
+            (&last_good, b"last good".as_slice()),
+            (&last_good_prev, b"previous last good".as_slice()),
+            (&recording, b"recording".as_slice()),
+        ] {
+            std::fs::write(path, bytes).unwrap();
+            set_readonly(path);
+        }
+
+        normalize_windows_store_permissions(&store_path).unwrap();
+
+        assert_eq!(std::fs::read(&store_path).unwrap(), canonical);
+        for path in [&store_path, &last_good, &last_good_prev] {
+            assert!(
+                !std::fs::metadata(path).unwrap().permissions().readonly(),
+                "{} must lose its read-only attribute",
+                path.display()
+            );
+        }
+        assert!(
+            std::fs::metadata(&recording)
+                .unwrap()
+                .permissions()
+                .readonly(),
+            "neighboring recording must remain untouched"
+        );
+        let mut permissions = std::fs::metadata(&recording).unwrap().permissions();
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&recording, permissions).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_store_permission_repair_resets_explicit_readonly_acl() {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let tmp = tempfile::tempdir().unwrap();
+        let store_path = tmp.path().join("store.bin");
+        let canonical = b"canonical settings bytes";
+        std::fs::write(&store_path, canonical).unwrap();
+
+        let identity = std::process::Command::new("whoami.exe")
+            .args(["/user", "/fo", "csv", "/nh"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .unwrap();
+        assert!(identity.status.success());
+        let identity = String::from_utf8(identity.stdout).unwrap();
+        let sid = identity
+            .trim()
+            .split("\",\"")
+            .nth(1)
+            .unwrap()
+            .trim_matches('"');
+        let readonly_deny = format!("*{sid}:(WD)");
+        let restricted = std::process::Command::new("icacls.exe")
+            .arg(&store_path)
+            .args(["/inheritance:r", "/deny", &readonly_deny, "/Q"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()
+            .unwrap();
+        assert!(restricted.success());
+        assert!(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&store_path)
+                .is_err(),
+            "explicit read-only ACL must prevent writes before repair"
+        );
+
+        normalize_windows_store_permissions(&store_path).unwrap();
+
+        assert_eq!(std::fs::read(&store_path).unwrap(), canonical);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&store_path)
+            .expect("repaired store must be writable");
+        let acl = std::process::Command::new("icacls.exe")
+            .arg(&store_path)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .unwrap();
+        assert!(acl.status.success());
+        let acl = String::from_utf8_lossy(&acl.stdout);
+        assert!(
+            !acl.contains("(DENY)"),
+            "repaired ACL must remove the explicit deny entry: {acl}"
+        );
     }
 
     #[cfg(windows)]

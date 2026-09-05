@@ -464,7 +464,7 @@ mod tests {
             Arc::from(format!("{}", db.display()).as_str()),
             WriteDrainOpts {
                 on_persistent_failure: crate::write_queue::persistent_failure_slot(Some(Arc::new(
-                    move || {
+                    move |_| {
                         fired_hook.store(true, AtomicOrdering::SeqCst);
                     },
                 ))),
@@ -784,7 +784,7 @@ mod tests {
         );
         let hook_calls = Arc::new(AtomicUsize::new(0));
         let hook_counter = Arc::clone(&hook_calls);
-        let hook = crate::write_queue::persistent_failure_slot(Some(Arc::new(move || {
+        let hook = crate::write_queue::persistent_failure_slot(Some(Arc::new(move |_| {
             hook_counter.fetch_add(1, AtomicOrdering::SeqCst);
         })));
         let mut tx = crate::ImmediateTx::for_test(conn, permit, health.clone(), hook);

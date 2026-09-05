@@ -184,6 +184,34 @@ fn send_recovery_offer() {
     );
 }
 
+fn effective_recovery_data_dir_with<F>(settings_lookup: F) -> Result<PathBuf, String>
+where
+    F: FnOnce() -> Result<Option<SettingsStore>, String>,
+{
+    let settings = settings_lookup()
+        .map_err(|_| "could not read settings for database recovery".to_string())?
+        .unwrap_or_default();
+    crate::config::resolve_data_dir(&settings.data_dir)
+        .map(|(data_dir, _fell_back)| data_dir)
+        .map_err(|_| "could not resolve the database recovery data directory".to_string())
+}
+
+/// Resolve the one effective data directory used by both recovery offers and
+/// the explicit user-approved repair action.
+pub(crate) fn effective_recovery_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    effective_recovery_data_dir_with(|| SettingsStore::get(app))
+}
+
+/// Re-surface the protected recovery action after an explicit user attempt to
+/// resume recording. This only offers recovery; it never starts repair work.
+pub fn offer_quarantined_database_recovery(data_dir: PathBuf) -> bool {
+    if !screenpipe_db::sqlite_quarantine_exists(data_dir.join("db.sqlite")) {
+        return false;
+    }
+    send_recovery_offer();
+    true
+}
+
 /// Offer recovery only after launch has proven the durable quarantine marker
 /// exists and has skipped every server, pool, watchdog, and capture startup.
 /// The notice persists in `/notify` and its inbox until the user acts.
@@ -194,13 +222,13 @@ pub fn notify_quarantined_database(data_dir: PathBuf) {
     {
         return;
     }
-    send_recovery_offer();
+    offer_quarantined_database_recovery(data_dir);
 }
 
 /// Start the protected recovery requested from the `/notify` action. Returns
 /// immediately so the notification panel can close while work continues.
 pub fn start_quarantined_database_recovery(app: AppHandle) -> Result<(), String> {
-    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    let data_dir = effective_recovery_data_dir(&app)?;
     start_quarantined_database_recovery_inner(app, data_dir, RecoveryInitiation::UserAction)
 }
 
@@ -329,6 +357,47 @@ mod tests {
         assert_eq!(action["url"], RECOVERY_DEEPLINK);
         assert_eq!(action["primary"], true);
         assert!(!action.to_string().contains("fingerprint"));
+    }
+
+    #[test]
+    fn recovery_offer_and_action_resolve_the_same_custom_data_dir() {
+        let custom_dir = tempfile::tempdir().expect("custom recovery tempdir");
+        let mut settings = SettingsStore::default();
+        settings.data_dir = custom_dir.path().to_string_lossy().into_owned();
+
+        let offer_target = effective_recovery_data_dir_with(|| Ok(Some(settings.clone())))
+            .expect("resolve offer target");
+        let action_target =
+            effective_recovery_data_dir_with(|| Ok(Some(settings))).expect("resolve action target");
+
+        assert_eq!(offer_target, custom_dir.path());
+        assert_eq!(action_target, offer_target);
+    }
+
+    #[test]
+    fn recovery_data_dir_preserves_default_and_fallback_semantics() {
+        let default_target = effective_recovery_data_dir_with(|| Ok(None))
+            .expect("resolve missing-settings default");
+
+        let mut fallback_settings = SettingsStore::default();
+        fallback_settings.data_dir = "relative/recovery-data".to_string();
+        let fallback_target = effective_recovery_data_dir_with(|| Ok(Some(fallback_settings)))
+            .expect("resolve invalid custom-path fallback");
+
+        assert_eq!(
+            default_target,
+            screenpipe_core::paths::default_screenpipe_data_dir()
+        );
+        assert_eq!(fallback_target, default_target);
+    }
+
+    #[test]
+    fn recovery_data_dir_lookup_errors_fail_closed() {
+        let error = effective_recovery_data_dir_with(|| Err("sensitive details".to_string()))
+            .expect_err("settings lookup must fail closed");
+
+        assert_eq!(error, "could not read settings for database recovery");
+        assert!(!error.contains("sensitive details"));
     }
 
     #[test]

@@ -5,6 +5,7 @@
 import { OpenAIProvider } from './openai';
 import { AnthropicProvider } from './anthropic';
 import { ScreenpipeEnclaveProvider, isScreenpipeEnclaveModel } from './screenpipe-enclave';
+import { ScreenpipeGlmProvider, isScreenpipeGlmModel } from './screenpipe-glm';
 import { AIProvider } from './base';
 import { Env } from '../types';
 
@@ -60,6 +61,7 @@ const RETIRED_HOSTED_MODEL_IDS = new Set([
  */
 export function resolveModelAlias(model: string): string {
 	const lower = model.toLowerCase();
+	if (isScreenpipeGlmModel(lower)) return model;
 	if (isRetiredHostedModel(lower)) {
 		console.log(`[router] retired hosted model ${model} → ${RETIRED_HOSTED_MODEL_FALLBACK}`);
 		return RETIRED_HOSTED_MODEL_FALLBACK;
@@ -176,6 +178,14 @@ export function createProvider(model: string, env: Env, connection?: ProviderCon
 			? env.SCREENPIPE_ENCLAVE_API_KEY
 			: env.TINFOIL_API_KEY;
 		return new ScreenpipeEnclaveProvider(requireSecret(key, 'No Tinfoil API key configured (need SCREENPIPE_ENCLAVE_API_KEY or TINFOIL_API_KEY)'));
+	}
+	if (isScreenpipeGlmModel(model)) {
+		return new ScreenpipeGlmProvider(
+			connection?.apiKey ?? requireSecret(env.TINFOIL_GLM_API_KEY, 'Screenpipe GLM API key not configured'),
+			connection?.baseURL,
+			connection?.defaultHeaders,
+			connection?.maxRetries,
+		);
 	}
 	return new OpenAIProvider(
 		connection?.apiKey ?? requireSecret(env.OPENAI_API_KEY, 'OpenAI API key not configured'),

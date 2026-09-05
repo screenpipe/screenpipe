@@ -255,12 +255,13 @@ static REQUIRED_PI_PACKAGE_INSTALL_LOCK: std::sync::OnceLock<Mutex<()>> =
 static PI_EXTENSION_SAFE_MODE_PROJECTS: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
     std::sync::OnceLock::new();
 
-const MANAGED_PI_EXTENSION_FILES: [&str; 5] = [
+const MANAGED_PI_EXTENSION_FILES: [&str; 6] = [
     "web-search.ts",
     "mcp-bridge.ts",
     "save-artifact.ts",
     "live-views.ts",
     "connection-gate.ts",
+    "context-pruning.ts",
 ];
 
 fn extension_safe_mode_projects() -> &'static std::sync::Mutex<HashSet<String>> {
@@ -1790,6 +1791,14 @@ fn ensure_context_usage_extension(project_dir: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to install context-usage extension: {}", e))
 }
 
+/// Install Screenpipe's context guard so native Pi chat and pi-acp use the
+/// same bounded pruning and provider-overflow recovery as background pipes.
+fn ensure_context_pruning_extension(project_dir: &str) -> Result<(), String> {
+    use screenpipe_core::agents::pi::PiExecutor;
+    PiExecutor::ensure_context_pruning_extension(std::path::Path::new(project_dir))
+        .map_err(|e| format!("Failed to install context-pruning extension: {}", e))
+}
+
 /// Every extension both Pi harnesses must load. Native Pi and pi-acp run the
 /// SAME pi binary against the same project dir, so an extension seeded on one
 /// path and not the other is always a bug — and the two lists drifted once
@@ -1801,6 +1810,7 @@ fn ensure_shared_pi_extensions(project_dir: &str) -> Result<(), String> {
     ensure_self_improvement_extension(project_dir)?;
     ensure_chat_control_extension(project_dir)?;
     ensure_context_usage_extension(project_dir)?;
+    ensure_context_pruning_extension(project_dir)?;
     // MCP bridge: lets the agent reach user-registered MCP servers.
     ensure_mcp_bridge_extension(project_dir)?;
     // Save artifact: lets the agent register deliverables in the Artifacts library.
@@ -1821,6 +1831,7 @@ const SHARED_PI_EXTENSION_FILES: &[&str] = &[
     "self-improvement.ts",
     "chat-control.ts",
     "context-usage.ts",
+    "context-pruning.ts",
     "mcp-bridge.ts",
     "save-artifact.ts",
     "live-views.ts",
@@ -7801,6 +7812,7 @@ error: InstallFailed extracting tarball"#;
         let header = "// screenpipe — AI that knows everything you've seen, said, or heard\n";
         std::fs::write(extension_dir.join("mcp-bridge.ts"), header).unwrap();
         std::fs::write(extension_dir.join("live-views.ts"), header).unwrap();
+        std::fs::write(extension_dir.join("context-pruning.ts"), header).unwrap();
         std::fs::write(extension_dir.join("third-party.ts"), header).unwrap();
 
         let mut command = Command::new("pi");
@@ -7811,9 +7823,10 @@ error: InstallFailed extracting tarball"#;
             .collect::<Vec<_>>();
 
         assert_eq!(args[0], "--no-extensions");
-        assert_eq!(args.iter().filter(|arg| *arg == "--extension").count(), 2);
+        assert_eq!(args.iter().filter(|arg| *arg == "--extension").count(), 3);
         assert!(args.iter().any(|arg| arg.ends_with("mcp-bridge.ts")));
         assert!(args.iter().any(|arg| arg.ends_with("live-views.ts")));
+        assert!(args.iter().any(|arg| arg.ends_with("context-pruning.ts")));
         assert!(!args.iter().any(|arg| arg.ends_with("third-party.ts")));
     }
 
@@ -8288,5 +8301,13 @@ error: InstallFailed extracting tarball"#;
             super::SHARED_PI_EXTENSION_FILES.contains(&"context-usage.ts"),
             "context-usage must stay in the shared set so pi-acp keeps the breakdown"
         );
+        assert!(
+            super::SHARED_PI_EXTENSION_FILES.contains(&"context-pruning.ts"),
+            "context-pruning must stay in the shared set for native Pi and pi-acp"
+        );
+        let pruning = std::fs::read_to_string(ext_dir.join("context-pruning.ts"))
+            .expect("read seeded context-pruning extension");
+        assert!(pruning.contains("normalizeContextOverflowError"));
+        assert!(pruning.contains("PROACTIVE_COMPACTION_PERCENT = 70"));
     }
 }

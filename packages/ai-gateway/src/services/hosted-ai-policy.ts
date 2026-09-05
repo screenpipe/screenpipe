@@ -37,6 +37,7 @@ const BUSINESS_HOSTED_MODELS = [
 	'claude-sonnet-5',
 	'claude-opus-5',
 	'claude-fable-5',
+	'glm-5.3-flash-reap50-iq3m',
 	'screenpipe-event-classifier',
 ] as const;
 

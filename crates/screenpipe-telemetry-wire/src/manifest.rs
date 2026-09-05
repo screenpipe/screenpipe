@@ -33,6 +33,8 @@ pub struct DirectUploadRecordCounts {
     pub frames: usize,
     #[serde(default)]
     pub parsed: usize,
+    #[serde(default)]
+    pub activities: usize,
     pub audio: usize,
     pub ui: usize,
     pub snapshots: usize,
@@ -47,6 +49,8 @@ pub struct DirectUploadCursors {
     pub last_frame_ts: Option<String>,
     #[serde(default)]
     pub last_parsed_ts: Option<String>,
+    #[serde(default)]
+    pub last_activity_ts: Option<String>,
     pub last_audio_ts: Option<String>,
     pub last_ui_ts: Option<String>,
     #[serde(default)]
@@ -111,6 +115,7 @@ mod tests {
             DirectUploadRecordCounts {
                 frames: 1,
                 parsed: 0,
+                activities: 0,
                 audio: 0,
                 ui: 0,
                 snapshots: 0,
@@ -120,6 +125,7 @@ mod tests {
             DirectUploadCursors {
                 last_frame_ts: Some("2026-05-13T18:00:00Z".to_string()),
                 last_parsed_ts: None,
+                last_activity_ts: None,
                 last_audio_ts: None,
                 last_ui_ts: None,
                 last_memory_ts: None,
@@ -183,8 +189,10 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(counts.parsed, 0);
+        assert_eq!(counts.activities, 0);
         assert_eq!(counts.memories, 0);
         assert_eq!(cursors.last_parsed_ts, None);
+        assert_eq!(cursors.last_activity_ts, None);
         assert_eq!(cursors.last_memory_ts, None);
     }
 }

@@ -205,6 +205,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // compute_batch_id, so they have to match what was actually written.
             frames: 2 + usize::from(device.stale_sentinel),
             parsed: 1,
+            activities: 0,
             audio: 1,
             ui: 1,
             snapshots: 0,
@@ -214,6 +215,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cursors = DirectUploadCursors {
             last_frame_ts: Some(format!("2026-07-22T{:02}:05:00Z", device.hour)),
             last_parsed_ts: Some(format!("2026-07-22T{:02}:06:00Z", device.hour)),
+            last_activity_ts: None,
             last_audio_ts: Some(format!("2026-07-22T{:02}:02:00Z", device.hour)),
             last_ui_ts: Some(format!("2026-07-22T{:02}:03:00Z", device.hour)),
             last_memory_ts: Some(format!("2026-07-22T{:02}:08:00Z", device.hour)),

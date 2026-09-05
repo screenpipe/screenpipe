@@ -348,6 +348,10 @@ async function tryModel(
     }
     const msg = String(error?.message || '');
     const transient = isTransient(status, msg);
+    const outputLimitTokens = Number(error?.screenpipeOutputLimitTokens);
+    const outputLimitTag = Number.isFinite(outputLimitTokens) && outputLimitTokens > 0
+      ? { output_limit_tokens: String(outputLimitTokens) }
+      : {};
     error.status = status;
     error.transient = transient;
 
@@ -415,7 +419,7 @@ async function tryModel(
       if (!SENTRY_SKIP_STATUSES.has(status) && !upstream500) {
         try {
           captureException(error, {
-            tags: { model, error_path: `${ctx}_cascade`, status: String(status) },
+            tags: { model, error_path: `${ctx}_cascade`, status: String(status), ...outputLimitTag },
             level: 'warning',
           });
         } catch {}
@@ -424,7 +428,7 @@ async function tryModel(
       // Non-transient (400/401) — real client/config bug, always log.
       try {
         captureException(error, {
-          tags: { model, error_path: `${ctx}_fatal`, status: String(status) },
+          tags: { model, error_path: `${ctx}_fatal`, status: String(status), ...outputLimitTag },
           level: 'error',
         });
       } catch {}

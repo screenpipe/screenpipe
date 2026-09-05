@@ -168,7 +168,7 @@ pub use server::spawn_server;
 pub use enterprise_install_metadata::get_enterprise_install_metadata;
 pub use enterprise_host_identity::get_enterprise_host_identity;
 pub use enterprise_policy::set_enterprise_policy;
-pub use enterprise_policy::set_sync_streams;
+pub use enterprise_policy::{set_activity_sync_enabled, set_sync_streams};
 pub use enterprise_recording_access::set_enterprise_recording_authorized;
 pub use permissions::do_permissions_check;
 pub use permissions::open_permission_settings;
@@ -2114,8 +2114,8 @@ async fn main() {
                             // auto-restarts recording (rebuilding every pool +
                             // the shared WAL-index).
                             let db_health = server.db.write_queue_health();
-                            server.db.set_persistent_failure_hook(
-                                crate::recording::make_db_wedge_recovery_hook(
+                            server.db.set_database_restart_hook(
+                                crate::recording::make_database_restart_hook(
                                     app_for_db_wedge.clone(),
                                     db_wedge_breaker.clone(),
                                     db_health,

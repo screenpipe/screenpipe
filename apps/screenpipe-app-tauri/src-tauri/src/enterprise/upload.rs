@@ -348,6 +348,7 @@ pub fn direct_upload_cursors(cursor: &Cursor) -> DirectUploadCursors {
     DirectUploadCursors {
         last_frame_ts: cursor.last_frame_ts.clone(),
         last_parsed_ts: cursor.last_parsed_ts.clone(),
+        last_activity_ts: cursor.boundary.activity_ts.clone(),
         last_audio_ts: cursor.last_audio_ts.clone(),
         last_ui_ts: cursor.last_ui_ts.clone(),
         last_memory_ts: cursor.last_memory_ts.clone(),
@@ -664,6 +665,7 @@ mod tests {
             DirectUploadRecordCounts {
                 frames: 1,
                 parsed: 0,
+                activities: 0,
                 audio: 0,
                 ui: 0,
                 snapshots: 0,
@@ -673,6 +675,7 @@ mod tests {
             DirectUploadCursors {
                 last_frame_ts: Some("2026-05-13T18:00:00Z".to_string()),
                 last_parsed_ts: None,
+                last_activity_ts: None,
                 last_audio_ts: None,
                 last_ui_ts: None,
                 last_memory_ts: None,

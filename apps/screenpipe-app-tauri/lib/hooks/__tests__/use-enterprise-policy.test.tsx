@@ -44,6 +44,7 @@ const mocks = vi.hoisted(() => {
       setEnterpriseRecordingAuthorized: vi.fn(async () => ({ status: "ok", data: null })),
       applyEnterpriseUiVisibility: vi.fn(async () => undefined),
       setSyncStreams: vi.fn(async () => undefined),
+      setActivitySyncEnabled: vi.fn(async () => undefined),
       saveEnterpriseTeamConfig: vi.fn(async () => null),
       syncManagedTeamSkills: vi.fn(async () => ({ status: "ok" as const, data: [] })),
     },
@@ -235,6 +236,7 @@ describe("enterprise policy runtime manual activation", () => {
     });
     mocks.commands.applyEnterpriseUiVisibility.mockResolvedValue(undefined);
     mocks.commands.setSyncStreams.mockResolvedValue(undefined);
+    mocks.commands.setActivitySyncEnabled.mockResolvedValue(undefined);
     mocks.commands.saveEnterpriseTeamConfig.mockResolvedValue(null);
     mocks.commands.syncManagedTeamSkills.mockResolvedValue({ status: "ok", data: [] });
     mocks.platform.mockReturnValue("windows");

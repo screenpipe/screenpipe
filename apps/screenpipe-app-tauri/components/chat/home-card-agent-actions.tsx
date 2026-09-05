@@ -23,6 +23,7 @@ import {
 } from "@/lib/first-run/agent-handoff";
 import { entryCardForHomeTemplate } from "@/lib/chat/response-feedback";
 import { type ChatEntryCard } from "@/lib/chat/types";
+import { openExternalUrl } from "@/lib/open-external-url";
 import { commands } from "@/lib/utils/tauri";
 
 type HomeCardAgentId = "claude" | "cursor" | "codex";
@@ -156,8 +157,7 @@ export function HomeCardAgentActions({
           if (copied.status === "error") throw new Error(copied.error);
         },
         openUrl: async (url) => {
-          const { openUrl } = await import("@tauri-apps/plugin-opener");
-          await openUrl(url);
+          await openExternalUrl(url);
         },
       },
       prompt,

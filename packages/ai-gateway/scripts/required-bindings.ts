@@ -6,6 +6,12 @@ type WranglerSecretBinding = {
 	name?: unknown;
 };
 
+type WranglerVersion = {
+	resources?: {
+		bindings?: unknown;
+	};
+};
+
 export const REQUIRED_HOSTED_AI_SECRET_BINDINGS = [
 	'FREE_CHAT_COST_RESERVATION_MICRO_USD',
 	'FREE_CHAT_DAILY_BUDGET_MICRO_USD',
@@ -35,16 +41,20 @@ export const REQUIRED_HOSTED_AI_SECRET_BINDINGS = [
 	'PRIVATE_MAX_BACKGROUND_RESERVED_FRACTION',
 	'SCREENPIPE_QWEN35_API_KEY',
 	'SCREENPIPE_QWEN35_URL',
+	'TINFOIL_GLM_API_KEY',
 ] as const;
 
 export function assertRequiredHostedAiSecretBindings(rawOutput: string): void {
-	let bindings: WranglerSecretBinding[];
+	let payload: unknown;
 	try {
-		bindings = JSON.parse(rawOutput) as WranglerSecretBinding[];
+		payload = JSON.parse(rawOutput);
 	} catch {
 		throw new Error('required hosted AI binding check returned invalid JSON');
 	}
 
+	const bindings = Array.isArray(payload)
+		? payload
+		: (payload as WranglerVersion | null)?.resources?.bindings;
 	if (!Array.isArray(bindings)) {
 		throw new Error('required hosted AI binding check returned an invalid payload');
 	}

@@ -445,6 +445,27 @@ describeMacOS("macOS renderer-stall recovery", function () {
     expect(existsSync(filepath)).toBe(true);
   });
 
+  it("keeps Tauri IPC on the IPC protocol while replacing a stale webview", async () => {
+    const baseline = await recoveryState();
+    const logOffset = readFileSync(E2E_APP_LOG_FILE).byteLength;
+
+    await browser.switchToWindow("home");
+    await invokeOrThrow("plugin:e2e|arm_renderer_stalls", {
+      label: "home",
+      count: 1,
+    });
+    await triggerHomeShowWithoutWaitingOnDestroyedContext();
+    await waitForRecoveredHome(baseline.recoveryCount + 1);
+    await delay(2_500);
+
+    const appendedLog = readFileSync(E2E_APP_LOG_FILE)
+      .subarray(logOffset)
+      .toString("utf8");
+    expect(appendedLog).not.toMatch(
+      /tauri::protocol::asset:\s+asset protocol not configured to allow the path:\s+(?:webview_renderer_heartbeat|write_browser_logs|is_enterprise_build_cmd)/,
+    );
+  });
+
   it("recreates the discarded Search and Chat surfaces on demand after recovery", async () => {
     await browser.switchToWindow("home");
     await showWindow({ Search: { query: null } });

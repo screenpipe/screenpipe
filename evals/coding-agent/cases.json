@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite": "screenpipe-app-coding-agent-regressions",
-  "dataset_version": "2026-09-03.1",
+  "dataset_version": "2026-09-05.1",
   "suite_type": "regression",
   "owner": "screenpipe engineering",
   "policy": {
@@ -941,6 +941,85 @@
           }
         ],
         "command": "cd apps/screenpipe-app-tauri && NODE_OPTIONS=--localstorage-file=.eval-localstorage bun x vitest run --config vitest.config.ts lib/hooks/__tests__/use-enterprise-policy.test.tsx"
+      }
+    },
+    {
+      "id": "ai-gateway-nested-json-schema",
+      "name": "Accept standard nested JSON Schema response formats",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "28da95884640708ced5db107a4e08b587c2e32d6",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/6873"
+      },
+      "base_ref": "05a801d6103426108817849f99b26edb94e5be42",
+      "oracle_ref": "28da95884640708ced5db107a4e08b587c2e32d6",
+      "oracle_paths": [
+        "packages/ai-gateway/src/providers/openai.ts",
+        "packages/ai-gateway/src/providers/openrouter.ts",
+        "packages/ai-gateway/src/types.ts"
+      ],
+      "gate": "advisory",
+      "trigger_paths": [
+        "packages/ai-gateway/src/providers/openai.ts",
+        "packages/ai-gateway/src/providers/openrouter.ts",
+        "packages/ai-gateway/src/types.ts",
+        "packages/ai-gateway/src/index.ts"
+      ],
+      "tags": ["regression", "escaped-failure", "ai-gateway", "structured-output", "json-schema", "openai", "openrouter", "compatibility"],
+      "prompt": "Valid structured-output requests using the standard nested response_format.json_schema shape are rejected before provider dispatch, although the equivalent legacy flattened form works. Accept the nested form for both OpenAI and OpenRouter while preserving flattened compatibility. When both forms are present, nested fields must take precedence; json_object requests must stay unchanged; and incomplete schemas must still fail before dispatch.",
+      "agent_timeout_seconds": 900,
+      "grader_dependency_links": [
+        { "source_path": "packages/ai-gateway/node_modules", "destination_path": "packages/ai-gateway/node_modules" }
+      ],
+      "grader": {
+        "timeout_seconds": 300,
+        "fixtures": [
+          {
+            "local_path": "graders/ai-gateway-nested-json-schema.test.ts",
+            "destination_path": "packages/ai-gateway/src/test/eval-nested-json-schema.test.ts"
+          },
+          {
+            "source_ref": "28da95884640708ced5db107a4e08b587c2e32d6",
+            "source_path": "packages/ai-gateway/src/test/openai-models.unit.test.ts"
+          }
+        ],
+        "command": "cd packages/ai-gateway && bun test src/test/eval-nested-json-schema.test.ts src/test/openai-models.unit.test.ts --timeout=10000"
+      }
+    },
+    {
+      "id": "ai-gateway-gpt5-output-limit-retry",
+      "name": "Recover from retryable GPT-5 output-limit rejections",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "ae5f134d90acd4e38cf0e3a8a234f33df3c4806f",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/6904"
+      },
+      "base_ref": "d375badd50f99e194c251c8dbc6ba90dc476231e",
+      "oracle_ref": "ae5f134d90acd4e38cf0e3a8a234f33df3c4806f",
+      "oracle_paths": [
+        "packages/ai-gateway/src/providers/openai.ts"
+      ],
+      "gate": "advisory",
+      "trigger_paths": [
+        "packages/ai-gateway/src/providers/openai.ts",
+        "packages/ai-gateway/src/handlers/chat.ts",
+        "packages/ai-gateway/src/types.ts"
+      ],
+      "tags": ["regression", "escaped-failure", "ai-gateway", "openai", "gpt-5", "output-limit", "retry", "bounded-recovery"],
+      "prompt": "GPT-5 requests can fail before producing a response when the provider explicitly says the configured output limit was reached and asks the caller to retry with a higher limit. Recover that request with a bounded higher-limit retry instead of letting the model chain fail. Preserve the caller's initial limit until this exact rejection occurs, keep the retry within the supported GPT-5 ceiling, avoid a futile retry when already at that ceiling, leave non-GPT-5 and unrelated errors untouched, and preserve the provider's existing parameter-repair behavior and loop bound.",
+      "agent_timeout_seconds": 900,
+      "grader_dependency_links": [
+        { "source_path": "packages/ai-gateway/node_modules", "destination_path": "packages/ai-gateway/node_modules" }
+      ],
+      "grader": {
+        "timeout_seconds": 300,
+        "fixtures": [
+          {
+            "source_ref": "ae5f134d90acd4e38cf0e3a8a234f33df3c4806f",
+            "source_path": "packages/ai-gateway/src/test/openai-param-retry.unit.test.ts"
+          }
+        ],
+        "command": "cd packages/ai-gateway && bun test src/test/openai-param-retry.unit.test.ts --timeout=10000"
       }
     }
   ]

@@ -90,8 +90,16 @@ accessibility-sys = { workspace = true }
 core-foundation = { workspace = true }
 core-graphics = { workspace = true }
 
-[target.'cfg(target_os = "windows")'.dependencies]
+[target.'cfg(all(target_os = "windows", not(target_arch = "aarch64")))'.dependencies]
 xcap = { workspace = true, features = ["wgc"] }
+
+# The primary capture path already uses our direct WGC implementation. Keep its
+# ARM64 fallback independent: enabling xcap's `wgc` feature made both rungs use
+# the same backend, so a WGC/driver failure could leave capture with no frames.
+[target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
+xcap = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
 uiautomation = { workspace = true }
 windows = { workspace = true, features = [
   "Graphics_Imaging",
