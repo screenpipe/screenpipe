@@ -1219,6 +1219,123 @@ fn normalize_analysis(
     Ok(json!({ "workflows": normalized }))
 }
 
+#[derive(Default)]
+struct MeasuredApplication {
+    label: String,
+    minutes: f64,
+}
+
+fn empty_time_dimension(total_minutes: u64) -> Value {
+    json!({
+        "items": [],
+        "attributedMinutes": 0,
+        "unattributedMinutes": total_minutes,
+        "coveragePercent": 0,
+    })
+}
+
+fn measured_application_dimension(daily: &[Value], total_minutes: u64) -> Value {
+    let mut measured = HashMap::<String, MeasuredApplication>::new();
+    for app in daily
+        .iter()
+        .filter_map(|bundle| bundle.get("apps").and_then(Value::as_array))
+        .flatten()
+    {
+        let Some(label) = app
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let minutes = app
+            .get("minutes")
+            .and_then(Value::as_f64)
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .unwrap_or_default();
+        if minutes == 0.0 {
+            continue;
+        }
+        let entry = measured
+            .entry(label.to_lowercase())
+            .or_insert_with(|| MeasuredApplication {
+                label: label.chars().take(180).collect(),
+                ..MeasuredApplication::default()
+            });
+        entry.minutes += minutes;
+    }
+
+    let mut minute_rows = measured
+        .into_values()
+        .map(|app| (app.label, app.minutes.round() as u64))
+        .filter(|(_, minutes)| *minutes > 0)
+        .collect::<Vec<_>>();
+    minute_rows.sort_by_key(|(_, minutes)| std::cmp::Reverse(*minutes));
+
+    let raw_sum = minute_rows.iter().map(|(_, minutes)| *minutes).sum::<u64>();
+    if raw_sum > total_minutes && total_minutes > 0 {
+        let mut scaled_sum = 0u64;
+        for (_, minutes) in &mut minute_rows {
+            *minutes = minutes.saturating_mul(total_minutes) / raw_sum;
+            scaled_sum = scaled_sum.saturating_add(*minutes);
+        }
+        let mut remainder = total_minutes.saturating_sub(scaled_sum);
+        for (_, minutes) in &mut minute_rows {
+            if remainder == 0 {
+                break;
+            }
+            *minutes += 1;
+            remainder -= 1;
+        }
+        minute_rows.retain(|(_, minutes)| *minutes > 0);
+    }
+
+    let attributed_minutes = minute_rows
+        .iter()
+        .map(|(_, minutes)| *minutes)
+        .sum::<u64>()
+        .min(total_minutes);
+    let items = minute_rows
+        .into_iter()
+        .map(|(label, minutes)| {
+            json!({
+                "label": label,
+                "description": "",
+                "minutes": minutes,
+                "percentage": if total_minutes == 0 { 0 } else { ((minutes as f64 * 100.0 / total_minutes as f64).round() as u64).min(100) },
+                "confidence": 100,
+                "distinctDays": 0,
+                "apps": [label],
+                "evidence": [],
+                "basis": "recorder-app",
+            })
+        })
+        .collect::<Vec<_>>();
+    let coverage_percent = if total_minutes == 0 {
+        0
+    } else {
+        ((attributed_minutes as f64 * 100.0 / total_minutes as f64).round() as u64).min(100)
+    };
+    json!({
+        "items": items,
+        "attributedMinutes": attributed_minutes,
+        "unattributedMinutes": total_minutes.saturating_sub(attributed_minutes),
+        "coveragePercent": coverage_percent,
+    })
+}
+
+fn measured_time_profile(daily: &[Value], days: u16, total_minutes: u64) -> Value {
+    json!({
+        "days": days,
+        "totalMinutes": total_minutes,
+        "categories": measured_application_dimension(daily, total_minutes),
+        "projects": empty_time_dimension(total_minutes),
+        "people": empty_time_dimension(total_minutes),
+        "companies": empty_time_dimension(total_minutes),
+    })
+}
+
 async fn stage_screenshot(endpoint: &RecorderEndpoint, stage: &Value) -> Option<Value> {
     let evidence = stage.get("evidence")?.as_array()?;
     let mut candidate_apps = Vec::new();
