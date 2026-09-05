@@ -94,7 +94,7 @@ const primaryNavigation = [
   ["privacy", ShieldCheck, "Data controls", ["G", "D"]],
 ] as const;
 
-type TimeLens = "categories" | "projects" | "people" | "companies";
+type TimeLens = "categories" | "projects";
 
 type PaletteCommand = {
   id: string;
@@ -742,8 +742,6 @@ function WorkflowDetail({ workflow, navigate }: { workflow: WorkflowMap | null; 
 const timeLensOptions = [
   ["categories", ChartPie, "Categories"],
   ["projects", FolderKanban, "Projects"],
-  ["people", Users, "People"],
-  ["companies", Building2, "Companies"],
 ] as const;
 
 function TimeAllocationList({ items, lens, query }: { items: TimeAllocationItem[]; lens: TimeLens; query: string }) {
@@ -771,7 +769,7 @@ function TimeAllocationList({ items, lens, query }: { items: TimeAllocationItem[
   </section>;
 }
 
-function TimeView({ analysis, analyze, analyzing, workProfile, workspaceView, lens, setLens }: { analysis: WorkflowAnalysis | null; analyze: () => void; analyzing: boolean; workProfile: WorkProfile | null; workspaceView: boolean; lens: TimeLens; setLens: (lens: TimeLens) => void }) {
+function TimeView({ analysis, analyze, analyzing, workProfile, lens, setLens }: { analysis: WorkflowAnalysis | null; analyze: () => void; analyzing: boolean; workProfile: WorkProfile | null; lens: TimeLens; setLens: (lens: TimeLens) => void }) {
   const [query, setQuery] = useState("");
   const [visibleCount, setVisibleCount] = useState(12);
   const profile = analysis?.timeProfile;
@@ -791,7 +789,7 @@ function TimeView({ analysis, analyze, analyzing, workProfile, workspaceView, le
   if (!profile) {
     return <>
       <div className={styles.pageHeader}><div><h1>Where your time goes</h1></div></div>
-      {analyzing ? <ProcessingView /> : <section className={styles.emptyState}><ChartPie size={23} /><h2>Build your time profile</h2><p>Organize the last {WORKFLOW_CATALOG_DAYS} days by category, project, person, and company.</p><button className={styles.primaryButton} onClick={analyze}><RefreshCw size={14} />Map where my time goes</button></section>}
+      {analyzing ? <ProcessingView /> : <section className={styles.emptyState}><ChartPie size={23} /><h2>Build your time profile</h2><p>Organize the last {WORKFLOW_CATALOG_DAYS} days by category and project.</p><button className={styles.primaryButton} onClick={analyze}><RefreshCw size={14} />Map where my time goes</button></section>}
     </>;
   }
   if (!dimension) return null;
@@ -799,11 +797,8 @@ function TimeView({ analysis, analyze, analyzing, workProfile, workspaceView, le
   const visibleItems = matchingItems.slice(0, visibleCount);
   const hiddenCount = matchingItems.length - visibleItems.length;
   const resultLabel = matchingItems.length === 1
-    ? ({ categories: "category", projects: "project", people: "person", companies: "company" } as const)[lens]
+    ? ({ categories: "category", projects: "project" } as const)[lens]
     : lens;
-  const lensNotice = workspaceView && lens === "people"
-    ? "Only external collaborators appear here. Employee identities stay private."
-    : null;
 
   return <>
     <div className={styles.pageHeader}>
@@ -825,7 +820,6 @@ function TimeView({ analysis, analyze, analyzing, workProfile, workspaceView, le
     </div>
     <div className={styles.timeLensTools}>
       <label><Search size={13} /><input aria-label={`Filter ${lens}`} value={query} onChange={(event) => { setQuery(event.target.value); setVisibleCount(12); }} placeholder={`Filter ${lens}…`} /></label>
-      {lensNotice && <p>{lensNotice}</p>}
       <strong>{matchingItems.length} {resultLabel}</strong>
     </div>
     <TimeAllocationList items={visibleItems} lens={lens} query={query} />
@@ -1268,7 +1262,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
         focusWorkflowSearch();
         return;
       }
-      if (view === "time" && ["1", "2", "3", "4"].includes(key)) {
+      if (view === "time" && ["1", "2"].includes(key)) {
         event.preventDefault();
         setTimeLens(timeLensOptions[Number(key) - 1][0]);
         return;
@@ -1291,7 +1285,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   let content: React.ReactNode;
   switch (view) {
     case "overview": content = <OverviewView analysis={analysis ? { ...analysis, analysis: { workflows } } : null} analyzing={analyzing} error={analysisError} analyze={() => void analyze()} openWorkflow={openWorkflow} navigate={navigate} knownWorkflowCount={knownWorkflows.length} activityPeriod={activityPeriod} runtime={runtime} workProfile={workProfile} refreshRuntime={refreshRuntime} openAccount={platform.openAccount} />; break;
-    case "time": content = <TimeView analysis={analysis} analyze={() => void analyze()} analyzing={analyzing} workProfile={workProfile} workspaceView={workspaceProfile} lens={timeLens} setLens={setTimeLens} />; break;
+    case "time": content = <TimeView analysis={analysis} analyze={() => void analyze()} analyzing={analyzing} workProfile={workProfile} lens={timeLens} setLens={setTimeLens} />; break;
     case "workflows": content = <WorkflowsView workflows={workflows} knownWorkflowCount={knownWorkflows.length} activityPeriod={activityPeriod} filters={filters} setFilters={setFilters} openWorkflow={openWorkflow} analyze={() => void analyze()} analyzing={analyzing} />; break;
     case "workflow": content = <WorkflowDetail workflow={activeWorkflow} navigate={navigate} />; break;
     case "bottlenecks": content = <BottlenecksView workflows={workflows} openWorkflow={openWorkflow} />; break;

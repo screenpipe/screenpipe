@@ -36,7 +36,7 @@ describe("shared workflows experience", () => {
     expect(screen.getByText("5 of 5 shown")).toBeInTheDocument();
   });
 
-  it("shows complete time dimensions through filtering and progressive disclosure", async () => {
+  it("keeps the time view focused on categories and projects", async () => {
     render(
       <WorkflowsApp
         platform={createFixtureWorkflowsPlatform()}
@@ -46,16 +46,16 @@ describe("shared workflows experience", () => {
     );
 
     fireEvent.click(await screen.findByRole("button", { name: /^time$/i }));
-    fireEvent.click(screen.getByRole("tab", { name: /people.*14/i }));
-    expect(screen.getByText("14 people")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /show 2 more.*2 remaining/i })).toBeInTheDocument();
-    expect(screen.queryByText("Sofia Alvarez")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(screen.getByRole("tab", { name: /categories.*4/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /projects.*8/i })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /people/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /companies/i })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /show 2 more/i }));
-    expect(screen.getByText("Sofia Alvarez")).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Filter people"), { target: { value: "Sofia" } });
-    expect(screen.getByText("1 person")).toBeInTheDocument();
-    expect(screen.getByText("Sofia Alvarez")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /projects.*8/i }));
+    fireEvent.change(screen.getByLabelText("Filter projects"), { target: { value: "Investor" } });
+    expect(screen.getByText("1 project")).toBeInTheDocument();
+    expect(screen.getByText("Investor process")).toBeInTheDocument();
   });
 
   it("keeps command palette and navigation shortcuts inside the focused UI", async () => {
@@ -73,10 +73,10 @@ describe("shared workflows experience", () => {
     expect(screen.queryByText("Only while this app is focused")).not.toBeInTheDocument();
 
     const commandSearch = screen.getByRole("textbox", { name: "Search commands and workflows" });
-    fireEvent.change(commandSearch, { target: { value: "People time profile" } });
+    fireEvent.change(commandSearch, { target: { value: "Projects time profile" } });
     fireEvent.keyDown(commandSearch, { key: "Enter" });
     expect(screen.getByRole("heading", { name: "Where your time goes" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /people.*14/i })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /projects.*8/i })).toHaveAttribute("aria-selected", "true");
 
     fireEvent.keyDown(window, { key: "1" });
     expect(screen.getByRole("tab", { name: /categories/i })).toHaveAttribute("aria-selected", "true");
@@ -118,9 +118,10 @@ describe("shared workflows experience", () => {
     expect(screen.queryByRole("button", { name: /create automation|new automation/i })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /^time$/i }));
-    fireEvent.click(screen.getByRole("tab", { name: /people.*14/i }));
     expect(screen.queryByText("Contributing seats")).not.toBeInTheDocument();
-    expect(screen.getByText(/only external collaborators appear here/i)).toBeInTheDocument();
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(screen.queryByRole("tab", { name: /people/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /companies/i })).not.toBeInTheDocument();
   });
 
   it("keeps a simple personal work profile private and saves explicit context", async () => {

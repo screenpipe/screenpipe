@@ -382,17 +382,16 @@
 .timeSummary span { display: block; color: #898d83; font-size: 8px; font-weight: 720; letter-spacing: .07em; text-transform: uppercase; }
 .timeSummary strong { display: block; margin: 7px 0 4px; font-size: 21px; letter-spacing: -.035em; }
 .timeValueNotice { grid-template-columns: 26px minmax(0,1fr); margin: -21px 0 34px; }
-.timeLensTabs { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 7px; margin-bottom: 13px; }
+.timeLensTabs { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; margin-bottom: 13px; }
 .timeLensTabs button { min-height: 43px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: #6d7167; font-size: 9px; font-weight: 670; cursor: pointer; }
 .timeLensTabs button:hover { background: #f4f5ef; color: var(--ink); }
 .timeLensTabs button > strong { margin-left: auto; min-width: 21px; height: 21px; display: grid; place-items: center; border-radius: 999px; background: #eff0eb; color: #777b70; font-size: 8px; }
 .timeLensTabs .timeLensActive { border-color: var(--ink); background: var(--ink); color: #fff; box-shadow: 0 5px 14px rgba(0,0,0,.08); }
 .timeLensTabs .timeLensActive > strong { background: var(--lime); color: #354800; }
-.timeLensTools { display: grid; grid-template-columns: minmax(180px,260px) minmax(0,1fr) auto; align-items: center; gap: 14px; margin-bottom: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.68); }
+.timeLensTools { display: grid; grid-template-columns: minmax(180px,260px) minmax(0,1fr); align-items: center; gap: 14px; margin-bottom: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.68); }
 .timeLensTools label { min-height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid #dfe1da; border-radius: 7px; background: #fff; color: #8a8e84; }
 .timeLensTools input { width: 100%; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: 9px; }
-.timeLensTools p { margin: 0; color: #777c71; font-size: 8px; line-height: 1.45; }
-.timeLensTools > strong { color: #666b61; font-size: 9px; white-space: nowrap; }
+.timeLensTools > strong { justify-self: end; color: #666b61; font-size: 9px; white-space: nowrap; }
 .timeAllocationList { overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .timeAllocationItem { display: grid; grid-template-columns: 35px minmax(0,1fr); gap: 13px; padding: 20px 20px 16px; border-bottom: 1px solid #e6e8e0; }
 .timeAllocationItem:last-child { border-bottom: 0; }
@@ -670,7 +669,6 @@
   .timeSummary > div:nth-child(-n+2) { border-bottom: 1px solid #e7e8e2; }
   .timeLensTabs { grid-template-columns: repeat(2,1fr); }
   .timeLensTools { grid-template-columns: 1fr auto; }
-  .timeLensTools p { grid-column: 1 / -1; grid-row: 2; }
   .profileAdvancedGrid { grid-template-columns: 1fr; }
 }
 
@@ -719,7 +717,7 @@
   .timeSummary > div:last-child { border-bottom: 0; }
   .timeAllocationHead { grid-template-columns: 1fr; gap: 12px; }
   .timeLensTools { grid-template-columns: 1fr; }
-  .timeLensTools p { grid-column: auto; grid-row: auto; }
+  .timeLensTools > strong { justify-self: start; }
   .timeAllocationHead > div:last-child { padding: 0; border: 0; text-align: left; }
   .timeEvidence ul { grid-template-columns: 1fr; }
   .profileCard { padding: 18px; }
