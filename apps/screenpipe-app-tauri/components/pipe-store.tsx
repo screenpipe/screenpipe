@@ -757,6 +757,25 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       // Switch to my-pipes tab — PipesSection mounts and auto-opens the connection modal
       onInstalled?.();
     } catch (err: any) {
+      if (err.message.includes("free_pipe_limit_reached")) {
+        toast({
+          title: "free task limit reached",
+          description: (
+            <span>
+              free plan includes up to 2 installed tasks. delete one in{" "}
+              <button
+                type="button"
+                className="underline underline-offset-2 text-inherit opacity-80 hover:opacity-100"
+                onClick={onInstalled}
+              >
+                My tasks
+              </button>
+              .
+            </span>
+          ),
+        });
+        return;
+      }
       toast({
         title: "failed to install scheduled task",
         description: (
