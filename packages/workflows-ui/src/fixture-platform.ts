@@ -110,7 +110,7 @@ function fixtureWorkflow(input: FixtureWorkflow, index: number): WorkflowMap {
   };
 }
 
-function allocation(label: string, description: string, minutes: number, percentage: number, apps: string[], day: number, basis: "recorder-app" | "explicit-project" = "explicit-project"): TimeAllocationItem {
+function allocation(label: string, description: string, minutes: number, percentage: number, apps: string[], day: number, basis: "recorder-category" | "explicit-project" = "explicit-project"): TimeAllocationItem {
   return {
     label,
     description,
@@ -169,10 +169,10 @@ export const fixtureWorkflowAnalysis: WorkflowAnalysis = {
     days: 90,
     totalMinutes,
     categories: dimension([
-      allocation("Linear", "", 510, 27, ["Linear"], 1, "recorder-app"),
-      allocation("Slack", "", 430, 23, ["Slack"], 2, "recorder-app"),
-      allocation("Chrome", "", 345, 19, ["Chrome"], 3, "recorder-app"),
-      allocation("GitHub", "", 260, 14, ["GitHub"], 4, "recorder-app"),
+      allocation("Engineering", "Building, debugging, and reviewing product changes", 510, 27, ["Linear", "GitHub"], 1, "recorder-category"),
+      allocation("Customer work", "Understanding requests and supporting customers", 430, 23, ["Intercom", "Slack"], 2, "recorder-category"),
+      allocation("Product and design", "Shaping product behavior and experience", 345, 19, ["Figma", "Chrome"], 3, "recorder-category"),
+      allocation("Operations", "Planning, coordination, and internal administration", 260, 14, ["Calendar", "Docs"], 4, "recorder-category"),
     ], totalMinutes),
     projects: dimension([
       allocation("Northstar launch", "Website, release, and launch coordination", 470, 25, ["Figma", "GitHub"], 1),

@@ -42,7 +42,7 @@ import {
   Workflow,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { type AppView, isAppView } from "./navigation";
+import { type AppView, isPrimaryAppView } from "./navigation";
 import {
   activeFilterCount,
   defaultWorkflowFilters,
@@ -85,13 +85,8 @@ const processingSteps = [
 ] as const;
 
 const primaryNavigation = [
-  ["overview", LayoutDashboard, "Overview", ["G", "O"]],
-  ["time", ChartPie, "Time", ["G", "T"]],
   ["workflows", ListTree, "Workflows", ["G", "W"]],
-  ["bottlenecks", AlertTriangle, "Friction", ["G", "F"]],
   ["profile", UserRoundCog, "Work profile", ["G", "P"]],
-  ["evidence", FileCheck2, "Evidence", ["G", "E"]],
-  ["privacy", ShieldCheck, "Data controls", ["G", "D"]],
 ] as const;
 
 type TimeLens = "categories" | "projects";
@@ -173,10 +168,10 @@ function handleWindowDrag(event: React.MouseEvent<HTMLElement>, startWindowDrag?
 }
 
 function appViewFromLocation(): AppView {
-  if (typeof window === "undefined") return "overview";
+  if (typeof window === "undefined") return "workflows";
   const params = new URLSearchParams(window.location.search);
   const requested = params.get("view") ?? params.get("section");
-  return isAppView(requested) ? requested : "overview";
+  return isPrimaryAppView(requested) ? requested : "workflows";
 }
 
 function qualityLabel(grade: "strong" | "good" | "limited") {
@@ -378,7 +373,7 @@ function AppShell({
 }) {
   const activeView = view === "workflow" ? "workflows" : view;
   const workspaceView = Boolean(runtime?.workspace);
-  const nav = primaryNavigation.filter(([target]) => target !== "evidence" || runtime?.dataBoundary?.workspaceVisibility !== "aggregate-only");
+  const nav = primaryNavigation;
   const statusLabel = workspaceView
     ? runtime?.recording ? "Reports ready" : "Loading"
     : runtime?.recording
@@ -733,14 +728,14 @@ function WorkflowDetail({ workflow, navigate }: { workflow: WorkflowMap | null; 
         <div className={styles.panel}><div className={styles.panelTitle}><div><span>Duration evidence</span><h2>{measuredDuration ? "Measured from meeting boundaries" : "Not enough continuous evidence"}</h2></div><Clock3 size={18} /></div><p className={styles.panelEmpty}>{measuredDuration ? `${workflowDurationLabel(workflow)} is the median of ${workflow.durationSampleCount ?? 1} exact meeting window${(workflow.durationSampleCount ?? 1) === 1 ? "" : "s"}. Stage timing remains unknown.` : "The map shows the repeated pattern without turning scattered screenshots or transcript excerpts into a made-up duration."}</p></div>
         <div className={styles.panel}><div className={styles.panelTitle}><div><span>Workflow variations</span><h2>What changes between runs</h2></div><GitBranch size={18} /></div>{workflow.variations.length ? <ul className={styles.plainList}>{workflow.variations.map((item) => <li key={item}>{item}</li>)}</ul> : <p className={styles.panelEmpty}>No clear variations were supported in this period.</p>}{!!workflow.handoffs.length && <div className={styles.handoffs}><strong>Handoffs observed</strong>{workflow.handoffs.map((item) => <span key={item}><ArrowRight size={11} />{item}</span>)}</div>}</div>
       </section>
-      {!!actionableFriction.length && <><div className={styles.sectionHeading}><div><span>Within reach</span><h2>Friction you can affect</h2></div><button className={styles.textButton} onClick={() => navigate("bottlenecks")}>View all friction <ArrowRight size={14} /></button></div><BottleneckList items={actionableFriction.map((item) => ({ ...item, workflowTitle: workflow.title, repetitions: workflow.repetitions }))} /></>}
+      {!!actionableFriction.length && <><div className={styles.sectionHeading}><div><span>Within reach</span><h2>Friction you can affect</h2></div></div><BottleneckList items={actionableFriction.map((item) => ({ ...item, workflowTitle: workflow.title, repetitions: workflow.repetitions }))} /></>}
       {!!constraints.length && <><div className={styles.sectionHeading}><div><span>Plan around</span><h2>External and required constraints</h2></div></div><BottleneckList items={constraints.map((item) => ({ ...item, workflowTitle: workflow.title, repetitions: workflow.repetitions }))} numbered={false} /></>}
     </>
   );
 }
 
 const timeLensOptions = [
-  ["categories", ChartPie, "Applications"],
+  ["categories", ChartPie, "Categories"],
   ["projects", FolderKanban, "Projects"],
 ] as const;
 
@@ -748,8 +743,8 @@ function TimeAllocationList({ items, lens, query }: { items: TimeAllocationItem[
   if (!items.length) {
     return <section className={styles.timeLensEmpty}>
       <FileCheck2 size={21} />
-      <h2>{query ? "No matches" : lens === "projects" ? "No measured project time yet" : "No recorded application time yet"}</h2>
-      <p>{query ? "Try another name or clear the filter." : lens === "projects" ? "Project time stays hidden until it can be tied to measured activity." : "Refresh after Screenpipe has captured some active work."}</p>
+      <h2>{query ? "No matches" : lens === "projects" ? "No measured project time yet" : "No supported categories yet"}</h2>
+      <p>{query ? "Try another name or clear the filter." : lens === "projects" ? "Project time stays hidden until it can be tied to measured activity." : "Refresh to group clearly identifiable work. Unclear activity stays unattributed."}</p>
     </section>;
   }
 
@@ -784,17 +779,17 @@ function TimeView({ analysis, analyze, analyzing, workProfile, lens, setLens }: 
   if (!profile) {
     return <>
       <div className={styles.pageHeader}><div><h1>Recorded active time</h1></div></div>
-      {analyzing ? <ProcessingView /> : <section className={styles.emptyState}><ChartPie size={23} /><h2>Measure your active time</h2><p>Use Screenpipe's recorded application totals for the last {WORKFLOW_CATALOG_DAYS} days.</p><button className={styles.primaryButton} onClick={analyze}><RefreshCw size={14} />Refresh time</button></section>}
+      {analyzing ? <ProcessingView /> : <section className={styles.emptyState}><ChartPie size={23} /><h2>Map your active time</h2><p>Group measured work into categories across the last {WORKFLOW_CATALOG_DAYS} days.</p><button className={styles.primaryButton} onClick={analyze}><RefreshCw size={14} />Refresh time</button></section>}
     </>;
   }
   if (!dimension) return null;
   const usableDays = analysis?.quality.usableDays ?? 0;
   const visibleItems = matchingItems.slice(0, visibleCount);
   const hiddenCount = matchingItems.length - visibleItems.length;
-  const lensName = lens === "categories" ? "applications" : "projects";
+  const lensName = lens === "categories" ? "categories" : "projects";
   const resultLabel = matchingItems.length === 1
-    ? ({ categories: "application", projects: "project" } as const)[lens]
-    : ({ categories: "applications", projects: "projects" } as const)[lens];
+    ? ({ categories: "category", projects: "project" } as const)[lens]
+    : ({ categories: "categories", projects: "projects" } as const)[lens];
 
   return <>
     <div className={styles.pageHeader}>
@@ -804,7 +799,7 @@ function TimeView({ analysis, analyze, analyzing, workProfile, lens, setLens }: 
     <section className={styles.timeSummary} aria-label="Time profile summary">
       <div><span>Captured active time</span><strong>{formatMinutes(profile.totalMinutes)}</strong></div>
       <div><span>History reviewed</span><strong>{usableDays} days</strong></div>
-      <div><span>{lens === "categories" ? "Application" : "Project"} coverage</span><strong>{dimension.coveragePercent}%</strong></div>
+      <div><span>{lens === "categories" ? "Category" : "Project"} coverage</span><strong>{dimension.coveragePercent}%</strong></div>
       <div><span>Unattributed</span><strong>{formatMinutes(dimension.unattributedMinutes)}</strong></div>
     </section>
     {workProfile?.hourlyValue && workProfile.hourlyValue.amount > 0 && <section className={styles.timeValueNotice}>
@@ -965,7 +960,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   const [selectedWorkflow, setSelectedWorkflow] = useState(0);
   const [activityPeriod, setActivityPeriod] = useState<WorkflowActivityPeriod>(0);
   const [filters, setFilters] = useState<WorkflowFilters>(defaultWorkflowFilters);
-  const [view, setView] = useState<AppView>("overview");
+  const [view, setView] = useState<AppView>("workflows");
   const [timeLens, setTimeLens] = useState<TimeLens>("categories");
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [workProfile, setWorkProfile] = useState<WorkProfile | null>(null);
@@ -1135,30 +1130,16 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
 
   const paletteCommands = useMemo<PaletteCommand[]>(() => {
     const navigationCommands = primaryNavigation
-      .filter(([target]) => target !== "evidence" || runtime?.dataBoundary?.workspaceVisibility !== "aggregate-only")
       .map(([target, icon, label, shortcut]) => ({
         id: `navigate-${target}`,
         label: `Go to ${label}`,
-        detail: target === "privacy" ? "Review storage, retention, and sharing boundaries" : `Open the ${label.toLowerCase()} view`,
+        detail: `Open the ${label.toLowerCase()} view`,
         group: "Navigate" as const,
         icon,
         keywords: target,
         shortcut,
         action: () => navigate(target),
       }));
-    const timeCommands = timeLensOptions.map(([lens, icon, label], index) => ({
-      id: `time-${lens}`,
-      label: `${label} time profile`,
-      detail: `Open Time and compare captured work by ${label.toLowerCase()}`,
-      group: "Time profile" as const,
-      icon,
-      keywords: `time ${lens}`,
-      shortcut: [String(index + 1)],
-      action: () => {
-        setTimeLens(lens);
-        navigate("time");
-      },
-    }));
     const activityCommands = ([
       [0, "All captured activity"],
       [7, "Active in 7 days"],
@@ -1199,7 +1180,6 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
     const filtersActive = activeFilterCount(filters) > 0;
     return [
       ...navigationCommands,
-      ...timeCommands,
       {
         id: "action-search",
         label: "Search workflows",
@@ -1258,16 +1238,11 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
         focusWorkflowSearch();
         return;
       }
-      if (view === "time" && ["1", "2"].includes(key)) {
-        event.preventDefault();
-        setTimeLens(timeLensOptions[Number(key) - 1][0]);
-        return;
-      }
       const pending = shortcutPrefix.current;
       if (pending?.key === "g" && Date.now() - pending.at < 1_000) {
         shortcutPrefix.current = null;
-        const target = ({ o: "overview", t: "time", w: "workflows", f: "bottlenecks", p: "profile", e: "evidence", d: "privacy" } as Record<string, AppView>)[key];
-        if (!target || (target === "evidence" && runtime?.dataBoundary?.workspaceVisibility === "aggregate-only")) return;
+        const target = ({ w: "workflows", p: "profile" } as Record<string, AppView>)[key];
+        if (!target) return;
         event.preventDefault();
         navigate(target);
         return;

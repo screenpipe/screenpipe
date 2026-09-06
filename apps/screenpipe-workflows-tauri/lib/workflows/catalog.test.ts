@@ -184,9 +184,38 @@ describe("workflow catalog", () => {
     expect(sanitizeWorkflowAnalysis(legacy).timeProfile).toBeNull();
   });
 
-  it("keeps recorder-measured application time and removes unsupported identities", () => {
+  it("keeps categories backed by measured window rows and removes unsupported identities", () => {
     const current = analysis([workflow("Review customer feedback", "2026-09-01T10:00:00Z")]);
     const measured = {
+      label: "Engineering",
+      description: "Product development",
+      minutes: 80,
+      percentage: 80,
+      confidence: 100,
+      distinctDays: 0,
+      apps: ["Arc"],
+      evidence: [],
+      basis: "recorder-category" as const,
+    };
+    current.timeProfile = {
+      days: 90,
+      totalMinutes: 100,
+      categories: { items: [measured], attributedMinutes: 80, unattributedMinutes: 20, coveragePercent: 80 },
+      projects: { items: [], attributedMinutes: 0, unattributedMinutes: 100, coveragePercent: 0 },
+      people: { items: [{ ...measured, label: "self@example.com" }], attributedMinutes: 80, unattributedMinutes: 20, coveragePercent: 80 },
+      companies: { items: [{ ...measured, label: "example.com" }], attributedMinutes: 80, unattributedMinutes: 20, coveragePercent: 80 },
+    };
+
+    const sanitized = sanitizeWorkflowAnalysis(current).timeProfile!;
+    expect(sanitized.categories.items.map((item) => item.label)).toEqual(["Engineering"]);
+    expect(sanitized.categories.coveragePercent).toBe(80);
+    expect(sanitized.people.items).toEqual([]);
+    expect(sanitized.companies.items).toEqual([]);
+  });
+
+  it("hides the temporary raw-application category regression", () => {
+    const current = analysis([workflow("Review customer feedback", "2026-09-01T10:00:00Z")]);
+    const rawApplication = {
       label: "Arc",
       description: "",
       minutes: 80,
@@ -200,17 +229,13 @@ describe("workflow catalog", () => {
     current.timeProfile = {
       days: 90,
       totalMinutes: 100,
-      categories: { items: [measured, { ...measured, label: "UserNotificationCenter", minutes: 15 }], attributedMinutes: 95, unattributedMinutes: 5, coveragePercent: 95 },
+      categories: { items: [rawApplication], attributedMinutes: 80, unattributedMinutes: 20, coveragePercent: 80 },
       projects: { items: [], attributedMinutes: 0, unattributedMinutes: 100, coveragePercent: 0 },
-      people: { items: [{ ...measured, label: "self@example.com" }], attributedMinutes: 80, unattributedMinutes: 20, coveragePercent: 80 },
-      companies: { items: [{ ...measured, label: "example.com" }], attributedMinutes: 80, unattributedMinutes: 20, coveragePercent: 80 },
+      people: { items: [], attributedMinutes: 0, unattributedMinutes: 100, coveragePercent: 0 },
+      companies: { items: [], attributedMinutes: 0, unattributedMinutes: 100, coveragePercent: 0 },
     };
 
-    const sanitized = sanitizeWorkflowAnalysis(current).timeProfile!;
-    expect(sanitized.categories.items.map((item) => item.label)).toEqual(["Arc"]);
-    expect(sanitized.categories.coveragePercent).toBe(80);
-    expect(sanitized.people.items).toEqual([]);
-    expect(sanitized.companies.items).toEqual([]);
+    expect(sanitizeWorkflowAnalysis(current).timeProfile).toBeNull();
   });
 
   it("uses recent periods as a lens without deleting older workflows", () => {

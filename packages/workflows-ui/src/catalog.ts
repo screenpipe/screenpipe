@@ -101,16 +101,8 @@ function deduplicateWorkflows(workflows: WorkflowMap[]) {
 function trustedTimeProfile(analysis: WorkflowAnalysis) {
   const profile = analysis.timeProfile;
   if (!profile) return profile;
-  const systemApplicationNoise = new Set([
-    "characterpalette", "controlcenter", "dock", "emojiandsymbols", "followupui", "loginwindow",
-    "notificationcenter", "problemreporter", "securityagent", "systemuiserver",
-    "universalaccessauthwarn", "usernotificationcenter", "windowserver",
-  ]);
-  const trustedApplications = profile.categories.items.filter((item) =>
-    item.basis === "recorder-app"
-    && !systemApplicationNoise.has(item.label.toLocaleLowerCase().replace(/[^a-z0-9]+/g, "")),
-  );
-  if (profile.categories.items.length > 0 && trustedApplications.length === 0) return null;
+  const trustedCategories = profile.categories.items.filter((item) => item.basis === "recorder-category");
+  if (profile.categories.items.length > 0 && trustedCategories.length === 0) return null;
   const dimension = (items: typeof profile.categories.items) => {
     const attributedMinutes = Math.min(profile.totalMinutes, items.reduce((sum, item) => sum + item.minutes, 0));
     return {
@@ -122,7 +114,7 @@ function trustedTimeProfile(analysis: WorkflowAnalysis) {
   };
   return {
     ...profile,
-    categories: dimension(trustedApplications),
+    categories: dimension(trustedCategories),
     projects: dimension(profile.projects.items.filter((item) => item.basis === "explicit-project")),
     people: dimension([]),
     companies: dimension([]),

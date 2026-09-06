@@ -18,7 +18,7 @@ The app should:
 - Break every workflow into granular, measured stages.
 - Separate hands-on work, waiting, handoffs, and external constraints.
 - Show the local evidence and screenshots behind every accepted stage.
-- Show recorder-measured application time; keep project time unattributed until it has a traceable measurement basis.
+- Group exact recorder-measured window time into semantic categories; keep ambiguous and project time unattributed.
 
 The app should not:
 

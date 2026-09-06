@@ -15,6 +15,12 @@ export const appViews = [
 
 export type AppView = (typeof appViews)[number];
 
+export const primaryAppViews = ["workflows", "profile"] as const satisfies readonly AppView[];
+
+export function isPrimaryAppView(value: string | null): value is (typeof primaryAppViews)[number] {
+  return primaryAppViews.includes(value as (typeof primaryAppViews)[number]);
+}
+
 export function isAppView(value: string | null): value is AppView {
   return appViews.includes(value as AppView);
 }

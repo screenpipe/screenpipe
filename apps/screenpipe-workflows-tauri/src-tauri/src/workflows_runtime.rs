@@ -37,7 +37,7 @@ Map how work actually happens across the complete requested period. Find distinc
 
 Audio may contain the user, another participant, media playback, or an unknown speaker. It can support the topic of a captured meeting, but it cannot by itself prove what the user did, who said something, a trigger, an outcome, or elapsed time. A meeting workflow covers only work performed inside the meeting; preparation and follow-up are separate workflows when independently supported. For meeting workflows, cite only exact supplied meeting records at their meeting_start; only their meeting_start and meeting_end can measure meeting length. Never add stage estimates or sum loosely related observations into a duration. The app computes duration only when the whole workflow is supported by at least two exact meeting records and no scattered screen, parsed, or audio observations.
 
-Classify bottlenecks as direct, influence, external, or required based on who controls them. Never blame the user for external dependencies or required safeguards. Do not estimate or allocate time. The app calculates recorder-measured application time separately from your workflow analysis.
+Classify bottlenecks as direct, influence, external, or required based on who controls them. Never blame the user for external dependencies or required safeguards. Do not estimate durations. For the time profile, group only the supplied measured window rows into useful work categories. The app calculates every category total from those rows; you never output minutes.
 
 Return only the requested JSON. Copy exact supplied timestamps and apps for evidence. Use each evidence point for only one workflow and one stage. Do not invent identities, durations, apps, events, sequences, frequency, or evidence. Keep unsupported time unattributed. The work profile is context for vocabulary and priorities only, never evidence."#;
 
@@ -1219,9 +1219,11 @@ fn normalize_analysis(
     Ok(json!({ "workflows": normalized }))
 }
 
-#[derive(Default)]
-struct MeasuredApplication {
-    label: String,
+#[derive(Clone, Debug, Default)]
+struct MeasuredTimeRow {
+    id: String,
+    app: String,
+    window: String,
     minutes: f64,
 }
 
@@ -1258,25 +1260,33 @@ fn is_system_application_noise(label: &str) -> bool {
     )
 }
 
-fn measured_application_dimension(daily: &[Value], total_minutes: u64) -> Value {
-    let mut measured = HashMap::<String, MeasuredApplication>::new();
-    for app in daily
+fn measured_time_rows(daily: &[Value], total_minutes: u64) -> Vec<MeasuredTimeRow> {
+    let mut measured = HashMap::<String, MeasuredTimeRow>::new();
+    for window in daily
         .iter()
-        .filter_map(|bundle| bundle.get("apps").and_then(Value::as_array))
+        .filter_map(|bundle| bundle.get("windows").and_then(Value::as_array))
         .flatten()
     {
-        let Some(label) = app
-            .get("name")
+        let Some(app) = window
+            .get("app_name")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
         else {
             continue;
         };
-        if is_system_application_noise(label) {
+        if is_system_application_noise(app) {
             continue;
         }
-        let minutes = app
+        let Some(window_name) = window
+            .get("window_name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let minutes = window
             .get("minutes")
             .and_then(Value::as_f64)
             .filter(|value| value.is_finite() && *value > 0.0)
@@ -1284,61 +1294,165 @@ fn measured_application_dimension(daily: &[Value], total_minutes: u64) -> Value 
         if minutes == 0.0 {
             continue;
         }
-        let entry = measured
-            .entry(label.to_lowercase())
-            .or_insert_with(|| MeasuredApplication {
-                label: label.chars().take(180).collect(),
-                ..MeasuredApplication::default()
-            });
+        let key = format!("{}\u{0}{}", app.to_lowercase(), window_name.to_lowercase());
+        let entry = measured.entry(key).or_insert_with(|| MeasuredTimeRow {
+            app: app.chars().take(120).collect(),
+            window: window_name.chars().take(220).collect(),
+            ..MeasuredTimeRow::default()
+        });
         entry.minutes += minutes;
     }
 
-    let mut minute_rows = measured
+    let mut rows = measured
         .into_values()
-        .map(|app| (app.label, app.minutes.round() as u64))
-        .filter(|(_, minutes)| *minutes > 0)
+        .filter(|row| row.minutes.round() > 0.0)
         .collect::<Vec<_>>();
-    minute_rows.sort_by_key(|(_, minutes)| std::cmp::Reverse(*minutes));
+    rows.sort_by(|left, right| {
+        right
+            .minutes
+            .partial_cmp(&left.minutes)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
-    let raw_sum = minute_rows.iter().map(|(_, minutes)| *minutes).sum::<u64>();
-    if raw_sum > total_minutes && total_minutes > 0 {
-        let mut scaled_sum = 0u64;
-        for (_, minutes) in &mut minute_rows {
-            *minutes = minutes.saturating_mul(total_minutes) / raw_sum;
-            scaled_sum = scaled_sum.saturating_add(*minutes);
+    let raw_sum = rows.iter().map(|row| row.minutes).sum::<f64>();
+    if raw_sum > total_minutes as f64 && total_minutes > 0 {
+        let scale = total_minutes as f64 / raw_sum;
+        for row in &mut rows {
+            row.minutes *= scale;
         }
-        let mut remainder = total_minutes.saturating_sub(scaled_sum);
-        for (_, minutes) in &mut minute_rows {
-            if remainder == 0 {
-                break;
+    }
+    let target_sum = rows
+        .iter()
+        .map(|row| row.minutes)
+        .sum::<f64>()
+        .round()
+        .min(total_minutes as f64) as u64;
+    let mut allocated = 0u64;
+    for row in &mut rows {
+        row.minutes = row.minutes.floor();
+        allocated = allocated.saturating_add(row.minutes as u64);
+    }
+    let mut remainder = target_sum.saturating_sub(allocated);
+    for row in &mut rows {
+        if remainder == 0 {
+            break;
+        }
+        row.minutes += 1.0;
+        remainder -= 1;
+    }
+    rows.retain(|row| row.minutes > 0.0);
+    rows.truncate(240);
+    for (index, row) in rows.iter_mut().enumerate() {
+        row.id = format!("t{:03}", index + 1);
+    }
+    rows
+}
+
+fn measured_time_rows_payload(rows: &[MeasuredTimeRow]) -> Value {
+    Value::Array(
+        rows.iter()
+            .map(|row| {
+                json!({
+                    "id": row.id,
+                    "app": row.app,
+                    "window": row.window,
+                    "minutes": row.minutes.round() as u64,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn measured_category_dimension(
+    rows: &[MeasuredTimeRow],
+    raw_categories: Option<&Value>,
+    total_minutes: u64,
+) -> Value {
+    let rows_by_id = rows
+        .iter()
+        .map(|row| (row.id.as_str(), row))
+        .collect::<HashMap<_, _>>();
+    let mut used_rows = HashSet::new();
+    let mut used_labels = HashSet::new();
+    let mut items = Vec::new();
+
+    for category in raw_categories
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(16)
+    {
+        let label = category
+            .get("label")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .chars()
+            .take(80)
+            .collect::<String>();
+        if label.is_empty() || !used_labels.insert(label.to_lowercase()) {
+            continue;
+        }
+        let description = category
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .chars()
+            .take(240)
+            .collect::<String>();
+        let mut minutes = 0u64;
+        let mut apps = Vec::new();
+        for row_id in category
+            .get("rowIds")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            let Some(row) = rows_by_id.get(row_id) else {
+                continue;
+            };
+            if !used_rows.insert(row.id.clone()) {
+                continue;
             }
-            *minutes += 1;
-            remainder -= 1;
+            minutes = minutes.saturating_add(row.minutes.round() as u64);
+            if !apps
+                .iter()
+                .any(|app: &String| app.eq_ignore_ascii_case(&row.app))
+            {
+                apps.push(row.app.clone());
+            }
         }
-        minute_rows.retain(|(_, minutes)| *minutes > 0);
+        if minutes == 0 {
+            continue;
+        }
+        items.push(json!({
+            "label": label,
+            "description": description,
+            "minutes": minutes,
+            "percentage": if total_minutes == 0 { 0 } else { ((minutes as f64 * 100.0 / total_minutes as f64).round() as u64).min(100) },
+            "confidence": 100,
+            "distinctDays": 0,
+            "apps": apps,
+            "evidence": [],
+            "basis": "recorder-category",
+        }));
     }
 
-    let attributed_minutes = minute_rows
+    items.sort_by_key(|item| {
+        std::cmp::Reverse(
+            item.get("minutes")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+        )
+    });
+
+    let attributed_minutes = items
         .iter()
-        .map(|(_, minutes)| *minutes)
+        .filter_map(|item| item.get("minutes").and_then(Value::as_u64))
         .sum::<u64>()
         .min(total_minutes);
-    let items = minute_rows
-        .into_iter()
-        .map(|(label, minutes)| {
-            json!({
-                "label": label,
-                "description": "",
-                "minutes": minutes,
-                "percentage": if total_minutes == 0 { 0 } else { ((minutes as f64 * 100.0 / total_minutes as f64).round() as u64).min(100) },
-                "confidence": 100,
-                "distinctDays": 0,
-                "apps": [label],
-                "evidence": [],
-                "basis": "recorder-app",
-            })
-        })
-        .collect::<Vec<_>>();
     let coverage_percent = if total_minutes == 0 {
         0
     } else {
@@ -1352,11 +1466,16 @@ fn measured_application_dimension(daily: &[Value], total_minutes: u64) -> Value 
     })
 }
 
-fn measured_time_profile(daily: &[Value], days: u16, total_minutes: u64) -> Value {
+fn measured_time_profile(
+    rows: &[MeasuredTimeRow],
+    raw_categories: Option<&Value>,
+    days: u16,
+    total_minutes: u64,
+) -> Value {
     json!({
         "days": days,
         "totalMinutes": total_minutes,
-        "categories": measured_application_dimension(daily, total_minutes),
+        "categories": measured_category_dimension(rows, raw_categories, total_minutes),
         "projects": empty_time_dimension(total_minutes),
         "people": empty_time_dimension(total_minutes),
         "companies": empty_time_dimension(total_minutes),
@@ -1708,6 +1827,7 @@ fn workflow_analysis_prompt(
     days: u16,
     total_minutes: u64,
     activity: &[Value],
+    time_rows: &[MeasuredTimeRow],
     profile: Option<&Value>,
 ) -> String {
     format!(
@@ -1728,8 +1848,10 @@ Never estimate time inside a workflow. Do not output stage minutes, waiting minu
 
 Audio transcripts can establish meeting topic only. They may contain the user, another person, unknown speakers, or playback. Never use audio alone to claim that the user performed an action, said a statement, initiated a trigger, completed an outcome, or spent a duration.
 
+Also group the supplied MEASURED_TIME_ROWS into 4 to 12 stable, human-readable work categories such as Engineering, Sales, Fundraising, Product and design, Operations, Research, or Communication. Use the work profile only to choose vocabulary. Assign a row only when its app and window title provide enough evidence for the category. Generic browser, chat, terminal, or document rows are ambiguous unless the window title resolves their purpose. Omit ambiguous rows; the app will show them as unattributed. Each row ID may appear in at most one category. Do not return minutes, percentages, people, companies, projects, or explanations for individual rows. The app will sum the exact recorder-measured minutes for the IDs you assign.
+
 Return one JSON object and no Markdown with this exact shape:
-{{"workflows":[{{"title":string,"description":string,"trigger":string,"outcome":string,"confidence":integer,"apps":[string],"people":[string],"teams":[string],"handoffs":[string],"variations":[string],"stages":[{{"name":string,"description":string,"confidence":integer,"apps":[string],"evidence":[{{"timestamp":string,"app":string}}]}}],"bottlenecks":[{{"label":string,"stage":string,"type":"waiting"|"switching"|"rework"|"handoff"|"unclear","control":"direct"|"influence"|"external"|"required","controlReason":string,"detail":string,"confidence":integer}}],"evidence":[{{"timestamp":string,"app":string}}]}}]}}.
+{{"workflows":[{{"title":string,"description":string,"trigger":string,"outcome":string,"confidence":integer,"apps":[string],"people":[string],"teams":[string],"handoffs":[string],"variations":[string],"stages":[{{"name":string,"description":string,"confidence":integer,"apps":[string],"evidence":[{{"timestamp":string,"app":string}}]}}],"bottlenecks":[{{"label":string,"stage":string,"type":"waiting"|"switching"|"rework"|"handoff"|"unclear","control":"direct"|"influence"|"external"|"required","controlReason":string,"detail":string,"confidence":integer}}],"evidence":[{{"timestamp":string,"app":string}}]}}],"timeCategories":[{{"label":string,"description":string,"rowIds":[string]}}]}}.
 
 DAYS
 {days}
@@ -1740,11 +1862,16 @@ RECORDER_MEASURED_ACTIVE_MINUTES
 WORK_PROFILE
 {profile}
 
+MEASURED_TIME_ROWS
+{time_rows}
+
 CAPTURED_ACTIVITY
 {activity}"#,
         profile = serde_json::to_string(&profile.unwrap_or(&Value::Null))
             .unwrap_or_else(|_| "null".to_string()),
         activity = serde_json::to_string(activity).unwrap_or_else(|_| "[]".to_string()),
+        time_rows = serde_json::to_string(&measured_time_rows_payload(time_rows))
+            .unwrap_or_else(|_| "[]".to_string()),
     )
 }
 
@@ -1774,13 +1901,14 @@ async fn request_workflow_analysis(
     days: u16,
     total_minutes: u64,
     activity: &[Value],
+    time_rows: &[MeasuredTimeRow],
     profile: Option<&Value>,
 ) -> Result<Value, String> {
     let raw = crate::activity_history::run_background_pi_with_config(
         app,
         "workflows",
         "pi-workflows",
-        workflow_analysis_prompt(days, total_minutes, activity, profile),
+        workflow_analysis_prompt(days, total_minutes, activity, time_rows, profile),
         Some(Duration::from_secs(15 * 60)),
         workflow_agent_config(),
         Some(token),
@@ -1943,6 +2071,7 @@ pub async fn analyze_workflows(
         .filter_map(|bundle| bundle.get("total_active_minutes").and_then(Value::as_f64))
         .sum::<f64>()
         .round() as u64;
+    let time_rows = measured_time_rows(&daily, observed_active_minutes);
     let profile = work_profile_payload(profile.as_ref());
     let raw = request_workflow_analysis(
         &app,
@@ -1950,6 +2079,7 @@ pub async fn analyze_workflows(
         days,
         observed_active_minutes,
         &daily,
+        &time_rows,
         profile.as_ref(),
     )
     .await?;
@@ -1967,7 +2097,12 @@ pub async fn analyze_workflows(
     attach_stage_screenshots(&mut analysis, &recorder).await;
     attach_screenshot_quality(&mut analysis);
     let quality = analysis_quality(&daily, days, &analysis);
-    let time_profile = measured_time_profile(&daily, days, observed_active_minutes);
+    let time_profile = measured_time_profile(
+        &time_rows,
+        raw.get("timeCategories"),
+        days,
+        observed_active_minutes,
+    );
     let usable_days = quality
         .get("usableDays")
         .cloned()
@@ -2397,6 +2532,12 @@ mod tests {
             90,
             120,
             &[json!({"start": "2026-06-01T00:00:00Z", "end": "2026-06-08T00:00:00Z"})],
+            &[MeasuredTimeRow {
+                id: "t001".to_string(),
+                app: "Cursor".to_string(),
+                window: "screenpipe workflows".to_string(),
+                minutes: 20.0,
+            }],
             None,
         );
 
@@ -2413,6 +2554,8 @@ mod tests {
         assert!(prompt.contains("If the evidence genuinely supports 12 to 30 narrow workflows"));
         assert!(prompt.contains("Creating a deck, editing a video, sending an email"));
         assert!(prompt.contains("at least two exact meeting_start and meeting_end records"));
+        assert!(prompt.contains("The app will sum the exact recorder-measured minutes"));
+        assert!(prompt.contains("\"id\":\"t001\""));
         assert!(!prompt.contains("For timeProfile"));
         assert!(!prompt.contains("\"companies\":[same item shape]"));
         assert!(prompt.contains("2026-06-01T00:00:00Z"));
@@ -2420,35 +2563,42 @@ mod tests {
     }
 
     #[test]
-    fn time_profile_uses_only_recorder_measured_application_minutes() {
+    fn time_profile_sums_only_agent_grouped_measured_window_rows() {
         let daily = vec![
             json!({
-                "apps": [
-                    {"name": "Arc", "minutes": 35.4},
-                    {"name": "Cursor", "minutes": 20.2},
-                    {"name": "UserNotificationCenter", "minutes": 12.0}
+                "windows": [
+                    {"app_name": "Arc", "window_name": "Screenpipe investor deck", "minutes": 35.4},
+                    {"app_name": "Cursor", "window_name": "screenpipe workflows", "minutes": 20.2},
+                    {"app_name": "UserNotificationCenter", "window_name": "Notification", "minutes": 12.0}
                 ]
             }),
             json!({
-                "apps": [
-                    {"name": "arc", "minutes": 10.4},
-                    {"name": "Slack", "minutes": 5.1}
+                "windows": [
+                    {"app_name": "arc", "window_name": "screenpipe investor deck", "minutes": 10.4},
+                    {"app_name": "Slack", "window_name": "Screenpipe team", "minutes": 5.1}
                 ]
             }),
         ];
+        let rows = measured_time_rows(&daily, 72);
+        let categories = json!([
+            {"label": "Fundraising", "description": "Investor work", "rowIds": ["t001"]},
+            {"label": "Engineering", "description": "Product development", "rowIds": ["t002", "t001", "unknown"]}
+        ]);
 
-        let profile = measured_time_profile(&daily, 90, 72);
+        let profile = measured_time_profile(&rows, Some(&categories), 90, 72);
 
-        assert_eq!(profile["categories"]["items"][0]["label"], "Arc");
+        assert_eq!(profile["categories"]["items"][0]["label"], "Fundraising");
         assert_eq!(profile["categories"]["items"][0]["minutes"], 46);
-        assert_eq!(profile["categories"]["items"][0]["basis"], "recorder-app");
-        assert_eq!(profile["categories"]["attributedMinutes"], 71);
-        assert_eq!(profile["categories"]["unattributedMinutes"], 1);
-        assert!(!profile["categories"]["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|item| item["label"] == "UserNotificationCenter"));
+        assert_eq!(
+            profile["categories"]["items"][0]["basis"],
+            "recorder-category"
+        );
+        assert_eq!(profile["categories"]["items"][1]["label"], "Engineering");
+        assert_eq!(profile["categories"]["items"][1]["minutes"], 20);
+        assert_eq!(profile["categories"]["attributedMinutes"], 66);
+        assert_eq!(profile["categories"]["unattributedMinutes"], 6);
+        assert_eq!(rows.len(), 3);
+        assert!(!rows.iter().any(|row| row.app == "UserNotificationCenter"));
         assert_eq!(profile["projects"]["items"], json!([]));
         assert_eq!(profile["people"]["items"], json!([]));
         assert_eq!(profile["companies"]["items"], json!([]));
