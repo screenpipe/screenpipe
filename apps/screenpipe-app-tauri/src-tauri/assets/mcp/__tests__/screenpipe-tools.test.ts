@@ -124,6 +124,7 @@ describe("screenpipe-tools MCP server", () => {
         "query_recordings",
         "list_connections",
         "live_view",
+        "live_view_propose",
         "save_artifact",
         "search_chats",
         "send_to_chat",
@@ -140,12 +141,13 @@ describe("screenpipe-tools MCP server", () => {
     const props = (saveArtifact?.inputSchema as { properties?: Record<string, { enum?: string[] }> })
       ?.properties;
     expect(props?.encoding?.enum).toEqual(["utf8", "base64"]);
-    // live_view advertises the list/get/save action set (Live Views parity).
+    // ACP Live View editing needs the same read actions and review-only handoff as Pi.
     const liveView = tools.find((t) => t.name === "live_view");
     const actionEnum = (liveView?.inputSchema as {
       properties?: Record<string, { enum?: string[] }>;
     })?.properties?.action?.enum;
-    expect(actionEnum).toEqual(["list", "get", "save"]);
+    expect(actionEnum).toEqual(["list", "get", "save", "pipes", "values"]);
+    expect(tools.find((t) => t.name === "live_view_propose")).toBeDefined();
 
     const sendToChat = tools.find((t) => t.name === "send_to_chat");
     const sendProperties = sendToChat?.inputSchema as {
@@ -163,6 +165,35 @@ describe("screenpipe-tools MCP server", () => {
     await server.request(1, "initialize", {});
     const res = await server.request(3, "tools/call", { name: "does_not_exist", arguments: {} });
     expect(res.error).toMatchObject({ code: -32602 });
+  });
+
+  it("accepts a review-only Live View proposal without calling the engine", async () => {
+    server = new Server({ SCREENPIPE_API_URL: "http://127.0.0.1:1" });
+    const res = await server.request(1, "tools/call", {
+      name: "live_view_propose",
+      arguments: {
+        note: "Adds a focus summary.",
+        blocks: [
+          {
+            title: "Focus",
+            intent: "Summarize focused work in the selected period.",
+            component: "metric.v1",
+            width: 6,
+            pipeName: null,
+          },
+        ],
+      },
+    });
+
+    const text = (
+      res.result as { content: Array<{ text: string }>; isError?: boolean }
+    ).content[0].text;
+    expect(JSON.parse(text)).toMatchObject({
+      accepted: true,
+      awaitingUserReview: true,
+      blockCount: 1,
+    });
+    expect((res.result as { isError?: boolean }).isError).not.toBe(true);
   });
 
   it("keeps cross-chat sends out of unattended ACP tasks", async () => {

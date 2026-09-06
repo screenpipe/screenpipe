@@ -360,6 +360,152 @@ function liveViewSaveRequest(view) {
   };
 }
 
+const LIVE_VIEW_COMPONENTS = [
+  "metric.v1",
+  "list.v1",
+  "bar-chart.v1",
+  "line-chart.v1",
+  "table.v1",
+  "timeline.v1",
+  "markdown.v1",
+];
+const LIVE_VIEW_TIME_RANGES = ["today", "24h", "7d", "30d"];
+const LIVE_VIEW_WIDTHS = [3, 6, 12];
+const LIVE_VIEW_BLOCK_SCHEMA = {
+  type: "object",
+  properties: {
+    id: { type: "string" },
+    title: { type: "string" },
+    intent: { type: "string" },
+    component: { type: "string", enum: LIVE_VIEW_COMPONENTS },
+    width: { type: "integer", enum: LIVE_VIEW_WIDTHS },
+    pipeName: { type: ["string", "null"] },
+  },
+  required: ["title", "intent", "component", "width"],
+  additionalProperties: false,
+};
+const LIVE_VIEW_PROPOSAL_SCHEMA = {
+  type: "object",
+  properties: {
+    note: { type: "string" },
+    title: { type: "string" },
+    timeRange: { type: "string", enum: LIVE_VIEW_TIME_RANGES },
+    timeRangeBehavior: { type: "string", enum: ["selectable", "fixed"] },
+    blocks: { type: "array", items: LIVE_VIEW_BLOCK_SCHEMA },
+    operations: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          op: { type: "string", enum: ["add", "update", "remove"] },
+          blockId: { type: "string" },
+          block: LIVE_VIEW_BLOCK_SCHEMA,
+        },
+        required: ["op"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["note"],
+  additionalProperties: false,
+};
+
+function validateLiveViewProposal(params) {
+  const hasBlocks = Array.isArray(params?.blocks) && params.blocks.length > 0;
+  const hasOperations = Array.isArray(params?.operations) && params.operations.length > 0;
+  if (hasBlocks === hasOperations) {
+    throw new Error(
+      hasBlocks
+        ? "Send either blocks (new dashboard) or operations (edit), not both."
+        : "Send blocks for a new dashboard, or operations for an edit. Both were empty.",
+    );
+  }
+  if (typeof params.note !== "string" || !params.note.trim()) {
+    throw new Error("note is required and must say what visibly changes");
+  }
+}
+
+function searchWords(value) {
+  return [
+    ...new Set(
+      String(value || "")
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((word) => word.length >= 3),
+    ),
+  ];
+}
+
+async function searchInstalledPipes(query) {
+  const body = await liveViewJson(
+    await fetch(`${apiBase()}/pipes`, { method: "GET", headers: authHeaders() }),
+  );
+  const raw = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : [];
+  const pipes = raw.flatMap((entry) => {
+    const config = entry?.config ?? entry;
+    const name = typeof config?.name === "string" ? config.name : entry?.id;
+    if (typeof name !== "string" || !name.trim()) return [];
+    const description =
+      typeof config?.description === "string"
+        ? config.description
+        : typeof config?.config?.description === "string"
+          ? config.config.description
+          : "";
+    return [{
+      name: name.trim(),
+      description: description.slice(0, 240),
+      enabled: entry?.enabled === true || config?.enabled === true,
+    }];
+  });
+  const words = searchWords(query);
+  if (words.length === 0) return pipes.slice(0, 24);
+  const matched = pipes.filter((pipe) => {
+    const haystack = `${pipe.name} ${pipe.description}`.toLowerCase();
+    return words.some((word) => haystack.includes(word));
+  });
+  return (matched.length > 0 ? matched : pipes).slice(0, 24);
+}
+
+function liveViewValuePreview(value) {
+  const payload = value && typeof value === "object" ? value.payload ?? value : null;
+  if (payload == null) return { hasValue: false, renders: null };
+  const text = JSON.stringify(payload);
+  if (typeof text !== "string") return { hasValue: false, renders: null };
+  return {
+    hasValue: true,
+    renders: text.length > 600 ? `${text.slice(0, 600)}...` : text,
+  };
+}
+
+async function liveViewValues(viewId, blockId) {
+  const views = await liveViewJson(
+    await fetch(`${apiBase()}/live-views`, { method: "GET", headers: authHeaders() }),
+  );
+  const view = (Array.isArray(views) ? views : []).find((entry) => entry?.id === viewId);
+  if (!view) throw new Error(`Live View "${viewId}" was not found`);
+  const blocks = Array.isArray(view.slots)
+    ? view.slots
+    : Array.isArray(view.blocks)
+      ? view.blocks
+      : [];
+  const wanted = typeof blockId === "string" && blockId.trim()
+    ? blocks.filter((block) => block?.id === blockId.trim())
+    : blocks;
+  if (typeof blockId === "string" && blockId.trim() && wanted.length === 0) {
+    throw new Error(`Block "${blockId}" was not found in "${viewId}"`);
+  }
+  return {
+    viewId,
+    blocks: wanted.slice(0, 12).map((block) => ({
+      id: block?.id ?? null,
+      title: block?.title ?? null,
+      component: block?.component ?? block?.kind ?? null,
+      pipeName: block?.binding?.pipeName ?? block?.source?.pipeName ?? null,
+      ...liveViewValuePreview(block?.value),
+    })),
+  };
+}
+
 const IMAGE_EXT_KIND = {
   ".png": "image",
   ".jpg": "image",
@@ -803,19 +949,27 @@ const TOOLS = [
     // lazily by the model — dashboard contents are never preloaded into chat.
     name: "live_view",
     description:
-      "Read or edit the user's saved Screenpipe Live Views (dashboards) on demand. Use only when the user asks about a dashboard or Live View. action=list returns compact summaries; action=get returns one editable definition; action=save persists a complete definition previously returned by get. Before saving, get the latest definition and preserve every block the user did not ask to change; the revision guards against overwriting a newer edit. Only save when the user explicitly asked to create or change a Live View.",
+      "Read or edit the user's saved Screenpipe Live Views (dashboards) on demand. Use only when the user asks about a dashboard or Live View. action=list returns compact summaries; action=get returns one editable definition; action=pipes searches installed scheduled tasks; action=values returns what Blocks currently render; action=save persists a complete definition previously returned by get. Before saving, get the latest definition and preserve every block the user did not ask to change; the revision guards against overwriting a newer edit. Only save when the user explicitly asked to create or change a Live View.",
     inputSchema: {
       type: "object",
       properties: {
         action: {
           type: "string",
-          enum: ["list", "get", "save"],
+          enum: ["list", "get", "save", "pipes", "values"],
           description:
-            "list returns compact dashboard summaries; get returns one editable definition; save persists a complete definition previously returned by get.",
+            "list returns compact dashboard summaries; get returns one editable definition; pipes searches installed scheduled tasks; values returns what Blocks currently render; save persists a complete definition previously returned by get.",
         },
         viewId: {
           type: "string",
-          description: "Live View id for get. Use list first when the target is unknown.",
+          description: "Live View id for get and values. Use list first when the target is unknown.",
+        },
+        blockId: {
+          type: "string",
+          description: "Optional Block id for values. Omit to inspect every Block.",
+        },
+        query: {
+          type: "string",
+          description: "Optional search text for pipes.",
         },
         view: {
           type: "object",
@@ -857,6 +1011,16 @@ const TOOLS = [
         return JSON.stringify({ view });
       }
 
+      if (action === "pipes") {
+        return JSON.stringify({ pipes: await searchInstalledPipes(args?.query) });
+      }
+
+      if (action === "values") {
+        return JSON.stringify(
+          await liveViewValues(requireViewId(args?.viewId), args?.blockId),
+        );
+      }
+
       if (action === "save") {
         const request = liveViewSaveRequest(args?.view);
         const res = await fetch(
@@ -875,6 +1039,21 @@ const TOOLS = [
       }
 
       throw new Error(`unsupported Live View action: ${action || "<missing>"}`);
+    },
+  },
+  {
+    name: "live_view_propose",
+    description:
+      "Submit a finished Live View design for user review. This validates and returns the proposal without writing anything.",
+    inputSchema: LIVE_VIEW_PROPOSAL_SCHEMA,
+    async run(args) {
+      validateLiveViewProposal(args);
+      return JSON.stringify({
+        accepted: true,
+        awaitingUserReview: true,
+        blockCount: Array.isArray(args?.blocks) ? args.blocks.length : undefined,
+        operationCount: Array.isArray(args?.operations) ? args.operations.length : undefined,
+      });
     },
   },
   {

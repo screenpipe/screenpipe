@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildLiveViewGenerationPrompt,
+  matchesLiveViewToolName,
   parseGeneratedLiveView,
 } from "../generate-live-view-with-pi";
 
@@ -395,6 +396,33 @@ describe("parseGeneratedLiveView", () => {
 });
 
 describe("buildLiveViewGenerationPrompt", () => {
+  it("uses the ACP MCP tool names and accepts their adapter-prefixed events", () => {
+    const prompt = buildLiveViewGenerationPrompt({
+      prompt: "track how I spend my time",
+      scope: "dashboard",
+      preset: { provider: "acp" } as any,
+      userToken: null,
+      pipes: [],
+    });
+
+    expect(prompt).toContain("live_view action=pipes");
+    expect(prompt).toContain("live_view_propose");
+    expect(prompt).not.toContain("screenpipe_live_view");
+    expect(
+      matchesLiveViewToolName(
+        "mcp__screenpipe_tools__live_view",
+        "live_view",
+      ),
+    ).toBe(true);
+    expect(
+      matchesLiveViewToolName(
+        "mcp__screenpipe_tools__live_view_propose",
+        "live_view_propose",
+      ),
+    ).toBe(true);
+    expect(matchesLiveViewToolName("exec", "live_view")).toBe(false);
+  });
+
   it("references an existing Live View lazily and looks at what it renders first", () => {
     const prompt = buildLiveViewGenerationPrompt({
       prompt: "show more detail",

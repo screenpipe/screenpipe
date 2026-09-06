@@ -19,7 +19,10 @@ import { applyResolvedModelLimits } from "@/lib/model-metadata";
 
 const GENERATION_TIMEOUT_MS = 90_000;
 const PROJECT_DIR = "pi-live-views";
+const LIVE_VIEW_TOOL = "screenpipe_live_view";
 const PROPOSE_TOOL = "screenpipe_live_view_propose";
+const ACP_LIVE_VIEW_TOOL = "live_view";
+const ACP_PROPOSE_TOOL = "live_view_propose";
 const READ_ACTIONS = new Set(["get", "list", "pipes", "values"]);
 const COMPONENTS = new Set<BrainViewComponent>([
   "metric.v1",
@@ -83,6 +86,21 @@ type GenerateLiveViewOptions = {
   signal?: AbortSignal;
   onPhase?: (phase: "starting" | "working" | "reviewing") => void;
 };
+
+function liveViewTools(preset: AIPreset) {
+  return preset.provider === "acp"
+    ? { read: ACP_LIVE_VIEW_TOOL, propose: ACP_PROPOSE_TOOL }
+    : { read: LIVE_VIEW_TOOL, propose: PROPOSE_TOOL };
+}
+
+export function matchesLiveViewToolName(
+  reportedName: string | undefined,
+  expectedName: string,
+): boolean {
+  if (!reportedName) return false;
+  const normalized = reportedName.toLowerCase().replaceAll("-", "_");
+  return normalized === expectedName || normalized.endsWith(`__${expectedName}`);
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -305,6 +323,7 @@ screenpipe_live_view_propose({"operations":[{"op":"add","block":{"id":"meeting-f
 export function buildLiveViewGenerationPrompt(
   options: GenerateLiveViewOptions,
 ): string {
+  const tools = liveViewTools(options.preset);
   const editing = Boolean(options.currentViewRef);
   const replacing = editing && options.replaceExisting === true;
   const scopeInstruction =
@@ -332,21 +351,26 @@ ${JSON.stringify(
   })),
 )}`
       : `
-Find scheduled tasks with screenpipe_live_view action=pipes and a short query. Bind pipeName only to a name that search returned; use null when nothing fits.`;
+Find scheduled tasks with ${tools.read} action=pipes and a short query. Bind pipeName only to a name that search returned; use null when nothing fits.`;
 
-  return `Design a Screenpipe Live View change for the user to review, then submit it with screenpipe_live_view_propose. The app applies nothing until the user accepts, so never call action=save.
+  const editExamples = EDIT_EXAMPLES.replaceAll(PROPOSE_TOOL, tools.propose).replaceAll(
+    LIVE_VIEW_TOOL,
+    tools.read,
+  );
+
+  return `Design a Screenpipe Live View change for the user to review, then submit it with ${tools.propose}. The app applies nothing until the user accepts, so never call action=save.
 
 ${scopeInstruction}
 
 Work in this order:
-1. ${editing && !replacing ? `Call screenpipe_live_view action=values for ${JSON.stringify(options.currentViewRef?.id ?? "")} to see what the Blocks currently render. A Block shows its bound task's last payload, so an intent-only edit changes nothing the user can see.` : "Decide the outcomes the user wants to see."}
+1. ${editing && !replacing ? `Call ${tools.read} action=values for ${JSON.stringify(options.currentViewRef?.id ?? "")} to see what the Blocks currently render. A Block shows its bound task's last payload, so an intent-only edit changes nothing the user can see.` : "Decide the outcomes the user wants to see."}
 2. ${options.pipeAvailability === "store" ? "Choose from the installable tasks listed below." : "Look up scheduled tasks only if a section needs one."}
-3. Call screenpipe_live_view_propose once with the finished change. Fix and retry if it reports problems.
+3. Call ${tools.propose} once with the finished change. Fix and retry if it reports problems.
 
 Each Block needs a precise, source-backed intent covering the selected period and how missing evidence is handled. Avoid duplicate Blocks. Reuse the id of every Block you edit.
 ${storeCandidates}
 
-${editing && !replacing ? EDIT_EXAMPLES : ""}
+${editing && !replacing ? editExamples : ""}
 
 User request:
 ${options.prompt.trim()}
@@ -383,7 +407,7 @@ function providerConfig(preset: AIPreset): PiProviderConfig {
     // tasks, and submit a reviewable proposal. Restrict the runtime itself so
     // normal Chat, MCP, web, filesystem, and artifact tools are never
     // advertised on this private editing surface.
-    allowedTools: ["screenpipe_live_view", PROPOSE_TOOL],
+    allowedTools: Object.values(liveViewTools(preset)),
   };
 }
 
@@ -414,6 +438,7 @@ async function runGeneration(
   const sessionId = `${INTERNAL_TITLE_PREFIX}live-view-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   await mountAgentEventBus();
   const projectDir = await liveViewProjectDir();
+  const tools = liveViewTools(options.preset);
 
   // The proposal arrives as tool arguments and is only kept once the tool
   // accepts it, so a retry after a rejection is what reaches the user.
@@ -453,14 +478,14 @@ async function runGeneration(
     const event = envelope.event;
     if (event.type === "agent_start") options.onPhase?.("working");
     if (event.type === "tool_execution_start") {
-      if (event.toolName === PROPOSE_TOOL) {
+      if (matchesLiveViewToolName(event.toolName, tools.propose)) {
         const args = asRecord(event.args);
         if (args && event.toolCallId)
           pendingProposals.set(event.toolCallId, args);
         options.onPhase?.("reviewing");
         return;
       }
-      if (event.toolName !== "screenpipe_live_view") {
+      if (!matchesLiveViewToolName(event.toolName, tools.read)) {
         fail("Live View editor tried to use an unrelated tool");
         void commands.piStop(sessionId);
         return;
