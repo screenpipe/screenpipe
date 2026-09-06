@@ -83,10 +83,10 @@ updates:
     commit-message:
       prefix: "chore(deps)"
 
-  # ------------------------------------------------------------------ npm ----
-  # Desktop app frontend. Highest-value npm target: a single stale `next` pin
+  # ------------------------------------------------------------------ bun ----
+  # Desktop app frontend. Highest-value bun target: a single stale `next` pin
   # accounted for 32 of the 144 open alerts, including both runtime criticals.
-  - package-ecosystem: npm
+  - package-ecosystem: bun
     directory: "/apps/screenpipe-app-tauri"
     schedule:
       interval: weekly
@@ -105,8 +105,8 @@ updates:
     commit-message:
       prefix: "chore(deps)"
 
-  # Published to npm — users install these directly, so keep them current.
-  - package-ecosystem: npm
+  # Published to bun — users install these directly, so keep them current.
+  - package-ecosystem: bun
     directory: "/packages/screenpipe-mcp"
     schedule:
       interval: weekly
@@ -118,7 +118,7 @@ updates:
     commit-message:
       prefix: "chore(deps)"
 
-  - package-ecosystem: npm
+  - package-ecosystem: bun
     directory: "/packages/sdk"
     schedule:
       interval: weekly
@@ -133,7 +133,7 @@ updates:
   # Example apps. Dev-scope only and never shipped, so they get a low limit and
   # a single grouped PR — the electron example alone carries 31 open alerts
   # (all one package, `electron`, 7 majors behind) and would otherwise dominate.
-  - package-ecosystem: npm
+  - package-ecosystem: bun
     directory: "/packages/sdk/examples/electron-app"
     schedule:
       interval: monthly
@@ -144,7 +144,7 @@ updates:
     commit-message:
       prefix: "chore(deps)"
 
-  - package-ecosystem: npm
+  - package-ecosystem: bun
     directory: "/packages/sdk/examples/tauri-app"
     schedule:
       interval: monthly
@@ -155,7 +155,7 @@ updates:
     commit-message:
       prefix: "chore(deps)"
 
-  - package-ecosystem: npm
+  - package-ecosystem: bun
     directory: "/crates/screenpipe-gateway/e2e/conformance"
     schedule:
       interval: monthly
