@@ -12,6 +12,7 @@ use crate::transcription::whisper::batch::process_with_whisper;
 use crate::transcription::whisper::model::{
     create_whisper_context_parameters, download_whisper_model, get_cached_whisper_model_path,
 };
+use crate::transcription::whisper::ScoredLanguage;
 use crate::transcription::{TranscriptionOutput, VocabularyEntry};
 use anyhow::{anyhow, Result};
 use reqwest::Client;
@@ -604,6 +605,18 @@ pub enum TranscriptionSession {
     Disabled,
 }
 
+/// Live meetings lock onto the first confidently-detected language and force it
+/// for the rest of the session, so a wrong lock garbles the whole meeting.
+/// Require whisper to be both confident in the winner and clearly ahead of the
+/// runner-up before locking; a noisy or ambiguous opening keeps re-detecting on
+/// later chunks instead of committing to a guess.
+const LIVE_LANGUAGE_MIN_CONFIDENCE: f32 = 0.6;
+const LIVE_LANGUAGE_MIN_MARGIN: f32 = 0.15;
+
+fn live_lock_accepts(scored: &ScoredLanguage) -> bool {
+    scored.confidence >= LIVE_LANGUAGE_MIN_CONFIDENCE && scored.margin >= LIVE_LANGUAGE_MIN_MARGIN
+}
+
 impl TranscriptionSession {
     /// Force a single decoding language on this session, overriding the engine's
     /// configured languages. A single language makes Whisper skip per-chunk
@@ -626,9 +639,12 @@ impl TranscriptionSession {
         matches!(self, Self::Whisper { languages, .. } if languages.is_empty())
     }
 
-    /// Detect the dominant language of a live chunk on a local Whisper session.
-    /// Used to lock the language once instead of re-detecting every chunk.
-    /// Returns `None` for non-Whisper sessions or when the audio is inconclusive.
+    /// Detect the dominant language of a live chunk on a local Whisper session,
+    /// used to lock the language once instead of re-detecting every chunk.
+    /// Returns `Some` only when whisper is confident and unambiguous (see
+    /// [`live_lock_accepts`]); returns `None` for non-Whisper sessions, silent
+    /// audio, or a weak/ambiguous detection, so the caller keeps re-detecting
+    /// rather than locking onto a bad guess.
     pub fn detect_live_language(&mut self, audio: &[f32]) -> Option<Language> {
         let Self::Whisper {
             state, languages, ..
@@ -636,10 +652,14 @@ impl TranscriptionSession {
         else {
             return None;
         };
-        crate::transcription::whisper::batch::detect_whisper_language(audio, languages, state)
-            .ok()
-            .flatten()
-            .and_then(|code| code.parse::<Language>().ok())
+        let scored =
+            crate::transcription::whisper::batch::detect_whisper_language(audio, languages, state)
+                .ok()
+                .flatten()?;
+        if !live_lock_accepts(&scored) {
+            return None;
+        }
+        scored.code.parse::<Language>().ok()
     }
 
     pub async fn transcribe_detailed(
@@ -1020,5 +1040,27 @@ mod merge_keyterms_tests {
             vocabulary: vec![],
         };
         assert!(!session.live_language_is_unconstrained());
+    }
+
+    #[test]
+    fn live_lock_accepts_only_confident_unambiguous() {
+        // Clear, confident detection locks.
+        assert!(live_lock_accepts(&ScoredLanguage {
+            code: "pt",
+            confidence: 0.92,
+            margin: 0.8,
+        }));
+        // A noisy opening with low confidence must not lock.
+        assert!(!live_lock_accepts(&ScoredLanguage {
+            code: "pt",
+            confidence: 0.45,
+            margin: 0.3,
+        }));
+        // Confident-looking but a near-tied runner-up (ambiguous) must not lock.
+        assert!(!live_lock_accepts(&ScoredLanguage {
+            code: "pt",
+            confidence: 0.62,
+            margin: 0.05,
+        }));
     }
 }

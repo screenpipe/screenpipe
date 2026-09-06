@@ -602,4 +602,16 @@ mod tests {
         // A constrained session never wants detection.
         assert!(!LiveLanguageLock::new(false).wants_detection());
     }
+
+    #[test]
+    fn fresh_meeting_resets_the_language_lock() {
+        // Locking pins the language for the current meeting only.
+        let mut lock = LiveLanguageLock::new(true);
+        lock.lock();
+        assert!(!lock.wants_detection());
+
+        // A new meeting builds a fresh lock and detects again from scratch, so a
+        // bad lock in one meeting cannot carry over to the next.
+        assert!(LiveLanguageLock::new(true).wants_detection());
+    }
 }
