@@ -75,6 +75,29 @@ pub async fn process_with_whisper(
     transcribe_sync(audio, languages, whisper_state, vocabulary)
 }
 
+/// Detect the dominant language of an audio buffer, honoring the `languages`
+/// allow-list (a single entry is forced, empty detects any). Returns `None` when
+/// the audio is too quiet to judge. The local live path uses this to lock one
+/// language for the session instead of re-detecting every short chunk, which
+/// otherwise flips scripts mid-meeting on non-english speech (issue #5650).
+pub fn detect_whisper_language(
+    audio: &[f32],
+    languages: &[Language],
+    whisper_state: &mut WhisperState,
+) -> Result<Option<&'static str>> {
+    let rms = (audio.iter().map(|s| s * s).sum::<f32>() / audio.len().max(1) as f32).sqrt();
+    if rms < MIN_RMS_ENERGY {
+        return Ok(None);
+    }
+    let mut audio = audio.to_vec();
+    if audio.len() < 16000 {
+        audio.resize(16000, 0.0);
+    }
+    whisper_state.pcm_to_mel(&audio, 2)?;
+    let (_, lang_tokens) = whisper_state.lang_detect(0, 2)?;
+    Ok(detect_language(lang_tokens, languages.to_vec()))
+}
+
 /// Sync body of [`process_with_whisper`]. Deliberately NOT async: the
 /// thread-priority guard below must never live across an `.await` (the task
 /// could resume on a different tokio worker and the guard would restore the

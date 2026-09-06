@@ -619,6 +619,29 @@ impl TranscriptionSession {
         }
     }
 
+    /// True only for a local Whisper session with no configured language, the
+    /// case where Whisper auto-detects per short chunk and can flip scripts
+    /// mid-meeting (#5650). Cloud engines resolve language server-side.
+    pub fn live_language_is_unconstrained(&self) -> bool {
+        matches!(self, Self::Whisper { languages, .. } if languages.is_empty())
+    }
+
+    /// Detect the dominant language of a live chunk on a local Whisper session.
+    /// Used to lock the language once instead of re-detecting every chunk.
+    /// Returns `None` for non-Whisper sessions or when the audio is inconclusive.
+    pub fn detect_live_language(&mut self, audio: &[f32]) -> Option<Language> {
+        let Self::Whisper {
+            state, languages, ..
+        } = self
+        else {
+            return None;
+        };
+        crate::transcription::whisper::batch::detect_whisper_language(audio, languages, state)
+            .ok()
+            .flatten()
+            .and_then(|code| code.parse::<Language>().ok())
+    }
+
     pub async fn transcribe_detailed(
         &mut self,
         audio: &[f32],
@@ -981,5 +1004,21 @@ mod merge_keyterms_tests {
             }
             _ => panic!("expected deepgram session"),
         }
+    }
+
+    #[test]
+    fn only_local_whisper_is_language_unconstrained() {
+        // A cloud session is never treated as unconstrained, even with no
+        // configured languages, so the live language lock stays off for it.
+        let session = TranscriptionSession::Deepgram {
+            config: DeepgramTranscriptionConfig {
+                endpoint: String::new(),
+                auth_token: String::new(),
+                auth_header_prefix: "Token",
+            },
+            languages: vec![],
+            vocabulary: vec![],
+        };
+        assert!(!session.live_language_is_unconstrained());
     }
 }
