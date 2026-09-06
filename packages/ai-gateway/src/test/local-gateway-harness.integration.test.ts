@@ -25,7 +25,11 @@ describe('local AI gateway harness', () => {
 		expect(usage.status).toBe(200);
 		expect(await usage.json()).toMatchObject({
 			tier: 'subscribed',
-			hosted_ai: { plan: 'business' },
+			hosted_ai: {
+				plan: 'internal',
+				allowance_managed_by: 'cloudflare',
+				allowances: null,
+			},
 		});
 
 		const completion = await harness.fetch('/chat/completions', {
@@ -61,19 +65,22 @@ describe('local AI gateway harness', () => {
 		expect(streamBody).toContain('data: [DONE]');
 
 		const costState = await harness.readCostState();
-		expect(costState.dailyCostUsd).toBeGreaterThan(0);
+		expect(costState.dailyCostUsd).toBe(0);
 		expect(costState.activeReservations).toBe(0);
 		expect(costState.aggregatedRequests).toBe(2);
 
 		expect(harness.outboundRequests).toHaveLength(2);
 		expect(
-			harness.outboundRequests.every((request) => request.expected && request.url === 'https://api.openai.com/v1/chat/completions'),
+			harness.outboundRequests.every((request) =>
+				request.expected && request.url.endsWith('/screenpipe-local-e2e/openai/chat/completions'),
+			),
 		).toBe(true);
 		harness.assertNoUnexpectedOutboundRequests();
 	});
 
-	test('returns the real structured daily-limit contract before provider egress', async () => {
+	test('ignores retired D1 text caps and reaches Cloudflare Gateway policy', async () => {
 		const harness = await startHarness({
+			providerReply: 'gateway policy owns admission',
 			privateCostControls: {
 				MAX_DAILY_FREE_TEXT_COST: '1',
 				MAX_DAILY_BASIC_TEXT_COST: '1',
@@ -91,23 +98,15 @@ describe('local AI gateway harness', () => {
 			body: JSON.stringify({
 				model: 'gpt-5.4-mini',
 				stream: true,
-				messages: [{ role: 'user', content: 'must stop before provider' }],
+				messages: [{ role: 'user', content: 'legacy cap must not block provider' }],
 				max_tokens: 16,
 			}),
 		});
 
-		expect(response.status).toBe(429);
-		const outer = (await response.json()) as { error?: string };
-		const contract = JSON.parse(outer.error ?? '{}');
-		expect(contract).toMatchObject({
-			error: 'daily_cost_limit_exceeded',
-			plan: 'business',
-			required_plan: 'business_max',
-			upgrade_url: 'https://screenpipe.com/account/billing?target_plan=pro_max&interval=month',
-			can_buy_credits: false,
-			byok_supported: true,
-		});
-		expect(harness.outboundRequests).toHaveLength(0);
+		expect(response.status).toBe(200);
+		expect(await response.text()).toContain('gateway policy owns admission');
+		expect(harness.outboundRequests).toHaveLength(1);
+		expect(harness.outboundRequests[0]?.url).toEndWith('/screenpipe-local-e2e/openai/chat/completions');
 		harness.assertNoUnexpectedOutboundRequests();
 	});
 

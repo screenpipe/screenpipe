@@ -66,9 +66,7 @@ GEMINI_FLEX_INTERACTIVE = "false"
 MODEL_GATING_ENABLED = "true"
 PIPE_FRONTIER_POLICY = "reject"
 
-# Hosted-chat AI Gateway rollout is managed in Worker dashboard variables so a
-# deploy cannot flip production (keep_vars=true above):
-# - HOSTED_CHAT_GATEWAY_MODE: "legacy" (default/rollback) or "cloudflare".
+# Hosted chat always uses Cloudflare AI Gateway. Production provides:
 # - CLOUDFLARE_AI_GATEWAY_ID: same-account Gateway with default OpenAI and
 #   Anthropic BYOK keys. See CLOUDFLARE_AI_GATEWAY_ROLLOUT.md.
 # - CLOUDFLARE_ACCOUNT_ID: account that owns the Gateway and Analytics data.

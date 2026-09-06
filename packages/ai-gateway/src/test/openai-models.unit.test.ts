@@ -60,29 +60,28 @@ describe('OpenAI API model catalog', () => {
 		expect(ids).not.toContain('gpt-5.3-codex');
 	});
 
-	it('hides OpenAI models until OPENAI_API_KEY is configured', async () => {
+	it('advertises Gateway-backed OpenAI models without a direct provider key', async () => {
 		const ids = await listedModelIds({ OPENAI_API_KEY: '' });
 
-		expect(ids).not.toContain('gpt-5.6-terra');
-		expect(ids).not.toContain('gpt-5.5');
-		expect(ids).not.toContain('gpt-5.5-pro');
-		expect(ids).not.toContain('gpt-5.4');
-		expect(ids).not.toContain('gpt-5.4-pro');
+		expect(ids).toContain('gpt-5.6-terra');
+		expect(ids).toContain('gpt-5.5');
+		expect(ids).toContain('gpt-5.5-pro');
+		expect(ids).toContain('gpt-5.4');
+		expect(ids).toContain('gpt-5.4-pro');
 		expect(ids).not.toContain('gpt-5.3-codex');
-		expect(ids).not.toContain('gpt-5.4-mini');
-		expect(ids).not.toContain('gpt-5.4-nano');
+		expect(ids).toContain('gpt-5.4-mini');
+		expect(ids).toContain('gpt-5.4-nano');
 	});
 
-	it('hides OpenAI models when OPENAI_API_KEY is a placeholder', async () => {
+	it('ignores a placeholder direct key for Gateway-backed OpenAI models', async () => {
 		const ids = await listedModelIds({ OPENAI_API_KEY: 'placeholder' });
 
-		expect(ids).not.toContain('gpt-5.5');
-		expect(ids).not.toContain('gpt-5.4-mini');
+		expect(ids).toContain('gpt-5.5');
+		expect(ids).toContain('gpt-5.4-mini');
 	});
 
-	it('publishes zero query weights when Cloudflare manages hosted-chat allowance', async () => {
+	it('publishes zero query weights because Cloudflare manages hosted-chat allowance', async () => {
 		const models = await listedModels({
-			HOSTED_CHAT_GATEWAY_MODE: 'cloudflare',
 			CLOUDFLARE_AI_GATEWAY_ID: 'screenpipe-staging',
 		});
 		expect(models.length).toBeGreaterThan(0);

@@ -156,8 +156,6 @@ export interface Env {
 	AI: Ai;
 	/** GPT-5.6 prompt caching: `system` (default/kill switch) or `history`. */
 	GPT56_HISTORY_CACHE_MODE?: string;
-	/** Hosted chat rollout switch. Any value other than `cloudflare` is legacy. */
-	HOSTED_CHAT_GATEWAY_MODE?: string;
 	/** Same-account Cloudflare AI Gateway used by the Workers AI binding. */
 	CLOUDFLARE_AI_GATEWAY_ID?: string;
 	/** Local-dev only: Gateway root or compat chat URL when remote binding URL resolution is unavailable. */
