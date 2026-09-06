@@ -301,6 +301,11 @@ mod db_wedge;
 pub use db_wedge::{
     make_database_restart_hook, new_db_wedge_breaker, DbWedgeBreaker, DbWedgeState,
 };
+mod lifecycle_coordinator;
+pub(crate) use lifecycle_coordinator::{
+    deferred_lifecycle_handoff, HandoffOutcome, LifecycleCoordinator, PostLockAction,
+    StartDisposition,
+};
 
 #[derive(Clone, Debug)]
 pub(crate) struct InterruptedMeeting {
@@ -329,21 +334,17 @@ pub struct RecordingState {
     pub capture: Arc<Mutex<Option<CaptureSession>>>,
     /// True while a server start is in progress (prevents race between main.rs boot and frontend)
     pub is_starting: Arc<AtomicBool>,
+    /// Orders start/stop requests and coalesces one deferred lifecycle handoff.
+    /// Generation and desired state share one atomic snapshot so correctness
+    /// never depends on lifecycle-mutex waiter order.
+    pub(crate) lifecycle_coordinator: Arc<LifecycleCoordinator>,
     /// True while the caller holding `capture` is building a capture session.
     /// Duplicate app-wide start requests wait on that mutex, then observe the
     /// installed session instead of starting another one.
     pub is_starting_capture: Arc<AtomicBool>,
     /// Epoch seconds of last successful spawn — enforces cooldown between restarts
     pub last_spawn_epoch: Arc<AtomicU64>,
-    /// Capture intent: true while capture is supposed to be running. Tracked at
-    /// every on/off point — `spawn_screenpipe`/`start_capture` set it,
-    /// `stop_screenpipe`/`stop_capture` clear it — because capture has two
-    /// on-paths (full spawn vs the tray toggle) and two off-paths. Lets the
-    /// health watchdog tell a crash (intent still ON → respawn) from a
-    /// deliberate stop (intent OFF → leave it down), including the tray "stop
-    /// recording" that keeps the server up. `last_spawn_epoch` can't carry this
-    /// — it's reset to 0 on a failed spawn too, and never sees the tray toggle.
-    pub wants_recording: Arc<AtomicBool>,
+
     /// Recently active meeting to revive when capture is immediately restarted.
     pub(crate) interrupted_meeting: Arc<Mutex<Option<InterruptedMeeting>>>,
     /// App-scoped cloud-auth token (Clerk JWT). Outlives the Server (which
@@ -363,6 +364,13 @@ pub struct RecordingState {
     pub db_wedge_breaker: DbWedgeBreaker,
 }
 
+fn database_is_quarantined(app: &tauri::AppHandle) -> Result<bool, String> {
+    let config = build_config(app)?;
+    Ok(screenpipe_db::sqlite_quarantine_exists(
+        &config.data_dir.join("db.sqlite"),
+    ))
+}
+
 /// Install a fully constructed capture session before activating any monitor
 /// that can synchronously request its teardown.
 pub(crate) fn install_capture_session(
@@ -376,18 +384,22 @@ pub(crate) fn install_capture_session(
 }
 
 impl RecordingState {
-    /// Single source of truth for `wants_recording`. Call from every capture
-    /// on/off path so the health watchdog can tell a crash from a deliberate
-    /// stop: `start_capture` / `spawn_screenpipe` set it on; `stop_capture` /
-    /// `stop_screenpipe` clear it. (Capture has two on-paths and two off-paths;
-    /// missing any one is how a tray-stopped capture got resurrected.)
+    /// Publish capture-only intent. Call from every capture-only on/off path so
+    /// the health watchdog can tell a crash from a deliberate
+    /// stop. Full lifecycle start/stop requests publish their server and capture
+    /// state together through `LifecycleCoordinator` instead.
     pub fn set_capture_intent(&self, on: bool) {
-        self.wants_recording.store(on, Ordering::SeqCst);
+        if on {
+            self.lifecycle_coordinator.request_capture_start();
+        } else {
+            self.lifecycle_coordinator.request_capture_stop();
+        }
+
     }
 
     /// Whether capture is currently intended to be running.
     pub fn capture_intended(&self) -> bool {
-        capture_intended_now(&self.wants_recording)
+        self.lifecycle_coordinator.capture_intended()
     }
 }
 
@@ -403,10 +415,6 @@ pub(crate) fn refresh_history_access_policy(
 
 fn history_access_restricted(is_enterprise_build: bool, free_or_unattributed: bool) -> bool {
     !is_enterprise_build && free_or_unattributed
-}
-
-fn capture_intended_now(wants_recording: &AtomicBool) -> bool {
-    wants_recording.load(Ordering::SeqCst)
 }
 
 // ---------------------------------------------------------------------------
@@ -852,9 +860,14 @@ pub async fn stop_screenpipe(
 ) -> Result<(), String> {
     // Deliberate stop → clear the intent so the health watchdog leaves the
     // server down instead of auto-respawning it.
-    state.set_capture_intent(false);
+    let stop_generation = state.lifecycle_coordinator.request_stop();
 
     let _lifecycle_guard = state.server_lifecycle.lock().await;
+    if !state.lifecycle_coordinator.stop_is_current(stop_generation) {
+        info!("stop_screenpipe: superseded by a later lifecycle request");
+        return Ok(());
+    }
+    state.lifecycle_coordinator.request_capture_stop();
     stop_screenpipe_inner(&state).await
 }
 
@@ -954,12 +967,26 @@ pub async fn spawn_screenpipe(
     // for Timeline, but it must not publish capture intent or restart capture.
     let store = SettingsStore::get(&app).ok().flatten().unwrap_or_default();
     require_server_access(&app, &store)?;
+    match database_is_quarantined(&app) {
+        Ok(false) => {}
+        Ok(true) => {
+            state.set_capture_intent(false);
+            return Err(
+                "database remains quarantined after a SQLite hard fault; recover it before starting screenpipe"
+                    .to_string(),
+            );
+        }
+        Err(error) => {
+            state.set_capture_intent(false);
+            return Err(error);
+        }
+    }
     let capture_allowed = recording_access_allowed(&app, &store);
 
-    // Normal starts publish capture intent before touching lifecycle state.
-    // The paywall deliberately leaves it OFF, so the same server startup path
-    // cannot accidentally create a CaptureSession.
-    state.set_capture_intent(capture_allowed);
+    // Publish full-lifecycle state and capture intent in one atomic snapshot.
+    // The paywall deliberately leaves capture OFF, so the same server startup
+    // path cannot accidentally create a CaptureSession.
+    state.lifecycle_coordinator.request_start(capture_allowed);
 
     // Do not wait for the lifecycle lock. It is held across a full stop/start,
     // so when the app is already bringing the server up — the ordinary case
@@ -969,17 +996,63 @@ pub async fn spawn_screenpipe(
     // observed giving up: one closed the app at the timeout, one stayed 11
     // minutes and never completed setup.
     //
-    // A held lock means a startup or teardown is already running, and capture
-    // intent is set above, so the desired end state is already being reached.
-    // Report success and let the caller's health poll observe the engine come
-    // up — which is what already rescues most of these users, just without the
-    // dead wait first. If that in-flight startup fails, capture intent keeps
-    // the health watchdog retrying and the caller's own health timeout still
-    // surfaces it, so a real failure is not swallowed here.
+    // Keep every collision non-blocking for onboarding, but queue one coalesced
+    // reconciliation behind the active lifecycle operation. A startup may have
+    // already consumed an older capture intent, while teardown cannot satisfy a
+    // later start at all; the handoff applies the latest packed request in both
+    // cases after the current owner releases the lock.
     let Ok(_lifecycle_guard) = state.server_lifecycle.try_lock() else {
-        info!("spawn_screenpipe: startup already in progress, not queueing behind it");
+        match state.lifecycle_coordinator.collision_disposition() {
+            StartDisposition::DeferredStartAlreadyQueued => {
+                info!("spawn_screenpipe: lifecycle busy, deferred start already queued");
+            }
+            StartDisposition::DeferUntilTeardownCompletes => {
+                info!("spawn_screenpipe: lifecycle busy, deferring start until it completes");
+                let app_for_deferred_start = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = app_for_deferred_start.state::<RecordingState>();
+                    let outcome = deferred_lifecycle_handoff(
+                        state.lifecycle_coordinator.clone(),
+                        state.server_lifecycle.clone(),
+                        || database_is_quarantined(&app_for_deferred_start),
+                    )
+                    .await;
+                    let result = match outcome {
+                        HandoffOutcome::Start(_lifecycle_guard) => {
+                            spawn_screenpipe_inner(&state, app_for_deferred_start.clone()).await
+                        }
+                        HandoffOutcome::Cancelled => {
+                            info!("spawn_screenpipe: deferred start cancelled by a later stop");
+                            return;
+                        }
+                        HandoffOutcome::DatabaseQuarantined => {
+                            warn!("spawn_screenpipe: deferred start cancelled because the database is quarantined");
+                            return;
+                        }
+                        HandoffOutcome::DatabasePathError(error) => {
+                            warn!("spawn_screenpipe: deferred start cancelled because the database path could not be resolved: {error}");
+                            return;
+                        }
+                    };
+                    if let Err(error) = result {
+                        warn!("spawn_screenpipe: deferred start after teardown failed: {error}");
+                    }
+                });
+            }
+        }
         return Ok(());
     };
+    match state
+        .lifecycle_coordinator
+        .resolve_after_lock(|| database_is_quarantined(&app))
+    {
+        PostLockAction::Start => {}
+        PostLockAction::Stale => return Ok(()),
+        PostLockAction::DatabaseQuarantined => {
+            return Err("database remains quarantined after a SQLite hard fault; recover it before starting screenpipe".to_string());
+        }
+        PostLockAction::DatabasePathError(error) => return Err(error),
+    }
     spawn_screenpipe_inner(&state, app).await
 }
 
@@ -1168,14 +1241,18 @@ async fn spawn_screenpipe_inner(
                 .and_then(|core| core.local_api_key.clone());
             if probe_server_health(&health_url, api_key.as_deref()).await {
                 info!("Server already running and healthy on port {}", port);
+                drop(server_guard);
+                let mut capture_guard = state.capture.lock().await;
                 if !state.capture_intended() {
-                    info!("Capture is deliberately stopped; leaving healthy server running");
+                    info!("Capture is deliberately stopped; reconciling the healthy server to paused");
+                    if let Some(session) = capture_guard.take() {
+                        session.stop().await;
+                    }
                     state.is_starting.store(false, Ordering::SeqCst);
+                    state.is_starting_capture.store(false, Ordering::SeqCst);
                     return Ok(());
                 }
                 // Server is fine — just ensure capture is running
-                drop(server_guard);
-                let capture_guard = state.capture.lock().await;
                 if capture_guard.is_some() {
                     state.is_starting.store(false, Ordering::SeqCst);
                     return Ok(());
@@ -1362,7 +1439,7 @@ async fn spawn_screenpipe_inner(
 
     let server_arc = state.server.clone();
     let capture_arc = state.capture.clone();
-    let wants_recording = state.wants_recording.clone();
+    let lifecycle_coordinator = state.lifecycle_coordinator.clone();
     let cloud_token_arc = state.cloud_token.clone();
     let history_access = state.history_access.clone();
     // Orphan-closing exists to clean up meetings a *crash* left open. When this
@@ -1478,7 +1555,7 @@ async fn spawn_screenpipe_inner(
                 // so a stop racing a full server spawn either prevents capture
                 // from starting or waits and then tears down the new session.
                 let mut capture_guard = capture_arc.lock().await;
-                let capture = if capture_intended_now(&wants_recording) {
+                let capture = if lifecycle_coordinator.capture_intended() {
                     match CaptureSession::start(
                         &server,
                         &recording_config,
@@ -1588,6 +1665,11 @@ async fn start_capture_internal(
     require_recording_access(app, &store)?;
 
     let mut capture_guard = state.capture.lock().await;
+    if !state.capture_intended() {
+        state.is_starting.store(false, Ordering::SeqCst);
+        info!("Capture start was superseded by a later stop");
+        return Ok(());
+    }
     if capture_guard.is_some() {
         // A concurrent start_capture beat us to it.
         state.is_starting.store(false, Ordering::SeqCst);
@@ -1650,24 +1732,28 @@ mod spawn_lifecycle_lock_tests {
             "expected a non-blocking try_lock so an in-progress startup is \
              reported rather than queued behind"
         );
+        assert!(
+            body.contains("match database_is_quarantined(&app)"),
+            "every spawn path must reject a durably quarantined database before touching lifecycle state",
+        );
     }
 }
 
 #[cfg(test)]
 mod capture_intent_tests {
-    use super::capture_intended_now;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use super::LifecycleCoordinator;
 
     #[test]
     fn stop_during_debounce_is_honored_when_recovery_respawns() {
-        let wants_recording = AtomicBool::new(true);
+        let coordinator = LifecycleCoordinator::new();
+        coordinator.request_start(true);
 
         // The hook does not cache capture intent when it fires. A tray stop
         // during the debounce clears the shared flag, and the server thread
         // reads that latest value immediately before constructing capture.
-        wants_recording.store(false, Ordering::SeqCst);
+        coordinator.request_capture_stop();
 
-        assert!(!capture_intended_now(&wants_recording));
+        assert!(!coordinator.capture_intended());
     }
 }
 

@@ -730,7 +730,7 @@ pub(super) fn db_hard_fault_state(
         "processId": std::process::id(),
         "recoveryRequired": crate::db_relaunch::manual_recovery_required(),
         "recordingStatus": format!("{:?}", crate::health::get_recording_status()).to_lowercase(),
-        "wantsRecording": state.wants_recording.load(Ordering::SeqCst),
+        "wantsRecording": state.capture_intended(),
         "isStarting": state.is_starting.load(Ordering::SeqCst),
         "isStartingCapture": state.is_starting_capture.load(Ordering::SeqCst),
         "lastSpawnEpoch": state.last_spawn_epoch.load(Ordering::SeqCst),

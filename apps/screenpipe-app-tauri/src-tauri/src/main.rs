@@ -941,9 +941,9 @@ async fn main() {
         server: Arc::new(tokio::sync::Mutex::new(None)),
         capture: Arc::new(tokio::sync::Mutex::new(None)),
         is_starting: Arc::new(AtomicBool::new(false)),
+        lifecycle_coordinator: Arc::new(recording::LifecycleCoordinator::new()),
         is_starting_capture: Arc::new(AtomicBool::new(false)),
         last_spawn_epoch: Arc::new(AtomicU64::new(0)),
-        wants_recording: Arc::new(AtomicBool::new(false)),
         interrupted_meeting: Arc::new(tokio::sync::Mutex::new(None)),
         cloud_token: Arc::new(arc_swap::ArcSwap::new(Arc::new(initial_cloud_token))),
         history_access: screenpipe_engine::history_access::HistoryAccessPolicy::unrestricted(),
@@ -1893,7 +1893,6 @@ async fn main() {
                 // leaving a normally auto-started recording paused.
                 let capture_allowed =
                     crate::recording::recording_access_allowed(&app_handle, &store_clone);
-                recording_state.set_capture_intent(capture_allowed);
                 if !capture_allowed {
                     info!("Starting local read server without capture for trial activation");
                 }
@@ -1909,14 +1908,30 @@ async fn main() {
                 {
                     Ok(guard) => guard,
                     Err(_) => {
-                        warn!("Server lifecycle already active; skipping duplicate native auto-start");
+                        warn!("Server lifecycle already active; deferring native auto-start");
+                        let app_for_deferred_start = app_handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let state = app_for_deferred_start.state::<RecordingState>();
+                            if let Err(error) = crate::recording::spawn_screenpipe(
+                                state,
+                                app_for_deferred_start.clone(),
+                                None,
+                            )
+                            .await
+                            {
+                                warn!("Deferred native auto-start failed: {error}");
+                            }
+                        });
                         break 'start_server;
                     }
                 };
+                recording_state
+                    .lifecycle_coordinator
+                    .request_start(capture_allowed);
                 recording_state.is_starting.store(true, std::sync::atomic::Ordering::SeqCst);
                 let server_arc = recording_state.server.clone();
                 let capture_arc = recording_state.capture.clone();
-                let wants_recording = recording_state.wants_recording.clone();
+                let lifecycle_coordinator = recording_state.lifecycle_coordinator.clone();
                 let is_starting_clone = recording_state.is_starting.clone();
                 let cloud_token_arc = recording_state.cloud_token.clone();
                 let history_access = recording_state.history_access.clone();
@@ -2129,9 +2144,7 @@ async fn main() {
                             // value from app launch. Hold the slot across
                             // check/start/assign so a racing stop_capture wins.
                             let mut capture_guard = capture_arc.lock().await;
-                            let capture = if wants_recording
-                                .load(std::sync::atomic::Ordering::SeqCst)
-                            {
+                            let capture = if lifecycle_coordinator.capture_intended() {
                                 match capture_session::CaptureSession::start(
                                     &server, &config, true,
                                 )
