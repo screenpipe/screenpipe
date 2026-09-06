@@ -2028,6 +2028,7 @@ impl SettingsStore {
             ];
             if let Some(presets) = obj.get_mut("aiPresets") {
                 if let Some(arr) = presets.as_array_mut() {
+                    arr.retain(|preset| !preset.is_null());
                     for preset in arr.iter_mut() {
                         Self::repair_orphaned_acp_preset(preset);
                         if let Some(provider) = preset.get("provider").and_then(|p| p.as_str()) {
@@ -4948,6 +4949,24 @@ mod tests {
         let preset = &sanitized_acp["aiPresets"][0];
         assert_eq!(preset["provider"].as_str(), Some("acp"));
         assert_eq!(preset["acpAgent"]["id"].as_str(), Some("codex-acp"));
+    }
+
+    #[test]
+    fn persisted_ai_presets_skip_null_but_reject_other_malformed_entries() {
+        let mut persisted = serde_json::to_value(SettingsStore::default()).unwrap();
+        persisted["aiPresets"] = json!([
+            {"id": "working", "provider": "screenpipe-cloud"},
+            null
+        ]);
+
+        let sanitized = SettingsStore::sanitize_legacy_fields(persisted.clone());
+        let settings: SettingsStore = serde_json::from_value(sanitized).unwrap();
+        assert_eq!(settings.ai_presets.len(), 1);
+        assert_eq!(settings.ai_presets[0].id, "working");
+
+        persisted["aiPresets"][1] = json!("malformed");
+        let malformed = SettingsStore::sanitize_legacy_fields(persisted);
+        assert!(serde_json::from_value::<SettingsStore>(malformed).is_err());
     }
 
     #[test]
