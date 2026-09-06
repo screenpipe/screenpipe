@@ -106,14 +106,20 @@ const persistOnboardingStepFixture = async (step: string) => {
  * dependencies. Same shape as screen-recording-restart.spec.ts.
  */
 const gotoSlide = async (step: string) => {
+  // WebView2 can strand store-plugin IPC when it originates from the
+  // onboarding webview while that webview is also hydrating the same store.
+  // Home stays mounted for the whole setup flow and is the context used by
+  // the fresh-premise setup above, so write the synthetic fixture there.
+  if (!(await browser.getWindowHandles()).includes("home")) {
+    await showWindow({ Home: { page: null } });
+  }
+  await waitForWindowHandle("home", t(20_000));
+  await browser.switchToWindow("home");
   await persistOnboardingStepFixture(step);
 
   // Destroy and recreate rather than just showing: showWindow on a live
   // window only focuses it, so the mount-time restore effect never re-runs
   // and the flow stays on whatever slide it was already displaying.
-  await showWindow({ Home: { page: null } });
-  await waitForWindowHandle("home", t(20_000));
-  await browser.switchToWindow("home");
   await closeWindow("Onboarding");
   await waitForWindowClosed("onboarding", t(15_000));
 
