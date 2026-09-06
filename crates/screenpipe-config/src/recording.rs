@@ -16,6 +16,18 @@ where
     Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
+/// Coerce a top-level `null` JSON value for `Vec<T>` fields to an empty vec so
+/// a single corrupted/null array field never makes the whole settings file
+/// unreadable.
+fn deserialize_null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    T: Default + Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    let opt = Option::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
+}
+
 /// Older desktop builds persisted a single selected monitor as a string, while
 /// current builds persist an array. Accept both shapes so an upgrade preserves
 /// the user's selection instead of rejecting the entire settings store.
@@ -398,7 +410,11 @@ pub struct RecordingSettings {
 
     /// Custom vocabulary for transcription biasing and word replacement.
     /// Previously stored in SettingsStore.extra["vocabularyWords"].
-    #[serde(rename = "vocabularyWords", default)]
+    #[serde(
+        rename = "vocabularyWords",
+        default,
+        deserialize_with = "deserialize_null_as_default"
+    )]
     pub vocabulary: Vec<VocabEntry>,
 
     // ── Vision ─────────────────────────────────────────────────────────
@@ -838,7 +854,11 @@ pub struct RecordingSettings {
     pub schedule_enabled: bool,
 
     /// Per-day schedule rules (only used when schedule_enabled is true)
-    #[serde(rename = "scheduleRules", default)]
+    #[serde(
+        rename = "scheduleRules",
+        default,
+        deserialize_with = "deserialize_null_as_default"
+    )]
     pub schedule_rules: Vec<ScheduleRule>,
 
     /// Require authentication for remote (non-localhost) API access.

@@ -1257,6 +1257,24 @@ where
     Ok(opt.unwrap_or_default())
 }
 
+/// Deserialize a `Vec<T>` tolerating both a top-level `null` (returns empty
+/// vec) and `null` elements within the array (those elements are silently
+/// dropped). This prevents a single corrupt/null preset from making the
+/// entire settings file unreadable.
+fn deserialize_vec_skip_nulls<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    // Deserialize the raw JSON value so we can inspect/filter it.
+    let raw: Option<Vec<Option<T>>> = Option::deserialize(deserializer)?;
+    Ok(raw
+        .unwrap_or_default()
+        .into_iter()
+        .flatten()
+        .collect())
+}
+
 #[derive(Serialize, Deserialize, Type, Clone)]
 #[serde(default)]
 pub struct SettingsStore {
@@ -1267,7 +1285,7 @@ pub struct SettingsStore {
     pub recording: screenpipe_config::RecordingSettings,
 
     // ── App-only fields (UI, shortcuts, metadata) ────────────────────────
-    #[serde(rename = "aiPresets", deserialize_with = "deserialize_null_as_default")]
+    #[serde(rename = "aiPresets", deserialize_with = "deserialize_vec_skip_nulls")]
     pub ai_presets: Vec<AIPreset>,
 
     #[serde(rename = "isLoading")]
@@ -2028,6 +2046,8 @@ impl SettingsStore {
             ];
             if let Some(presets) = obj.get_mut("aiPresets") {
                 if let Some(arr) = presets.as_array_mut() {
+                    // Drop null elements to prevent deserialization failures.
+                    arr.retain(|v| !v.is_null());
                     for preset in arr.iter_mut() {
                         Self::repair_orphaned_acp_preset(preset);
                         if let Some(provider) = preset.get("provider").and_then(|p| p.as_str()) {
@@ -2045,6 +2065,14 @@ impl SettingsStore {
                             }
                         }
                     }
+                }
+            }
+
+            // Strip null elements from other struct-typed arrays so a single
+            // corrupt entry never makes the whole settings file unreadable.
+            for key in ["scheduleRules", "vocabularyWords"] {
+                if let Some(Value::Array(arr)) = obj.get_mut(key) {
+                    arr.retain(|v| !v.is_null());
                 }
             }
         }
