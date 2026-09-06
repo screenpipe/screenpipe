@@ -4457,7 +4457,7 @@ dependencies = [
  "memchr",
  "thiserror 2.0.18",
  "unicase",
- "xdg 3.0.0",
+ "xdg",
 ]
 
 [[package]]
@@ -11271,7 +11271,7 @@ dependencies = [
  "windows-icons",
  "winreg 0.52.0",
  "wiremock",
- "xdg 2.5.2",
+ "xdg",
 ]
 
 [[package]]
@@ -17382,12 +17382,6 @@ dependencies = [
  "libc",
  "quick-xml 0.30.0",
 ]
-
-[[package]]
-name = "xdg"
-version = "2.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "213b7324336b53d2414b2db8537e56544d981803139155afa84f76eeebb7a546"
 
 [[package]]
 name = "xdg"
