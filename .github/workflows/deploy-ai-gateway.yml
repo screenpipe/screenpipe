@@ -76,7 +76,7 @@ jobs:
         working-directory: packages/ai-gateway
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
@@ -107,7 +107,7 @@ jobs:
         working-directory: packages/ai-gateway
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup bun
         uses: oven-sh/setup-bun@v2

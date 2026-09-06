@@ -101,7 +101,7 @@ jobs:
     # much faster than this budget suggests.
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: System info
         run: |
@@ -125,7 +125,7 @@ jobs:
           cache-bin: false
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Configure sccache
         shell: bash
@@ -144,7 +144,7 @@ jobs:
           cache-bin: false
 
       - name: Cache macOS build artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             apps/screenpipe-app-tauri/src-tauri/ffmpeg-x86_64-apple-darwin
@@ -164,7 +164,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Cache Next.js build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ./apps/screenpipe-app-tauri/.next
           key: ${{ runner.os }}-intel-next-v1-${{ hashFiles('apps/screenpipe-app-tauri/package.json', 'apps/screenpipe-app-tauri/bun.lock', 'apps/screenpipe-app-tauri/next.config.mjs', 'apps/screenpipe-app-tauri/postcss.config.mjs', 'apps/screenpipe-app-tauri/app/**', 'apps/screenpipe-app-tauri/components/**', 'apps/screenpipe-app-tauri/lib/**', 'apps/screenpipe-app-tauri/styles/**') }}
@@ -172,7 +172,7 @@ jobs:
             ${{ runner.os }}-intel-next-v1-
 
       - name: Build
-        uses: tauri-apps/tauri-action@v0.5.17
+        uses: tauri-apps/tauri-action@v1.0.0
         env:
           NEXT_PUBLIC_SCREENPIPE_E2E: "true"
         with:
@@ -392,7 +392,7 @@ jobs:
 
       - name: Upload artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-intel-launch-smoke-${{ github.run_id }}
           path: |

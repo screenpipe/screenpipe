@@ -70,7 +70,7 @@ jobs:
       run:
         working-directory: packages/sdk
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -106,11 +106,11 @@ jobs:
       run:
         working-directory: packages/sdk
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.10"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Install Rust toolchain
@@ -128,7 +128,7 @@ jobs:
       - name: Build
         run: bun run build --target ${{ matrix.settings.target }} --cargo-flags="--locked"
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sdk-bindings-${{ matrix.settings.target }}
           path: |
@@ -151,11 +151,11 @@ jobs:
       run:
         working-directory: packages/sdk
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.10"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Install ffmpeg (macOS)
@@ -174,7 +174,7 @@ jobs:
       - name: Install deps
         run: bun install --frozen-lockfile
       - name: Download host-native binding
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: sdk-bindings-${{ runner.os == 'macOS' && 'aarch64-apple-darwin' || 'x86_64-pc-windows-msvc' }}
           path: packages/sdk
@@ -205,8 +205,8 @@ jobs:
       run:
         working-directory: packages/sdk
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Show Swift version

@@ -43,7 +43,7 @@ jobs:
       run:
         working-directory: apps/screenpipe-app-tauri
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: oven-sh/setup-bun@v2
         with:

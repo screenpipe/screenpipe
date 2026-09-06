@@ -52,7 +52,7 @@ jobs:
       release_sha: ${{ steps.resolve-release.outputs.sha }}
       release_version: ${{ steps.resolve-release.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Resolve and validate release revision
@@ -148,7 +148,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || needs.check_commit.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Pin to the triggering SHA (github.sha), not the branch ref: main
           # keeps moving while builds queue/run, so a branch ref lets platforms
@@ -215,7 +215,7 @@ jobs:
             throw "Failed to enable git long paths"
           }
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Pin to the triggering SHA (github.sha), not the branch ref: main
           # keeps moving while builds queue/run, so a branch ref lets platforms
@@ -239,7 +239,7 @@ jobs:
 
       - name: Checkout persistent Windows cache action
         if: runner.environment == 'self-hosted' && matrix.os_type == 'windows'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-workflow
@@ -254,7 +254,7 @@ jobs:
 
       - name: Checkout persistent Linux cache action
         if: runner.environment == 'self-hosted' && matrix.os_type == 'linux'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-workflow
@@ -303,7 +303,7 @@ jobs:
 
       - name: Setup Node
         if: runner.environment != 'self-hosted' || (matrix.os_type != 'windows' && matrix.os_type != 'linux')
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.target == 'aarch64-pc-windows-msvc' && '22' || '20' }}
 
@@ -407,7 +407,7 @@ jobs:
 
       - name: Cache Build Artifacts
         if: runner.environment == 'github-hosted'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             target/${{ matrix.target }}/release
@@ -425,7 +425,7 @@ jobs:
 
       - name: Cache Homebrew packages
         if: runner.environment == 'github-hosted' && matrix.os_type == 'macos'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/Library/Caches/Homebrew
@@ -439,7 +439,7 @@ jobs:
       # These rarely change - keyed on workflow file hash, not lockfiles
       - name: Cache Binary Dependencies
         if: runner.environment == 'github-hosted'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             apps/screenpipe-app-tauri/src-tauri/ffmpeg
@@ -458,7 +458,7 @@ jobs:
       - name: Cache Node Modules
         if: runner.environment == 'github-hosted'
         id: cache-pre-build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             apps/screenpipe-app-tauri/node_modules
@@ -1040,7 +1040,7 @@ jobs:
       # finds it already on disk and never touches the network.
       - name: Cache Tauri NSIS toolchain (Windows)
         if: matrix.os_type == 'windows'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/AppData/Local/tauri/NSIS
           key: tauri-nsis-${{ runner.os }}-${{ runner.arch }}-nsis3.11-utils0.5.3
@@ -1706,7 +1706,7 @@ jobs:
 
       - name: Upload macOS dry-run artifacts
         if: matrix.os_type == 'macos' && github.event.inputs.dry_run == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: consumer-macos-${{ matrix.target }}
           path: |
@@ -1718,7 +1718,7 @@ jobs:
 
       - name: Upload Windows dry-run artifacts
         if: matrix.os_type == 'windows' && github.event.inputs.dry_run == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: consumer-windows-${{ matrix.target }}
           path: |
