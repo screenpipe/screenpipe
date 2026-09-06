@@ -13,6 +13,6 @@
     "@screenpipe/sdk": "file:../.."
   },
   "devDependencies": {
-    "electron": "^32.2.5"
+    "electron": "^44.0.0"
   }
 }
