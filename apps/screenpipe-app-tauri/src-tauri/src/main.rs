@@ -133,6 +133,7 @@ mod tray;
 mod staged_update;
 mod stale_tier;
 mod startup_auth;
+mod startup_server_owner;
 mod updates;
 mod voice_training;
 mod window;
@@ -147,6 +148,32 @@ mod windows_webview_env;
 mod linux_webkit_env;
 
 pub use server::*;
+
+async fn probe_startup_server_health(port: u16, api_key: Option<&str>) -> bool {
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        let client = reqwest::Client::new();
+        let mut request = client
+            .get(format!("http://localhost:{port}/health"))
+            .timeout(std::time::Duration::from_secs(1));
+        if let Some(key) = api_key {
+            request = request.header("Authorization", format!("Bearer {key}"));
+        }
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(_) => return false,
+        };
+        let status = response.status().as_u16();
+        response
+            .json::<serde_json::Value>()
+            .await
+            .map(|payload| {
+                screenpipe_engine::health_identity::is_screenpipe_health_response(status, &payload)
+            })
+            .unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false)
+}
 
 pub use recording::*;
 
@@ -2000,36 +2027,69 @@ async fn main() {
                             }
                             let config = store_clone.to_recording_config(data_dir_clone.clone());
 
-                            // Check if server already running
-                            let server_running = tokio::time::timeout(
-                                std::time::Duration::from_secs(2),
-                                async {
-                                    let client = reqwest::Client::new();
-                                    let mut request = client
-                                        .get(format!("http://localhost:{}/health", config.port))
-                                        .timeout(std::time::Duration::from_secs(1));
-                                    if let Some(ref key) = config.api_auth_key {
-                                        request = request.header(
-                                            "Authorization",
-                                            format!("Bearer {}", key),
-                                        );
-                                    }
-                                    let response = match request.send().await {
-                                        Ok(response) => response,
-                                        Err(_) => return false,
-                                    };
-                                    let status = response.status().as_u16();
-                                    match response.json::<serde_json::Value>().await {
-                                        Ok(payload) => screenpipe_engine::health_identity::is_screenpipe_health_response(status, &payload),
-                                        Err(_) => false,
-                                    }
-                                }
-                            ).await.unwrap_or(false);
+                            let mut server_running = probe_startup_server_health(
+                                config.port,
+                                config.api_auth_key.as_deref(),
+                            )
+                            .await;
 
                             if server_running {
-                                info!("Healthy screenpipe server already running, skipping startup");
-                                is_starting_clone.store(false, std::sync::atomic::Ordering::SeqCst);
-                                return;
+                                // A health response is not an ownership handle. During a
+                                // permission relaunch the predecessor can answer briefly
+                                // after this process creates a fresh RecordingState. The
+                                // old early return left `server=None`, so onboarding could
+                                // never create a managed capture session.
+                                const PREDECESSOR_RELEASE_GRACE: std::time::Duration =
+                                    std::time::Duration::from_secs(5);
+                                let release_started = std::time::Instant::now();
+                                loop {
+                                    let action =
+                                        startup_server_owner::startup_server_owner_action(
+                                            server_running,
+                                            release_started.elapsed()
+                                                >= PREDECESSOR_RELEASE_GRACE,
+                                        );
+                                    match action {
+                                        startup_server_owner::StartupServerOwnerAction::StartOwned => {
+                                            info!(
+                                                "Previous healthy server released port {}; starting an owned server",
+                                                config.port
+                                            );
+                                            break;
+                                        }
+                                        startup_server_owner::StartupServerOwnerAction::WaitForRelease => {
+                                            tokio::time::sleep(std::time::Duration::from_millis(
+                                                250,
+                                            ))
+                                            .await;
+                                            server_running = probe_startup_server_health(
+                                                config.port,
+                                                config.api_auth_key.as_deref(),
+                                            )
+                                            .await;
+                                        }
+                                        startup_server_owner::StartupServerOwnerAction::PreserveExternal => {
+                                            let message = format!(
+                                                "another healthy screenpipe is already using local port {}",
+                                                config.port
+                                            );
+                                            warn!("{message}; preserving its capture session");
+                                            crate::health::set_boot_error(&message);
+                                            crate::health::set_recording_status(
+                                                crate::health::RecordingStatus::Error,
+                                            );
+                                            crate::port_conflict::show_healthy_screenpipe(
+                                                &app_for_owned,
+                                                config.port,
+                                            );
+                                            is_starting_clone.store(
+                                                false,
+                                                std::sync::atomic::Ordering::SeqCst,
+                                            );
+                                            return;
+                                        }
+                                    }
+                                }
                             }
 
                             // Permissions check
