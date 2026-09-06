@@ -114,6 +114,25 @@ function isConnectionLikeError(errorStr: string): boolean {
   );
 }
 
+// A bare "Connection error." (no status code, no other specific network
+// signature) is the OpenAI SDK's APIConnectionError default message -- it is
+// only produced when the underlying fetch itself rejects at the network
+// layer, before any HTTP response; a real HTTP status is formatted by pi-ai
+// as "<status>: <body>" instead. When the long-lived pi subprocess's fetch
+// layer gets wedged, every subsequent turn fails with exactly this bare
+// string, indefinitely, even though the endpoint/key/model are all healthy.
+// Telling the user to check their internet connection here is actively
+// wrong -- restarting screenpipe (which respawns pi) is what actually fixes
+// it. See #6642.
+function isBareConnectionError(errorStr: string): boolean {
+  return errorStr.trim().toLowerCase() === "connection error.";
+}
+
+export function buildStuckAgentProcessMessage(provider?: string | null): string {
+  const named = provider && provider !== "custom" ? ` for ${provider}` : "";
+  return `The AI agent process${named} appears to be stuck and is rejecting every request -- this isn't your internet connection or provider setup. Restart screenpipe to clear it, then try again.`;
+}
+
 export function isHostedScreenpipeProvider(provider?: string | null): boolean {
   // screenpipe's own hosted gateway (default chat preset + the Pi agent both
   // route through api.screenpipe.com). A connection failure here is on us,
@@ -336,6 +355,13 @@ function buildGenericProviderErrorMessage(
       normalized.includes("request was blocked"))
   ) {
     return "The custom AI provider rejected the request. Check the API key and Custom URL in Settings → AI, including any required API path such as /v1, then run Test Connection.";
+  }
+
+  // A bare "Connection error." means the long-lived process's fetch layer is
+  // wedged, not that the network is actually down -- check this before the
+  // broader connection-like bucket below. See #6642.
+  if (isBareConnectionError(errorStr)) {
+    return buildStuckAgentProcessMessage(provider);
   }
 
   // Hosted/remote providers: a connection-like failure means we never reached

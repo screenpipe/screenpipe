@@ -3607,7 +3607,14 @@ pub async fn pi_start_inner(
                         cmd.env("ANTHROPIC_API_KEY", api_key);
                     }
                     "custom" => {
-                        cmd.env("CUSTOM_API_KEY", api_key);
+                        // Trim to match the normalization already applied when
+                        // testing the connection in Settings (see
+                        // `const key = apiKey.trim()` in
+                        // connections-section.tsx). A stray trailing newline
+                        // in a pasted/imported key still passes Test
+                        // Connection but was previously sent verbatim into
+                        // the subprocess env here. See #6642.
+                        cmd.env("CUSTOM_API_KEY", api_key.trim());
                     }
                     _ => {}
                 }
