@@ -835,7 +835,7 @@ let DEFAULT_SETTINGS: Settings = {
 			keepComputerAwake: false,
 			showRestartNotifications: false,
 			experimentalCoreaudioSystemAudio: true,
-			experimentalMeetingPiggyback: false,
+			experimentalMeetingPiggyback: LOCAL_DESKTOP_REMOTE_POLICY.boolean.smartRecording.defaultEnabled,
 			alwaysRecordBluetoothMic: false,
 			windowsInputAecEnabled: false,
 			macosInputVpioEnabled: false,

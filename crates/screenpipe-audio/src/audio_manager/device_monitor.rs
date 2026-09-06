@@ -2373,14 +2373,17 @@ async fn run_pinned_input_fallback_sweep(
 /// where a paired headset becomes the default mic without ever being
 /// explicitly enabled).
 async fn run_bluetooth_mic_gate_sweep(audio_manager: &AudioManager) {
-    use crate::core::device::bluetooth_input_is_combo_headset;
-    use crate::core::device_detection::{bluetooth_mic_allowed, InputDeviceKind};
+    use crate::core::device_detection::InputDeviceKind;
 
-    let always_override = audio_manager.always_record_bluetooth_mic().await;
     let in_meeting = match audio_manager.meeting_detector().await {
         Some(d) => d.is_in_meeting(),
         None => false,
     };
+    // The meeting sweep follows the process-selected mic (or its fallback).
+    // Opening the OS default here as well could capture the wrong second mic.
+    if in_meeting && audio_manager.piggyback_enabled().await {
+        return;
+    }
 
     let mut candidates: HashSet<String> = audio_manager
         .enabled_devices()
@@ -2405,15 +2408,7 @@ async fn run_bluetooth_mic_gate_sweep(audio_manager: &AudioManager) {
         if InputDeviceKind::detect_input(&device.name) != InputDeviceKind::Bluetooth {
             continue;
         }
-        // Per-device: a dedicated mic-only Bluetooth device (no output side
-        // on the same hardware) is never gated, regardless of other devices.
-        let is_combo_headset = bluetooth_input_is_combo_headset(&device.name);
-        let allowed = bluetooth_mic_allowed(
-            &InputDeviceKind::Bluetooth,
-            is_combo_headset,
-            always_override,
-            in_meeting,
-        );
+        let allowed = !audio_manager.bluetooth_input_gate_blocks(&device).await;
         let running = audio_manager.is_device_actively_streaming(&device);
         if allowed && !running {
             if let Err(e) = audio_manager.start_device(&device).await {

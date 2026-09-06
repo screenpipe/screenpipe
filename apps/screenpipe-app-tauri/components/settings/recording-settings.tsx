@@ -42,7 +42,6 @@ export const audioSearchIndex: SettingsField[] = [
   { label: "Auto-select audio devices", keywords: ["devices", "bluetooth"], conditional: true },
   { label: "Languages", keywords: ["transcript language", "language"], conditional: true },
   { label: "Custom Vocabulary", keywords: ["vocabulary", "names", "jargon", "replacement"], conditional: true },
-  { label: "Smart recording", keywords: ["smart recording", "beta", "meeting", "piggyback", "per-process", "meeting audio"], conditional: true },
   { label: "Always record bluetooth mic", keywords: ["bluetooth", "airpods", "headset", "a2dp", "sco", "meeting"], conditional: true },
   { label: "Your name", keywords: ["speaker", "voice training"], conditional: true },
 ];
@@ -2088,10 +2087,6 @@ export function RecordingSettings({ section }: { section: RecordingSettingsSecti
     settings,
     "semanticContext",
   );
-  const smartRecordingRemotePolicy = getRemoteBooleanPolicy(
-    settings,
-    "smartRecording",
-  );
   const aecModeRemotePolicy = getRemoteAecModePolicy(settings);
   const screenContextEnabled = !settings.disableVision;
   const screenshotImagesEnabled = screenContextEnabled && !(settings.disableScreenshots ?? false);
@@ -3492,64 +3487,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           onToggle={handleToggleIgnoredMeetingApp}
         />
 
-        {/* Smart recording — in the meetings section where it belongs */}
-        {!settings.disableAudio && (isMacOS || isWindows) && processTapAvailable && (
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                    Smart recording
-                    <Badge variant="secondary" aria-label="beta" className="px-1.5 py-0 text-[10px] font-medium uppercase tracking-wide">
-                      beta
-                    </Badge>
-                  </h3>
-                  <p className="text-xs text-muted-foreground">
-                    during meetings, records your meeting&apos;s audio and whichever microphone you pick in the meeting app — taking precedence over your other audio settings. falls back to your configured capture automatically if unavailable.
-                  </p>
-                  {settings.disableMeetingDetector && (
-                    <p className="text-xs text-amber-600 dark:text-amber-500">
-                      requires automatic meeting detection — turn it back on above to use this.
-                    </p>
-                  )}
-                </div>
-              </div>
-              <Switch
-                id="experimentalMeetingPiggyback"
-                checked={Boolean(settings.experimentalMeetingPiggyback ?? false)}
-                disabled={
-                  Boolean(settings.disableMeetingDetector) ||
-                  smartRecordingRemotePolicy.forceDisabled
-                }
-                onCheckedChange={(checked) =>
-                  handleSettingsChange(
-                    {
-                      remoteControlPreferences: {
-                        ...remoteControlPreferences,
-                        smartRecording: checked,
-                      },
-                      experimentalMeetingPiggyback: resolveBooleanRemoteValue(
-                        checked,
-                        smartRecordingRemotePolicy,
-                      ),
-                    },
-                    true,
-                  )
-                }
-              />
-            </div>
-            {smartRecordingRemotePolicy.forceDisabled && (
-              <p className="mt-2 ml-[26px] text-xs text-muted-foreground">
-                Temporarily disabled by the remote safety control. Your
-                preference is preserved.
-              </p>
-            )}
-          </CardContent>
-        </Card>
-        )}
-
         {!settings.disableAudio && (
           <div className="flex items-center gap-2 px-1 pt-1.5">
             <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">devices & capture</span>
@@ -3566,7 +3503,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
                   <h3 className="text-sm font-medium text-foreground">Auto-select audio devices</h3>
-                  <p className="text-xs text-muted-foreground">Records all default devices. Turn off to exclude bluetooth headphones or pick specific devices.</p>
+                  <p className="text-xs text-muted-foreground">Follows your system defaults. Bluetooth headset microphones are used during meetings unless you enable continuous recording.</p>
                 </div>
               </div>
               <Switch
@@ -3590,10 +3527,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
             const displayName = getAudioDeviceDisplayName(device.name);
             // Use per-device level if available, fall back to global speechRatio
             const deviceLevel = overlayData.deviceLevels[device.name] ?? overlayData.speechRatio;
-            // Backend-computed: exactly mirrors AudioManager::start_device's
-            // real gate (Bluetooth input + combo headset), so this hint
-            // never mismatches actual recording behavior.
-            const isBluetoothMicGated = device.isComboBluetoothMic && !settings.alwaysRecordBluetoothMic;
+            // Explicit selection permits continuous Bluetooth mic capture.
+            const isBluetoothMic = device.isComboBluetoothMic;
             return (
               <div
                 key={device.name}
@@ -3612,13 +3547,13 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     {device.isDefault && (
                       <Badge variant="secondary" className="text-[9px] h-3.5 px-1 shrink-0">Default</Badge>
                     )}
-                    {isBluetoothMicGated && (
+                    {isBluetoothMic && (
                       <Badge
                         variant="outline"
                         className="text-[9px] h-3.5 px-1 shrink-0"
-                        title="only recorded during a detected meeting — turn on &quot;always record bluetooth mic&quot; to change this"
+                        title="Selecting this microphone allows continuous recording and may reduce Bluetooth headphone audio quality."
                       >
-                        meetings only
+                        Bluetooth
                       </Badge>
                     )}
                   </div>

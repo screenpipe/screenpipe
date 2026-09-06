@@ -79,7 +79,7 @@ describe("DesktopRemoteControl", () => {
       platform: "macos",
       enableSemanticContext: false,
       experimentalCoreaudioSystemAudio: true,
-      experimentalMeetingPiggyback: false,
+      experimentalMeetingPiggyback: true,
       filterMusic: true,
       prioritizeInputLatency: false,
       aecMode: "off",
@@ -129,6 +129,7 @@ describe("DesktopRemoteControl", () => {
   });
 
   it("applies independently targeted defaults with one settings write and restart", async () => {
+    mocks.settings.experimentalMeetingPiggyback = false; // legacy install
     mocks.payloads = {
       "semantic-context-control": {
         defaultEnabled: true,
