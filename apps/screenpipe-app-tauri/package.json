@@ -128,7 +128,7 @@
     "clsx": "^2.1.1",
     "cmdk": "0.2.1",
     "date-fns": "^3.6.0",
-    "framer-motion": "^11.18.2",
+    "framer-motion": "^13.1.1",
     "fuse.js": "^7.4.2",
     "hotkeys-js": "^3.13.15",
     "js-levenshtein": "^1.1.6",
