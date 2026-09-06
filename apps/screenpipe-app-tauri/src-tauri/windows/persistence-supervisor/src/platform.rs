@@ -45,9 +45,10 @@ use windows_service::service_dispatcher;
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 
 use crate::{
-    is_path_within, launch_decision, log_path, marker_path, path_eq, policy_disabled_path,
-    policy_enforcement_from_exit_code, select_active_session, state_dir, LaunchDecision, APP_EXE,
-    POLICY_REFRESH_SECONDS, RECHECK_SECONDS, SERVICE_DISPLAY_NAME, SERVICE_NAME, SUPERVISOR_EXE,
+    install_app_validation_required, is_path_within, launch_decision, log_path, marker_path,
+    path_eq, policy_disabled_path, policy_enforcement_from_exit_code, select_active_session,
+    state_dir, LaunchDecision, APP_EXE, POLICY_REFRESH_SECONDS, RECHECK_SECONDS,
+    SERVICE_DISPLAY_NAME, SERVICE_NAME, SUPERVISOR_EXE,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
@@ -552,7 +553,10 @@ fn install_persistence() -> Result<()> {
     )?;
 
     let start_result = create_and_start_service(&supervisor).and_then(|_| {
-        if cached_policy_enforcement() {
+        if install_app_validation_required(
+            cached_policy_enforcement(),
+            active_interactive_session()?,
+        ) {
             wait_for_supervised_app(&app_path)
         } else {
             Ok(())

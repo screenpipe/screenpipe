@@ -52,11 +52,11 @@ powershell.exe -ExecutionPolicy Bypass -File install-screenpipe-enterprise.ps1
 ```
 
 ```bash uninstall command
-"%ProgramFiles%\screenpipe\uninstall.exe" /S
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "C:\ProgramData\screenpipe\mdm\uninstall-screenpipe-enterprise.ps1"
 ```
 </CodeGroup>
 
-the `.intunewin` contains the signed NSIS installer plus `install-screenpipe-enterprise.ps1`. the wrapper runs the installer silently and writes `HKLM\SOFTWARE\screenpipe\InstallSource=Intune`, `UpdateManager=mdm`, and `Version=<build version>` so the app and enterprise dashboard can report that updates are Intune-managed.
+the `.intunewin` contains the signed NSIS installer plus install and uninstall wrappers. the install wrapper runs the installer silently, stores the protected uninstall wrapper under `C:\ProgramData\screenpipe\mdm`, and writes `HKLM\SOFTWARE\screenpipe\InstallSource=Intune`, `UpdateManager=mdm`, `Version=<build version>`, and `PersistenceMode` so the app and enterprise dashboard can report the managed lifecycle accurately. the wrapper is required because Intune does not expand environment variables in uninstall commands.
 
 | field | value |
 |---|---|
@@ -85,7 +85,7 @@ pick **Manually configure detection rules**. for first-time installs, a file-exi
 
 Intune uses this to decide whether the install succeeded and whether the app is already present on subsequent check-ins.
 
-for versioned upgrades, prefer a registry detection rule:
+for versioned upgrades, use the custom detection script included with the dashboard MDM configuration. it checks the 64-bit registry version, app binary, and—when the persistent package is selected—the LocalSystem supervisor. if you configure the rules manually, use both registry values below:
 
 | field | value |
 |---|---|
@@ -97,13 +97,24 @@ for versioned upgrades, prefer a registry detection rule:
 | value | the version you uploaded, for example `2.4.208` |
 | associated with a 32-bit app on 64-bit clients | No |
 
+add a second registry rule for persistent deployments:
+
+| field | value |
+|---|---|
+| key path | `HKEY_LOCAL_MACHINE\SOFTWARE\screenpipe` |
+| value name | `PersistenceMode` |
+| detection method | Integer comparison |
+| operator | Equals |
+| value | `1` |
+| associated with a 32-bit app on 64-bit clients | No |
+
 without version-aware detection, Intune can tell that screenpipe exists but cannot tell whether a device is still on an older release.
 
 ## step 6 — dependencies & supersedence
 
 screenpipe ships everything it needs (WebView2, ONNX Runtime, ffmpeg) bundled inside the NSIS installer. **leave dependencies empty.**
 
-if you're updating from an older deployed version, set **supersedence** to the previous Intune app entry so Intune uninstalls the old version cleanly.
+if you're updating from an older deployed version, set **supersedence** to the previous Intune app entry with **Uninstall previous version = No**. the newer Screenpipe installer performs an in-place upgrade and preserves the persistence service and managed identity; asking Intune to uninstall first turns an update into a removal and reinstall.
 
 ## step 7 — automatic updates
 
@@ -162,12 +173,13 @@ screenpipe needs the license key to enable enterprise mode (centralized telemetr
     either the registry pre-stage didn't run before first launch (check Intune script assignment / order) or the license key has expired. check expiry in the [enterprise dashboard](https://screenpi.pe/enterprise) → **policy** → license info.
   </Accordion>
   <Accordion title="audio recording doesn't start">
-    on Windows, microphone access is permission-gated. either deploy a Windows privacy-settings profile that grants screenpipe microphone access, or have users approve once at first launch. policy-based grant is cleaner for fleet deployments — contact us if you need the AppX-style manifest mapping.
+    on Windows, microphone access for unpackaged desktop apps is controlled by the operating system's desktop-app privacy setting. Windows doesn't expose a Screenpipe-only MDM allow rule for this Win32 package. keep desktop microphone access enabled and have the user approve access if Windows prompts; do not force-enable microphone access for every desktop app just for Screenpipe.
   </Accordion>
 </AccordionGroup>
 
 ## also see
 
-- macOS Jamf / Kandji / Mosyle deployment: contact us — `.pkg` distribution flow is identical in shape to the above but with macOS MDM tooling
+- macOS Intune / Jamf / Kandji / Mosyle deployment: download the Screenpipe `.mobileconfig` from the enterprise dashboard and deploy it through the device channel beside the persistent `.pkg`
+- macOS 27: Apple removes legacy PPPC Accessibility grants. the dashboard must mark Accessibility as unsupported until Intune exposes App Settings Privacy—not silently reuse the macOS 13–26 profile
 - enterprise dashboard reference: [screenpi.pe/enterprise](https://screenpi.pe/enterprise) (members, devices, pipes, policy, builds)
 - questions or stuck: [louis@screenpi.pe](mailto:louis@screenpi.pe)

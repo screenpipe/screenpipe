@@ -1,0 +1,64 @@
+{
+  "$schema": "./deployment-manifest.v1.schema.json",
+  "schemaVersion": 1,
+  "id": "screenpipe-enterprise-persistence",
+  "displayName": "Screenpipe Enterprise (persistent)",
+  "controlPlane": {
+    "policyEndpoint": "https://screenpipe.com/api/enterprise/policy",
+    "requiredLockedSettings": {
+      "autoStartEnabled": "true",
+      "enforcePersistence": "true"
+    },
+    "refreshSeconds": 300,
+    "disableBehavior": "An explicit enforcePersistence=false stops relaunch while leaving the supervisor installed for later re-enable."
+  },
+  "macos": {
+    "minimumVersion": "13.0",
+    "configurationProfileMaximumVersion": "26.x",
+    "artifactSuffix": "-persistent.pkg",
+    "configurationProfile": "macos/screenpipe-enterprise.mobileconfig",
+    "deploymentChannel": "device",
+    "installCommand": "/usr/sbin/installer -pkg {{PACKAGE_PATH}} -target /",
+    "updateStrategy": "in_place",
+    "persistenceOnlyRemovalCommand": "/Library/PrivilegedHelperTools/screenpipe-persistence-uninstall && /usr/sbin/pkgutil --forget screenpi.pe.enterprise.persistence",
+    "fullRemovalCommand": "/Library/PrivilegedHelperTools/screenpipe-persistence-uninstall && /bin/rm -rf '/Applications/screenpipe enterprise.app' && /usr/sbin/pkgutil --forget screenpi.pe.enterprise.persistence",
+    "detection": {
+      "packageId": "screenpi.pe.enterprise.persistence",
+      "appPath": "/Applications/screenpipe enterprise.app",
+      "supervisorLabel": "screenpi.pe.enterprise.persistence-supervisor"
+    },
+    "permissions": {
+      "accessibility": "managed_allow",
+      "screenRecording": "standard_user_may_approve",
+      "inputMonitoring": "user_consent_required",
+      "microphone": "user_consent_required"
+    },
+    "macos27": {
+      "status": "requires_intune_app_settings_privacy_support",
+      "reason": "Apple removes PPPC Accessibility grants in macOS 27. Do not report Accessibility as managed until the MDM exposes the declarative App Settings Privacy keys."
+    }
+  },
+  "windows": {
+    "minimumVersion": "10.0.17763",
+    "artifactSuffix": "-persistent.intunewin",
+    "appType": "win32LobApp",
+    "installBehavior": "system",
+    "installCommand": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File install-screenpipe-enterprise.ps1",
+    "uninstallCommand": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\ProgramData\\screenpipe\\mdm\\uninstall-screenpipe-enterprise.ps1\"",
+    "detectionScriptTemplate": "windows/detect-screenpipe-enterprise.ps1",
+    "updateStrategy": "in_place",
+    "supersedenceUninstallPreviousVersion": false,
+    "registry": {
+      "path": "HKEY_LOCAL_MACHINE\\SOFTWARE\\screenpipe",
+      "versionValue": "Version",
+      "persistenceValue": "PersistenceMode",
+      "persistenceExpected": 1
+    },
+    "serviceName": "ScreenpipeEnterprisePersistence",
+    "permissions": {
+      "screenCapture": "no_os_permission_required",
+      "accessibility": "no_os_permission_required",
+      "microphone": "desktop_app_user_consent"
+    }
+  }
+}

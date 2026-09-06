@@ -492,7 +492,10 @@ jobs:
             "${BUNDLE_DIR}"/nsis/*.exe \
             "${BUNDLE_DIR}"/nsis/*.nsis.zip \
             "${BUNDLE_DIR}"/nsis/*.sig \
-            apps/screenpipe-app-tauri/scripts/intunewin/out/**/*.intunewin
+            apps/screenpipe-app-tauri/scripts/intunewin/out/**/*.intunewin \
+            apps/screenpipe-app-tauri/mdm/deployment-manifest.v1.json \
+            apps/screenpipe-app-tauri/mdm/deployment-manifest.v1.schema.json \
+            apps/screenpipe-app-tauri/mdm/windows/detect-screenpipe-enterprise.ps1
 
       - name: Upload enterprise NSIS installer (artifact)
         uses: actions/upload-artifact@v4
@@ -1419,7 +1422,10 @@ jobs:
             "${BUNDLE_DIR}"/dmg/*.dmg \
             "${BUNDLE_DIR}"/pkg/*.pkg \
             "${BUNDLE_DIR}"/macos/*.app.tar.gz \
-            "${BUNDLE_DIR}"/macos/*.app.tar.gz.sig
+            "${BUNDLE_DIR}"/macos/*.app.tar.gz.sig \
+            apps/screenpipe-app-tauri/mdm/deployment-manifest.v1.json \
+            apps/screenpipe-app-tauri/mdm/deployment-manifest.v1.schema.json \
+            apps/screenpipe-app-tauri/mdm/macos/screenpipe-enterprise.mobileconfig
 
       - name: Upload enterprise macOS artifacts
         uses: actions/upload-artifact@v4

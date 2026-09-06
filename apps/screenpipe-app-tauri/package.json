@@ -75,6 +75,7 @@
     "build:tauri:status": "bun scripts/native-build-queue.ts status",
     "test:tauri": "bun scripts/native-build-queue.ts test",
     "test:persistence-supervisor": "bun scripts/native-build-queue.ts persistence-test",
+    "test:mdm": "bun test scripts/enterprise-mdm.test.ts",
     "build:persistence-supervisor": "bun scripts/native-build-queue.ts persistence-release",
     "build:persistence-installer": "bun scripts/native-build-queue.ts persistence-package",
     "bundle:persistence-installer": "bun scripts/native-build-queue.ts persistence-bundle",

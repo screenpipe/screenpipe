@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://screenpipe.com/schemas/enterprise-deployment-manifest.v1.schema.json",
+  "type": "object",
+  "required": ["schemaVersion", "id", "displayName", "controlPlane", "macos", "windows"],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "schemaVersion": { "const": 1 },
+    "id": { "const": "screenpipe-enterprise-persistence" },
+    "displayName": { "type": "string", "minLength": 1 },
+    "controlPlane": {
+      "type": "object",
+      "required": ["policyEndpoint", "requiredLockedSettings", "refreshSeconds"],
+      "properties": {
+        "policyEndpoint": { "type": "string", "pattern": "^https://" },
+        "requiredLockedSettings": {
+          "type": "object",
+          "required": ["autoStartEnabled", "enforcePersistence"],
+          "properties": {
+            "autoStartEnabled": { "const": "true" },
+            "enforcePersistence": { "const": "true" }
+          },
+          "additionalProperties": false
+        },
+        "refreshSeconds": { "type": "integer", "minimum": 60 },
+        "disableBehavior": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "macos": {
+      "type": "object",
+      "required": [
+        "artifactSuffix",
+        "configurationProfile",
+        "configurationProfileMaximumVersion",
+        "deploymentChannel",
+        "updateStrategy",
+        "persistenceOnlyRemovalCommand",
+        "fullRemovalCommand",
+        "detection",
+        "permissions",
+        "macos27"
+      ],
+      "properties": {
+        "minimumVersion": { "type": "string" },
+        "artifactSuffix": { "const": "-persistent.pkg" },
+        "configurationProfile": { "type": "string" },
+        "configurationProfileMaximumVersion": { "const": "26.x" },
+        "deploymentChannel": { "const": "device" },
+        "installCommand": { "type": "string" },
+        "updateStrategy": { "const": "in_place" },
+        "persistenceOnlyRemovalCommand": { "type": "string" },
+        "fullRemovalCommand": { "type": "string" },
+        "detection": { "type": "object" },
+        "permissions": { "type": "object" },
+        "macos27": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "windows": {
+      "type": "object",
+      "required": [
+        "artifactSuffix",
+        "appType",
+        "installBehavior",
+        "installCommand",
+        "uninstallCommand",
+        "detectionScriptTemplate",
+        "updateStrategy",
+        "supersedenceUninstallPreviousVersion",
+        "registry",
+        "serviceName",
+        "permissions"
+      ],
+      "properties": {
+        "minimumVersion": { "type": "string" },
+        "artifactSuffix": { "const": "-persistent.intunewin" },
+        "appType": { "const": "win32LobApp" },
+        "installBehavior": { "const": "system" },
+        "installCommand": { "type": "string" },
+        "uninstallCommand": { "type": "string" },
+        "detectionScriptTemplate": { "type": "string" },
+        "updateStrategy": { "const": "in_place" },
+        "supersedenceUninstallPreviousVersion": { "const": false },
+        "registry": { "type": "object" },
+        "serviceName": { "const": "ScreenpipeEnterprisePersistence" },
+        "permissions": { "type": "object" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

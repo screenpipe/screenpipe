@@ -60,6 +60,13 @@ pub fn launch_decision(
     }
 }
 
+pub fn install_app_validation_required(
+    supervision_enabled: bool,
+    active_session: Option<u32>,
+) -> bool {
+    supervision_enabled && active_session.is_some()
+}
+
 pub fn select_active_session(console_session: Option<u32>, active_sessions: &[u32]) -> Option<u32> {
     console_session
         .filter(|session| active_sessions.contains(session))
@@ -121,6 +128,13 @@ mod tests {
             launch_decision(true, None, &[]),
             LaunchDecision::NoActiveUser
         );
+    }
+
+    #[test]
+    fn system_install_without_a_signed_in_user_does_not_require_an_app_process() {
+        assert!(!install_app_validation_required(true, None));
+        assert!(!install_app_validation_required(false, Some(7)));
+        assert!(install_app_validation_required(true, Some(7)));
     }
 
     #[test]

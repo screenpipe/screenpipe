@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- screenpipe — AI that knows everything you've seen, said, or heard -->
+<!-- https://screenpipe.com -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>PayloadContent</key>
+  <array>
+    <dict>
+      <key>Services</key>
+      <dict>
+        <key>Accessibility</key>
+        <array>
+          <dict>
+            <key>Authorization</key>
+            <string>Allow</string>
+            <key>CodeRequirement</key>
+            <string>identifier "screenpi.pe.enterprise" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = URFF7QHPUR</string>
+            <key>Identifier</key>
+            <string>screenpi.pe.enterprise</string>
+            <key>IdentifierType</key>
+            <string>bundleID</string>
+            <key>StaticCode</key>
+            <false/>
+          </dict>
+        </array>
+        <key>ScreenCapture</key>
+        <array>
+          <dict>
+            <key>Authorization</key>
+            <string>AllowStandardUserToSetSystemService</string>
+            <key>CodeRequirement</key>
+            <string>identifier "screenpi.pe.enterprise" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = URFF7QHPUR</string>
+            <key>Identifier</key>
+            <string>screenpi.pe.enterprise</string>
+            <key>IdentifierType</key>
+            <string>bundleID</string>
+            <key>StaticCode</key>
+            <false/>
+          </dict>
+        </array>
+      </dict>
+      <key>PayloadDisplayName</key>
+      <string>Screenpipe privacy permissions</string>
+      <key>PayloadIdentifier</key>
+      <string>screenpi.pe.enterprise.mdm.pppc</string>
+      <key>PayloadType</key>
+      <string>com.apple.TCC.configuration-profile-policy</string>
+      <key>PayloadUUID</key>
+      <string>FE2ADA87-B44F-4CE9-8B03-C28566CD8FCE</string>
+      <key>PayloadVersion</key>
+      <integer>1</integer>
+    </dict>
+    <dict>
+      <key>Rules</key>
+      <array>
+        <dict>
+          <key>Comment</key>
+          <string>Screenpipe Enterprise application</string>
+          <key>RuleType</key>
+          <string>BundleIdentifier</string>
+          <key>RuleValue</key>
+          <string>screenpi.pe.enterprise</string>
+          <key>TeamIdentifier</key>
+          <string>URFF7QHPUR</string>
+        </dict>
+        <dict>
+          <key>Comment</key>
+          <string>Screenpipe per-user persistence agent</string>
+          <key>RuleType</key>
+          <string>Label</string>
+          <key>RuleValue</key>
+          <string>screenpi.pe.enterprise.persistence</string>
+        </dict>
+        <dict>
+          <key>Comment</key>
+          <string>Screenpipe root persistence supervisor</string>
+          <key>RuleType</key>
+          <string>Label</string>
+          <key>RuleValue</key>
+          <string>screenpi.pe.enterprise.persistence-supervisor</string>
+        </dict>
+      </array>
+      <key>PayloadDisplayName</key>
+      <string>Screenpipe background services</string>
+      <key>PayloadIdentifier</key>
+      <string>screenpi.pe.enterprise.mdm.servicemanagement</string>
+      <key>PayloadType</key>
+      <string>com.apple.servicemanagement</string>
+      <key>PayloadUUID</key>
+      <string>780C1E0E-2EDB-4A5C-A3A6-4F70C21C0F65</string>
+      <key>PayloadVersion</key>
+      <integer>1</integer>
+    </dict>
+    <dict>
+      <key>install_source</key>
+      <string>mdm</string>
+      <key>update_manager</key>
+      <string>mdm</string>
+      <key>PayloadDisplayName</key>
+      <string>Screenpipe managed update metadata</string>
+      <key>PayloadIdentifier</key>
+      <string>screenpi.pe.enterprise.mdm.preferences</string>
+      <key>PayloadType</key>
+      <string>pe.screenpipe.enterprise</string>
+      <key>PayloadUUID</key>
+      <string>1988E804-8C9C-4EBB-8851-9966F0550BD3</string>
+      <key>PayloadVersion</key>
+      <integer>1</integer>
+    </dict>
+  </array>
+  <key>PayloadDescription</key>
+  <string>Approves Screenpipe Enterprise accessibility and background services. Screen Recording, Input Monitoring, and Microphone still require user consent.</string>
+  <key>PayloadDisplayName</key>
+  <string>Screenpipe Enterprise</string>
+  <key>PayloadIdentifier</key>
+  <string>screenpi.pe.enterprise.mdm</string>
+  <key>PayloadOrganization</key>
+  <string>Screenpipe Inc.</string>
+  <key>PayloadScope</key>
+  <string>System</string>
+  <key>PayloadType</key>
+  <string>Configuration</string>
+  <key>PayloadUUID</key>
+  <string>6D542A31-052F-47A2-81F7-B57B307104DE</string>
+  <key>PayloadVersion</key>
+  <integer>1</integer>
+</dict>
+</plist>
