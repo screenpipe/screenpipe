@@ -20,6 +20,9 @@ use std::io::{BufRead, BufReader, Write};
 use tauri::Manager;
 use tokio::sync::oneshot;
 
+#[path = "pi_extension_recovery.rs"]
+mod pi_extension_recovery;
+
 #[derive(Clone, Debug)]
 pub(crate) struct InternalAgentEvent {
     pub session_id: String,
@@ -897,6 +900,10 @@ pub struct PiManager {
     last_activity: std::time::Instant,
     /// Guard: ensures only one `pi_terminated` event is emitted per session.
     terminated_emitted: Arc<AtomicBool>,
+    /// Set before Screenpipe intentionally stops this exact child. The stdout
+    /// reader uses its own Arc generation so stale readers cannot classify a
+    /// deliberate replacement as an extension crash.
+    termination_expected: Arc<AtomicBool>,
     /// Channels waiting for RPC responses, keyed by request ID.
     pending_responses: PendingResponses,
     /// Command queue handle — all commands go through here for serialization.
@@ -959,6 +966,7 @@ impl PiManager {
             app_handle,
             last_activity: std::time::Instant::now(),
             terminated_emitted: Arc::new(AtomicBool::new(false)),
+            termination_expected: Arc::new(AtomicBool::new(true)),
             pending_responses: Arc::new(std::sync::Mutex::new(HashMap::new())),
             queue_handle: None,
             queue_state: None,
@@ -1013,6 +1021,7 @@ impl PiManager {
     }
 
     pub async fn stop(&mut self) {
+        self.termination_expected.store(true, Ordering::Release);
         // Signal queue to stop accepting commands
         if let Some(state) = self.queue_state.take() {
             state.signal_terminated();
@@ -3657,6 +3666,7 @@ pub async fn pi_start_inner(
 
     // Update manager for this session
     let terminated_emitted = Arc::new(AtomicBool::new(false));
+    let termination_expected = Arc::new(AtomicBool::new(false));
     let pending_responses: PendingResponses;
     if let Some(m) = pool.sessions.get_mut(&sid) {
         // Spawn the command queue for this session
@@ -3678,6 +3688,7 @@ pub async fn pi_start_inner(
         m.last_activity = std::time::Instant::now();
         // Fresh flag for this session — old reader threads keep their own Arc
         m.terminated_emitted = terminated_emitted.clone();
+        m.termination_expected = termination_expected.clone();
         pending_responses = m.pending_responses.clone();
     } else {
         pending_responses = Arc::new(std::sync::Mutex::new(HashMap::new()));
@@ -3740,7 +3751,10 @@ pub async fn pi_start_inner(
     // Spawn stdout reader thread — this is the SOLE emitter of `pi_terminated`.
     let app_handle = app.clone();
     let terminated_guard = terminated_emitted.clone();
+    let termination_expected_reader = termination_expected.clone();
     let sid_clone = sid.clone();
+    let project_dir_stdout = project_dir.clone();
+    let extension_safe_mode_at_start = extension_safe_mode;
     let pending_for_reader = pending_responses.clone();
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
@@ -3932,6 +3946,17 @@ pub async fn pi_start_inner(
             "Pi stdout reader ended (pid: {}, session: {}), processed {} lines",
             pid, sid_clone, line_count
         );
+        if pi_extension_recovery::should_enable_pi_extension_safe_mode_on_exit(
+            use_acp,
+            termination_expected_reader.load(Ordering::Acquire),
+            extension_safe_mode_at_start,
+        ) && enable_pi_extension_safe_mode(&project_dir_stdout)
+        {
+            warn!(
+                "Pi exited unexpectedly for '{}'; the next automatic restart will load only Screenpipe-managed extensions",
+                project_dir_stdout
+            );
+        }
         if !ready_signalled {
             if let Ok(mut startup) = startup_result_reader.lock() {
                 *startup = Some(Err(
