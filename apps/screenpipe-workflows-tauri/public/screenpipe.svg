@@ -1,0 +1,21 @@
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 304.47873665993166 83.20000000000005" width="913.436209979795" height="249.60000000000014">
+  <!-- svg-source:excalidraw -->
+  
+  <defs>
+    <style class="style-fonts">
+      @font-face {
+        font-family: "Virgil";
+        src: url("https://excalidraw.com/Virgil.woff2");
+      }
+      @font-face {
+        font-family: "Cascadia";
+        src: url("https://excalidraw.com/Cascadia.woff2");
+      }
+      @font-face {
+        font-family: "Assistant";
+        src: url("https://app.excalidraw.com//dist/excalidraw-assets/Assistant-Regular.woff2");
+      }
+    </style>
+    
+  </defs>
+  <g transform="translate(10 10) rotate(0 107.994140625 31.600000000000023)"><text x="107.994140625" y="50.85624999999997" font-family="Cascadia, Segoe UI Emoji" font-size="52.666666666666636px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">screen </text></g><g transform="translate(214.8820382425074 25.275577602132216) rotate(0 10.546875 21.600000000000023)"><text x="10.546875" y="34.762499999999996" font-family="Cascadia, Segoe UI Emoji" font-size="36px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">|</text></g><g transform="translate(258.47873665993166 24.111197740844545) rotate(0 18 21.600000000000023)"><text x="18" y="34.762499999999996" font-family="Cascadia, Segoe UI Emoji" font-size="36px" fill="#1e1e1e" text-anchor="middle" style="white-space: pre;" direction="ltr" dominant-baseline="alphabetic">⭐️</text></g></svg>

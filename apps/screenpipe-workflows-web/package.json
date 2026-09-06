@@ -1,0 +1,23 @@
+{
+  "name": "screenpipe-workflows-web",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 1431",
+    "build": "next build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@screenpipe/workflows-ui": "file:../../packages/workflows-ui",
+    "lucide-react": "^0.414.0",
+    "next": "15.5.21",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.37",
+    "@types/react": "^18.3.28",
+    "@types/react-dom": "^18.3.7",
+    "typescript": "^5.9.3"
+  },
+  "packageManager": "bun@1.3.10"
+}

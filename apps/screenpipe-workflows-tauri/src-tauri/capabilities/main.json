@@ -1,0 +1,617 @@
+{
+  "identifier": "migrated",
+  "description": "permissions that were migrated from v1",
+  "local": true,
+  "windows": [
+    "*"
+  ],
+  "remote": {
+    "urls": [
+      "http://localhost:*",
+      "https://api.openai.com/*",
+      "https://*.openai.com/*",
+      "https://api.screenpipe.com/*",
+      "https://*.anthropic.com/*",
+      "https://*.ollama.ai/*",
+      "https://*"
+    ]
+  },
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:default",
+    "core:app:allow-version",
+    "process:allow-restart",
+    "process:allow-exit",
+    "notification:default",
+    "core:resources:default",
+    "core:menu:default",
+    "core:tray:default",
+    "shell:default",
+    {
+      "identifier": "shell:allow-open",
+      "allow": [
+        {
+          "url": "^https?://.*"
+        },
+        {
+          "url": "^mailto:.*"
+        },
+        {
+          "url": "^tel:.*"
+        },
+        {
+          "url": "^x-apple-reminderkit://.*"
+        }
+      ]
+    },
+    "store:default",
+    "fs:allow-watch",
+    "fs:allow-open",
+    "fs:default",
+    "fs:allow-read-file",
+    "fs:allow-read-dir",
+    "fs:allow-read",
+    "fs:allow-write-file",
+    "fs:read-dirs",
+    "fs:allow-copy-file",
+    "fs:allow-exists",
+    "fs:allow-read-text-file",
+    "fs:allow-create",
+    "fs:allow-mkdir",
+    "fs:allow-remove",
+    "fs:allow-rename",
+    "global-shortcut:allow-is-registered",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister",
+    "global-shortcut:allow-unregister-all",
+    "global-shortcut:default",
+    "sentry:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "^https?://.*"
+        },
+        {
+          "url": "^mailto:.*"
+        },
+        {
+          "url": "^tel:.*"
+        },
+        {
+          "url": "^x-apple-reminderkit://.*"
+        },
+        {
+          "url": "^obsidian://.*"
+        },
+        {
+          "url": "^claude://claude\\.ai/new\\?q=.*$"
+        },
+        {
+          "url": "^cursor://anysphere\\.cursor-deeplink/prompt\\?text=.*$"
+        },
+        {
+          "url": "^codex://threads/new\\?prompt=.*$"
+        },
+        {
+          "url": "^codex://automations(?:\\?.*)?$"
+        }
+      ]
+    },
+    "core:window:default",
+    "core:window:allow-get-all-windows",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "core:window:allow-start-dragging",
+    "core:window:allow-show",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        {
+          "path": "$XDG_DATA_HOME",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$XDG_DATA_HOME/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$LOCALAPPDATA/*",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$LOCALAPPDATA/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$APPLOCALDATA/*",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$APPLOCALDATA/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$APPDATA/*",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$APPDATA/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$APPCONFIG/*",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$RESOURCE/*",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$RESOURCE/.screenpipe/*",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/*",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$DOWNLOAD",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$DOWNLOAD/*",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.screenpipe/*",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$APP/*",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.screenpipe/data/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.screenpipe/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.screenpipe/.e2e/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.screenpipe/.e2e/external-chat-home/.codex",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.screenpipe/.e2e/external-chat-home/.codex/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.screenpipe/.e2e/external-chat-home/.claude",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.screenpipe/.e2e/external-chat-home/.claude/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$RESOURCE/.screenpipe/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.cursor",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.cursor/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.codex",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.codex/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.claude",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.claude/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.openclaw",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.openclaw/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.hermes",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.hermes/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.codeium",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.codeium/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/Library/Application Support/Claude",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/Library/Application Support/Claude/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$APPDATA/Claude",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$APPDATA/Claude/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/AppData/Roaming/Claude",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/AppData/Roaming/Claude/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$APPDATA/Obsidian",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$APPDATA/Obsidian/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/AppData/Roaming/Obsidian",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/AppData/Roaming/Obsidian/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/Library/Application Support/obsidian",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/Library/Application Support/obsidian/**",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.config/obsidian",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$HOME/.config/obsidian/**",
+          "requireLiteralLeadingDot": false
+        }
+      ]
+    },
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "exec-sh",
+          "cmd": "sh",
+          "args": [
+            "-c",
+            {
+              "validator": "\\S[\\s\\S]*"
+            }
+          ],
+          "sidecar": false
+        }
+      ]
+    },
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "screenpipe",
+          "cmd": "screenpipe",
+          "args": true,
+          "sidecar": true
+        }
+      ]
+    },
+    "cli:default",
+    "shell:allow-spawn",
+    "permission-flow:default",
+    "dialog:default",
+    "updater:default",
+    "os:default",
+    "os:allow-arch",
+    "os:allow-hostname",
+    "os:allow-os-type",
+    "core:path:default",
+    "process:default",
+    "core:webview:allow-internal-toggle-devtools",
+    "core:webview:allow-create-webview-window",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "screenpipe-pipe-list",
+          "cmd": "screenpipe",
+          "args": [
+            "pipe",
+            "list",
+            "--output",
+            "json"
+          ],
+          "sidecar": true
+        }
+      ]
+    },
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "screenpipe-pipe-download",
+          "cmd": "screenpipe",
+          "args": [
+            "pipe",
+            "download",
+            {
+              "validator": "\\S+"
+            },
+            "--output",
+            "json"
+          ],
+          "sidecar": true
+        }
+      ]
+    },
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "screenpipe-pipe-enable",
+          "cmd": "screenpipe",
+          "args": [
+            "pipe",
+            "enable",
+            {
+              "validator": "\\S+"
+            }
+          ],
+          "sidecar": true
+        }
+      ]
+    },
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "screenpipe-pipe-disable",
+          "cmd": "screenpipe",
+          "args": [
+            "pipe",
+            "disable",
+            {
+              "validator": "\\S+"
+            }
+          ],
+          "sidecar": true
+        }
+      ]
+    },
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "screenpipe-pipe-update",
+          "cmd": "screenpipe",
+          "args": [
+            "pipe",
+            "update",
+            {
+              "validator": "\\S+"
+            },
+            {
+              "validator": "\\{.*\\}"
+            }
+          ],
+          "sidecar": true
+        }
+      ]
+    },
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "screenpipe-pipe-delete",
+          "cmd": "screenpipe",
+          "args": [
+            "pipe",
+            "delete",
+            {
+              "validator": "\\S+"
+            },
+            "--yes"
+          ],
+          "sidecar": true
+        }
+      ]
+    },
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "screenpipe-pipe-info",
+          "cmd": "screenpipe",
+          "args": [
+            "pipe",
+            "info",
+            {
+              "validator": "\\S+"
+            },
+            "--output",
+            "json"
+          ],
+          "sidecar": true
+        }
+      ]
+    },
+    {
+      "identifier": "http:default",
+      "allow": [
+        {
+          "url": "http://**/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        {
+          "url": "http://localhost:*/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        {
+          "url": "http://127.0.0.1:*/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        {
+          "url": "https://**/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        {
+          "url": "http://**:*/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        },
+        {
+          "url": "https://**:*/*",
+          "methods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "HEAD",
+            "OPTIONS"
+          ]
+        }
+      ]
+    },
+    "deep-link:default",
+    "fs:allow-write-text-file",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        {
+          "path": "$APPLOCALDATA"
+        },
+        {
+          "path": "$APPLOCALDATA/**"
+        },
+        {
+          "path": "$TEMP"
+        },
+        {
+          "path": "$TEMP/*"
+        },
+        {
+          "path": "$TEMP/**"
+        }
+      ]
+    },
+    "opener:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "open",
+          "cmd": "open",
+          "args": true,
+          "sidecar": false
+        }
+      ]
+    },
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "cmd",
+          "cmd": "cmd",
+          "args": true,
+          "sidecar": false
+        }
+      ]
+    }
+  ]
+}

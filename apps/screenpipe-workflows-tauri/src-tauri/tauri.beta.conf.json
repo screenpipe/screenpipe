@@ -1,0 +1,129 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Screenpipe Workflows - Beta",
+  "identifier": "screenpi.pe.workflows.beta",
+  "build": {
+    "beforeDevCommand": "bun run dev",
+    "beforeBuildCommand": "bun run build",
+    "frontendDist": "../out",
+    "devUrl": "http://localhost:1430"
+  },
+  "bundle": {
+    "createUpdaterArtifacts": true,
+    "active": true,
+    "publisher": "Mediar, Inc.",
+    "category": "DeveloperTool",
+    "shortDescription": "Map how your repeated work actually happens",
+    "longDescription": "Screenpipe Workflows reconstructs repeated work from private desktop history so you can inspect its stages, time, waiting, bottlenecks, and supporting evidence.",
+    "copyright": "",
+    "targets": [
+      "app",
+      "dmg",
+      "deb",
+      "appimage",
+      "nsis"
+    ],
+    "externalBin": [
+      "bun"
+    ],
+    "icon": [
+      "icons/beta/32x32.png",
+      "icons/beta/128x128.png",
+      "icons/beta/128x128@2x.png",
+      "icons/beta/256x256.png",
+      "icons/beta/512x512.png",
+      "icons/beta/1024x1024.png",
+      "icons/beta/icon.icns",
+      "icons/beta/icon.ico",
+      "icons/screenpipe-logo-tray-failed.png",
+      "icons/screenpipe-logo-tray-beta.png"
+    ],
+    "resources": [
+      "assets/*",
+      "PermissionFlow_PermissionFlow.bundle"
+    ],
+    "macOS": {
+      "entitlements": "entitlements.plist",
+      "hardenedRuntime": true
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": false,
+      "dialog": false,
+      "endpoints": [],
+      "pubkey": ""
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "screenpipe-workflows-beta"
+        ]
+      },
+      "mobile": [
+        {
+          "host": "screenpipe.com",
+          "pathPrefix": [
+            "/auth"
+          ]
+        },
+        {
+          "host": "screenpipe.com",
+          "pathPrefix": [
+            "/stripe-connect"
+          ]
+        },
+        {
+          "host": "screenpipe.com",
+          "pathPrefix": [
+            "/purchase-successful"
+          ]
+        },
+        {
+          "host": "screenpipe.com",
+          "pathPrefix": [
+            "/settings"
+          ]
+        },
+        {
+          "host": "screenpipe.com",
+          "pathPrefix": [
+            "/changelog"
+          ]
+        },
+        {
+          "host": "screenpipe.com",
+          "pathPrefix": [
+            "/onboarding"
+          ]
+        },
+        {
+          "host": "screenpipe.com",
+          "pathPrefix": [
+            "/status"
+          ]
+        }
+      ]
+    }
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "trayIcon": {
+      "id": "screenpipe_workflows_main",
+      "iconPath": "assets/screenpipe-logo-tray-white.png",
+      "iconAsTemplate": true,
+      "menuOnLeftClick": true
+    },
+    "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPDATA/**",
+          "$HOME/.screenpipe/**"
+        ]
+      },
+      "csp": null
+    },
+    "macOSPrivateApi": true
+  }
+}

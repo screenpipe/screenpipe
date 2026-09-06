@@ -1,0 +1,31 @@
+{
+    "bundle": {
+        "publisher": "Mediar, Inc.",
+        "windows": {
+            "nsis": {
+                "headerImage": "assets/nsis-header.bmp",
+                "sidebarImage": "assets/nsis-sidebar.bmp",
+                "installerIcon": "icons/icon.ico",
+                "installerHooks": "windows/hooks.nsh",
+                "compression": "zlib"
+            }
+        },
+        "externalBin": [
+            "bun"
+        ],
+        "targets": [
+            "nsis"
+        ],
+        "resources": {
+            "ffmpeg\\bin\\ffmpeg.exe": "./",
+            "ffmpeg\\bin\\ffprobe.exe": "./",
+            "ffmpeg\\bin\\*.dll": "./",
+            "ffmpeg\\lib\\*": "./",
+            "onnxruntime*\\lib\\*.dll": "./",
+            "wer\\*.dll": "./",
+            "openblas\\bin\\*.dll": "./",
+            "vcredist\\*.dll": "./",
+            "assets/*": "./assets/"
+        }
+    }
+}
