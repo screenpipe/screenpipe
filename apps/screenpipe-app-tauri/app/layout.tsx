@@ -103,6 +103,16 @@ export default function RootLayout({
 
     const uninstallBrowserLogBridge = installBrowserLogBridge();
 
+    // Packaged builds should not expose WKWebView's browser context menu.
+    // Listen during bubbling so app-owned context-menu handlers still run;
+    // preventing the default here only suppresses the native webview menu.
+    const preventNativeContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+    };
+    if (process.env.NODE_ENV === "production") {
+      document.addEventListener("contextmenu", preventNativeContextMenu);
+    }
+
     // A native foreground watchdog requires a heartbeat from WebKit's main
     // event loop. When paint submission wedges in the GPU-process IPC path,
     // the page cannot run this callback; the shell then rebuilds the stale UI
@@ -234,6 +244,7 @@ export default function RootLayout({
 
     return () => {
       uninstallBrowserLogBridge();
+      document.removeEventListener("contextmenu", preventNativeContextMenu);
       window.removeEventListener("focus", handleWindowFocus);
       window.removeEventListener("mousedown", handlePointerRecovery, true);
       window.removeEventListener("keydown", markKeyActivity, true);
