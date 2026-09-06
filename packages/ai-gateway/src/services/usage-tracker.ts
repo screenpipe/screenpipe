@@ -131,6 +131,8 @@ const MODEL_WEIGHTS: Record<string, number> = {
   // Auto — smart routing, free
   'auto': 0,
   // OpenAI API
+  // Same Standard token prices as Fable 5; cash caps also track actual usage.
+  'gpt-6-astra': 10,
   'gpt-5.6': 6,
   'gpt-5.6-sol': 6,
   'gpt-5.6-terra': 3,
