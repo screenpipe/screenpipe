@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Mirror crates/screenpipe-core/assets/skills/ → .claude/skills/
         run: |
@@ -66,7 +66,7 @@ jobs:
         # Once secrets.PAT is rotated the PR opens for real; until then a human
         # can run the rsync above by hand. Tracked in #4676.
         continue-on-error: true
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v8
         with:
           # GITHUB_TOKEN can't open PRs here — the enterprise policy disables
           # "Allow GitHub Actions to create and approve pull requests" (the API

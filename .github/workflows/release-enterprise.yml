@@ -46,7 +46,7 @@ jobs:
       release_sha: ${{ steps.resolve.outputs.sha }}
       release_version: ${{ steps.resolve.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Resolve and validate release revision
@@ -93,7 +93,7 @@ jobs:
     runs-on: ${{ github.event.inputs.force_github_runners == 'true' && 'windows-2022' || 'screenpipe-release-windows' }}
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve-release.outputs.release_sha }}
           # The persistent Windows runner keeps a regular node_modules tree on
@@ -107,7 +107,7 @@ jobs:
 
       - name: Checkout persistent Windows cache action
         if: runner.environment == 'self-hosted'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-workflow
@@ -152,7 +152,7 @@ jobs:
 
       - name: Setup Node
         if: runner.environment == 'github-hosted'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
 
@@ -206,7 +206,7 @@ jobs:
 
       - name: Cache Pre Build
         if: runner.environment == 'github-hosted'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             apps/screenpipe-app-tauri/src-tauri/ffmpeg
@@ -362,7 +362,7 @@ jobs:
           }
 
       - name: Build (enterprise, Windows x64)
-        uses: tauri-apps/tauri-action@v0.5.17
+        uses: tauri-apps/tauri-action@v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CI: true
@@ -495,7 +495,7 @@ jobs:
             apps/screenpipe-app-tauri/scripts/intunewin/out/**/*.intunewin
 
       - name: Upload enterprise NSIS installer (artifact)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: enterprise-windows-x64
           path: |
@@ -507,13 +507,13 @@ jobs:
     runs-on: ${{ github.event.inputs.force_github_runners == 'true' && 'ubuntu-24.04' || 'screenpipe-release-linux' }}
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve-release.outputs.release_sha }}
 
       - name: Checkout persistent Linux cache action
         if: runner.environment == 'self-hosted'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-workflow
@@ -534,7 +534,7 @@ jobs:
 
       - name: Setup Node
         if: runner.environment == 'github-hosted'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
 
@@ -561,7 +561,7 @@ jobs:
 
       - name: Cache Pre Build
         if: runner.environment == 'github-hosted'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             apps/screenpipe-app-tauri/src-tauri/ffmpeg
@@ -770,7 +770,7 @@ jobs:
             "${BUNDLE_DIR}"/deb/*.deb
 
       - name: Upload enterprise Linux artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: enterprise-linux-x64
           path: |
@@ -796,7 +796,7 @@ jobs:
     runs-on: ${{ github.event.inputs.force_github_runners == 'true' && matrix.platform || 'screenpipe-release-macos' }}
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve-release.outputs.release_sha }}
 
@@ -812,7 +812,7 @@ jobs:
           bun-version: "1.3.10"
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
 
@@ -837,7 +837,7 @@ jobs:
 
       - name: Cache Pre Build
         if: runner.environment == 'github-hosted'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             apps/screenpipe-app-tauri/node_modules
@@ -1422,7 +1422,7 @@ jobs:
             "${BUNDLE_DIR}"/macos/*.app.tar.gz.sig
 
       - name: Upload enterprise macOS artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: enterprise-macos-${{ matrix.package_arch }}
           path: |

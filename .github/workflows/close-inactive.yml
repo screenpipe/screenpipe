@@ -21,7 +21,7 @@ jobs:
 
     steps:
       - name: Close inactive issues and pull requests
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const owner = context.repo.owner;

@@ -41,7 +41,7 @@ jobs:
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 2
       - id: check
@@ -84,7 +84,7 @@ jobs:
         target: [x86_64-apple-darwin, aarch64-apple-darwin]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -107,7 +107,7 @@ jobs:
           write-secret-access-key: ${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}
 
       - name: Cache Homebrew packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/Library/Caches/Homebrew
@@ -123,7 +123,7 @@ jobs:
           brew install ffmpeg pkg-config
           brew link --overwrite pkg-config
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/bin/
@@ -258,7 +258,7 @@ jobs:
           echo "MAC_SHA256_${{ matrix.target }}=$(shasum -a 256 screenpipe-*.tar.gz | cut -d ' ' -f 1)" >> $GITHUB_ENV
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: screenpipe-macos-${{ matrix.target }}
           path: screenpipe-*.tar.gz
@@ -269,7 +269,7 @@ jobs:
     runs-on: windows-2022
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust
         run: |
@@ -305,7 +305,7 @@ jobs:
           write-access-key-id: ${{ secrets.SCCACHE_R2_WRITE_ACCESS_KEY_ID }}
           write-secret-access-key: ${{ secrets.SCCACHE_R2_WRITE_SECRET_ACCESS_KEY }}
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index/
@@ -582,7 +582,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "ONNX Runtime failed to initialize natively against the shipped DirectML DLL (exit $LASTEXITCODE)" }
 
       - name: Upload smoke probes for the SDE job
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ort-smoke-windows
           path: smoke-probes/
@@ -594,7 +594,7 @@ jobs:
           "WIN_SHA256=$($hash.Hash)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: screenpipe-windows
           path: screenpipe-*.zip
@@ -621,12 +621,12 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Download Windows package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: screenpipe-windows
 
       - name: Download smoke probes
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ort-smoke-windows
           path: smoke-probes
@@ -753,7 +753,7 @@ jobs:
         target: [x86_64-unknown-linux-gnu]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -815,7 +815,7 @@ jobs:
           sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.a /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.a
           echo "OPENBLAS_PATH=/usr/lib/x86_64-linux-gnu/openblas" >> $GITHUB_ENV
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/bin/
@@ -882,7 +882,7 @@ jobs:
           echo "LINUX_SHA256_${{ matrix.target }}=$(sha256sum screenpipe-*.tar.gz | cut -d ' ' -f 1)" >> $GITHUB_ENV
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: screenpipe-linux-${{ matrix.target }}
           path: screenpipe-*.tar.gz
@@ -897,10 +897,10 @@ jobs:
     needs: [build-macos, build-windows, build-linux, smoke-windows]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           # npm trusted publishing requires Node >=22.14 and npm >=11.5.1.
           node-version: "24"
@@ -922,7 +922,7 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       - name: Download Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -1081,7 +1081,7 @@ jobs:
     needs: [build-macos, build-windows, build-linux, smoke-windows]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set version
         run: |
@@ -1099,7 +1099,7 @@ jobs:
           echo "Set version to: $VERSION"
 
       - name: Download Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 

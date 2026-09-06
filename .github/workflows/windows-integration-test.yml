@@ -33,7 +33,7 @@ jobs:
     outputs:
       cli: ${{ steps.filter.outputs.cli }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 20
       - name: Detect CLI runtime changes
@@ -65,10 +65,10 @@ jobs:
     # A hung recording session otherwise burns the 6-hour GitHub default.
     timeout-minutes: 90
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Setup Node
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v7
       with:
         node-version: 22
 
@@ -390,7 +390,7 @@ jobs:
         Get-Content "screenpipe_error.log"
 
     - name: Upload logs
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: screenpipe-logs
@@ -400,7 +400,7 @@ jobs:
           screenpipe_error.log
 
     - name: Upload data
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: screenpipe-data
