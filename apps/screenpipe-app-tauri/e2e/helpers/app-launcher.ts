@@ -322,7 +322,7 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
   if (backgroundAiToolsEnabled) {
     // Cross-platform fake agent homes. The app's e2e-only home override keeps
     // the native background writer away from real ~/.claude.json, ~/.codex,
-    // ~/.cursor, ~/.gemini, ~/.grok, and ~/.runner.
+    // ~/.cursor, ~/.gemini, and ~/.runner.
     mkdirSync(E2E_AI_TOOLS_HOME, { recursive: true });
     writeFileSync(resolve(E2E_AI_TOOLS_HOME, '.claude.json'), '{}\n');
     mkdirSync(resolve(E2E_AI_TOOLS_HOME, '.codex'), { recursive: true });
@@ -344,16 +344,6 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
       JSON.stringify({
         mcpServers: { existing: { command: 'gemini-existing' } },
         ui: { theme: 'GitHub' },
-      }),
-    );
-    mkdirSync(resolve(E2E_AI_TOOLS_HOME, '.grok'), { recursive: true });
-    writeFileSync(
-      resolve(E2E_AI_TOOLS_HOME, '.grok', 'user-settings.json'),
-      JSON.stringify({
-        defaultModel: 'user-model',
-        mcp: {
-          servers: [{ id: 'existing', enabled: true, transport: 'http', url: 'https://example.com/mcp' }],
-        },
       }),
     );
     mkdirSync(resolve(E2E_AI_TOOLS_HOME, '.runner'), { recursive: true });

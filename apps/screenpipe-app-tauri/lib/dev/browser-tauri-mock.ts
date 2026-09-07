@@ -742,6 +742,10 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
           birthtime: null,
           readonly: false,
         };
+      case "bun_check":
+        return { available: true, path: "/mock/screenpipe/bun", version: "browser-mock" };
+      case "get_active_data_dir":
+        return "/mock/screenpipe/data";
       case "get_local_api_config":
         return {
           key: options.mode === "live" ? options.apiKey || null : null,

@@ -77,7 +77,6 @@ vi.mock("@/lib/hooks/use-hardcoded-tiles", () => ({
   getClaudeConfigPath: vi.fn(async () => "/Users/test/Library/Application Support/Claude/claude_desktop_config.json"),
   getCodexConfigPath: vi.fn(async () => "/Users/test/.codex/config.toml"),
   getCursorMcpConfigPath: vi.fn(async () => "/Users/test/.cursor/mcp.json"),
-  getGrokConfigPath: vi.fn(async () => "/Users/test/.grok/user-settings.json"),
 }));
 
 vi.mock("@/lib/external-agent-skills", () => skillsMock);
@@ -91,9 +90,6 @@ import {
   uninstallRunnerMcp,
   installGeminiMcp,
   uninstallGeminiMcp,
-  installGrokMcp,
-  uninstallGrokMcp,
-  isToolConfigHealthy,
   detectAiTools,
   connectAiTool,
   connectAiToolTargets,
@@ -108,7 +104,6 @@ const CLAUDE_CODE = "/Users/test/.claude.json";
 const HERMES = "/Users/test/.hermes/config.yaml";
 const RUNNER = "/Users/test/.runner/mcp.json";
 const GEMINI = "/Users/test/.gemini/settings.json";
-const GROK = "/Users/test/.grok/user-settings.json";
 
 const backupsOf = (path: string) =>
   Array.from(fsMock.files.keys()).filter((p) => p.startsWith(`${path}.screenpipe-backup-`));
@@ -122,81 +117,6 @@ beforeEach(() => {
   skillsMock.installExternalAgentSkills.mockClear();
   skillsMock.removeExternalAgentSkills.mockClear();
   tauriMock.setAiToolAutoConnectOptOut.mockClear();
-});
-
-describe("Grok default connection", () => {
-  it("detects Grok only when its own directory exists", async () => {
-    expect(await detectAiTools()).not.toContain("grok");
-    fsMock.files.set("/Users/test/.grok", "");
-    expect(await detectAiTools()).toContain("grok");
-  });
-
-  it("connects through the shared flow and preserves Grok settings and other servers", async () => {
-    const other = { id: "other", enabled: true, transport: "http", url: "https://example.com/mcp" };
-    const seeded = JSON.stringify({
-      apiKey: "user-key-fixture", defaultModel: "user-model",
-      mcp: { customSetting: true, servers: [other, { id: "Screenpipe", enabled: false }] },
-    });
-    fsMock.files.set(GROK, seeded);
-    await connectAiTool("grok");
-    expect(tauriMock.setAiToolAutoConnectOptOut).toHaveBeenCalledWith("grok", false);
-    expect(skillsMock.installExternalAgentSkills).not.toHaveBeenCalled();
-    expect(fsMock.files.get(backupsOf(GROK)[0])).toBe(seeded);
-    await connectAiTool("grok");
-    const config = JSON.parse(fsMock.files.get(GROK)!);
-    expect(config.apiKey).toBe("user-key-fixture");
-    expect(config.defaultModel).toBe("user-model");
-    expect(config.mcp.customSetting).toBe(true);
-    expect(config.mcp.servers).toEqual([other, {
-      id: "screenpipe", label: "screenpipe", enabled: true, transport: "stdio",
-      command: "/app/bun", args: ["x", "screenpipe-mcp@latest"],
-      env: {
-        SCREENPIPE_LOCAL_API_KEY: "sp-test",
-        SCREENPIPE_MCP_CLIENT: "grok",
-      },
-    }]);
-    expect(tmpsOf(GROK)).toHaveLength(0);
-    await disconnectAiTool("grok");
-    expect(tauriMock.setAiToolAutoConnectOptOut).toHaveBeenCalledWith("grok", true);
-    expect(skillsMock.removeExternalAgentSkills).not.toHaveBeenCalled();
-    const removed = fsMock.files.get(GROK);
-    expect(JSON.parse(removed!).mcp.servers).toEqual([other]);
-    await disconnectAiTool("grok");
-    expect(fsMock.files.get(GROK)).toBe(removed);
-  });
-
-  it("creates missing settings and leaves a missing config alone on disconnect", async () => {
-    await uninstallGrokMcp();
-    expect(fsMock.files.has(GROK)).toBe(false);
-    expect(await isToolConfigHealthy("grok")).toBe(true);
-    await installGrokMcp();
-    expect(JSON.parse(fsMock.files.get(GROK)!).mcp.servers).toHaveLength(1);
-  });
-
-  it.each(["{ broken", "[]", "null", '{"mcp":null}', '{"mcp":[]}', '{"mcp":{"servers":{}}}'])(
-    "refuses malformed settings without overwriting them: %s", async (invalid) => {
-      fsMock.files.set(GROK, invalid);
-      expect(await isToolConfigHealthy("grok")).toBe(false);
-      await expect(installGrokMcp()).rejects.toThrow();
-      await expect(disconnectAiTool("grok")).rejects.toThrow();
-      expect(tauriMock.setAiToolAutoConnectOptOut).toHaveBeenCalledWith("grok", true);
-      expect(fsMock.files.get(GROK)).toBe(invalid);
-      expect(backupsOf(GROK)).toHaveLength(0);
-    }
-  );
-
-  it("does not treat unreadable Grok settings as a fresh install", async () => {
-    fsMock.unreadable.add(GROK);
-    await expect(installGrokMcp()).rejects.toThrow(/could not read/);
-    expect(fsMock.files.has(GROK)).toBe(false);
-  });
-
-  it("shows a readable schema error with a usable config file path", () => {
-    expect(friendlyToolError(new Error(`${GROK} mcp.servers is not an array`))).toMatchObject({
-      message: "config has an invalid MCP section",
-      path: GROK,
-    });
-  });
 });
 
 describe("safe config IO", () => {

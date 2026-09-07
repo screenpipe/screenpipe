@@ -65,7 +65,6 @@ import { areExternalAgentSkillsInstalled } from "@/lib/external-agent-skills";
 import {
   buildMcpConfig,
   buildCodexMcpToml,
-  buildGrokMcpJson,
   connectAiTool,
   connectAiToolTargets,
   disconnectAiTool,
@@ -78,6 +77,8 @@ import {
   type FriendlyToolError,
 } from "@/lib/ai-tools-mcp";
 import { AiToolsCard } from "./ai-tools-card";
+import { GrokBotPanel } from "./grokbot-panel";
+import { isGrokBotDetected } from "@/lib/grokbot-connection";
 import { CursorLogo } from "./tool-logos";
 
 // ---------------------------------------------------------------------------
@@ -244,6 +245,8 @@ async function detectInstalledConnectionIds(): Promise<Set<string>> {
       /* best-effort ranking hint only */
     }
   };
+
+  await addIf("grokbot", isGrokBotDetected());
 
   // ~/.claude is also where Claude Desktop receives shared skills, so it does
   // not prove Claude Code exists. Claude Code itself owns ~/.claude.json.
@@ -431,6 +434,50 @@ async function detectInstalledConnectionIds(): Promise<Set<string>> {
   return detected;
 }
 
+// Grok CLI stores MCP servers as an array under `mcp.servers[]` in
+// ~/.grok/user-settings.json, each entry tagged with `id`/`label`/`enabled`
+// (see superagent-ai/grok-cli src/utils/settings.ts McpServerConfig).
+function buildGrokMcpServer(config: McpCommand): Record<string, unknown> {
+  const server: Record<string, unknown> = {
+    id: "screenpipe",
+    label: "screenpipe",
+    enabled: true,
+    transport: "stdio",
+    command: config.command,
+    args: config.args,
+  };
+  if (config.env && Object.keys(config.env).length > 0) server.env = config.env;
+  return server;
+}
+
+function buildGrokMcpJson(config: McpCommand): string {
+  return JSON.stringify({ mcp: { servers: [buildGrokMcpServer(config)] } }, null, 2);
+}
+
+async function installGrokMcp(): Promise<void> {
+  const configPath = await getGrokConfigPath();
+  let config: Record<string, unknown> = {};
+  try { config = JSON.parse(await readTextFile(configPath)); } catch { /* fresh */ }
+  const mcp = (config.mcp && typeof config.mcp === "object" ? config.mcp : {}) as Record<string, unknown>;
+  const servers = (Array.isArray(mcp.servers) ? mcp.servers : []) as Record<string, unknown>[];
+  const next = servers.filter((s) => s?.id !== "screenpipe");
+  next.push(buildGrokMcpServer(await buildMcpConfig({ client: "grok" })));
+  mcp.servers = next;
+  config.mcp = mcp;
+  await mkdir(await dirname(configPath), { recursive: true });
+  await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
+}
+
+async function uninstallGrokMcp(): Promise<void> {
+  const configPath = await getGrokConfigPath();
+  let config: Record<string, unknown> = {};
+  try { config = JSON.parse(await readTextFile(configPath)); } catch { return; }
+  const mcp = (config.mcp && typeof config.mcp === "object" ? config.mcp : null) as Record<string, unknown> | null;
+  if (!mcp || !Array.isArray(mcp.servers)) return;
+  mcp.servers = (mcp.servers as Record<string, unknown>[]).filter((s) => s?.id !== "screenpipe");
+  await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
+}
+
 // ---------------------------------------------------------------------------
 // Grid tile icons
 // ---------------------------------------------------------------------------
@@ -462,6 +509,7 @@ const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
     cursor: <CursorLogo className="w-5 h-5 rounded" />,
     codex: <img src="/images/codex.svg" alt="Codex" className="w-5 h-5 rounded" />,
     grok: <GrokLogo className="w-5 h-5 rounded" />,
+    grokbot: <GrokLogo className="w-5 h-5 rounded" />,
     "claude-code": <Terminal className="h-5 w-5" />,
     warp: <img src="/images/warp.png" alt="Warp" className="w-5 h-5 rounded" />,
     chatgpt: <img src="/images/openai.png" alt="ChatGPT" className="w-5 h-5 rounded" />,
@@ -1378,7 +1426,7 @@ function GrokPanel({ onConnected, onDisconnected }: { onConnected?: () => void; 
     try {
       setState("installing");
       setConnectError(null);
-      await connectAiTool("grok");
+      await installGrokMcp();
       setState("installed");
       onConnected?.();
     } catch (error) {
@@ -1389,19 +1437,14 @@ function GrokPanel({ onConnected, onDisconnected }: { onConnected?: () => void; 
   };
 
   const handleDisconnect = async () => {
-    try {
-      setConnectError(null);
-      await disconnectAiTool("grok");
-      setState("idle");
-      onDisconnected?.();
-    } catch (error) {
-      setConnectError(friendlyToolError(error));
-    }
+    try { await uninstallGrokMcp(); } catch (e) { console.warn("grok config remove failed:", e); }
+    setState("idle");
+    onDisconnected?.();
   };
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-muted-foreground">Let Grok search your screen and audio history.</p>
+      <p className="text-xs text-muted-foreground">Let Grok CLI search your screen and audio history.</p>
       <div className="flex flex-wrap gap-2">
         {state === "installed" ? (
           <Button onClick={handleDisconnect} variant="outline" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
@@ -3965,7 +4008,8 @@ export function ConnectionsSection({
       { id: "claude", name: "Claude", icon: "claude", connected: claudeInstalled, detected: detectedConnectionIds.has("claude") || detectedConnectionIds.has("claude-code") },
       { id: "cursor", name: "Cursor", icon: "cursor", connected: cursorInstalled, detected: detectedConnectionIds.has("cursor") },
       { id: "codex", name: "Codex", icon: "codex", connected: codexInstalled, detected: detectedConnectionIds.has("codex") },
-      { id: "grok", name: "Grok", icon: "grok", connected: grokInstalled, detected: detectedConnectionIds.has("grok") },
+      { id: "grokbot", name: "Grok Bot", icon: "grokbot", connected: false, detected: detectedConnectionIds.has("grokbot") },
+      { id: "grok", name: "Grok CLI", icon: "grok", connected: grokInstalled, detected: detectedConnectionIds.has("grok") },
       { id: "warp", name: "Warp", icon: "warp", connected: false, detected: detectedConnectionIds.has("warp") },
       { id: "chatgpt", name: "ChatGPT", icon: "chatgpt", connected: chatgptConnected, detected: detectedConnectionIds.has("chatgpt") },
       ...(os === "macos" ? [
@@ -4196,6 +4240,7 @@ export function ConnectionsSection({
         onConnected={() => setCodexInstalled(true)}
         onDisconnected={() => setCodexInstalled(false)}
       />;
+      case "grokbot": return <GrokBotPanel />;
       case "grok": return <GrokPanel
         onConnected={() => setGrokInstalled(true)}
         onDisconnected={() => setGrokInstalled(false)}
@@ -4423,6 +4468,8 @@ export function ConnectionsSection({
               onClick={() => setSelected(selected === "pi-extensions" ? null : "pi-extensions")}
             />
             <AiToolsCard
+              grokBotDetected={detectedConnectionIds.has("grokbot")}
+              onSetupGrokBot={() => setSelected("grokbot")}
               onChanged={() => {
                 refreshStatus();
                 notifyConnectionsUpdated();

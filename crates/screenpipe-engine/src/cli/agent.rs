@@ -34,7 +34,7 @@ pub enum AgentCommand {
     Setup {
         /// Which agent to wire up. Omit when using --all.
         #[arg(
-            value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "gemini", "grok", "runner", "windsurf"],
+            value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "gemini", "runner", "windsurf"],
             required_unless_present = "all",
             conflicts_with = "all"
         )]
@@ -54,7 +54,7 @@ pub enum AgentCommand {
     /// agent's own config or other skills.
     Remove {
         /// Which agent to unwire.
-        #[arg(value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "gemini", "grok", "runner", "windsurf"])]
+        #[arg(value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "gemini", "runner", "windsurf"])]
         target: String,
     },
 }
@@ -221,7 +221,6 @@ fn detected_agents_in(home: &Path) -> Vec<DetectedAgent> {
         ("codex", "Codex", ".codex"),
         ("cursor", "Cursor", ".cursor"),
         ("gemini", "Gemini CLI", ".gemini"),
-        ("grok", "Grok CLI", ".grok"),
         ("openclaw", "OpenClaw", ".openclaw"),
         ("hermes", "Hermes", ".hermes"),
         ("runner", "Runner", ".runner"),
@@ -287,15 +286,6 @@ fn has_screenpipe_mcp(layout: &AgentLayout) -> bool {
                 !entry.is_null()
                     && (layout.name != "Runner"
                         || entry.get("type").and_then(|value| value.as_str()) == Some("stdio"))
-            }),
-        McpFormat::GrokJson => serde_json::from_str::<serde_json::Value>(&existing)
-            .ok()
-            .and_then(|root| root.pointer("/mcp/servers")?.as_array().cloned())
-            .is_some_and(|servers| {
-                servers.iter().any(|entry| {
-                    is_grok_screenpipe_server(entry)
-                        && entry.get("enabled").and_then(|v| v.as_bool()) != Some(false)
-                })
             }),
         McpFormat::Toml => existing.lines().any(is_screenpipe_toml_table),
         McpFormat::Yaml => existing.lines().any(|line| {
@@ -376,7 +366,7 @@ fn write_prompted_targets(data_dir: &Path, agents: &[DetectedAgent]) -> Result<(
 /// OpenClaw/Hermes cards exactly so CLI and GUI setups agree.
 struct AgentLayout {
     name: &'static str,
-    /// `None` for MCP-only agents (Claude Desktop, Grok, Runner, and Windsurf).
+    /// `None` for MCP-only agents (Claude Desktop, Runner, and Windsurf).
     skills_dir: Option<PathBuf>,
     mcp_path: PathBuf,
     mcp_format: McpFormat,
@@ -385,7 +375,6 @@ struct AgentLayout {
 #[derive(PartialEq)]
 enum McpFormat {
     Json,
-    GrokJson,
     Yaml,
     Toml,
 }
@@ -428,7 +417,6 @@ fn detected_desktop_agents_in(home: &Path) -> Vec<DesktopDetectedAgent> {
         ("codex", "Codex", "codex", ".codex", true),
         ("cursor", "Cursor", "cursor", ".cursor", true),
         ("gemini", "Gemini CLI", "gemini", ".gemini", true),
-        ("grok", "Grok CLI", "grok", ".grok", false),
         ("openclaw", "OpenClaw", "openclaw", ".openclaw", true),
         ("hermes", "Hermes", "hermes", ".hermes", true),
         ("runner", "Runner", "runner", ".runner", false),
@@ -543,16 +531,6 @@ fn desktop_mcp_ready(layout: &AgentLayout, launch: &McpLaunchConfig) -> bool {
                         == launch.transport.as_deref()
                     && entry.get("type").and_then(|value| value.as_str())
                         == launch.server_type.as_deref()
-            }),
-        McpFormat::GrokJson => serde_json::from_str::<serde_json::Value>(&existing)
-            .ok()
-            .and_then(|root| root.pointer("/mcp/servers")?.as_array().cloned())
-            .is_some_and(|servers| {
-                let entries: Vec<_> = servers
-                    .iter()
-                    .filter(|s| is_grok_screenpipe_server(s))
-                    .collect();
-                entries.len() == 1 && *entries[0] == grok_mcp_server(launch)
             }),
         McpFormat::Toml => render_mcp_toml_block(launch)
             .ok()
@@ -756,14 +734,6 @@ fn layout_in(target: &str, h: &Path) -> Result<AgentLayout> {
             mcp_path: h.join(".gemini/settings.json"),
             mcp_format: McpFormat::Json,
         },
-        // https://github.com/superagent-ai/grok-cli/blob/main/src/utils/settings.ts
-        // Grok uses an array at mcp.servers, not the usual mcpServers object.
-        "grok" => AgentLayout {
-            name: "Grok CLI",
-            skills_dir: None,
-            mcp_path: h.join(".grok/user-settings.json"),
-            mcp_format: McpFormat::GrokJson,
-        },
         // Cursor loads global skills from ~/.cursor/skills (also ~/.agents/skills
         // and, for compat, ~/.claude/skills + ~/.codex/skills) — see
         // https://cursor.com/docs/skills
@@ -789,7 +759,7 @@ fn layout_in(target: &str, h: &Path) -> Result<AgentLayout> {
             mcp_format: McpFormat::Json,
         },
         other => anyhow::bail!(
-            "unknown agent target '{other}' (use: openclaw, hermes, claude-code, claude-desktop, codex, cursor, gemini, grok, runner, windsurf)"
+            "unknown agent target '{other}' (use: openclaw, hermes, claude-code, claude-desktop, codex, cursor, gemini, runner, windsurf)"
         ),
     })
 }
@@ -935,9 +905,6 @@ fn setup(target: &str, api_url: &str) -> Result<()> {
             merge_mcp_json_launch(&l.mcp_path, &launch)?;
         }
         McpFormat::Json => merge_mcp_json(&l.mcp_path, remote, api_url)?,
-        McpFormat::GrokJson => {
-            merge_grok_mcp_launch(&l.mcp_path, &cli_launch_config(remote, api_url))?
-        }
         McpFormat::Yaml => merge_mcp_yaml(&l.mcp_path, remote, api_url)?,
         McpFormat::Toml => merge_mcp_toml(&l.mcp_path, remote, api_url)?,
     }
@@ -1024,7 +991,6 @@ fn remove(target: &str) -> Result<()> {
 
     match l.mcp_format {
         McpFormat::Json => remove_mcp_json(&l.mcp_path)?,
-        McpFormat::GrokJson => remove_grok_mcp(&l.mcp_path)?,
         McpFormat::Toml => remove_mcp_toml(&l.mcp_path)?,
         McpFormat::Yaml => remove_mcp_yaml(&l.mcp_path)?,
     }
@@ -1237,99 +1203,9 @@ fn cli_launch_config(remote: bool, api_url: &str) -> McpLaunchConfig {
 fn merge_mcp_launch(layout: &AgentLayout, launch: &McpLaunchConfig) -> Result<()> {
     match layout.mcp_format {
         McpFormat::Json => merge_mcp_json_launch(&layout.mcp_path, launch),
-        McpFormat::GrokJson => merge_grok_mcp_launch(&layout.mcp_path, launch),
         McpFormat::Yaml => merge_mcp_yaml_launch(&layout.mcp_path, launch),
         McpFormat::Toml => merge_mcp_toml_launch(&layout.mcp_path, launch),
     }
-}
-
-fn is_grok_screenpipe_server(entry: &serde_json::Value) -> bool {
-    entry
-        .get("id")
-        .and_then(|v| v.as_str())
-        .is_some_and(|id| id.eq_ignore_ascii_case("screenpipe"))
-}
-
-fn grok_mcp_server(launch: &McpLaunchConfig) -> serde_json::Value {
-    let mut entry = serde_json::json!({
-        "id": "screenpipe",
-        "label": "screenpipe",
-        "enabled": true,
-        "transport": "stdio",
-        "command": launch.command,
-        "args": launch.args,
-    });
-    if !launch.env.is_empty() {
-        entry["env"] = serde_json::json!(launch.env);
-    }
-    entry
-}
-
-/// Missing config starts fresh; invalid JSON or schema is never overwritten.
-fn read_grok_config(path: &Path, existing: Option<&str>) -> Result<serde_json::Value> {
-    let root: serde_json::Value = match existing {
-        Some(s) if !s.trim().is_empty() => serde_json::from_str(s)
-            .with_context(|| format!("{} is not valid JSON; fix or remove it", path.display()))?,
-        _ => serde_json::json!({}),
-    };
-    anyhow::ensure!(root.is_object(), "{} is not a JSON object", path.display());
-    if let Some(mcp) = root.get("mcp") {
-        anyhow::ensure!(mcp.is_object(), "{}: mcp is not an object", path.display());
-        if let Some(servers) = mcp.get("servers") {
-            anyhow::ensure!(
-                servers.is_array(),
-                "{}: mcp.servers is not an array",
-                path.display()
-            );
-        }
-    }
-    Ok(root)
-}
-
-fn merge_grok_mcp_launch(path: &Path, launch: &McpLaunchConfig) -> Result<()> {
-    let existing = read_config_text(path)?;
-    let mut root = read_grok_config(path, existing.as_deref())?;
-    let mcp = root
-        .as_object_mut()
-        .unwrap()
-        .entry("mcp")
-        .or_insert_with(|| serde_json::json!({}));
-    let servers = mcp
-        .as_object_mut()
-        .unwrap()
-        .entry("servers")
-        .or_insert_with(|| serde_json::json!([]))
-        .as_array_mut()
-        .unwrap();
-    servers.retain(|s| !is_grok_screenpipe_server(s));
-    servers.push(grok_mcp_server(launch));
-    replace_config(
-        path,
-        existing.as_deref(),
-        &(serde_json::to_string_pretty(&root)? + "\n"),
-    )?;
-    Ok(())
-}
-
-fn remove_grok_mcp(path: &Path) -> Result<()> {
-    let existing = read_config_text(path)?;
-    let mut root = read_grok_config(path, existing.as_deref())?;
-    let Some(servers) = root
-        .pointer_mut("/mcp/servers")
-        .and_then(|v| v.as_array_mut())
-    else {
-        return Ok(());
-    };
-    let before = servers.len();
-    servers.retain(|s| !is_grok_screenpipe_server(s));
-    if servers.len() != before {
-        replace_config(
-            path,
-            existing.as_deref(),
-            &(serde_json::to_string_pretty(&root)? + "\n"),
-        )?;
-    }
-    Ok(())
 }
 
 /// Idempotently add the `screenpipe` server to a JSON MCP config (OpenClaw,
@@ -2481,122 +2357,6 @@ mod tests {
     }
 
     #[test]
-    fn test_grok_desktop_connection_preserves_settings_and_repairs_stale_config() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path();
-        let path = home.join(".grok/user-settings.json");
-        let bun = home.join("runtime/bun");
-        // A machine without Grok must not get a Grok directory manufactured.
-        assert_eq!(
-            setup_all_detected_desktop_in(home, &bun, None, "http://localhost:3030").detected,
-            0
-        );
-        assert!(!path.parent().unwrap().exists());
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let other = serde_json::json!({"id": "other", "enabled": true, "transport": "http", "url": "https://example.com/mcp"});
-        let seed = serde_json::json!({
-            "apiKey": "user-key-fixture",
-            "defaultModel": "user-model",
-            "mcp": {"customSetting": true, "servers": [other.clone(), {"id": "Screenpipe", "enabled": false}, {"id": "screenpipe", "command": "old"}]}
-        }).to_string();
-        std::fs::write(&path, &seed).unwrap();
-        assert_eq!(detected_agents_in(home)[0].target, "grok");
-
-        let report =
-            setup_all_detected_desktop_in(home, &bun, Some("sp-test"), "http://localhost:31337");
-        assert_eq!(report.connected, 1);
-        assert!(report.failures.is_empty(), "{:?}", report.failures);
-        let read = || std::fs::read_to_string(&path).unwrap();
-        let first = read();
-        let config: serde_json::Value = serde_json::from_str(&first).unwrap();
-        assert_eq!(config["apiKey"], "user-key-fixture");
-        assert_eq!(config["defaultModel"], "user-model");
-        assert_eq!(config["mcp"]["customSetting"], true);
-        assert_eq!(config["mcp"]["servers"][0], other);
-        let servers = config["mcp"]["servers"].as_array().unwrap();
-        assert_eq!(servers.len(), 2);
-        assert_eq!(servers[1]["id"], "screenpipe");
-        assert_eq!(servers[1]["enabled"], true);
-        assert_eq!(servers[1]["transport"], "stdio");
-        assert_eq!(servers[1]["command"], bun.to_string_lossy().as_ref());
-        assert_eq!(
-            servers[1]["args"],
-            serde_json::json!(["x", "screenpipe-mcp@latest"])
-        );
-        assert_eq!(servers[1]["env"]["SCREENPIPE_LOCAL_API_KEY"], "sp-test");
-        assert_eq!(servers[1]["env"]["SCREENPIPE_MCP_CLIENT"], "grok");
-        assert_eq!(
-            servers[1]["env"]["SCREENPIPE_API_URL"],
-            "http://localhost:31337"
-        );
-        assert!(is_agent_setup_in("grok", home));
-        assert!(!home.join(".grok/skills").exists());
-        assert!(std::fs::read_dir(path.parent().unwrap())
-            .unwrap()
-            .flatten()
-            .any(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("user-settings.json.screenpipe-backup-")
-                    && std::fs::read_to_string(e.path()).unwrap() == seed
-            }));
-
-        let repeat =
-            setup_all_detected_desktop_in(home, &bun, Some("sp-test"), "http://localhost:31337");
-        assert_eq!(repeat.already_connected, 1);
-        assert_eq!(read(), first);
-        let repaired = setup_all_detected_desktop_in(home, &bun, None, "http://localhost:3030");
-        assert_eq!(repaired.connected, 1);
-        let config: serde_json::Value = serde_json::from_str(&read()).unwrap();
-        assert!(config["mcp"]["servers"][1]["env"]["SCREENPIPE_LOCAL_API_KEY"].is_null());
-        assert_eq!(config["mcp"]["servers"].as_array().unwrap().len(), 2);
-
-        remove_grok_mcp(&path).unwrap();
-        let removed = read();
-        remove_grok_mcp(&path).unwrap();
-        assert_eq!(read(), removed);
-        let opted_out = BTreeSet::from(["grok".to_string()]);
-        let report =
-            reconcile_detected_desktop_in(home, &bun, None, "http://localhost:3030", &opted_out);
-        assert_eq!(report.opted_out, 1);
-        assert_eq!(read(), removed);
-        assert!(!is_agent_setup_in("grok", home));
-        let config: serde_json::Value = serde_json::from_str(&removed).unwrap();
-        assert_eq!(config["mcp"]["servers"], serde_json::json!([other]));
-        assert_eq!(config["apiKey"], "user-key-fixture");
-    }
-
-    #[test]
-    fn test_grok_missing_settings_connects_and_invalid_settings_do_not_block_other_tools() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path();
-        let path = home.join(".grok/user-settings.json");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let bun = home.join("runtime/bun");
-        let report = setup_all_detected_desktop_in(home, &bun, None, "http://localhost:3030");
-        assert_eq!(report.connected, 1);
-        assert!(is_agent_setup_in("grok", home));
-
-        for invalid in [
-            "{ broken",
-            "[]",
-            "null",
-            r#"{"mcp":null}"#,
-            r#"{"mcp":[]}"#,
-            r#"{"mcp":{"servers":{}}}"#,
-        ] {
-            std::fs::write(&path, invalid).unwrap();
-            std::fs::create_dir_all(home.join(".cursor")).unwrap();
-            let report = setup_all_detected_desktop_in(home, &bun, None, "http://localhost:3030");
-            assert_eq!(report.failures.len(), 1, "{invalid}: {report:?}");
-            assert_eq!(report.connected + report.already_connected, 1);
-            assert_eq!(std::fs::read_to_string(&path).unwrap(), invalid);
-            assert!(remove_grok_mcp(&path).is_err());
-            assert_eq!(std::fs::read_to_string(&path).unwrap(), invalid);
-        }
-    }
-
-    #[test]
     fn test_setup_all_cli_flag_is_explicit_and_conflicts_with_target() {
         use clap::Parser;
 
@@ -2613,8 +2373,6 @@ mod tests {
             }
         ));
         assert!(crate::cli::Cli::try_parse_from(["screenpipe", "agent", "setup"]).is_err());
-        assert!(crate::cli::Cli::try_parse_from(["screenpipe", "agent", "setup", "grok"]).is_ok());
-        assert!(crate::cli::Cli::try_parse_from(["screenpipe", "agent", "remove", "grok"]).is_ok());
         assert!(crate::cli::Cli::try_parse_from([
             "screenpipe",
             "agent",

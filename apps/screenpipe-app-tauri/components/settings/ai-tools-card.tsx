@@ -37,7 +37,6 @@ import {
   getInstalledMcpVersion,
   isCodexMcpInstalled,
   isCursorMcpInstalled,
-  isGrokMcpInstalled,
 } from "@/lib/hooks/use-hardcoded-tiles";
 
 const DISPLAY_NAMES: Record<ConnectAllToolId, string> = {
@@ -99,8 +98,6 @@ async function isToolConnected(id: ConnectAllToolId): Promise<boolean> {
       return (await isCursorMcpInstalled()) && (await areExternalAgentSkillsInstalled("cursor"));
     case "gemini":
       return (await isGeminiMcpInstalled()) && (await areExternalAgentSkillsInstalled("gemini"));
-    case "grok":
-      return isGrokMcpInstalled();
     case "openclaw":
       return (await isOpenclawMcpInstalled()) && (await areExternalAgentSkillsInstalled("openclaw"));
     case "hermes":
@@ -139,7 +136,11 @@ function ToolIcon({ id }: { id: ConnectAllToolId }) {
   }
 }
 
-export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
+export function AiToolsCard({ onChanged, grokBotDetected = false, onSetupGrokBot }: {
+  onChanged?: () => void;
+  grokBotDetected?: boolean;
+  onSetupGrokBot?: () => void;
+}) {
   const [detected, setDetected] = useState<ConnectAllToolId[]>([]);
   const [connected, setConnected] = useState<Partial<Record<ConnectAllToolId, boolean>>>({});
   const [busy, setBusy] = useState<Partial<Record<ConnectAllToolId, ToolBusy>>>({});
@@ -277,13 +278,16 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
   };
 
   // Machines with zero AI tools never see this card.
-  if (detected.length === 0) return null;
+  if (detected.length === 0 && !grokBotDetected) return null;
 
-  const summary = noneConnected
+  const localSummary = rows.length === 0 ? "" : noneConnected
     ? `${rows.length} found. Connect ${rows.length === 1 ? "it" : "them"} in one click.`
     : allConnected
     ? `All ${rows.length} connected`
     : `${connectedCount} of ${rows.length} connected`;
+  const summary = grokBotDetected
+    ? [rows.length > 0 ? `${connectedCount} connected` : "", "Grok Bot setup available"].filter(Boolean).join(" · ")
+    : localSummary;
 
   return (
     <div className={`rounded-lg border bg-card p-3 transition-colors ${expanded ? "border-foreground bg-accent" : "border-border"}`}>
@@ -305,7 +309,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
           </div>
         </button>
         {/* Adaptive: one-click magic for first-timers, Manage once anything is on. */}
-        {noneConnected ? (
+        {noneConnected && rows.length > 0 ? (
           <Button
             type="button"
             size="sm"
@@ -341,6 +345,20 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
             Connected apps can search your screen and audio history. Remove access any time.
           </p>
           <div>
+            {grokBotDetected && (
+              <div className="flex items-center gap-3 py-2.5 border-b border-border/60">
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted">
+                  <Bot className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <span className="text-[13px] text-foreground">Grok Bot</span>
+                  <p className="text-xs text-muted-foreground">Finish setup in Grok Bot to approve local access.</p>
+                </div>
+                <Button type="button" variant="outline" size="sm" onClick={onSetupGrokBot} aria-label="Set up Grok Bot" className="h-7 text-xs normal-case font-sans tracking-normal">
+                  Set up
+                </Button>
+              </div>
+            )}
             {rows.map((row) => {
               const { id } = row;
               const isOn = isRowConnected(row, connected);
