@@ -416,6 +416,30 @@ async fn cloud_token() -> Option<String> {
     screenpipe_engine::auth_key::find_cloud_token(&data_dir).await
 }
 
+/// The helper searches the same recorder as workflow analysis. In companion
+/// mode that is the existing Screenpipe process, including its API key; the
+/// copied app's own API key would fail or point at an empty second database.
+pub(crate) async fn assistant_agent_context(
+    app: &AppHandle,
+) -> Result<(LocalApiContext, String), String> {
+    let recorder = selected_recorder(app)
+        .await
+        .ok_or("Screenpipe memory is unavailable. Open Screenpipe and try again.")?;
+    let port = reqwest::Url::parse(&recorder.base_url)
+        .map_err(|_| "Invalid local recorder address")?
+        .port_or_known_default()
+        .ok_or("Invalid local recorder port")?;
+    if recorder.api_key.is_none() {
+        return Err(
+            "Couldn’t connect to Screenpipe memory. Restart Screenpipe and try again.".to_string(),
+        );
+    }
+    let token = cloud_token()
+        .await
+        .ok_or("Sign in to Screenpipe to ask a question.")?;
+    Ok((LocalApiContext { port, api_key: recorder.api_key }, token))
+}
+
 fn runtime_payload(recorder: Option<&RecorderEndpoint>, has_cloud_token: bool) -> Value {
     let history_available = recorder.is_some();
     let recording = recorder

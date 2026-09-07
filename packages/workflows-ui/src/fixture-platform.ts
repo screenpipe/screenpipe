@@ -14,6 +14,34 @@ import type {
   WorkflowSkillProgress,
 } from "./model";
 import type { WorkflowsPlatform } from "./platform";
+import { isAssistantState, type AssistantState, type WorkflowsAssistantPlatform } from "./assistant";
+
+function fixtureAssistant(): WorkflowsAssistantPlatform {
+  let saved: AssistantState | null = null;
+  return {
+    load: async () => {
+      const raw = typeof window === "undefined" ? null : window.localStorage.getItem("workflows-preview-assistant");
+      if (raw) { const value: unknown = JSON.parse(raw); if (isAssistantState(value)) saved = value; }
+      return saved;
+    },
+    save: async (state) => {
+      saved = state;
+      if (typeof window !== "undefined") window.localStorage.setItem("workflows-preview-assistant", JSON.stringify(state));
+    },
+    ask: async ({ context, signal, onProgress }) => {
+      const answer = context?.workflow
+        ? `The friction is in **${context.workflow.stages[1]?.name ?? "the handoff"}**. In this fictional preview, information gets checked in several places before the next step can begin.\n\nLook at the evidence under that step to see the repeated checks. The map alone doesn’t establish how much time could be saved.\n\nI’d start by bringing those inputs together, then compare the next few occurrences.`
+        : "This browser preview uses fictional workflows. In the desktop app, I can search your captured work and return specific moments with dates and evidence.\n\nOpen a workflow to ask about its steps here.";
+      onProgress({ text: "", activity: "searching" });
+      for (let end = 0; end < answer.length + 16; end += 16) {
+        if (signal.aborted) throw new DOMException("Stopped", "AbortError");
+        await new Promise((resolve) => setTimeout(resolve, 70));
+        onProgress({ text: answer.slice(0, end), activity: "writing" });
+      }
+      return answer;
+    },
+  };
+}
 
 const analyzedAt = "2026-09-03T17:30:00.000Z";
 
@@ -324,6 +352,7 @@ function fixtureSkillReceipt(draft: WorkflowSkillDraft) {
 export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixtureWorkflowAnalysis): WorkflowsPlatform {
   let profile = fixturePersonalWorkProfile;
   return {
+    assistant: fixtureAssistant(),
     ensureRuntime: async () => fixtureWorkflowRuntime,
     analyzeCapturedWork: async () => analysis,
     loadWorkProfile: async () => profile,

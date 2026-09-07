@@ -113,6 +113,15 @@
   scrollbar-gutter: stable;
 }
 
+@media (min-width: 1100px) {
+  .appDocked { grid-template-columns: 190px minmax(0, 1fr) 390px; }
+  .appDocked.appEmbedded { grid-template-columns: minmax(0, 1fr) 390px; }
+  .appDocked .main { padding-left: 26px; padding-right: 26px; }
+  .appDocked .topbar { gap: 10px; padding-left: 18px; padding-right: 18px; }
+  .appDocked .dragRegion { display: none; }
+  .appDocked .search { flex: 1; width: auto; min-width: 100px; margin: 0; }
+}
+
 .appEmbedded { grid-template-columns: minmax(0,1fr); min-height: calc(100svh - 56px); }
 .appEmbedded .sidebar { display: none; }
 .appEmbedded .workspace { height: auto; min-height: calc(100svh - 56px); }

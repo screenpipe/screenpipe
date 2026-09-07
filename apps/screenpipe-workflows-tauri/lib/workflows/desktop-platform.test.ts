@@ -33,6 +33,7 @@ vi.mock("./runtime", () => ({
   generateWorkflowSkill: mocks.generateSkill,
   saveWorkflowSkill: mocks.saveSkill,
 }));
+vi.mock("./assistant", () => ({ desktopAssistant: {} }));
 vi.mock("./disk-storage", () => ({
   isStoredWorkflowAnalysis: (value: unknown) => {
     const record = value as { schemaVersion?: number; analysis?: { workflows?: unknown[] } } | null;

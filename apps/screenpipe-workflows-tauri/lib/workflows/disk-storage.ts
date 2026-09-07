@@ -11,6 +11,7 @@ import {
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
 import type { WorkProfile, WorkflowAnalysis } from "@screenpipe/workflows-ui";
+import { isAssistantState, type AssistantState } from "@screenpipe/workflows-ui";
 
 const STORAGE_DIRECTORY = "workflows";
 const CATALOG_PATH = `${STORAGE_DIRECTORY}/catalog.json`;
@@ -124,4 +125,12 @@ export function saveWorkProfileToDisk(profile: WorkProfile) {
 
 export function resetWorkflowDiskStorageForTests() {
   writeQueue = Promise.resolve();
+}
+
+export function loadAssistantFromDisk() {
+  return readValidated("workflows/assistant.json", "workflows/assistant.backup.json", isAssistantState, "conversations");
+}
+
+export function saveAssistantToDisk(state: AssistantState) {
+  return queueWrite(() => replaceWithBackup("workflows/assistant.json", "workflows/assistant.backup.json", state));
 }

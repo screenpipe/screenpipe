@@ -3,6 +3,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fixturePersonalWorkProfile, fixtureWorkflowAnalysis } from "@screenpipe/workflows-ui/fixture";
+import { emptyAssistantState } from "@screenpipe/workflows-ui";
 
 const files = new Map<string, string>();
 
@@ -25,6 +26,8 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
 }));
 
 import {
+  loadAssistantFromDisk,
+  saveAssistantToDisk,
   loadWorkflowAnalysisFromDisk,
   loadWorkProfileFromDisk,
   resetWorkflowDiskStorageForTests,
@@ -33,6 +36,12 @@ import {
 } from "./disk-storage";
 
 describe("workflow disk storage", () => {
+  it("recovers conversations, drafts and display preference from the disk backup", async () => {
+    const state = emptyAssistantState(); state.mode = "sidebar"; state.conversations[0].draft = "Keep this question";
+    await saveAssistantToDisk(state); await saveAssistantToDisk(state);
+    files.set("workflows/assistant.json", "truncated");
+    expect(await loadAssistantFromDisk()).toEqual(state);
+  });
   beforeEach(() => {
     files.clear();
     resetWorkflowDiskStorageForTests();

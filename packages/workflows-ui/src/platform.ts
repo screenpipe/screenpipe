@@ -11,6 +11,7 @@ import type {
   WorkflowSkillDraft,
   WorkflowSkillProgress,
 } from "./model";
+import type { WorkflowsAssistantPlatform } from "./assistant";
 
 export type WorkflowAnalysisOptions = {
   scope?: WorkflowScope;
@@ -26,6 +27,7 @@ export type WorkflowAnalysisJob = {
 };
 
 export type WorkflowsPlatform = {
+  assistant?: WorkflowsAssistantPlatform;
   ensureRuntime: () => Promise<WorkflowRuntime>;
   analyzeCapturedWork: (days: number, options?: WorkflowAnalysisOptions) => Promise<WorkflowAnalysis>;
   loadCapturedWork?: (days: number, options?: WorkflowAnalysisOptions) => Promise<WorkflowAnalysis | null>;

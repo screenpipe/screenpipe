@@ -2,6 +2,7 @@
 // https://screenpipe.com
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { desktopAssistant } from "./assistant";
 import type { WorkProfile, WorkflowAnalysis, WorkflowsPlatform } from "@screenpipe/workflows-ui";
 import { commands } from "@/lib/utils/tauri";
 import {
@@ -111,6 +112,7 @@ async function saveWorkProfile(profile: WorkProfile) {
 }
 
 export const desktopWorkflowsPlatform: WorkflowsPlatform = {
+  ...(!browserPreview ? { assistant: desktopAssistant } : {}),
   ensureRuntime: ensureWorkflowRuntime,
   analyzeCapturedWork: (days, options) => analyzeCapturedWork(days, options?.workProfile),
   loadCapturedWork: () => loadSavedAnalysis(),
