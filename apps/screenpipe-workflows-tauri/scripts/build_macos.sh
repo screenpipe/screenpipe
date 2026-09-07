@@ -19,10 +19,17 @@ bun tauri build --bundles app -- --profile debug-dev
 
 # Strip extended attributes from all files in the bundle
 APP_PATH="src-tauri/target/debug-dev/bundle/macos/Screenpipe Workflows - Development.app"
+# Apple Silicon does not load ONNX dynamically. Tauri may still package the
+# empty Intel-only build placeholder; a .dylib-shaped empty file fails macOS
+# deep signature verification even though the app itself is signed.
+if [ -f "$APP_PATH/Contents/MacOS/libonnxruntime.dylib" ] && [ ! -s "$APP_PATH/Contents/MacOS/libonnxruntime.dylib" ]; then
+  rm "$APP_PATH/Contents/MacOS/libonnxruntime.dylib"
+fi
 xattr -cr "$APP_PATH"
 
 # Sign the app manually
 IDENTITY="${APPLE_SIGNING_IDENTITY:-Apple Development: Louis Beaumont (NJ372MT773)}"
 codesign --force --deep --sign "$IDENTITY" "$APP_PATH"
+codesign --verify --deep --strict "$APP_PATH"
 
 echo "Build completed successfully!"
