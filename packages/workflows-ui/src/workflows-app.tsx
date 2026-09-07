@@ -74,6 +74,7 @@ import {
   type SavedWorkflowSkill,
   type WorkflowScope,
   type WorkflowSkillDraft,
+  type WorkflowSkillProgress,
   type TimeAllocationItem,
   type TimeProfileDimension,
 } from "./model";
@@ -671,12 +672,21 @@ function destinationList(items: string[]) {
   return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
 }
 
+function readableSkillInstructions(value: string) {
+  return value
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .trim();
+}
+
 function WorkflowSkillDialog({
   workflow,
   draft,
   generating,
   saving,
   saved,
+  progress,
   error,
   update,
   retry,
@@ -688,53 +698,76 @@ function WorkflowSkillDialog({
   generating: boolean;
   saving: boolean;
   saved: SavedWorkflowSkill | null;
+  progress: WorkflowSkillProgress;
   error: string;
   update: (draft: WorkflowSkillDraft) => void;
   retry: () => void;
   save: () => void;
   close: () => void;
 }) {
+  const phases = [
+    ["reading", "Read the map"],
+    ["drafting", "Write the steps"],
+    ["checking", "Check safeguards"],
+  ] as const;
+  const activePhase = Math.max(0, phases.findIndex(([phase]) => phase === progress.phase));
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || generating || saving) return;
+      if (event.key !== "Escape" || saving) return;
       event.preventDefault();
       close();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [close, generating, saving]);
+  }, [close, saving]);
 
   return <div className={styles.skillBackdrop} role="presentation" onMouseDown={(event) => {
-    if (event.target === event.currentTarget && !generating && !saving) close();
+    if (event.target === event.currentTarget && !saving) close();
   }}>
     <section className={styles.skillDialog} role="dialog" aria-modal="true" aria-labelledby="workflow-skill-title" onKeyDown={(event) => event.stopPropagation()}>
       <div className={styles.skillDialogHeader}>
-        <div><span>From {workflow.title}</span><h2 id="workflow-skill-title">Create a skill</h2><p>Turn this mapped workflow into reusable agent instructions. Review and edit before saving.</p></div>
-        <button type="button" onClick={close} disabled={generating || saving} aria-label="Close skill editor"><X size={16} /></button>
+        <div><span>{workflow.title}</span><h2 id="workflow-skill-title">{generating ? "Creating your skill" : saved ? "Ready in your agents" : "Review this skill"}</h2><p>{generating ? "The repeatable parts of this workflow will appear as they are drafted." : saved ? "This workflow is now available where you work." : "Make any changes, then install it in your local agents."}</p></div>
+        <button type="button" onClick={close} disabled={saving} aria-label="Close skill editor"><X size={16} /></button>
       </div>
 
-      {generating ? <div className={styles.skillGenerating}><span className={styles.spinner} /><strong>Drafting from the mapped steps</strong><p>Separating the repeatable procedure from one-off details.</p></div> : saved ? <div className={styles.skillSaved}>
-        <CheckCircle2 size={23} />
-        <h3>Skill saved</h3>
-        <p>Installed in {destinationList(saved.destinations)} on this computer.</p>
-        {!!saved.warnings.length && <details><summary>Not added everywhere</summary><ul>{saved.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></details>}
-        <details><summary>File location</summary><code>{saved.path}</code></details>
-        <button className={styles.primaryButton} type="button" onClick={close}>Done</button>
-      </div> : draft ? <>
-        <div className={styles.skillEvidenceNote}><FileCheck2 size={15} /><span>Drafted from {workflow.stages.length} mapped stages with evidence across {workflow.quality.distinctDays} captured day{workflow.quality.distinctDays === 1 ? "" : "s"}. Review uncertain branches before saving.</span></div>
-        {error && <div className={styles.skillError}><AlertTriangle size={14} />{error}</div>}
-        <div className={styles.skillFields}>
-          <label><span>Name</span><input value={draft.name} maxLength={64} onChange={(event) => update({ ...draft, name: event.target.value })} /></label>
-          <label><span>Use this skill when</span><textarea className={styles.skillDescription} value={draft.description} maxLength={500} onChange={(event) => update({ ...draft, description: event.target.value })} /></label>
-          <label><span>Instructions</span><textarea className={styles.skillInstructions} value={draft.instructions} maxLength={20_000} onChange={(event) => update({ ...draft, instructions: event.target.value })} /></label>
-        </div>
-        <div className={styles.skillDialogFooter}><button type="button" onClick={close} disabled={saving}>Cancel</button><button className={styles.primaryButton} type="button" onClick={save} disabled={saving || !draft.name.trim() || !draft.description.trim() || !draft.instructions.trim()}>{saving ? <><span className={styles.spinnerSmall} />Saving…</> : <><Save size={14} />Save skill</>}</button></div>
-      </> : <div className={styles.skillGenerating}>
-        <AlertTriangle size={22} />
-        <strong>Could not create the draft</strong>
-        <p>{error || "Try again when processing is available."}</p>
-        <button className={styles.primaryButton} type="button" onClick={retry}><RefreshCw size={14} />Try again</button>
-      </div>}
+      <div className={styles.skillDialogBody}>
+        {generating ? <div className={styles.skillAgentRun} aria-live="polite">
+          <div className={styles.skillRunStatus}><span className={styles.skillAgentMark}><Sparkles size={15} /></span><div><strong>{progress.message}</strong><p>Built from the mapped stages and their evidence.</p></div></div>
+          <div className={styles.skillRunPhases}>{phases.map(([phase, label], index) => <div key={phase} className={index === activePhase ? styles.skillRunPhaseActive : index < activePhase ? styles.skillRunPhaseDone : ""}><span>{index < activePhase ? <CheckCircle2 size={13} /> : index + 1}</span><strong>{label}</strong></div>)}</div>
+          <div className={styles.skillLiveDraft}>
+            <span>Live draft</span>
+            <pre>{progress.preview ? readableSkillInstructions(progress.preview) : "The reusable instructions will appear here."}<i aria-hidden="true" /></pre>
+          </div>
+        </div> : saved ? <div className={styles.skillSaved}>
+          <CheckCircle2 size={23} />
+          <h3>Installed</h3>
+          <p>Installed in {destinationList(saved.destinations)} on this computer.</p>
+          {!!saved.warnings.length && <details><summary>Not added everywhere</summary><ul>{saved.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></details>}
+          <details><summary>File location</summary><code>{saved.path}</code></details>
+          <button className={styles.primaryButton} type="button" onClick={close}>Done</button>
+        </div> : draft ? <>
+          <div className={styles.skillEvidenceNote}><FileCheck2 size={15} /><span>Based on {workflow.stages.length} mapped stages observed across {workflow.quality.distinctDays} captured day{workflow.quality.distinctDays === 1 ? "" : "s"}.</span></div>
+          {error && <div className={styles.skillError}><AlertTriangle size={14} />{error}</div>}
+          <div className={styles.skillReview}>
+            <div><span>Use this skill when</span><p>{draft.description}</p></div>
+            <div><span>Instructions</span><pre>{readableSkillInstructions(draft.instructions)}</pre></div>
+          </div>
+          <details className={styles.skillEdit}>
+            <summary>Edit draft <ChevronDown size={14} /></summary>
+            <div className={styles.skillFields}>
+              <label><span>Name</span><input value={draft.name} maxLength={64} onChange={(event) => update({ ...draft, name: event.target.value })} /></label>
+              <label><span>Use this skill when</span><textarea className={styles.skillDescription} value={draft.description} maxLength={500} onChange={(event) => update({ ...draft, description: event.target.value })} /></label>
+              <label><span>Instructions</span><textarea className={styles.skillInstructions} value={draft.instructions} maxLength={20_000} onChange={(event) => update({ ...draft, instructions: event.target.value })} /></label>
+            </div>
+          </details>
+        </> : <div className={styles.skillGenerating}>
+          <AlertTriangle size={22} />
+          <strong>Could not create the draft</strong>
+          <p>{error || "Try again when processing is available."}</p>
+          <button className={styles.primaryButton} type="button" onClick={retry}><RefreshCw size={14} />Try again</button>
+        </div>}
+      </div>
+      {draft && !saved && !generating && <div className={styles.skillDialogFooter}><button type="button" onClick={close} disabled={saving}>Close</button><button className={styles.primaryButton} type="button" onClick={save} disabled={saving || !draft.name.trim() || !draft.description.trim() || !draft.instructions.trim()}>{saving ? <><span className={styles.spinnerSmall} />Installing…</> : <><Save size={14} />Install in my agents</>}</button></div>}
     </section>
   </div>;
 }
@@ -747,12 +780,14 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile }: { workflo
   const [skillSaving, setSkillSaving] = useState(false);
   const [skillSaved, setSkillSaved] = useState<SavedWorkflowSkill | null>(null);
   const [skillError, setSkillError] = useState("");
+  const [skillProgress, setSkillProgress] = useState<WorkflowSkillProgress>({ phase: "reading", message: "Reading the mapped steps" });
   useEffect(() => {
     setExpandedStages(new Set([0]));
     setSkillOpen(false);
     setSkillDraft(null);
     setSkillSaved(null);
     setSkillError("");
+    setSkillProgress({ phase: "reading", message: "Reading the mapped steps" });
   }, [workflow?.title]);
   const generateSkill = useCallback(() => {
     if (!workflow || !platform.generateWorkflowSkill) return;
@@ -761,11 +796,19 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile }: { workflo
     setSkillDraft(null);
     setSkillSaved(null);
     setSkillError("");
-    void platform.generateWorkflowSkill(workflow, workProfile)
+    setSkillProgress({ phase: "reading", message: "Reading the mapped steps" });
+    void platform.generateWorkflowSkill(workflow, workProfile, setSkillProgress)
       .then(setSkillDraft)
       .catch((error) => setSkillError(error instanceof Error ? error.message : String(error || "Could not create the skill draft.")))
       .finally(() => setSkillGenerating(false));
   }, [platform, workProfile, workflow]);
+  const openSkill = useCallback(() => {
+    if (skillGenerating || skillDraft || skillSaved || skillError) {
+      setSkillOpen(true);
+      return;
+    }
+    generateSkill();
+  }, [generateSkill, skillDraft, skillError, skillGenerating, skillSaved]);
   const saveSkill = useCallback(() => {
     if (!skillDraft || !platform.saveWorkflowSkill) return;
     setSkillSaving(true);
@@ -790,7 +833,7 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile }: { workflo
     <>
       <button className={styles.backButton} onClick={() => navigate("workflows")}><ArrowLeft size={14} />All workflows</button>
       <section className={styles.detailHeader}>
-        <div><Pill>Evidence on {workflow.repetitions} captured day{workflow.repetitions === 1 ? "" : "s"}</Pill><h1>{workflow.title}</h1><p>{workflow.description}</p>{platform.generateWorkflowSkill && platform.saveWorkflowSkill && <button className={styles.skillButton} type="button" onClick={generateSkill}><Sparkles size={14} />Generate skill</button>}</div>
+        <div><Pill>Evidence on {workflow.repetitions} captured day{workflow.repetitions === 1 ? "" : "s"}</Pill><h1>{workflow.title}</h1><p>{workflow.description}</p>{platform.generateWorkflowSkill && platform.saveWorkflowSkill && <button className={styles.skillButton} type="button" onClick={openSkill}><Sparkles size={14} />{skillGenerating ? "Creating skill…" : skillSaved ? "Skill installed" : skillDraft ? "Review skill" : "Create skill"}</button>}</div>
         <div className={styles.detailTotal}><span>{measuredDuration ? "Observed meeting duration" : "Workflow duration"}</span><strong>{workflowDurationLabel(workflow)}</strong><small>{measuredDuration ? `${workflow.durationSampleCount ?? 1} exact meeting window${(workflow.durationSampleCount ?? 1) === 1 ? "" : "s"}` : "Not estimated from scattered observations"}</small></div>
       </section>
       <section className={styles.detailStats}>
@@ -840,7 +883,7 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile }: { workflo
       </section>
       {!!actionableFriction.length && <><div className={styles.sectionHeading}><div><span>Within reach</span><h2>Friction you can affect</h2></div></div><BottleneckList items={actionableFriction.map((item) => ({ ...item, workflowTitle: workflow.title, repetitions: workflow.repetitions }))} /></>}
       {!!constraints.length && <><div className={styles.sectionHeading}><div><span>Plan around</span><h2>External and required constraints</h2></div></div><BottleneckList items={constraints.map((item) => ({ ...item, workflowTitle: workflow.title, repetitions: workflow.repetitions }))} numbered={false} /></>}
-      {skillOpen && <WorkflowSkillDialog workflow={workflow} draft={skillDraft} generating={skillGenerating} saving={skillSaving} saved={skillSaved} error={skillError} update={setSkillDraft} retry={generateSkill} save={saveSkill} close={() => setSkillOpen(false)} />}
+      {skillOpen && <WorkflowSkillDialog workflow={workflow} draft={skillDraft} generating={skillGenerating} saving={skillSaving} saved={skillSaved} progress={skillProgress} error={skillError} update={setSkillDraft} retry={generateSkill} save={saveSkill} close={() => setSkillOpen(false)} />}
     </>
   );
 }

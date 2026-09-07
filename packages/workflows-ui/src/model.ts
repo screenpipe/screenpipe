@@ -219,6 +219,12 @@ export type WorkflowSkillDraft = {
   sourceWorkflow: string;
 };
 
+export type WorkflowSkillProgress = {
+  phase: "reading" | "drafting" | "checking";
+  message: string;
+  preview?: string;
+};
+
 export type SavedWorkflowSkill = {
   name: string;
   path: string;

@@ -11,6 +11,7 @@ import type {
   WorkflowMap,
   WorkflowRuntime,
   WorkflowSkillDraft,
+  WorkflowSkillProgress,
 } from "./model";
 import type { WorkflowsPlatform } from "./platform";
 
@@ -288,6 +289,28 @@ function fixtureSkillDraft(workflow: WorkflowMap): WorkflowSkillDraft {
   };
 }
 
+async function fixtureSkillDraftWithProgress(
+  workflow: WorkflowMap,
+  onProgress?: (progress: WorkflowSkillProgress) => void,
+): Promise<WorkflowSkillDraft> {
+  const draft = fixtureSkillDraft(workflow);
+  onProgress?.({ phase: "reading", message: "Reading the mapped steps" });
+  await new Promise((resolve) => setTimeout(resolve, 180));
+  onProgress?.({
+    phase: "drafting",
+    message: "Writing the reusable steps",
+    preview: draft.instructions.slice(0, Math.max(80, Math.round(draft.instructions.length * 0.55))),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 240));
+  onProgress?.({
+    phase: "checking",
+    message: "Checking decisions and safeguards",
+    preview: draft.instructions,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 180));
+  return draft;
+}
+
 function fixtureSkillReceipt(draft: WorkflowSkillDraft) {
   return {
     name: draft.name,
@@ -305,7 +328,7 @@ export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixt
     analyzeCapturedWork: async () => analysis,
     loadWorkProfile: async () => profile,
     saveWorkProfile: async (nextProfile) => (profile = nextProfile),
-    generateWorkflowSkill: async (workflow) => fixtureSkillDraft(workflow),
+    generateWorkflowSkill: async (workflow, _profile, onProgress) => fixtureSkillDraftWithProgress(workflow, onProgress),
     saveWorkflowSkill: async (draft) => fixtureSkillReceipt(draft),
   };
 }
@@ -366,7 +389,7 @@ export function createFixtureEnterpriseWorkflowsPlatform(analysis: WorkflowAnaly
     getAnalysisJob: async () => ({ id: "fixture-enterprise-job", status: "complete", result: scopedAnalysis() }),
     loadWorkProfile: async () => profile,
     saveWorkProfile: async (nextProfile) => (profile = nextProfile),
-    generateWorkflowSkill: async (workflow) => fixtureSkillDraft(workflow),
+    generateWorkflowSkill: async (workflow, _profile, onProgress) => fixtureSkillDraftWithProgress(workflow, onProgress),
     saveWorkflowSkill: async (draft) => fixtureSkillReceipt(draft),
   };
 }

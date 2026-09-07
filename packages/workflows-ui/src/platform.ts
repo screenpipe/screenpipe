@@ -9,6 +9,7 @@ import type {
   WorkflowRuntime,
   WorkflowScope,
   WorkflowSkillDraft,
+  WorkflowSkillProgress,
 } from "./model";
 
 export type WorkflowAnalysisOptions = {
@@ -33,7 +34,11 @@ export type WorkflowsPlatform = {
   getAnalysisJob?: (jobId: string) => Promise<WorkflowAnalysisJob>;
   loadWorkProfile?: (scope?: WorkflowScope) => Promise<WorkProfile | null>;
   saveWorkProfile?: (profile: WorkProfile, scope?: WorkflowScope) => Promise<WorkProfile>;
-  generateWorkflowSkill?: (workflow: WorkflowMap, profile?: WorkProfile | null) => Promise<WorkflowSkillDraft>;
+  generateWorkflowSkill?: (
+    workflow: WorkflowMap,
+    profile?: WorkProfile | null,
+    onProgress?: (progress: WorkflowSkillProgress) => void,
+  ) => Promise<WorkflowSkillDraft>;
   saveWorkflowSkill?: (draft: WorkflowSkillDraft) => Promise<SavedWorkflowSkill>;
   openAccount?: () => Promise<void>;
   startWindowDrag?: () => Promise<void> | void;

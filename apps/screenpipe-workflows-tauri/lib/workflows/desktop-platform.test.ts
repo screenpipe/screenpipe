@@ -99,10 +99,11 @@ describe("desktop workflows persistence", () => {
     };
     mocks.generateSkill.mockResolvedValue(draft);
     mocks.saveSkill.mockResolvedValue(receipt);
+    const onProgress = vi.fn();
 
-    await expect(desktopWorkflowsPlatform.generateWorkflowSkill?.(workflow, null)).resolves.toEqual(draft);
+    await expect(desktopWorkflowsPlatform.generateWorkflowSkill?.(workflow, null, onProgress)).resolves.toEqual(draft);
     await expect(desktopWorkflowsPlatform.saveWorkflowSkill?.(draft)).resolves.toEqual(receipt);
-    expect(mocks.generateSkill).toHaveBeenCalledWith(workflow, null);
+    expect(mocks.generateSkill).toHaveBeenCalledWith(workflow, null, onProgress);
     expect(mocks.saveSkill).toHaveBeenCalledWith(draft);
   });
 });
