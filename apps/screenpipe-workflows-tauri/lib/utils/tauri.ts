@@ -3682,10 +3682,10 @@ useSystemDefaultAudio: boolean;
  */
 experimentalCoreaudioSystemAudio?: boolean;
 /**
- * Beta ("Smart recording" in the app): during detected meetings, capture
+ * Automatic meeting capture: during detected meetings, capture
  * the meeting app's own audio via a per-process tap plus the microphone
  * that app actually has open (instead of the global mix + assumed-default
- * mic). Default `false`. Takes precedence over everything: it engages in
+ * mic). Default `true`. Takes precedence over everything: it engages in
  * ANY `audio_capture_mode` (continuous or meetings-only) and displaces
  * the configured devices for the meeting's duration. Requires macOS 14.4+
  * or Windows, plus the meeting detector (with `disable_meeting_detector`
@@ -3700,10 +3700,10 @@ experimentalMeetingPiggyback?: boolean;
  * link out of A2DP into SCO, degrading the user's headphone/speaker
  * output quality (48kHz stereo -> 24kHz stereo or mono HFP, depending on
  * hardware) — a macOS/OS-level tradeoff with no external workaround
- * (issue #3750). Default `false`: Bluetooth input devices are only
- * actually opened while a meeting is detected; outside a meeting they
- * stay enabled-but-gated (selected in settings, not streaming) so the
- * Bluetooth link stays in A2DP. Set `true` to always record Bluetooth
+ * (issue #3750). Default `false`: automatically selected Bluetooth inputs
+ * are opened only during meetings, keeping A2DP outside meetings. A
+ * manually selected device or explicit device-start request is exempt.
+ * Set `true` to always record automatically selected Bluetooth
  * mics regardless of meeting state (prior behavior). Has no effect on
  * wired/built-in/unrecognized mics, on Bluetooth output devices, or on a
  * dedicated Bluetooth microphone with no output side of its own (macOS:
