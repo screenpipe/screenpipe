@@ -459,7 +459,6 @@ const CODEX_REQUEST_HEADING = /^## My request:\s*$/m;
  */
 function cleanCodexUserText(text: string): string {
   let clean = text.trim();
-  if (!clean || isCodexHarnessContext(clean)) return "";
 
   if (clean.startsWith(SCREENPIPE_SYSTEM_CONTEXT_OPEN)) {
     const closeIndex = clean.indexOf(SCREENPIPE_SYSTEM_CONTEXT_CLOSE);
@@ -468,6 +467,15 @@ function cleanCodexUserText(text: string): string {
       .slice(closeIndex + SCREENPIPE_SYSTEM_CONTEXT_CLOSE.length)
       .trim();
   }
+
+  // Codex desktop emits these setup blocks as user-role content, sometimes
+  // alongside the actual request. Strip only complete leading envelopes so
+  // quoted tags and the request following a preamble remain user content.
+  const setupBlock = /^<(recommended_plugins|environment_context)>[\s\S]*?<\/\1>\s*/;
+  while (setupBlock.test(clean)) {
+    clean = clean.replace(setupBlock, "").trimStart();
+  }
+  if (!clean || isCodexHarnessContext(clean)) return "";
 
   if (clean.startsWith(CODEX_FILES_SECTION)) {
     const requestHeading = CODEX_REQUEST_HEADING.exec(clean);
