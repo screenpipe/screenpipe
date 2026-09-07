@@ -8808,6 +8808,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "zerocopy 0.7.35",
 ]
 
@@ -8941,6 +8942,7 @@ dependencies = [
  "tower 0.4.13",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "wiremock",
 ]
 
@@ -9170,6 +9172,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

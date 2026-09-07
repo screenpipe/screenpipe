@@ -2549,7 +2549,9 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
         }
         Ok(None) => {
             is_new_store = true;
-            (SettingsStore::default(), true, true) // New store, save defaults
+            let mut settings = SettingsStore::default();
+            settings.device_id = crate::enterprise::host_identity::new_install_device_id()?;
+            (settings, true, true)
         }
         Err(e) => {
             is_new_store = false;

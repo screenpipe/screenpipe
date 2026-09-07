@@ -713,7 +713,8 @@ let DEFAULT_SETTINGS: Settings = {
 			activitiesIntervalMinutes: 15,
 			aiPresets: makeDefaultPresets(false) as any,
 			userGoalCategory: DEFAULT_USER_GOAL_CATEGORY,
-			deviceId: crypto.randomUUID(),
+			// Native startup persists the device identity before opening a webview.
+			deviceId: "",
 			deepgramApiKey: "",
 			isLoading: false,
 			userId: "",
@@ -1451,7 +1452,7 @@ function createSettingsStore() {
 			const current = await get();
 			const managedValues = await activeManagedValues(current);
 			const defaults = applyManagedOverrides(
-				createDefaultSettingsObject() as Record<string, unknown>,
+				{ ...createDefaultSettingsObject(), deviceId: current.deviceId } as Record<string, unknown>,
 				managedValues
 			) as Settings;
 			if (managedValues) defaults.enterpriseManagedSettings = managedValues;
@@ -1460,6 +1461,7 @@ function createSettingsStore() {
 		});
 
 	const resetSetting = async <K extends keyof Settings>(key: K) => {
+		if (key === "deviceId") return;
 		const current = await get();
 		const defaultValue = createDefaultSettingsObject()[key];
 		await set({ [key]: defaultValue } as Partial<Settings>);

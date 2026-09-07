@@ -296,6 +296,7 @@ impl Drop for ImmediateTx {
 }
 
 pub struct DatabaseManager {
+    upload_source_id: tokio::sync::OnceCell<String>,
     /// Read-only pool. Used for all SELECT queries.
     /// Separated from writes so read bursts (search, timeline, API) can never
     /// starve the write pipeline. Size depends on DbConfig tier.
@@ -466,6 +467,7 @@ mod outputs;
 mod search;
 mod semantic;
 mod setup;
+mod source_identity;
 mod speakers;
 mod tags;
 mod text_positions;

@@ -196,6 +196,22 @@ mod imp {
 
     #[async_trait::async_trait]
     impl LocalApiClient for ScreenpipeLocalClient {
+        async fn upload_source_id(&self) -> Result<String, EnterpriseSyncError> {
+            let state = self.app.state::<crate::recording::RecordingState>();
+            let db = state
+                .server
+                .lock()
+                .await
+                .as_ref()
+                .map(|server| Arc::clone(&server.db))
+                .ok_or_else(|| {
+                    EnterpriseSyncError::Configuration("recording database is not ready".into())
+                })?;
+            db.upload_source_id()
+                .await
+                .map(str::to_string)
+                .map_err(|error| EnterpriseSyncError::Configuration(error.to_string()))
+        }
         async fn fetch_frames_since(
             &self,
             since_ts: Option<&str>,

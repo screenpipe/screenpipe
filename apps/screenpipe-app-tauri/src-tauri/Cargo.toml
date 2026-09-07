@@ -178,8 +178,8 @@ thiserror = { version = "1.0", optional = true }
 # as thiserror — `#[path = ...]` imports aren't followed by cargo-machete.
 screenpipe-sync = { path = "../../../crates/screenpipe-sync", optional = true }
 
-# Telemetry wire contract shared by Enterprise telemetry and opt-in consumer
-# data sync so both upload byte-compatible JSONL records.
+# Telemetry wire contract shared by Enterprise telemetry, consumer data sync,
+# and stable device identity initialization.
 screenpipe-telemetry-wire = { path = "../../../crates/screenpipe-telemetry-wire" }
 
 # jemalloc — aggressively returns freed pages to OS, reducing RSS bloat
