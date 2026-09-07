@@ -3664,6 +3664,7 @@ mod tests {
 
     #[tokio::test]
     async fn first_run_seeds_cursor_to_recent_window() {
+        let _guard = crate::enterprise_policy::sync_streams_test_lock();
         let dir = TempDir::new().unwrap();
         let cfg = test_cfg(&dir, "http://does-not-matter".into());
         let mut cursor = Cursor::default();

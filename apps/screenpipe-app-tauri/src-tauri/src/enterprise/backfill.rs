@@ -499,6 +499,7 @@ mod tests {
     }
     #[tokio::test]
     async fn backfill_stable_identity_preserves_range_and_rejects_database_switch() {
+        let _guard = crate::enterprise_policy::sync_streams_test_lock();
         let server = MockServer::start().await;
         let dir = tempfile::TempDir::new().unwrap();
         let mut cfg = cfg(&dir, &server);
