@@ -196,6 +196,74 @@ mod imp {
 
     #[async_trait::async_trait]
     impl LocalApiClient for ScreenpipeLocalClient {
+        async fn initialized_upload_source_id(&self) -> Option<String> {
+            let state = self.app.state::<crate::recording::RecordingState>();
+            let server = state.server.lock().await;
+            server
+                .as_ref()?
+                .db
+                .initialized_upload_source_id()
+                .map(str::to_string)
+        }
+        async fn device_identity_migration(
+            &self,
+            legacy_id: &str,
+            journal: &std::path::Path,
+        ) -> Result<Option<(String, String)>, EnterpriseSyncError> {
+            // Operator-provided IDs are outside the automatic UUID migration.
+            if uuid::Uuid::parse_str(legacy_id).map_or(true, |id| {
+                id.get_version_num() != 4 || id.to_string() != legacy_id
+            }) {
+                return Ok(None);
+            }
+            let state = self.app.state::<crate::recording::RecordingState>();
+            let db = state
+                .server
+                .lock()
+                .await
+                .as_ref()
+                .map(|server| Arc::clone(&server.db))
+                .ok_or_else(|| {
+                    EnterpriseSyncError::Configuration("recording database is not ready".into())
+                })?;
+            let source_id = db
+                .adopt_upload_source_id(legacy_id, journal)
+                .await
+                .map_err(|e| EnterpriseSyncError::Configuration(e.to_string()))?
+                .to_string();
+            let stable_id = crate::enterprise::host_identity::new_install_device_id()
+                .map_err(EnterpriseSyncError::Configuration)?;
+            Ok(Some((stable_id, source_id)))
+        }
+
+        async fn commit_device_identity(
+            &self,
+            legacy_id: &str,
+            stable_id: &str,
+        ) -> Result<(), EnterpriseSyncError> {
+            crate::store::SettingsStore::migrate_device_id(&self.app, legacy_id, stable_id)
+                .map_err(EnterpriseSyncError::Configuration)?;
+            // Replace only the defaults previously derived from this identity;
+            // explicit operator telemetry overrides remain authoritative.
+            for name in [
+                "SCREENPIPE_ENTERPRISE_DEVICE_ID",
+                "SCREENPIPE_DEPLOYMENT_ID",
+            ] {
+                if std::env::var(name).ok().as_deref() == Some(legacy_id) {
+                    std::env::set_var(name, stable_id);
+                }
+            }
+            if let Some(org) =
+                license_key_from_env_or_config().and_then(|key| enterprise_license_hash(&key))
+            {
+                if std::env::var("SCREENPIPE_SUPPORT_ID").ok().as_deref()
+                    == Some(&format!("{org}:{legacy_id}"))
+                {
+                    std::env::set_var("SCREENPIPE_SUPPORT_ID", format!("{org}:{stable_id}"));
+                }
+            }
+            Ok(())
+        }
         async fn upload_source_id(&self) -> Result<String, EnterpriseSyncError> {
             let state = self.app.state::<crate::recording::RecordingState>();
             let db = state

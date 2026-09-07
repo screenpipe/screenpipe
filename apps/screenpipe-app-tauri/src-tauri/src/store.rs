@@ -2477,6 +2477,25 @@ impl SettingsStore {
         reencrypt_store_file(app);
         Ok(())
     }
+
+    /// Update only identity, preserving the latest settings and rejecting a
+    /// concurrent identity change. The server association and cursor must already
+    /// be durable before the enterprise uploader calls this.
+    pub fn migrate_device_id(app: &AppHandle, legacy: &str, stable: &str) -> Result<(), String> {
+        let store = get_store(app, None).map_err(|e| e.to_string())?;
+        let mut settings = store.get("settings").ok_or("settings unavailable")?;
+        let current = settings["deviceId"]
+            .as_str()
+            .ok_or("device identity unavailable")?;
+        if current != legacy && current != stable {
+            return Err("device identity changed during migration".into());
+        }
+        settings["deviceId"] = json!(stable);
+        store.set("settings", settings);
+        save_store_to_disk(store.as_ref())?;
+        reencrypt_store_file(app);
+        Ok(())
+    }
 }
 
 /// Consumer builds no longer support the legacy tray-only UI preference. Reset

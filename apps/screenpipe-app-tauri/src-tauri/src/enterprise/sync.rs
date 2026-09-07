@@ -308,6 +308,26 @@ impl Cursor {
 /// desktop crate against `LocalApiContext`.
 #[async_trait::async_trait]
 pub trait LocalApiClient: Send + Sync {
+    async fn initialized_upload_source_id(&self) -> Option<String> {
+        None
+    }
+    /// Desktop-only boundary; headless clients retain their configured identity.
+    async fn device_identity_migration(
+        &self,
+        _legacy_id: &str,
+        _journal: &std::path::Path,
+    ) -> Result<Option<(String, String)>, EnterpriseSyncError> {
+        Ok(None)
+    }
+    async fn commit_device_identity(
+        &self,
+        _legacy_id: &str,
+        _stable_id: &str,
+    ) -> Result<(), EnterpriseSyncError> {
+        Err(EnterpriseSyncError::Configuration(
+            "device settings unavailable".into(),
+        ))
+    }
     async fn upload_source_id(&self) -> Result<String, EnterpriseSyncError> {
         Err(EnterpriseSyncError::Configuration(
             "database source identity unavailable".into(),
@@ -576,6 +596,101 @@ async fn post_jsonl_with_identity(
 
 // ─── Sync state machine ─────────────────────────────────────────────────────
 
+/// Adopt only registry metadata. Persist the existing cursor's namespace before
+/// switching settings, so a crash at either boundary can be retried safely.
+async fn migrate_device_identity(
+    cfg: &mut EnterpriseSyncConfig,
+    cursor: &mut Cursor,
+    local: &dyn LocalApiClient,
+    http: &reqwest::Client,
+) -> Result<(), EnterpriseSyncError> {
+    if screenpipe_telemetry_wire::identity::is_stable_device_id(&cfg.device_id) {
+        return Ok(());
+    }
+    let journal = cfg.cursor_path.with_extension("device-migration.json");
+    let Some((stable_id, source_id)) = local
+        .device_identity_migration(&cfg.device_id, &journal)
+        .await?
+    else {
+        return Ok(());
+    };
+    let base = control_plane_base(&cfg.ingest_url)
+        .ok_or_else(|| EnterpriseSyncError::Configuration("invalid control plane URL".into()))?;
+    let response = http.post(format!("{base}/api/enterprise/device-identity-migration"))
+        .header("X-License-Key", &cfg.license_key)
+        .json(&serde_json::json!({"source_id": source_id, "device_id": stable_id, "migrate_from": cfg.device_id}))
+        .send().await.map_err(|e| EnterpriseSyncError::Ingest(e.to_string()))?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(EnterpriseSyncError::IngestAuthRejected);
+    }
+    if !response.status().is_success() {
+        return Err(EnterpriseSyncError::Configuration(
+            "device identity migration pending; recordings remain local".into(),
+        ));
+    }
+    let confirmed: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| EnterpriseSyncError::Ingest(e.to_string()))?;
+    // Version 1 servers ignore unknown fields. Never treat that as a migration.
+    if confirmed["version"] != 2
+        || confirmed["migrate_from"] != cfg.device_id
+        || confirmed["source_id"] != source_id
+        || confirmed["device_id"] != stable_id
+    {
+        return Err(EnterpriseSyncError::Configuration(
+            "control plane did not confirm device migration".into(),
+        ));
+    }
+    if local.upload_source_id().await? != source_id {
+        return Err(EnterpriseSyncError::Configuration(
+            "database changed during device migration".into(),
+        ));
+    }
+    let mut next = cursor.clone();
+    if next.source_id.as_deref() != Some(&source_id) {
+        if next.source_id.is_some() || source_id != cfg.device_id {
+            next = Cursor::default();
+        }
+        next.source_id = Some(source_id);
+    }
+    next.save(&cfg.cursor_path)
+        .map_err(|e| EnterpriseSyncError::Configuration(e.to_string()))?;
+    *cursor = next;
+    local
+        .commit_device_identity(&cfg.device_id, &stable_id)
+        .await?;
+    cfg.device_id = stable_id;
+    Ok(())
+}
+
+async fn try_device_identity_migration(
+    cfg: &mut EnterpriseSyncConfig,
+    cursor: &mut Cursor,
+    local: &dyn LocalApiClient,
+    http: &reqwest::Client,
+) -> Result<(), EnterpriseSyncError> {
+    match migrate_device_identity(cfg, cursor, local, http).await {
+        Err(error)
+            if !matches!(error, EnterpriseSyncError::IngestAuthRejected)
+                && local.initialized_upload_source_id().await.as_deref()
+                    == Some(&cfg.device_id)
+                && cursor
+                    .source_id
+                    .as_deref()
+                    .is_none_or(|source| source == cfg.device_id) =>
+        {
+            // A conflict or unavailable control plane must not stop a safe
+            // existing uploader. After a DB reset, this proof fails and the
+            // new data stays local until its fresh namespace is registered.
+            warn!("enterprise device migration deferred: {error}");
+            cursor.source_id = Some(cfg.device_id.clone());
+            Ok(())
+        }
+        result => result,
+    }
+}
+
 /// New devices register their database source before sending any recordings.
 /// Old installs do not enter this path or create source-identity metadata.
 async fn prepare_upload_identity(
@@ -649,6 +764,14 @@ async fn run_one_sync_inner(
 
     let prepared = prepare_upload_identity(cfg, local, http).await?;
     let cfg = &prepared;
+    if cfg.stable_device_id.is_none()
+        && cursor.source_id.is_some()
+        && local.upload_source_id().await? != cfg.device_id
+    {
+        return Err(EnterpriseSyncError::Configuration(
+            "database changed during deferred identity migration".into(),
+        ));
+    }
     if cfg.stable_device_id.is_some() && cursor.source_id.as_deref() != Some(cfg.device_id.as_str())
     {
         *cursor = Cursor {
@@ -856,7 +979,7 @@ async fn run_one_sync_inner(
 
     // A server restart/database replacement during the reads must not label a
     // mixed batch with the old source's identity or advance its cursor.
-    if cfg.stable_device_id.is_some() && local.upload_source_id().await? != cfg.device_id {
+    if cursor.source_id.is_some() && local.upload_source_id().await? != cfg.device_id {
         return Err(EnterpriseSyncError::Configuration(
             "database changed during sync; retrying".into(),
         ));
@@ -1312,6 +1435,13 @@ pub async fn fulfill_frame_requests(
         return report;
     };
 
+    let guard_source = cfg.stable_device_id.is_some()
+        || uuid::Uuid::parse_str(&cfg.device_id).is_ok_and(|id| id.get_version_num() == 4);
+    if guard_source
+        && local.upload_source_id().await.ok().as_deref() != Some(cfg.device_id.as_str())
+    {
+        return report;
+    }
     let requests_url = format!("{base}/api/enterprise/frame-requests");
     let resp = match http
         .get(&requests_url)
@@ -1379,7 +1509,7 @@ pub async fn fulfill_frame_requests(
         entries.push(entry);
     }
 
-    if cfg.stable_device_id.is_some()
+    if guard_source
         && local.upload_source_id().await.ok().as_deref() != Some(cfg.device_id.as_str())
     {
         warn!("frame fulfillment: database changed while fetching images; retry next tick");
@@ -1789,12 +1919,18 @@ async fn run_sync_burst_with_recovery<R: LicenseKeyRecovery + ?Sized>(
         Err(error) => return Err(error),
     }
 
-    match run_sync_burst(cfg, cursor, local, http).await {
+    let result = async {
+        try_device_identity_migration(cfg, cursor, local, http).await?;
+        run_sync_burst(cfg, cursor, local, http).await
+    }
+    .await;
+    match result {
         Err(EnterpriseSyncError::IngestAuthRejected) if !recovered => {
             if !recover_rotated_license_key(cfg, recovery).await {
                 return Err(EnterpriseSyncError::IngestAuthRejected);
             }
             cfg.resolve_upload_mode().await?;
+            try_device_identity_migration(cfg, cursor, local, http).await?;
             run_sync_burst(cfg, cursor, local, http).await
         }
         result => result,
@@ -1843,11 +1979,12 @@ pub async fn run(
         // and reruns resolution before any local read; other failures preserve
         // the last safe mode.
         let license_key_before_tick = cfg.license_key.clone();
+        let device_id_before_tick = cfg.device_id.clone();
         let result =
             run_sync_burst_with_recovery(&mut cfg, &mut cursor, local.as_ref(), &http, &recovery)
                 .await;
 
-        if cfg.license_key != license_key_before_tick {
+        if cfg.license_key != license_key_before_tick || cfg.device_id != device_id_before_tick {
             // The log poller owns a cloned config, so restart it with the
             // recovered key. Fulfillment state lives server-side.
             log_request_loop.abort();
