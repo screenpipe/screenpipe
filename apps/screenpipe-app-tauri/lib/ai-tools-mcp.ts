@@ -22,6 +22,7 @@ import {
   getClaudeConfigPath,
   getCodexConfigPath,
   getCursorMcpConfigPath,
+  getGrokConfigPath,
 } from "@/lib/hooks/use-hardcoded-tiles";
 import {
   installExternalAgentSkills,
@@ -39,6 +40,7 @@ const CONNECT_ALL_TOOL_IDS = [
   "codex",
   "cursor",
   "gemini",
+  "grok",
   "openclaw",
   "hermes",
   "runner",
@@ -52,6 +54,7 @@ export const CONNECT_ALL_TOOL_NAMES: Record<ConnectAllToolId, string> = {
   codex: "Codex",
   cursor: "Cursor",
   gemini: "Gemini CLI",
+  grok: "Grok",
   openclaw: "OpenClaw",
   hermes: "Hermes",
   runner: "Runner",
@@ -63,9 +66,7 @@ export const CONNECT_ALL_TOOL_NAMES: Record<ConnectAllToolId, string> = {
 
 // Skills support per tool lives in the disconnect-all component's
 // SKILLS_TARGET map: claude/codex/cursor/gemini/openclaw/hermes read
-// SKILL.md skills; runner and windsurf are MCP-only. Grok is intentionally
-// not in this matrix: it isn't part of connect-all and its settings panel has
-// its own disconnect.
+// SKILL.md skills; grok, runner and windsurf are MCP-only.
 
 export async function detectAiTools(): Promise<ConnectAllToolId[]> {
   const home = await homeDir();
@@ -82,6 +83,7 @@ export async function detectAiTools(): Promise<ConnectAllToolId[]> {
     ["codex", async () => exists(await join(home, ".codex"))],
     ["cursor", async () => exists(await join(home, ".cursor"))],
     ["gemini", async () => exists(await join(home, ".gemini"))],
+    ["grok", async () => exists(await join(home, ".grok"))],
     // Locally installed remote-capable agents. Remote setups keep using the
     // settings remote agent card.
     ["openclaw", async () => exists(await join(home, ".openclaw"))],
@@ -134,7 +136,7 @@ async function resolveLocalApiKeyForMcp(): Promise<string | undefined> {
  */
 export async function buildMcpConfig(opts?: {
   forceNpx?: boolean;
-  client?: ConnectAllToolId | "grok";
+  client?: ConnectAllToolId;
 }): Promise<McpCommand> {
   const apiKey = await resolveLocalApiKeyForMcp();
 
@@ -621,13 +623,71 @@ export async function uninstallGeminiMcp(): Promise<void> {
   await removeScreenpipeFromJsonConfig(await getGeminiMcpConfigPath());
 }
 
+// Grok CLI stores MCP servers as an array at mcp.servers in user-settings.json.
+// Keep manual config, Settings and native launch setup on the same schema.
+function buildGrokMcpServer(config: McpCommand): Record<string, unknown> {
+  return {
+    id: "screenpipe",
+    label: "screenpipe",
+    enabled: true,
+    transport: "stdio",
+    command: config.command,
+    args: config.args,
+    ...(config.env && Object.keys(config.env).length > 0 ? { env: config.env } : {}),
+  };
+}
+
+export function buildGrokMcpJson(config: McpCommand): string {
+  return JSON.stringify({ mcp: { servers: [buildGrokMcpServer(config)] } }, null, 2);
+}
+
+async function readGrokConfig(configPath: string): Promise<Record<string, unknown>> {
+  const config = await readJsonConfigStrict(configPath);
+  if (config.mcp !== undefined) {
+    if (!config.mcp || typeof config.mcp !== "object" || Array.isArray(config.mcp)) {
+      throw new Error(`${configPath} mcp is not an object`);
+    }
+    const mcp = config.mcp as Record<string, unknown>;
+    if (mcp.servers !== undefined && !Array.isArray(mcp.servers)) {
+      throw new Error(`${configPath} mcp.servers is not an array`);
+    }
+  }
+  return config;
+}
+
+function isGrokScreenpipeServer(server: unknown): boolean {
+  const id = (server as { id?: unknown } | null)?.id;
+  return typeof id === "string" && id.toLowerCase() === "screenpipe";
+}
+
+export async function installGrokMcp(): Promise<McpCommand> {
+  const configPath = await getGrokConfigPath();
+  const config = await readGrokConfig(configPath);
+  const mcp = (config.mcp ?? {}) as Record<string, unknown>;
+  const servers = (mcp.servers ?? []) as unknown[];
+  const command = await buildMcpConfig({ client: "grok" });
+  mcp.servers = [...servers.filter((s) => !isGrokScreenpipeServer(s)), buildGrokMcpServer(command)];
+  config.mcp = mcp;
+  await writeJsonConfig(configPath, config);
+  return command;
+}
+
+export async function uninstallGrokMcp(): Promise<void> {
+  const configPath = await getGrokConfigPath();
+  const config = await readGrokConfig(configPath);
+  const mcp = config.mcp as Record<string, unknown> | undefined;
+  if (!mcp || !Array.isArray(mcp.servers)) return;
+  const remaining = mcp.servers.filter((s) => !isGrokScreenpipeServer(s));
+  if (remaining.length === mcp.servers.length) return;
+  mcp.servers = remaining;
+  await writeJsonConfig(configPath, config);
+}
+
 // ─── Transactional Settings connect / disconnect orchestrators (#5291) ──────
 
 // Tools whose agent reads global SKILL.md skills. Runner has no global skills
 // contract, and Windsurf (Devin Desktop) only discovers skills per-project
-// (docs.devin.ai/product-guides/skills), so both stay MCP-only. Grok is not in
-// the matrix: it isn't part of connect-all and its settings panel has its own
-// disconnect.
+// (docs.devin.ai/product-guides/skills), so both stay MCP-only alongside Grok.
 export const SKILLS_TARGET: Partial<Record<ConnectAllToolId, ExternalAgentWithSkills>> = {
   claude: "claude",
   "claude-code": "claude",
@@ -644,6 +704,7 @@ const INSTALL_MCP: Record<ConnectAllToolId, () => Promise<McpCommand>> = {
   codex: installCodexMcp,
   cursor: installCursorMcp,
   gemini: installGeminiMcp,
+  grok: installGrokMcp,
   openclaw: installOpenclawMcp,
   hermes: installHermesMcp,
   runner: installRunnerMcp,
@@ -656,6 +717,7 @@ const UNINSTALL_MCP: Record<ConnectAllToolId, () => Promise<void>> = {
   codex: uninstallCodexMcp,
   cursor: uninstallCursorMcp,
   gemini: uninstallGeminiMcp,
+  grok: uninstallGrokMcp,
   openclaw: uninstallOpenclawMcp,
   hermes: uninstallHermesMcp,
   runner: uninstallRunnerMcp,
@@ -813,6 +875,9 @@ export function friendlyToolError(err: unknown): FriendlyToolError {
   if (detail.includes("not valid JSON")) {
     return { message: "config file has a syntax error", path, detail };
   }
+  if (detail.includes("mcp is not an object") || detail.includes("mcp.servers is not an array")) {
+    return { message: "config has an invalid MCP section", path, detail };
+  }
   if (detail.includes("could not read")) {
     return { message: "can't read the config file — check its permissions", path, detail };
   }
@@ -854,6 +919,9 @@ export async function isToolConfigHealthy(id: ConnectAllToolId): Promise<boolean
         return true;
       case "gemini":
         await readJsonConfigStrict(await getGeminiMcpConfigPath());
+        return true;
+      case "grok":
+        await readGrokConfig(await getGrokConfigPath());
         return true;
       case "openclaw":
         await readJsonConfigStrict(await getOpenclawMcpConfigPath());

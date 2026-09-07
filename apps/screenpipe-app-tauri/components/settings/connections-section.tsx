@@ -65,6 +65,7 @@ import { areExternalAgentSkillsInstalled } from "@/lib/external-agent-skills";
 import {
   buildMcpConfig,
   buildCodexMcpToml,
+  buildGrokMcpJson,
   connectAiTool,
   connectAiToolTargets,
   disconnectAiTool,
@@ -428,50 +429,6 @@ async function detectInstalledConnectionIds(): Promise<Set<string>> {
   }
 
   return detected;
-}
-
-// Grok CLI stores MCP servers as an array under `mcp.servers[]` in
-// ~/.grok/user-settings.json, each entry tagged with `id`/`label`/`enabled`
-// (see superagent-ai/grok-cli src/utils/settings.ts McpServerConfig).
-function buildGrokMcpServer(config: McpCommand): Record<string, unknown> {
-  const server: Record<string, unknown> = {
-    id: "screenpipe",
-    label: "screenpipe",
-    enabled: true,
-    transport: "stdio",
-    command: config.command,
-    args: config.args,
-  };
-  if (config.env && Object.keys(config.env).length > 0) server.env = config.env;
-  return server;
-}
-
-function buildGrokMcpJson(config: McpCommand): string {
-  return JSON.stringify({ mcp: { servers: [buildGrokMcpServer(config)] } }, null, 2);
-}
-
-async function installGrokMcp(): Promise<void> {
-  const configPath = await getGrokConfigPath();
-  let config: Record<string, unknown> = {};
-  try { config = JSON.parse(await readTextFile(configPath)); } catch { /* fresh */ }
-  const mcp = (config.mcp && typeof config.mcp === "object" ? config.mcp : {}) as Record<string, unknown>;
-  const servers = (Array.isArray(mcp.servers) ? mcp.servers : []) as Record<string, unknown>[];
-  const next = servers.filter((s) => s?.id !== "screenpipe");
-  next.push(buildGrokMcpServer(await buildMcpConfig({ client: "grok" })));
-  mcp.servers = next;
-  config.mcp = mcp;
-  await mkdir(await dirname(configPath), { recursive: true });
-  await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
-}
-
-async function uninstallGrokMcp(): Promise<void> {
-  const configPath = await getGrokConfigPath();
-  let config: Record<string, unknown> = {};
-  try { config = JSON.parse(await readTextFile(configPath)); } catch { return; }
-  const mcp = (config.mcp && typeof config.mcp === "object" ? config.mcp : null) as Record<string, unknown> | null;
-  if (!mcp || !Array.isArray(mcp.servers)) return;
-  mcp.servers = (mcp.servers as Record<string, unknown>[]).filter((s) => s?.id !== "screenpipe");
-  await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
 }
 
 // ---------------------------------------------------------------------------
@@ -1421,7 +1378,7 @@ function GrokPanel({ onConnected, onDisconnected }: { onConnected?: () => void; 
     try {
       setState("installing");
       setConnectError(null);
-      await installGrokMcp();
+      await connectAiTool("grok");
       setState("installed");
       onConnected?.();
     } catch (error) {
@@ -1432,9 +1389,14 @@ function GrokPanel({ onConnected, onDisconnected }: { onConnected?: () => void; 
   };
 
   const handleDisconnect = async () => {
-    try { await uninstallGrokMcp(); } catch (e) { console.warn("grok config remove failed:", e); }
-    setState("idle");
-    onDisconnected?.();
+    try {
+      setConnectError(null);
+      await disconnectAiTool("grok");
+      setState("idle");
+      onDisconnected?.();
+    } catch (error) {
+      setConnectError(friendlyToolError(error));
+    }
   };
 
   return (

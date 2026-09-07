@@ -150,11 +150,12 @@ async function callActivitySummaryThroughMcp(
       await waitForAppReady();
     });
 
-    it("connects detected Claude Code, Codex, Cursor, Gemini, and Runner configs in the Rust background task", async () => {
+    it("connects detected Claude Code, Codex, Cursor, Gemini, Grok, and Runner configs in the Rust background task", async () => {
       const claudeCodeConfig = resolve(E2E_AI_TOOLS_HOME, ".claude.json");
       const codexConfig = resolve(E2E_AI_TOOLS_HOME, ".codex", "config.toml");
       const cursorConfig = resolve(E2E_AI_TOOLS_HOME, ".cursor", "mcp.json");
       const geminiConfig = resolve(E2E_AI_TOOLS_HOME, ".gemini", "settings.json");
+      const grokConfig = resolve(E2E_AI_TOOLS_HOME, ".grok", "user-settings.json");
       const runnerConfig = resolve(E2E_AI_TOOLS_HOME, ".runner", "mcp.json");
       const requiredSkills = [
         resolve(
@@ -229,6 +230,9 @@ async function callActivitySummaryThroughMcp(
             JSON.parse(readFileSync(geminiConfig, "utf8")).mcpServers
               ?.screenpipe,
           ) &&
+          JSON.parse(readFileSync(grokConfig, "utf8")).mcp?.servers?.some(
+            (server: { id: string; enabled: boolean }) => server.id === "screenpipe" && server.enabled,
+          ) &&
           JSON.parse(readFileSync(runnerConfig, "utf8")).mcpServers
             ?.screenpipe?.type === "stdio",
         {
@@ -275,6 +279,21 @@ async function callActivitySummaryThroughMcp(
         SCREENPIPE_MCP_CLIENT: "gemini",
       });
 
+      const grok = JSON.parse(readFileSync(grokConfig, "utf8"));
+      expect(grok.defaultModel).toBe("user-model");
+      expect(grok.mcp.servers).toHaveLength(2);
+      expect(grok.mcp.servers[0].id).toBe("existing");
+      const grokLaunch = grok.mcp.servers[1];
+      expect(grokLaunch).toEqual({
+        id: "screenpipe", label: "screenpipe", enabled: true, transport: "stdio",
+        command: E2E_BUN_PATH, args: ["x", "screenpipe-mcp@latest"],
+        env: {
+          SCREENPIPE_API_URL: `http://localhost:${api.port}`,
+          SCREENPIPE_LOCAL_API_KEY: api.key,
+          SCREENPIPE_MCP_CLIENT: "grok",
+        },
+      });
+
       const runner = JSON.parse(readFileSync(runnerConfig, "utf8"));
       expect(runner.workspace).toBe("kept");
       expect(runner.mcpServers.existing.url).toBe("https://example.com/mcp");
@@ -289,11 +308,12 @@ async function callActivitySummaryThroughMcp(
         expect(statSync(codexConfig).mode & 0o777).toBe(0o600);
         expect(statSync(cursorConfig).mode & 0o777).toBe(0o600);
         expect(statSync(geminiConfig).mode & 0o777).toBe(0o600);
+        expect(statSync(grokConfig).mode & 0o777).toBe(0o600);
         expect(statSync(runnerConfig).mode & 0o777).toBe(0o600);
       }
 
       const result = (await callActivitySummaryThroughMcp(
-        cursor.mcpServers.screenpipe,
+        grokLaunch,
       )) as { isError?: boolean; content?: Array<{ text?: string }> };
       expect(result.isError).not.toBe(true);
       expect(

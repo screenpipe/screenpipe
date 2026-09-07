@@ -37,6 +37,7 @@ import {
   getInstalledMcpVersion,
   isCodexMcpInstalled,
   isCursorMcpInstalled,
+  isGrokMcpInstalled,
 } from "@/lib/hooks/use-hardcoded-tiles";
 
 const DISPLAY_NAMES: Record<ConnectAllToolId, string> = {
@@ -98,6 +99,8 @@ async function isToolConnected(id: ConnectAllToolId): Promise<boolean> {
       return (await isCursorMcpInstalled()) && (await areExternalAgentSkillsInstalled("cursor"));
     case "gemini":
       return (await isGeminiMcpInstalled()) && (await areExternalAgentSkillsInstalled("gemini"));
+    case "grok":
+      return isGrokMcpInstalled();
     case "openclaw":
       return (await isOpenclawMcpInstalled()) && (await areExternalAgentSkillsInstalled("openclaw"));
     case "hermes":
