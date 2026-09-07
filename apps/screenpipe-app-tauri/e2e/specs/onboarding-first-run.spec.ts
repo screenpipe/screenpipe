@@ -50,6 +50,8 @@ const LEARNING_STORAGE_KEY = "screenpipe.first-run.learning-window.v1";
 const FORCE_BILLING_GATE_KEY = "screenpipe_e2e_force_billing_gate";
 const E2E_ACCOUNT_USER_KEY = "screenpipe_e2e_account_user";
 const E2E_ACCOUNT_USER_EVENT = "screenpipe-e2e-seed-account-user";
+const E2E_ACCOUNT_USER_REQUEST_KEY = "screenpipe_e2e_account_user_request_id";
+const E2E_ACCOUNT_USER_APPLIED_KEY = "screenpipe_e2e_account_user_applied_id";
 const E2E_ACCOUNT_FIXTURE_ACTIVE_KEY =
   "screenpipe_e2e_account_fixture_active";
 
@@ -65,6 +67,36 @@ const waitForBodyText = async (needle: string, timeout = 10_000) => {
   });
 };
 
+/** Persist a synthetic starting slide without exercising a product action. */
+const persistOnboardingStepFixture = async (step: string) => {
+  const rid = await invokeOrThrow<number | null>("plugin:store|get_store", {
+    path: join(E2E_DATA_DIR, "store.bin"),
+  });
+  if (rid == null) throw new Error("settings store is not loaded");
+  const [value, exists] = await invokeOrThrow<
+    [Record<string, unknown>, boolean]
+  >("plugin:store|get", { rid, key: "onboarding" });
+  const onboarding = exists && value ? value : {};
+  await invokeOrThrow("plugin:store|set", {
+    rid,
+    key: "onboarding",
+    value: { ...onboarding, currentStep: step },
+  });
+  await invokeOrThrow("plugin:store|save", { rid });
+  await browser.waitUntil(
+    async () => {
+      const status = await invokeOrThrow<{ currentStep: string | null }>(
+        "get_onboarding_status",
+      );
+      return status.currentStep === step;
+    },
+    {
+      timeout: t(10_000),
+      timeoutMsg: `onboarding step "${step}" was not persisted`,
+    },
+  );
+};
+
 /**
  * Drive the setup flow to a specific slide without a real login round-trip.
  *
@@ -74,14 +106,20 @@ const waitForBodyText = async (needle: string, timeout = 10_000) => {
  * dependencies. Same shape as screen-recording-restart.spec.ts.
  */
 const gotoSlide = async (step: string) => {
-  await invokeOrThrow("set_onboarding_step", { step });
+  // WebView2 can strand store-plugin IPC when it originates from the
+  // onboarding webview while that webview is also hydrating the same store.
+  // Home stays mounted for the whole setup flow and is the context used by
+  // the fresh-premise setup above, so write the synthetic fixture there.
+  if (!(await browser.getWindowHandles()).includes("home")) {
+    await showWindow({ Home: { page: null } });
+  }
+  await waitForWindowHandle("home", t(20_000));
+  await browser.switchToWindow("home");
+  await persistOnboardingStepFixture(step);
 
   // Destroy and recreate rather than just showing: showWindow on a live
   // window only focuses it, so the mount-time restore effect never re-runs
   // and the flow stays on whatever slide it was already displaying.
-  await showWindow({ Home: { page: null } });
-  await waitForWindowHandle("home", t(20_000));
-  await browser.switchToWindow("home");
   await closeWindow("Onboarding");
   await waitForWindowClosed("onboarding", t(15_000));
 
@@ -178,6 +216,53 @@ const seedFreshOnboardingPremise = async () => {
   );
 };
 
+/** Apply an account fixture and wait until the real settings write resolves. */
+const applyOnboardingUser = async (
+  user: Record<string, unknown> | null,
+  fixtureActive: boolean,
+) => {
+  const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  await browser.execute(
+    (
+      key: string,
+      eventName: string,
+      value: string,
+      activeKey: string,
+      requestKey: string,
+      appliedKey: string,
+      id: string,
+      isActive: boolean,
+    ) => {
+      if (isActive) window.localStorage.setItem(activeKey, "1");
+      else window.localStorage.removeItem(activeKey);
+      window.localStorage.setItem(key, value);
+      window.localStorage.setItem(requestKey, id);
+      window.localStorage.removeItem(appliedKey);
+      window.dispatchEvent(new Event(eventName));
+    },
+    E2E_ACCOUNT_USER_KEY,
+    E2E_ACCOUNT_USER_EVENT,
+    JSON.stringify(user),
+    E2E_ACCOUNT_FIXTURE_ACTIVE_KEY,
+    E2E_ACCOUNT_USER_REQUEST_KEY,
+    E2E_ACCOUNT_USER_APPLIED_KEY,
+    requestId,
+    fixtureActive,
+  );
+  await browser.waitUntil(
+    async () =>
+      (await browser.execute(
+        (appliedKey: string) => window.localStorage.getItem(appliedKey),
+        E2E_ACCOUNT_USER_APPLIED_KEY,
+      )) === requestId,
+    {
+      timeout: t(15_000),
+      interval: 250,
+      timeoutMsg: `synthetic account ${String(user?.id ?? "clear")} was not persisted`,
+    },
+  );
+};
+
 /**
  * Seed account truth through the app's E2E-only account hook.
  *
@@ -187,49 +272,15 @@ const seedFreshOnboardingPremise = async () => {
  * the synthetic token from being sent to the production account API.
  */
 const seedOnboardingUser = async (user: Record<string, unknown>) => {
-  const seededUser = { ...user, __e2eSkipAccountRefresh: true };
-  await browser.execute(
-    (key: string, eventName: string, value: string, activeKey: string) => {
-      window.localStorage.setItem(activeKey, "1");
-      window.localStorage.setItem(key, value);
-      window.dispatchEvent(new Event(eventName));
-    },
-    E2E_ACCOUNT_USER_KEY,
-    E2E_ACCOUNT_USER_EVENT,
-    JSON.stringify(seededUser),
-    E2E_ACCOUNT_FIXTURE_ACTIVE_KEY,
-  );
-  await browser.waitUntil(
-    async () => {
-      const persisted = await readSetting<Record<string, unknown>>("user");
-      return (
-        persisted?.id === user.id &&
-        persisted?.__e2eSkipAccountRefresh === true
-      );
-    },
-    {
-      timeout: t(15_000),
-      timeoutMsg: `synthetic account ${String(user.id)} was not persisted`,
-    },
-  );
+  await applyOnboardingUser({ ...user, __e2eSkipAccountRefresh: true }, true);
 };
 
 const clearOnboardingUser = async () => {
-  await browser.execute(
-    (key: string, eventName: string, activeKey: string) => {
-      window.localStorage.removeItem(activeKey);
-      window.localStorage.setItem(key, "null");
-      window.dispatchEvent(new Event(eventName));
-    },
-    E2E_ACCOUNT_USER_KEY,
-    E2E_ACCOUNT_USER_EVENT,
-    E2E_ACCOUNT_FIXTURE_ACTIVE_KEY,
-  );
-  await browser.waitUntil(async () => (await readSetting("user")) == null, {
-    timeout: t(15_000),
-    timeoutMsg: "synthetic onboarding account was not cleared",
-  });
-  await invokeOrThrow("set_cloud_token", { token: null });
+  // updateSettings({ user: null }) performs and awaits the production
+  // setCloudToken(null) cleanup before the E2E acknowledgement is written.
+  // Invoking the same native cleanup again can contend with the just-finished
+  // encrypted-store write on Windows and leaves WebDriver waiting forever.
+  await applyOnboardingUser(null, false);
 };
 
 /**
@@ -411,7 +462,10 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
     await seedOnboardingUser({
       id: "e2e-free-user",
       clerk_id: "e2e-free-user",
-      token: "e2e-free-token",
+      // Native auth accepts synthetic credentials only under this explicit E2E
+      // prefix; using any other value leaves it in store.bin and does not seed
+      // the encrypted token path this scenario is meant to exercise.
+      token: "e2e-fake-token-onboarding-free",
       email: "free-user@screenpipe.test",
       cloud_subscribed: false,
       app_entitled: false,
@@ -500,7 +554,7 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
     await seedOnboardingUser({
       id: "e2e-lifetime-owner",
       clerk_id: "e2e-lifetime-owner",
-      token: "e2e-lifetime-token",
+      token: "e2e-fake-token-onboarding-lifetime",
       email: "lifetime-owner@screenpipe.test",
       cloud_subscribed: false,
       app_entitled: true,

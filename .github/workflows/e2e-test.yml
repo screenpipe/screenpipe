@@ -280,7 +280,11 @@ jobs:
     - name: Verify clean Free onboarding without card capture
       shell: pwsh
       working-directory: ./apps/screenpipe-app-tauri
-      run: bun run test:e2e:onboarding-first-run
+      run: |
+        $env:SCREENPIPE_E2E_FOCUSED_CANARY = "true"
+        $env:SCREENPIPE_E2E_SEED = "no-recording"
+        $env:SCREENPIPE_PORT = "3047"
+        bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/onboarding-first-run.spec.ts --mochaOpts.grep "continues from a verified Free account without asking for a card"
 
     - name: Run E2E Tests
       shell: pwsh
@@ -640,7 +644,10 @@ jobs:
         export RECORD_VIDEO=1
 
         bun run test:e2e:onboarding-background-ai-tools
-        bun run test:e2e:onboarding-first-run
+        SCREENPIPE_E2E_FOCUSED_CANARY=true \
+        SCREENPIPE_E2E_SEED=no-recording \
+        SCREENPIPE_PORT=3047 \
+        bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/onboarding-first-run.spec.ts --mochaOpts.grep "continues from a verified Free account without asking for a card"
         rm -rf ./e2e/results
         bun run test:e2e
 
@@ -932,7 +939,11 @@ jobs:
     - name: Verify clean Free onboarding without card capture
       shell: bash
       working-directory: ./apps/screenpipe-app-tauri
-      run: bun run test:e2e:onboarding-first-run
+      run: |
+        SCREENPIPE_E2E_FOCUSED_CANARY=true \
+        SCREENPIPE_E2E_SEED=no-recording \
+        SCREENPIPE_PORT=3047 \
+        bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/onboarding-first-run.spec.ts --mochaOpts.grep "continues from a verified Free account without asking for a card"
 
     - name: Run E2E Tests
       # ADVISORY (non-blocking): the full serial suite (maxInstances:1) with
