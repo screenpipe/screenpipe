@@ -180,7 +180,13 @@ function TrialActivationFlagAssignment({
         fresh: true,
         send_event: false,
       });
-      if (value === undefined) return;
+      // A disabled/deleted flag is absent even from a successful fresh
+      // response. The authenticated reload guard above has already resolved
+      // that ambiguity: absence means control, not five more seconds waiting.
+      if (value === undefined) {
+        settle({ variant: "control", source: "posthog" });
+        return;
+      }
 
       // Emit the experiment exposure only after the route is pinned to the
       // final identity. Reading cached values through the React hook here was
@@ -309,6 +315,8 @@ export default function OnboardingPage() {
   const { onboardingData, isLoading, completeOnboarding } = useOnboarding();
   const { settings, isSettingsLoaded } = useSettings();
   const user = settings.user as AppUser | null | undefined;
+  const isLoggedIn = Boolean(user?.token);
+  const previousLoginStateRef = React.useRef<boolean | null>(null);
   const completedForHiddenUiRef = React.useRef(false);
   const transitioningRef = React.useRef(false);
   const funnelStartedRef = React.useRef(false);
@@ -323,6 +331,26 @@ export default function OnboardingPage() {
     policy: managedPolicy,
     isSettingLocked,
   } = useManagedPolicy();
+
+  // The page survives the assignment-pending screen; the login slide does
+  // not. Observe the auth transition here so a new account still records its
+  // completion when that same render unmounts the slide. Wait for hydration
+  // so reopening an already authenticated installation remains a resume.
+  useEffect(() => {
+    if (isLoading || !isSettingsLoaded || !isManagedDeploymentResolved) return;
+    const loginCompleted = previousLoginStateRef.current === false && isLoggedIn;
+    previousLoginStateRef.current = isLoggedIn;
+    if (loginCompleted && currentSlide === "login" && !isManagedDeployment) {
+      posthog.capture("onboarding_login_completed");
+    }
+  }, [
+    currentSlide,
+    isLoading,
+    isLoggedIn,
+    isManagedDeployment,
+    isManagedDeploymentResolved,
+    isSettingsLoaded,
+  ]);
   // This intervention is intentionally narrow: only a canonical "low" tier
   // written by the native hardware detector is enough evidence to show it.
   // Missing, malformed, mid, and high tiers all skip it. We also wait for the
@@ -589,9 +617,8 @@ export default function OnboardingPage() {
       return;
     }
 
-    // The login gate owns this event because only it can distinguish a fresh
-    // logged-out -> logged-in transition from resuming a persisted session.
-    // Capturing it here as well duplicates every fresh-login completion.
+    // The page's auth-transition observer owns login completion. Advancing a
+    // resumed session or rerunning this callback must not emit it again.
     if (currentSlide !== "login") {
       posthog.capture(`onboarding_${currentSlide}_completed`);
     }

@@ -896,16 +896,21 @@ impl DatabaseManager {
         self.write_queue_health.clone()
     }
 
-    /// Set the hook fired when writes fail persistently (a process-wide WAL-index
-    /// desync that only a full engine restart can clear). The app wires this to a
-    /// recording restart. Safe to call after construction and to overwrite.
-    pub fn set_persistent_failure_hook(&self, hook: crate::write_queue::PersistentFailureHook) {
+    /// Set the hook fired when this database generation needs every live pool
+    /// rebuilt. The app wires this to a recording restart. Safe to call after
+    /// construction and to overwrite.
+    pub fn set_database_restart_hook(&self, hook: crate::write_queue::DatabaseRestartHook) {
         self.persistent_failure_hook.set_hook(hook);
         if self.write_queue_health.is_hard_faulted() {
             if let Some(hook) = self.persistent_failure_hook.take_hard_fault_hook() {
-                hook();
+                hook(crate::write_queue::DatabaseRestartReason::SqliteHardFault);
             }
         }
+    }
+
+    /// Compatibility wrapper for callers using the former write-wedge name.
+    pub fn set_persistent_failure_hook(&self, hook: crate::write_queue::PersistentFailureHook) {
+        self.set_database_restart_hook(Arc::new(move |_| hook()));
     }
 
     /// Route a hard SQLite error observed outside the coalescing queue (for
@@ -1214,7 +1219,7 @@ mod shutdown_tests {
         assert!(database.report_sqlite_error(&full));
         assert!(database.report_sqlite_error(&full));
         assert_eq!(hook_calls.load(Ordering::SeqCst), 0);
-        database.set_persistent_failure_hook(Arc::new(move || {
+        database.set_database_restart_hook(Arc::new(move |_| {
             hook_counter.fetch_add(1, Ordering::SeqCst);
         }));
         assert!(database.write_queue_health().is_hard_faulted());

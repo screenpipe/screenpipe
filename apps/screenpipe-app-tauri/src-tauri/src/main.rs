@@ -1861,9 +1861,6 @@ async fn main() {
             if launch_db_quarantined {
                 // Preserve the cross-launch fail-closed boundary before any
                 // server, SQLite pool, watchdog, or capture thread is started.
-                crate::health::set_boot_error(
-                    "database remains quarantined after a SQLite hard fault; run `screenpipe db recover` while screenpipe is closed",
-                );
                 crate::health::set_recording_status(crate::health::RecordingStatus::Error);
             }
 
@@ -2114,8 +2111,8 @@ async fn main() {
                             // auto-restarts recording (rebuilding every pool +
                             // the shared WAL-index).
                             let db_health = server.db.write_queue_health();
-                            server.db.set_persistent_failure_hook(
-                                crate::recording::make_db_wedge_recovery_hook(
+                            server.db.set_database_restart_hook(
+                                crate::recording::make_database_restart_hook(
                                     app_for_db_wedge.clone(),
                                     db_wedge_breaker.clone(),
                                     db_health,
@@ -2332,20 +2329,30 @@ async fn main() {
                 let recovery_app = app_handle.clone();
                 let automatic_recovery = headless_startup;
                 tauri::async_runtime::spawn(async move {
-                    if crate::db_self_heal::try_self_heal_at_launch(
+                    let self_heal_outcome = crate::db_self_heal::try_self_heal_at_launch(
                         self_heal_app,
                         self_heal_db_path,
                         !automatic_recovery,
                     )
-                    .await
+                    .await;
+                    crate::db_self_heal::finish_launch_quarantine(
+                        self_heal_outcome,
+                        || {
+                            crate::health::set_boot_error(
+                                "database remains quarantined after a SQLite hard fault; run `screenpipe db recover` while screenpipe is closed",
+                            );
+                        },
+                        || crate::db_relaunch::surface_quarantined_recovery_at_launch(
+                            &launch_db_path,
+                            !automatic_recovery,
+                        ),
+                    )
+                    .await;
+                    if self_heal_outcome
+                        != crate::db_self_heal::LaunchSelfHealOutcome::QuarantineUnresolved
                     {
                         return;
                     }
-                    crate::db_relaunch::surface_quarantined_recovery_at_launch(
-                        &launch_db_path,
-                        !automatic_recovery,
-                    )
-                    .await;
                     if automatic_recovery {
                         let recovery = crate::db_recovery_notifications::
                             start_headless_quarantined_database_recovery(

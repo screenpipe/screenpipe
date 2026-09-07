@@ -40,12 +40,19 @@ fn sqlite_lifecycle_has_one_owner_per_physical_database() {
     rust_files(&repository.join("crates"), &mut files);
 
     let mut live_truncation = Vec::new();
+    let mut live_capture_restart = Vec::new();
     let mut legacy_secret_open = Vec::new();
     let mut capture_pool_secret_store = Vec::new();
     for path in files {
         let source = production_source(&path);
         if source.contains("\"PRAGMA wal_checkpoint(TRUNCATE)") {
             live_truncation.push(path.clone());
+        }
+        if path.starts_with(crate_dir.join("src"))
+            && !path.ends_with("screenpipe-db/src/db/setup.rs")
+            && source.contains("wal_checkpoint(RESTART)")
+        {
+            live_capture_restart.push(path.clone());
         }
         if !path.ends_with("screenpipe-secrets/src/store.rs")
             && source.contains("SecretStore::open(")
@@ -64,6 +71,10 @@ fn sqlite_lifecycle_has_one_owner_per_physical_database() {
         "live WAL truncation is forbidden; use non-truncating checkpoints or offline recovery: {live_truncation:?}"
     );
     assert!(
+        live_capture_restart.is_empty(),
+        "live capture code must hand off to a full pool teardown before resetting WAL state: {live_capture_restart:?}"
+    );
+    assert!(
         legacy_secret_open.is_empty(),
         "production credential callers must use open_for_data_dir and secrets.sqlite: {legacy_secret_open:?}"
     );
@@ -75,12 +86,21 @@ fn sqlite_lifecycle_has_one_owner_per_physical_database() {
     let maintenance = production_source(&crate_dir.join("src/db/maintenance.rs"));
     assert!(!maintenance.contains("PRAGMA locking_mode = EXCLUSIVE"));
     assert!(!maintenance.contains("PRAGMA synchronous = OFF"));
+    assert!(
+        !maintenance.contains("wal_checkpoint(RESTART)"),
+        "live maintenance must hand off to a full pool teardown before resetting WAL state"
+    );
     assert!(maintenance.contains("online SQLite repair is disabled"));
 
     let setup = production_source(&crate_dir.join("src/db/setup.rs"));
     assert!(setup.contains("acquire_sqlite_manager_lease"));
     assert!(!setup.contains("sqlx::Sqlite::database_exists("));
     assert!(!setup.contains("sqlx::Sqlite::create_database("));
+    assert_eq!(
+        setup.matches("wal_checkpoint(RESTART)").count(),
+        1,
+        "RESTART is reserved for the startup boundary before application traffic"
+    );
     assert_eq!(
         setup.matches("capture_pool_options()").count(),
         2,

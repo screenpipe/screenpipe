@@ -171,6 +171,30 @@ describe("provider error copy", () => {
     expect(msg).toContain("Codex");
   });
 
+  it("reserves upgrade guidance for explicit hosted rate limits", () => {
+    for (const raw of ["rate-limited", "rate limit exceeded", "too many requests"]) {
+      const msg = buildProviderErrorMessage(raw, {
+        provider: "screenpipe-cloud",
+        model: "auto",
+      });
+
+      expect(msg).toContain("rate-limited");
+      expect(msg).toContain("upgrade");
+    }
+  });
+
+  it("maps hosted unavailability to outage copy without upgrade guidance", () => {
+    const msg = buildProviderErrorMessage("service temporarily unavailable", {
+      provider: "screenpipe-cloud",
+      model: "auto",
+    });
+
+    expect(msg).toContain("screenpipe cloud");
+    expect(msg).toContain("outage on our end");
+    expect(msg).not.toContain("rate-limited");
+    expect(msg).not.toContain("upgrade");
+  });
+
   it("maps the per-message tool-loop cap separately", () => {
     const msg = buildProviderErrorMessage(
       '{"error":"free_chat_turn_request_limit_exceeded"}',

@@ -7,6 +7,7 @@
 use super::{
     bounded_teardown, spawn_screenpipe_inner, RecordingState, TeardownOutcome,
 };
+use screenpipe_db::DatabaseRestartReason;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -116,7 +117,7 @@ enum DbWedgeRecoveryDecision {
 
 fn db_wedge_recovery_decision(
     signaled_health: &screenpipe_db::WriteQueueHealth,
-    signaled_recovery_epoch: u64,
+    signaled_recovery_epoch: Option<u64>,
     current_health: Option<&screenpipe_db::WriteQueueHealth>,
 ) -> DbWedgeRecoveryDecision {
     let Some(current_health) = current_health else {
@@ -125,32 +126,35 @@ fn db_wedge_recovery_decision(
     if !signaled_health.is_same_instance(current_health) {
         return DbWedgeRecoveryDecision::SkipSupersededGeneration;
     }
-    if current_health.fatal_run_recovery_epoch() != signaled_recovery_epoch {
+    if signaled_recovery_epoch
+        .is_some_and(|epoch| current_health.fatal_run_recovery_epoch() != epoch)
+    {
         return DbWedgeRecoveryDecision::SkipRecovered;
     }
     DbWedgeRecoveryDecision::Restart
 }
 
-/// Build the `PersistentFailureHook` the DB layer fires when writes wedge
-/// persistently. The hook itself is sync (`Fn()`), so it spawns the async
-/// restart. Captures an `AppHandle` (cheap clone, Send+Sync) and the shared
-/// breaker so restart-storm protection persists across restarts.
-pub fn make_db_wedge_recovery_hook(
+/// Build the lifecycle hook the DB layer fires when the current SQLite
+/// generation must be replaced. The hook itself is synchronous, so it spawns
+/// the async restart. Captures an `AppHandle` (cheap clone, Send+Sync) and the
+/// shared breaker so restart-storm protection persists across restarts.
+pub fn make_database_restart_hook(
     app: tauri::AppHandle,
     breaker: DbWedgeBreaker,
     health: screenpipe_db::WriteQueueHealth,
-) -> screenpipe_db::PersistentFailureHook {
-    std::sync::Arc::new(move || {
+) -> screenpipe_db::DatabaseRestartHook {
+    std::sync::Arc::new(move |reason| {
         let app = app.clone();
         let breaker = breaker.clone();
         let health = health.clone();
-        let recovery_epoch = health.fatal_run_recovery_epoch();
+        let recovery_epoch = matches!(reason, DatabaseRestartReason::PersistentWriteFailure)
+            .then(|| health.fatal_run_recovery_epoch());
         // The hook fires on the dedicated *server* runtime. Recovery removes
         // that server from state, which intentionally lets its runtime exit;
         // running this task there would cancel it halfway through respawn.
         // Dispatch onto Tauri's process-lifetime runtime instead.
         tauri::async_runtime::spawn(async move {
-            recover_from_db_wedge(app, breaker, health, recovery_epoch).await;
+            recover_from_db_wedge(app, breaker, health, recovery_epoch, reason).await;
         });
     })
 }
@@ -159,7 +163,8 @@ async fn recover_from_db_wedge(
     app: tauri::AppHandle,
     breaker: DbWedgeBreaker,
     signaled_health: screenpipe_db::WriteQueueHealth,
-    signaled_recovery_epoch: u64,
+    signaled_recovery_epoch: Option<u64>,
+    reason: DatabaseRestartReason,
 ) {
     // Debounce: let a burst of signals coalesce and any in-flight work settle.
     tokio::time::sleep(DB_WEDGE_DEBOUNCE).await;
@@ -236,8 +241,8 @@ async fn recover_from_db_wedge(
         .expect("restart decision requires a current server generation");
 
     warn!(
-        "db wedge auto-recovery: persistent write failure detected — restarting recording to \
-         rebuild all DB pools + the shared WAL-index"
+        ?reason,
+        "database lifecycle recovery requested — restarting recording to rebuild all DB pools + the shared WAL-index"
     );
 
     *recording_state.interrupted_meeting.lock().await = None;
@@ -429,11 +434,20 @@ mod tests {
         let epoch = signaled.fatal_run_recovery_epoch();
 
         assert_eq!(
-            db_wedge_recovery_decision(&signaled, epoch, Some(&same_generation)),
+            db_wedge_recovery_decision(&signaled, Some(epoch), Some(&same_generation)),
             DbWedgeRecoveryDecision::Restart
         );
         assert_eq!(
-            db_wedge_recovery_decision(&signaled, epoch.wrapping_add(1), Some(&same_generation)),
+            db_wedge_recovery_decision(&signaled, None, Some(&same_generation)),
+            DbWedgeRecoveryDecision::Restart,
+            "non-write-wedge lifecycle requests are generation-bound, not fatal-run-bound"
+        );
+        assert_eq!(
+            db_wedge_recovery_decision(
+                &signaled,
+                Some(epoch.wrapping_add(1)),
+                Some(&same_generation)
+            ),
             DbWedgeRecoveryDecision::SkipRecovered
         );
     }
@@ -445,11 +459,11 @@ mod tests {
         let epoch = signaled.fatal_run_recovery_epoch();
 
         assert_eq!(
-            db_wedge_recovery_decision(&signaled, epoch, None),
+            db_wedge_recovery_decision(&signaled, Some(epoch), None),
             DbWedgeRecoveryDecision::SkipNoServer
         );
         assert_eq!(
-            db_wedge_recovery_decision(&signaled, epoch, Some(&replacement)),
+            db_wedge_recovery_decision(&signaled, Some(epoch), Some(&replacement)),
             DbWedgeRecoveryDecision::SkipSupersededGeneration
         );
     }

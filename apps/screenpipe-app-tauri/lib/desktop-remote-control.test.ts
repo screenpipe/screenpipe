@@ -44,7 +44,7 @@ describe("desktop remote control", () => {
         forceDisabled: false,
         arbitrarySetting: true,
       }),
-    ).toEqual({ defaultEnabled: false, forceDisabled: false });
+    ).toEqual({ defaultEnabled: true, forceDisabled: false });
     expect(
       parseAecModeRemotePolicy({
         defaultValue: "invalid",
@@ -116,6 +116,29 @@ describe("desktop remote control", () => {
     ).toBe(true);
   });
 
+  it("automatically enables meeting capture for old opt-outs and old rollout defaults", () => {
+    const settings = {
+      experimentalMeetingPiggyback: false,
+      remoteControlPreferences: { ...NEW_INSTALL_REMOTE_CONTROL_PREFERENCES, smartRecording: false },
+      enterpriseManagedSettings: { experimentalMeetingPiggyback: false },
+    };
+    const policy = {
+      ...LOCAL_DESKTOP_REMOTE_POLICY,
+      boolean: {
+        ...LOCAL_DESKTOP_REMOTE_POLICY.boolean,
+        smartRecording: { defaultEnabled: false, forceDisabled: false },
+      },
+    };
+    const result = buildDesktopRemoteControlPatch(settings, policy);
+    expect(result.preferences.smartRecording).toBeNull();
+    expect(result.patch.experimentalMeetingPiggyback).toBe(true);
+    expect(result.recorderRestartRequired).toBe(true);
+    policy.boolean.smartRecording.forceDisabled = true;
+    expect(buildDesktopRemoteControlPatch(
+      { ...settings, experimentalMeetingPiggyback: true }, policy,
+    ).patch.experimentalMeetingPiggyback).toBe(false);
+  });
+
   it("preserves existing values while new stores inherit remote defaults", () => {
     expect(
       normalizeDesktopRemotePreferences({
@@ -130,7 +153,7 @@ describe("desktop remote control", () => {
     ).toEqual({
       semanticContext: true,
       coreAudioSystemAudio: false,
-      smartRecording: true,
+      smartRecording: null,
       filterMusic: false,
       prioritizeInputLatency: true,
       overlayHiding: null,
@@ -283,7 +306,7 @@ describe("desktop remote control", () => {
       autoUpdate: false,
       enableSemanticContext: false,
       experimentalCoreaudioSystemAudio: true,
-      experimentalMeetingPiggyback: false,
+      experimentalMeetingPiggyback: true,
       filterMusic: true,
       prioritizeInputLatency: false,
       aecMode: "off" as const,
@@ -353,7 +376,7 @@ describe("desktop remote control", () => {
 
     expect(
       buildDesktopRemoteControlPatch(settings, policy).changedControls,
-    ).toEqual([]);
+    ).toEqual(["smartRecording"]);
   });
 
   it("ships the rollout capability disabled and never seeds a local opt-in", () => {
@@ -402,7 +425,7 @@ describe("desktop remote control", () => {
         platform: "macos",
         enableSemanticContext: false,
         experimentalCoreaudioSystemAudio: true,
-        experimentalMeetingPiggyback: false,
+        experimentalMeetingPiggyback: true,
         filterMusic: true,
         prioritizeInputLatency: false,
         aecMode: "off",

@@ -26,6 +26,7 @@ cd "$(dirname "$0")/.."
 SENTRY_ORG="${SENTRY_ORG:-mediar}"
 SENTRY_PROJECT="${SENTRY_PROJECT:-screenpipe-ai-proxy}"
 DEPLOY_MODE="${SCREENPIPE_AI_GATEWAY_DEPLOY_MODE:-deploy}"
+PREVIEW_ALIAS="${SCREENPIPE_AI_GATEWAY_PREVIEW_ALIAS:-}"
 
 if [[ "$DEPLOY_MODE" != "deploy" && "$DEPLOY_MODE" != "upload" ]]; then
   echo "✗ SCREENPIPE_AI_GATEWAY_DEPLOY_MODE must be deploy or upload."
@@ -95,10 +96,15 @@ bunx @sentry/cli releases set-commits "${RELEASE}" --auto \
 # paths pass SENTRY_RELEASE so runtime errors resolve against the maps above.
 if [[ "$DEPLOY_MODE" == "upload" ]]; then
   echo "→ uploading zero-traffic worker version…"
-  bunx wrangler versions upload \
-    --var SENTRY_RELEASE:"${RELEASE}" \
-    --tag "${RELEASE}" \
+  UPLOAD_ARGS=(
+    --var SENTRY_RELEASE:"${RELEASE}"
+    --tag "${RELEASE}"
     --message "candidate ${RELEASE}; no traffic assigned"
+  )
+  if [[ -n "$PREVIEW_ALIAS" ]]; then
+    UPLOAD_ARGS+=(--preview-alias "$PREVIEW_ALIAS")
+  fi
+  bunx wrangler versions upload "${UPLOAD_ARGS[@]}"
   echo "✓ uploaded ${RELEASE}; production traffic unchanged"
 else
   echo "→ deploying worker to production…"

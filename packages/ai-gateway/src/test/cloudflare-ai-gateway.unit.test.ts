@@ -12,6 +12,7 @@ import {
 	getHostedChatGatewayConnection,
 	getHostedChatGatewayMode,
 	isCloudflareSpendLimitError,
+	shouldUseHostedChatGateway,
 	withHostedChatLane,
 } from '../services/cloudflare-ai-gateway';
 
@@ -31,6 +32,8 @@ describe('Cloudflare hosted-chat metadata', () => {
 		expect(getHostedChatGatewayMode({})).toBe('legacy');
 		expect(getHostedChatGatewayMode({ HOSTED_CHAT_GATEWAY_MODE: 'legacy' })).toBe('legacy');
 		expect(getHostedChatGatewayMode({ HOSTED_CHAT_GATEWAY_MODE: 'CLOUDFLARE' })).toBe('cloudflare');
+		expect(shouldUseHostedChatGateway({}, 'gpt-5.6-luna')).toBe(false);
+		expect(shouldUseHostedChatGateway({}, 'glm-5.3-flash-reap50-iq3m')).toBe(true);
 	});
 
 	it('hashes the account identity and sends only the five reviewed fields', async () => {
@@ -133,9 +136,57 @@ describe('Cloudflare provider-native connection', () => {
 		);
 	});
 
-	it('routes only OpenAI and Anthropic hosted models through the Gateway', () => {
+	it('routes Screenpipe GLM through the custom provider with container auth instead of BYOK', async () => {
+		const calls: string[] = [];
+		const env = {
+			HOSTED_CHAT_GATEWAY_MODE: 'cloudflare',
+			CLOUDFLARE_AI_GATEWAY_ID: 'gateway-staging',
+			TINFOIL_GLM_API_KEY: 'glm-container-secret',
+			AI: {
+				gateway: (id: string) => ({
+					getUrl: async (provider: string) => {
+						calls.push(`${id}:${provider}`);
+						return `https://gateway.example/${id}/${provider}`;
+					},
+				}),
+			},
+		} as unknown as Env;
+		const context = await buildHostedChatGatewayContext(
+			auth({ accountPlan: 'business' }),
+			'glm-5.3-flash-reap50-iq3m',
+			'interactive',
+		);
+		const connection = await getHostedChatGatewayConnection(env, 'custom-tinfoil', context);
+
+		expect(calls).toEqual(['gateway-staging:custom-tinfoil']);
+		expect(connection.baseURL).toEndWith('/gateway-staging/custom-tinfoil/glm/v1');
+		expect(connection.apiKey).toBe('glm-container-secret');
+		expect(connection.maxRetries).toBe(0);
+		expect(connection.defaultHeaders).not.toHaveProperty('cf-aig-byok-alias');
+		expect(connection.defaultHeaders).not.toHaveProperty('Authorization');
+		expect(connection.defaultHeaders['cf-aig-collect-log-payload']).toBe('false');
+	});
+
+	it('fails closed when the custom GLM provider has no container key', async () => {
+		const env = {
+			CLOUDFLARE_AI_GATEWAY_ID: 'gateway-staging',
+			AI: { gateway: () => ({ getUrl: async () => 'https://gateway.example/custom-tinfoil' }) },
+		} as unknown as Env;
+		const context = await buildHostedChatGatewayContext(
+			auth({ accountPlan: 'business' }),
+			'glm-5.3-flash-reap50-iq3m',
+			'interactive',
+		);
+
+		await expect(getHostedChatGatewayConnection(env, 'custom-tinfoil', context)).rejects.toThrow(
+			'TINFOIL_GLM_API_KEY is not configured',
+		);
+	});
+
+	it('routes hosted providers through the Gateway and keeps internal-only models direct', () => {
 		expect(gatewayProviderForModel('gpt-5.6-luna')).toBe('openai');
 		expect(gatewayProviderForModel('claude-sonnet-5')).toBe('anthropic');
+		expect(gatewayProviderForModel('glm-5.3-flash-reap50-iq3m')).toBe('custom-tinfoil');
 		expect(gatewayProviderForModel('screenpipe-event-classifier')).toBeNull();
 		expect(gatewayProviderForModel('gemma4-e4b')).toBeNull();
 	});

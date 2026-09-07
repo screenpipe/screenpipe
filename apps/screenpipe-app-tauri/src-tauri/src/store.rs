@@ -1860,7 +1860,7 @@ Rules:
                             "forceDisabled": false,
                         },
                         "smartRecording": {
-                            "defaultEnabled": false,
+                            "defaultEnabled": screenpipe_config::default_experimental_meeting_piggyback(),
                             "forceDisabled": false,
                         },
                         "filterMusic": {
@@ -2150,6 +2150,10 @@ impl SettingsStore {
 
     pub fn to_recording_settings(&self) -> screenpipe_config::RecordingSettings {
         let mut settings = self.recording.clone();
+        // Automatic meeting capture also applies before the frontend mounts,
+        // including old stores with the former opt-in saved as false.
+        settings.experimental_meeting_piggyback =
+            screenpipe_config::default_experimental_meeting_piggyback();
         // Override user_id with the Clerk JWT token from the auth user object.
         // This token is used as the Bearer credential for screenpipe cloud
         // (transcription proxy, Pi agent, etc.), not as a database ID.
@@ -5055,6 +5059,17 @@ mod tests {
         assert_eq!(settings.user.token, None);
         assert_eq!(settings.embedded_llm.enabled, false);
         assert_eq!(settings.ai_presets.len(), 0);
+    }
+
+    #[test]
+    fn smart_recording_is_automatic_for_legacy_stores_before_frontend_startup() {
+        let mut store = SettingsStore::default();
+        store.recording.experimental_meeting_piggyback = false;
+        store.extra.insert(
+            "remoteControlPreferences".into(),
+            json!({"smartRecording": false}),
+        );
+        assert!(store.to_recording_settings().experimental_meeting_piggyback);
     }
 
     #[test]

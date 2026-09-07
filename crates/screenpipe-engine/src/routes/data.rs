@@ -406,10 +406,11 @@ pub(crate) async fn checkpoint_handler(
         "manual wal checkpoint: busy={}, log_pages={}, checkpointed={}",
         busy, log_pages, checkpointed
     );
+    let complete = busy == 0 && checkpointed == log_pages;
 
     Ok(JsonResponse(CheckpointResponse {
-        success: busy == 0,
-        busy: busy != 0,
+        success: complete,
+        busy: !complete,
         wal_pages: log_pages,
         checkpointed_pages: checkpointed,
     }))

@@ -134,7 +134,7 @@ fn meetings_only_capture_waiting(
 /// Whether smart recording currently owns the user's normal capture.
 ///
 /// `sweep_owns_capture` is the piggyback sweep's answer to "can I actually
-/// deliver this meeting" (see `meeting_piggyback::piggyback_may_own_capture`).
+/// deliver this meeting" (see `meeting_piggyback::decide_piggyback`).
 /// Without it this gate suspended normal capture for every confirmed meeting
 /// regardless of whether the Meeting Tap had been built, so a meeting whose tap
 /// never came up recorded nothing at all.
@@ -240,6 +240,9 @@ pub struct AudioManager {
     /// The device monitor must never auto-start devices in this set.
     /// Cleared on global start/stop but preserved across reconnects.
     user_disabled_devices: Arc<RwLock<HashSet<String>>>,
+    /// Explicit configured devices and tray/API starts, distinct from automatic enrollment.
+    user_enabled_devices: Arc<RwLock<HashSet<String>>>,
+    bluetooth_gate_decisions: Arc<DashMap<AudioDevice, bool>>,
     /// Meeting-lifetime session streams (e.g. the Meeting Tap, a piggyback
     /// mic). Registered by `start_session_device`, removed by
     /// `stop_session_device`. NEVER persisted to `enabled_devices` (those are
@@ -421,6 +424,11 @@ impl AudioManager {
         let meeting_audio_tap =
             MeetingAudioTap::new(meeting_audio_tx, Arc::new(AtomicBool::new(false)));
 
+        let user_enabled_devices = if options.use_system_default_audio {
+            HashSet::new()
+        } else {
+            options.enabled_devices.clone()
+        };
         let manager = Self {
             liveness: Arc::new(()),
             piggyback_owns_capture: Arc::new(AtomicBool::new(false)),
@@ -449,6 +457,8 @@ impl AudioManager {
             reconciliation_wakeup: Arc::new(Notify::new()),
             drm_stopped_devices: Arc::new(RwLock::new(Vec::new())),
             user_disabled_devices: Arc::new(RwLock::new(HashSet::new())),
+            user_enabled_devices: Arc::new(RwLock::new(user_enabled_devices)),
+            bluetooth_gate_decisions: Arc::new(DashMap::new()),
             session_devices: Arc::new(std::sync::RwLock::new(HashSet::new())),
             suspended_devices: Arc::new(std::sync::RwLock::new(HashSet::new())),
         };
@@ -498,6 +508,11 @@ impl AudioManager {
             options.macos_input_vpio_enabled && !options.screenpipe_aec_enabled,
         );
         *self.meeting_detector.write().await = options.meeting_detector.clone();
+        *self.user_enabled_devices.write().await = if options.use_system_default_audio {
+            HashSet::new()
+        } else {
+            options.enabled_devices.clone()
+        };
 
         let user_disabled = self.user_disabled_devices.read().await.clone();
         let mut options = options;
@@ -808,6 +823,7 @@ impl AudioManager {
     /// Temporarily pause a device without changing the configured device list.
     /// Idempotent — safe to call if already paused. Never errors.
     pub async fn pause_device(&self, device_name: &str) -> Result<()> {
+        self.user_enabled_devices.write().await.remove(device_name);
         // Mark as disabled FIRST so no monitor path can race and restart it
         self.user_disabled_devices
             .write()
@@ -846,13 +862,24 @@ impl AudioManager {
             Ok(device) => device,
             Err(_) => return Err(anyhow!("Device {} not found", device_name)),
         };
+        self.user_enabled_devices
+            .write()
+            .await
+            .insert(device.to_string());
         self.start_device(&device).await?;
+        if !self.is_device_actively_streaming(&device) {
+            return Err(anyhow!(
+                "Device {} did not start: capture is gated or the stream is unavailable",
+                device
+            ));
+        }
         info!("user resumed audio device: {}", device_name);
         Ok(())
     }
 
     /// Mark a device as user-disabled. The device monitor will not auto-start it.
     pub async fn user_disable_device(&self, device_name: &str) {
+        self.user_enabled_devices.write().await.remove(device_name);
         self.user_disabled_devices
             .write()
             .await
@@ -1046,14 +1073,18 @@ impl AudioManager {
         tap_pids: Option<Vec<i32>>,
     ) -> Result<()> {
         if self.options.read().await.is_disabled {
-            return Ok(());
+            return Err(anyhow!("audio capture is disabled"));
         }
-        if self.meetings_only_capture_waiting().await {
+        if self
+            .meeting_detector()
+            .await
+            .is_none_or(|d| !d.is_in_meeting())
+        {
             debug!(
                 "skipping start of meeting-session audio device without a confirmed meeting: {}",
                 device
             );
-            return Ok(());
+            return Err(anyhow!("meeting capture is waiting for an active meeting"));
         }
         #[cfg(target_os = "macos")]
         if screenpipe_config::should_pause_audio_for_lock() {
@@ -1061,7 +1092,17 @@ impl AudioManager {
                 "skipping start of meeting-session audio device while screen is locked: {}",
                 device
             );
-            return Ok(());
+            return Err(anyhow!(
+                "audio capture is paused while the screen is locked"
+            ));
+        }
+        if self
+            .user_disabled_devices
+            .read()
+            .await
+            .contains(&device.to_string())
+        {
+            return Err(anyhow!("device {} is paused by the user", device));
         }
         // Insert BEFORE starting: the audio-receiver drop-gate bypass must see
         // this device from the very first chunk. Rolled back on failure below.
@@ -1095,7 +1136,11 @@ impl AudioManager {
         // The meeting can end while the backend is opening the stream. Remove
         // session ownership before stopping so a racing callback cannot bypass
         // the persistence gate after the edge.
-        if self.meetings_only_capture_waiting().await {
+        if self
+            .meeting_detector()
+            .await
+            .is_none_or(|d| !d.is_in_meeting())
+        {
             self.session_devices
                 .write()
                 .unwrap()
@@ -1105,7 +1150,7 @@ impl AudioManager {
                 "stopped newly-opened meeting-session audio device after the meeting ended during startup: {}",
                 device
             );
-            return Ok(());
+            return Err(anyhow!("meeting ended while opening {}", device));
         }
 
         // As above, close a stream that finished opening after the screen-lock
@@ -1121,7 +1166,7 @@ impl AudioManager {
                 "stopped newly-opened meeting-session audio device after screen locked during startup: {}",
                 device
             );
-            return Ok(());
+            return Err(anyhow!("screen locked while opening {}", device));
         }
 
         if !self.recording_handles.contains_key(device) {
@@ -1927,14 +1972,6 @@ impl AudioManager {
         self.piggyback_owns_capture.store(owns, Ordering::Relaxed);
     }
 
-    /// Whether Bluetooth mics are exempt from the meeting gate (see
-    /// `start_device`'s Bluetooth check and the device monitor's
-    /// `run_bluetooth_mic_gate_sweep`). Consumed outside this module, so
-    /// `pub(crate)` rather than private, matching `piggyback_enabled`.
-    pub(crate) async fn always_record_bluetooth_mic(&self) -> bool {
-        self.options.read().await.always_record_bluetooth_mic
-    }
-
     /// Whether `device` is currently withheld by the Bluetooth meeting gate.
     /// `start_device` uses this internally, but it's also `pub(crate)` for
     /// callers in `device_monitor.rs` that swap the active input device
@@ -1965,17 +2002,35 @@ impl AudioManager {
         // mic-only Bluetooth device (no output side on the same hardware)
         // has nothing to protect, so it's exempt from the gate entirely.
         let is_combo_headset = crate::core::device::bluetooth_input_is_combo_headset(&device.name);
-        let always_override = self.always_record_bluetooth_mic().await;
+        let options = self.options.read().await;
+        let explicitly_selected = self
+            .user_enabled_devices
+            .read()
+            .await
+            .contains(&device.to_string());
+        let always_override = options.always_record_bluetooth_mic || explicitly_selected;
+        drop(options);
         let in_meeting = match self.meeting_detector().await {
             Some(d) => d.is_in_meeting(),
             None => false,
         };
-        !crate::core::device_detection::bluetooth_mic_allowed(
+        let blocked = !crate::core::device_detection::bluetooth_mic_allowed(
             &kind,
             is_combo_headset,
             always_override,
             in_meeting,
-        )
+        );
+        if self
+            .bluetooth_gate_decisions
+            .insert(device.clone(), blocked)
+            != Some(blocked)
+        {
+            info!(
+                "bluetooth microphone gate: device={}, blocked={}, in_meeting={}, explicitly_selected={}, always_override={}, combo_headset={}",
+                device, blocked, in_meeting, explicitly_selected, always_override, is_combo_headset
+            );
+        }
+        blocked
     }
 
     /// Returns the shared WhisperContext for backward compatibility, if loaded.
@@ -2473,6 +2528,83 @@ mod tests {
         Arc,
     };
     use tokio::sync::{Barrier, Notify, Semaphore};
+
+    #[tokio::test]
+    async fn explicit_resume_cannot_report_success_when_meetings_only_gate_skips_start() {
+        if !cfg!(any(target_os = "macos", target_os = "windows")) {
+            return;
+        }
+        let db = Arc::new(
+            DatabaseManager::new("sqlite::memory:", Default::default())
+                .await
+                .unwrap(),
+        );
+        let manager = AudioManager::new(
+            AudioManagerOptions {
+                is_disabled: true, // Construct without models or opening hardware.
+                audio_capture_mode: AudioCaptureMode::MeetingsOnly,
+                ..Default::default()
+            },
+            db,
+        )
+        .await
+        .unwrap();
+        manager.options.write().await.is_disabled = false;
+        *manager.status.write().await = AudioManagerStatus::Running;
+        let error = manager
+            .resume_device("Issue 6931 microphone (input)")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("did not start"));
+        assert!(manager.current_devices().is_empty());
+        manager.options.write().await.audio_capture_mode = AudioCaptureMode::Always;
+        let device = parse_audio_device("Issue 6931 microphone (input)").unwrap();
+        let error = manager
+            .start_session_device(&device, None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("waiting for an active meeting"));
+        assert!(manager.session_devices().is_empty());
+    }
+
+    #[tokio::test]
+    async fn bluetooth_gate_distinguishes_explicit_selection_from_automatic_enrollment() {
+        let db = Arc::new(
+            DatabaseManager::new("sqlite::memory:", Default::default())
+                .await
+                .unwrap(),
+        );
+        let bt = AudioDevice::new(
+            "AirPods issue 6931 fixture".into(),
+            crate::core::device::DeviceType::Input,
+        );
+        let detector = Arc::new(MeetingDetector::new());
+        let manager = AudioManager::new(
+            AudioManagerOptions {
+                is_disabled: true,
+                enabled_devices: [bt.to_string()].into(),
+                use_system_default_audio: true,
+                meeting_detector: Some(detector.clone()),
+                ..Default::default()
+            },
+            db,
+        )
+        .await
+        .unwrap();
+        assert!(manager.bluetooth_input_gate_blocks(&bt).await);
+        detector.set_v2_in_meeting(true);
+        assert!(!manager.bluetooth_input_gate_blocks(&bt).await);
+        detector.set_v2_in_meeting(false);
+        assert!(manager.bluetooth_input_gate_blocks(&bt).await);
+        manager
+            .user_enabled_devices
+            .write()
+            .await
+            .insert(bt.to_string());
+        assert!(!manager.bluetooth_input_gate_blocks(&bt).await);
+        manager.pause_device(&bt.to_string()).await.unwrap();
+        assert!(manager.bluetooth_input_gate_blocks(&bt).await);
+    }
 
     /// Regression: a dropped clone used to tear down the live manager.
     ///

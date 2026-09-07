@@ -574,10 +574,10 @@ async fn checkpoint_hard_fault_fixture(database: &DatabaseManager) -> Result<(),
             .await
             .map_err(|error| format!("failed to checkpoint corruption fixture: {error}"))?;
         last_checkpoint = Some((busy, log_pages, checkpointed_pages));
-        // Production checkpoints deliberately use RESTART instead of TRUNCATE:
-        // the WAL can remain physically allocated even after every logical
-        // frame is durable in the main database. Requiring zero frames here
-        // confuses that safe allocation reuse with an incomplete checkpoint.
+        // Production checkpoints deliberately use PASSIVE: the WAL can remain
+        // physically allocated even after every logical frame is durable in
+        // the main database. Requiring zero frames here confuses safe
+        // allocation reuse with an incomplete checkpoint.
         if busy == 0 && checkpointed_pages == log_pages {
             return Ok(());
         }

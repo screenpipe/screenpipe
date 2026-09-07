@@ -31,8 +31,8 @@ pub async fn handle_backup_command(
 
             let (busy, log_pages, checkpointed) = db.wal_checkpoint().await?;
 
-            if busy != 0 {
-                eprintln!("warning: checkpoint was busy (another process holds the database)");
+            if busy != 0 || checkpointed != log_pages {
+                eprintln!("warning: checkpoint was incomplete (an active reader may hold the WAL)");
                 eprintln!("  wal pages: {}, checkpointed: {}", log_pages, checkpointed);
                 std::process::exit(1);
             }

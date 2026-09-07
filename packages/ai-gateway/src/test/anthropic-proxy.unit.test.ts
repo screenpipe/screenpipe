@@ -678,6 +678,22 @@ describe('AnthropicProvider.formatMessages', () => {
 		expect(toolResult.content).toBe('Found: result');
 	});
 
+	it('coerces parsed non-object tool arguments to an empty object', () => {
+		for (const argumentsValue of ['null', '[]', '42', '"text"']) {
+			const result = provider.formatMessages([{
+				role: 'assistant',
+				content: '',
+				tool_calls: [{
+					id: 'call_1',
+					type: 'function' as const,
+					function: { name: 'search', arguments: argumentsValue },
+				}],
+			}]);
+			const toolUse = (result[0].content as any[]).find((part: any) => part.type === 'tool_use');
+			expect(toolUse.input).toEqual({});
+		}
+	});
+
 	it('should handle image_url content parts', () => {
 		const result = provider.formatMessages([{
 			role: 'user',

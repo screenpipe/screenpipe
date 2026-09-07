@@ -18,12 +18,30 @@
 
 import { describe, it, expect } from 'bun:test';
 import { OpenAIProvider } from '../providers/openai';
+import { ScreenpipeGlmProvider } from '../providers/screenpipe-glm';
 import type { RequestBody } from '../types';
 
 function makeOpenAIProvider(stream: () => AsyncGenerator<any>) {
 	const provider = new OpenAIProvider('test-key');
 	(provider as any).client = {
 		baseURL: 'https://api.openai.com/v1',
+		chat: {
+			completions: {
+				create: async () => {
+					const s: any = stream();
+					s.controller = { abort: () => {} };
+					return s;
+				},
+			},
+		},
+	};
+	return provider;
+}
+
+function makeGlmProvider(stream: () => AsyncGenerator<any>) {
+	const provider = new ScreenpipeGlmProvider('test-key');
+	(provider as any).client = {
+		baseURL: 'https://pii.screenpipe.containers.tinfoil.dev/glm/v1',
 		chat: {
 			completions: {
 				create: async () => {
@@ -116,5 +134,156 @@ describe('OpenAIProvider streaming — tool calls', () => {
 
 		const finish = events.map((e) => e.choices?.[0]?.finish_reason).find(Boolean);
 		expect(finish).toBe('stop');
+	});
+
+	it('normalizes GLM native streamed content into Pi tool-call deltas', async () => {
+		async function* stream() {
+			yield { choices: [{ delta: { content: '<tool_' } }] };
+			yield { choices: [{ delta: { content: 'call>read' } }] };
+			yield { choices: [{ delta: { content: '{"path":"/tmp/pi-tool-test"}' } }] };
+			yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+			yield { choices: [], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } };
+		}
+
+		const provider = makeGlmProvider(stream);
+		const glmBody: RequestBody = {
+			model: 'glm-5.3-flash-reap50-iq3m',
+			messages: [{ role: 'user', content: 'Read the test file.' }],
+			tools: [{
+				type: 'function',
+				function: {
+					name: 'read',
+					description: 'Read a local file',
+					parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+				},
+			}],
+		};
+		const text = await new Response(await provider.createStreamingCompletion(glmBody)).text();
+		const events = parseEvents(text);
+		const toolCalls = events.flatMap((event) => event.choices?.[0]?.delta?.tool_calls ?? []);
+
+		expect(events.map((event) => event.choices?.[0]?.delta?.content ?? '').join('')).toBe('');
+		expect(toolCalls).toHaveLength(1);
+		expect(toolCalls[0].function.name).toBe('read');
+		expect(JSON.parse(toolCalls[0].function.arguments)).toEqual({ path: '/tmp/pi-tool-test' });
+		expect(events.map((event) => event.choices?.[0]?.finish_reason).find(Boolean)).toBe('tool_calls');
+		expect(events.find((event) => event.usage)?.usage.total_tokens).toBe(120);
+	});
+
+	it('normalizes GLM bare JSON streamed content into Pi tool-call deltas', async () => {
+		async function* stream() {
+			yield { choices: [{ delta: { content: '{' } }] };
+			yield { choices: [{ delta: { content: '"name":"read",' } }] };
+			yield { choices: [{ delta: { content: '"arguments":{"path":"/tmp/pi-tool-test"}}' } }] };
+			yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+		}
+
+		const provider = makeGlmProvider(stream);
+		const glmBody: RequestBody = {
+			model: 'glm-5.3-flash-reap50-iq3m',
+			messages: [{ role: 'user', content: 'Read the test file.' }],
+			tools: [{
+				type: 'function',
+				function: {
+					name: 'read',
+					description: 'Read a local file',
+					parameters: { type: 'object', properties: { path: { type: 'string' } } },
+				},
+			}],
+		};
+		const text = await new Response(await provider.createStreamingCompletion(glmBody)).text();
+		const events = parseEvents(text);
+		const toolCall = events.flatMap((event) => event.choices?.[0]?.delta?.tool_calls ?? [])[0];
+
+		expect(toolCall.function.name).toBe('read');
+		expect(JSON.parse(toolCall.function.arguments)).toEqual({ path: '/tmp/pi-tool-test' });
+		expect(events.map((event) => event.choices?.[0]?.finish_reason).find(Boolean)).toBe('tool_calls');
+	});
+
+	it('forwards GLM reasoning immediately while native tool content remains buffered', async () => {
+		let releaseContent!: () => void;
+		const contentGate = new Promise<void>((resolve) => {
+			releaseContent = resolve;
+		});
+		async function* stream() {
+			yield { choices: [{ delta: { reasoning_content: 'I should inspect the file.' } }] };
+			await contentGate;
+			yield { choices: [{ delta: { content: '<tool_call>read' } }] };
+			yield { choices: [{ delta: { content: '{"path":"/tmp/pi-tool-test"}' } }] };
+			yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+		}
+
+		const provider = makeGlmProvider(stream);
+		const glmBody: RequestBody = {
+			model: 'glm-5.3-flash-reap50-iq3m',
+			reasoning_effort: 'high',
+			messages: [{ role: 'user', content: 'Read the test file.' }],
+			tools: [{
+				type: 'function',
+				function: {
+					name: 'read',
+					description: 'Read a local file',
+					parameters: { type: 'object', properties: { path: { type: 'string' } } },
+				},
+			}],
+		};
+		const reader = (await provider.createStreamingCompletion(glmBody)).getReader();
+		const first = await Promise.race([
+			reader.read().then((value) => ({ kind: 'chunk' as const, value })),
+			new Promise<{ kind: 'timeout' }>((resolve) => setTimeout(() => resolve({ kind: 'timeout' }), 250)),
+		]);
+
+		expect(first.kind).toBe('chunk');
+		if (first.kind !== 'chunk') throw new Error('reasoning delta was buffered');
+		const firstText = new TextDecoder().decode(first.value.value);
+		expect(parseEvents(firstText)[0].choices[0].delta.reasoning_content).toBe('I should inspect the file.');
+
+		releaseContent();
+		let remaining = '';
+		while (true) {
+			const next = await reader.read();
+			if (next.done) break;
+			remaining += new TextDecoder().decode(next.value);
+		}
+		const remainingEvents = parseEvents(remaining);
+		expect(remainingEvents.map((event) => event.choices?.[0]?.delta?.content ?? '').join('')).toBe('');
+		expect(remainingEvents.flatMap((event) => event.choices?.[0]?.delta?.tool_calls ?? [])[0].function.name).toBe('read');
+	});
+
+	it('uses fast GLM template mode by default and keeps high reasoning as opt-in', async () => {
+		const requests: any[] = [];
+		const provider = new ScreenpipeGlmProvider('test-key');
+		(provider as any).client = {
+			baseURL: 'https://pii.screenpipe.containers.tinfoil.dev/glm/v1',
+			chat: {
+				completions: {
+					create: async (params: any) => {
+						requests.push(params);
+						const response = (async function* () {
+							yield { choices: [{ delta: { content: 'ok' } }] };
+							yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+						})();
+						(response as any).controller = { abort: () => {} };
+						return response;
+					},
+				},
+			},
+		};
+
+		for (const reasoning_effort of [undefined, 'medium', 'high', 'max'] as const) {
+			const request: RequestBody = {
+				model: 'glm-5.3-flash-reap50-iq3m',
+				messages: [{ role: 'user', content: 'hello' }],
+				...(reasoning_effort ? { reasoning_effort: reasoning_effort as RequestBody['reasoning_effort'] } : {}),
+			};
+			await new Response(await provider.createStreamingCompletion(request)).text();
+		}
+
+		expect(requests.map((request) => request.chat_template_kwargs?.enable_thinking)).toEqual([
+			false,
+			false,
+			true,
+			true,
+		]);
 	});
 });

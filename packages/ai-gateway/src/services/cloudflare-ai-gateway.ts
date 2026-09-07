@@ -5,13 +5,14 @@
 import type { AuthResult, Env } from '../types';
 import { isFrontierModel } from './cost-tracker';
 import { getHostedAiPlan } from './hosted-ai-policy';
+import { SCREENPIPE_GLM_MODEL } from '../providers/screenpipe-glm';
 
 export type HostedChatGatewayMode = 'legacy' | 'cloudflare';
 export type HostedChatPlan = 'free' | 'basic' | 'business' | 'business_max' | 'business_ultra' | 'super_admin' | 'internal';
 export type HostedChatLane = 'auto' | 'explicit' | 'frontier';
 export type HostedChatRequestLane = Exclude<HostedChatLane, 'frontier'>;
 export type HostedChatWorkload = 'interactive' | 'background';
-export type CloudflareGatewayProvider = 'openai' | 'anthropic';
+export type CloudflareGatewayProvider = 'openai' | 'anthropic' | 'custom-tinfoil';
 export type HostedChatLimitScope = 'combined' | 'frontier' | 'unknown';
 
 const SUPER_ADMIN_ACTOR_ID = 'f0d67846f15d207818a4016c5f12edac415d35adf8084792fec508554def5906';
@@ -77,6 +78,15 @@ export function getHostedChatGatewayMode(env: Pick<Env, 'HOSTED_CHAT_GATEWAY_MOD
 
 export function isHostedChatGatewayEnabled(env: Pick<Env, 'HOSTED_CHAT_GATEWAY_MODE'>): boolean {
 	return getHostedChatGatewayMode(env) === 'cloudflare';
+}
+
+/** Keep the global rollout gate for existing providers, but GLM is only
+ * exposed through Screenpipe's reviewed custom Gateway provider. */
+export function shouldUseHostedChatGateway(
+	env: Pick<Env, 'HOSTED_CHAT_GATEWAY_MODE'>,
+	model: string,
+): boolean {
+	return isHostedChatGatewayEnabled(env) || model.toLowerCase() === SCREENPIPE_GLM_MODEL;
 }
 
 function collapsePlan(auth: AuthResult): HostedChatPlan {
@@ -148,6 +158,7 @@ export function withHostedChatLane(
 
 export function gatewayProviderForModel(model: string): CloudflareGatewayProvider | null {
 	const lower = model.toLowerCase();
+	if (lower === SCREENPIPE_GLM_MODEL) return 'custom-tinfoil';
 	if (lower.includes('claude')) return 'anthropic';
 	if (lower.startsWith('gpt-') || lower.startsWith('o1') || lower.startsWith('o3') || lower.startsWith('o4')) {
 		return 'openai';
@@ -192,8 +203,8 @@ export async function getHostedChatGatewayConnection(
 		'cf-aig-metadata': JSON.stringify(context),
 		'cf-aig-collect-log-payload': 'false',
 		'cf-aig-max-attempts': '1',
-		'cf-aig-byok-alias': 'default',
 	};
+	if (provider !== 'custom-tinfoil') defaultHeaders['cf-aig-byok-alias'] = 'default';
 	const localGatewayToken = String(env.CLOUDFLARE_AI_GATEWAY_TOKEN ?? '').trim();
 	if (localGatewayToken) {
 		defaultHeaders['cf-aig-authorization'] = localGatewayToken.toLowerCase().startsWith('bearer ')
@@ -201,14 +212,23 @@ export async function getHostedChatGatewayConnection(
 			: `Bearer ${localGatewayToken}`;
 	}
 	if (provider === 'openai') defaultHeaders.Authorization = null;
-	else defaultHeaders['x-api-key'] = null;
+	else if (provider === 'anthropic') defaultHeaders['x-api-key'] = null;
+	const glmApiKey = String(env.TINFOIL_GLM_API_KEY ?? '').trim();
+	if (provider === 'custom-tinfoil' && !glmApiKey) {
+		throw new HostedChatGatewayConfigurationError('TINFOIL_GLM_API_KEY is not configured');
+	}
+	const gatewayBaseUrl = localBaseUrl
+		? localGatewayProviderUrl(localBaseUrl, gatewayId, provider)
+		: await env.AI!.gateway(gatewayId).getUrl(provider);
 	return {
-		baseURL: localBaseUrl
-			? localGatewayProviderUrl(localBaseUrl, gatewayId, provider)
-			: await env.AI!.gateway(gatewayId).getUrl(provider),
+		// Custom-provider URLs append the provider path after `custom-{slug}`.
+		// The Tinfoil llama.cpp endpoint lives below the fixed `/glm/v1` prefix.
+		baseURL: provider === 'custom-tinfoil'
+			? `${gatewayBaseUrl.replace(/\/$/, '')}/glm/v1`
+			: gatewayBaseUrl,
 		// Both SDKs require a value at construction time. The null header above
 		// removes it from the actual request before Cloudflare injects BYOK.
-		apiKey: 'cloudflare-byok',
+		apiKey: provider === 'custom-tinfoil' ? glmApiKey : 'cloudflare-byok',
 		maxRetries: 0,
 		defaultHeaders,
 	};

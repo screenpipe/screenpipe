@@ -158,7 +158,7 @@ impl HardFaultReporter {
         self.close_token.cancel();
         if first_for_manager {
             if let Some(hook) = self.persistent_failure_hook.take_hard_fault_hook() {
-                hook();
+                hook(crate::write_queue::DatabaseRestartReason::SqliteHardFault);
             }
         }
         true

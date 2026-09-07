@@ -18,6 +18,7 @@ interface ModelPricing {
   // so we never overstate savings for families we haven't verified.
   cacheRead?: number;
   cacheWrite?: number;
+  longContext?: { threshold: number; inputMultiplier: number; outputMultiplier: number };
 }
 
 // Anthropic prompt-caching multipliers (5-minute TTL writes — the only TTL we use)
@@ -31,6 +32,11 @@ const GEMINI25_CACHE = { cacheRead: 0.25 };
 
 const MODEL_PRICING: Record<string, ModelPricing> = {
   // OpenAI API
+  // https://developers.openai.com/api/docs/models/gpt-6-astra (Standard, Low).
+  'gpt-6-astra': {
+    input: 10.00, output: 50.00, ...GPT56_CACHE,
+    longContext: { threshold: 272_000, inputMultiplier: 2, outputMultiplier: 1.5 },
+  },
   // GPT-5.6: Sol is the flagship/default, Terra is balanced, Luna is high-volume.
   'gpt-5.6': { input: 5.00, output: 30.00, ...GPT56_CACHE },
   'gpt-5.6-sol': { input: 5.00, output: 30.00, ...GPT56_CACHE },
@@ -80,6 +86,8 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   'step-3.5-flash': { input: 0.00, output: 0.00 },
   // Screenpipe internal models (self-hosted, zero cost)
   'screenpipe-event-classifier': { input: 0.00, output: 0.00 },
+  // Fixed-capacity Tinfoil H200; no marginal provider-token charge.
+  'glm-5.3-flash-reap50-iq3m': { input: 0.00, output: 0.00 },
   // Google Gemini
   // Gemini 3.x cache pricing unverified — no discount applied (conservative)
   'gemini-2.5-flash': { input: 0.15, output: 0.60, ...GEMINI25_CACHE },
@@ -203,12 +211,14 @@ export function getModelCost(
   const readTokens = cacheRead * overflow;
   const writeTokens = cacheWrite * overflow;
 
-  const inputRate = pricing.input / 1_000_000;
+  const longContext = pricing.longContext && inTokens > pricing.longContext.threshold
+    ? pricing.longContext : undefined;
+  const inputRate = pricing.input * (longContext?.inputMultiplier ?? 1) / 1_000_000;
   const inCost =
     uncached * inputRate +
     readTokens * inputRate * (pricing.cacheRead ?? 1) +
     writeTokens * inputRate * (pricing.cacheWrite ?? 1);
-  const outCost = (outTokens / 1_000_000) * pricing.output;
+  const outCost = (outTokens / 1_000_000) * pricing.output * (longContext?.outputMultiplier ?? 1);
   return inCost + outCost;
 }
 
@@ -771,6 +781,7 @@ export function inferProvider(model: string | null | undefined): string {
   if (lower.includes('gpt') || lower.includes('o1') || lower.includes('o3') || lower.includes('o4')) return 'openai';
   if (lower.includes('gemini')) return 'google';
   if (lower.includes('gemma4')) return 'tinfoil';
+  if (lower === 'glm-5.3-flash-reap50-iq3m') return 'screenpipe-tinfoil';
   if (lower.includes('glm-') || lower.includes('kimi-k')) return 'vertex-maas';
   if (lower.includes('llama') || lower.includes('qwen') || lower.includes('mistral') || lower.includes('step-3.5') || lower.includes('stepfun')) return 'openrouter';
   if (lower.includes('screenpipe-event')) return 'screenpipe-vllm';

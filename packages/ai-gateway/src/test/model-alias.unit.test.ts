@@ -9,6 +9,10 @@ import {
 } from '../providers';
 
 describe('resolveModelAlias', () => {
+	it('keeps the active Screenpipe GLM quant instead of applying the retired GLM fallback', () => {
+		expect(resolveModelAlias('glm-5.3-flash-reap50-iq3m')).toBe('glm-5.3-flash-reap50-iq3m');
+	});
+
 	it('routes removed Google/Open MaaS aliases to the current hosted fallback', () => {
 		for (const model of [
 			'glm-4.7',

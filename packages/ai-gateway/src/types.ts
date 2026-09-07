@@ -222,6 +222,8 @@ export interface Env {
 	// fallback. Set this separately only if you need to rotate it
 	// independently of the gemma4-31b path.
 	SCREENPIPE_ENCLAVE_API_KEY?: string;
+	/** Container-owned bearer for the co-hosted GLM-5.3 Flash endpoint. */
+	TINFOIL_GLM_API_KEY?: string;
 	// Admin API auth
 	ADMIN_SECRET: string;
 	// Transcription A/B/C test routing

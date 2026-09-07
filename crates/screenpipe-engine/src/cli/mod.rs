@@ -1992,6 +1992,10 @@ pub enum DbCommand {
     /// verifies integrity, foreign keys, and a durable write canary, then swaps.
     /// Refuses to run while screenpipe is open.
     Recover {
+        /// Revalidate and install the newest previously verified candidate.
+        /// Never starts another full recovery if the candidate cannot be reused.
+        #[arg(long)]
+        resume: bool,
         /// Deprecated compatibility flag. Recovery still refuses to race a
         /// reachable screenpipe server because that cannot preserve one exact
         /// DB/WAL/SHM generation.

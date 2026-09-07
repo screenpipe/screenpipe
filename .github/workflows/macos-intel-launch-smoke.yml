@@ -277,9 +277,11 @@ jobs:
           # Whisper/VAD/diarization initialization can consume the entire watch
           # window before VisionManager starts and turn a healthy launch red.
           # `no-audio` is the existing vision-only E2E mode documented by
-          # e2e/helpers/app-launcher.ts.
+          # e2e/helpers/app-launcher.ts. The existing cloud-authenticated seed
+          # satisfies the debug app's account gate so capture actually starts;
+          # without it the process stays healthy but never creates VisionManager.
           SCREENPIPE_DATA_DIR="$DATA_DIR" \
-          SCREENPIPE_E2E_SEED="onboarding,no-audio" \
+          SCREENPIPE_E2E_SEED="onboarding,no-audio,cloud-authenticated" \
           SCREENPIPE_FOCUS_PORT="11436" \
           RUST_BACKTRACE=1 \
             "$APP_BIN" >"$LOG" 2>&1 &

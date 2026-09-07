@@ -389,7 +389,9 @@ impl AnalyticsManager {
 
                 // Send periodic event with health data + feature config
                 if let Err(e) = self.send_event("app_still_running", Some(props)).await {
-                    error!("failed to send periodic posthog event: {}", e);
+                    // Analytics transport is best-effort. Offline machines and
+                    // transient PostHog outages must not become app errors.
+                    warn!("failed to send periodic posthog event: {}", e);
                 }
             }
         }
@@ -633,7 +635,9 @@ pub fn start_analytics(
                 .send_event("app_started", Some(feature_config))
                 .await
             {
-                error!("Failed to send initial PostHog event: {}", e);
+                // A telemetry outage must never make a healthy app startup an
+                // error; the next periodic event provides another opportunity.
+                warn!("Failed to send initial PostHog event: {}", e);
             }
         }
     });

@@ -161,7 +161,7 @@ describe("onboarding login gate", () => {
     expect(mocks.loadUser).not.toHaveBeenCalled();
   });
 
-  it("captures completion only for a logged-out to logged-in transition", () => {
+  it("advances once after a fresh login while the page owns completion telemetry", () => {
     vi.useFakeTimers();
     const next = vi.fn();
     const { rerender } = render(<OnboardingLogin handleNextSlide={next} />);
@@ -171,8 +171,7 @@ describe("onboarding login gate", () => {
     };
     rerender(<OnboardingLogin handleNextSlide={next} />);
 
-    expect(mocks.capture).toHaveBeenCalledTimes(1);
-    expect(mocks.capture).toHaveBeenCalledWith(
+    expect(mocks.capture).not.toHaveBeenCalledWith(
       "onboarding_login_completed",
     );
 
@@ -182,7 +181,9 @@ describe("onboarding login gate", () => {
     rerender(<OnboardingLogin handleNextSlide={next} />);
     act(() => vi.advanceTimersByTime(500));
 
-    expect(mocks.capture).toHaveBeenCalledTimes(1);
+    expect(mocks.capture).not.toHaveBeenCalledWith(
+      "onboarding_login_completed",
+    );
     expect(next).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });

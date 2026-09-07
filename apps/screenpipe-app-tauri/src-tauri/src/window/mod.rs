@@ -164,6 +164,17 @@ pub(crate) fn make_panel_key_if_allowed(panel: &tauri_nspanel::raw_nspanel::RawN
     }
 }
 
+/// Whether a visible panel belongs to the user's currently active macOS Space.
+///
+/// `isVisible` remains true for windows pinned to a different Space, so callers
+/// must use this when deciding whether an invocation should hide the panel or
+/// move it to the Space the user is currently viewing.
+#[cfg(target_os = "macos")]
+pub(crate) fn panel_is_on_active_space(panel: &tauri_nspanel::raw_nspanel::RawNSPanel) -> bool {
+    use objc::{msg_send, sel, sel_impl};
+    unsafe { msg_send![panel, isOnActiveSpace] }
+}
+
 /// `[NSApp activateIgnoringOtherApps:YES]`, unless an e2e run is non-activating.
 ///
 /// This is the single call that yanks a developer out of their fullscreen Space,

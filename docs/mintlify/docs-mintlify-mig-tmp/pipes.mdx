@@ -81,7 +81,7 @@ curl -H "Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY" \
 - start_time / end_time: ISO 8601 timestamps
 - app_name: filter by app (e.g. "chrome", "cursor")
 - window_name: filter by window title
-- browser_url: filter by URL (e.g. "github.com")
+- browser_url: returned URL metadata; it is not a `/search` filter. To find pages by URL text, use `q` (for example, `q=github.com`) and inspect each result's `browser_url`.
 - min_length / max_length: filter by text length
 - speaker_ids: filter audio by speaker IDs
 

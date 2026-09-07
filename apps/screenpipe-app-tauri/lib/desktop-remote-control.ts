@@ -25,7 +25,7 @@ export const BOOLEAN_REMOTE_CONTROL_DEFINITIONS = {
   smartRecording: {
     flagKey: "smart-recording-control",
     settingKey: "experimentalMeetingPiggyback",
-    shippedDefault: false,
+    shippedDefault: true,
   },
   filterMusic: {
     flagKey: "music-filter-control",
@@ -404,6 +404,10 @@ export function resolveBooleanRemoteControlValue(
   platform?: string,
   managedValue?: boolean,
 ): boolean {
+  // Meeting capture is automatic. Legacy preferences, managed opt-outs and
+  // old rollout defaults must not strand existing installs on the old path.
+  // Keep the emergency kill switch available for a backend incident.
+  if (control === "smartRecording") return !policy.forceDisabled;
   const definition = BOOLEAN_REMOTE_CONTROL_DEFINITIONS[
     control
   ] as BooleanRemoteControlDefinition;
@@ -475,9 +479,7 @@ export function normalizeDesktopRemotePreferences(
     coreAudioSystemAudio: validBooleanPreference(current?.coreAudioSystemAudio)
       ? current.coreAudioSystemAudio
       : Boolean(settings.experimentalCoreaudioSystemAudio ?? true),
-    smartRecording: validBooleanPreference(current?.smartRecording)
-      ? current.smartRecording
-      : Boolean(settings.experimentalMeetingPiggyback ?? false),
+    smartRecording: null,
     filterMusic: validBooleanPreference(current?.filterMusic)
       ? current.filterMusic
       : Boolean(settings.filterMusic ?? true),

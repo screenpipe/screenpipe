@@ -296,6 +296,32 @@ describe("AuthGuard session-expiry handling", () => {
     expect(mocks.updateSettings).not.toHaveBeenCalled();
     expect(mocks.setCloudToken).not.toHaveBeenCalled();
   });
+
+  it("does not let an old token's delayed 401 clear a newly selected account", async () => {
+    let rejectOldRequest!: (error: Error) => void;
+    mocks.loadUser.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectOldRequest = reject;
+        }),
+    );
+    const view = renderGuard();
+    fireEvent(window, new Event("focus"));
+    await waitFor(() => expect(mocks.loadUser).toHaveBeenCalledWith("tok-123"));
+
+    mocks.state.user = { token: "tok-new-account", cloud_subscribed: false };
+    view.rerender(
+      <AuthGuard>
+        <div>child</div>
+      </AuthGuard>,
+    );
+    rejectOldRequest(new Error("failed to verify token: 401 Unauthorized"));
+
+    await waitFor(() => expect(mocks.loadUser).toHaveBeenCalledTimes(1));
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+    expect(mocks.setCloudToken).not.toHaveBeenCalled();
+    expect(mocks.capture).not.toHaveBeenCalled();
+  });
 });
 
 describe("installAuthInterceptor sign-out scoping", () => {

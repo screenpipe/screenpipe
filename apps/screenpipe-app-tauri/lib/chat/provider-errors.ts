@@ -306,10 +306,12 @@ function buildGenericProviderErrorMessage(
     if (
       normalized.includes("rate-limited") ||
       normalized.includes("rate limit") ||
-      normalized.includes("too many requests") ||
-      normalized.includes("unavailable")
+      normalized.includes("too many requests")
     ) {
-      return `You are currently rate-limited or the service is temporarily unavailable. Please wait a moment before trying again, or upgrade your plan for higher limits.`;
+      return `You are currently rate-limited. Please wait a moment before trying again, or upgrade your plan for higher limits.`;
+    }
+    if (normalized.includes("unavailable")) {
+      return buildCloudConnectionMessage();
     }
   }
 

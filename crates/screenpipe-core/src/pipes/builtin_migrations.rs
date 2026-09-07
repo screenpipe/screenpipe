@@ -268,6 +268,20 @@ const LEGACY_DIRECT_SAVE_STEP: &str = r#"step 3 — if your summary is worth sav
 
 replace `<EXISTING_NOTE>` with the meeting's current `note` field (empty string if none) so you don't overwrite the user's work; just append your summary under a `## Summary` heading. for the title: if the current title is missing, generic ("untitled", "meeting", just the app name) or doesn't capture what actually happened, replace it with a 5-8 word plain-english title (no quotes, no "meeting about…" prefix) — otherwise omit the field so a user-set title is left alone. if there's nothing useful to summarize (empty transcript, irrelevant audio), say so out loud and skip the PUT — don't write a placeholder."#;
 
+/// An official intermediate ending shipped after live output was introduced but
+/// before the dedicated summary endpoint. PR #6718 covered the generations on
+/// either side of it but omitted this exact `step 3 — before saving` fragment.
+const LEGACY_BEFORE_SAVING_ENDING: &str = r#"step 3 — before saving, write the proposed summary in your response starting on a line with exactly `## Summary`. put only summary content after that heading and use that same markdown in `<YOUR_SUMMARY>`. the meeting UI streams this section while you write it, so do not put planning, tool narration, or save confirmations after the heading.
+
+if your summary is worth saving, append it to the meeting note (and refresh the title in the same call) via:
+
+  curl -s -X PUT "http://localhost:3030/meetings/<MEETING_ID>" \
+    -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"title": "<NEW_TITLE_OR_OMIT>", "note": "<EXISTING_NOTE>\n\n## Summary\n<YOUR_SUMMARY>"}'
+
+replace `<EXISTING_NOTE>` with the meeting's current `note` field (empty string if none) so you don't overwrite the user's work; just append your summary under a `## Summary` heading. for the title: if the current title is missing, generic ("untitled", "meeting", just the app name) or doesn't capture what actually happened, replace it with a 5-8 word plain-english title (no quotes, no "meeting about…" prefix) — otherwise omit the field so a user-set title is left alone. if there's nothing useful to summarize (empty transcript, irrelevant audio), say so out loud and skip the PUT — don't write a placeholder."#;
+
 /// Swaps for `meeting-summary`, oldest defect first.
 fn meeting_summary_swaps() -> Vec<FragmentSwap> {
     let mut swaps = vec![
@@ -451,6 +465,13 @@ fn meeting_summary_swaps() -> Vec<FragmentSwap> {
                   summary, leaving the meeting UI on an empty spinner; upgrade the \
                   whole ending to streamed output plus the dedicated save endpoint",
             old: LEGACY_DIRECT_SAVE_STEP,
+            new: output_and_save_steps,
+        });
+        swaps.push(FragmentSwap {
+            why: "SCR-536: an omitted official ending remained non-identical to the \
+                  bundled prompt, so quota classification suppressed its valid \
+                  pipe.md from the runtime registry",
+            old: LEGACY_BEFORE_SAVING_ENDING,
             new: output_and_save_steps,
         });
     }
@@ -746,7 +767,22 @@ fn replace_prompt_body_when_hash_matches(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipes::parse_frontmatter;
+    use crate::pipes::{parse_frontmatter, PipeManager};
+    use std::collections::HashMap;
+
+    /// Exact official ending from `1985c855c^`, kept independent from the
+    /// production matcher so a transcription error cannot make the regression
+    /// fixture agree with the implementation by construction.
+    const HISTORICAL_BEFORE_SAVING_ENDING: &str = r#"step 3 — before saving, write the proposed summary in your response starting on a line with exactly `## Summary`. put only summary content after that heading and use that same markdown in `<YOUR_SUMMARY>`. the meeting UI streams this section while you write it, so do not put planning, tool narration, or save confirmations after the heading.
+
+if your summary is worth saving, append it to the meeting note (and refresh the title in the same call) via:
+
+  curl -s -X PUT "http://localhost:3030/meetings/<MEETING_ID>" \
+    -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"title": "<NEW_TITLE_OR_OMIT>", "note": "<EXISTING_NOTE>\n\n## Summary\n<YOUR_SUMMARY>"}'
+
+replace `<EXISTING_NOTE>` with the meeting's current `note` field (empty string if none) so you don't overwrite the user's work; just append your summary under a `## Summary` heading. for the title: if the current title is missing, generic ("untitled", "meeting", just the app name) or doesn't capture what actually happened, replace it with a 5-8 word plain-english title (no quotes, no "meeting about…" prefix) — otherwise omit the field so a user-set title is left alone. if there's nothing useful to summarize (empty transcript, irrelevant audio), say so out loud and skip the PUT — don't write a placeholder."#;
 
     /// The bundled prompt for a pipe, or a clear failure naming the pipe.
     fn bundled(name: &str) -> &'static str {
@@ -895,6 +931,131 @@ mod tests {
         );
         assert_eq!(fixed_body, bundled_body);
         assert!(migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
+    }
+
+    #[test]
+    fn migrate_builtin_pipe_upgrades_before_saving_meeting_summary_ending() {
+        let current_ending = meeting_summary_output_and_save_steps()
+            .expect("bundled prompt carries streamed output and save steps");
+        let bundled_presets =
+            meeting_summary_preset_chain().expect("bundled prompt carries preset chain");
+        let stale = bundled("meeting-summary")
+            .replace(current_ending, HISTORICAL_BEFORE_SAVING_ENDING)
+            .replace(
+                bundled_presets,
+                "preset:\n  - screenpipe-cloud\n  - local-model\ntimeout: 600",
+            );
+
+        assert!(stale.contains("step 3 — before saving"));
+        assert!(stale.contains("-X PUT \"http://localhost:3030/meetings/<MEETING_ID>\""));
+        assert!(stale.contains("<EXISTING_NOTE>"));
+        assert!(!stale.contains("/meetings/<MEETING_ID>/summary"));
+
+        let fixed = migrate_builtin_pipe_text("meeting-summary", &stale)
+            .expect("official before-saving ending should migrate");
+        assert!(fixed.contains("step 3 — write the summary"));
+        assert!(fixed.contains("the meeting UI streams this section live"));
+        assert!(fixed.contains("/meetings/<MEETING_ID>/summary"));
+        assert!(!fixed.contains("step 3 — before saving"));
+        assert!(!fixed.contains("<EXISTING_NOTE>"));
+
+        let (stale_prefix, stale_suffix) = stale
+            .split_once(HISTORICAL_BEFORE_SAVING_ENDING)
+            .expect("stale fixture contains the historical ending once");
+        let (fixed_prefix, fixed_suffix) = fixed
+            .split_once(current_ending)
+            .expect("migrated prompt contains the current ending once");
+        assert_eq!(fixed_prefix, stale_prefix);
+        assert_eq!(fixed_suffix, stale_suffix);
+
+        let (config, _) = parse_frontmatter(&fixed).expect("migrated Pipe should parse");
+        assert_eq!(config.preset, ["screenpipe-cloud", "local-model"]);
+        assert!(migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
+
+        let patch_variant = stale.replace(
+            "-X PUT \"http://localhost:3030/meetings/<MEETING_ID>\"",
+            "-X PATCH \"http://localhost:3030/meetings/<MEETING_ID>\"",
+        );
+        assert_eq!(
+            migrate_builtin_pipe_text("meeting-summary", &patch_variant)
+                .expect("PATCH normalization should expose the official ending migration"),
+            fixed
+        );
+    }
+
+    #[tokio::test]
+    async fn before_saving_official_pipe_is_migrated_and_loaded_at_zero_user_capacity() {
+        let temp = tempfile::tempdir().expect("temporary screenpipe data directory");
+        let pipes_dir = temp.path().join("pipes");
+        let pipe_dir = pipes_dir.join("meeting-summary");
+        std::fs::create_dir_all(&pipe_dir).expect("meeting-summary directory");
+
+        let current = bundled("meeting-summary");
+        let current_ending = meeting_summary_output_and_save_steps()
+            .expect("bundled prompt carries streamed output and save steps");
+        let stale = current.replace(current_ending, HISTORICAL_BEFORE_SAVING_ENDING);
+        std::fs::write(pipe_dir.join("pipe.md"), stale).expect("historical pipe.md fixture");
+
+        let mut manager = PipeManager::new(pipes_dir.clone(), HashMap::new(), None, 0);
+        manager.set_max_non_template_pipes(Some(0));
+        manager
+            .install_builtin_pipes()
+            .expect("startup builtin installation");
+        manager.load_pipes().await.expect("startup pipe loading");
+
+        let persisted = std::fs::read_to_string(pipe_dir.join("pipe.md"))
+            .expect("persisted meeting-summary pipe.md");
+        assert_eq!(persisted, current);
+        let meeting_summary = manager
+            .get_pipe("meeting-summary")
+            .await
+            .expect("meeting-summary remains registered at zero user capacity");
+        assert!(meeting_summary.is_bundled_builtin);
+        assert!(manager
+            .list_pipes()
+            .await
+            .iter()
+            .any(|pipe| pipe.config.name == "meeting-summary"));
+    }
+
+    #[test]
+    fn explicit_bundled_install_repairs_before_saving_meeting_summary() {
+        let temp = tempfile::tempdir().expect("temporary screenpipe data directory");
+        let pipes_dir = temp.path().join("pipes");
+        let pipe_dir = pipes_dir.join("meeting-summary");
+        std::fs::create_dir_all(&pipe_dir).expect("meeting-summary directory");
+
+        let current = bundled("meeting-summary");
+        let current_ending = meeting_summary_output_and_save_steps()
+            .expect("bundled prompt carries streamed output and save steps");
+        let stale = current.replace(current_ending, HISTORICAL_BEFORE_SAVING_ENDING);
+        std::fs::write(pipe_dir.join("pipe.md"), stale).expect("historical pipe.md fixture");
+
+        let created = crate::pipes::install_bundled_pipe(&pipes_dir, "meeting-summary")
+            .expect("explicit bundled installation");
+        assert!(
+            !created,
+            "existing pipe should be repaired, not newly installed"
+        );
+        let persisted = std::fs::read_to_string(pipe_dir.join("pipe.md"))
+            .expect("persisted meeting-summary pipe.md");
+        assert_eq!(persisted, current);
+    }
+
+    #[test]
+    fn before_saving_ending_near_match_is_preserved_as_user_customization() {
+        let current = bundled("meeting-summary");
+        let current_ending = meeting_summary_output_and_save_steps()
+            .expect("bundled prompt carries streamed output and save steps");
+        let customized_ending = HISTORICAL_BEFORE_SAVING_ENDING.replace(
+            "if your summary is worth saving",
+            "if this summary is worth saving",
+        );
+        let customized = current.replace(current_ending, &customized_ending);
+
+        assert!(migrate_builtin_pipe_text("meeting-summary", &customized).is_none());
+        assert!(migrate_builtin_pipe_text("day-recap", &customized).is_none());
+        assert!(migrate_builtin_pipe_text("meeting-summary", current).is_none());
     }
 
     #[test]

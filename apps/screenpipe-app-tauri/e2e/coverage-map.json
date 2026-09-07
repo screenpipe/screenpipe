@@ -2281,8 +2281,8 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "tests": 7,
-      "notes": "Fresh-install setup walk: the acquisition slide is reachable in the shipped slide order and counted by the progress bar, offers no free-text field, one tap persists through to store.bin via the real settings command, skip records nothing, and the engine slide is the last one with no goal picker after it."
+      "tests": 9,
+      "notes": "Fresh-install setup walk: the acquisition slide is reachable in the shipped slide order and counted by the progress bar, offers no free-text field, one tap persists through to store.bin via the real settings command, skip records nothing, signed-out users reach recommended setup, verified Free accounts continue without card capture or hosted checkout and land in Home, and existing lifetime owners stay out of mandatory checkout."
     },
     {
       "spec": "onboarding-h1-follow-up.spec.ts",
