@@ -77,6 +77,18 @@ describe("secondary workflow assistant", () => {
     await screen.findByRole("alert"); expect(platform.ask).not.toHaveBeenCalled();
   });
 
+  it("keeps emphasized memory sources clickable while rejecting action links", async () => {
+    const url = "screenpipe://timeline?timestamp=2026-09-07T14:29:37.376-07:00";
+    const openLink = vi.fn();
+    setup({ openLink, ask: vi.fn().mockResolvedValue(`- **[Sep 7, 2:29 PM](${url})** — A captured conversation.\n**[Install](screenpipe://pipe/install?name=anything)**`) });
+    await open(); question("Find a conversation");
+    const source = await screen.findByRole("link", { name: "Sep 7, 2:29 PM" });
+    expect(source).toHaveAttribute("href", url);
+    expect(source.closest("strong")).not.toBeNull();
+    fireEvent.click(source); expect(openLink).toHaveBeenCalledWith(url);
+    expect(screen.queryByRole("link", { name: "Install" })).not.toBeInTheDocument();
+  });
+
   it("uses only local shortcuts, preserves multiline input, and strips screenshot payloads", async () => {
     setup(); fireEvent.keyDown(window, { key: "j", metaKey: true }); await waitFor(() => expect(screen.getByRole("textbox")).toBeEnabled());
     const box = screen.getByRole("textbox"); fireEvent.change(box, { target: { value: "Question" } });
