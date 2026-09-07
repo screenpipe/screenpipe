@@ -40,6 +40,8 @@ import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt"
 
 const E2E_ACCOUNT_USER_KEY = "screenpipe_e2e_account_user";
 const E2E_ACCOUNT_USER_EVENT = "screenpipe-e2e-seed-account-user";
+const E2E_ACCOUNT_USER_REQUEST_KEY = "screenpipe_e2e_account_user_request_id";
+const E2E_ACCOUNT_USER_APPLIED_KEY = "screenpipe_e2e_account_user_applied_id";
 // This value is replaced at build time. Normal production bundles compile the
 // unsafe account-seed hook out instead of honoring attacker-controlled storage.
 const E2E_ACCOUNT_SEED_ENABLED =
@@ -297,11 +299,25 @@ export function AppEntitlementGate({
       if (typeof window.localStorage?.getItem !== "function") return;
       const raw = window.localStorage?.getItem(E2E_ACCOUNT_USER_KEY);
       if (!raw) return;
+      const requestId = window.localStorage.getItem(
+        E2E_ACCOUNT_USER_REQUEST_KEY,
+      );
       try {
         const seededUser = JSON.parse(raw) as AppUser;
         window.localStorage.removeItem(E2E_ACCOUNT_USER_KEY);
         skipNextResumeForE2ESeedRef.current = true;
-        void updateSettings({ user: seededUser as any });
+        void updateSettings({ user: seededUser as any })
+          .then(() => {
+            if (requestId) {
+              window.localStorage.setItem(
+                E2E_ACCOUNT_USER_APPLIED_KEY,
+                requestId,
+              );
+            }
+          })
+          .catch((err) => {
+            console.warn("failed to persist e2e account user seed:", err);
+          });
       } catch (err) {
         console.warn("failed to apply e2e account user seed:", err);
       }
