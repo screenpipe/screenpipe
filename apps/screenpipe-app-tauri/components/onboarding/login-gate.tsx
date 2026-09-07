@@ -249,10 +249,6 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
   const canSkipLogin = isDevLoginSkipEnabled();
 
   const isLoggedIn = !!settings.user?.token;
-  // null until settings hydrate — SettingsProvider starts from defaults (no
-  // user) and loads store.bin asynchronously, so a mount-time snapshot would
-  // read an existing session as a fresh login on every relaunch.
-  const wasLoggedIn = useRef<boolean | null>(null);
 
   useBackgroundCanvas(bgRef, 500, 480);
   useButtonCanvas(btnRef, 200, 52, isHovered);
@@ -264,13 +260,9 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
 
   useEffect(() => {
     if (!isSettingsLoaded) return;
-    const loginCompleted = wasLoggedIn.current === false && isLoggedIn;
-    wasLoggedIn.current = isLoggedIn;
-
     if (!suppressAutoAdvance && isLoggedIn && !hasAdvanced.current) {
-      if (loginCompleted) {
-        posthog.capture("onboarding_login_completed");
-      }
+      // The page owns completion telemetry because experiment assignment can
+      // unmount this slide on the same render that delivers the login token.
       // hasAdvanced flips when the timer fires, not when it is scheduled —
       // a cancelled timer (StrictMode remount, dep change within the window)
       // must stay reschedulable or auto-advance dies with the cleanup.

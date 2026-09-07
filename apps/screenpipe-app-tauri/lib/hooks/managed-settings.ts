@@ -151,7 +151,6 @@ export const MANAGED_SETTING_DEFINITIONS: readonly ManagedSettingDefinition[] = 
     ["selected-engine", "screenpipe-cloud", "deepgram-live", "disabled"],
     "selected-engine",
   ),
-  bool("experimentalMeetingPiggyback", false),
   bool("filterMusic", false),
   enumeration("aecMode", ["off", "screenpipe", "macos", "windows"], "off"),
   number("audioChunkDuration", 5, 300, 30),

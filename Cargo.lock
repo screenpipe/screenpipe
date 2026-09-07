@@ -8555,7 +8555,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -8623,7 +8623,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio-eval"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -8662,7 +8662,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "dirs 6.0.0",
  "screenpipe-cpu-features",
@@ -8676,7 +8676,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "anyhow",
  "async-imap",
@@ -8724,7 +8724,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -8778,11 +8778,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-cpu-features"
-version = "0.4.47"
+version = "0.4.50"
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8808,12 +8808,13 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "zerocopy 0.7.35",
 ]
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -8898,7 +8899,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8916,7 +8917,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-gateway"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "async-trait",
  "axum",
@@ -8941,12 +8942,13 @@ dependencies = [
  "tower 0.4.13",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "wiremock",
 ]
 
 [[package]]
 name = "screenpipe-meeting-eval"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "anyhow",
  "clap",
@@ -8958,7 +8960,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-overlay-win"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "serde",
  "serde_json",
@@ -8969,7 +8971,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -9008,7 +9010,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-resource"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "serde",
  "sysinfo",
@@ -9028,7 +9030,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -9109,7 +9111,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sqlite-coordinator"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "libsqlite3-sys",
  "serde",
@@ -9123,7 +9125,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sqlite-recovery"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "cc",
  "libsqlite3-sys",
@@ -9133,7 +9135,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sync"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -9155,7 +9157,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-team-memory"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "serde",
  "serde_yaml",
@@ -9164,17 +9166,18 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-telemetry-wire"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.4.47"
+version = "0.4.50"
 dependencies = [
  "argon2 0.5.3",
  "chacha20poly1305",

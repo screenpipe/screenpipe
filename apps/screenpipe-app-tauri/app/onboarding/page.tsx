@@ -34,6 +34,8 @@ import {
   TRIAL_ACTIVATION_UNLOCKED_STEP,
 } from "@/lib/first-run/trial-activation";
 import { readOnboardingCheckoutStatus } from "@/lib/onboarding-checkout-navigation";
+import { StartupAuthenticationContext } from "@/components/app-entitlement-gate";
+import { shouldRestoreOnboardingLogin } from "@/lib/onboarding-auth-restore";
 
 type SlideKey =
   | "login"
@@ -180,7 +182,13 @@ function TrialActivationFlagAssignment({
         fresh: true,
         send_event: false,
       });
-      if (value === undefined) return;
+      // A disabled/deleted flag is absent even from a successful fresh
+      // response. The authenticated reload guard above has already resolved
+      // that ambiguity: absence means control, not five more seconds waiting.
+      if (value === undefined) {
+        settle({ variant: "control", source: "posthog" });
+        return;
+      }
 
       // Emit the experiment exposure only after the route is pinned to the
       // final identity. Reading cached values through the React hook here was
@@ -309,6 +317,11 @@ export default function OnboardingPage() {
   const { onboardingData, isLoading, completeOnboarding } = useOnboarding();
   const { settings, isSettingsLoaded } = useSettings();
   const user = settings.user as AppUser | null | undefined;
+  const isLoggedIn = Boolean(user?.token);
+  const startupAuthenticationStatus = React.useContext(
+    StartupAuthenticationContext,
+  );
+  const previousLoginStateRef = React.useRef<boolean | null>(null);
   const completedForHiddenUiRef = React.useRef(false);
   const transitioningRef = React.useRef(false);
   const funnelStartedRef = React.useRef(false);
@@ -323,6 +336,26 @@ export default function OnboardingPage() {
     policy: managedPolicy,
     isSettingLocked,
   } = useManagedPolicy();
+
+  // The page survives the assignment-pending screen; the login slide does
+  // not. Observe the auth transition here so a new account still records its
+  // completion when that same render unmounts the slide. Wait for hydration
+  // so reopening an already authenticated installation remains a resume.
+  useEffect(() => {
+    if (isLoading || !isSettingsLoaded || !isManagedDeploymentResolved) return;
+    const loginCompleted = previousLoginStateRef.current === false && isLoggedIn;
+    previousLoginStateRef.current = isLoggedIn;
+    if (loginCompleted && currentSlide === "login" && !isManagedDeployment) {
+      posthog.capture("onboarding_login_completed");
+    }
+  }, [
+    currentSlide,
+    isLoading,
+    isLoggedIn,
+    isManagedDeployment,
+    isManagedDeploymentResolved,
+    isSettingsLoaded,
+  ]);
   // This intervention is intentionally narrow: only a canonical "low" tier
   // written by the native hardware detector is enough evidence to show it.
   // Missing, malformed, mid, and high tiers all skip it. We also wait for the
@@ -497,7 +530,19 @@ export default function OnboardingPage() {
           // A saved step must not resume onto a slide that this device or its
           // managed policy is no longer eligible to see.
           const mappedSlide =
-            mapped === "acquisition" && isManagedDeployment
+            // Post-login steps assume native startup authentication succeeded.
+            // If the session was lost between launches, restoring one of those
+            // steps calls spawn_screenpipe while signed out and strands the user
+            // on the engine error screen. Return consumer installs to the login
+            // gate so they can re-authenticate before setup resumes.
+            shouldRestoreOnboardingLogin({
+              isManagedDeployment,
+              startupAuthenticationStatus,
+              isLoggedIn,
+              mappedSlide: mapped,
+            })
+              ? "login"
+              : mapped === "acquisition" && isManagedDeployment
               ? // A managed install saved mid-acquisition, from a build that
                 // still asked, resumes at the step that follows it rather than
                 // at the engine: permissions still have to be granted.
@@ -515,9 +560,11 @@ export default function OnboardingPage() {
     checkoutReturnStatus,
     isManagedDeployment,
     isManagedDeploymentResolved,
+    isLoggedIn,
     isSettingsLoaded,
     router,
     shouldShowPlanSelection,
+    startupAuthenticationStatus,
   ]);
 
   useEffect(() => {
@@ -589,9 +636,8 @@ export default function OnboardingPage() {
       return;
     }
 
-    // The login gate owns this event because only it can distinguish a fresh
-    // logged-out -> logged-in transition from resuming a persisted session.
-    // Capturing it here as well duplicates every fresh-login completion.
+    // The page's auth-transition observer owns login completion. Advancing a
+    // resumed session or rerunning this callback must not emit it again.
     if (currentSlide !== "login") {
       posthog.capture(`onboarding_${currentSlide}_completed`);
     }

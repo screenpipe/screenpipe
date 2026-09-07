@@ -351,6 +351,7 @@ impl DatabaseManager {
             },
         );
         let db_manager = DatabaseManager {
+            upload_source_id: tokio::sync::OnceCell::new(),
             pool: read_pool,
             write_pool,
             write_semaphore,

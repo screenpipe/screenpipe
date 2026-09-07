@@ -51,6 +51,9 @@ export type StartupAuthenticationStatus =
   | "logged_out"
   | "not_required";
 
+export const StartupAuthenticationContext =
+  React.createContext<StartupAuthenticationStatus>("authenticated");
+
 function getDownloadPlatform(): string | null {
   try {
     const os = getOsPlatform();
@@ -692,7 +695,11 @@ export function AppEntitlementGate({
   }
 
   if (!shouldGate) {
-    return <>{children}</>;
+    return (
+      <StartupAuthenticationContext.Provider value={authenticationStatus}>
+        {children}
+      </StartupAuthenticationContext.Provider>
+    );
   }
 
   if (!isManagedDeploymentResolved) {

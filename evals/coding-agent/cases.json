@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite": "screenpipe-app-coding-agent-regressions",
-  "dataset_version": "2026-09-05.1",
+  "dataset_version": "2026-09-07.1",
   "suite_type": "regression",
   "owner": "screenpipe engineering",
   "policy": {
@@ -1020,6 +1020,78 @@
           }
         ],
         "command": "cd packages/ai-gateway && bun test src/test/openai-param-retry.unit.test.ts --timeout=10000"
+      }
+    },
+    {
+      "id": "ai-gateway-anthropic-tool-input-object",
+      "name": "Normalize Anthropic tool-use inputs to objects",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "b06e1ffa467989bb075540e0d2e86ae36dc03683",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/6905"
+      },
+      "base_ref": "1a645b0ba4d0c51e00a2665e871050800ae6fac5",
+      "oracle_ref": "b06e1ffa467989bb075540e0d2e86ae36dc03683",
+      "oracle_paths": [
+        "packages/ai-gateway/src/providers/anthropic.ts"
+      ],
+      "gate": "advisory",
+      "trigger_paths": [
+        "packages/ai-gateway/src/providers/anthropic.ts",
+        "packages/ai-gateway/src/types.ts",
+        "packages/ai-gateway/src/handlers/chat.ts"
+      ],
+      "tags": ["regression", "escaped-failure", "ai-gateway", "anthropic", "tool-use", "schema", "compatibility"],
+      "prompt": "OpenAI-compatible assistant history can contain tool-call arguments that parse as JSON null, an array, a number, or a string. Forwarding those values as Anthropic tool-use input causes the provider to reject the request because tool input must be an object. Normalize every parsed non-object tool input to an empty object before Anthropic dispatch. Preserve valid object arguments unchanged, keep malformed JSON fail-safe, and preserve tool call identifiers and names, tool results, ordinary text and image messages, streaming behavior, and provider routing.",
+      "agent_timeout_seconds": 900,
+      "grader_dependency_links": [
+        { "source_path": "packages/ai-gateway/node_modules", "destination_path": "packages/ai-gateway/node_modules" }
+      ],
+      "grader": {
+        "timeout_seconds": 300,
+        "fixtures": [
+          {
+            "source_ref": "b06e1ffa467989bb075540e0d2e86ae36dc03683",
+            "source_path": "packages/ai-gateway/src/test/anthropic-proxy.unit.test.ts"
+          }
+        ],
+        "command": "cd packages/ai-gateway && bun test src/test/anthropic-proxy.unit.test.ts --timeout=10000"
+      }
+    },
+    {
+      "id": "meeting-audio-fallback-before-process-tap",
+      "name": "Preserve meeting audio until process capture is ready",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "c366c0747298cf919b767095c3b5f6632ffdfcde",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/6937"
+      },
+      "base_ref": "018f1ecfa4c7bd0c28210607209c4bff19aa9bd8",
+      "oracle_ref": "c366c0747298cf919b767095c3b5f6632ffdfcde",
+      "oracle_paths": [
+        "crates/screenpipe-audio/src/audio_manager/meeting_piggyback.rs"
+      ],
+      "gate": "advisory",
+      "trigger_paths": [
+        "crates/screenpipe-audio/src/audio_manager/meeting_piggyback.rs",
+        "crates/screenpipe-audio/src/audio_manager.rs",
+        "crates/screenpipe-audio/src/core/device.rs"
+      ],
+      "tags": ["regression", "escaped-failure", "audio", "meeting", "microphone", "fallback", "capture-reliability", "data-loss", "bluetooth"],
+      "prompt": "A detected meeting can start before process-level audio capture opens or while process microphone resolution is temporarily empty. In those states, preserve the existing fallback microphone and normal configured capture so neither side of the meeting is silently lost. Retry process capture only within the existing bound. Once process capture has opened, retain meeting capture ownership through transient gaps. When the meeting ends or the feature is disabled, clean up session devices and resume suspended capture. Preserve ordinary non-meeting behavior.",
+      "agent_timeout_seconds": 900,
+      "grader_dependency_links": [
+        { "source_path": "target", "destination_path": "target" }
+      ],
+      "grader": {
+        "timeout_seconds": 600,
+        "fixtures": [
+          {
+            "local_path": "graders/meeting-audio-fallback.mjs",
+            "destination_path": "crates/screenpipe-audio/eval-meeting-audio-fallback.mjs"
+          }
+        ],
+        "command": "node crates/screenpipe-audio/eval-meeting-audio-fallback.mjs && cargo test -p screenpipe-audio --lib eval_meeting_audio_fallback -- --test-threads=2"
       }
     }
   ]

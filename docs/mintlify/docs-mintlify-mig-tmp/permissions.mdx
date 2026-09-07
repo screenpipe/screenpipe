@@ -96,7 +96,7 @@ To confirm which devices screenpipe can see, query the local API:
 curl http://localhost:3030/audio/list
 ```
 
-If the expected device is not listed, macOS or the device driver has not exposed it to screenpipe yet. Check that the device works in **System Settings** → **Sound** → **Input**, then relaunch screenpipe. The microphone permission reset below uses the app's bundle ID, just like Screen Recording permission.
+If the expected device is not listed, macOS or the device driver has not exposed it to screenpipe yet. Check that the device works in **System Settings** → **Sound** → **Input**, then relaunch screenpipe. For a pinned external device that is temporarily disconnected, screenpipe can use the current system-default input as a fallback; select **Follow System Default** if you want capture to follow devices as they are plugged in or removed. The microphone permission reset below uses the app's bundle ID, just like Screen Recording permission.
 
 ## still stuck?
 

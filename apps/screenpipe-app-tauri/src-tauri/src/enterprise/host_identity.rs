@@ -14,6 +14,22 @@ use std::sync::OnceLock;
 
 const HASH_DOMAIN: &str = "screenpipe-enterprise-host-identity-v1";
 
+/// Fresh settings only: existing installation IDs are never regenerated.
+pub fn new_install_device_id() -> Result<String, String> {
+    static DEVICE_ID: OnceLock<Result<String, String>> = OnceLock::new();
+    DEVICE_ID.get_or_init(|| {
+        // Keep an EDR-interposed platform probe from hanging first launch.
+        let (send, recv) = std::sync::mpsc::channel();
+        std::thread::Builder::new().name("device-identity".into()).spawn(move || {
+            let id = raw_machine_id().as_deref()
+                .and_then(screenpipe_telemetry_wire::identity::device_id_from_machine_id);
+            let _ = send.send(id);
+        }).map_err(|e| format!("Could not start device identity lookup: {e}"))?;
+        recv.recv_timeout(std::time::Duration::from_secs(2)).ok().flatten()
+            .ok_or_else(|| "Could not read a stable machine identifier. Please restart screenpipe to retry.".into())
+    }).clone()
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct EnterpriseHostIdentity {
     pub machine_id_hash: Option<String>,
@@ -211,5 +227,17 @@ mod tests {
             parse_ioreg_platform_uuid(output).as_deref(),
             Some("00000000-1111-2222-3333-444444444444")
         );
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod device_identity_tests {
+    #[test]
+    fn platform_probe_matches_stable_id_across_initializations() {
+        let raw = super::raw_machine_id().expect("macOS exposes IOPlatformUUID");
+        let expected =
+            screenpipe_telemetry_wire::identity::device_id_from_machine_id(&raw).unwrap();
+        assert_eq!(super::new_install_device_id().unwrap(), expected);
+        assert_eq!(super::new_install_device_id().unwrap(), expected);
     }
 }

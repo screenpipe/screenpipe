@@ -35,6 +35,21 @@ env:
   GIT_LFS_SKIP_SMUDGE: 1
 
 jobs:
+  test-sqlite-recovery-windows:
+    # This package needs only bundled SQLite. Exercise NTFS links and WAL
+    # recovery independently of the full engine's media dependency build.
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: false
+          rustflags: ""
+      - name: Verify embedded SQLite recovery on Windows
+        run: cargo test --locked -p screenpipe-sqlite-recovery -- --nocapture
+
   test-ubuntu:
     runs-on: ubuntu-latest
     # A hung test otherwise burns the 6-hour GitHub default and blocks the
@@ -310,13 +325,11 @@ jobs:
           AWS_LC_SYS_PREBUILT_NASM: "1"
         run: cargo test -p screenpipe-engine --test router_contract_test --profile release-dev --target x86_64-pc-windows-msvc
 
-      # Recovery must be part of the shipped binary on Windows; never fall
-      # back to a host-installed sqlite3 executable.
-      - name: Verify embedded SQLite recovery on Windows
+      - name: Verify offline recovery installation on Windows
         env:
           RUSTFLAGS: ""
           AWS_LC_SYS_PREBUILT_NASM: "1"
-        run: cargo test -p screenpipe-sqlite-recovery --profile release-dev --target x86_64-pc-windows-msvc
+        run: cargo test -p screenpipe-engine --lib cli::db::recovery_tests --profile release-dev --target x86_64-pc-windows-msvc
 
       - name: Run specific Windows OCR cargo test
         env:

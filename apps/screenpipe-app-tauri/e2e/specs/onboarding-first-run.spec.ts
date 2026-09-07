@@ -232,6 +232,29 @@ const clearOnboardingUser = async () => {
   await invokeOrThrow("set_cloud_token", { token: null });
 };
 
+const seedFreeOnboardingUser = async () => {
+  await clearOnboardingUser();
+  const checkedAt = new Date().toISOString();
+  await seedOnboardingUser({
+    id: "e2e-free-user",
+    clerk_id: "e2e-free-user",
+    token: "e2e-free-token",
+    email: "free-user@screenpipe.test",
+    cloud_subscribed: false,
+    app_entitled: false,
+    subscription_plan: "none",
+    entitlement_source: "none",
+    has_payment_method: false,
+    entitlement: {
+      active: false,
+      plan: "none",
+      source: "none",
+      checked_at: checkedAt,
+      features: { app: false, cloud: false },
+    },
+  });
+};
+
 /**
  * Wait for an element to exist in the DOM.
  *
@@ -297,6 +320,7 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
     await waitForWindowHandle("onboarding", t(20_000));
     await browser.switchToWindow("onboarding");
     await waitForWindowUrl("/onboarding", undefined, t(20_000));
+    await waitForTestId("login-cta", 20_000);
   });
 
   after(async () => {
@@ -311,7 +335,26 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
     expect(await bodyText()).toContain("screenpipe");
   });
 
+  it("returns a signed-out restored post-login step to login", async () => {
+    await gotoSlide("engine");
+    await waitForTestId("login-cta", 30_000);
+    // Every onboarding mount starts on login before async persisted-state
+    // restore. Give that restore time to settle so this cannot pass on the
+    // transient initial frame while a broken build is about to show engine.
+    await browser.pause(t(1_500));
+    expect(await $('[data-testid="login-cta"]').isExisting()).toBe(true);
+    expect(
+      await browser.execute(
+        () =>
+          !!document.querySelector('[data-testid="onboarding-engine-startup"]'),
+      ),
+    ).toBe(false);
+  });
+
   it("reaches the acquisition slide in the shipped slide order", async () => {
+    // The shipped flow reaches acquisition only after account creation. Seed
+    // that authenticated handoff before directly restoring post-login slides.
+    await seedFreeOnboardingUser();
     await gotoSlide("acquisition");
     await waitForTestId("onboarding-acquisition", 45_000);
     await waitForBodyText("how did you find screenpipe");
@@ -380,7 +423,7 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
     await waitForBodyText("permission", 15_000);
   });
 
-  it("keeps recommended setup final for a signed-out install with no goal picker", async () => {
+  it("keeps recommended setup final for an authenticated install with no goal picker", async () => {
     await gotoSlide("recommended-setup");
     await waitForTestId("onboarding-scroll-region", 30_000);
     await waitForTestId("onboarding-final-setup", 30_000);
@@ -391,9 +434,8 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
     expect(text).not.toContain("what do you want first");
     expect(text).not.toContain("build my first live view");
 
-    // A fresh signed-out install cannot enter hosted checkout because there is
-    // no account to attach a subscription to. It must still encounter the
-    // final connection setup instead of depending on Home's learning timer.
+    // An authenticated Free install must still encounter final connection
+    // setup instead of depending on Home's learning timer.
     expect(text).toContain("connect gmail");
     const match = text.match(/setup[^0-9]*(\d+)\s*of\s*(\d+)/);
     if (match) {
@@ -406,26 +448,7 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
     // Tauri's encrypted token store survives the app-data reset used between
     // local E2E runs. Clear any synthetic token from a previous run before
     // installing this fixture so the native store and settings stay aligned.
-    await clearOnboardingUser();
-    const checkedAt = new Date().toISOString();
-    await seedOnboardingUser({
-      id: "e2e-free-user",
-      clerk_id: "e2e-free-user",
-      token: "e2e-free-token",
-      email: "free-user@screenpipe.test",
-      cloud_subscribed: false,
-      app_entitled: false,
-      subscription_plan: "none",
-      entitlement_source: "none",
-      has_payment_method: false,
-      entitlement: {
-        active: false,
-        plan: "none",
-        source: "none",
-        checked_at: checkedAt,
-        features: { app: false, cloud: false },
-      },
-    });
+    await seedFreeOnboardingUser();
 
     try {
       await gotoSlide("plan");

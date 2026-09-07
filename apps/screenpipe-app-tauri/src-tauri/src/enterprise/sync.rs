@@ -100,6 +100,9 @@ pub struct EnterpriseSyncConfig {
     pub license_key: String,
     /// Stable identifier for this physical device (e.g. machine UUID).
     pub device_id: String,
+    /// Present only on a prepared new-install upload. device_id is then the
+    /// database UUID; this value is registration metadata, never a record key.
+    pub stable_device_id: Option<String>,
     /// Hostname / friendly device name (for the admin to recognize).
     pub device_label: String,
     /// Ingest endpoint URL. Defaults to `DEFAULT_INGEST_URL`.
@@ -179,6 +182,7 @@ impl EnterpriseSyncConfig {
         Some(Self {
             license_key,
             device_id,
+            stable_device_id: None,
             device_label,
             ingest_url,
             cursor_path,
@@ -212,6 +216,8 @@ impl EnterpriseSyncConfig {
 /// language portability if we ever read it from JS.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Cursor {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_id: Option<String>,
     /// ISO-8601 UTC. Latest `frames.timestamp` we have successfully ingested.
     pub last_frame_ts: Option<String>,
     /// ISO-8601 UTC. Latest `audio_transcriptions.timestamp` we've ingested.
@@ -302,6 +308,31 @@ impl Cursor {
 /// desktop crate against `LocalApiContext`.
 #[async_trait::async_trait]
 pub trait LocalApiClient: Send + Sync {
+    async fn initialized_upload_source_id(&self) -> Option<String> {
+        None
+    }
+    /// Desktop-only boundary; headless clients retain their configured identity.
+    async fn device_identity_migration(
+        &self,
+        _legacy_id: &str,
+        _journal: &std::path::Path,
+    ) -> Result<Option<(String, String)>, EnterpriseSyncError> {
+        Ok(None)
+    }
+    async fn commit_device_identity(
+        &self,
+        _legacy_id: &str,
+        _stable_id: &str,
+    ) -> Result<(), EnterpriseSyncError> {
+        Err(EnterpriseSyncError::Configuration(
+            "device settings unavailable".into(),
+        ))
+    }
+    async fn upload_source_id(&self) -> Result<String, EnterpriseSyncError> {
+        Err(EnterpriseSyncError::Configuration(
+            "database source identity unavailable".into(),
+        ))
+    }
     /// Fetch frames + their text at or after `since_ts`, ordered by timestamp
     /// ascending, skipping `boundary_offset` rows at the boundary timestamp.
     async fn fetch_frames_since(
@@ -513,10 +544,24 @@ pub async fn post_jsonl(
     license_key: &str,
     body: Vec<u8>,
 ) -> Result<(), EnterpriseSyncError> {
-    let resp = client
+    post_jsonl_with_identity(client, url, license_key, body, None).await
+}
+
+async fn post_jsonl_with_identity(
+    client: &reqwest::Client,
+    url: &str,
+    license_key: &str,
+    body: Vec<u8>,
+    stable_device_id: Option<&str>,
+) -> Result<(), EnterpriseSyncError> {
+    let mut request = client
         .post(url)
         .header("X-License-Key", license_key)
-        .header("Content-Type", "application/x-ndjson")
+        .header("Content-Type", "application/x-ndjson");
+    if let Some(device) = stable_device_id {
+        request = request.header("X-Screenpipe-Stable-Device-Id", device);
+    }
+    let resp = request
         .body(body)
         .send()
         .await
@@ -551,6 +596,149 @@ pub async fn post_jsonl(
 
 // ─── Sync state machine ─────────────────────────────────────────────────────
 
+/// Adopt only registry metadata. Persist the existing cursor's namespace before
+/// switching settings, so a crash at either boundary can be retried safely.
+async fn migrate_device_identity(
+    cfg: &mut EnterpriseSyncConfig,
+    cursor: &mut Cursor,
+    local: &dyn LocalApiClient,
+    http: &reqwest::Client,
+) -> Result<(), EnterpriseSyncError> {
+    if screenpipe_telemetry_wire::identity::is_stable_device_id(&cfg.device_id) {
+        return Ok(());
+    }
+    let journal = cfg.cursor_path.with_extension("device-migration.json");
+    let Some((stable_id, source_id)) = local
+        .device_identity_migration(&cfg.device_id, &journal)
+        .await?
+    else {
+        return Ok(());
+    };
+    let base = control_plane_base(&cfg.ingest_url)
+        .ok_or_else(|| EnterpriseSyncError::Configuration("invalid control plane URL".into()))?;
+    let response = http.post(format!("{base}/api/enterprise/device-identity-migration"))
+        .header("X-License-Key", &cfg.license_key)
+        .json(&serde_json::json!({"source_id": source_id, "device_id": stable_id, "migrate_from": cfg.device_id}))
+        .send().await.map_err(|e| EnterpriseSyncError::Ingest(e.to_string()))?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(EnterpriseSyncError::IngestAuthRejected);
+    }
+    if !response.status().is_success() {
+        return Err(EnterpriseSyncError::Configuration(
+            "device identity migration pending; recordings remain local".into(),
+        ));
+    }
+    let confirmed: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| EnterpriseSyncError::Ingest(e.to_string()))?;
+    // Version 1 servers ignore unknown fields. Never treat that as a migration.
+    if confirmed["version"] != 2
+        || confirmed["migrate_from"] != cfg.device_id
+        || confirmed["source_id"] != source_id
+        || confirmed["device_id"] != stable_id
+    {
+        return Err(EnterpriseSyncError::Configuration(
+            "control plane did not confirm device migration".into(),
+        ));
+    }
+    if local.upload_source_id().await? != source_id {
+        return Err(EnterpriseSyncError::Configuration(
+            "database changed during device migration".into(),
+        ));
+    }
+    let mut next = cursor.clone();
+    if next.source_id.as_deref() != Some(&source_id) {
+        if next.source_id.is_some() || source_id != cfg.device_id {
+            next = Cursor::default();
+        }
+        next.source_id = Some(source_id);
+    }
+    next.save(&cfg.cursor_path)
+        .map_err(|e| EnterpriseSyncError::Configuration(e.to_string()))?;
+    *cursor = next;
+    local
+        .commit_device_identity(&cfg.device_id, &stable_id)
+        .await?;
+    cfg.device_id = stable_id;
+    Ok(())
+}
+
+async fn try_device_identity_migration(
+    cfg: &mut EnterpriseSyncConfig,
+    cursor: &mut Cursor,
+    local: &dyn LocalApiClient,
+    http: &reqwest::Client,
+) -> Result<(), EnterpriseSyncError> {
+    match migrate_device_identity(cfg, cursor, local, http).await {
+        Err(error)
+            if !matches!(error, EnterpriseSyncError::IngestAuthRejected)
+                && local.initialized_upload_source_id().await.as_deref()
+                    == Some(&cfg.device_id)
+                && cursor
+                    .source_id
+                    .as_deref()
+                    .is_none_or(|source| source == cfg.device_id) =>
+        {
+            // A conflict or unavailable control plane must not stop a safe
+            // existing uploader. After a DB reset, this proof fails and the
+            // new data stays local until its fresh namespace is registered.
+            warn!("enterprise device migration deferred: {error}");
+            cursor.source_id = Some(cfg.device_id.clone());
+            Ok(())
+        }
+        result => result,
+    }
+}
+
+/// New devices register their database source before sending any recordings.
+/// Old installs do not enter this path or create source-identity metadata.
+async fn prepare_upload_identity(
+    cfg: &EnterpriseSyncConfig,
+    local: &dyn LocalApiClient,
+    http: &reqwest::Client,
+) -> Result<EnterpriseSyncConfig, EnterpriseSyncError> {
+    if cfg.stable_device_id.is_some()
+        || !screenpipe_telemetry_wire::identity::is_stable_device_id(&cfg.device_id)
+    {
+        return Ok(cfg.clone());
+    }
+    let source_id = local.upload_source_id().await?;
+    let base = control_plane_base(&cfg.ingest_url)
+        .ok_or_else(|| EnterpriseSyncError::Configuration("invalid control plane URL".into()))?;
+    let response = http
+        .post(format!("{base}/api/enterprise/device-sources"))
+        .header("X-License-Key", &cfg.license_key)
+        .json(&serde_json::json!({"source_id": source_id, "device_id": cfg.device_id}))
+        .send()
+        .await
+        .map_err(|e| EnterpriseSyncError::Ingest(e.to_string()))?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(EnterpriseSyncError::IngestAuthRejected);
+    }
+    if !response.status().is_success() {
+        return Err(EnterpriseSyncError::Configuration(
+            "device source registration unavailable; recordings remain local".into(),
+        ));
+    }
+    let registered: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| EnterpriseSyncError::Ingest(e.to_string()))?;
+    if registered["version"] != 1
+        || registered["source_id"] != source_id
+        || registered["device_id"] != cfg.device_id
+    {
+        return Err(EnterpriseSyncError::Configuration(
+            "device source registration did not confirm this database".into(),
+        ));
+    }
+    let mut prepared = cfg.clone();
+    prepared.stable_device_id = Some(cfg.device_id.clone());
+    prepared.device_id = source_id;
+    Ok(prepared)
+}
+
 /// One pass: pull new frames + audio from local API since `cursor`, POST
 /// upstream, advance cursor on success. Pure-ish (depends on injected client +
 /// HTTP client) — easy to test.
@@ -572,6 +760,24 @@ async fn run_one_sync_inner(
 ) -> Result<SyncTickReport, EnterpriseSyncError> {
     if let EnterpriseUploadMode::Blocked(reason) = &cfg.upload_mode {
         return Err(EnterpriseSyncError::Configuration(reason.clone()));
+    }
+
+    let prepared = prepare_upload_identity(cfg, local, http).await?;
+    let cfg = &prepared;
+    if cfg.stable_device_id.is_none()
+        && cursor.source_id.is_some()
+        && local.upload_source_id().await? != cfg.device_id
+    {
+        return Err(EnterpriseSyncError::Configuration(
+            "database changed during deferred identity migration".into(),
+        ));
+    }
+    if cfg.stable_device_id.is_some() && cursor.source_id.as_deref() != Some(cfg.device_id.as_str())
+    {
+        *cursor = Cursor {
+            source_id: Some(cfg.device_id.clone()),
+            ..Cursor::default()
+        };
     }
 
     // First-run safeguard: if cursor is empty, backfill SAFE_BACKFILL only —
@@ -771,6 +977,14 @@ async fn run_one_sync_inner(
         return Ok(SyncTickReport::default());
     }
 
+    // A server restart/database replacement during the reads must not label a
+    // mixed batch with the old source's identity or advance its cursor.
+    if cursor.source_id.is_some() && local.upload_source_id().await? != cfg.device_id {
+        return Err(EnterpriseSyncError::Configuration(
+            "database changed during sync; retrying".into(),
+        ));
+    }
+
     let mut body = screenpipe_telemetry_wire::build_jsonl_with_semantic_streams(
         &cfg.device_id,
         &cfg.device_label,
@@ -831,7 +1045,14 @@ async fn run_one_sync_inner(
     match &cfg.upload_mode {
         EnterpriseUploadMode::HostedIngest => {
             for request_body in split_jsonl_requests(body, HOSTED_INGEST_REQUEST_BYTES) {
-                post_jsonl(http, &cfg.ingest_url, &cfg.license_key, request_body).await?;
+                post_jsonl_with_identity(
+                    http,
+                    &cfg.ingest_url,
+                    &cfg.license_key,
+                    request_body,
+                    cfg.stable_device_id.as_deref(),
+                )
+                .await?;
             }
         }
         EnterpriseUploadMode::DirectWriteOnly(direct) => {
@@ -1198,6 +1419,14 @@ pub async fn fulfill_frame_requests(
         debug!("frame fulfillment skipped: direct-upload org stays zero-knowledge");
         return report;
     }
+    let prepared = match prepare_upload_identity(cfg, local, http).await {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            warn!("frame source registration unavailable: {error}");
+            return report;
+        }
+    };
+    let cfg = &prepared;
     let Some(base) = control_plane_base(&cfg.ingest_url) else {
         warn!(
             "frame fulfillment: cannot derive control plane base from ingest url {}",
@@ -1206,6 +1435,13 @@ pub async fn fulfill_frame_requests(
         return report;
     };
 
+    let guard_source = cfg.stable_device_id.is_some()
+        || uuid::Uuid::parse_str(&cfg.device_id).is_ok_and(|id| id.get_version_num() == 4);
+    if guard_source
+        && local.upload_source_id().await.ok().as_deref() != Some(cfg.device_id.as_str())
+    {
+        return report;
+    }
     let requests_url = format!("{base}/api/enterprise/frame-requests");
     let resp = match http
         .get(&requests_url)
@@ -1271,6 +1507,13 @@ pub async fn fulfill_frame_requests(
             }
         };
         entries.push(entry);
+    }
+
+    if guard_source
+        && local.upload_source_id().await.ok().as_deref() != Some(cfg.device_id.as_str())
+    {
+        warn!("frame fulfillment: database changed while fetching images; retry next tick");
+        return report;
     }
 
     let requested = entries.len();
@@ -1676,12 +1919,18 @@ async fn run_sync_burst_with_recovery<R: LicenseKeyRecovery + ?Sized>(
         Err(error) => return Err(error),
     }
 
-    match run_sync_burst(cfg, cursor, local, http).await {
+    let result = async {
+        try_device_identity_migration(cfg, cursor, local, http).await?;
+        run_sync_burst(cfg, cursor, local, http).await
+    }
+    .await;
+    match result {
         Err(EnterpriseSyncError::IngestAuthRejected) if !recovered => {
             if !recover_rotated_license_key(cfg, recovery).await {
                 return Err(EnterpriseSyncError::IngestAuthRejected);
             }
             cfg.resolve_upload_mode().await?;
+            try_device_identity_migration(cfg, cursor, local, http).await?;
             run_sync_burst(cfg, cursor, local, http).await
         }
         result => result,
@@ -1730,11 +1979,12 @@ pub async fn run(
         // and reruns resolution before any local read; other failures preserve
         // the last safe mode.
         let license_key_before_tick = cfg.license_key.clone();
+        let device_id_before_tick = cfg.device_id.clone();
         let result =
             run_sync_burst_with_recovery(&mut cfg, &mut cursor, local.as_ref(), &http, &recovery)
                 .await;
 
-        if cfg.license_key != license_key_before_tick {
+        if cfg.license_key != license_key_before_tick || cfg.device_id != device_id_before_tick {
             // The log poller owns a cloned config, so restart it with the
             // recovered key. Fulfillment state lives server-side.
             log_request_loop.abort();
@@ -1868,7 +2118,7 @@ mod tests {
     };
     use tempfile::TempDir;
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    pub(super) static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn enterprise_log_identifier_is_regex_safe() {
@@ -2451,6 +2701,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let p = dir.path().join("c.json");
         let c = Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-05-07T10:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:30:00Z".to_string()),
@@ -2495,6 +2746,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let p = dir.path().join("c.json");
         Cursor {
+            source_id: None,
             last_frame_ts: Some("t".to_string()),
             last_audio_ts: None,
             last_ui_ts: None,
@@ -2897,6 +3149,7 @@ mod tests {
 
     fn test_cfg(dir: &TempDir, ingest_url: String) -> EnterpriseSyncConfig {
         EnterpriseSyncConfig {
+            stable_device_id: None,
             license_key: "sek_test".to_string(),
             device_id: "dev-1".to_string(),
             device_label: "louis-mbp".to_string(),
@@ -3025,6 +3278,7 @@ mod tests {
 
     fn initialized_cursor() -> Cursor {
         Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-08-04T00:00:00Z".to_string()),
             last_audio_ts: Some("2026-08-04T00:00:00Z".to_string()),
             last_ui_ts: Some("2026-08-04T00:00:00Z".to_string()),
@@ -3326,6 +3580,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = test_cfg(&dir, "http://does-not-matter".into());
         let mut cursor = Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-05-07T10:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T10:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T10:00:00Z".to_string()),
@@ -3382,6 +3637,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
         let mut cursor = Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
@@ -3434,6 +3690,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
         let mut cursor = Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-07-27T23:26:23Z".to_string()),
             last_audio_ts: Some("2026-07-27T23:26:23Z".to_string()),
             last_ui_ts: Some("2026-07-27T23:26:23Z".to_string()),
@@ -3480,6 +3737,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
         let mut cursor = Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-07-31T23:59:59Z".to_string()),
             last_audio_ts: Some("2026-07-31T23:59:59Z".to_string()),
             last_ui_ts: Some("2026-07-31T23:59:59Z".to_string()),
@@ -3535,6 +3793,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
         let mut cursor = Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-07-31T23:59:59Z".to_string()),
             last_audio_ts: Some("2026-07-31T23:59:59Z".to_string()),
             last_ui_ts: Some("2026-07-31T23:59:59Z".to_string()),
@@ -3586,6 +3845,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = test_cfg(&dir, format!("{}/ingest", failing_server.uri()));
         let mut cursor = Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-07-27T23:26:23Z".to_string()),
             last_audio_ts: Some("2026-07-27T23:26:23Z".to_string()),
             last_ui_ts: Some("2026-07-27T23:26:23Z".to_string()),
@@ -3648,6 +3908,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
         let original_cursor = Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
@@ -3711,6 +3972,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
         let mut cursor = Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
@@ -3756,6 +4018,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
         let mut cursor = Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
@@ -3811,6 +4074,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
         let mut cursor = Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
@@ -3875,6 +4139,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
         let mut cursor = Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
@@ -4031,6 +4296,7 @@ mod tests {
             format!("{}/complete", server.uri()),
         );
         let mut cursor = Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
@@ -4105,6 +4371,7 @@ mod tests {
             format!("{}/complete", server.uri()),
         );
         let mut cursor = Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
@@ -4170,6 +4437,7 @@ mod tests {
             format!("{}/complete", server.uri()),
         );
         let mut cursor = Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
@@ -4206,6 +4474,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
         let mut cursor = Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
@@ -4241,6 +4510,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
         let mut cursor = Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
@@ -4282,6 +4552,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
         let mut cursor = Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
@@ -4431,6 +4702,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = test_cfg(&dir, format!("{}/ingest", server.uri()));
         let mut cursor = Cursor {
+            source_id: None,
             last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
             last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
@@ -4562,6 +4834,7 @@ mod tests {
 
     fn frame_test_cfg(server_uri: &str, tmp: &TempDir) -> EnterpriseSyncConfig {
         EnterpriseSyncConfig {
+            stable_device_id: None,
             license_key: "sek_frames".to_string(),
             device_id: "dev-frame-test".to_string(),
             device_label: "frame test".to_string(),
@@ -4912,3 +5185,7 @@ mod frame_batch_tests {
         assert_eq!(frame_batch_max(FrameImagesMode::All), 200);
     }
 }
+
+#[cfg(test)]
+#[path = "source_identity_tests.rs"]
+mod source_identity_tests;

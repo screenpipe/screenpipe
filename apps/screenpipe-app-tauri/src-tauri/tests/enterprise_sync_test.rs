@@ -97,3 +97,6 @@ mod device_config;
 
 // Re-export so type names appear under one module path in test output.
 pub use sync::*;
+
+#[path = "../src/enterprise/host_identity.rs"]
+mod host_identity;

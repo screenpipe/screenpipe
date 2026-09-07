@@ -663,6 +663,7 @@
         "src/db/feedback.rs",
         "src/db/maintenance.rs",
         "src/db/setup.rs",
+        "src/db/source_identity.rs",
         "src/db/tests.rs",
         "src/db/truncation_tests.rs",
         "src/types.rs",

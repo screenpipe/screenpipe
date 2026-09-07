@@ -874,7 +874,7 @@ describe('/v1/chat/completions free-plan route policy', () => {
 			allowances: expectedAllowances,
 		});
 		const expectedFrontierModels = cloudSubscribed
-			? ['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.5-pro', 'gpt-5.4-pro', 'claude-opus-5', 'claude-fable-5']
+			? ['gpt-6-astra', 'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.5-pro', 'gpt-5.4-pro', 'claude-opus-5', 'claude-fable-5']
 			: [];
 		expect(body.hosted_ai.frontier_models).toEqual(expectedFrontierModels);
 		expect(body.hosted_ai.required_plan).toBe(expectedUpgrade?.requiredPlan ?? null);

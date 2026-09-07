@@ -27,6 +27,7 @@ const FREE_HOSTED_MODELS = ['auto'] as const;
 // name from bypassing our cost review through a Business wildcard.
 const BUSINESS_HOSTED_MODELS = [
 	...BASIC_HOSTED_MODELS,
+	'gpt-6-astra',
 	'gpt-5.6',
 	'gpt-5.6-sol',
 	'gpt-5.6-terra',
