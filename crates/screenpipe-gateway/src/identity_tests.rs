@@ -164,7 +164,9 @@ async fn database_reset_keeps_search_and_images_distinct_without_changing_legacy
     .await;
     let rows = records["records"].as_array().unwrap();
     assert_eq!(rows.len(), 14);
-    for kind in ["frame", "parsed", "activity", "audio", "ui", "memory", "feedback"] {
+    for kind in [
+        "frame", "parsed", "activity", "audio", "ui", "memory", "feedback",
+    ] {
         assert_eq!(
             rows.iter().filter(|r| r["kind"] == kind).count(),
             2,

@@ -186,7 +186,8 @@ pub async fn ensure_gateway_schema(db: &DatabaseManager) -> Result<(), GatewayEr
                SELECT 1 FROM gateway_device_sources s WHERE s.source_id = d.device_id
            )"#,
     )
-        .execute(&mut **tx.conn()).await?;
+    .execute(&mut **tx.conn())
+    .await?;
     // Parsed projections intentionally live in a gateway-owned table rather
     // than being folded into OCR rows. The full versioned wire payload stays
     // recoverable while scalar columns and FTS make the v1 surface useful.
