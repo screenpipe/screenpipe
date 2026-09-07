@@ -293,6 +293,8 @@ function fixtureSkillReceipt(draft: WorkflowSkillDraft) {
     name: draft.name,
     path: `/Users/screenpipe/.screenpipe/skills/${draft.name}/SKILL.md`,
     updated: true,
+    destinations: ["Screenpipe", "Claude Code", "Codex"],
+    warnings: [],
   };
 }
 

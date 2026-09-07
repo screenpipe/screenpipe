@@ -665,6 +665,12 @@ function WorkflowsView({ workflows, knownWorkflowCount, activityPeriod, filters,
   );
 }
 
+function destinationList(items: string[]) {
+  if (items.length < 2) return items[0] || "Screenpipe";
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
 function WorkflowSkillDialog({
   workflow,
   draft,
@@ -710,7 +716,8 @@ function WorkflowSkillDialog({
       {generating ? <div className={styles.skillGenerating}><span className={styles.spinner} /><strong>Drafting from the mapped steps</strong><p>Separating the repeatable procedure from one-off details.</p></div> : saved ? <div className={styles.skillSaved}>
         <CheckCircle2 size={23} />
         <h3>Skill saved</h3>
-        <p>It is available to Screenpipe agents on this computer.</p>
+        <p>Installed in {destinationList(saved.destinations)} on this computer.</p>
+        {!!saved.warnings.length && <details><summary>Not added everywhere</summary><ul>{saved.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></details>}
         <details><summary>File location</summary><code>{saved.path}</code></details>
         <button className={styles.primaryButton} type="button" onClick={close}>Done</button>
       </div> : draft ? <>

@@ -223,4 +223,6 @@ export type SavedWorkflowSkill = {
   name: string;
   path: string;
   updated: boolean;
+  destinations: string[];
+  warnings: string[];
 };

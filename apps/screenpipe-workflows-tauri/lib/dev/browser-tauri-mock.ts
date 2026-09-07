@@ -890,7 +890,13 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
       case "save_workflow_skill": {
         const draft = input.draft as { name?: string } | undefined;
         const name = draft?.name || "mapped-workflow";
-        return { name, path: `/Users/screenpipe/.screenpipe/skills/${name}/SKILL.md`, updated: true };
+        return {
+          name,
+          path: `/Users/screenpipe/.screenpipe/skills/${name}/SKILL.md`,
+          updated: true,
+          destinations: ["Screenpipe", "Claude Code", "Codex"],
+          warnings: [],
+        };
       }
       case "get_screenpipe_base_dir":
         return "/Users/screenpipe/.screenpipe";

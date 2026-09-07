@@ -90,7 +90,13 @@ describe("desktop workflows persistence", () => {
       instructions: "# Review\n\n1. Inspect the change.",
       sourceWorkflow: workflow.title,
     };
-    const receipt = { name: draft.name, path: "/skills/review-pull-requests/SKILL.md", updated: true };
+    const receipt = {
+      name: draft.name,
+      path: "/skills/review-pull-requests/SKILL.md",
+      updated: true,
+      destinations: ["Screenpipe", "Codex"],
+      warnings: [],
+    };
     mocks.generateSkill.mockResolvedValue(draft);
     mocks.saveSkill.mockResolvedValue(receipt);
 
