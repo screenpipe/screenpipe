@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   saveAnalysis: vi.fn(),
   loadProfile: vi.fn(),
   saveProfile: vi.fn(),
+  generateSkill: vi.fn(),
+  saveSkill: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
@@ -28,6 +30,8 @@ vi.mock("@/lib/utils/tauri", () => ({
 vi.mock("./runtime", () => ({
   analyzeCapturedWork: vi.fn(),
   ensureWorkflowRuntime: vi.fn(),
+  generateWorkflowSkill: mocks.generateSkill,
+  saveWorkflowSkill: mocks.saveSkill,
 }));
 vi.mock("./disk-storage", () => ({
   isStoredWorkflowAnalysis: (value: unknown) => {
@@ -50,6 +54,8 @@ describe("desktop workflows persistence", () => {
     mocks.saveAnalysis.mockReset().mockResolvedValue(undefined);
     mocks.loadProfile.mockReset().mockResolvedValue(null);
     mocks.saveProfile.mockReset().mockResolvedValue(undefined);
+    mocks.generateSkill.mockReset();
+    mocks.saveSkill.mockReset();
   });
 
   it("migrates the legacy catalog to disk without deleting its source", async () => {
@@ -74,5 +80,23 @@ describe("desktop workflows persistence", () => {
     await desktopWorkflowsPlatform.saveCapturedWork?.(fixtureWorkflowAnalysis);
 
     expect(mocks.saveAnalysis).toHaveBeenCalledWith(fixtureWorkflowAnalysis);
+  });
+
+  it("uses the native agent harness and local skill library", async () => {
+    const workflow = fixtureWorkflowAnalysis.analysis.workflows[0];
+    const draft = {
+      name: "review-pull-requests",
+      description: "Review a pull request when a change is ready.",
+      instructions: "# Review\n\n1. Inspect the change.",
+      sourceWorkflow: workflow.title,
+    };
+    const receipt = { name: draft.name, path: "/skills/review-pull-requests/SKILL.md", updated: true };
+    mocks.generateSkill.mockResolvedValue(draft);
+    mocks.saveSkill.mockResolvedValue(receipt);
+
+    await expect(desktopWorkflowsPlatform.generateWorkflowSkill?.(workflow, null)).resolves.toEqual(draft);
+    await expect(desktopWorkflowsPlatform.saveWorkflowSkill?.(draft)).resolves.toEqual(receipt);
+    expect(mocks.generateSkill).toHaveBeenCalledWith(workflow, null);
+    expect(mocks.saveSkill).toHaveBeenCalledWith(draft);
   });
 });

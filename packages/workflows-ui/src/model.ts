@@ -211,3 +211,16 @@ export type WorkflowAnalysis = {
     label: string;
   };
 };
+
+export type WorkflowSkillDraft = {
+  name: string;
+  description: string;
+  instructions: string;
+  sourceWorkflow: string;
+};
+
+export type SavedWorkflowSkill = {
+  name: string;
+  path: string;
+  updated: boolean;
+};

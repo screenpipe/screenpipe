@@ -875,6 +875,23 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
         };
       case "analyze_workflows":
         return createBrowserDevWorkflowAnalysis(Number(input.days ?? 7));
+      case "generate_workflow_skill": {
+        const workflow = input.workflow as { title?: string; trigger?: string; outcome?: string; stages?: Array<{ name?: string; description?: string }> } | undefined;
+        const title = workflow?.title || "Mapped workflow";
+        const name = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 64) || "mapped-workflow";
+        const steps = (workflow?.stages ?? []).map((stage, index) => `${index + 1}. **${stage.name || `Step ${index + 1}`}** — ${stage.description || "Complete the mapped step."}`).join("\n");
+        return {
+          name,
+          description: `Use when ${workflow?.trigger || "this mapped workflow begins"} to reach ${workflow?.outcome || "its reviewed outcome"}.`,
+          instructions: `# ${title}\n\n## Workflow\n\n${steps}\n\n## Verification\n\nConfirm the mapped outcome is visible before considering the workflow complete.`,
+          sourceWorkflow: title,
+        };
+      }
+      case "save_workflow_skill": {
+        const draft = input.draft as { name?: string } | undefined;
+        const name = draft?.name || "mapped-workflow";
+        return { name, path: `/Users/screenpipe/.screenpipe/skills/${name}/SKILL.md`, updated: true };
+      }
       case "get_screenpipe_base_dir":
         return "/Users/screenpipe/.screenpipe";
       case "get_chats_dir":

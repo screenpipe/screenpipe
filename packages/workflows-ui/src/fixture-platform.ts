@@ -10,6 +10,7 @@ import type {
   WorkflowEvidence,
   WorkflowMap,
   WorkflowRuntime,
+  WorkflowSkillDraft,
 } from "./model";
 import type { WorkflowsPlatform } from "./platform";
 
@@ -267,6 +268,34 @@ export const fixtureEnterpriseWorkProfile: WorkProfile = {
   visibility: "aggregate-workspace",
 };
 
+function fixtureSkillDraft(workflow: WorkflowMap): WorkflowSkillDraft {
+  const name = workflow.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 64) || "mapped-workflow";
+  return {
+    name,
+    description: `Use when ${workflow.trigger.toLowerCase()} to reach ${workflow.outcome.toLowerCase()}.`,
+    instructions: [
+      `# ${workflow.title}`,
+      "",
+      "## Workflow",
+      "",
+      ...workflow.stages.map((stage, index) => `${index + 1}. **${stage.name}** — ${stage.description}`),
+      "",
+      "## Verification",
+      "",
+      `Confirm that ${workflow.outcome.toLowerCase()} before considering the workflow complete.`,
+    ].join("\n"),
+    sourceWorkflow: workflow.title,
+  };
+}
+
+function fixtureSkillReceipt(draft: WorkflowSkillDraft) {
+  return {
+    name: draft.name,
+    path: `/Users/screenpipe/.screenpipe/skills/${draft.name}/SKILL.md`,
+    updated: true,
+  };
+}
+
 export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixtureWorkflowAnalysis): WorkflowsPlatform {
   let profile = fixturePersonalWorkProfile;
   return {
@@ -274,6 +303,8 @@ export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixt
     analyzeCapturedWork: async () => analysis,
     loadWorkProfile: async () => profile,
     saveWorkProfile: async (nextProfile) => (profile = nextProfile),
+    generateWorkflowSkill: async (workflow) => fixtureSkillDraft(workflow),
+    saveWorkflowSkill: async (draft) => fixtureSkillReceipt(draft),
   };
 }
 
@@ -333,5 +364,7 @@ export function createFixtureEnterpriseWorkflowsPlatform(analysis: WorkflowAnaly
     getAnalysisJob: async () => ({ id: "fixture-enterprise-job", status: "complete", result: scopedAnalysis() }),
     loadWorkProfile: async () => profile,
     saveWorkProfile: async (nextProfile) => (profile = nextProfile),
+    generateWorkflowSkill: async (workflow) => fixtureSkillDraft(workflow),
+    saveWorkflowSkill: async (draft) => fixtureSkillReceipt(draft),
   };
 }

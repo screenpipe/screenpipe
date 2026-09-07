@@ -525,6 +525,14 @@ async generateActivityHistory(start: string, end: string, idempotencyKey: string
     else return { status: "error", error: e  as any };
 }
 },
+async generateWorkflowSkill(workflow: JsonValue, profile: JsonValue | null) : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("generate_workflow_skill", { workflow, profile }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Absolute path of the data directory used by the running engine. This is
  * distinct from the app base directory when the user selected a custom
@@ -2367,6 +2375,14 @@ async saveEnterpriseLicenseKey(licenseKey: string) : Promise<Result<null, string
 async saveEnterpriseTeamConfig(isAdmin: boolean | null, licenseActive: boolean | null, teamApiToken: string | null, gatewayUrl: string | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("save_enterprise_team_config", { isAdmin, licenseActive, teamApiToken, gatewayUrl }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async saveWorkflowSkill(draft: JsonValue) : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_workflow_skill", { draft }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };

@@ -4,7 +4,12 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { WorkProfile, WorkflowAnalysis, WorkflowsPlatform } from "@screenpipe/workflows-ui";
 import { commands } from "@/lib/utils/tauri";
-import { analyzeCapturedWork, ensureWorkflowRuntime } from "./runtime";
+import {
+  analyzeCapturedWork,
+  ensureWorkflowRuntime,
+  generateWorkflowSkill,
+  saveWorkflowSkill,
+} from "./runtime";
 import {
   isStoredWorkflowAnalysis,
   loadWorkflowAnalysisFromDisk,
@@ -112,6 +117,8 @@ export const desktopWorkflowsPlatform: WorkflowsPlatform = {
   saveCapturedWork: (analysis) => saveAnalysis(analysis),
   loadWorkProfile: () => loadSavedWorkProfile(),
   saveWorkProfile,
+  generateWorkflowSkill,
+  saveWorkflowSkill,
   openAccount: async () => {
     const result = await commands.openLoginWindow(null, "sign-up");
     if (result.status !== "ok") throw new Error(result.error);

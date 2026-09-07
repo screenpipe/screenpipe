@@ -1,7 +1,15 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-import type { WorkProfile, WorkflowAnalysis, WorkflowRuntime, WorkflowScope } from "./model";
+import type {
+  SavedWorkflowSkill,
+  WorkProfile,
+  WorkflowAnalysis,
+  WorkflowMap,
+  WorkflowRuntime,
+  WorkflowScope,
+  WorkflowSkillDraft,
+} from "./model";
 
 export type WorkflowAnalysisOptions = {
   scope?: WorkflowScope;
@@ -25,6 +33,8 @@ export type WorkflowsPlatform = {
   getAnalysisJob?: (jobId: string) => Promise<WorkflowAnalysisJob>;
   loadWorkProfile?: (scope?: WorkflowScope) => Promise<WorkProfile | null>;
   saveWorkProfile?: (profile: WorkProfile, scope?: WorkflowScope) => Promise<WorkProfile>;
+  generateWorkflowSkill?: (workflow: WorkflowMap, profile?: WorkProfile | null) => Promise<WorkflowSkillDraft>;
+  saveWorkflowSkill?: (draft: WorkflowSkillDraft) => Promise<SavedWorkflowSkill>;
   openAccount?: () => Promise<void>;
   startWindowDrag?: () => Promise<void> | void;
 };
