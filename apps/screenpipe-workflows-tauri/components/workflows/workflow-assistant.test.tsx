@@ -79,7 +79,7 @@ describe("secondary workflow assistant", () => {
 
   it("keeps emphasized memory sources clickable while rejecting action links", async () => {
     const url = "screenpipe://timeline?timestamp=2026-09-07T14:29:37.376-07:00";
-    const openLink = vi.fn();
+    const openLink = vi.fn().mockResolvedValue(undefined);
     setup({ openLink, ask: vi.fn().mockResolvedValue(`- **[Sep 7, 2:29 PM](${url})** — A captured conversation.\n**[Install](screenpipe://pipe/install?name=anything)**`) });
     await open(); question("Find a conversation");
     const source = await screen.findByRole("link", { name: "Sep 7, 2:29 PM" });

@@ -12,12 +12,12 @@ import styles from "./workflow-assistant.module.css";
 function AnswerText({ text, openLink }: { text: string; openLink?: (url: string) => void }) {
   function inline(value: string): React.ReactNode {
     return value.split(/(\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\))/g).map((part, j) => {
-    // Agent replies often emphasize a source link. Preserve its interaction
-    // inside the emphasis instead of exposing the Markdown as plain text.
-    if (/^\*\*[^*]+\*\*$/.test(part)) return <strong key={j}>{inline(part.slice(2, -2))}</strong>;
-    const link = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
-    if (link && isAssistantLink(link[2])) return <a key={j} href={link[2]} target="_blank" rel="noreferrer" onClick={openLink ? (event) => { event.preventDefault(); openLink(link[2]); } : undefined}>{link[1]}</a>;
-    return part || "\u00a0";
+      // Agent replies often emphasize a source link. Preserve its interaction
+      // inside the emphasis instead of exposing the Markdown as plain text.
+      if (/^\*\*[^*]+\*\*$/.test(part)) return <strong key={j}>{inline(part.slice(2, -2))}</strong>;
+      const link = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+      if (link && isAssistantLink(link[2])) return <a key={j} href={link[2]} target="_blank" rel="noreferrer" onClick={openLink ? (event) => { event.preventDefault(); openLink(link[2]); } : undefined}>{link[1]}</a>;
+      return part || "\u00a0";
     });
   }
   return <div className={styles.answer}>{text.split("\n").map((line, i) => <div key={i} className={/^#{1,3} /.test(line) ? styles.answerHeading : undefined}>{inline(line.replace(/^#{1,3} /, ""))}</div>)}</div>;
