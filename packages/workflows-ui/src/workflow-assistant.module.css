@@ -1,7 +1,7 @@
 /* screenpipe — AI that knows everything you've seen, said, or heard */
 /* https://screenpipe.com */
 
-.launcher { position: fixed; z-index: 30; right: 22px; bottom: 22px; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 1px solid #d5d6ce; border-radius: 50%; background: #fff; color: #333; box-shadow: 0 3px 12px #0000000d; cursor: pointer; }
+.launcher { position: absolute; z-index: 30; right: 22px; bottom: 22px; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 1px solid #d5d6ce; border-radius: 50%; background: #fff; color: #333; box-shadow: 0 3px 12px #0000000d; cursor: pointer; }
 .launcher:hover { background: #f6f6f3; border-color: #aeb0a6; }
 .launcher > span { position: absolute; right: 54px; display: flex; align-items: center; gap: 12px; padding: 7px 10px; white-space: nowrap; border: 1px solid #dedfd8; border-radius: 6px; background: #fff; font-family: inherit; font-size: 12px; opacity: 0; pointer-events: none; }
 .launcher:hover > span, .launcher:focus-visible > span { opacity: 1; }
@@ -12,7 +12,7 @@
 .panel button { font-family: inherit; cursor: pointer; }
 .panel button:disabled { opacity: .4; cursor: default; }
 .panel button:focus-visible, .panel input:focus-visible, .launcher:focus-visible, .resizeHandle:focus-visible { outline: 1px solid #777; outline-offset: 3px; }
-.floating { position: fixed; z-index: 35; right: 22px; bottom: 22px; width: min(var(--assistant-width), calc(100vw - 32px)); height: min(620px, calc(100svh - 36px)); border: 1px solid #dedfd8; border-radius: 8px; box-shadow: 0 6px 24px #00000012; animation: reveal .15s ease-out; }
+.floating { position: absolute; z-index: 35; right: 22px; bottom: 22px; width: min(var(--assistant-width), calc(100vw - 32px)); height: min(620px, calc(100svh - 36px)); border: 1px solid #dedfd8; border-radius: 8px; box-shadow: 0 6px 24px #00000012; animation: reveal .15s ease-out; }
 .floating[data-empty="true"] { height: auto; max-height: calc(100svh - 36px); }
 .docked { height: 100%; border-left: 1px solid var(--chat-line); z-index: 4; }
 .resizeHandle { position: absolute; top: 8px; bottom: 8px; left: -5px; z-index: 8; width: 9px; cursor: col-resize; touch-action: none; }
@@ -81,7 +81,7 @@
 .saveError { margin: 0 12px 8px; }
 @keyframes reveal { from { opacity: 0; transform: translateY(4px); } }
 @keyframes pulse { 50% { opacity: .45; } }
-@media (max-width: 959px) { .docked { position: fixed; z-index: 35; top: 0; bottom: 0; right: 0; height: auto; width: min(var(--assistant-width), 100vw); box-shadow: -4px 0 20px #00000008; } }
+@media (max-width: 959px) { .docked { position: absolute; z-index: 35; top: 0; bottom: 0; right: 0; height: auto; width: min(var(--assistant-width), 100vw); box-shadow: -4px 0 20px #00000008; } }
 @media (max-width: 600px) { .floating { right: 10px; bottom: 10px; width: calc(100vw - 20px); max-height: calc(100svh - 20px); } .launcher { right: 16px; bottom: 16px; } .resizeHandle { display: none; } .body { padding-left: 18px; padding-right: 18px; } }
 @media (prefers-reduced-motion: reduce) { .floating, .activity i, .launcher i { animation: none; } }
 :global(.dark) .panel { --chat-ink: #e6e7de; --chat-muted: #a0a393; --chat-line: #3c3f36; --chat-soft: #2a2c25; --chat-surface: #20221c; }
