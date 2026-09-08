@@ -2550,6 +2550,13 @@ pub async fn pi_start_inner(
             .map(|agent| agent.id.as_str())
             == Some("pi-acp");
 
+    if !use_acp || is_pi_acp {
+        screenpipe_core::agents::pi::PiExecutor::ensure_context_pruning_extension(
+            std::path::Path::new(&project_dir),
+        )
+        .map_err(|e| format!("Failed to install context guard: {}", e))?;
+    }
+
     // ACP agents receive Screenpipe via MCP during session/new. Pi-only
     // extensions and packages must not be installed or required there — except
     // pi-acp, which is pi and can't consume the MCP servers.
