@@ -83,7 +83,6 @@ export async function detectAiTools(): Promise<ConnectAllToolId[]> {
       },
     ],
     ["claude-code", async () => exists(await join(home, ".claude.json"))],
-    ["grokbot", isGrokBotDetected],
     ["codex", async () => exists(await join(home, ".codex"))],
     ["cursor", async () => exists(await join(home, ".cursor"))],
     ["gemini", async () => exists(await join(home, ".gemini"))],
@@ -93,6 +92,8 @@ export async function detectAiTools(): Promise<ConnectAllToolId[]> {
     ["hermes", async () => exists(await join(home, ".hermes"))],
     ["runner", async () => exists(await join(home, ".runner"))],
     ["windsurf", async () => exists(await join(home, ".codeium", "windsurf"))],
+    // Connect all finishes the local integrations before a cloud request.
+    ["grokbot", isGrokBotDetected],
   ];
 
   const detected: ConnectAllToolId[] = [];

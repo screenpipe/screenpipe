@@ -100,6 +100,16 @@ describe("AiToolsCard", () => {
     expect(libMocks.connectAiToolTargets).not.toHaveBeenCalled();
   });
 
+  it("shows local connections while Grok Bot is still checking its cloud skill", async () => {
+    libMocks.detectAiTools.mockResolvedValue(["codex", "grokbot"]);
+    hookMocks.isCodexMcpInstalled.mockResolvedValue(true);
+    skillsMocks.areExternalAgentSkillsInstalled.mockResolvedValue(true);
+    grokMocks.isGrokBotConnected.mockImplementationOnce(() => new Promise(() => {}));
+    render(<AiToolsCard />);
+    expect(await screen.findByText("1 of 2 connected")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Manage" })).toBeEnabled();
+  });
+
   it("includes Grok Bot in connect-all", async () => {
     libMocks.detectAiTools.mockResolvedValue(["codex", "grokbot"]);
     render(<AiToolsCard />);

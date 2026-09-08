@@ -133,10 +133,22 @@ mod tests {
     #[tokio::test]
     async fn bundled_bridge_executes_with_an_isolated_home_without_connecting_real_accounts() {
         let fixture = tempfile::tempdir().unwrap();
-        let bun = crate::pi::find_bun_executable()
-            .expect("bundled Bun must be available for the integration check");
+        // `cargo test` puts this executable in target/.../deps, outside an
+        // app bundle. Use the sidecar prepared by the required build script.
+        let platform = match std::env::consts::OS {
+            "macos" => "apple-darwin",
+            "windows" => "pc-windows-msvc",
+            "linux" => "unknown-linux-gnu",
+            other => panic!("unsupported test platform: {other}"),
+        };
+        let bun = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "bun-{}-{platform}{}",
+            std::env::consts::ARCH,
+            std::env::consts::EXE_SUFFIX,
+        ));
+        assert!(bun.is_file(), "run the test through bun run test:tauri");
         let result = run_bridge_input(
-            Path::new(&bun),
+            &bun,
             &json!({
                 "home": fixture.path(), "bun": bun, "dataDir": fixture.path().join("data"),
                 "port": 3137, "skill": "fixture skill", "action": "connect"

@@ -155,10 +155,11 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
     try {
       const tools = await detectAiTools();
       setDetected(tools);
-      const entries = await Promise.all(
-        tools.map(async (id) => [id, await isToolConnected(id).catch(() => false)] as const)
-      );
-      setConnected(Object.fromEntries(entries));
+      await Promise.all(tools.map(async (id) => {
+        const value = await isToolConnected(id).catch(() => false);
+        // A cloud status check must not delay the other apps' local status.
+        setConnected((previous) => ({ ...previous, [id]: value }));
+      }));
     } catch {
       /* keep previous state */
     }
