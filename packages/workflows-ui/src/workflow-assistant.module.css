@@ -12,7 +12,7 @@
 .panel button { font-family: inherit; cursor: pointer; }
 .panel button:disabled { opacity: .4; cursor: default; }
 .panel button:focus-visible, .panel input:focus-visible, .launcher:focus-visible, .resizeHandle:focus-visible { outline: 1px solid #777; outline-offset: 3px; }
-.floating { position: absolute; z-index: 35; right: 22px; bottom: 22px; width: min(var(--assistant-width), calc(100vw - 32px)); height: min(620px, calc(100svh - 36px)); border: 1px solid #dedfd8; border-radius: 8px; box-shadow: 0 6px 24px #00000012; animation: reveal .15s ease-out; }
+.floating { position: absolute; z-index: 35; right: 22px; bottom: 22px; width: min(var(--assistant-width), calc(100vw - 32px)); height: min(620px, calc(100svh - 36px)); border: 1px solid #dedfd8; border-radius: 8px; box-shadow: 0 6px 24px #00000012; }
 .floating[data-empty="true"] { height: auto; max-height: calc(100svh - 36px); }
 .docked { height: 100%; border-left: 1px solid var(--chat-line); z-index: 4; }
 .resizeHandle { position: absolute; top: 8px; bottom: 8px; left: -5px; z-index: 8; width: 9px; cursor: col-resize; touch-action: none; }
