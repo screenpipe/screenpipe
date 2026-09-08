@@ -1,0 +1,1 @@
+Prompt: [Memory / Optimization] Explicitly drop Ort::Session tensors after inference batch and trigger jemalloc purge
