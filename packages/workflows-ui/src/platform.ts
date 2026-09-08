@@ -42,6 +42,7 @@ export type WorkflowsPlatform = {
     onProgress?: (progress: WorkflowSkillProgress) => void,
   ) => Promise<WorkflowSkillDraft>;
   saveWorkflowSkill?: (draft: WorkflowSkillDraft) => Promise<SavedWorkflowSkill>;
+  skillInstallMode?: "local" | "preview";
   openAccount?: () => Promise<void>;
   startWindowDrag?: () => Promise<void> | void;
 };

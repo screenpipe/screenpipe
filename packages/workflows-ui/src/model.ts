@@ -230,5 +230,7 @@ export type SavedWorkflowSkill = {
   path: string;
   updated: boolean;
   destinations: string[];
+  /** Successful native writes only; older app receipts may omit this field. */
+  locations?: Array<{ destination: string; path: string }>;
   warnings: string[];
 };

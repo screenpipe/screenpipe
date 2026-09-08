@@ -128,6 +128,7 @@ describe("shared workflows experience", () => {
 
   it("streams agent progress into a calm review and local install flow", async () => {
     const platform = createFixtureWorkflowsPlatform();
+    platform.skillInstallMode = "local";
     const workflow = fixtureWorkflowAnalysis.analysis.workflows[0];
     const draft = {
       name: "customer-feedback-triage",
@@ -150,6 +151,11 @@ describe("shared workflows experience", () => {
       path: `/Users/screenpipe/.screenpipe/skills/${draft.name}/SKILL.md`,
       updated: true,
       destinations: ["Screenpipe", "Claude Code", "Codex"],
+      locations: [
+        { destination: "Screenpipe", path: `/example/workflows-profile/skills/${draft.name}/SKILL.md` },
+        { destination: "Claude Code", path: `/example/agent-library/${draft.name}/SKILL.md` },
+        { destination: "Codex", path: `C:\\Users\\A Person\\.codex\\skills\\${draft.name}\\SKILL.md` },
+      ],
       warnings: [],
     }));
 
@@ -173,5 +179,59 @@ describe("shared workflows experience", () => {
     fireEvent.click(screen.getByRole("button", { name: "Install in my agents" }));
     expect(await screen.findByRole("heading", { name: "Ready in your agents" })).toBeInTheDocument();
     expect(screen.getByText(/Screenpipe, Claude Code, and Codex/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Installed files"));
+    const locations = (await vi.mocked(platform.saveWorkflowSkill).mock.results[0].value).locations!;
+    for (const location of locations) expect(screen.getByText(location.path)).toBeVisible();
+    expect(screen.queryByText(`/Users/screenpipe/.screenpipe/skills/${draft.name}/SKILL.md`)).not.toBeInTheDocument();
+    const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Copy Codex file path" }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith(locations[2].path));
+      expect(await screen.findByText("Copied")).toBeInTheDocument();
+      writeText.mockRejectedValueOnce(new Error("Clipboard unavailable"));
+      fireEvent.click(screen.getByRole("button", { name: "Copy Claude Code file path" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("Couldn’t copy the path");
+    } finally {
+      if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("never claims the browser preview installed real skills or created a local path", async () => {
+    const platform = createFixtureWorkflowsPlatform();
+    const workflow = fixtureWorkflowAnalysis.analysis.workflows[0];
+    const draft = { name: "preview-skill", description: "A preview", instructions: "1. Review the evidence.", sourceWorkflow: workflow.title };
+    platform.generateWorkflowSkill = vi.fn().mockResolvedValue(draft);
+    for (const fixture of [platform, createFixtureEnterpriseWorkflowsPlatform()]) {
+      expect(fixture.skillInstallMode).toBe("preview");
+      expect(await fixture.saveWorkflowSkill!(draft)).toMatchObject({ path: "", updated: false, destinations: [], locations: [] });
+    }
+    render(<WorkflowsApp platform={platform} initialAnalysis={fixtureWorkflowAnalysis} storageKey={null} />);
+    fireEvent.click(await screen.findByRole("button", { name: /customer feedback triage/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Create skill" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Preview installation" }));
+    expect(await screen.findByRole("heading", { name: "Preview complete" })).toBeInTheDocument();
+    expect(screen.getByText("No files were installed")).toBeInTheDocument();
+    expect(screen.queryByText("Installed files")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Installed in .* on this computer/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Skill installed" })).not.toBeInTheDocument();
+  });
+
+  it("labels an older single-copy receipt without inventing other agent paths", async () => {
+    const platform = createFixtureWorkflowsPlatform();
+    platform.skillInstallMode = "local";
+    const draft = { name: "review", description: "Review changes", instructions: "1. Review.", sourceWorkflow: "Review changes" };
+    platform.generateWorkflowSkill = vi.fn().mockResolvedValue(draft);
+    platform.saveWorkflowSkill = vi.fn().mockResolvedValue({ name: "review", path: "/custom/profile/skills/review/SKILL.md", updated: true, destinations: ["Screenpipe"], warnings: ["Codex: An unrelated skill already exists."] });
+    render(<WorkflowsApp platform={platform} initialAnalysis={fixtureWorkflowAnalysis} storageKey={null} />);
+    fireEvent.click(await screen.findByRole("button", { name: /customer feedback triage/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Create skill" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Install in my agents" }));
+    expect(await screen.findByRole("heading", { name: "Saved to Screenpipe" })).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Installed files"));
+    expect(screen.getByText("/custom/profile/skills/review/SKILL.md")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Copy Codex file path" })).not.toBeInTheDocument();
   });
 });

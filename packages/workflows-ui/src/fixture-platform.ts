@@ -342,9 +342,10 @@ async function fixtureSkillDraftWithProgress(
 function fixtureSkillReceipt(draft: WorkflowSkillDraft) {
   return {
     name: draft.name,
-    path: `/Users/screenpipe/.screenpipe/skills/${draft.name}/SKILL.md`,
-    updated: true,
-    destinations: ["Screenpipe", "Claude Code", "Codex"],
+    path: "",
+    updated: false,
+    destinations: [],
+    locations: [],
     warnings: [],
   };
 }
@@ -359,6 +360,7 @@ export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixt
     saveWorkProfile: async (nextProfile) => (profile = nextProfile),
     generateWorkflowSkill: async (workflow, _profile, onProgress) => fixtureSkillDraftWithProgress(workflow, onProgress),
     saveWorkflowSkill: async (draft) => fixtureSkillReceipt(draft),
+    skillInstallMode: "preview",
   };
 }
 
@@ -420,5 +422,6 @@ export function createFixtureEnterpriseWorkflowsPlatform(analysis: WorkflowAnaly
     saveWorkProfile: async (nextProfile) => (profile = nextProfile),
     generateWorkflowSkill: async (workflow, _profile, onProgress) => fixtureSkillDraftWithProgress(workflow, onProgress),
     saveWorkflowSkill: async (draft) => fixtureSkillReceipt(draft),
+    skillInstallMode: "preview",
   };
 }

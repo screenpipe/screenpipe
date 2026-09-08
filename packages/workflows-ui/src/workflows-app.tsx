@@ -692,6 +692,7 @@ function WorkflowSkillDialog({
   generating,
   saving,
   saved,
+  preview,
   progress,
   error,
   update,
@@ -704,6 +705,7 @@ function WorkflowSkillDialog({
   generating: boolean;
   saving: boolean;
   saved: SavedWorkflowSkill | null;
+  preview: boolean;
   progress: WorkflowSkillProgress;
   error: string;
   update: (draft: WorkflowSkillDraft) => void;
@@ -711,6 +713,17 @@ function WorkflowSkillDialog({
   save: () => void;
   close: () => void;
 }) {
+  const [copiedPath, setCopiedPath] = useState("");
+  const [copyError, setCopyError] = useState(false);
+  // Legacy receipts only identify Screenpipe's own copy. Never infer agent
+  // paths from their names or claim a failed destination was installed.
+  const locations = saved?.locations ?? (saved?.path ? [{ destination: "Screenpipe", path: saved.path }] : []);
+  const hasExternalInstall = saved?.destinations.some((destination) => destination !== "Screenpipe");
+  const completedTitle = preview ? "Preview complete" : hasExternalInstall ? "Ready in your agents" : "Saved to Screenpipe";
+  async function copyPath(path: string) {
+    try { await navigator.clipboard.writeText(path); setCopiedPath(path); setCopyError(false); }
+    catch { setCopyError(true); }
+  }
   const phases = [
     ["reading", "Read the map"],
     ["drafting", "Write the steps"],
@@ -732,7 +745,7 @@ function WorkflowSkillDialog({
   }}>
     <section className={styles.skillDialog} role="dialog" aria-modal="true" aria-labelledby="workflow-skill-title" onKeyDown={(event) => event.stopPropagation()}>
       <div className={styles.skillDialogHeader}>
-        <div><span>{workflow.title}</span><h2 id="workflow-skill-title">{generating ? "Creating your skill" : saved ? "Ready in your agents" : "Review this skill"}</h2><p>{generating ? "The repeatable parts of this workflow will appear as they are drafted." : saved ? "This workflow is now available where you work." : "Make any changes, then install it in your local agents."}</p></div>
+        <div><span>{workflow.title}</span><h2 id="workflow-skill-title">{generating ? "Creating your skill" : saved ? completedTitle : "Review this skill"}</h2><p>{generating ? "The repeatable parts of this workflow will appear as they are drafted." : preview ? "This is a preview. Installation is available in the desktop app." : saved ? "Your skill has been saved on this computer." : "Make any changes, then install it in your local agents."}</p></div>
         <button type="button" onClick={close} disabled={saving} aria-label="Close skill editor"><X size={16} /></button>
       </div>
 
@@ -746,10 +759,12 @@ function WorkflowSkillDialog({
           </div>
         </div> : saved ? <div className={styles.skillSaved}>
           <CheckCircle2 size={23} />
-          <h3>Installed</h3>
-          <p>Installed in {destinationList(saved.destinations)} on this computer.</p>
-          {!!saved.warnings.length && <details><summary>Not added everywhere</summary><ul>{saved.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></details>}
-          <details><summary>File location</summary><code>{saved.path}</code></details>
+          <h3>{preview ? "No files were installed" : "Installed"}</h3>
+          {!preview && <>
+            <p>Installed in {destinationList(saved.destinations)} on this computer.</p>
+            {!!saved.warnings.length && <details><summary>Not added everywhere</summary><ul>{saved.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></details>}
+            {locations.length > 0 && <details className={styles.skillLocations}><summary>Installed files</summary><ul>{locations.map((location) => <li key={`${location.destination}:${location.path}`}><div><strong>{location.destination}</strong><button type="button" aria-label={`Copy ${location.destination} file path`} onClick={() => void copyPath(location.path)}>{copiedPath === location.path ? "Copied" : "Copy path"}</button></div><code>{location.path}</code></li>)}</ul>{copyError && <p role="alert">Couldn’t copy the path. Select it to copy manually.</p>}</details>}
+          </>}
           <button className={styles.primaryButton} type="button" onClick={close}>Done</button>
         </div> : draft ? <>
           <div className={styles.skillEvidenceNote}><FileCheck2 size={15} /><span>Based on {workflow.stages.length} mapped stages observed across {workflow.quality.distinctDays} captured day{workflow.quality.distinctDays === 1 ? "" : "s"}.</span></div>
@@ -773,7 +788,7 @@ function WorkflowSkillDialog({
           <button className={styles.primaryButton} type="button" onClick={retry}><RefreshCw size={14} />Try again</button>
         </div>}
       </div>
-      {draft && !saved && !generating && <div className={styles.skillDialogFooter}><button type="button" onClick={close} disabled={saving}>Close</button><button className={styles.primaryButton} type="button" onClick={save} disabled={saving || !draft.name.trim() || !draft.description.trim() || !draft.instructions.trim()}>{saving ? <><span className={styles.spinnerSmall} />Installing…</> : <><Save size={14} />Install in my agents</>}</button></div>}
+      {draft && !saved && !generating && <div className={styles.skillDialogFooter}><button type="button" onClick={close} disabled={saving}>Close</button><button className={styles.primaryButton} type="button" onClick={save} disabled={saving || !draft.name.trim() || !draft.description.trim() || !draft.instructions.trim()}>{saving ? <><span className={styles.spinnerSmall} />{preview ? "Previewing…" : "Installing…"}</> : <><Save size={14} />{preview ? "Preview installation" : "Install in my agents"}</>}</button></div>}
     </section>
   </div>;
 }
@@ -839,7 +854,7 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile }: { workflo
     <>
       <button className={styles.backButton} onClick={() => navigate("workflows")}><ArrowLeft size={14} />All workflows</button>
       <section className={styles.detailHeader}>
-        <div><Pill>Evidence on {workflow.repetitions} captured day{workflow.repetitions === 1 ? "" : "s"}</Pill><h1>{workflow.title}</h1><p>{workflow.description}</p>{platform.generateWorkflowSkill && platform.saveWorkflowSkill && <button className={styles.skillButton} type="button" onClick={openSkill}><Sparkles size={14} />{skillGenerating ? "Creating skill…" : skillSaved ? "Skill installed" : skillDraft ? "Review skill" : "Create skill"}</button>}</div>
+        <div><Pill>Evidence on {workflow.repetitions} captured day{workflow.repetitions === 1 ? "" : "s"}</Pill><h1>{workflow.title}</h1><p>{workflow.description}</p>{platform.generateWorkflowSkill && platform.saveWorkflowSkill && <button className={styles.skillButton} type="button" onClick={openSkill}><Sparkles size={14} />{skillGenerating ? "Creating skill…" : skillSaved ? platform.skillInstallMode === "preview" ? "Skill preview" : "Skill installed" : skillDraft ? "Review skill" : "Create skill"}</button>}</div>
         <div className={styles.detailTotal}><span>{measuredDuration ? "Observed meeting duration" : "Workflow duration"}</span><strong>{workflowDurationLabel(workflow)}</strong><small>{measuredDuration ? `${workflow.durationSampleCount ?? 1} exact meeting window${(workflow.durationSampleCount ?? 1) === 1 ? "" : "s"}` : "Not estimated from scattered observations"}</small></div>
       </section>
       <section className={styles.detailStats}>
@@ -889,7 +904,7 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile }: { workflo
       </section>
       {!!actionableFriction.length && <><div className={styles.sectionHeading}><div><span>Within reach</span><h2>Friction you can affect</h2></div></div><BottleneckList items={actionableFriction.map((item) => ({ ...item, workflowTitle: workflow.title, repetitions: workflow.repetitions }))} /></>}
       {!!constraints.length && <><div className={styles.sectionHeading}><div><span>Plan around</span><h2>External and required constraints</h2></div></div><BottleneckList items={constraints.map((item) => ({ ...item, workflowTitle: workflow.title, repetitions: workflow.repetitions }))} numbered={false} /></>}
-      {skillOpen && <WorkflowSkillDialog workflow={workflow} draft={skillDraft} generating={skillGenerating} saving={skillSaving} saved={skillSaved} progress={skillProgress} error={skillError} update={setSkillDraft} retry={generateSkill} save={saveSkill} close={() => setSkillOpen(false)} />}
+      {skillOpen && <WorkflowSkillDialog workflow={workflow} draft={skillDraft} generating={skillGenerating} saving={skillSaving} saved={skillSaved} preview={platform.skillInstallMode === "preview"} progress={skillProgress} error={skillError} update={setSkillDraft} retry={generateSkill} save={saveSkill} close={() => setSkillOpen(false)} />}
     </>
   );
 }

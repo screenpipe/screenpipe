@@ -437,7 +437,13 @@ pub(crate) async fn assistant_agent_context(
     let token = cloud_token()
         .await
         .ok_or("Sign in to Screenpipe to ask a question.")?;
-    Ok((LocalApiContext { port, api_key: recorder.api_key }, token))
+    Ok((
+        LocalApiContext {
+            port,
+            api_key: recorder.api_key,
+        },
+        token,
+    ))
 }
 
 fn runtime_payload(recorder: Option<&RecorderEndpoint>, has_cloud_token: bool) -> Value {
@@ -2234,13 +2240,20 @@ fn save_workflow_skill_in(home: &Path, store: &Path, draft: &Value) -> Result<Va
     let marker = generated_skill_marker(&source_workflow)?;
     let (skill_path, updated) = write_generated_skill_copy(store, &name, &markdown, &marker)?;
     let mut destinations = vec!["Screenpipe".to_string()];
+    let mut locations = vec![json!({
+        "destination": "Screenpipe",
+        "path": skill_path.to_string_lossy(),
+    })];
     let mut warnings = Vec::new();
 
     for (label, root) in detected_user_agent_skill_roots(home) {
         let result = validate_agent_skill_root(home, &root)
-            .and_then(|_| write_generated_skill_copy(&root, &name, &markdown, &marker).map(|_| ()));
+            .and_then(|_| write_generated_skill_copy(&root, &name, &markdown, &marker));
         match result {
-            Ok(()) => destinations.push(label.to_string()),
+            Ok((path, _)) => {
+                destinations.push(label.to_string());
+                locations.push(json!({ "destination": label, "path": path.to_string_lossy() }));
+            }
             Err(error) => warnings.push(format!("{label}: {error}")),
         }
     }
@@ -2250,6 +2263,7 @@ fn save_workflow_skill_in(home: &Path, store: &Path, draft: &Value) -> Result<Va
         "path": skill_path.to_string_lossy(),
         "updated": updated,
         "destinations": destinations,
+        "locations": locations,
         "warnings": warnings,
     }))
 }
@@ -2918,6 +2932,20 @@ mod tests {
             json!(["Screenpipe", "Claude Code", "Codex"])
         );
         assert_eq!(receipt["warnings"], json!([]));
+        assert_eq!(receipt["locations"].as_array().unwrap().len(), 3);
+        for (location, destination) in receipt["locations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(receipt["destinations"].as_array().unwrap())
+        {
+            assert_eq!(&location["destination"], destination);
+            assert_eq!(
+                std::fs::read_to_string(location["path"].as_str().unwrap()).unwrap(),
+                saved
+            );
+        }
+        assert_eq!(receipt["locations"][0]["path"], receipt["path"]);
         assert!(saved.starts_with("---\nname: review-pull-requests\n"));
         assert!(saved
             .contains("description: \"Review a requested change when evidence is available.\""));
@@ -2980,6 +3008,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(receipt["destinations"], json!(["Screenpipe"]));
+        assert_eq!(receipt["locations"].as_array().unwrap().len(), 1);
+        assert_eq!(receipt["locations"][0]["destination"], "Screenpipe");
+        assert!(Path::new(receipt["locations"][0]["path"].as_str().unwrap()).is_file());
         assert!(receipt["warnings"][0]
             .as_str()
             .unwrap_or_default()

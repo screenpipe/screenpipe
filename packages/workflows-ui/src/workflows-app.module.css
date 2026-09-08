@@ -559,6 +559,12 @@
 .skillSaved details { max-width: 100%; margin-top: 7px; color: #777b72; font-size: 8px; }
 .skillSaved summary { cursor: pointer; }
 .skillSaved code { display: block; max-width: 560px; overflow-wrap: anywhere; margin-top: 7px; padding: 8px 10px; border: 1px solid #dddfd8; border-radius: 4px; background: #fff; font-size: 7.5px; text-align: left; }
+.skillSaved .skillLocations { width: 100%; font-size: 11px; }
+.skillLocations ul { list-style: none; padding: 0; margin: 12px 0 0; text-align: left; }
+.skillLocations li { margin-bottom: 14px; }
+.skillLocations li > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.skillLocations button { padding: 3px 7px; border: 1px solid #dddfd8; border-radius: 4px; background: #fff; color: inherit; font-size: 10px; cursor: pointer; }
+.skillLocations code { font-size: 10px; user-select: text; }
 .skillAgentRun { min-height: 100%; display: flex; flex-direction: column; padding: 24px 22px 28px; }
 .skillRunStatus { display: flex; align-items: center; gap: 12px; }
 .skillAgentMark { width: 34px; height: 34px; display: grid; flex: 0 0 auto; place-items: center; border-radius: 8px; background: var(--ink); color: var(--lime); }
