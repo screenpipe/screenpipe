@@ -493,23 +493,29 @@ impl Ingestor {
                     "database source identity cannot be reassigned".into(),
                 ));
             }
+            // Move only the device registry entry. Historic rows, FTS entries,
+            // sync IDs and screenshot addresses keep their original source ID.
+            sqlx::query("INSERT INTO gateway_devices (device_id, device_label, enrolled_at, last_seen) SELECT ?2, device_label, enrolled_at, last_seen FROM gateway_devices WHERE device_id = ?1 ON CONFLICT(device_id) DO UPDATE SET enrolled_at = MIN(enrolled_at, excluded.enrolled_at), last_seen = MAX(last_seen, excluded.last_seen)")
+                .bind(key_device_id).bind(device_id).execute(&mut **tx.conn()).await?;
+            sqlx::query("DELETE FROM gateway_devices WHERE device_id = ?1")
+                .bind(key_device_id)
+                .execute(&mut **tx.conn())
+                .await?;
         }
         // Register/refresh every device seen in this batch. `last_seen`
         // advances to the newest record timestamp (not wall clock) so it
         // means "latest telemetry", matching the hosted dashboard's sense.
         for record in &parsed.records {
+            // An older batch can arrive after migration. Resolve the registered
+            // alias even when that batch predates stable-device metadata.
             sqlx::query(
                 r#"INSERT INTO gateway_devices (device_id, device_label, enrolled_at, last_seen)
-                   VALUES (?1, ?2, ?3, ?4)
+                   VALUES (COALESCE((SELECT device_id FROM gateway_device_sources WHERE source_id = ?1), ?1), ?2, ?3, ?4)
                    ON CONFLICT(device_id) DO UPDATE SET
                      device_label = excluded.device_label,
                      last_seen = MAX(last_seen, excluded.last_seen)"#,
             )
-            .bind(
-                stable_device_id
-                    .map(String::as_str)
-                    .unwrap_or_else(|| record.device_id()),
-            )
+            .bind(record.device_id())
             .bind(record.device_label())
             .bind(chrono::Utc::now().to_rfc3339())
             .bind(record.timestamp())

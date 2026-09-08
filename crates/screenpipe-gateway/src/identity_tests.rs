@@ -100,6 +100,101 @@ async fn json_get(router: &Router, uri: &str) -> Value {
 }
 
 #[tokio::test]
+async fn existing_device_alias_preserves_search_images_and_late_legacy_uploads() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(
+        DatabaseManager::new(
+            dir.path().join("db.sqlite").to_str().unwrap(),
+            DbConfig::default(),
+        )
+        .await
+        .unwrap(),
+    );
+    let store = Arc::new(InMemory::new());
+    let source = Arc::new(S3BlobSource::from_store(store.clone(), None));
+    let ingestor = Ingestor::new(
+        source.clone(),
+        db.clone(),
+        "lic".into(),
+        dir.path().join("snapshots"),
+    )
+    .await
+    .unwrap();
+    let router = api::router(db.clone(), source, "lic".into(), None);
+    put(&store, SOURCE_A, "old", None).await;
+    store
+        .put(
+            &Path::from(frame_image_key("lic", SOURCE_A, 1)),
+            b"original image".to_vec().into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ingestor.run_once().await.unwrap().records_inserted, 7);
+    let old_url = format!("/api/enterprise/v1/search?q=roadmap&device_id={SOURCE_A}&{WINDOW}");
+    let before = json_get(&router, &old_url).await;
+    let original_devices = json_get(&router, "/api/enterprise/v1/devices").await;
+    let mut attributes = Attributes::new();
+    attributes.insert(
+        Attribute::Metadata(STABLE_DEVICE_METADATA.into()),
+        DEVICE.to_string().into(),
+    );
+    for attempt in ["migration", "migration-retry"] {
+        store
+            .put_opts(
+                &Path::from(direct_batch_key("lic", SOURCE_A, attempt)),
+                Vec::<u8>::new().into(),
+                PutOptions {
+                    attributes: attributes.clone(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let migrated = ingestor.run_once().await.unwrap();
+    assert_eq!(migrated.objects_ingested, 2);
+    assert_eq!(migrated.records_inserted, 0);
+    let devices = json_get(&router, "/api/enterprise/v1/devices").await;
+    assert_eq!(devices["devices"].as_array().unwrap().len(), 1);
+    assert_eq!(devices["devices"][0]["device_id"], DEVICE);
+    assert_eq!(
+        devices["devices"][0]["enrolled_at"],
+        original_devices["devices"][0]["enrolled_at"]
+    );
+    assert_eq!(json_get(&router, &old_url).await, before);
+    let stable_url = format!("/api/enterprise/v1/search?q=roadmap&device_id={DEVICE}&{WINDOW}");
+    assert_eq!(
+        json_get(&router, &stable_url).await["results"],
+        before["results"]
+    );
+    let (_, bytes) = get(&router, &format!("/api/enterprise/v1/frames/{SOURCE_A}/1")).await;
+    assert_eq!(bytes, b"original image");
+    // Queued pre-upgrade data cannot resurrect a duplicate device. A later
+    // database's reused local row number remains a distinct recording.
+    put(&store, SOURCE_A, "late-legacy", None).await;
+    put(&store, SOURCE_B, "reset", Some(DEVICE)).await;
+    let report = ingestor.run_once().await.unwrap();
+    assert_eq!(report.records_deduped, 7);
+    assert_eq!(report.records_inserted, 7);
+    assert_eq!(
+        json_get(&router, "/api/enterprise/v1/devices").await["devices"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(json_get(&router, &old_url).await, before);
+    let records = json_get(
+        &router,
+        &format!("/api/enterprise/v1/records?device_id={DEVICE}&{WINDOW}"),
+    )
+    .await;
+    assert_eq!(records["records"].as_array().unwrap().len(), 14);
+    assert_eq!(ingestor.run_once().await.unwrap().records_inserted, 0);
+    db.close().await;
+}
+
+#[tokio::test]
 async fn database_reset_keeps_search_and_images_distinct_without_changing_legacy_records() {
     let dir = tempfile::tempdir().unwrap();
     let db = Arc::new(

@@ -798,8 +798,9 @@ fn create_error_callback(
     }
 }
 
-/// Detect WASAPI's `AUDCLNT_E_UNSUPPORTED_FORMAT` (HRESULT 0x88890008)
-/// surfaced through cpal as `failed to initialize audio client: OS Error
+/// Detect WASAPI configuration rejections that should retry the device's
+/// current shared-mode mix format. `AUDCLNT_E_UNSUPPORTED_FORMAT` (HRESULT
+/// 0x88890008) is surfaced through cpal as `failed to initialize audio client: OS Error
 /// -2004287480 (FormatMessageW() returned error 317)`. The HRESULT has
 /// no system message string, hence error 317 (`ERROR_MR_MID_NOT_FOUND`)
 /// from `FormatMessageW` — we recognize the numeric form instead. Also
@@ -810,6 +811,10 @@ fn is_wasapi_unsupported_format(err: &anyhow::Error) -> bool {
     let s = err.to_string();
     s.contains("-2004287480")
         || s.contains("0x88890008")
+        // Some Windows spatial/exclusive-mode stacks reject the selected
+        // capture shape with this backend-specific device-read error. The
+        // device's current shared-mode mix format is the safe retry.
+        || s.to_ascii_lowercase().contains("0x887c001e")
         || s.to_lowercase().contains("unsupported format")
         // WASAPI with AEC enabled rejects non-default configs with this message
         // (seen on Logitech C922 and other USB mics). The existing fallback to
@@ -1174,5 +1179,12 @@ mod wasapi_format_tests {
         assert!(!is_wasapi_unsupported_format(&err("device disconnected")));
         assert!(!is_wasapi_unsupported_format(&err("stream timeout")));
         assert!(!is_wasapi_unsupported_format(&err("no audio received")));
+    }
+
+    #[test]
+    fn catches_windows_device_read_rejection() {
+        assert!(is_wasapi_unsupported_format(&err(
+            "A backend-specific error has occurred: 0x887C001E"
+        )));
     }
 }

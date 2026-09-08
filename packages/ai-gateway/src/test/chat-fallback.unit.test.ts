@@ -78,9 +78,35 @@ describe('chat handler — oversized-input classification (SCREENPIPE-AI-PROXY-C
 		expect(isUserInputTooLarge(400, 'prompt is too long: 250000 tokens > 200000 maximum')).toBe(true);
 	});
 
+	it('matches current OpenAI input-limit phrasings', () => {
+		expect(
+			isUserInputTooLarge(
+				400,
+				'Input tokens exceed the configured limit of 272000 tokens. Your messages resulted in 272325 tokens.',
+			),
+		).toBe(true);
+		expect(
+			isUserInputTooLarge(
+				400,
+				'request (64174 tokens) exceeds the available context size (32768 tokens), try increasing it',
+			),
+		).toBe(true);
+	});
+
 	it('ignores unrelated 400s and non-4xx statuses', () => {
 		expect(isUserInputTooLarge(400, 'invalid tool schema')).toBe(false);
 		expect(isUserInputTooLarge(500, 'maximum context length exceeded')).toBe(false);
+	});
+});
+
+describe('chat handler — oversized tool-call payloads', () => {
+	it('returns a clean client message for the current OpenAI tool-call limit', () => {
+		const message = clientPayloadMessage(
+			400,
+			"Invalid 'messages[11].tool_calls': array too long. Expected an array with maximum length 128, but got an array with length 504 instead.",
+		);
+
+		expect(message).toContain('too many tool calls');
 	});
 });
 

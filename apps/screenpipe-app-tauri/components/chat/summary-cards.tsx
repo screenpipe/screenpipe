@@ -265,11 +265,11 @@ export function SummaryCards({
                 slug={featured[0].name}
                 className="h-5 w-5 shrink-0 text-foreground/70 group-hover/home-card:text-background group-focus-within/home-card:text-background"
               />
-              <div className="flex-1 pr-16">
+              <div className="min-w-0 flex-1 pr-24">
                 <div className="text-sm font-semibold group-hover/home-card:text-background group-focus-within/home-card:text-background leading-tight">
                   {featured[0].title}
                 </div>
-                <div className="text-xs text-muted-foreground group-hover/home-card:text-background/60 group-focus-within/home-card:text-background/60 leading-tight mt-0.5">
+                <div className="text-pretty text-xs text-muted-foreground group-hover/home-card:text-background/60 group-focus-within/home-card:text-background/60 leading-tight mt-0.5">
                   {featured[0].description}
                 </div>
               </div>
@@ -297,11 +297,11 @@ export function SummaryCards({
                 slug={featured[1].name}
                 className="h-4 w-4 shrink-0 text-foreground/65 group-hover/home-card:text-background group-focus-within/home-card:text-background"
               />
-              <div className="flex-1 pr-16">
+              <div className="min-w-0 flex-1 pr-24">
                 <div className="text-xs font-semibold text-foreground/85 group-hover/home-card:text-background group-focus-within/home-card:text-background leading-tight">
                   {featured[1].title}
                 </div>
-                <div className="text-xs text-muted-foreground group-hover/home-card:text-background/70 group-focus-within/home-card:text-background/70 leading-tight mt-0.5">
+                <div className="text-pretty text-xs text-muted-foreground group-hover/home-card:text-background/70 group-focus-within/home-card:text-background/70 leading-tight mt-0.5">
                   {featured[1].description}
                 </div>
               </div>
@@ -323,7 +323,7 @@ export function SummaryCards({
       <div className="w-full max-w-lg mb-4 flex flex-wrap items-center gap-1">
         {/* Template-backed chips (Time Breakdown, Missed To-Dos) */}
         {featured.slice(2).map((pipe) => (
-          <div key={pipe.name} className="group/home-card relative grow">
+          <div key={pipe.name} className="group/home-card relative min-w-[108px] flex-1">
             <button
               type="button"
               data-testid={`summary-card-${pipe.name}`}
@@ -332,7 +332,7 @@ export function SummaryCards({
                 previewPromptForPipe(pipe),
                 onPreviewPrompt,
               )}
-              className="w-full cursor-pointer rounded-md border border-foreground/20 bg-card px-2 py-0.5 text-[11px] text-foreground/75 transition-colors duration-150 group-hover/home-card:border-foreground group-hover/home-card:bg-foreground group-hover/home-card:text-background group-focus-within/home-card:border-foreground group-focus-within/home-card:bg-foreground group-focus-within/home-card:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none"
+              className="h-10 w-full cursor-pointer rounded-md border border-foreground/20 bg-card px-0 text-[11px] text-foreground/75 transition-colors duration-150 group-hover/home-card:border-foreground group-hover/home-card:bg-foreground group-hover/home-card:text-background group-focus-within/home-card:border-foreground group-focus-within/home-card:bg-foreground group-focus-within/home-card:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none"
             >
               <span className="transition-opacity duration-150 group-hover/home-card:opacity-0 group-focus-within/home-card:opacity-0 motion-reduce:transition-none">
                 {pipe.title}
@@ -343,7 +343,7 @@ export function SummaryCards({
         ))}
         {/* Quick summary chips */}
         {QUICK_SUMMARY_TASKS.map((task) => (
-          <div key={task.name} className="group/home-card relative grow">
+          <div key={task.name} className="group/home-card relative min-w-[108px] flex-1">
             <button
               type="button"
               {...promptPreviewHandlers(
@@ -363,7 +363,7 @@ export function SummaryCards({
                   "other_builtin",
                 );
               }}
-              className="w-full cursor-pointer rounded-md border border-foreground/20 bg-card px-2 py-0.5 text-[11px] text-foreground/75 transition-colors duration-150 group-hover/home-card:border-foreground group-hover/home-card:bg-foreground group-hover/home-card:text-background group-focus-within/home-card:border-foreground group-focus-within/home-card:bg-foreground group-focus-within/home-card:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none"
+              className="h-10 w-full cursor-pointer rounded-md border border-foreground/20 bg-card px-0 text-[11px] text-foreground/75 transition-colors duration-150 group-hover/home-card:border-foreground group-hover/home-card:bg-foreground group-hover/home-card:text-background group-focus-within/home-card:border-foreground group-focus-within/home-card:bg-foreground group-focus-within/home-card:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none"
             >
               <span className="transition-opacity duration-150 group-hover/home-card:opacity-0 group-focus-within/home-card:opacity-0 motion-reduce:transition-none">
                 {task.title}
@@ -382,7 +382,7 @@ export function SummaryCards({
         {customTemplates.map((ct) => (
           <div
             key={ct.id}
-            className="group/home-card relative inline-flex max-w-[140px] grow"
+            className="group/home-card relative inline-flex min-w-[108px] max-w-[140px] grow"
           >
             <button
               type="button"
@@ -394,7 +394,7 @@ export function SummaryCards({
               )}
               onClick={() => handleCustomTemplateClick(ct)}
               title={ct.description || ct.timeRange}
-              className="inline-flex w-full cursor-pointer items-center justify-center gap-1 rounded-md border border-foreground/20 bg-card px-2 py-0.5 text-[11px] text-foreground/70 transition-colors duration-150 group-hover/home-card:border-foreground group-hover/home-card:bg-foreground group-hover/home-card:text-background group-focus-within/home-card:border-foreground group-focus-within/home-card:bg-foreground group-focus-within/home-card:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none"
+              className="inline-flex h-10 w-full cursor-pointer items-center justify-center gap-1 rounded-md border border-foreground/20 bg-card px-2 text-[11px] text-foreground/70 transition-colors duration-150 group-hover/home-card:border-foreground group-hover/home-card:bg-foreground group-hover/home-card:text-background group-focus-within/home-card:border-foreground group-focus-within/home-card:bg-foreground group-focus-within/home-card:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none"
             >
               <span className="inline-flex min-w-0 items-center gap-1 transition-opacity duration-150 group-hover/home-card:opacity-0 group-focus-within/home-card:opacity-0 motion-reduce:transition-none">
                 <Pin className="h-3 w-3 shrink-0" strokeWidth={1.5} />
@@ -414,7 +414,7 @@ export function SummaryCards({
             posthog.capture("home_card_clicked", { kind: "custom_summary_open" });
             setShowBuilder(true);
           }}
-          className="cursor-pointer rounded-md border border-dashed border-foreground/25 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors duration-150 hover:border-foreground hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none"
+          className="h-10 cursor-pointer rounded-md border border-dashed border-foreground/25 px-1 text-[11px] text-muted-foreground transition-colors duration-150 hover:border-foreground hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none"
         >
           + custom
         </button>

@@ -83,7 +83,27 @@ fn reset_windows_store_file_permissions(path: &Path) -> anyhow::Result<()> {
         std::fs::set_permissions(path, permissions)?;
     }
 
+    // Cloud-backed and virtual filesystems may reject `icacls /reset` even
+    // though the current process can already update the file. Do not make a
+    // Windows-specific ACL utility a startup dependency for a writable store.
+    if std::fs::OpenOptions::new().write(true).open(path).is_ok() {
+        return Ok(());
+    }
+
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let status = std::process::Command::new("icacls.exe")
+        .arg(path)
+        .args(["/inheritance:e", "/Q"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()?;
+    if !status.success() {
+        return Err(anyhow::anyhow!(
+            "failed to enable inherited settings permissions for {}: icacls exited with {}",
+            path.display(),
+            status
+        ));
+    }
+
     let status = std::process::Command::new("icacls.exe")
         .arg(path)
         .args(["/reset", "/Q"])
@@ -96,32 +116,33 @@ fn reset_windows_store_file_permissions(path: &Path) -> anyhow::Result<()> {
             status
         ));
     }
+    std::fs::OpenOptions::new().write(true).open(path)?;
     Ok(())
 }
 
 /// Repair only the settings files whose permissions may have been carried
-/// forward from an older installation. The canonical bytes are captured
-/// before any mutation and atomically republished afterward so store.bin
-/// inherits the directory's current ACL without risking settings loss.
+/// forward from an older installation. `icacls /reset` reapplies the
+/// directory's inherited ACL in place, so the canonical bytes never need to
+/// be replaced while the old ACL may still deny delete/replace access.
 #[cfg(windows)]
 fn normalize_windows_store_permissions(store_path: &Path) -> anyhow::Result<()> {
-    let canonical = match read_store_file(store_path) {
-        Ok(bytes) => Some(bytes),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error.into()),
-    };
+    reset_windows_store_file_permissions(store_path)?;
 
     for path in [
-        store_path.to_path_buf(),
         store_path.with_extension(LAST_GOOD_SUFFIX),
         store_path.with_extension(LAST_GOOD_PREV_SUFFIX),
     ] {
-        reset_windows_store_file_permissions(&path)?;
+        if let Err(error) = reset_windows_store_file_permissions(&path) {
+            // Snapshots are recovery aids. A stale sidecar ACL must not stop
+            // an otherwise readable and writable canonical settings store.
+            tracing::warn!(
+                "failed to repair settings recovery sidecar permissions at {}: {}",
+                path.display(),
+                error
+            );
+        }
     }
 
-    if let Some(bytes) = canonical {
-        durable_write(store_path, &bytes)?;
-    }
     Ok(())
 }
 
@@ -288,10 +309,7 @@ pub(crate) fn durable_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         f.write_all(bytes)?;
         f.sync_all()?; // contents + metadata to stable storage before the rename
     }
-    if let Err(e) = retry_windows_store_io(|| std::fs::rename(&tmp, path)) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
+    replace_store_temp(&tmp, path)?;
     // fsync the directory so the rename itself survives a crash. Best-effort:
     // not all platforms allow opening a dir for sync (Windows), and rename is
     // already atomic there via MoveFileEx.
@@ -302,6 +320,34 @@ pub(crate) fn durable_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_store_temp(tmp: &Path, path: &Path) -> std::io::Result<()> {
+    std::fs::rename(tmp, path)
+}
+
+#[cfg(windows)]
+fn replace_store_temp(tmp: &Path, path: &Path) -> std::io::Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut delay = std::time::Duration::from_millis(1);
+    let mut temporary = tempfile::TempPath::try_from_path(tmp)?;
+
+    loop {
+        match temporary.persist(path) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                if error.error.kind() != std::io::ErrorKind::PermissionDenied
+                    || std::time::Instant::now() >= deadline
+                {
+                    return Err(error.error);
+                }
+                temporary = error.path;
+                std::thread::sleep(delay);
+                delay = (delay * 2).min(std::time::Duration::from_millis(50));
+            }
+        }
+    }
 }
 
 /// Like [`durable_write`], but skip the temp/fsync/rename if `path` already
@@ -418,7 +464,7 @@ fn restore_snapshot_over(store_path: &Path, why: &str) -> bool {
         pre_restore_note = format!("pre-restore copy at {}", pre_restore.display());
     }
 
-    if let Err(e) = durable_write(store_path, &data) {
+    if let Err(e) = retry_windows_store_io(|| durable_write(store_path, &data)) {
         tracing::error!(
             "settings recovery: failed to restore {} from {}: {}",
             store_path.display(),
@@ -468,6 +514,16 @@ pub fn auto_restore_if_wiped(store_path: &Path) -> bool {
     }
     if store_json_has_presets(&cur) {
         return false; // current state is healthy, nothing to do
+    }
+    if read_healthy_snapshot(store_path).is_none() {
+        // A valid legacy document can predate aiPresets. SettingsStore's serde
+        // defaults recover it below and init_store persists the non-empty
+        // invariant; absence of a snapshot is not itself a recovery failure.
+        tracing::warn!(
+            "settings recovery: store.bin has no aiPresets and no healthy snapshot; \
+             the settings migration will persist the default preset"
+        );
+        return false;
     }
     restore_snapshot_over(
         store_path,
@@ -524,7 +580,7 @@ fn decrypt_store_file(path: &Path) -> DecryptOutcome {
             // user's settings instead of silently resetting them.
             let backup = path.with_extension("bin.encrypted.bak");
             let _ = std::fs::copy(path, &backup);
-            tracing::error!(
+            tracing::warn!(
                 "store.bin is encrypted but keychain access was denied — \
                  ciphertext preserved at {}. Grant keychain access and \
                  restart to use it.",
@@ -748,6 +804,39 @@ fn save_store_to_disk<R: tauri::Runtime>(
     store: &tauri_plugin_store::Store<R>,
 ) -> Result<(), String> {
     retry_windows_store_io(|| store.save()).map_err(|e| e.to_string())
+}
+
+fn save_store_with_permission_repair(
+    app: &AppHandle,
+    store: &tauri_plugin_store::Store<tauri::Wry>,
+) -> Result<(), String> {
+    match save_store_to_disk(store) {
+        Ok(()) => Ok(()),
+        Err(first_error) => {
+            #[cfg(not(windows))]
+            {
+                let _ = app;
+                return Err(first_error);
+            }
+
+            #[cfg(windows)]
+            {
+                let store_path = get_base_dir(app, None)
+                    .map_err(|error| error.to_string())?
+                    .join("store.bin");
+                tracing::warn!(
+                    "settings save failed; repairing Windows store permissions and retrying: {}",
+                    first_error
+                );
+                normalize_windows_store_permissions(&store_path).map_err(|repair_error| {
+                    format!(
+                        "settings save failed ({first_error}); permission repair also failed: {repair_error}"
+                    )
+                })?;
+                save_store_to_disk(store)
+            }
+        }
+    }
 }
 
 /// Flush the process-shared store to durable, encrypted storage before a
@@ -1176,7 +1265,7 @@ impl OnboardingStore {
         let mut onboarding = Self::get(app)?.unwrap_or_default();
         update(&mut onboarding);
         store.set("onboarding", json!(onboarding));
-        save_store_to_disk(store.as_ref())?;
+        save_store_with_permission_repair(app, store.as_ref())?;
         reencrypt_store_file(app);
         Ok(())
     }
@@ -1187,7 +1276,7 @@ impl OnboardingStore {
         };
 
         store.set("onboarding", json!(self));
-        save_store_to_disk(store.as_ref())?;
+        save_store_with_permission_repair(app, store.as_ref())?;
         reencrypt_store_file(app);
         Ok(())
     }
@@ -2473,6 +2562,25 @@ impl SettingsStore {
         };
 
         store.set("settings", json!(self));
+        save_store_with_permission_repair(app, store.as_ref())?;
+        reencrypt_store_file(app);
+        Ok(())
+    }
+
+    /// Update only identity, preserving the latest settings and rejecting a
+    /// concurrent identity change. The server association and cursor must already
+    /// be durable before the enterprise uploader calls this.
+    pub fn migrate_device_id(app: &AppHandle, legacy: &str, stable: &str) -> Result<(), String> {
+        let store = get_store(app, None).map_err(|e| e.to_string())?;
+        let mut settings = store.get("settings").ok_or("settings unavailable")?;
+        let current = settings["deviceId"]
+            .as_str()
+            .ok_or("device identity unavailable")?;
+        if current != legacy && current != stable {
+            return Err("device identity changed during migration".into());
+        }
+        settings["deviceId"] = json!(stable);
+        store.set("settings", settings);
         save_store_to_disk(store.as_ref())?;
         reencrypt_store_file(app);
         Ok(())
@@ -2525,6 +2633,14 @@ fn migrate_windows_timeline_to_window_mode(settings: &mut SettingsStore) -> bool
     true
 }
 
+fn backfill_default_ai_preset(settings: &mut SettingsStore) -> bool {
+    if !settings.ai_presets.is_empty() {
+        return false;
+    }
+    settings.ai_presets = SettingsStore::default().ai_presets;
+    true
+}
+
 pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
     println!("Initializing settings store");
 
@@ -2540,12 +2656,29 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
         .as_ref()
         .map(|obj| !obj.contains_key("restartNotificationsDefaultedOff"))
         .unwrap_or(false);
+    let should_persist_ai_preset_backfill = raw_obj.as_ref().is_some_and(|obj| {
+        obj.get("aiPresets")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+    });
 
     let is_new_store;
     let (mut store, mut should_save, can_run_settings_migrations) = match SettingsStore::get(app) {
-        Ok(Some(store)) => {
+        Ok(Some(mut store)) => {
             is_new_store = false;
-            (store, should_persist_restart_notification_migration, true)
+            if should_persist_ai_preset_backfill {
+                // At least one preset is a UI and persistence invariant. Keep
+                // every other setting from the valid document and repair only
+                // the missing/null/empty list.
+                backfill_default_ai_preset(&mut store);
+                tracing::warn!("settings migration: restored the default AI preset");
+            }
+            (
+                store,
+                should_persist_restart_notification_migration
+                    || should_persist_ai_preset_backfill,
+                true,
+            )
         }
         Ok(None) => {
             is_new_store = true;
@@ -3917,6 +4050,23 @@ mod tests {
         assert!(!store_json_has_presets(&missing));
         assert!(!store_json_has_presets(&no_settings));
         assert!(!store_json_has_presets(&invalid_json));
+    }
+
+    #[test]
+    fn valid_settings_without_presets_restore_one_default_and_preserve_other_fields() {
+        let raw = json!({
+            "autoUpdate": false,
+            "aiPresets": [],
+        });
+        let mut settings: SettingsStore = serde_json::from_value(raw).unwrap();
+
+        assert!(settings.ai_presets.is_empty());
+        let preserved_auto_update = settings.auto_update;
+        assert!(backfill_default_ai_preset(&mut settings));
+
+        assert_eq!(settings.ai_presets.len(), 1);
+        assert_eq!(settings.auto_update, preserved_auto_update);
+        assert!(!backfill_default_ai_preset(&mut settings));
     }
 
     /// Any `<name>.durable.<pid>.<seq>.tmp` still sitting in `dir`.

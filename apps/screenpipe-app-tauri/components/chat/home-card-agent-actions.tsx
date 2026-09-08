@@ -31,8 +31,6 @@ type LaunchState = "opening" | "opened" | "copied" | "unavailable";
 
 const SCREENPIPE_GITHUB_URL = "https://github.com/screenpipe/screenpipe";
 
-export const HOME_CARD_AGENT_TOOLTIP = "run this in your favorite agent";
-
 const SETUP_TARGETS: Record<HomeCardAgentId, string> = {
   claude: "claude-desktop",
   cursor: "cursor",
@@ -83,7 +81,7 @@ Use Screenpipe's recorded data and only report activity you can verify.`;
 }
 
 function AgentLogo({ id }: { id: HomeCardAgentId }) {
-  const className = "h-3.5 w-3.5";
+  const className = "h-4 w-4";
   if (id === "claude") {
     // eslint-disable-next-line @next/next/no-img-element
     return <img src="/images/claude-ai.svg" alt="" className={className} />;
@@ -91,7 +89,7 @@ function AgentLogo({ id }: { id: HomeCardAgentId }) {
   if (id === "cursor") return <CursorLogo className={className} />;
   return (
     // eslint-disable-next-line @next/next/no-img-element
-    <img src="/images/openai.svg" alt="" className={className} />
+    <img src="/images/openai.svg" alt="" className={`${className} dark:invert`} />
   );
 }
 
@@ -201,7 +199,7 @@ export function HomeCardAgentActions({
       data-placement={placement}
       role="group"
       aria-label={`Run ${pipe.title} in another agent`}
-      className={`absolute top-1/2 z-20 flex -translate-y-1/2 items-center gap-0.5 text-foreground transition-opacity duration-150 motion-reduce:transition-none ${
+      className={`absolute top-1/2 z-20 flex -translate-y-1/2 items-center gap-0.5 rounded-md border border-border bg-background p-0.5 text-foreground transition-opacity duration-150 motion-reduce:transition-none ${
         placement === "chip" ? "left-1/2 -translate-x-1/2" : "right-3"
       } ${
         state
@@ -219,6 +217,7 @@ export function HomeCardAgentActions({
       <TooltipProvider delayDuration={120}>
         {HOME_CARD_AGENT_TARGETS.map((target) => {
           const label = AGENT_LABELS[target.id];
+          const actionLabel = `Run in ${label}`;
           const isOpening = pending && activeAgent === target.id;
           const isResult = !pending && state && activeAgent === target.id;
           return (
@@ -227,23 +226,21 @@ export function HomeCardAgentActions({
                 <button
                   type="button"
                   data-testid={`home-card-agent-${pipe.name}-${target.id}`}
-                  aria-label={`Run in ${label}`}
+                  aria-label={actionLabel}
                   disabled={pending}
                   onPointerEnter={() => trackAgentViewed(target.id, "hover")}
                   onFocus={() => trackAgentViewed(target.id, "keyboard")}
                   onClick={() => void launch(target)}
-                  className={`flex h-5 w-5 items-center justify-center rounded-full opacity-75 transition-[color,background-color,opacity,transform] duration-150 hover:z-10 hover:scale-110 hover:bg-background/10 hover:opacity-100 focus-visible:z-10 focus-visible:bg-background/10 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-background disabled:cursor-wait disabled:opacity-50 motion-reduce:transform-none motion-reduce:transition-none ${
-                    isResult ? "z-10 text-signal opacity-100" : ""
-                  }`}
+                  className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-sm transition-colors duration-150 hover:bg-foreground/10 focus-visible:bg-foreground/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground disabled:cursor-wait disabled:opacity-50 motion-reduce:transition-none"
                 >
                   {isOpening ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
                   ) : isResult && state === "opened" ? (
-                    <Check className="h-3.5 w-3.5" aria-hidden />
+                    <Check className="h-4 w-4" aria-hidden />
                   ) : isResult && state === "copied" ? (
-                    <Clipboard className="h-3.5 w-3.5" aria-hidden />
+                    <Clipboard className="h-4 w-4" aria-hidden />
                   ) : isResult && state === "unavailable" ? (
-                    <X className="h-3.5 w-3.5" aria-hidden />
+                    <X className="h-4 w-4" aria-hidden />
                   ) : (
                     <AgentLogo id={target.id} />
                   )}
@@ -254,7 +251,7 @@ export function HomeCardAgentActions({
                 sideOffset={6}
                 className="rounded-md px-2.5 py-1.5 text-[11px] font-normal"
               >
-                {HOME_CARD_AGENT_TOOLTIP}
+                {actionLabel}
               </TooltipContent>
             </Tooltip>
           );
