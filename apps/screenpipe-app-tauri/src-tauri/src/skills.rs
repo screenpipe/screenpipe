@@ -42,7 +42,7 @@ const AI_TOOL_AUTO_CONNECT_TARGETS: [&str; 10] = [
 /// its marker while holding this lock before removing MCP/skills, so an
 /// already-running launch repair cannot finish after the user's explicit
 /// choice and reconnect that target.
-pub(crate) static AI_TOOL_AUTO_CONNECT_LOCK: Lazy<tokio::sync::Mutex<()>> =
+static AI_TOOL_AUTO_CONNECT_LOCK: Lazy<tokio::sync::Mutex<()>> =
     Lazy::new(|| tokio::sync::Mutex::new(()));
 
 pub(crate) fn ai_tool_auto_connect_opt_out_dir() -> PathBuf {
@@ -85,7 +85,11 @@ async fn set_ai_tool_auto_connect_opt_out_serialized_in(
     target: String,
     opt_out: bool,
 ) -> Result<(), String> {
-    let _guard = AI_TOOL_AUTO_CONNECT_LOCK.lock().await;
+    let _guard = if target == "grokbot" {
+        crate::grokbot::GROKBOT_CONNECTION_LOCK.lock().await
+    } else {
+        AI_TOOL_AUTO_CONNECT_LOCK.lock().await
+    };
     tokio::task::spawn_blocking(move || {
         set_ai_tool_auto_connect_opt_out_in(&dir, &target, opt_out)
     })
@@ -1698,6 +1702,34 @@ pub async fn install_registry_skill(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn grokbot_network_work_does_not_block_other_ai_tool_choices() {
+        let root = tempfile::tempdir().unwrap();
+        let grok_guard = crate::grokbot::GROKBOT_CONNECTION_LOCK.lock().await;
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            set_ai_tool_auto_connect_opt_out_serialized_in(
+                root.path().to_owned(),
+                "codex".into(),
+                true,
+            ),
+        )
+        .await
+        .expect("Grok Bot network work must not hold up other AI tools")
+        .unwrap();
+        assert!(root.path().join("codex").is_file());
+        let pending = tokio::spawn(set_ai_tool_auto_connect_opt_out_serialized_in(
+            root.path().to_owned(),
+            "grokbot".into(),
+            true,
+        ));
+        tokio::task::yield_now().await;
+        assert!(!pending.is_finished());
+        drop(grok_guard);
+        pending.await.unwrap().unwrap();
+        assert!(root.path().join("grokbot").is_file());
+    }
 
     #[test]
     fn ai_tool_auto_connect_opt_out_is_per_target_and_reversible() {
