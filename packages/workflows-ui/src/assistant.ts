@@ -22,6 +22,7 @@ export type AssistantConversation = { id: string; title: string; messages: Assis
 export type AssistantState = {
   version: 1;
   mode: "floating" | "sidebar";
+  sidebarWidth?: number;
   activeId: string;
   conversations: AssistantConversation[];
 };

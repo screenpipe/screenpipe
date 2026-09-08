@@ -4,6 +4,7 @@
 "use client";
 
 import { X } from "lucide-react";
+import { ComposerTextArea } from "@screenpipe/workflows-ui/chat";
 import { IntegrationIcon } from "@/components/settings/connections-section";
 import { MentionDropdown } from "@/components/chat/standalone/mention-dropdown";
 import type {
@@ -56,7 +57,8 @@ export function ComposerInputBox({
             </button>
           </>
         )}
-        <textarea
+        <ComposerTextArea
+          autoGrow={false}
           ref={input.inputRef}
           value={input.value}
           onChange={input.onChange}

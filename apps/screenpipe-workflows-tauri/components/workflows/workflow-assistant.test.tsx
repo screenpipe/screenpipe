@@ -23,7 +23,8 @@ describe("secondary workflow assistant", () => {
     expect(platform.load).not.toHaveBeenCalled(); await open(); question();
     await screen.findByText("Checking the handoff");
     fireEvent.change(screen.getByRole("textbox", { name: "Ask Screenpipe" }), { target: { value: "And yesterday?" } });
-    fireEvent.click(screen.getByRole("button", { name: "Dock in sidebar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Chat display" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Sidebar" }));
     expect(props.onDockChange).toHaveBeenLastCalledWith(true);
     fireEvent.click(screen.getByRole("button", { name: "Close assistant" }));
     expect(screen.queryByRole("region", { name: "Screenpipe assistant" })).not.toBeInTheDocument();
@@ -46,7 +47,7 @@ describe("secondary workflow assistant", () => {
     fireEvent.click(screen.getByRole("button", { name: "Try again" })); await screen.findByText("Found it.");
     expect(ask.mock.calls[0][0].context).toBeNull(); expect(ask.mock.calls[1][0].context).toBeNull();
     expect(ask.mock.calls[1][0].history).toEqual([]);
-    expect(screen.getAllByText("What is taking time?")).toHaveLength(1);
+    expect(screen.getAllByLabelText("Your question")).toHaveLength(1);
   });
 
   it("saves the question before dispatch and stops without losing partial output", async () => {
@@ -99,5 +100,72 @@ describe("secondary workflow assistant", () => {
     expect(isAssistantLink("screenpipe://frame/123")).toBe(true);
     expect(isAssistantLink("screenpipe://pipe/install?name=anything")).toBe(false);
     expect(isAssistantLink("javascript:alert(1)")).toBe(false);
+  });
+
+  it("searches conversation contents and keeps the draft when returning from history", async () => {
+    const saved = emptyAssistantState();
+    saved.conversations[0].draft = "Keep this question";
+    saved.conversations[0].title = "Proposal review";
+    saved.conversations[0].messages = [{ id: "1", role: "assistant", text: "The launch brief is ready.", at: "2026-09-07" }];
+    setup({ load: vi.fn().mockResolvedValue(saved) }); await open();
+    fireEvent.click(screen.getByRole("button", { name: "Conversation history" }));
+    const search = screen.getByRole("textbox", { name: "Search conversations" });
+    expect(search).toHaveFocus();
+    expect(screen.queryByRole("textbox", { name: "Ask Screenpipe" })).not.toBeInTheDocument();
+    fireEvent.change(search, { target: { value: "launch" } });
+    expect(screen.getByRole("button", { name: "Proposal review" })).toBeInTheDocument();
+    fireEvent.change(search, { target: { value: "no such phrase" } });
+    expect(screen.getByText("No matching conversations.")).toBeInTheDocument();
+    fireEvent.keyDown(search, { key: "Escape" });
+    expect(screen.getByRole("textbox", { name: "Ask Screenpipe" })).toHaveValue("Keep this question");
+    expect(screen.getByRole("textbox", { name: "Ask Screenpipe" })).toHaveFocus();
+  });
+
+  it("supports keyboard mode selection and persists bounded resizing", async () => {
+    const { platform } = setup(); await open();
+    fireEvent.keyDown(screen.getByRole("button", { name: "Chat display" }), { key: "ArrowDown" });
+    const floating = screen.getByRole("menuitemradio", { name: "Floating" });
+    expect(floating).toHaveFocus();
+    fireEvent.keyDown(floating, { key: "ArrowDown" });
+    expect(screen.getByRole("menuitemradio", { name: "Sidebar" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Sidebar" }));
+    expect(screen.getByRole("region", { name: "Screenpipe assistant" })).toHaveAttribute("data-mode", "sidebar");
+    const handle = screen.getByRole("separator", { name: "Resize chat" });
+    fireEvent.keyDown(handle, { key: "ArrowLeft" });
+    expect(handle).toHaveAttribute("aria-valuenow", "444");
+    fireEvent.keyDown(handle, { key: "Home" });
+    expect(handle).toHaveAttribute("aria-valuenow", "420");
+    fireEvent.click(screen.getByRole("button", { name: "Chat display" }));
+    fireEvent.keyDown(screen.getByRole("menuitemradio", { name: "Sidebar" }), { key: "Escape" });
+    expect(screen.getByRole("button", { name: "Chat display" })).toHaveFocus();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close assistant" }));
+    await waitFor(() => expect(platform.save).toHaveBeenCalledWith(expect.objectContaining({ mode: "sidebar", sidebarWidth: 420 })));
+  });
+
+  it("does not pull a reader to the bottom when a stream or draft changes", async () => {
+    let progress!: (update: { text: string; activity: "writing" }) => void;
+    let finish!: (text: string) => void;
+    setup({ ask: vi.fn(({ onProgress }) => { progress = onProgress; return new Promise((resolve) => { finish = resolve; }); }) });
+    await open(); question();
+    await waitFor(() => expect(progress).toBeDefined());
+    const body = screen.getByRole("log", { name: "Conversation" });
+    Object.defineProperties(body, { scrollHeight: { value: 2000 }, clientHeight: { value: 400 } });
+    fireEvent.scroll(body, { target: { scrollTop: 200 } });
+    await act(async () => progress({ text: "More evidence arrived.", activity: "writing" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Ask Screenpipe" }), { target: { value: "Next question" } });
+    expect(body.scrollTop).toBe(200);
+    expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+    await act(async () => finish("The finished answer."));
+    expect(body.scrollTop).toBe(200);
+  });
+
+  it("does not erase a prepared follow-up when retrying an answer", async () => {
+    const ask = vi.fn().mockResolvedValueOnce("First answer.").mockResolvedValueOnce("A revised answer.");
+    setup({ ask }); await open(); question(); await screen.findByText("First answer.");
+    fireEvent.change(screen.getByRole("textbox", { name: "Ask Screenpipe" }), { target: { value: "My next question" } });
+    fireEvent.click(screen.getByRole("button", { name: "Retry answer" })); await screen.findByText("A revised answer.");
+    expect(screen.getByRole("textbox", { name: "Ask Screenpipe" })).toHaveValue("My next question");
+    expect(screen.getAllByLabelText("Your question")).toHaveLength(1);
   });
 });

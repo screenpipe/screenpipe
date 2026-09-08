@@ -24,6 +24,7 @@
         "@radix-ui/react-tabs": "^1.1.13",
         "@radix-ui/react-toast": "^1.2.15",
         "@radix-ui/react-tooltip": "^1.2.8",
+        "@screenpipe/workflows-ui": "file:../../packages/workflows-ui",
         "@sentry/react": "^8.55.0",
         "@tanstack/react-query": "^5.101.2",
         "@tauri-apps/api": "~2.11.0",
@@ -641,6 +642,8 @@
     "@rollup/rollup-win32-x64-msvc": ["@rollup/rollup-win32-x64-msvc@4.56.0", "", { "os": "win32", "cpu": "x64" }, "sha512-H8AE9Ur/t0+1VXujj90w0HrSOuv0Nq9r1vSZF2t5km20NTfosQsGGUXDaKdQZzwuLts7IyL1fYT4hM95TI9c4g=="],
 
     "@rushstack/eslint-patch": ["@rushstack/eslint-patch@1.10.3", "", {}, ""],
+
+    "@screenpipe/workflows-ui": ["@screenpipe/workflows-ui@file:../../packages/workflows-ui", { "dependencies": { "react-markdown": "^9.1.0", "remark-gfm": "^4.0.1" }, "peerDependencies": { "lucide-react": ">=0.414.0 <1", "react": "^18.3.1" } }],
 
     "@sec-ant/readable-stream": ["@sec-ant/readable-stream@0.4.1", "", {}, "sha512-831qok9r2t8AlxLko40y2ebgSDhenenCatLVeW/uBtnHPyhHOvG0C7TvfgecV+wHzIm5KUICgzmVpWS+IMEAeg=="],
 

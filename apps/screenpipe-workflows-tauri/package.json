@@ -83,7 +83,6 @@
     "clean": "rm -rf out && cargo clean --manifest-path src-tauri/Cargo.toml && rm -rf src-tauri/{screenpipe-*,tesseract-*,ffmpeg*,openblas*,bun*,ollama*,ui_monitor*} node_modules"
   },
   "dependencies": {
-    "@screenpipe/workflows-ui": "file:../../packages/workflows-ui",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
@@ -103,6 +102,7 @@
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-toast": "^1.2.15",
     "@radix-ui/react-tooltip": "^1.2.8",
+    "@screenpipe/workflows-ui": "file:../../packages/workflows-ui",
     "@sentry/react": "^8.55.0",
     "@tanstack/react-query": "^5.101.2",
     "@tauri-apps/api": "~2.11.0",

@@ -380,6 +380,7 @@ function AppShell({
   children: React.ReactNode;
 }) {
   const [assistantDocked, setAssistantDocked] = useState(false);
+  const [assistantWidth, setAssistantWidth] = useState(420);
   const activeView = view === "workflow" ? "workflows" : view;
   const workspaceView = Boolean(runtime?.workspace);
   const nav = primaryNavigation;
@@ -390,7 +391,7 @@ function AppShell({
       : "Starting";
 
   return (
-    <div className={`${styles.app} ${embedded ? styles.appEmbedded : ""} ${assistantDocked ? styles.appDocked : ""}`}>
+    <div className={`${styles.app} ${embedded ? styles.appEmbedded : ""} ${assistantDocked ? styles.appDocked : ""}`} style={{ "--assistant-width": assistantWidth + "px" } as React.CSSProperties}>
       <aside className={styles.sidebar}>
         <div className={styles.brand} data-tauri-drag-region onMouseDown={(event) => handleWindowDrag(event, startWindowDrag)}>
           <BrandMark />
@@ -437,7 +438,7 @@ function AppShell({
         </nav>}
         <main className={styles.main}>{children}</main>
       </section>
-      {assistant && <WorkflowAssistant platform={assistant.platform} context={assistant.context} onDockChange={setAssistantDocked} />}
+      {assistant && <WorkflowAssistant platform={assistant.platform} context={assistant.context} onDockChange={setAssistantDocked} onWidthChange={setAssistantWidth} />}
     </div>
   );
 }

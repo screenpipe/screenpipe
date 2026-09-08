@@ -83,6 +83,7 @@
     "clean": "rm -rf out && cargo clean --manifest-path src-tauri/Cargo.toml && rm -rf src-tauri/{screenpipe-*,tesseract-*,ffmpeg*,openblas*,bun*,ollama*,ui_monitor*} node_modules"
   },
   "dependencies": {
+    "@screenpipe/workflows-ui": "file:../../packages/workflows-ui",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",

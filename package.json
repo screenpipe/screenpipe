@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./packages/workflows-ui/src/index.ts",
+    "./chat": "./packages/workflows-ui/src/chat-primitives.tsx",
     "./catalog": "./packages/workflows-ui/src/catalog.ts",
     "./controllability": "./packages/workflows-ui/src/controllability.ts",
     "./filters": "./packages/workflows-ui/src/filters.ts",
@@ -13,6 +14,10 @@
     "./navigation": "./packages/workflows-ui/src/navigation.ts",
     "./platform": "./packages/workflows-ui/src/platform.ts",
     "./web": "./packages/workflows-ui/src/web-platform.ts"
+  },
+  "dependencies": {
+    "react-markdown": "^9.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "peerDependencies": {
     "lucide-react": ">=0.414.0 <1",

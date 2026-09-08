@@ -105,6 +105,8 @@
 .shortcutsButton span { flex: 1; text-align: left; }
 .shortcutsButton kbd { min-width: 19px; padding: 2px 5px; border: 1px solid #d5d7cf; border-radius: 4px; background: #fff; color: #6f7369; font: 700 8px/1.2 "IBM Plex Mono", monospace; text-align: center; }
 .workspace {
+  container-type: inline-size;
+  container-name: workflow-pane;
   min-width: 0;
   min-height: 0;
   height: 100vh;
@@ -113,9 +115,9 @@
   scrollbar-gutter: stable;
 }
 
-@media (min-width: 1100px) {
-  .appDocked { grid-template-columns: 190px minmax(0, 1fr) 390px; }
-  .appDocked.appEmbedded { grid-template-columns: minmax(0, 1fr) 390px; }
+@media (min-width: 960px) {
+  .app.appDocked { grid-template-columns: 176px minmax(0, 1fr) min(var(--assistant-width, 420px), calc(100vw - 536px)); }
+  .appDocked.appEmbedded { grid-template-columns: minmax(0, 1fr) var(--assistant-width, 420px); }
   .appDocked .main { padding-left: 26px; padding-right: 26px; }
   .appDocked .topbar { gap: 10px; padding-left: 18px; padding-right: 18px; }
   .appDocked .dragRegion { display: none; }
@@ -465,6 +467,20 @@
 .detailStats { display: grid; grid-template-columns: repeat(5,1fr); margin-bottom: 17px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
 .detailStats > div { min-width: 0; padding: 15px 17px; border-right: 1px solid #e6e7e1; }
 .detailStats > div:last-child { border: 0; }
+/* Respond to the remaining work area, not the full window behind a chat. */
+@container workflow-pane (max-width: 720px) {
+  .detailHeader { grid-template-columns: 1fr; gap: 20px; }
+  .detailHeader h1 { font-size: clamp(30px, 7cqw, 44px); line-height: 1.12; }
+  .detailTotal { max-width: none; }
+  .detailStats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .detailStats > div { border-bottom: 1px solid var(--line); }
+  .detailStats > div:nth-child(2n) { border-right: 0; }
+  .detailStats > div:last-child { grid-column: 1 / -1; }
+  .workflowGrid, .detailColumns, .profileKpiDetails, .profileAdvancedGrid { grid-template-columns: 1fr; }
+  .topbar { padding-left: 16px; padding-right: 16px; gap: 8px; }
+  .dragRegion { display: none; }
+  .search { flex: 1; min-width: 0; width: auto; margin: 0; }
+}
 .detailStats strong { display: block; overflow: hidden; margin-top: 6px; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 
 .workflowQuality { margin: 0 0 14px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }

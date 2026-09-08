@@ -643,7 +643,7 @@
 
     "@rushstack/eslint-patch": ["@rushstack/eslint-patch@1.10.3", "", {}, ""],
 
-    "@screenpipe/workflows-ui": ["@screenpipe/workflows-ui@file:../../packages/workflows-ui", { "peerDependencies": { "lucide-react": "^0.414.0", "react": "^18.3.1" } }],
+    "@screenpipe/workflows-ui": ["@screenpipe/workflows-ui@file:../../packages/workflows-ui", { "dependencies": { "react-markdown": "^9.1.0", "remark-gfm": "^4.0.1" }, "peerDependencies": { "lucide-react": ">=0.414.0 <1", "react": "^18.3.1" } }],
 
     "@sec-ant/readable-stream": ["@sec-ant/readable-stream@0.4.1", "", {}, "sha512-831qok9r2t8AlxLko40y2ebgSDhenenCatLVeW/uBtnHPyhHOvG0C7TvfgecV+wHzIm5KUICgzmVpWS+IMEAeg=="],
 
