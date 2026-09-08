@@ -41,7 +41,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
@@ -58,7 +58,7 @@ jobs:
     env:
       RUSTFLAGS: "-C link-arg=-Wl,--allow-multiple-definition"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -127,10 +127,10 @@ jobs:
       # the PATH-append step below. Bump this in one place instead of four.
       ONNXRUNTIME_VERSION: "1.24.2"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
 
@@ -390,7 +390,7 @@ jobs:
     # merge queue.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
