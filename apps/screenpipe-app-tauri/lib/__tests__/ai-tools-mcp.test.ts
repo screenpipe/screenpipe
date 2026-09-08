@@ -20,6 +20,7 @@ const skillsMock = vi.hoisted(() => ({
 }));
 
 const tauriMock = vi.hoisted(() => ({
+  grokbotConnection: vi.fn(),
   setAiToolAutoConnectOptOut: vi.fn(async () => ({ status: "ok", data: null })),
 }));
 
@@ -70,6 +71,7 @@ vi.mock("@/lib/utils/tauri", () => ({
       data: { available: true, path: "/app/bun" },
     })),
     setAiToolAutoConnectOptOut: tauriMock.setAiToolAutoConnectOptOut,
+    grokbotConnection: tauriMock.grokbotConnection,
   },
 }));
 
@@ -402,5 +404,22 @@ describe("transactional connect / disconnect", () => {
 
     expect(skillsMock.installExternalAgentSkills).not.toHaveBeenCalled();
     expect(skillsMock.removeExternalAgentSkills).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("Grok Bot skill transport", () => {
+  it("connects and disconnects via native reconciliation without local MCP or skill writes", async () => {
+    tauriMock.grokbotConnection.mockImplementation(async action => ({ status: "ok", data: { detected: true, connected: action === "connect" } }));
+    await connectAiTool("grokbot");
+    await disconnectAiTool("grokbot");
+    expect(tauriMock.grokbotConnection).toHaveBeenNthCalledWith(1, "connect");
+    expect(tauriMock.grokbotConnection).toHaveBeenNthCalledWith(2, "disconnect");
+    expect(fsMock.files.size).toBe(0);
+    expect(skillsMock.installExternalAgentSkills).not.toHaveBeenCalled();
+  });
+  it("treats unconfirmed installation as a failed connection", async () => {
+    tauriMock.grokbotConnection.mockResolvedValue({ status: "ok", data: { detected: true, connected: false } });
+    await expect(connectAiTool("grokbot")).rejects.toThrow("not confirmed");
   });
 });

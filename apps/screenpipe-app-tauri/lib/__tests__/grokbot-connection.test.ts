@@ -2,14 +2,12 @@
 // https://screenpipe.com
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getGrokBotSetupPrompt, isGrokBotDetected } from "../grokbot-connection";
+import { grokBotConnection, isGrokBotDetected } from "../grokbot-connection";
 
 const mocks = vi.hoisted(() => ({
   exists: vi.fn(),
   platform: vi.fn(),
-  getLocalApiConfig: vi.fn(),
-  bunCheck: vi.fn(),
-  getActiveDataDir: vi.fn(),
+  grokbotConnection: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/path", () => ({
   homeDir: async () => "/home/test",
@@ -23,9 +21,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.platform.mockReturnValue("macos");
   mocks.exists.mockResolvedValue(false);
-  mocks.getLocalApiConfig.mockResolvedValue({ port: 3137, key: "sp-secret-fixture", auth_enabled: true });
-  mocks.bunCheck.mockResolvedValue({ status: "ok", data: { available: true, path: "/Applications/Screenpipe.app/Contents/Resources/bun" } });
-  mocks.getActiveDataDir.mockResolvedValue({ status: "ok", data: "/home/test/Screenpipe profile" });
+
 });
 
 describe("Grok Bot discovery", () => {
@@ -54,25 +50,16 @@ describe("Grok Bot discovery", () => {
   });
 });
 
-describe("Grok Bot setup", () => {
-  it("uses the active instance and bundled runtime without copying its API key", async () => {
-    const prompt = await getGrokBotSetupPrompt();
-    expect(prompt).toContain('"SCREENPIPE_LOCAL_API_URL": "http://127.0.0.1:3137"');
-    expect(prompt).toContain('"SCREENPIPE_DATA_DIR": "/home/test/Screenpipe profile"');
-    expect(prompt).toContain('"bun": "/Applications/Screenpipe.app/Contents/Resources/bun"');
-    expect(prompt).not.toContain("sp-secret-fixture");
-    expect(prompt).toContain("request local-command approval through Grok Bot");
-    expect(prompt).toContain("Do not claim recording access is verified until an authenticated query succeeds");
-    expect(prompt).toContain("/activity-summary");
+describe("Grok Bot native connection", () => {
+  it("uses the native verified status and does not send credentials into the renderer", async () => {
+    mocks.grokbotConnection.mockResolvedValue({ status: "ok", data: { detected: true, connected: true } });
+    expect((await grokBotConnection("connect")).connected).toBe(true);
+    expect(mocks.grokbotConnection).toHaveBeenCalledWith("connect");
   });
-
-  it.each([null, {}, { port: 0 }, { port: 65536 }, { port: "3030" }])("refuses an unavailable local address: %j", async (api) => {
-    mocks.getLocalApiConfig.mockResolvedValue(api);
-    await expect(getGrokBotSetupPrompt()).rejects.toThrow("local address is unavailable");
-  });
-
-  it("does not fall back to a different profile when the active data directory is unknown", async () => {
-    mocks.getActiveDataDir.mockResolvedValue({ status: "error", error: "unavailable" });
-    await expect(getGrokBotSetupPrompt()).rejects.toThrow("data location is unavailable");
+  it("surfaces setup failures and rejects malformed statuses", async () => {
+    mocks.grokbotConnection.mockResolvedValue({ status: "error", error: "Open Grok Bot" });
+    await expect(grokBotConnection()).rejects.toThrow("Open Grok Bot");
+    mocks.grokbotConnection.mockResolvedValue({ status: "ok", data: {} });
+    await expect(grokBotConnection()).rejects.toThrow("invalid connection status");
   });
 });

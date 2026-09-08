@@ -474,6 +474,7 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
   const stores = new Map<number, Map<string, unknown>>();
   const storePaths = new Map<string, number>();
   const warned = new Set<string>();
+  let grokBotConnected = true;
   let nextResourceId = 1;
   let piExtensionPackages: PiExtensionPackage[] = [];
   let importedSkills = BROWSER_DEV_IMPORTED_SKILLS.map((skill) => ({ ...skill }));
@@ -729,7 +730,7 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
             }))
           : [];
       case "plugin:fs|exists":
-        return String(input.path) === chatsDir || chatFixtures.has(String(input.path));
+        return String(input.path) === chatsDir || chatFixtures.has(String(input.path)) || String(input.path).endsWith("/.grokbot/settings.json");
       case "plugin:fs|stat":
       case "plugin:fs|lstat":
         return {
@@ -742,6 +743,10 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
           birthtime: null,
           readonly: false,
         };
+      case "grokbot_connection":
+        if (input.action === "connect") grokBotConnected = true;
+        if (input.action === "disconnect") grokBotConnected = false;
+        return { detected: true, connected: grokBotConnected, optedOut: !grokBotConnected };
       case "bun_check":
         return { available: true, path: "/mock/screenpipe/bun", version: "browser-mock" };
       case "get_active_data_dir":

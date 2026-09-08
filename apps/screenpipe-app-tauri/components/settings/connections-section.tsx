@@ -78,7 +78,7 @@ import {
 } from "@/lib/ai-tools-mcp";
 import { AiToolsCard } from "./ai-tools-card";
 import { GrokBotPanel } from "./grokbot-panel";
-import { isGrokBotDetected } from "@/lib/grokbot-connection";
+import { isGrokBotDetected, isGrokBotConnected } from "@/lib/grokbot-connection";
 import { CursorLogo } from "./tool-logos";
 
 // ---------------------------------------------------------------------------
@@ -3850,7 +3850,9 @@ export function ConnectionsSection({
     loadSkillsCount();
   }, [loadSkillsCount]);
 
+  const [grokBotConnected, setGrokBotConnected] = useState(false);
   const refreshStatus = useCallback(() => {
+    isGrokBotConnected().then(setGrokBotConnected).catch(() => setGrokBotConnected(false));
     detectInstalledConnectionIds()
       .then(setDetectedConnectionIds)
       .catch(() => setDetectedConnectionIds(new Set()));
@@ -4008,7 +4010,7 @@ export function ConnectionsSection({
       { id: "claude", name: "Claude", icon: "claude", connected: claudeInstalled, detected: detectedConnectionIds.has("claude") || detectedConnectionIds.has("claude-code") },
       { id: "cursor", name: "Cursor", icon: "cursor", connected: cursorInstalled, detected: detectedConnectionIds.has("cursor") },
       { id: "codex", name: "Codex", icon: "codex", connected: codexInstalled, detected: detectedConnectionIds.has("codex") },
-      { id: "grokbot", name: "Grok Bot", icon: "grokbot", connected: false, detected: detectedConnectionIds.has("grokbot") },
+      { id: "grokbot", name: "Grok Bot", icon: "grokbot", connected: grokBotConnected, detected: detectedConnectionIds.has("grokbot") },
       { id: "grok", name: "Grok CLI", icon: "grok", connected: grokInstalled, detected: detectedConnectionIds.has("grok") },
       { id: "warp", name: "Warp", icon: "warp", connected: false, detected: detectedConnectionIds.has("warp") },
       { id: "chatgpt", name: "ChatGPT", icon: "chatgpt", connected: chatgptConnected, detected: detectedConnectionIds.has("chatgpt") },
@@ -4081,6 +4083,8 @@ export function ConnectionsSection({
     }
     // Google OAuth dots are driven by direct oauthStatus (not the cached API), so they stay
     // in sync immediately after connect/disconnect without waiting for cache expiry.
+    const grokBotTile = hardcoded.find(h => h.id === "grokbot");
+    if (grokBotTile) grokBotTile.connected = grokBotConnected;
     const googleCalTile = hardcoded.find(h => h.id === "google-calendar");
     if (googleCalTile) googleCalTile.connected = googleCalendarConnected;
     const googleDocsTile = hardcoded.find(h => h.id === "google-docs");
@@ -4101,7 +4105,7 @@ export function ConnectionsSection({
       category: CONNECTION_CATEGORY_BY_ID[tile.id] ?? tile.category ?? "Other",
       description: tile.description ?? CONNECTION_HARDCODED_DESCRIPTIONS[tile.id],
     }));
-  }, [os, claudeInstalled, cursorInstalled, codexInstalled, grokInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, customMcpConnected, customMcpServerCount, krispConnected, plaudConnected, mcpProviderConnected, excalidrawConnected, importedSkillsCount, detectedConnectionIds, composioConnected]);
+  }, [os, claudeInstalled, cursorInstalled, codexInstalled, grokInstalled, grokBotConnected, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, customMcpConnected, customMcpServerCount, krispConnected, plaudConnected, mcpProviderConnected, excalidrawConnected, importedSkillsCount, detectedConnectionIds, composioConnected]);
 
   const isDefaultView = !search.trim() && categoryFilter === ALL_CONNECTION_CATEGORIES;
 
@@ -4240,7 +4244,7 @@ export function ConnectionsSection({
         onConnected={() => setCodexInstalled(true)}
         onDisconnected={() => setCodexInstalled(false)}
       />;
-      case "grokbot": return <GrokBotPanel />;
+      case "grokbot": return <GrokBotPanel onChanged={setGrokBotConnected} />;
       case "grok": return <GrokPanel
         onConnected={() => setGrokInstalled(true)}
         onDisconnected={() => setGrokInstalled(false)}
@@ -4468,8 +4472,6 @@ export function ConnectionsSection({
               onClick={() => setSelected(selected === "pi-extensions" ? null : "pi-extensions")}
             />
             <AiToolsCard
-              grokBotDetected={detectedConnectionIds.has("grokbot")}
-              onSetupGrokBot={() => setSelected("grokbot")}
               onChanged={() => {
                 refreshStatus();
                 notifyConnectionsUpdated();

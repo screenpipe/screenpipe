@@ -2,59 +2,47 @@
 // https://screenpipe.com
 "use client";
 
-import { useState } from "react";
-import { Copy, ExternalLink, Loader2 } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { useEffect, useState } from "react";
+import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { commands } from "@/lib/utils/tauri";
-import { getGrokBotSetupPrompt, GROKBOT_SETUP_GUIDE } from "@/lib/grokbot-connection";
+import { grokBotConnection, type GrokBotConnection } from "@/lib/grokbot-connection";
 
-export function GrokBotPanel() {
-  const [copying, setCopying] = useState(false);
-  const [copied, setCopied] = useState(false);
+export function GrokBotPanel({ onChanged }: { onChanged?: (connected: boolean) => void }) {
+  const [status, setStatus] = useState<GrokBotConnection | null>(null);
+  const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  const copySetup = async () => {
-    setCopying(true);
-    setCopied(false);
+  const update = async (action: "status" | "connect" | "disconnect") => {
+    setBusy(true);
     setError(null);
     try {
-      const prompt = await getGrokBotSetupPrompt();
-      const result = await commands.copyTextToClipboard(prompt);
-      if (result.status === "error") throw new Error(result.error);
-      setCopied(true);
+      const next = await grokBotConnection(action);
+      setStatus(next);
+      onChanged?.(next.connected);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not copy setup instructions. Try again.");
-    } finally {
-      setCopying(false);
-    }
+      setError(e instanceof Error ? e.message : "Could not connect to Grok Bot. Open Grok Bot and retry.");
+    } finally { setBusy(false); }
   };
-
+  useEffect(() => { void update("status"); }, []);
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
-        Let Grok Bot search your screen and audio history through its local-computer access.
-        Grok Bot needs a one-time setup in its app.
+        On macOS and Windows, Screenpipe automatically installs its skill when Grok Bot is installed and signed in.
+        The skill is available across your Bots.
       </p>
-      <ol className="list-decimal pl-4 space-y-1 text-xs text-muted-foreground">
-        <li>Copy the setup prompt and paste it into Grok Bot.</li>
-        <li>Approve access to this computer when Grok Bot asks.</li>
-        <li>Ask Grok Bot what you worked on in the last five minutes.</li>
-      </ol>
+      <p role="status" className="text-xs">
+        {busy ? "Checking Grok Bot..." : status?.connected ? "Screenpipe skill installed" : status?.optedOut ? "Automatic installation is off" : "Waiting for Grok Bot"}
+      </p>
       <p className="text-xs text-muted-foreground">
-        Keep Screenpipe and Grok Bot open on this computer. Results you request are shared
-        with Grok Bot. Manage or revoke local access in Grok Bot settings.
+        Keep both apps open to retrieve your history. Grok Bot asks for local-computer access
+        according to your permissions. Results you request are shared with Grok Bot.
       </p>
-      <div className="flex flex-wrap gap-2">
-        <Button onClick={copySetup} disabled={copying} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-          {copying ? <Loader2 className="h-3 w-3 animate-spin" /> : <Copy className="h-3 w-3" />}
-          {copying ? "preparing..." : "copy setup prompt"}
+      <div className="flex gap-2">
+        <Button disabled={busy} size="sm" onClick={() => update("connect")} className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+          {busy && <Loader2 className="h-3 w-3 animate-spin" />}
+          {status?.connected ? "repair connection" : "connect Grok Bot"}
         </Button>
-        <Button variant="outline" onClick={() => openUrl(GROKBOT_SETUP_GUIDE)} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-          <ExternalLink className="h-3 w-3" />setup guide
-        </Button>
+        {(status?.connected || error) && <Button disabled={busy} variant="outline" size="sm" onClick={() => update("disconnect")} className="h-7 text-xs normal-case font-sans tracking-normal">disconnect</Button>}
       </div>
-      {copied && <p role="status" className="text-xs text-muted-foreground">Copied. Paste into Grok Bot to finish setup there.</p>}
       {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
     </div>
   );

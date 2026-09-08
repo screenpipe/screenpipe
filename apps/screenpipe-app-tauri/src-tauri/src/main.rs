@@ -190,6 +190,7 @@ mod notifications;
 mod safe_icon;
 mod shortcuts;
 mod skills;
+mod grokbot;
 // Binding generation runs from `cargo test` (`bun run bindings:generate` /
 // `bindings:check`) and from the debug-build refresh in `async_main`. Release
 // binaries never export TypeScript, so the whole module stays out of them.
@@ -1692,6 +1693,7 @@ async fn main() {
             if !app_ui_hidden {
                 let local_api = recording::local_api_context_from_app(&app.handle());
                 skills::connect_detected_ai_tools_in_background(
+                    app.handle().clone(),
                     store.recording.api_auth,
                     local_api.port,
                 );

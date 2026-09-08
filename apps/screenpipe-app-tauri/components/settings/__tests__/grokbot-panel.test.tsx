@@ -2,49 +2,39 @@
 // https://screenpipe.com
 
 import React from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GrokBotPanel } from "../grokbot-panel";
-
-const mocks = vi.hoisted(() => ({ getPrompt: vi.fn(), copy: vi.fn() }));
-vi.mock("@/lib/grokbot-connection", () => ({
-  getGrokBotSetupPrompt: mocks.getPrompt,
-  GROKBOT_SETUP_GUIDE: "https://docs.x.ai/grok-bot/computer-and-apps",
-}));
-vi.mock("@/lib/utils/tauri", () => ({ commands: { copyTextToClipboard: mocks.copy } }));
-vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
-
-beforeEach(() => {
-  vi.resetAllMocks();
-  mocks.getPrompt.mockResolvedValue("setup prompt fixture");
-  mocks.copy.mockResolvedValue({ status: "ok", data: null });
-});
+const mocks = vi.hoisted(() => ({ connection: vi.fn() }));
+vi.mock("@/lib/grokbot-connection", () => ({ grokBotConnection: mocks.connection }));
+beforeEach(() => { vi.resetAllMocks(); });
 afterEach(cleanup);
 
-describe("Grok Bot setup panel", () => {
-  it("copies instructions without claiming that access is connected", async () => {
+describe("Grok Bot connection panel", () => {
+  it("shows the verified automatic installation without a setup prompt", async () => {
+    mocks.connection.mockResolvedValue({ detected: true, connected: true });
     render(<GrokBotPanel />);
-    expect(mocks.getPrompt).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "copy setup prompt" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Paste into Grok Bot to finish setup there");
-    expect(mocks.copy).toHaveBeenCalledWith("setup prompt fixture");
-    expect(screen.queryByText(/^connected/i)).toBeNull();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Screenpipe skill installed"));
+    expect(mocks.connection).toHaveBeenCalledWith("status");
+    expect(screen.queryByText(/copy setup prompt/i)).toBeNull();
   });
-
-  it("shows a clipboard failure and allows retry without a false copied state", async () => {
-    mocks.copy.mockResolvedValue({ status: "error", error: "Clipboard unavailable" });
-    render(<GrokBotPanel />);
-    fireEvent.click(screen.getByRole("button", { name: "copy setup prompt" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Clipboard unavailable");
-    expect(screen.queryByRole("status")).toBeNull();
-    expect(screen.getByRole("button", { name: "copy setup prompt" })).toBeEnabled();
+  it("connects, reports the verified result, and disconnects", async () => {
+    mocks.connection.mockImplementation(async action => ({ detected: true, connected: action === "connect", optedOut: action === "disconnect" }));
+    const onChanged = vi.fn();
+    render(<GrokBotPanel onChanged={onChanged} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "connect Grok Bot" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "connect Grok Bot" }));
+    await waitFor(() => expect(onChanged).toHaveBeenLastCalledWith(true));
+    fireEvent.click(screen.getByRole("button", { name: "disconnect" }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Automatic installation is off"));
+    expect(onChanged).toHaveBeenLastCalledWith(false);
   });
-
-  it("leaves the clipboard untouched when setup parameters cannot be resolved", async () => {
-    mocks.getPrompt.mockRejectedValue(new Error("Screenpipe unavailable"));
+  it("keeps setup failures visible and allows retry or opting out", async () => {
+    mocks.connection.mockRejectedValue(new Error("Open Grok Bot and sign in."));
     render(<GrokBotPanel />);
-    fireEvent.click(screen.getByRole("button", { name: "copy setup prompt" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Screenpipe unavailable");
-    expect(mocks.copy).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Open Grok Bot and sign in.");
+    expect(screen.getByRole("status")).not.toHaveTextContent("installed");
+    expect(screen.getByRole("button", { name: "connect Grok Bot" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "disconnect" })).toBeEnabled();
   });
 });

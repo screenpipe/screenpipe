@@ -29,6 +29,8 @@ import {
   type ExternalAgentWithSkills,
 } from "@/lib/external-agent-skills";
 
+import { isGrokBotDetected, grokBotConnection } from "@/lib/grokbot-connection";
+
 type McpCommand = { command: string; args: string[]; env?: Record<string, string> };
 
 // ─── Tool matrix ──────────────────────────────────────────────────────────────
@@ -43,10 +45,12 @@ const CONNECT_ALL_TOOL_IDS = [
   "hermes",
   "runner",
   "windsurf",
+  "grokbot",
 ] as const;
 export type ConnectAllToolId = (typeof CONNECT_ALL_TOOL_IDS)[number];
 
 export const CONNECT_ALL_TOOL_NAMES: Record<ConnectAllToolId, string> = {
+  grokbot: "Grok Bot",
   claude: "Claude",
   "claude-code": "Claude Code",
   codex: "Codex",
@@ -63,9 +67,9 @@ export const CONNECT_ALL_TOOL_NAMES: Record<ConnectAllToolId, string> = {
 
 // Skills support per tool lives in the disconnect-all component's
 // SKILLS_TARGET map: claude/codex/cursor/gemini/openclaw/hermes read
-// SKILL.md skills; runner and windsurf are MCP-only. Grok is intentionally
-// not in this matrix: it isn't part of connect-all and its settings panel has
-// its own disconnect.
+// SKILL.md skills; runner and windsurf are MCP-only. Grok Bot installs a
+// private skill through its gateway. The separate Grok CLI integration stays
+// outside connect-all and has its own settings panel.
 
 export async function detectAiTools(): Promise<ConnectAllToolId[]> {
   const home = await homeDir();
@@ -79,6 +83,7 @@ export async function detectAiTools(): Promise<ConnectAllToolId[]> {
       },
     ],
     ["claude-code", async () => exists(await join(home, ".claude.json"))],
+    ["grokbot", isGrokBotDetected],
     ["codex", async () => exists(await join(home, ".codex"))],
     ["cursor", async () => exists(await join(home, ".cursor"))],
     ["gemini", async () => exists(await join(home, ".gemini"))],
@@ -625,9 +630,8 @@ export async function uninstallGeminiMcp(): Promise<void> {
 
 // Tools whose agent reads global SKILL.md skills. Runner has no global skills
 // contract, and Windsurf (Devin Desktop) only discovers skills per-project
-// (docs.devin.ai/product-guides/skills), so both stay MCP-only. Grok is not in
-// the matrix: it isn't part of connect-all and its settings panel has its own
-// disconnect.
+// (docs.devin.ai/product-guides/skills), so both stay MCP-only. Grok Bot uses
+// its cloud skill store; the separate Grok CLI is outside this matrix.
 export const SKILLS_TARGET: Partial<Record<ConnectAllToolId, ExternalAgentWithSkills>> = {
   claude: "claude",
   "claude-code": "claude",
@@ -638,7 +642,7 @@ export const SKILLS_TARGET: Partial<Record<ConnectAllToolId, ExternalAgentWithSk
   hermes: "hermes",
 };
 
-const INSTALL_MCP: Record<ConnectAllToolId, () => Promise<McpCommand>> = {
+const INSTALL_MCP: Record<Exclude<ConnectAllToolId, "grokbot">, () => Promise<McpCommand>> = {
   claude: installClaudeMcp,
   "claude-code": installClaudeCodeMcp,
   codex: installCodexMcp,
@@ -650,7 +654,7 @@ const INSTALL_MCP: Record<ConnectAllToolId, () => Promise<McpCommand>> = {
   windsurf: installWindsurfMcp,
 };
 
-const UNINSTALL_MCP: Record<ConnectAllToolId, () => Promise<void>> = {
+const UNINSTALL_MCP: Record<Exclude<ConnectAllToolId, "grokbot">, () => Promise<void>> = {
   claude: uninstallClaudeMcp,
   "claude-code": uninstallClaudeCodeMcp,
   codex: uninstallCodexMcp,
@@ -674,7 +678,14 @@ async function setAutoConnectOptOut(id: ConnectAllToolId, optOut: boolean): Prom
  * tool is left exactly as it was — never half-connected. Returns the MCP
  * command written so callers can warn about the npx fallback.
  */
-export async function connectAiTool(id: ConnectAllToolId): Promise<McpCommand> {
+export function connectAiTool(id: Exclude<ConnectAllToolId, "grokbot">): Promise<McpCommand>;
+export function connectAiTool(id: ConnectAllToolId): Promise<McpCommand | void>;
+export async function connectAiTool(id: ConnectAllToolId): Promise<McpCommand | void> {
+  if (id === "grokbot") {
+    const status = await grokBotConnection("connect");
+    if (!status.connected) throw new Error(status.message || "Grok Bot has not confirmed the skill installation.");
+    return;
+  }
   // Explicit connect re-enables launch reconciliation before touching config.
   // If setup then fails, the next launch can safely retry the user's request.
   await setAutoConnectOptOut(id, false);
@@ -701,6 +712,10 @@ export async function connectAiTool(id: ConnectAllToolId): Promise<McpCommand> {
  * a no-op.
  */
 export async function disconnectAiTool(id: ConnectAllToolId): Promise<void> {
+  if (id === "grokbot") {
+    await grokBotConnection("disconnect");
+    return;
+  }
   // Persist intent first. If removal hits a malformed config, launch healing
   // must still leave the partially disconnected target alone.
   await setAutoConnectOptOut(id, true);
@@ -840,6 +855,8 @@ export function friendlyToolError(err: unknown): FriendlyToolError {
 export async function isToolConfigHealthy(id: ConnectAllToolId): Promise<boolean> {
   try {
     switch (id) {
+      case "grokbot":
+        return isGrokBotDetected();
       case "claude": {
         const p = await getClaudeConfigPath();
         if (!p) return false;

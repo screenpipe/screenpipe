@@ -698,6 +698,14 @@ async getKeychainStatus() : Promise<Result<KeychainStatus, string>> {
 async getLocalApiConfig() : Promise<JsonValue> {
     return await TAURI_INVOKE("get_local_api_config");
 },
+async grokbotConnection(action: string) : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("grokbot_connection", { action }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async getLogFiles() : Promise<Result<LogFile[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_log_files") };
