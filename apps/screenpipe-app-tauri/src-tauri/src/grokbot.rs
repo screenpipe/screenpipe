@@ -13,13 +13,19 @@ use std::{
 use tauri::AppHandle;
 use tokio::io::AsyncWriteExt;
 
-pub(crate) static GROKBOT_CONNECTION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(crate) static GROKBOT_CONNECTION_LOCK: tokio::sync::Mutex<()> =
+    tokio::sync::Mutex::const_new(());
 
 const INSTALLER: &str = include_str!("../../lib/grokbot-installer.mjs");
 const API_SKILL: &str =
     include_str!("../../../../crates/screenpipe-core/assets/skills/screenpipe-api/SKILL.md");
 
-async fn run_bridge(app: &AppHandle, home: &Path, bun: &Path, action: &str) -> Result<Value, String> {
+async fn run_bridge(
+    app: &AppHandle,
+    home: &Path,
+    bun: &Path,
+    action: &str,
+) -> Result<Value, String> {
     let data_dir = crate::log_files::get_active_data_dir(app.clone()).await?;
     let api = crate::recording::local_api_context_from_app(app);
     let input = json!({ "home": home, "bun": bun, "dataDir": data_dir,
