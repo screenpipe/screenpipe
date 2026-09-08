@@ -283,7 +283,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
           value={conversation.draft} maxLength={8000} disabled={!loaded} onChange={(event) => update((current) => ({
             ...current, conversations: current.conversations.map((item) => item.id === current.activeId ? { ...item, draft: event.target.value } : item),
           }))} onSend={() => void send(conversation.draft)} />
-        <div className={styles.composerFooter}><span title="Search your recorded Screenpipe history"><Search size={13} />Memory</span>
+        <div className={styles.composerFooter}>
           {busy ? <button type="button" className={styles.send} aria-label="Stop answer" title="Stop answer" onClick={() => controller.current?.abort()}><Square size={12} fill="currentColor" /></button>
             : <button className={styles.send} type="submit" aria-label="Send message" title="Send (Enter)" disabled={!loaded || !conversation.draft.trim()}><ArrowUp size={18} /></button>}
         </div>

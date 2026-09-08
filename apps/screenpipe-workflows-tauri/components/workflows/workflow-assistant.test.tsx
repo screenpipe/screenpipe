@@ -16,6 +16,15 @@ async function open() { fireEvent.click(screen.getByRole("button", { name: "Ask 
 function question(text = "What is taking time?") { fireEvent.change(screen.getByRole("textbox", { name: "Ask Screenpipe" }), { target: { value: text } }); fireEvent.click(screen.getByRole("button", { name: "Send message" })); }
 
 describe("secondary workflow assistant", () => {
+  it("omits the decorative Memory label without removing search or send", async () => {
+    const { platform } = setup(); await open();
+    expect(screen.queryByText("Memory", { exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Search your recorded Screenpipe history")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    question("Find my last meeting"); await screen.findByText("A verified answer.");
+    expect(platform.ask).toHaveBeenCalledTimes(1);
+  });
+
   it("loads lazily and preserves stream and draft through docking, closing and navigation", async () => {
     let finish!: (answer: string) => void;
     const ask = vi.fn(async ({ onProgress }) => { onProgress({ text: "Checking the handoff", activity: "searching" }); return new Promise<string>((resolve) => { finish = resolve; }); });

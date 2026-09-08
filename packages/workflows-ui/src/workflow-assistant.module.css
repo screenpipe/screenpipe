@@ -58,8 +58,7 @@
 .contextDot { width: 6px; height: 6px; border: 1px solid #8b8f80; border-radius: 2px; flex-shrink: 0; }
 .composer textarea { display: block; box-sizing: border-box; width: 100%; min-height: 42px; max-height: 160px; margin: 7px 0 3px; padding: 7px 0; resize: none; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; line-height: 1.5; }
 .composer textarea::placeholder { color: #96998e; }
-.composerFooter { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.composerFooter > span { display: flex; align-items: center; gap: 6px; color: var(--chat-muted); font-size: 11px; }
+.composerFooter { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
 .send { width: 30px; height: 30px; display: grid; place-items: center; border: 0; border-radius: 6px; color: #fff; background: #333; }
 .send:disabled { background: #edede7; color: #b3b5a9; opacity: 1 !important; }
 .historyHeader { display: flex; align-items: center; gap: 7px; margin-bottom: 12px; }
