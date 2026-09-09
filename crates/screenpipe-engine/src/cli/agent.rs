@@ -789,6 +789,8 @@ fn claude_desktop_config(home: &Path) -> Result<PathBuf> {
 /// unreadable (permissions, IO) → error — never treated as empty, which is
 /// how a subsequent write would wipe the user's config (issue #5291).
 fn read_config_text(path: &Path) -> Result<Option<String>> {
+    let resolved = resolve_config_path(path)?;
+    let path = resolved.as_path();
     match std::fs::read_to_string(path) {
         Ok(s) => Ok(Some(s)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -796,6 +798,23 @@ fn read_config_text(path: &Path) -> Result<Option<String>> {
             "could not read {} ({e}) — fix its permissions and retry",
             path.display()
         ),
+    }
+}
+
+/// Resolve existing config symlink chains before reading or replacing them.
+/// Only a genuinely missing path starts fresh: dangling links, loops and
+/// permission errors must never fall back to replacing the link itself.
+pub fn resolve_config_path(path: &Path) -> Result<PathBuf> {
+    match std::fs::canonicalize(path) {
+        Ok(resolved) => Ok(resolved),
+        Err(error) => {
+            if error.kind() == std::io::ErrorKind::NotFound
+                && matches!(std::fs::symlink_metadata(path), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+            {
+                return Ok(path.to_path_buf());
+            }
+            Err(error).with_context(|| format!("could not resolve config {}", path.display()))
+        }
     }
 }
 
@@ -814,6 +833,8 @@ fn config_lock_path(path: &Path) -> PathBuf {
 /// owner-only files on Unix so the embedded local API key is never widened to
 /// a default `0644` mode.
 fn replace_config(path: &Path, expected: Option<&str>, contents: &str) -> Result<()> {
+    let resolved = resolve_config_path(path)?;
+    let path = resolved.as_path();
     let _lock = crate::atomic_file::lock(&config_lock_path(path))
         .with_context(|| format!("lock {} before changing it", path.display()))?;
     let current = read_config_text(path)?;
@@ -1603,6 +1624,69 @@ mod tests {
             "tmp left behind: {names:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_config_symlink_connect_and_disconnect_preserve_chain_and_target_settings() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let dotfiles = dir.path().join("dotfiles");
+        let codex = dir.path().join(".codex");
+        std::fs::create_dir(&dotfiles).unwrap();
+        std::fs::create_dir(&codex).unwrap();
+        let target = dotfiles.join("config.toml");
+        let intermediate = dir.path().join("config-link");
+        let link = codex.join("config.toml");
+        let original = "model = \"test\"\n";
+        std::fs::write(&target, original).unwrap();
+        symlink(&target, &intermediate).unwrap();
+        symlink("../config-link", &link).unwrap();
+
+        merge_mcp_toml(&link, true, "http://localhost:3030").unwrap();
+        let connected = std::fs::read_to_string(&target).unwrap();
+        assert!(connected.contains("mcp_servers.screenpipe"));
+        assert!(connected.contains(original.trim()));
+        let backup = std::fs::read_dir(&dotfiles)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .contains(".screenpipe-backup-")
+            })
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(backup).unwrap(), original);
+
+        remove_mcp_toml(&link).unwrap();
+        let disconnected = std::fs::read_to_string(&target).unwrap();
+        assert!(!disconnected.contains("mcp_servers.screenpipe"));
+        assert!(disconnected.contains(original.trim()));
+        assert_eq!(
+            std::fs::read_link(&link).unwrap(),
+            Path::new("../config-link")
+        );
+        assert_eq!(std::fs::read_link(&intermediate).unwrap(), target);
+        assert_eq!(std::fs::read_dir(&codex).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_config_symlink_resolution_errors_leave_links_untouched() {
+        use std::os::unix::fs::symlink;
+
+        for destination in ["missing.toml", "config.toml"] {
+            let dir = tempfile::tempdir().unwrap();
+            let link = dir.path().join("config.toml");
+            symlink(destination, &link).unwrap();
+
+            assert!(read_config_text(&link).is_err());
+            assert!(replace_config(&link, None, "replacement").is_err());
+            assert_eq!(std::fs::read_link(&link).unwrap(), Path::new(destination));
+            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        }
     }
 
     #[test]

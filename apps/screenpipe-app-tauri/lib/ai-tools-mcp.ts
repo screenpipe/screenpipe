@@ -175,12 +175,19 @@ export async function buildMcpConfig(opts?: {
 /** How many `.screenpipe-backup-*` siblings to keep per config file. */
 const MAX_CONFIG_BACKUPS = 2;
 
+async function resolveConfigPath(configPath: string): Promise<string> {
+  const result = await commands.resolveAiToolConfigPath(configPath);
+  if (result.status === "error") throw new Error(result.error);
+  return result.data;
+}
+
 /**
  * Read a config as text. Missing file → null (caller starts fresh). A file
  * that exists but cannot be read (permissions, IO) throws a clear error —
  * never treated as empty, which is how configs get silently wiped.
  */
 async function readConfigText(configPath: string): Promise<string | null> {
+  configPath = await resolveConfigPath(configPath);
   if (!(await exists(configPath))) return null;
   try {
     return await readTextFile(configPath);
@@ -254,6 +261,7 @@ async function writeConfigAtomic(configPath: string, text: string): Promise<void
 
 /** Backup (if existing) + atomic write, the standard mutation path. */
 async function replaceConfig(configPath: string, text: string): Promise<void> {
+  configPath = await resolveConfigPath(configPath);
   await backupConfigIfExists(configPath);
   await writeConfigAtomic(configPath, text);
 }

@@ -20,6 +20,9 @@ const skillsMock = vi.hoisted(() => ({
 }));
 
 const tauriMock = vi.hoisted(() => ({
+  resolveAiToolConfigPath: vi.fn<[string], Promise<
+    { status: "ok"; data: string } | { status: "error"; error: string }
+  >>(),
   grokbotConnection: vi.fn(),
   setAiToolAutoConnectOptOut: vi.fn(async () => ({ status: "ok", data: null })),
 }));
@@ -65,6 +68,7 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
 
 vi.mock("@/lib/utils/tauri", () => ({
   commands: {
+    resolveAiToolConfigPath: tauriMock.resolveAiToolConfigPath,
     getLocalApiConfig: vi.fn(async () => ({ key: "sp-test", port: 3030, auth_enabled: true })),
     bunCheck: vi.fn(async () => ({
       status: "ok",
@@ -84,6 +88,8 @@ vi.mock("@/lib/hooks/use-hardcoded-tiles", () => ({
 vi.mock("@/lib/external-agent-skills", () => skillsMock);
 
 import {
+  installCodexMcp,
+  uninstallCodexMcp,
   installCursorMcp,
   uninstallCursorMcp,
   installHermesMcp,
@@ -114,6 +120,8 @@ const tmpsOf = (path: string) =>
   Array.from(fsMock.files.keys()).filter((p) => p.startsWith(`${path}.`) && p.endsWith(".tmp"));
 
 beforeEach(() => {
+  tauriMock.resolveAiToolConfigPath.mockReset();
+  tauriMock.resolveAiToolConfigPath.mockImplementation(async (path) => ({ status: "ok", data: path }));
   fsMock.files.clear();
   fsMock.unreadable.clear();
   skillsMock.installExternalAgentSkills.mockClear();
@@ -122,6 +130,36 @@ beforeEach(() => {
 });
 
 describe("safe config IO", () => {
+  it.each([
+    ["/Users/test/.codex/config.toml", 'model = "test"\n', installCodexMcp, uninstallCodexMcp],
+    [CURSOR, '{"theme":"dark"}', installCursorMcp, uninstallCursorMcp],
+  ] as const)("backs up and replaces the resolved target of %s on connect and disconnect", async (path, seeded, install, uninstall) => {
+    const target = `/Users/test/dotfiles/${path.split("/").pop()}`;
+    fsMock.files.set(target, seeded);
+    tauriMock.resolveAiToolConfigPath.mockImplementation(async (requested) => ({
+      status: "ok", data: requested === path ? target : requested,
+    }));
+
+    await install();
+    expect(fsMock.files.get(target)).toContain("screenpipe");
+    expect(fsMock.files.get(backupsOf(target)[0])).toBe(seeded);
+    expect(fsMock.files.has(path)).toBe(false);
+    expect(backupsOf(path)).toHaveLength(0);
+    expect(tmpsOf(target)).toHaveLength(0);
+
+    await uninstall();
+    expect(fsMock.files.get(target)).not.toContain("screenpipe");
+    expect(fsMock.files.get(target)).toContain(path.endsWith("toml") ? 'model = "test"' : '"theme": "dark"');
+    expect(fsMock.files.has(path)).toBe(false);
+  });
+
+  it("refuses connect and disconnect when config resolution fails", async () => {
+    tauriMock.resolveAiToolConfigPath.mockResolvedValue({ status: "error", error: "could not resolve config: symlink loop" });
+    await expect(installCodexMcp()).rejects.toThrow(/could not resolve config/);
+    await expect(uninstallCodexMcp()).rejects.toThrow(/could not resolve config/);
+    expect(fsMock.files.size).toBe(0);
+  });
+
   it("preserves unrelated servers and settings, and takes a backup", async () => {
     const seeded = JSON.stringify({ mcpServers: { other: { command: "x" } }, theme: "dark" });
     fsMock.files.set(CURSOR, seeded);

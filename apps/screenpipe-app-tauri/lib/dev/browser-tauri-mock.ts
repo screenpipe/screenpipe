@@ -731,6 +731,8 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
           : [];
       case "plugin:fs|exists":
         return String(input.path) === chatsDir || chatFixtures.has(String(input.path)) || String(input.path).endsWith("/.grokbot/settings.json");
+      case "resolve_ai_tool_config_path":
+        return String(input.path);
       case "plugin:fs|stat":
       case "plugin:fs|lstat":
         return {

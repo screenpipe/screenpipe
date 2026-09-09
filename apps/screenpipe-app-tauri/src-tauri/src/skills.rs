@@ -778,6 +778,15 @@ fn write_managed_team_skill_package(
     Ok(())
 }
 
+/// Resolve a local AI tool config without replacing a symlink during setup.
+#[tauri::command]
+#[specta::specta]
+pub fn resolve_ai_tool_config_path(path: String) -> Result<String, String> {
+    screenpipe_engine::cli::agent::resolve_config_path(std::path::Path::new(&path))
+        .map(|resolved| resolved.to_string_lossy().into_owned())
+        .map_err(|error| format!("{error:#}"))
+}
+
 /// Install the two built-in screenpipe skills into a supported external agent.
 /// Explicit Settings actions still call this narrow command; native launch
 /// reconciliation shares the same engine skill installer directly.

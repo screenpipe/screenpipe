@@ -2246,6 +2246,17 @@ async resizeSearchWindow(width: number, height: number) : Promise<Result<null, s
 }
 },
 /**
+ * Resolve a local AI tool config without replacing a symlink during setup.
+ */
+async resolveAiToolConfigPath(path: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("resolve_ai_tool_config_path", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Restart only after the user explicitly clicks the in-app action. macOS's
  * native Screen Recording sheet includes a "Later" choice; closing that sheet
  * must never be treated as consent to relaunch screenpipe.
