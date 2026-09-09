@@ -6,7 +6,7 @@
 // launch reconciliation in crates/screenpipe-engine/src/cli/agent.rs; this
 // module remains the explicit connect/remove surface in Settings.
 
-import { homeDir, join, dirname } from "@tauri-apps/api/path";
+import { homeDir, join, dirname, isAbsolute, resolve } from "@tauri-apps/api/path";
 import {
   readTextFile,
   writeFile,
@@ -16,6 +16,8 @@ import {
   remove,
   copyFile,
   readDir,
+  lstat,
+  readLink,
 } from "@tauri-apps/plugin-fs";
 import { commands } from "@/lib/utils/tauri";
 import {
@@ -252,10 +254,39 @@ async function writeConfigAtomic(configPath: string, text: string): Promise<void
   }
 }
 
+/** Resolve symlinks before an atomic rename so the link itself is preserved. */
+async function resolveConfigWritePath(configPath: string): Promise<string> {
+  let path = configPath;
+  const visited = new Set<string>();
+
+  for (let depth = 0; depth < 40; depth++) {
+    if (visited.has(path)) {
+      throw new Error(`could not write ${configPath}: symlink loop detected`);
+    }
+    visited.add(path);
+
+    let info;
+    try {
+      info = await lstat(path);
+    } catch {
+      return path;
+    }
+    if (!info.isSymlink) return path;
+
+    const target = await readLink(path);
+    path = (await isAbsolute(target))
+      ? target
+      : await resolve(await dirname(path), target);
+  }
+
+  throw new Error(`could not write ${configPath}: too many symlink levels`);
+}
+
 /** Backup (if existing) + atomic write, the standard mutation path. */
 async function replaceConfig(configPath: string, text: string): Promise<void> {
-  await backupConfigIfExists(configPath);
-  await writeConfigAtomic(configPath, text);
+  const writePath = await resolveConfigWritePath(configPath);
+  await backupConfigIfExists(writePath);
+  await writeConfigAtomic(writePath, text);
 }
 
 async function writeJsonConfig(configPath: string, config: Record<string, unknown>): Promise<void> {

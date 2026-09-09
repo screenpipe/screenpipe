@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fsMock = vi.hoisted(() => ({
   files: new Map<string, string>(),
+  symlinks: new Map<string, string>(),
   unreadable: new Set<string>(),
 }));
 
@@ -28,16 +29,37 @@ vi.mock("@tauri-apps/api/path", () => ({
   homeDir: vi.fn(async () => "/Users/test"),
   join: vi.fn(async (...parts: string[]) => parts.join("/")),
   dirname: vi.fn(async (p: string) => p.split("/").slice(0, -1).join("/")),
+  isAbsolute: vi.fn(async (p: string) => p.startsWith("/")),
+  resolve: vi.fn(async (...parts: string[]) => {
+    const resolved: string[] = [];
+    for (const part of parts.join("/").split("/")) {
+      if (!part || part === ".") continue;
+      if (part === "..") resolved.pop();
+      else resolved.push(part);
+    }
+    return `/${resolved.join("/")}`;
+  }),
 }));
 
 vi.mock("@tauri-apps/plugin-fs", () => ({
-  exists: vi.fn(async (path: string) => fsMock.files.has(path) || fsMock.unreadable.has(path)),
+  exists: vi.fn(async (path: string) => fsMock.files.has(path) || fsMock.symlinks.has(path) || fsMock.unreadable.has(path)),
   mkdir: vi.fn(async () => undefined),
   readTextFile: vi.fn(async (path: string) => {
+    path = fsMock.symlinks.get(path) ?? path;
     if (fsMock.unreadable.has(path)) throw new Error("EACCES: permission denied");
     const text = fsMock.files.get(path);
     if (text === undefined) throw new Error(`missing ${path}`);
     return text;
+  }),
+  readLink: vi.fn(async (path: string) => {
+    const target = fsMock.symlinks.get(path);
+    if (target === undefined) throw new Error(`not a symlink: ${path}`);
+    return target;
+  }),
+  lstat: vi.fn(async (path: string) => {
+    if (fsMock.symlinks.has(path)) return { isSymlink: true };
+    if (fsMock.files.has(path)) return { isSymlink: false };
+    throw new Error(`missing ${path}`);
   }),
   writeFile: vi.fn(async (path: string, bytes: Uint8Array) => {
     fsMock.files.set(path, new TextDecoder().decode(bytes));
@@ -49,6 +71,7 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
     const text = fsMock.files.get(from);
     if (text === undefined) throw new Error(`missing ${from}`);
     fsMock.files.set(to, text);
+    fsMock.symlinks.delete(to);
     fsMock.files.delete(from);
   }),
   copyFile: vi.fn(async (from: string, to: string) => {
@@ -115,6 +138,7 @@ const tmpsOf = (path: string) =>
 
 beforeEach(() => {
   fsMock.files.clear();
+  fsMock.symlinks.clear();
   fsMock.unreadable.clear();
   skillsMock.installExternalAgentSkills.mockClear();
   skillsMock.removeExternalAgentSkills.mockClear();
@@ -122,6 +146,18 @@ beforeEach(() => {
 });
 
 describe("safe config IO", () => {
+  it("writes through a config symlink instead of replacing it", async () => {
+    const target = "/Users/test/dotfiles/codex-config.toml";
+    fsMock.files.set(target, "model = \"gpt-5\"\n");
+    fsMock.symlinks.set("/Users/test/.codex/config.toml", target);
+
+    await connectAiTool("codex");
+
+    expect(fsMock.symlinks.get("/Users/test/.codex/config.toml")).toBe(target);
+    expect(fsMock.files.get(target)).toContain("[mcp_servers.screenpipe]");
+    expect(backupsOf(target)).toHaveLength(1);
+  });
+
   it("preserves unrelated servers and settings, and takes a backup", async () => {
     const seeded = JSON.stringify({ mcpServers: { other: { command: "x" } }, theme: "dark" });
     fsMock.files.set(CURSOR, seeded);
