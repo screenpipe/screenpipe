@@ -231,24 +231,33 @@ fn render_digest_with_count(entries: &[MemoryEntry], dest: &Destination) -> (Str
 
 fn render_memory_line(entry: &MemoryEntry, dest: &Destination) -> String {
     let mut line = String::from("- ");
-    let collapsed = safe_inline(&entry.content, dest.agent_context);
-    let bounded = if dest.agent_context {
-        truncate_chars(collapsed.trim(), MAX_AGENT_MEMORY_CHARS)
+
+    // For Obsidian meeting-intel memories, preserve the multi-line markdown
+    // structure (headings, lists, etc.) instead of flattening to a single line.
+    // Headings are demoted by one level so they nest correctly inside the bullet.
+    if dest.id == Destination::OBSIDIAN.id && entry.source == "meeting-intel" {
+        let content = safe_obsidian_multiline(&entry.content);
+        line.push_str(&content);
     } else {
-        collapsed.trim().to_string()
-    };
-    // ATX headings are valid inside list items too: `- # title` renders an
-    // H1 in Obsidian. Escape only an opening heading marker, after collapsing
-    // and trimming, so ordinary hashtags and the agent snapshots stay intact.
-    if dest.id == Destination::OBSIDIAN.id {
-        let hashes = bounded.bytes().take_while(|&b| b == b'#').count();
-        if (1..=6).contains(&hashes)
-            && matches!(bounded.as_bytes().get(hashes), None | Some(b' ' | b'\t'))
-        {
-            line.push('\\');
+        let collapsed = safe_inline(&entry.content, dest.agent_context);
+        let bounded = if dest.agent_context {
+            truncate_chars(collapsed.trim(), MAX_AGENT_MEMORY_CHARS)
+        } else {
+            collapsed.trim().to_string()
+        };
+        // ATX headings are valid inside list items too: `- # title` renders an
+        // H1 in Obsidian. Escape only an opening heading marker, after collapsing
+        // and trimming, so ordinary hashtags and the agent snapshots stay intact.
+        if dest.id == Destination::OBSIDIAN.id {
+            let hashes = bounded.bytes().take_while(|&b| b == b'#').count();
+            if (1..=6).contains(&hashes)
+                && matches!(bounded.as_bytes().get(hashes), None | Some(b' ' | b'\t'))
+            {
+                line.push('\\');
+            }
         }
+        line.push_str(&bounded);
     }
-    line.push_str(&bounded);
     let mut meta_parts: Vec<String> = Vec::new();
     if !entry.source.is_empty() && entry.source != "user" {
         let source = safe_inline(&entry.source, dest.agent_context);
@@ -317,6 +326,31 @@ fn safe_inline(value: &str, agent_context: bool) -> String {
             .replace('>', "›")
     } else {
         collapsed
+    }
+}
+
+/// Format multi-line content for an Obsidian bullet, preserving structure.
+/// Headings are demoted by one level so they nest correctly inside the list
+/// item (e.g. `#` becomes `##`, `##` becomes `###`).  Continuation lines are
+/// indented with four spaces, which is valid Markdown list-continuation syntax.
+fn safe_obsidian_multiline(value: &str) -> String {
+    let parts: Vec<String> = value
+        .lines()
+        .map(|l| l.trim_end_matches('\r').trim())
+        .filter(|l| !l.is_empty())
+        .map(|l| demote_heading(l))
+        .collect();
+    parts.join("\n    ")
+}
+
+/// Demote an ATX heading by one level (`# ` → `## `, `## ` → `### `, etc.).
+/// Non-heading lines are returned unchanged.
+fn demote_heading(line: &str) -> String {
+    let hashes = line.bytes().take_while(|&b| b == b'#').count();
+    if (1..=5).contains(&hashes) && line.as_bytes().get(hashes) == Some(&b' ') {
+        format!("#{}", line)
+    } else {
+        line.to_string()
     }
 }
 
@@ -714,8 +748,10 @@ mod tests {
         meeting.source = "meeting-intel".to_string();
         meeting.tags = vec!["meeting:123".to_string()];
         let note = render_owned_note(&[meeting], &Destination::OBSIDIAN);
+        // Meeting-intel memories now preserve multi-line structure with demoted
+        // headings so that ## Summary renders as a proper heading inside the bullet.
         assert!(note.contains(
-            "\n- \\# Planning meeting  ## Summary  Discussed #roadmap  - [ ] Follow up _(src: meeting-intel · #meeting:123)_\n"
+            "\n- ## Planning meeting\n    ### Summary\n    Discussed #roadmap\n    - [ ] Follow up _(src: meeting-intel · #meeting:123)_\n"
         ));
         assert!(!note.contains("\n- # "));
     }
