@@ -138,6 +138,7 @@ mod voice_training;
 mod window;
 mod windows_ca_bundle;
 mod workflows_runtime;
+mod workflows_media;
 #[cfg(target_os = "windows")]
 mod windows_crash_dump;
 #[cfg(target_os = "windows")]

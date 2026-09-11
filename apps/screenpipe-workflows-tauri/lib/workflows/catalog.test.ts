@@ -10,6 +10,7 @@ import {
   workflowIdentity,
 } from "./catalog";
 import type { WorkflowAnalysis, WorkflowMap } from "./runtime";
+import { assistantContextSnapshot } from "@screenpipe/workflows-ui";
 
 function workflow(title: string, timestamp: string, apps = ["Browser"]): WorkflowMap {
   return {
@@ -73,7 +74,33 @@ function analysis(workflows: WorkflowMap[], analyzedAt = "2026-09-03T18:00:00Z")
 }
 
 describe("workflow catalog", () => {
-  it("replaces stale workflows instead of appending them to a complete refresh", () => {
+  it("does not attach local corrections or screenshot bytes to assistant context", () => {
+    const privateWorkflow = workflow("Review feedback", "2026-09-01T10:00:00Z");
+    privateWorkflow.userCorrection = "Private correction stays local";
+    const snapshot = assistantContextSnapshot({ key: "workflow", title: privateWorkflow.title, workflow: privateWorkflow });
+    expect(JSON.stringify(snapshot)).not.toContain("Private correction");
+  });
+  it("keeps all candidates on an empty refresh and repeated refreshes do not duplicate them", () => {
+    const original = analysis([workflow("Prepare investor updates", "2026-07-01T10:00:00Z")]);
+    const once = mergeWorkflowCatalog(original, analysis([]));
+    const twice = mergeWorkflowCatalog(once, analysis([]));
+    expect(twice.analysis.workflows).toHaveLength(1);
+    expect(twice.analysis.workflows[0].catalogStatus).toBe("not-reobserved");
+  });
+  it("preserves user corrections when replacing a matched workflow", () => {
+    const prior = workflow("Review support requests", "2026-07-01T10:00:00Z");
+    prior.userCorrection = "The reply requires approval";
+    const next = workflow("Review support requests", "2026-09-02T10:00:00Z");
+    const merged = mergeWorkflowCatalog(analysis([prior]), analysis([next]));
+    expect(merged.analysis.workflows[0].userCorrection).toBe(prior.userCorrection);
+  });
+  it("never moves personal candidates into a team scope", () => {
+    const prior = analysis([workflow("Private work", "2026-07-01T10:00:00Z")]);
+    const next = analysis([]);
+    next.scope = { id: "team", kind: "team", label: "Team" };
+    expect(mergeWorkflowCatalog(prior, next).analysis.workflows).toEqual([]);
+  });
+  it("keeps earlier candidates when a refresh finds fewer workflows", () => {
     const older = workflow("Prepare investor updates", "2026-07-01T10:00:00Z");
     older.quality.grade = "limited";
     const prior = analysis([older]);
@@ -81,9 +108,10 @@ describe("workflow catalog", () => {
 
     const merged = mergeWorkflowCatalog(prior, next);
 
-    expect(merged.analysis.workflows.map((item) => item.title)).toEqual(["Review support reports"]);
+    expect(merged.analysis.workflows.map((item) => item.title)).toEqual(["Review support reports", "Prepare investor updates"]);
+    expect(merged.analysis.workflows[1].catalogStatus).toBe("not-reobserved");
     expect(merged.quality.grade).toBe("good");
-    expect(merged.quality.warnings).not.toContain("Known workflows not observed in the latest scan remain in the catalog");
+    expect(merged.quality.warnings.join(" ")).toContain("1 earlier workflow candidates kept");
   });
 
   it("replaces the previous version of the same workflow", () => {
@@ -107,7 +135,7 @@ describe("workflow catalog", () => {
     expect(merged.analysis.workflows).toHaveLength(1);
   });
 
-  it("hides semantically different aliases that reuse most of the same evidence", () => {
+  it("keeps different workflows that share captured evidence", () => {
     const discovery = workflow("Run customer discovery demo", "2026-09-01T10:00:00Z", ["Meet"]);
     discovery.evidence.push({ timestamp: "2026-09-02T10:00:00Z", app: "Meet", detail: "Second call" });
     discovery.quality.evidenceCount = 2;
@@ -119,8 +147,8 @@ describe("workflow catalog", () => {
 
     const sanitized = sanitizeWorkflowAnalysis(analysis([discovery, sales]));
 
-    expect(sanitized.analysis.workflows).toHaveLength(1);
-    expect(sanitized.quality.warnings).toContain("Overlapping workflow aliases were hidden");
+    expect(sanitized.analysis.workflows).toHaveLength(2);
+    expect(sanitized.quality.warnings).not.toContain("Overlapping workflow aliases were hidden");
   });
 
   it("does not display legacy model estimates as measured time", () => {

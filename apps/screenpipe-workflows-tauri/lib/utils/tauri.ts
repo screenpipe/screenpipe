@@ -1187,6 +1187,14 @@ async loadBrainViewCanvas(viewId: string) : Promise<Result<BrainViewCanvasDocume
     else return { status: "error", error: e  as any };
 }
 },
+async loadWorkflowRecording(timestamp: string, appName: string) : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("load_workflow_recording", { timestamp, appName }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Lock sync (clear keys from memory and stop server sync service).
  */
@@ -1380,6 +1388,14 @@ async openViewerWindow(path: string) : Promise<Result<null, string>> {
 async openWindowsShellTarget(target: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("open_windows_shell_target", { target }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async openWorkflowCapturedMoment(frameId: number, timestamp: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_workflow_captured_moment", { frameId, timestamp }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2069,6 +2085,9 @@ async registerWindowShortcuts() : Promise<Result<null, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async releaseWorkflowRecording(url: string) : Promise<void> {
+    await TAURI_INVOKE("release_workflow_recording", { url });
 },
 async remoteSyncDiscoverHosts() : Promise<Result<DiscoveredHost[], string>> {
     try {

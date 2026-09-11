@@ -27,6 +27,10 @@ export type WorkflowAnalysisJob = {
 };
 
 export type WorkflowsPlatform = {
+  /** Local, on-demand media only. Never persist the returned URL or upload it. */
+  loadWorkflowRecording?: (timestamp: string, app: string) => Promise<WorkflowRecording | null>;
+  releaseWorkflowRecording?: (url: string) => Promise<void>;
+  openCapturedMoment?: (frameId: number, timestamp: string) => Promise<void>;
   assistant?: WorkflowsAssistantPlatform;
   ensureRuntime: () => Promise<WorkflowRuntime>;
   analyzeCapturedWork: (days: number, options?: WorkflowAnalysisOptions) => Promise<WorkflowAnalysis>;
@@ -45,6 +49,15 @@ export type WorkflowsPlatform = {
   skillInstallMode?: "local" | "preview";
   openAccount?: () => Promise<void>;
   startWindowDrag?: () => Promise<void> | void;
+};
+
+export type WorkflowRecording = {
+  kind: "video" | "image";
+  url: string;
+  timestamp: string;
+  frameId: number;
+  offsetSeconds: number;
+  matchDistanceSeconds: number;
 };
 
 export type WorkflowsAppProps = {

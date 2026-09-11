@@ -72,5 +72,5 @@ export function isAssistantState(value: unknown): value is AssistantState {
 /** Capture structured page content only. Never attach screenshot data URLs or local media paths. */
 export function assistantContextSnapshot(context: AssistantContext): AssistantContext {
   return JSON.parse(JSON.stringify(context, (key, value) =>
-    ["dataUrl", "filePath", "screenshot", "screenshots"].includes(key) ? undefined : value));
+    ["dataUrl", "filePath", "screenshot", "screenshots", "userCorrection"].includes(key) ? undefined : value));
 }

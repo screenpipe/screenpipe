@@ -83,7 +83,9 @@ function workflowsMatch(left: WorkflowMap, right: WorkflowMap) {
     right.apps.some((candidate) => candidate.toLocaleLowerCase() === app.toLocaleLowerCase()),
   );
   const similarity = tokenSimilarity(leftTokens, rightTokens);
-  return evidenceContainment(left, right) >= 0.5 || similarity >= 0.75 || (sharedApp && similarity >= 0.6);
+  // Shared screen content alone does not make different jobs the same workflow.
+  return similarity >= 0.75 || (sharedApp && similarity >= 0.6)
+    || (similarity >= 0.5 && evidenceContainment(left, right) >= 0.75);
 }
 
 function workflowScore(workflow: WorkflowMap) {
@@ -176,8 +178,24 @@ export function mergeWorkflowCatalog(
   next: WorkflowAnalysis,
 ): WorkflowAnalysis {
   const sanitized = sanitizeWorkflowAnalysis(next);
+  if (previous?.scope && next.scope && previous.scope.id !== next.scope.id) return sanitized;
+  if ((previous?.scope?.kind && previous.scope.kind !== "personal") || (next.scope?.kind && next.scope.kind !== "personal")) return sanitized;
+  const current = sanitized.analysis.workflows.map((workflow) => ({
+    ...workflow,
+    userCorrection: previous?.analysis.workflows.find((prior) => workflowsMatch(prior, workflow))?.userCorrection ?? workflow.userCorrection,
+    catalogStatus: "current" as const, lastReviewedAt: next.analyzedAt,
+  }));
+  const retained = previous ? sanitizeWorkflowAnalysis(previous).analysis.workflows
+    .filter((workflow) => !current.some((candidate) => workflowsMatch(candidate, workflow)))
+    .map((workflow) => ({ ...workflow, catalogStatus: "not-reobserved" as const,
+      lastReviewedAt: workflow.lastReviewedAt ?? previous.analyzedAt })) : [];
   return {
     ...sanitized,
+    analysis: { workflows: [...current, ...retained].map((workflow, index) => ({ ...workflow, rank: index + 1 })) },
+    quality: { ...sanitized.quality, warnings: [...new Set([
+      ...sanitized.quality.warnings,
+      ...(retained.length ? [`${retained.length} earlier workflow candidates kept; not re-observed in this scan. Quality totals describe this scan only.`] : []),
+    ])] },
     timeProfile: sanitized.timeProfile ?? (previous ? sanitizeWorkflowAnalysis(previous).timeProfile : null),
   };
 }

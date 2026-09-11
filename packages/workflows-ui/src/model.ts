@@ -99,6 +99,14 @@ export type WorkflowStage = {
   observedDays: number;
   evidence: WorkflowEvidence[];
   screenshot?: WorkflowScreenshot | null;
+  procedure?: Array<{
+    kind: "action" | "input" | "output" | "decision" | "check";
+    text: string;
+    quote: string;
+    timestamp: string;
+    app: string;
+  }>;
+  openQuestions?: string[];
 };
 
 export type WorkflowQualityGrade = "strong" | "good" | "limited";
@@ -127,6 +135,14 @@ export type WorkflowBottleneck = {
 };
 
 export type WorkflowMap = {
+  userCorrection?: string;
+  catalogStatus?: "current" | "not-reobserved";
+  lastReviewedAt?: string;
+  evidenceStatus?: "candidate" | "supported-steps";
+  evidenceVersion?: number;
+  captureSequence?: WorkflowEvidence[];
+  openQuestions?: string[];
+  limitations?: string[];
   rank: number;
   analysisDays: number;
   title: string;

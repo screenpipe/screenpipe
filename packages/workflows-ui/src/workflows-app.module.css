@@ -382,6 +382,19 @@
 .qualityDetails p { margin: 5px 0 0; }
 .qualityDetails ul { margin: 6px 0 0; padding-left: 14px; }
 
+.depthNotice { margin: 0 0 18px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas, #f6f6f3); font-size: 12px; line-height: 1.6; }
+.depthNotice p { margin: 6px 0 0; color: #6e7269; }
+.depthNotice ul { margin: 8px 0 0; padding-left: 20px; }
+.procedureDetails { grid-column: 1 / -1; min-width: 0; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.procedureDetails > ol { margin: 0; padding: 0 0 0 22px; }
+.procedureDetails > ol > li { padding: 8px 8px 16px; border-bottom: 1px solid var(--line); }
+.procedureKind { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: #6e7269; }
+.procedureDetails p { margin: 5px 0 9px; }
+.procedureDetails summary, .stageEvidence summary { cursor: pointer; font-size: 11px; color: #6e7269; }
+.procedureDetails blockquote { margin: 10px 0; padding: 8px 12px; border-left: 2px solid var(--line); white-space: pre-wrap; }
+.procedureDetails small { color: #6e7269; font-size: 10px; }
+.procedureQuestions { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; }
+.procedureQuestions ul { margin: 6px 0 0; padding-left: 18px; }
 .pageHeader { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; margin: 25px 0 42px; }
 .pageHeader h1 { margin: 0; font-size: clamp(34px,3.8vw,50px); letter-spacing: -.052em; }
 .pageHeader p { max-width: 700px; margin: 9px 0 0; color: #6e7269; font-size: 12px; line-height: 1.6; }
@@ -526,6 +539,8 @@
 .screenshotFrame img { width: 100%; height: 100%; display: block; object-fit: cover; }
 .stageScreenshot > div:last-child:not(.screenshotUnavailable) { display: grid; grid-template-columns: 14px minmax(0,1fr) auto; gap: 6px; align-items: center; padding-top: 9px; color: #83877d; font-size: 7.5px; }
 .stageScreenshot a { display: inline-flex; align-items: center; gap: 4px; color: #50564a; font-weight: 680; text-decoration: none; }
+.stageScreenshot button { display: inline-flex; align-items: center; padding: 4px 6px; border: 1px solid #c9cdc2; border-radius: 4px; background: transparent; color: #50564a; font: inherit; font-weight: 680; cursor: pointer; }
+.stageScreenshot button:disabled { opacity: .5; cursor: wait; }
 .screenshotUnavailable { min-height: 145px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 20px; border: 1px dashed #d2d5cc; border-radius: 6px; color: #8a8e84; text-align: center; }
 .screenshotUnavailable strong { color: #666b60; font-size: 9px; }
 .screenshotUnavailable span { max-width: 290px; font-size: 8px; line-height: 1.45; }
@@ -833,3 +848,23 @@
   .commandBackdrop, .commandPalette { animation: none; }
   .skillBackdrop, .skillDialog, .skillLiveDraft pre i { animation: none; }
 }
+.replay {
+  border: 1px solid var(--border, #d4d4ce);
+  border-radius: 8px;
+  padding: 20px;
+  margin: 20px 0;
+}
+.replay header, .replayNavigation { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.replay p { margin: 8px 0 14px; opacity: .8; }
+.replay button, .replay select { padding: 8px 12px; border: 1px solid currentColor; border-radius: 6px; background: transparent; color: inherit; }
+.replay button:disabled { opacity: .4; }
+.replay button:focus-visible, .replay select:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+.replayMedia { position: relative; background: #111; color: #eee; aspect-ratio: 16 / 9; display: grid; place-items: center; overflow: hidden; border-radius: 8px; margin: 12px 0; }
+.replayMedia p[role="status"] { position: absolute; bottom: 12px; margin: 0; padding: 6px 10px; background: #111; border-radius: 4px; }
+.replayMedia video, .replayMedia img { width: 100%; height: 100%; object-fit: contain; min-height: 0; }
+.replayMedia p { padding: 24px; max-width: 460px; text-align: center; }
+.replaySelect { display: grid; gap: 6px; margin: 16px 0; }
+.replaySelect select { width: 100%; min-width: 0; }
+.replay blockquote { white-space: pre-wrap; overflow-wrap: anywhere; margin: 12px 0; }
+.depthNotice textarea { display: block; width: 100%; min-height: 90px; padding: 10px; margin: 8px 0; background: transparent; color: inherit; border: 1px solid currentColor; border-radius: 6px; resize: vertical; }
+@media (max-width: 640px) { .replay header { align-items: flex-start; flex-direction: column; } }

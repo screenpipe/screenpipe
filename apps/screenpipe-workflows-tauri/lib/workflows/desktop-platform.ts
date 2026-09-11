@@ -2,6 +2,8 @@
 // https://screenpipe.com
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
+import type { WorkflowRecording } from "@screenpipe/workflows-ui";
 import { desktopAssistant } from "./assistant";
 import type { WorkProfile, WorkflowAnalysis, WorkflowsPlatform } from "@screenpipe/workflows-ui";
 import { commands } from "@/lib/utils/tauri";
@@ -112,6 +114,22 @@ async function saveWorkProfile(profile: WorkProfile) {
 }
 
 export const desktopWorkflowsPlatform: WorkflowsPlatform = {
+  ...(!browserPreview ? { loadWorkflowRecording: async (timestamp: string, app: string) => {
+    const media = await invoke<WorkflowRecording | null>("load_workflow_recording", { timestamp, appName: app });
+    if (!media) return null;
+    if (media.kind === "video") {
+      if (!/^http:\/\/127\.0\.0\.1:\d+\/media\/[0-9a-f-]{36}$/.test(media.url)) throw new Error("Invalid local recording address");
+      return media;
+    }
+    const [header, encoded] = media.url.split(",", 2);
+    if (!/^data:(video\/mp4|image\/(jpeg|png|webp));base64$/.test(header) || !encoded) throw new Error("Invalid local recording format");
+    const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+    return { ...media, url: URL.createObjectURL(new Blob([bytes], { type: header.slice(5, -7) })) };
+  } } : {}),
+  ...(!browserPreview ? {
+    releaseWorkflowRecording: (url: string) => invoke<void>("release_workflow_recording", { url }),
+    openCapturedMoment: (frameId: number, timestamp: string) => invoke<void>("open_workflow_captured_moment", { frameId, timestamp }),
+  } : {}),
   ...(!browserPreview ? { assistant: desktopAssistant } : {}),
   ensureRuntime: ensureWorkflowRuntime,
   analyzeCapturedWork: (days, options) => analyzeCapturedWork(days, options?.workProfile),

@@ -19,7 +19,10 @@ const mocks = vi.hoisted(() => ({
   saveProfile: vi.fn(),
   generateSkill: vi.fn(),
   saveSkill: vi.fn(),
+  invoke: vi.fn(),
 }));
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ startDragging: vi.fn() }),
@@ -57,6 +60,21 @@ describe("desktop workflows persistence", () => {
     mocks.saveProfile.mockReset().mockResolvedValue(undefined);
     mocks.generateSkill.mockReset();
     mocks.saveSkill.mockReset();
+  });
+
+  it("keeps video on the native loopback stream and opens moments through IPC", async () => {
+    const media = { kind: "video", url: "http://127.0.0.1:4567/media/12345678-1234-1234-1234-123456789abc", frameId: 12, timestamp: "2026-09-10T10:00:00Z", offsetSeconds: 2, matchDistanceSeconds: 0 };
+    mocks.invoke.mockResolvedValueOnce(media).mockResolvedValue(undefined);
+    expect(await desktopWorkflowsPlatform.loadWorkflowRecording!(media.timestamp, "Editor")).toEqual(media);
+    await desktopWorkflowsPlatform.openCapturedMoment!(12, media.timestamp);
+    expect(mocks.invoke).toHaveBeenCalledWith("open_workflow_captured_moment", { frameId: 12, timestamp: media.timestamp });
+    await desktopWorkflowsPlatform.releaseWorkflowRecording!(media.url);
+    expect(mocks.invoke).toHaveBeenCalledWith("release_workflow_recording", { url: media.url });
+  });
+
+  it("rejects non-local video URLs", async () => {
+    mocks.invoke.mockResolvedValueOnce({ kind: "video", url: "https://example.com/private.mp4" });
+    await expect(desktopWorkflowsPlatform.loadWorkflowRecording!("2026-09-10T10:00:00Z", "Editor")).rejects.toThrow("Invalid local recording address");
   });
 
   it("migrates the legacy catalog to disk without deleting its source", async () => {
