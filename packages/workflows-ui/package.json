@@ -1,0 +1,26 @@
+{
+  "name": "@screenpipe/workflows-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./chat": "./src/chat-primitives.tsx",
+    "./catalog": "./src/catalog.ts",
+    "./controllability": "./src/controllability.ts",
+    "./filters": "./src/filters.ts",
+    "./fixture": "./src/fixture-platform.ts",
+    "./model": "./src/model.ts",
+    "./navigation": "./src/navigation.ts",
+    "./platform": "./src/platform.ts",
+    "./web": "./src/web-platform.ts"
+  },
+  "dependencies": {
+    "react-markdown": "^9.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "peerDependencies": {
+    "lucide-react": ">=0.414.0 <1",
+    "react": "^18.3.1"
+  }
+}

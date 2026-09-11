@@ -1,0 +1,24 @@
+# Empty config - using root .cargo/config.toml settings
+# This file exists to prevent cargo from looking for missing config
+
+[env]
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+# pre_build.js downloads OpenBLAS to src-tauri/openblas/ and sets OPENBLAS_PATH
+# in its own process, but that env var is NOT inherited by the cargo subprocess
+# that tauri spawns to compile the Rust code. Setting it here ensures
+# antirez-asr-sys/build.rs can find cblas.h on every cargo invocation.
+# `relative = true` resolves the path from the directory that *contains* .cargo/
+# (i.e. src-tauri/), so "openblas" → src-tauri/openblas.
+OPENBLAS_PATH = { value = "openblas", relative = true }
+# whisper.cpp ggml uses std::filesystem::path which requires macOS 10.15+
+# These are picked up by whisper-rs-sys's cmake build before compilation starts
+# CI can still override via explicit env vars (force = false is default)
+MACOSX_DEPLOYMENT_TARGET = { value = "10.15", force = false }
+CMAKE_OSX_DEPLOYMENT_TARGET = { value = "10.15", force = false }
+
+# On Linux, use gcc linker with -z undefs to allow unresolved symbols
+# for platform-specific execution providers (CoreML, DirectML) that are
+# compiled into ort but not available in the ONNX Runtime library on Linux
+[target.x86_64-unknown-linux-gnu]
+linker = "gcc"
+rustflags = ["-C", "link-arg=-Wl,-z,undefs"]

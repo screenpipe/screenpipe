@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "externalBin": [
+      "bun"
+    ],
+    "resources": {
+      "assets/*": "./assets/",
+      "ffmpeg\\bin\\ffmpeg.exe": "./",
+      "ffmpeg\\bin\\ffprobe.exe": "./",
+      "ffmpeg\\bin\\*.dll": "./",
+      "ffmpeg\\lib\\*": "./",
+      "onnxruntime*\\lib\\*.dll": "./",
+      "wer\\*.dll": "./",
+      "openblas\\bin\\*.dll": "./",
+      "vcredist\\*.dll": "./",
+      "target\\x86_64-pc-windows-msvc\\release\\screenpipe-persistence-supervisor.exe": "./",
+      "target\\x86_64-pc-windows-msvc\\release\\remove-screenpipe-persistence.exe": "./"
+    },
+    "windows": {
+      "signCommand": null,
+      "nsis": {
+        "installMode": "perMachine",
+        "headerImage": "assets/nsis-header.bmp",
+        "sidebarImage": "assets/nsis-sidebar.bmp",
+        "installerIcon": "icons/icon.ico",
+        "installerHooks": "windows/persistent-hooks.nsh"
+      },
+      "webviewInstallMode": {
+        "type": "skip"
+      }
+    }
+  }
+}
