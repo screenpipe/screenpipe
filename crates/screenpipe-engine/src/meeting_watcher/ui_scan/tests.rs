@@ -1067,6 +1067,53 @@ fn test_real_browser_meetings_still_detected() {
     ));
 }
 
+#[test]
+fn test_arc_slack_huddle_titles_detected() {
+    // #6989 — Slack huddles in Arc/Chrome keep the tab at
+    // `app.slack.com/client/...` (never `/huddle`), so the URL pattern can't
+    // fire. The huddle window title is the only signal, and the URL is on
+    // Slack's own host, so the title fallback must apply.
+    //
+    // Huddles list / active huddle window title (captured from a live Arc
+    // frame): "Huddles - leadgen - Slack".
+    assert!(any_profile_matches(
+        Some("https://app.slack.com/client/T0123456/C0123456"),
+        Some("Huddles - leadgen - Slack")
+    ));
+    // URL-less window (Arc exposes no AXDocument) — plain fallback path.
+    assert!(any_profile_matches(None, Some("Huddles - leadgen - Slack")));
+    // Anchored prefix match: pattern "Huddles" + non-alphanumeric separator.
+    assert!(any_profile_matches(
+        Some("https://app.slack.com/client/T0123456/D0123456"),
+        Some("Huddles — My Workspace - Slack")
+    ));
+}
+
+#[test]
+fn test_arc_slack_non_huddle_titles_not_detected() {
+    // Ordinary Slack browsing must NOT start a meeting: the workspace URL is
+    // on Slack's host but the titles carry no huddle marker.
+    assert!(!any_profile_matches(
+        Some("https://app.slack.com/client/T0BBNEEH6Q2/D0BBT87MELU"),
+        Some("Alex N (DM) - 1651 Market Apartments Residents - 1 new item - Slack")
+    ));
+    assert!(!any_profile_matches(
+        Some("https://app.slack.com/client/T0123456/C0123456"),
+        Some("* Threads - leadgen - Slack")
+    ));
+    // #4246 guardrail unchanged: huddle-ish title on a FOREIGN host must not
+    // match even though "Huddles" would anchor-match the title.
+    assert!(!any_profile_matches(
+        Some("https://www.amazon.com/dp/B0123456"),
+        Some("Huddles - leadgen - Slack")
+    ));
+    // Substring anchoring: "Huddlesworth" must not match (next char is alnum).
+    assert!(!any_profile_matches(
+        Some("https://app.slack.com/client/T0123456/C0123456"),
+        Some("Huddlesworth notes - Slack")
+    ));
+}
+
 // ── State machine tests ────────────────────────────────────────────
 
 fn make_scan_result(app: &str, in_call: bool, signals: usize) -> ScanResult {

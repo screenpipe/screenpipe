@@ -257,7 +257,13 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
                 macos_app_names: &["slack"],
                 windows_process_names: &["slack.exe"],
                 browser_url_patterns: &["app.slack.com/huddle"],
-                browser_title_patterns: &[],
+                // Browser huddles run inside the workspace tab — the URL stays
+                // `app.slack.com/client/...` and never becomes `/huddle`, so
+                // the URL pattern never fires there. The huddle window title
+                // ("Huddles - <workspace> - Slack" for the huddles list,
+                // "<name> - <workspace> - Slack" during a 1:1) is the only
+                // signal. Anchored: "Huddles - …" matches via prefix.
+                browser_title_patterns: &["Huddles"],
             },
             call_signals: vec![
                 CallSignal::RoleWithName {

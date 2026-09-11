@@ -153,10 +153,36 @@ pub(crate) fn browser_window_matches_meeting(
     let ids = &profile.app_identifiers;
     if let Some(u) = url.map(str::trim).filter(|u| !u.is_empty()) {
         let doc = url_without_query_or_fragment(u);
-        return ids
+        if ids
             .browser_url_patterns
             .iter()
-            .any(|p| browser_url_pattern_matches(doc, p));
+            .any(|p| browser_url_pattern_matches(doc, p))
+        {
+            return true;
+        }
+        // URL-first normally ends here: a known non-meeting URL suppresses the
+        // title. Exception: a URL on the meeting platform's OWN host with no
+        // meeting-specific path (e.g. Slack — browser huddles keep the tab at
+        // `app.slack.com/client/...`, never `/huddle`, so URL matching can
+        // never fire). On the platform's own host, a meeting-titled window is
+        // strong evidence; foreign hosts (amazon.com/...meet...) stay blocked
+        // by the #4246 rule.
+        if let Some(t) = title {
+            let url_on_profile_host = ids
+                .browser_url_patterns
+                .iter()
+                .filter_map(|p| p.split('/').next())
+                .filter(|host| host.contains('.'))
+                .any(|host| contains_at_domain_boundary(doc, host));
+            if url_on_profile_host {
+                let t_lower = t.to_lowercase();
+                return ids
+                    .browser_title_patterns
+                    .iter()
+                    .any(|p| browser_title_matches_pattern(&t_lower, p));
+            }
+        }
+        return false;
     }
     if let Some(t) = title {
         let t_lower = t.to_lowercase();
@@ -281,18 +307,35 @@ pub(crate) fn ax_window_matches_meeting(
         {
             return true;
         }
-        if doc.is_none() && title_contains_meeting_code(title) {
-            let title_lower = title.to_lowercase();
-            if ids
-                .browser_title_patterns
-                .iter()
-                .any(|p| browser_title_matches_pattern(&title_lower, p))
-            {
-                return true;
-            }
+        if doc.is_none() && title_matches_with_profile_gate(title, ids) {
+            return true;
         }
     }
     false
+}
+
+/// Anchored `browser_title_patterns` fallback for the macOS AX sweep.
+///
+/// The Google Meet profile is gated on a Meet-code token in the title (see
+/// `title_contains_meeting_code`): Chrome/Edge title the post-call page "Meet"
+/// too, and the sweep is not mic-gated, so the bare anchor alone phantom-fired
+/// on idle Meet pages. That gate is Meet-specific — other platforms' titles
+/// (e.g. Slack's "Huddles - <workspace> - Slack") carry no code, so requiring
+/// one would disable their fallback entirely. Profiles with no title patterns
+/// are unaffected either way.
+#[cfg(any(target_os = "macos", test))]
+fn title_matches_with_profile_gate(title: &str, ids: &AppIdentifiers) -> bool {
+    let is_meet_profile = ids
+        .browser_url_patterns
+        .iter()
+        .any(|p| p.contains("meet.google.com"));
+    if is_meet_profile && !title_contains_meeting_code(title) {
+        return false;
+    }
+    let title_lower = title.to_lowercase();
+    ids.browser_title_patterns
+        .iter()
+        .any(|p| browser_title_matches_pattern(&title_lower, p))
 }
 
 /// True when `title` contains a standalone Google-Meet-code-shaped token:
