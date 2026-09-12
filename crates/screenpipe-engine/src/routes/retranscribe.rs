@@ -12,15 +12,97 @@ use oasgen::{oasgen, OaSchema};
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
 use screenpipe_audio::transcription::engine::TranscriptionEngine;
 use screenpipe_audio::transcription::VocabularyEntry;
+use screenpipe_audio::vad::{
+    create_vad_engine, min_speech_ratio, speech_ratio, VadEngine, VadEngineEnum,
+};
 use screenpipe_db::{AudioChunkInfo, NewMeetingTranscriptSegment};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::path::Path as StdPath;
 use std::sync::Arc;
-use tracing::{error, info};
+use tokio::sync::Mutex;
+use tracing::{debug, error, info, warn};
 
 use crate::server::AppState;
+
+/// Minimum-speech gate for re-transcription.
+///
+/// The live capture path only sends audio to the STT engine when Silero VAD
+/// finds more than `min_speech_ratio()` speech (see `stt.rs`), but the
+/// retranscribe routes fed every stored chunk file straight into the engine.
+/// Devices write a chunk every `audio_chunk_duration` seconds whether or not
+/// anyone spoke, so a day's backlog is mostly silence — which is also exactly
+/// the input STT models hallucinate on. Reusing the recorder's threshold keeps
+/// both paths in agreement about what counts as speech.
+///
+/// A dedicated engine per request rather than the AudioManager's: Silero keeps
+/// LSTM state between frames, and sharing it with live capture would interleave
+/// two unrelated streams. Falls back to WebRTC like AudioManager does, and to
+/// no gating at all if neither loads — a VAD failure must never silently drop
+/// transcription.
+struct SilenceGate {
+    vad: Option<Mutex<Box<dyn VadEngine>>>,
+}
+
+impl SilenceGate {
+    async fn new() -> Self {
+        let vad = match create_vad_engine(VadEngineEnum::Silero).await {
+            Ok(v) => Some(v),
+            Err(e) => {
+                warn!("retranscribe: silero vad unavailable ({}), trying webrtc", e);
+                match create_vad_engine(VadEngineEnum::WebRtc).await {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        warn!("retranscribe: no vad available ({}), transcribing everything", e);
+                        None
+                    }
+                }
+            }
+        };
+        Self {
+            vad: vad.map(Mutex::new),
+        }
+    }
+
+    /// `true` when the audio should be skipped as silent.
+    async fn is_silent(
+        &self,
+        samples: &[f32],
+        sample_rate: u32,
+        is_output_device: bool,
+        label: &str,
+    ) -> bool {
+        let Some(vad) = &self.vad else {
+            return false;
+        };
+        let resampled;
+        let samples_16k: &[f32] = if sample_rate == 16000 {
+            samples
+        } else {
+            match screenpipe_audio::resample(samples, sample_rate, 16000) {
+                Ok(r) => {
+                    resampled = r;
+                    &resampled
+                }
+                Err(e) => {
+                    warn!(
+                        "retranscribe: resample for vad failed on {} ({}), not gating",
+                        label, e
+                    );
+                    return false;
+                }
+            }
+        };
+        let ratio = speech_ratio(samples_16k, vad, is_output_device).await;
+        let min_ratio = min_speech_ratio();
+        debug!(
+            "retranscribe: {} speech ratio {:.3} (min {:.3})",
+            label, ratio, min_ratio
+        );
+        ratio <= min_ratio
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct RetranscribeRequest {
@@ -55,6 +137,8 @@ pub struct RetranscribeChunkResult {
 #[derive(Debug, Serialize)]
 pub struct RetranscribeResponse {
     pub chunks_processed: usize,
+    /// Chunks left untouched because VAD found no speech in them.
+    pub chunks_skipped_silent: usize,
     pub transcriptions: Vec<RetranscribeChunkResult>,
 }
 
@@ -80,6 +164,8 @@ pub struct MeetingRetranscribeResponse {
     pub engine: String,
     pub chunks_found: usize,
     pub chunks_processed: usize,
+    /// Chunks in batches skipped because VAD found no speech in them.
+    pub chunks_skipped_silent: usize,
     pub batches_processed: usize,
     pub seconds_processed: f64,
     pub replaced_segments: u64,
@@ -304,6 +390,7 @@ pub async fn retranscribe_handler(
         info!("retranscribe: no audio chunks found");
         return JsonResponse(json!({
             "chunks_processed": 0,
+            "chunks_skipped_silent": 0,
             "transcriptions": []
         }))
         .into_response();
@@ -313,6 +400,8 @@ pub async fn retranscribe_handler(
         "retranscribe: found {} raw rows (may include dupes)",
         chunks.len()
     );
+
+    let silence_gate = SilenceGate::new().await;
 
     // 2. Get transcription config from audio manager
     let audio_manager = &state.audio_manager;
@@ -373,6 +462,7 @@ pub async fn retranscribe_handler(
     // 4. Process each chunk
     let mut results = Vec::new();
     let mut processed = 0;
+    let mut skipped_silent = 0;
 
     // Deduplicate chunks by ID (multiple transcription rows per chunk)
     let mut seen_ids = std::collections::HashSet::new();
@@ -402,6 +492,20 @@ pub async fn retranscribe_handler(
             };
 
         if samples.is_empty() {
+            continue;
+        }
+
+        let is_output_device = !chunk.is_input_device.unwrap_or(false);
+        if silence_gate
+            .is_silent(
+                &samples,
+                sample_rate,
+                is_output_device,
+                &format!("chunk {}", chunk.id),
+            )
+            .await
+        {
+            skipped_silent += 1;
             continue;
         }
 
@@ -459,13 +563,15 @@ pub async fn retranscribe_handler(
     }
 
     info!(
-        "retranscribe complete: {} chunks processed, {} transcription results",
+        "retranscribe complete: {} chunks processed, {} skipped as silent, {} transcription results",
         processed,
+        skipped_silent,
         results.len()
     );
 
     let response = RetranscribeResponse {
         chunks_processed: processed,
+        chunks_skipped_silent: skipped_silent,
         transcriptions: results,
     };
     JsonResponse(json!(response)).into_response()
@@ -533,6 +639,7 @@ pub async fn retranscribe_meeting_handler(
             engine: "none".to_string(),
             chunks_found: 0,
             chunks_processed: 0,
+            chunks_skipped_silent: 0,
             batches_processed: 0,
             seconds_processed: 0.0,
             replaced_segments: 0,
@@ -578,8 +685,10 @@ pub async fn retranscribe_meeting_handler(
     };
 
     let batches = group_meeting_chunks(&chunks, max_batch_duration);
+    let silence_gate = SilenceGate::new().await;
     let mut pending = Vec::new();
     let mut chunks_processed = 0usize;
+    let mut chunks_skipped_silent = 0usize;
     let mut seconds_processed = 0.0f64;
     let mut sequence = 0u64;
 
@@ -633,6 +742,19 @@ pub async fn retranscribe_meeting_handler(
             continue;
         }
 
+        if silence_gate
+            .is_silent(
+                &combined_samples,
+                sample_rate,
+                !device.is_input,
+                &format!("meeting batch from chunk {}", first_chunk_id),
+            )
+            .await
+        {
+            chunks_skipped_silent += valid_chunks;
+            continue;
+        }
+
         let mut session = match transcription_engine.create_session() {
             Ok(session) => session,
             Err(e) => {
@@ -677,6 +799,7 @@ pub async fn retranscribe_meeting_handler(
             engine: engine_name,
             chunks_found: chunks.len(),
             chunks_processed,
+            chunks_skipped_silent,
             batches_processed: 0,
             seconds_processed,
             replaced_segments: 0,
@@ -757,6 +880,7 @@ pub async fn retranscribe_meeting_handler(
         engine: engine_name,
         chunks_found: chunks.len(),
         chunks_processed,
+        chunks_skipped_silent,
         batches_processed: inserted,
         seconds_processed,
         replaced_segments,

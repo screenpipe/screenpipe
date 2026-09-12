@@ -73,6 +73,49 @@ static MODEL_PATH: Mutex<Option<PathBuf>> = Mutex::const_new(None);
 
 static DOWNLOADING: AtomicBool = AtomicBool::new(false);
 
+/// Fraction of fixed-size frames the VAD classifies as speech.
+///
+/// Mirrors the live capture path in `speaker::prepare_segments` (same frame
+/// size, same RMS normalisation, same relaxed threshold for output devices) so
+/// that a chunk the recorder would have skipped is also skipped when it is
+/// re-transcribed later. Callers compare the result against
+/// [`min_speech_ratio`]. `samples` must be 16 kHz mono.
+///
+/// The lock is held for the whole pass: Silero carries LSTM state between
+/// frames, so interleaving two streams through one engine degrades both.
+pub async fn speech_ratio(
+    samples: &[f32],
+    vad_engine: &Mutex<Box<dyn VadEngine>>,
+    is_output_device: bool,
+) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let audio = crate::utils::audio::normalize_v2(samples);
+
+    #[cfg(target_os = "windows")]
+    let frame_size = 512;
+    #[cfg(not(target_os = "windows"))]
+    let frame_size = 1600;
+
+    let mut vad = vad_engine.lock().await;
+    if is_output_device {
+        vad.set_speech_threshold(Some(OUTPUT_SPEECH_THRESHOLD));
+    }
+    let mut total_frames = 0usize;
+    let mut speech_frames = 0usize;
+    for frame in audio.chunks(frame_size) {
+        total_frames += 1;
+        if matches!(vad.audio_type(frame), Ok(VadStatus::Speech)) {
+            speech_frames += 1;
+        }
+    }
+    if is_output_device {
+        vad.set_speech_threshold(None);
+    }
+    speech_frames as f32 / total_frames as f32
+}
+
 pub async fn create_vad_engine(engine: VadEngineEnum) -> anyhow::Result<Box<dyn VadEngine>> {
     match engine {
         VadEngineEnum::WebRtc => Ok(Box::new(WebRtcVad::new())),
