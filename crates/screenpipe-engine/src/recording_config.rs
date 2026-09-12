@@ -8,6 +8,9 @@ use screenpipe_audio::core::engine::AudioTranscriptionEngine;
 use screenpipe_audio::meeting_streaming::MeetingStreamingConfig;
 use screenpipe_audio::transcription::deepgram::DeepgramTranscriptionConfig;
 use screenpipe_audio::transcription::VocabularyEntry;
+use screenpipe_audio::{
+    OpenAICompatibleConfig, DEFAULT_OPENAI_COMPATIBLE_ENDPOINT, DEFAULT_OPENAI_COMPATIBLE_MODEL,
+};
 use screenpipe_audio::vad::VadEngineEnum;
 use screenpipe_config::{ChannelConfig, DbConfig, DomainRule, SemanticContextMode, UrlRule};
 use screenpipe_core::Language;
@@ -492,6 +495,45 @@ impl RecordingConfig {
         }
     }
 
+    /// OpenAI-compatible transcription config derived from the settings store.
+    ///
+    /// Returns `None` when neither an endpoint nor a model has been configured,
+    /// so an untouched install keeps today's behaviour. It is deliberately NOT
+    /// gated on `audio_transcription_engine == OpenAICompatible`: the engine can
+    /// be selected per request (`POST /audio/retranscribe` with
+    /// `"engine": "openai-compatible"`) while the live engine is something else
+    /// (or `disabled`), and that path reads this config off the audio manager.
+    pub fn openai_compatible_config(&self) -> Option<OpenAICompatibleConfig> {
+        let endpoint = self
+            .openai_compatible_endpoint
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let model = self
+            .openai_compatible_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        if endpoint.is_none() && model.is_none() {
+            return None;
+        }
+        Some(OpenAICompatibleConfig {
+            endpoint: endpoint
+                .map(str::to_string)
+                .unwrap_or_else(|| DEFAULT_OPENAI_COMPATIBLE_ENDPOINT.to_string()),
+            api_key: self
+                .openai_compatible_api_key
+                .clone()
+                .filter(|k| !k.trim().is_empty()),
+            model: model
+                .map(str::to_string)
+                .unwrap_or_else(|| DEFAULT_OPENAI_COMPATIBLE_MODEL.to_string()),
+            client: None,
+            headers: self.openai_compatible_headers.clone(),
+            raw_audio: self.openai_compatible_raw_audio,
+        })
+    }
+
     /// Build an `AudioManagerBuilder` pre-configured from this config.
     /// The caller can chain additional builder methods (e.g. `.realtime()`, `.meeting_detector()`)
     /// before calling `.build(db)`.
@@ -515,6 +557,7 @@ impl RecordingConfig {
             .macos_input_vpio_enabled(self.macos_input_vpio_enabled)
             .screenpipe_aec_enabled(self.screenpipe_aec_enabled)
             .deepgram_config(self.deepgram_config.clone())
+            .openai_compatible_config(self.openai_compatible_config())
             .output_path(output_path)
             .use_pii_removal(self.use_pii_removal)
             .filter_music(self.filter_music)
