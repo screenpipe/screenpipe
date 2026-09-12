@@ -315,7 +315,25 @@ fn browser_app_detection_is_case_insensitive() {
     assert!(is_browser_app("CHROME.EXE"));
     assert!(is_browser_app("Microsoft Edge Helper"));
     assert!(is_browser_app("brave.exe"));
+    assert!(is_browser_app("Dia"));
     assert!(!is_browser_app("Zoom.exe"));
+}
+
+/// Short `BROWSER_NAMES` entries are substrings of ordinary app names, so an
+/// unanchored match reports NVIDIA and Media Player as browsers. A window
+/// classified as a browser has its title and URL run against every meeting
+/// pattern, so a false positive there becomes a false meeting.
+#[test]
+fn browser_app_detection_requires_word_boundaries() {
+    assert!(!is_browser_app("NVIDIA GeForce Experience"));
+    assert!(!is_browser_app("Windows Media Player"));
+    assert!(!is_browser_app("Search"));
+    assert!(!is_browser_app("Diagnostics"));
+
+    assert!(is_browser_app("Dia"));
+    assert!(is_browser_app("Dia Browser"));
+    assert!(is_browser_app("Arc"));
+    assert!(is_browser_app("Arc Browser"));
 }
 
 #[test]

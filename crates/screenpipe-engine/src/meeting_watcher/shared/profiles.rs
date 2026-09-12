@@ -94,6 +94,7 @@ pub struct MeetingDetectionProfile {
 pub(crate) const BROWSER_NAMES: &[&str] = &[
     "google chrome",
     "arc",
+    "dia",
     "firefox",
     "safari",
     "microsoft edge",

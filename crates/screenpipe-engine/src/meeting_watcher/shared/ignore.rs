@@ -49,7 +49,7 @@ pub(crate) fn browser_title_matches_pattern(title_lower: &str, pattern: &str) ->
 pub(crate) fn is_browser_app(app_name: &str) -> bool {
     BROWSER_NAMES
         .iter()
-        .any(|b| contains_case_insensitive(app_name, b))
+        .any(|b| contains_at_word_boundary(app_name, b))
         || ends_with_ascii_case_insensitive(app_name, ".exe")
             && [
                 "chrome.exe",
@@ -329,6 +329,52 @@ pub(crate) fn title_contains_meeting_code(title: &str) -> bool {
             && (start == 0 || !extends_token(bytes[start - 1]))
             && (start + CODE_LEN == bytes.len() || !extends_token(bytes[start + CODE_LEN]))
     })
+}
+
+/// Case-insensitive substring match that must land on word boundaries.
+///
+/// `BROWSER_NAMES` holds entries as short as `"dia"` and `"arc"`, which sit
+/// inside ordinary app names: `"nvidia"` and `"media"` both contain `dia`,
+/// `"search"` contains `arc`. A plain substring test therefore reports those
+/// windows as browsers, and a window classified as a browser has its title and
+/// URL matched against every meeting pattern — so the cost is false meeting
+/// detection on a per-window hot path, not just wasted work.
+///
+/// A match counts only when the characters on both sides are non-alphanumeric
+/// or absent, so `"Dia"` and `"Dia Browser"` match while `"NVIDIA"` does not.
+pub(crate) fn contains_at_word_boundary(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+
+    if haystack.is_ascii() && needle.is_ascii() {
+        let needle = needle.as_bytes();
+        let bytes = haystack.as_bytes();
+        if bytes.len() < needle.len() {
+            return false;
+        }
+        return (0..=bytes.len() - needle.len()).any(|start| {
+            let end = start + needle.len();
+            bytes[start..end].eq_ignore_ascii_case(needle)
+                && (start == 0 || !bytes[start - 1].is_ascii_alphanumeric())
+                && (end == bytes.len() || !bytes[end].is_ascii_alphanumeric())
+        });
+    }
+
+    let haystack_lower = haystack.to_lowercase();
+    let needle_lower = needle.to_lowercase();
+    haystack_lower
+        .match_indices(&needle_lower)
+        .any(|(start, matched)| {
+            haystack_lower[..start]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_alphanumeric())
+                && haystack_lower[start + matched.len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| !c.is_alphanumeric())
+        })
 }
 
 pub(crate) fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
