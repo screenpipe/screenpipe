@@ -383,7 +383,7 @@
 .procedureDetails > ol > li { padding: 8px 8px 16px; border-bottom: 1px solid var(--line); }
 .procedureKind { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: #6e7269; }
 .procedureDetails p { margin: 5px 0 9px; }
-.procedureDetails summary, .stageEvidence summary { cursor: pointer; font-size: 11px; color: #6e7269; }
+.procedureDetails summary { cursor: pointer; font-size: 11px; color: #6e7269; }
 .procedureDetails blockquote { margin: 10px 0; padding: 8px 12px; border-left: 2px solid var(--line); white-space: pre-wrap; }
 .procedureDetails small { color: #6e7269; font-size: 10px; }
 .procedureQuestions { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; }
@@ -537,14 +537,6 @@
 .screenshotUnavailable { min-height: 145px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 20px; border: 1px dashed #d2d5cc; border-radius: 6px; color: #8a8e84; text-align: center; }
 .screenshotUnavailable strong { color: #666b60; font-size: 9px; }
 .screenshotUnavailable span { max-width: 290px; font-size: 8px; line-height: 1.45; }
-.stageEvidence { padding: 16px; }
-.stageEvidence > span { display: block; margin-bottom: 7px; color: #818679; font-size: 7px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
-.stageEvidence ul { max-height: 230px; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
-.stageEvidence li { padding: 9px 0; border-bottom: 1px solid #e5e7e0; }
-.stageEvidence li:last-child { border: 0; }
-.stageEvidence li strong { color: #5e6359; font-size: 8px; }
-.stageEvidence li p, .stageEvidence > p { margin: 4px 0 0; color: #767b70; font-size: 8.5px; line-height: 1.5; }
-.stageEvidence > small { display: block; margin-top: 10px; color: #92968d; font-size: 7.5px; }
 
 .detailColumns { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 13px; margin-bottom: 42px; }
 .panel { padding: 21px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }

@@ -958,9 +958,8 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile, saveCorrect
                   {stage.screenshot ? <>
                     <div className={styles.screenshotFrame}><img src={stage.screenshot.dataUrl} alt={`Captured screen evidence for ${stage.name}`} draggable={false} data-lm-disable="true" /></div>
                     <div><Camera size={12} /><span>{formatEvidenceTimestamp(stage.screenshot.timestamp)} · {stage.screenshot.app} · {screenshotMatchLabel(stage.screenshot.matchDistanceSeconds)}</span><CapturedMomentButton frameId={stage.screenshot.frameId} timestamp={stage.screenshot.timestamp} open={platform.openCapturedMoment} /></div>
-                  </> : <div className={styles.screenshotUnavailable}><Camera size={18} /><strong>No exact screenshot available</strong><span>Refresh the map to match a local frame. The text evidence remains available either way.</span></div>}
+                  </> : <div className={styles.screenshotUnavailable}><Camera size={18} /><strong>No exact screenshot available</strong><span>Use the replay above to inspect other captured moments.</span></div>}
                 </div>
-                <details className={styles.stageEvidence}><summary>All captured references ({stage.evidence.length})</summary>{stage.evidence.length ? <ul>{stage.evidence.map((item, evidenceIndex) => <li key={`${item.timestamp}-${evidenceIndex}`}><strong>{formatEvidenceTimestamp(item.timestamp)} · {item.app} · {item.source || "captured text"}</strong><p>{item.detail}</p></li>)}</ul> : <p>No direct observation was available for this stage.</p>}<small>{stage.observedDays > 1 ? `References span ${stage.observedDays} days` : "Not repeated across days"} · not a verified run count</small></details>
               </div>}
             </article>;
           })}
