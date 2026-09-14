@@ -23,6 +23,10 @@ xattr -cr "$APP_PATH"
 
 # Sign the app manually
 IDENTITY="${APPLE_SIGNING_IDENTITY:-Apple Development: Louis Beaumont (NJ372MT773)}"
+# Metal library signatures use extended attributes cleared above.
+if [ -f "$APP_PATH/Contents/MacOS/mlx.metallib" ]; then
+  codesign --force --sign "$IDENTITY" "$APP_PATH/Contents/MacOS/mlx.metallib"
+fi
 codesign --force --options runtime --entitlements src-tauri/entitlements.plist --sign "$IDENTITY" "$APP_PATH"
 
 echo "Build completed successfully!"
