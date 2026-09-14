@@ -10,6 +10,7 @@ import type { AssistantContext, AssistantState } from "./assistant";
 
 import {
   AlertTriangle,
+  MessageCircle,
   ArrowLeft,
   ArrowRight,
   BadgeDollarSign,
@@ -32,8 +33,6 @@ import {
   ListTree,
   LogIn,
   LockKeyhole,
-  MessageCircle,
-  Minus,
   Plus,
   PanelLeftClose,
   PanelLeftOpen,
@@ -385,9 +384,7 @@ function AppShell({
   const [assistantDocked, setAssistantDocked] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantMode, setAssistantMode] = useState<AssistantState["mode"]>("sidebar");
-  const assistantToggleLabel = assistantMode === "floating"
-    ? assistantOpen ? "Minimize chat" : "Open chat"
-    : assistantOpen ? "Collapse right sidebar" : "Open right sidebar";
+  const assistantToggleLabel = assistantOpen ? "Collapse right sidebar" : "Open right sidebar";
   const [navigationCollapsed, setNavigationCollapsed] = useState(false);
   const shortcuts = useSidebarShortcuts();
   const toggleNavigation = useCallback(() => {
@@ -473,14 +470,12 @@ function AppShell({
               </select>
             </label>}
           <Pill tone={runtime?.recording ? "green" : "plain"}><span className={styles.liveDot} />{statusLabel}</Pill>
-          {assistant && !assistantDocked && <button className={styles.panelToggle} data-workflows-assistant-toggle
+          {assistant && !assistantDocked && assistantMode === "sidebar" && <button className={styles.panelToggle} data-workflows-assistant-toggle
             onClick={() => window.dispatchEvent(new Event("workflows:toggle-assistant"))}
             aria-label={assistantToggleLabel}
             title={`${assistantToggleLabel} (${shortcuts.right.keys.join(" ")})`}
             aria-expanded={assistantOpen} aria-controls="workflows-assistant" aria-keyshortcuts={shortcuts.right.aria}>
-            {assistantMode === "floating"
-              ? assistantOpen ? <Minus size={18} /> : <MessageCircle size={18} />
-              : assistantOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
+            {assistantOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
           </button>}
         </header>
         {embedded && <nav className={styles.embeddedNav} aria-label="Workflows sections">

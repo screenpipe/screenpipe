@@ -50,10 +50,10 @@ describe("shared workflows experience", () => {
     fireEvent.click(screen.getByRole("button", { name: "Chat display" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Floating" }));
     const minimizeButtons = screen.getAllByRole("button", { name: "Minimize chat" });
-    expect(minimizeButtons).toHaveLength(2);
+    expect(minimizeButtons).toHaveLength(1);
     for (const button of minimizeButtons) expect(button.querySelector("svg")).toHaveClass("lucide-minus");
     expect(screen.queryByRole("button", { name: "Collapse right sidebar" })).not.toBeInTheDocument();
-    fireEvent.click(minimizeButtons[1]);
+    fireEvent.click(minimizeButtons[0]);
     const reopen = screen.getByRole("button", { name: "Open chat" });
     expect(reopen.querySelector("svg")).toHaveClass("lucide-message-circle");
     fireEvent.click(reopen);

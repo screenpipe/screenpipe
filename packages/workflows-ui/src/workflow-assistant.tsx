@@ -23,6 +23,8 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
   const shortcuts = useSidebarShortcuts();
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<AssistantState>(() => ({ ...emptyAssistantState(), mode: headerToggle ? "sidebar" : "floating" }));
+  const useHeaderToggle = headerToggle && state.mode === "sidebar";
+  const launcherLabel = headerToggle ? "Open chat" : "Ask Screenpipe";
   const stateRef = useRef(state);
   const [loaded, setLoaded] = useState(false);
   const loadedRef = useRef(false);
@@ -114,8 +116,8 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
     setOpen(false);
     setDisplayOpen(false);
     if (loadedRef.current) void persist(stateRef.current).catch(() => {});
-    requestAnimationFrame(() => (headerToggle ? document.querySelector<HTMLButtonElement>("[data-workflows-assistant-toggle]") : launcher.current)?.focus());
-  }, [persist, headerToggle]);
+    requestAnimationFrame(() => (useHeaderToggle ? document.querySelector<HTMLButtonElement>("[data-workflows-assistant-toggle]") : launcher.current)?.focus());
+  }, [persist, useHeaderToggle]);
   useEffect(() => {
     if (!active) return;
     const onKey = (event: KeyboardEvent) => {
@@ -220,8 +222,8 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
   }
 
   return <>
-    {!open && !headerToggle && <button ref={launcher} className={styles.launcher} onClick={() => setOpen(true)} title={`Ask Screenpipe (${shortcuts.right.keys.join(" ")})`} aria-keyshortcuts={shortcuts.right.aria} aria-label="Ask Screenpipe" aria-expanded={false}>
-      <MessageCircle size={20} strokeWidth={1.65} /><span>Ask Screenpipe<kbd>{shortcuts.right.keys.join(" ")}</kbd></span>{busy && <i aria-label="Answer in progress" />}
+    {!open && !useHeaderToggle && <button ref={launcher} className={styles.launcher} onClick={() => setOpen(true)} title={`${launcherLabel} (${shortcuts.right.keys.join(" ")})`} aria-keyshortcuts={shortcuts.right.aria} aria-label={launcherLabel} aria-expanded={false}>
+      <MessageCircle size={20} strokeWidth={1.65} /><span>{launcherLabel}<kbd>{shortcuts.right.keys.join(" ")}</kbd></span>{busy && <i aria-label="Answer in progress" />}
     </button>}
     <aside id="workflows-assistant" ref={panel} hidden={!open} className={[styles.panel, state.mode === "sidebar" ? styles.docked : styles.floating].join(" ")}
       style={{ "--assistant-width": width + "px" } as React.CSSProperties}
