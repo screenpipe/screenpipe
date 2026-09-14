@@ -648,8 +648,10 @@
 .bottleneckMain h3 { margin: 10px 0 5px; font-size: 12px; }
 .bottleneckMain p { margin: 0; color: #74786e; font-size: 9px; line-height: 1.5; }
 .bottleneckMain .controlReason { margin-top: 6px; color: #5f6559; font-weight: 650; }
-.bottleneckMain small { display: flex; align-items: flex-start; gap: 5px; margin-top: 9px; color: #92958c; font-size: 8px; line-height: 1.4; }
-.bottleneckMain small svg { flex: 0 0 auto; margin-top: 1px; }
+.bottleneckEvidence { margin-top: 10px; }
+.bottleneckEvidence summary { width: fit-content; cursor: pointer; color: #656b60; font-size: 11px; }
+.bottleneckEvidence summary:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; border-radius: 2px; }
+.bottleneckEvidence > p { max-height: 240px; overflow-y: auto; overscroll-behavior: contain; margin-top: 10px; padding: 12px; border-radius: 6px; background: #f6f7f3; color: #52574e; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .bottleneckTime { padding-left: 17px; border-left: 1px solid #e5e6e0; }
 .bottleneckTime strong { display: block; margin: 7px 0 4px; font-size: 21px; }
 .bottleneckTime small { color: #898d83; font-size: 8px; }

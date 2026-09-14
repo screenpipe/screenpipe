@@ -1068,7 +1068,7 @@ function BottleneckList({ items, openWorkflow, numbered = true }: { items: Ranke
   return <div className={styles.bottleneckList}>{items.map((item, index) => (
     <article key={`${item.workflowTitle}-${item.label}-${index}`}>
       <div className={styles.bottleneckRank}>{numbered ? String(index + 1).padStart(2, "0") : "—"}</div>
-      <div className={styles.bottleneckMain}><div><Pill tone={isActionableBottleneck(item) ? "warm" : "plain"}>{controlLabel(item)}</Pill><Pill>{item.type}</Pill><span>{item.workflowTitle} · {item.stage}</span></div><h3>{item.label}</h3><p>{item.detail}</p><p className={styles.controlReason}>{controlExplanation(item)}</p><small><FileCheck2 size={11} />{item.evidence}</small></div>
+      <div className={styles.bottleneckMain}><div><Pill tone={isActionableBottleneck(item) ? "warm" : "plain"}>{controlLabel(item)}</Pill><Pill>{item.type}</Pill><span>{item.workflowTitle} · {item.stage}</span></div><h3>{item.label}</h3><p>{item.detail}</p><p className={styles.controlReason}>{controlExplanation(item)}</p>{item.evidence && <details className={styles.bottleneckEvidence}><summary>View evidence</summary><p>{item.evidence}</p></details>}</div>
       <div className={styles.bottleneckTime}><span>Delay</span><strong>{item.estimatedMinutesPerRun ? formatMinutes(item.estimatedMinutesPerRun) : "Not measured"}</strong><small>Proposed friction · needs confirmation</small></div>
       {openWorkflow && <button className={styles.iconLink} onClick={() => openWorkflow(item.workflowTitle)} aria-label={`Open ${item.workflowTitle}`}><ChevronRight size={16} /></button>}
     </article>
