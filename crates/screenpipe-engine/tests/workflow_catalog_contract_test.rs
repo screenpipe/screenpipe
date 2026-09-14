@@ -34,12 +34,78 @@ async fn request(router: &axum::Router, path: &str, token: Option<&str>) -> (Sta
 
 #[tokio::test]
 async fn workflow_catalog_api_reads_desktop_store_and_enforces_access() {
+    check_workflow_catalog(false).await;
+}
+
+#[tokio::test]
+async fn workflow_catalog_retains_automation_evidence_after_parquet_migration() {
+    check_workflow_catalog(true).await;
+}
+
+async fn check_workflow_catalog(migrate_to_parquet: bool) {
     let dir = tempfile::tempdir().unwrap();
-    let db = Arc::new(
-        DatabaseManager::new("sqlite::memory:", Default::default())
+    let db_path = dir.path().join("db.sqlite");
+    let mut db = Arc::new(
+        DatabaseManager::new(db_path.to_str().unwrap(), Default::default())
             .await
             .unwrap(),
     );
+    let captured_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T12:00:30Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    db.insert_video_chunk("fixture.mp4", "fixture-monitor")
+        .await
+        .unwrap();
+    let frame_id = db
+        .insert_frame(
+            "fixture-monitor",
+            Some(captured_at),
+            None,
+            Some("Browser"),
+            Some("Invoice"),
+            true,
+            Some(0),
+        )
+        .await
+        .unwrap();
+    let nodes = json!([
+        {"role":"AXGroup","text":"","depth":0,"automation_id":"invoice-form"},
+        {"role":"AXButton","text":"","depth":1,"automation_id":"approve","is_enabled":true,"bounds":{"left":0.25,"top":0.5,"width":0.125,"height":0.0625}}
+    ]);
+    let mut tx = db.begin_immediate_with_retry().await.unwrap();
+    sqlx::query("UPDATE frames SET full_text = 'Invoice review evidence', accessibility_tree_json = ? WHERE id = ?")
+        .bind(nodes.to_string())
+        .bind(frame_id)
+        .execute(&mut **tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    if migrate_to_parquet {
+        db.close().await;
+        screenpipe_db::storage::migrate(dir.path(), Default::default(), Default::default())
+            .await
+            .unwrap();
+        db = Arc::new(
+            DatabaseManager::new(db_path.to_str().unwrap(), Default::default())
+                .await
+                .unwrap(),
+        );
+        assert_eq!(
+            db.storage_mode(),
+            screenpipe_db::storage::StorageMode::HybridParquetV1
+        );
+        let resident: Option<String> =
+            sqlx::query_scalar("SELECT accessibility_tree_json FROM frames WHERE id = ?")
+                .bind(frame_id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert!(
+            resident.is_none(),
+            "automation detail must come from Parquet"
+        );
+        db.verify_storage().await.unwrap();
+    }
     let audio = Arc::new(
         AudioManagerBuilder::new()
             .is_disabled(true)
@@ -81,6 +147,17 @@ async fn workflow_catalog_api_reads_desktop_store_and_enforces_access() {
         .pipe_permissions
         .insert("sp_pipe_scoped_workflow_test".into(), Arc::new(permission));
     let router = server.try_create_router().await.unwrap();
+    let (search_status, search_result) = request(
+        &router,
+        "/search?q=Invoice&content_type=ocr&limit=10",
+        Some("workflow-test-key"),
+    )
+    .await;
+    assert_eq!(search_status, StatusCode::OK);
+    assert_eq!(
+        search_result["data"][0]["content"]["text"],
+        "Invoice review evidence"
+    );
     assert_eq!(
         request(&router, "/workflows", None).await.0,
         StatusCode::FORBIDDEN
@@ -88,34 +165,6 @@ async fn workflow_catalog_api_reads_desktop_store_and_enforces_access() {
     let (status, empty) = request(&router, "/workflows", Some("workflow-test-key")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(empty["pagination"]["total"], 0);
-    let captured_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T12:00:30Z")
-        .unwrap()
-        .with_timezone(&chrono::Utc);
-    db.insert_video_chunk("fixture.mp4", "fixture-monitor")
-        .await
-        .unwrap();
-    let frame_id = db
-        .insert_frame(
-            "fixture-monitor",
-            Some(captured_at),
-            None,
-            Some("Browser"),
-            Some("Invoice"),
-            true,
-            Some(0),
-        )
-        .await
-        .unwrap();
-    let nodes = json!([
-        {"role":"AXGroup","text":"","depth":0,"automation_id":"invoice-form"},
-        {"role":"AXButton","text":"","depth":1,"automation_id":"approve","is_enabled":true,"bounds":{"left":0.25,"top":0.5,"width":0.125,"height":0.0625}}
-    ]);
-    sqlx::query("UPDATE frames SET accessibility_tree_json = ? WHERE id = ?")
-        .bind(nodes.to_string())
-        .bind(frame_id)
-        .execute(&db.pool)
-        .await
-        .unwrap();
     let workflow = json!({"title":"Invoice review","description":"Prepare an invoice","trigger":"Order","outcome":"Reviewed","evidence":[{"timestamp":"2026-01-01T12:00:00Z","app":"Browser"}],"stages":[{"name":"Review","evidence":[{"timestamp":"2026-01-01T12:00:00Z","app":"Browser"}],"screenshot":{"frameId":frame_id,"timestamp":"2026-01-01T12:00:30Z","matchDistanceSeconds":30,"app":"Browser","dataUrl":"data:image/png;base64,private"}}]});
     tokio::fs::create_dir_all(dir.path().join("workflows"))
         .await
@@ -169,12 +218,14 @@ async fn workflow_catalog_api_reads_desktop_store_and_enforces_access() {
         "normalized-monitor"
     );
     // Reused numeric frame IDs must never expose another recording's nodes.
+    let mut tx = db.begin_immediate_with_retry().await.unwrap();
     sqlx::query("UPDATE frames SET timestamp = ? WHERE id = ?")
         .bind("2026-01-02T12:00:30Z")
         .bind(frame_id)
-        .execute(&db.pool)
+        .execute(&mut **tx.conn())
         .await
         .unwrap();
+    tx.commit().await.unwrap();
     let (_, mismatch) = request(&router, &live_detail_path, Some("workflow-test-key")).await;
     assert_eq!(
         mismatch["automationEvidence"][0]["status"],

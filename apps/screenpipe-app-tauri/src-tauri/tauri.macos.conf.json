@@ -6,10 +6,7 @@
             "hardenedRuntime": true,
             "exceptionDomain": "screenpipe.com",
             "provisioningProfile": null,
-            "files": {
-                "MacOS/mlx.metallib": "mlx.metallib",
-                "MacOS/libonnxruntime.dylib": "libonnxruntime.dylib"
-            },
+            "files": {},
             "dmg": {
                 "background": "assets/dmg-background.png"
             }
@@ -17,7 +14,8 @@
         "externalBin": [
             "bun",
             "ffmpeg",
-            "ffprobe"
+            "ffprobe",
+            "mlx.metallib"
         ]
     }
 }

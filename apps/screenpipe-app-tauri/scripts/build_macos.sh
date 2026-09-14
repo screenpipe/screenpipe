@@ -18,11 +18,11 @@ rm -rf src-tauri/target/debug-dev/bundle
 bun tauri build --bundles app -- --profile debug-dev
 
 # Strip extended attributes from all files in the bundle
-APP_PATH="src-tauri/target/debug-dev/bundle/macos/screenpipe - Development.app"
+APP_PATH="src-tauri/target/debug-dev/bundle/macos/screenpipe.app"
 xattr -cr "$APP_PATH"
 
 # Sign the app manually
 IDENTITY="${APPLE_SIGNING_IDENTITY:-Apple Development: Louis Beaumont (NJ372MT773)}"
-codesign --force --deep --sign "$IDENTITY" "$APP_PATH"
+codesign --force --options runtime --entitlements src-tauri/entitlements.plist --sign "$IDENTITY" "$APP_PATH"
 
 echo "Build completed successfully!"
