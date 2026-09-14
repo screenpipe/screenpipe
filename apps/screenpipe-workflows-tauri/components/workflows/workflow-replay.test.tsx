@@ -14,25 +14,23 @@ function fixture() {
 const image: WorkflowRecording = { kind: "image", url: "blob:test-image", timestamp: "2026-09-01T10:00:00Z", frameId: 4, offsetSeconds: 0, matchDistanceSeconds: 0 };
 
 describe("workflow replay", () => {
-  it("loads media only on explicit open and releases it when closed", async () => {
+  it("shows media immediately without a disclosure and releases it on unmount", async () => {
     const load = vi.fn().mockResolvedValue(image);
     const revoke = vi.fn();
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revoke });
-    render(<WorkflowReplay workflow={fixture()} loadRecording={load} />);
-    expect(load).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByText("Open replay"));
+    const { unmount } = render(<WorkflowReplay workflow={fixture()} loadRecording={load} />);
+    expect(screen.queryByText("Open replay")).not.toBeInTheDocument();
+    expect(screen.queryByText("Watch the captured moments")).not.toBeInTheDocument();
     expect(await screen.findByRole("img")).toHaveAttribute("src", "blob:test-image");
     expect(load).toHaveBeenCalledWith("2026-09-01T10:00:00Z", "Editor");
     expect(screen.getByText(/Still image, not a video/)).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Hide replay"));
+    unmount();
     expect(revoke).toHaveBeenCalledWith("blob:test-image");
   });
   it("keeps text visible when media is absent and does not claim a continuous run", async () => {
     render(<WorkflowReplay workflow={fixture()} loadRecording={vi.fn().mockResolvedValue(null)} />);
-    fireEvent.click(screen.getByText("Open replay"));
     expect(await screen.findByText(/No playable recording/)).toBeVisible();
     expect(screen.getByText("Real observed detail 0")).toBeInTheDocument();
-    expect(screen.getByText(/Separate observations, not a verified/)).toBeInTheDocument();
     expect(screen.getByText("Previous moment")).toBeDisabled();
     await act(async () => fireEvent.click(screen.getByText("Next moment")));
     expect(screen.getByText("Real observed detail 1")).toBeInTheDocument();
@@ -43,7 +41,6 @@ describe("workflow replay", () => {
     const load = vi.fn().mockImplementationOnce(() => new Promise((done) => { resolve = done; }))
       .mockResolvedValue({ ...image, url: "blob:second" });
     render(<WorkflowReplay workflow={fixture()} loadRecording={load} />);
-    fireEvent.click(screen.getByText("Open replay"));
     fireEvent.click(screen.getByText("Next moment"));
     await waitFor(() => expect(screen.getByRole("img")).toHaveAttribute("src", "blob:second"));
     await act(async () => resolve(image));
@@ -52,14 +49,12 @@ describe("workflow replay", () => {
   it("supports retry without sending private error details into UI", async () => {
     const load = vi.fn().mockRejectedValueOnce(new Error("secret-token-local-path")).mockResolvedValue(image);
     render(<WorkflowReplay workflow={fixture()} loadRecording={load} />);
-    fireEvent.click(screen.getByText("Open replay"));
     expect(await screen.findByRole("alert")).not.toHaveTextContent("secret-token");
     fireEvent.click(screen.getByText("Retry"));
     expect(await screen.findByRole("img")).toBeInTheDocument();
   });
   it("renders native MP4 controls without autoplay and seeks to the captured offset", async () => {
     const { container } = render(<WorkflowReplay workflow={fixture()} loadRecording={vi.fn().mockResolvedValue({ ...image, kind: "video", offsetSeconds: 8 })} />);
-    fireEvent.click(screen.getByText("Open replay"));
     const video = await screen.findByLabelText("Local recording") as HTMLVideoElement;
     expect(video).toHaveAttribute("controls");
     expect(video).not.toHaveAttribute("autoplay");
@@ -73,7 +68,6 @@ describe("workflow replay", () => {
   it("opens the exact captured moment through the native adapter, not webview navigation", async () => {
     const open = vi.fn().mockResolvedValue(undefined);
     render(<WorkflowReplay workflow={fixture()} loadRecording={vi.fn().mockResolvedValue(image)} openCapturedMoment={open} />);
-    fireEvent.click(screen.getByText("Open replay"));
     fireEvent.click(await screen.findByRole("button", { name: "Open captured moment" }));
     expect(open).toHaveBeenCalledWith(4, "2026-09-01T10:00:00Z");
     expect(screen.queryByRole("link", { name: "Open captured moment" })).not.toBeInTheDocument();
@@ -82,25 +76,23 @@ describe("workflow replay", () => {
   it("shows a safe handoff failure and permits retry", async () => {
     const open = vi.fn().mockRejectedValue(new Error("private-path-token"));
     render(<WorkflowReplay workflow={fixture()} loadRecording={vi.fn().mockResolvedValue(image)} openCapturedMoment={open} />);
-    fireEvent.click(screen.getByText("Open replay"));
     fireEvent.click(await screen.findByRole("button", { name: "Open captured moment" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not open Screenpipe");
     expect(screen.getByRole("alert")).not.toHaveTextContent("private-path-token");
   });
-  it("releases native streaming capabilities on close", async () => {
+  it("releases native streaming capabilities on unmount", async () => {
     const url = "http://127.0.0.1:4567/media/12345678-1234-1234-1234-123456789abc";
     const release = vi.fn().mockResolvedValue(undefined);
-    render(<WorkflowReplay workflow={fixture()} loadRecording={vi.fn().mockResolvedValue({ ...image, kind: "video", url })} releaseRecording={release} />);
-    fireEvent.click(screen.getByText("Open replay"));
+    const { unmount } = render(<WorkflowReplay workflow={fixture()} loadRecording={vi.fn().mockResolvedValue({ ...image, kind: "video", url })} releaseRecording={release} />);
     expect(await screen.findByLabelText("Local recording")).toHaveAttribute("src", url);
-    fireEvent.click(screen.getByText("Hide replay"));
+    unmount();
     expect(release).toHaveBeenCalledWith(url);
   });
   it("does not leave an undecodable video as an endless black player", async () => {
     vi.useFakeTimers();
     try {
       render(<WorkflowReplay workflow={fixture()} loadRecording={vi.fn().mockResolvedValue({ ...image, kind: "video" })} />);
-      await act(async () => fireEvent.click(screen.getByText("Open replay")));
+      await act(async () => {});
       await act(async () => vi.advanceTimersByTime(12000));
       expect(screen.getByRole("alert")).toHaveTextContent("could not decode");
       expect(screen.queryByLabelText("Local recording")).not.toBeInTheDocument();
@@ -116,7 +108,6 @@ describe("workflow replay", () => {
   it("clamps selection when the same workflow receives fewer moments", async () => {
     const workflow = fixture();
     const { rerender } = render(<WorkflowReplay workflow={workflow} />);
-    fireEvent.click(screen.getByText("Open replay"));
     fireEvent.click(screen.getByText("Next moment"));
     const shorter = { ...workflow, stages: workflow.stages.slice(0, 1) };
     rerender(<WorkflowReplay workflow={shorter} />);
