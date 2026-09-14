@@ -914,20 +914,6 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile, saveCorrect
       </div>
       <WorkflowReplay key={`replay:${workflow.title}`} workflow={workflow} loadRecording={platform.loadWorkflowRecording} releaseRecording={platform.releaseWorkflowRecording} openCapturedMoment={platform.openCapturedMoment} />
       {saveCorrection && <WorkflowCorrection key={`correction:${workflow.title}`} workflow={workflow} save={saveCorrection} />}
-      <details className={styles.workflowQuality}>
-        <summary><div><strong>Evidence and limitations</strong><span>{workflow.quality.evidenceCount} references · {workflow.quality.distinctDays} observed days</span></div><ChevronDown size={14} /></summary>
-      <section className={styles.detailStats}>
-        <div><span>Coverage</span><strong>{workflow.frequency}</strong></div>
-        <div><span>App switches</span><strong>{workflow.appSwitches || "Not clear"}</strong></div>
-        <div><span>Evidence</span><strong>{workflow.quality.evidenceCount}</strong></div>
-        <div><span>Stage screenshots</span><strong>{workflow.quality.screenshotCount} of {workflow.stages.length}</strong></div>
-        <div><span>Source coverage</span><strong>{qualityLabel(workflow.quality.grade)}</strong></div>
-      </section>
-        <ul>{workflow.quality.reasons.map((reason) => <li key={reason}><CheckCircle2 size={12} />{reason}</li>)}</ul>
-        <p className={styles.panelEmpty}>References show where text was captured. They do not prove task completion or a continuous sequence. Model confidence is not an accuracy score.</p>
-        {!!workflow.captureSequence?.length && <section aria-label="Ordered capture example"><strong>Ordered capture example</strong><p className={styles.panelEmpty}>Check that these moments concern the same task. Time order alone does not establish this.</p><ol>{workflow.captureSequence.map((entry, index) => <li key={`${entry.timestamp}-${index}`}><details><summary>{workflow.stages[index]?.name} · {formatEvidenceTimestamp(entry.timestamp)} · {entry.app}</summary><p>{entry.detail}</p></details></li>)}</ol></section>}
-        {!!workflow.limitations?.length && <ul>{workflow.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul>}
-      </details>
       {!!workflow.openQuestions?.length && <section className={styles.depthNotice} aria-label="Confirm before use"><strong>Confirm before use</strong><ul>{workflow.openQuestions.map((question) => <li key={question}>{question}</li>)}</ul></section>}
       <section className={styles.flowMap}>
         <div className={styles.flowMapHeader}><div><span>Proposed steps</span><strong>Inspect the details, source excerpts, and gaps</strong></div><button onClick={() => setExpandedStages(allStagesOpen ? new Set() : new Set(workflow.stages.map((_, index) => index)))}>{allStagesOpen ? "Collapse all" : "Expand all"}</button></div>
@@ -972,6 +958,20 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile, saveCorrect
       </section>
       {!!actionableFriction.length && <><div className={styles.sectionHeading}><div><span>Within reach</span><h2>Friction you can affect</h2></div></div><BottleneckList items={actionableFriction.map((item) => ({ ...item, workflowTitle: workflow.title, repetitions: workflow.repetitions }))} /></>}
       {!!constraints.length && <><div className={styles.sectionHeading}><div><span>Plan around</span><h2>External and required constraints</h2></div></div><BottleneckList items={constraints.map((item) => ({ ...item, workflowTitle: workflow.title, repetitions: workflow.repetitions }))} numbered={false} /></>}
+      <details className={styles.workflowQuality}>
+        <summary><div><strong>Evidence and limitations</strong><span>{workflow.quality.evidenceCount} references · {workflow.quality.distinctDays} observed days</span></div><ChevronDown size={14} /></summary>
+      <section className={styles.detailStats}>
+        <div><span>Coverage</span><strong>{workflow.frequency}</strong></div>
+        <div><span>App switches</span><strong>{workflow.appSwitches || "Not clear"}</strong></div>
+        <div><span>Evidence</span><strong>{workflow.quality.evidenceCount}</strong></div>
+        <div><span>Stage screenshots</span><strong>{workflow.quality.screenshotCount} of {workflow.stages.length}</strong></div>
+        <div><span>Source coverage</span><strong>{qualityLabel(workflow.quality.grade)}</strong></div>
+      </section>
+        <ul>{workflow.quality.reasons.map((reason) => <li key={reason}><CheckCircle2 size={12} />{reason}</li>)}</ul>
+        <p className={styles.panelEmpty}>References show where text was captured. They do not prove task completion or a continuous sequence. Model confidence is not an accuracy score.</p>
+        {!!workflow.captureSequence?.length && <section aria-label="Ordered capture example"><strong>Ordered capture example</strong><p className={styles.panelEmpty}>Check that these moments concern the same task. Time order alone does not establish this.</p><ol>{workflow.captureSequence.map((entry, index) => <li key={`${entry.timestamp}-${index}`}><details><summary>{workflow.stages[index]?.name} · {formatEvidenceTimestamp(entry.timestamp)} · {entry.app}</summary><p>{entry.detail}</p></details></li>)}</ol></section>}
+        {!!workflow.limitations?.length && <ul>{workflow.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul>}
+      </details>
       {skillOpen && <WorkflowSkillDialog workflow={workflow} draft={skillDraft} generating={skillGenerating} saving={skillSaving} saved={skillSaved} preview={platform.skillInstallMode === "preview"} progress={skillProgress} error={skillError} update={setSkillDraft} retry={generateSkill} save={saveSkill} close={() => setSkillOpen(false)} />}
     </>
   );
