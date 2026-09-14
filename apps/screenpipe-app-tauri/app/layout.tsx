@@ -19,6 +19,7 @@ import { RecentChatSwitcherController } from "@/components/chat/recent-chat-swit
 import { FeedbackDialog } from "@/components/feedback-dialog";
 import { AnnouncementHost } from "@/components/announcement-host";
 import { AdvisoryOverlay } from "@/components/advisory-overlay";
+import { StorageMigrationGate } from "@/components/storage-migration-gate";
 import { PipeAdvisoryWatcher } from "@/components/pipe-advisory-watcher";
 // TODO: vault lock UI disabled for now — vault is CLI-only until app UX is polished
 // import { VaultLockDialog } from "@/components/vault-lock-dialog";
@@ -102,6 +103,16 @@ export default function RootLayout({
     if (typeof window === "undefined") return;
 
     const uninstallBrowserLogBridge = installBrowserLogBridge();
+
+    // Packaged builds should not expose WKWebView's browser context menu.
+    // Listen during bubbling so app-owned context-menu handlers still run;
+    // preventing the default here only suppresses the native webview menu.
+    const preventNativeContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+    };
+    if (process.env.NODE_ENV === "production") {
+      document.addEventListener("contextmenu", preventNativeContextMenu);
+    }
 
     // A native foreground watchdog requires a heartbeat from WebKit's main
     // event loop. When paint submission wedges in the GPU-process IPC path,
@@ -234,6 +245,7 @@ export default function RootLayout({
 
     return () => {
       uninstallBrowserLogBridge();
+      document.removeEventListener("contextmenu", preventNativeContextMenu);
       window.removeEventListener("focus", handleWindowFocus);
       window.removeEventListener("mousedown", handlePointerRecovery, true);
       window.removeEventListener("keydown", markKeyActivity, true);
@@ -328,6 +340,7 @@ export default function RootLayout({
             React #419 (hydration recovery) → #185 (infinite loop during
             recovery render) on every first launch after auto-update. */}
         <Providers>
+          <StorageMigrationGate offerMigration={pathname === "/home"} />
           {/* DeeplinkHandler is mounted in Providers (outside the entitlement
               gate) so the screenpipe:// login callback is always caught, even
               while the "sign in required" screen is showing. */}

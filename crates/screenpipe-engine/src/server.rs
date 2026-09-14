@@ -1066,6 +1066,10 @@ impl SCServer {
             // native Pi and ACP share profile safety, prompt rendering, skill
             // provenance, optimistic concurrency, and bundled protection.
             .route(
+                "/agent/learning/chats",
+                axum::routing::post(crate::agent_skills::learning_chats_handler),
+            )
+            .route(
                 "/agent/skills/manage",
                 axum::routing::post(crate::agent_skills::manage_agent_skill_handler),
             )
@@ -1490,6 +1494,10 @@ impl SCServer {
             )
             .layer(Extension(crate::routes::workflows::WorkflowCatalogSource(self.workflow_catalog_dir.clone())))
             .with_state(app_state.clone())
+            .layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                crate::routes::search::storage_snapshot_middleware,
+            ))
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 crate::pipe_permissions_middleware::pipe_backpressure_layer,

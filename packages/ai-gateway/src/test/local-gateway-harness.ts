@@ -191,12 +191,11 @@ export class LocalGatewayHarness {
 					MODEL_GATING_ENABLED: 'true',
 					PIPE_FRONTIER_POLICY: 'reject',
 					ROUTER_MODE: 'off',
+					CLOUDFLARE_AI_GATEWAY_ID: cloudflareGatewayId,
+					CLOUDFLARE_AI_GATEWAY_BASE_URL: `${cloudflareGatewayRoot}/compat/chat/completions`,
+					CLOUDFLARE_AI_GATEWAY_TOKEN: 'screenpipe-local-e2e-gateway-token',
 					...(cloudflareSpendRules ? {
-						HOSTED_CHAT_GATEWAY_MODE: 'cloudflare',
 						CLOUDFLARE_ACCOUNT_ID: cloudflareAccountId,
-						CLOUDFLARE_AI_GATEWAY_ID: cloudflareGatewayId,
-						CLOUDFLARE_AI_GATEWAY_BASE_URL: `${cloudflareGatewayRoot}/compat/chat/completions`,
-						CLOUDFLARE_AI_GATEWAY_TOKEN: 'screenpipe-local-e2e-gateway-token',
 						CLOUDFLARE_API_TOKEN: 'screenpipe-local-e2e-read-token',
 					} : {}),
 				},
@@ -212,9 +211,7 @@ export class LocalGatewayHarness {
 							.text()
 							.catch(() => null);
 					}
-					const directProvider = request.method === 'POST' && request.url === 'https://api.openai.com/v1/chat/completions';
-					const gatewayProvider = cloudflareSpendRules &&
-						request.method === 'POST' &&
+					const gatewayProvider = request.method === 'POST' &&
 						request.url === `${cloudflareGatewayRoot}/openai/chat/completions`;
 					const gatewaySettings = cloudflareSpendRules &&
 						request.method === 'GET' &&
@@ -222,7 +219,7 @@ export class LocalGatewayHarness {
 					const gatewayAnalytics = cloudflareSpendRules &&
 						request.method === 'POST' &&
 						request.url === 'https://api.cloudflare.com/client/v4/graphql';
-					const expected = directProvider || gatewayProvider || gatewaySettings || gatewayAnalytics;
+					const expected = gatewayProvider || gatewaySettings || gatewayAnalytics;
 					harness.outboundRequests.push({
 						url: request.url,
 						method: request.method,

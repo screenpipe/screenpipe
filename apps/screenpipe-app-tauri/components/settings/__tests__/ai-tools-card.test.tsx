@@ -30,6 +30,9 @@ const hookMocks = vi.hoisted(() => ({
   isCursorMcpInstalled: vi.fn(async () => false),
 }));
 
+const grokMocks = vi.hoisted(() => ({ isGrokBotConnected: vi.fn(async () => false) }));
+vi.mock("@/lib/grokbot-connection", () => grokMocks);
+
 const skillsMocks = vi.hoisted(() => ({
   areExternalAgentSkillsInstalled: vi.fn(async () => false),
 }));
@@ -41,6 +44,7 @@ vi.mock("@/lib/ai-tools-mcp", () => ({
     detail: e instanceof Error ? e.message : String(e),
   }),
   CONNECT_ALL_TOOL_NAMES: {
+    grokbot: "Grok Bot",
     claude: "Claude",
     "claude-code": "Claude Code",
     codex: "Codex",
@@ -66,6 +70,7 @@ vi.mock("posthog-js", () => ({ default: { capture: vi.fn() } }));
 describe("AiToolsCard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    grokMocks.isGrokBotConnected.mockResolvedValue(false);
     libMocks.detectAiTools.mockResolvedValue(["claude", "codex"]);
     libMocks.connectAiTool.mockResolvedValue({ command: "/app/bun", args: [] });
     libMocks.disconnectAiTool.mockResolvedValue(undefined);
@@ -84,6 +89,37 @@ describe("AiToolsCard", () => {
   });
 
   afterEach(() => cleanup());
+
+  it("shows the last confirmed Grok Bot connection without reconnecting", async () => {
+    libMocks.detectAiTools.mockResolvedValue(["grokbot"]);
+    grokMocks.isGrokBotConnected.mockResolvedValue(true);
+    render(<AiToolsCard />);
+    expect(await screen.findByText("All 1 connected")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
+    expect(await screen.findByText("Grok Bot")).toBeVisible();
+    expect(libMocks.connectAiToolTargets).not.toHaveBeenCalled();
+  });
+
+  it("shows local connections while Grok Bot is still checking its cloud skill", async () => {
+    libMocks.detectAiTools.mockResolvedValue(["codex", "grokbot"]);
+    hookMocks.isCodexMcpInstalled.mockResolvedValue(true);
+    skillsMocks.areExternalAgentSkillsInstalled.mockResolvedValue(true);
+    grokMocks.isGrokBotConnected.mockImplementationOnce(() => new Promise(() => {}));
+    render(<AiToolsCard />);
+    expect(await screen.findByText("1 of 2 connected")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Manage" })).toBeEnabled();
+  });
+
+  it("includes Grok Bot in connect-all", async () => {
+    libMocks.detectAiTools.mockResolvedValue(["codex", "grokbot"]);
+    render(<AiToolsCard />);
+    const connect = await screen.findByRole("button", { name: /connect all/i });
+    expect(screen.getByText(/saved connection credential/)).toBeVisible();
+    expect(libMocks.connectAiToolTargets).not.toHaveBeenCalled();
+    fireEvent.click(connect);
+    await waitFor(() => expect(libMocks.connectAiToolTargets).toHaveBeenCalledWith(["grokbot"]));
+    expect(libMocks.connectAiToolTargets).toHaveBeenCalledWith(["codex"]);
+  });
 
   it("one failing tool does not stop the rest, shows its error, and the button recovers", async () => {
     libMocks.connectAiToolTargets.mockImplementation(async (targets: string[]) => {

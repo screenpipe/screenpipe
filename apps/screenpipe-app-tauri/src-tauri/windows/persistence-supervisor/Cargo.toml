@@ -8,6 +8,11 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[features]
+# Installed acceptance fixtures may substitute a disposable updater trust root.
+# Release packaging does not enable this feature.
+persistence-updater-e2e = []
+
 [[bin]]
 name = "screenpipe-persistence-supervisor"
 path = "src/main.rs"
@@ -17,6 +22,12 @@ name = "remove-screenpipe-persistence"
 path = "src/bin/remove.rs"
 
 [dependencies]
+base64 = "0.22"
+minisign-verify = "0.2"
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
 windows-service = "0.8.1"
 
 [dependencies.windows]
@@ -24,8 +35,10 @@ version = "0.58"
 features = [
   "Win32_Foundation",
   "Win32_Security",
+  "Win32_Storage_FileSystem",
   "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_Environment",
+  "Win32_System_JobObjects",
   "Win32_System_RemoteDesktop",
   "Win32_System_Threading",
 ]

@@ -333,16 +333,12 @@ where
     }
 }
 
-fn database_is_quarantined(database_path: &std::path::Path) -> Result<bool, String> {
-    let marker_path = screenpipe_db::sqlite_quarantine_marker_path(database_path)
-        .ok_or_else(|| "the database path cannot be quarantined".to_string())?;
-    match std::fs::symlink_metadata(marker_path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(format!(
-            "could not check whether the database needs recovery: {error}"
-        )),
-    }
+fn database_has_confirmed_damage(database_path: &std::path::Path) -> Result<bool, String> {
+    // Legacy or unreadable markers require normal startup diagnosis; they do
+    // not prove that repair is necessary or prohibit the user's Resume action.
+    Ok(screenpipe_db::sqlite_confirmed_corruption_exists(
+        database_path,
+    ))
 }
 
 impl TrayRecordingAction {
@@ -385,7 +381,7 @@ async fn run_tray_recording_action(
         TrayRecordingAction::Start => {
             let data_dir = crate::db_recovery_notifications::effective_recovery_data_dir(app)?;
             let database_path = data_dir.join("db.sqlite");
-            match tray_start_route_with(|| database_is_quarantined(&database_path))? {
+            match tray_start_route_with(|| database_has_confirmed_damage(&database_path))? {
                 TrayStartRoute::StartCapture => {
                     crate::recording::start_capture(state, app.clone()).await?
                 }
@@ -2331,11 +2327,15 @@ mod tests {
         let data_dir = tempfile::tempdir().expect("tray quarantine tempdir");
         let database_path = data_dir.path().join("db.sqlite");
         std::fs::write(&database_path, b"quarantined generation").expect("write database");
-        screenpipe_db::persist_sqlite_quarantine(&database_path, Some(11), "database corrupt")
-            .expect("persist quarantine");
+        screenpipe_db::persist_verified_sqlite_quarantine(
+            &database_path,
+            Some(11),
+            "verified database damage",
+        )
+        .expect("persist quarantine");
 
         assert_eq!(
-            tray_start_route_with(|| database_is_quarantined(&database_path)),
+            tray_start_route_with(|| database_has_confirmed_damage(&database_path)),
             Ok(TrayStartRoute::OfferDatabaseRecovery)
         );
     }
@@ -2345,12 +2345,31 @@ mod tests {
         let data_dir = tempfile::tempdir().expect("healthy tray tempdir");
         let database_path = data_dir.path().join("db.sqlite");
         assert_eq!(
-            tray_start_route_with(|| database_is_quarantined(&database_path)),
+            tray_start_route_with(|| database_has_confirmed_damage(&database_path)),
             Ok(TrayStartRoute::StartCapture)
         );
         assert_eq!(
             tray_start_route_with(|| Err("lookup failed".to_string())),
             Err("lookup failed".to_string())
+        );
+    }
+
+    #[test]
+    fn tray_resume_sends_unverified_markers_to_startup_diagnosis() {
+        let dir = tempfile::tempdir().unwrap();
+        let database_path = dir.path().join("db.sqlite");
+        std::fs::write(&database_path, b"existing generation").unwrap();
+        screenpipe_db::persist_sqlite_quarantine(&database_path, Some(11), "legacy observation")
+            .unwrap();
+        assert_eq!(
+            tray_start_route_with(|| database_has_confirmed_damage(&database_path)),
+            Ok(TrayStartRoute::StartCapture)
+        );
+        let marker = screenpipe_db::sqlite_quarantine_marker_path(&database_path).unwrap();
+        std::fs::write(marker, b"unreadable legacy marker").unwrap();
+        assert_eq!(
+            tray_start_route_with(|| database_has_confirmed_damage(&database_path)),
+            Ok(TrayStartRoute::StartCapture)
         );
     }
 

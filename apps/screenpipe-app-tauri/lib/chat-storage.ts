@@ -803,6 +803,21 @@ export async function updateConversationFlags(
   }
 }
 
+// Check the current selection inside the write lock so deleting a preset
+// cannot overwrite a newer model choice made while dependencies were scanned.
+export async function reassignConversationPreset(
+  id: string,
+  removedIds: ReadonlySet<string>,
+  replacementId: string,
+): Promise<void> {
+  if (isEphemeralSideConversationNamespaceId(id)) return;
+  await withConversationLock(id, async () => {
+    const conv = await loadConversationFile(id);
+    if (!conv?.presetId || !removedIds.has(conv.presetId)) return;
+    await persistWithMerge({ ...conv, presetId: replacementId });
+  });
+}
+
 export async function loadAllConversations(
   options: ConversationListOptions = {}
 ): Promise<ChatConversation[]> {

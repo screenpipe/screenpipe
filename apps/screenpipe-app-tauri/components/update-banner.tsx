@@ -23,6 +23,7 @@ import { resolveConsumerUpdateChannel } from "@/lib/update-channel";
 interface UpdateInfo {
   version: string;
   body: string;
+  persistent?: boolean;
 }
 
 interface AuthRequiredInfo {
@@ -136,7 +137,7 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
       // ExitRequested handler — plain relaunch is fine. macOS/Linux go through
       // restart_for_update which sets QUIT_REQUESTED so the exit isn't blocked
       // by main.rs (2026-06-10 "stuck on still starting" report).
-      if (os === "windows") {
+      if (os === "windows" && !updateInfo?.persistent) {
         const gate = await commands.awaitSafeRestart(60);
         if (gate !== "proceed") {
           setIsInstalling(false);
@@ -357,6 +358,7 @@ interface PendingUpdateSnapshot {
   body: string;
   downloaded: boolean;
   auth_required: boolean;
+  persistent: boolean;
 }
 
 // Hook to listen for update events from Rust.
@@ -408,7 +410,11 @@ export function useUpdateListener() {
           if (pending.auth_required) {
             showAuthIfNotDismissed({ version: pending.version, message: "sign in to get the latest update" });
           } else if (pending.downloaded) {
-            showIfNotDismissed({ version: pending.version, body: pending.body });
+            showIfNotDismissed({
+              version: pending.version,
+              body: pending.body,
+              persistent: pending.persistent,
+            });
           }
         }
       } catch (e) {

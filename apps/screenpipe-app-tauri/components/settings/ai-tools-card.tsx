@@ -39,6 +39,8 @@ import {
   isCursorMcpInstalled,
 } from "@/lib/hooks/use-hardcoded-tiles";
 
+import { isGrokBotConnected } from "@/lib/grokbot-connection";
+
 const DISPLAY_NAMES: Record<ConnectAllToolId, string> = {
   ...CONNECT_ALL_TOOL_NAMES,
   claude: "Claude",
@@ -88,6 +90,8 @@ function hasRowConnection(
 // Connected = MCP entry AND both skills where supported — same rule as tiles.
 async function isToolConnected(id: ConnectAllToolId): Promise<boolean> {
   switch (id) {
+    case "grokbot":
+      return isGrokBotConnected();
     case "claude":
       return !!(await getInstalledMcpVersion()) && (await areExternalAgentSkillsInstalled("claude"));
     case "claude-code":
@@ -128,6 +132,7 @@ function ToolIcon({ id }: { id: ConnectAllToolId }) {
       return <img src="/images/openclaw.png" alt="" className={`${img} rounded`} />;
     case "hermes":
       return <img src="/images/hermes.png" alt="" className={`${img} rounded`} />;
+    case "grokbot":
     case "runner":
       return <Bot className={img} />;
     case "windsurf":
@@ -150,10 +155,11 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
     try {
       const tools = await detectAiTools();
       setDetected(tools);
-      const entries = await Promise.all(
-        tools.map(async (id) => [id, await isToolConnected(id).catch(() => false)] as const)
-      );
-      setConnected(Object.fromEntries(entries));
+      await Promise.all(tools.map(async (id) => {
+        const value = await isToolConnected(id).catch(() => false);
+        // A cloud status check must not delay the other apps' local status.
+        setConnected((previous) => ({ ...previous, [id]: value }));
+      }));
     } catch {
       /* keep previous state */
     }
@@ -282,6 +288,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
     ? `All ${rows.length} connected`
     : `${connectedCount} of ${rows.length} connected`;
 
+
   return (
     <div className={`rounded-lg border bg-card p-3 transition-colors ${expanded ? "border-foreground bg-accent" : "border-border"}`}>
       <div className="flex items-center gap-3">
@@ -302,7 +309,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
           </div>
         </button>
         {/* Adaptive: one-click magic for first-timers, Manage once anything is on. */}
-        {noneConnected ? (
+        {noneConnected && rows.length > 0 ? (
           <Button
             type="button"
             size="sm"
@@ -331,6 +338,12 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
           </Button>
         )}
       </div>
+
+      {detected.includes("grokbot") && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Connecting Grok Bot reads its saved connection credential and contacts its service.
+        </p>
+      )}
 
       {expanded && (
         <div className="mt-3 border-t border-border">

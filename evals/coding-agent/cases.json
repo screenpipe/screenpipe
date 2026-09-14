@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite": "screenpipe-app-coding-agent-regressions",
-  "dataset_version": "2026-09-07.1",
+  "dataset_version": "2026-09-14.1",
   "suite_type": "regression",
   "owner": "screenpipe engineering",
   "policy": {
@@ -1092,6 +1092,234 @@
           }
         ],
         "command": "node crates/screenpipe-audio/eval-meeting-audio-fallback.mjs && cargo test -p screenpipe-audio --lib eval_meeting_audio_fallback -- --test-threads=2"
+      }
+    },
+    {
+      "id": "app-referral-lookup-session-preservation",
+      "name": "Keep authenticated accounts signed in during referral lookup",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "1494836d8f34d2a388ae3393ac0e2d802b1c9d7a",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/6959",
+        "issue": "https://github.com/screenpipe/screenpipe/issues/6943"
+      },
+      "base_ref": "1d9aff4972dc25cc5984ce995ccfceb5ee95f6b9",
+      "oracle_ref": "1494836d8f34d2a388ae3393ac0e2d802b1c9d7a",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/components/settings/referral-card.tsx"
+      ],
+      "gate": "advisory",
+      "trigger_paths": [
+        "apps/screenpipe-app-tauri/components/settings/referral-card.tsx",
+        "apps/screenpipe-app-tauri/lib/auth-guard.tsx",
+        "apps/screenpipe-app-tauri/lib/web-url.ts"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "auth",
+        "session-preservation",
+        "settings",
+        "referral",
+        "false-sign-out"
+      ],
+      "prompt": "Opening referral settings can clear a valid signed-in account when the referral lookup is rejected as unauthenticated. A valid account with no referral code should remain signed in and see the eligibility explanation. Make referral lookup work with the current account, while preserving genuine session-expiry handling and the distinction between authentication failures and unrelated service errors. Preserve backend-issued referral links, copying, authenticated invitations, retry after a transient failure, and the sign-in option when no account is present.",
+      "agent_timeout_seconds": 900,
+      "grader_dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 300,
+        "fixtures": [
+          {
+            "source_ref": "1494836d8f34d2a388ae3393ac0e2d802b1c9d7a",
+            "source_path": "apps/screenpipe-app-tauri/components/settings/referral-card.test.tsx"
+          },
+          {
+            "source_ref": "1494836d8f34d2a388ae3393ac0e2d802b1c9d7a",
+            "source_path": "apps/screenpipe-app-tauri/lib/auth-guard.test.tsx"
+          }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && NODE_OPTIONS=--localstorage-file=.eval-localstorage bun x vitest run --config vitest.config.ts components/settings/referral-card.test.tsx lib/auth-guard.test.tsx"
+      }
+    },
+    {
+      "id": "ai-gateway-input-limit-classification",
+      "name": "Recognize current provider input and tool-call limits",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "739090783bb1116dca26621522e8034134e65028",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/6945"
+      },
+      "base_ref": "655dfc3ad50fedfa9ba9561ebdf3a1467bc55517",
+      "oracle_ref": "739090783bb1116dca26621522e8034134e65028",
+      "oracle_paths": [
+        "packages/ai-gateway/src/handlers/chat.ts"
+      ],
+      "gate": "advisory",
+      "trigger_paths": [
+        "packages/ai-gateway/src/handlers/chat.ts",
+        "packages/ai-gateway/src/test/chat-fallback.unit.test.ts"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "ai-gateway",
+        "input-limit",
+        "tool-call",
+        "error-classification",
+        "false-positive"
+      ],
+      "prompt": "The gateway fails to recognize provider errors saying input tokens exceed the configured limit or a request exceeds the available context size. It also misses an excess-length tool-call array, leaving the caller without useful payload guidance. Recognize these input-size and tool-call-limit failures on their supported client-error statuses, and provide actionable tool-call guidance without leaking the raw nested error. Preserve older input-limit phrasings, image and empty-message guidance, transient status handling, terminal safety outcomes, and bounded ordered fallback attempts. Do not classify unrelated schemas, non-tool arrays, thin messages, authentication errors, or server failures as these client payload problems.",
+      "agent_timeout_seconds": 900,
+      "grader_dependency_links": [
+        {
+          "source_path": "packages/ai-gateway/node_modules",
+          "destination_path": "packages/ai-gateway/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 300,
+        "fixtures": [
+          {
+            "local_path": "graders/ai-gateway-input-limits.test.ts",
+            "destination_path": "packages/ai-gateway/src/test/eval-input-limits.test.ts"
+          }
+        ],
+        "command": "cd packages/ai-gateway && bun test src/test/eval-input-limits.test.ts --timeout=10000"
+      }
+    },
+    {
+      "id": "sqlite-operational-fault-not-corruption",
+      "name": "Keep SQLite operational faults distinct from corruption verdicts",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "968141d50e944a625230e3df60f243eb4be5f9d5",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/6967"
+      },
+      "base_ref": "db8bd7ee23c02cbfc0eed2f4b9d99c70fd4cfc2d",
+      "oracle_ref": "968141d50e944a625230e3df60f243eb4be5f9d5",
+      "oracle_paths": [
+        "crates/screenpipe-sqlite-coordinator/src/lib.rs",
+        "crates/screenpipe-sqlite-coordinator/src/quarantine.rs",
+        "crates/screenpipe-sqlite-coordinator/src/verification.rs"
+      ],
+      "gate": "advisory",
+      "trigger_paths": [
+        "crates/screenpipe-sqlite-coordinator/src/**",
+        "crates/screenpipe-db/src/db/**"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "sqlite",
+        "data-integrity",
+        "availability",
+        "quarantine",
+        "false-positive"
+      ],
+      "prompt": "A single SQLite I/O failure or full-disk result currently creates corruption quarantine even when database damage has not been verified, unnecessarily routing a healthy database toward repair. Fix this boundary in the shared SQLite coordinator: retire the failed writer generation and retain a durable admission barrier, but do not declare corruption from an operational result alone. Preserve the original database bytes and physical identity. Pending faults must still block writes after process restart; repeated faults or recreating a writer gate must not reopen the failed generation. Preserve the first recorded fault, existing quarantine and malformed-metadata safety, ordinary contention and pool-pressure handling, and independent admission for unrelated databases. Keep the existing public fault-entry and coordination interfaces usable. This task covers incident classification and safe admission, not automatic repair or the complete recording-recovery lifecycle.",
+      "agent_timeout_seconds": 1800,
+      "grader_dependency_links": [
+        {
+          "source_path": "target",
+          "destination_path": "target"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 600,
+        "fixtures": [
+          {
+            "local_path": "graders/sqlite-operational-fault.rs",
+            "destination_path": "crates/screenpipe-sqlite-coordinator/tests/eval_operational_fault.rs"
+          }
+        ],
+        "command": "cargo test -p screenpipe-sqlite-coordinator --locked --test eval_operational_fault -- --test-threads=1"
+      }
+    },
+    {
+      "id": "app-mcp-config-symlink-preservation",
+      "name": "Preserve linked config files during explicit MCP setup",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "fa7ce9ab5fa8865b0a9c8c044368d8c76f4434cc",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/6977"
+      },
+      "base_ref": "53049736dd78d2c12c1a326d89adb8f9b53ef831",
+      "oracle_ref": "fa7ce9ab5fa8865b0a9c8c044368d8c76f4434cc",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/lib/ai-tools-mcp.ts",
+        "apps/screenpipe-app-tauri/lib/utils/tauri.ts",
+        "apps/screenpipe-app-tauri/src-tauri/src/skills.rs",
+        "crates/screenpipe-engine/src/cli/agent.rs"
+      ],
+      "gate": "advisory",
+      "trigger_paths": [
+        "apps/screenpipe-app-tauri/lib/ai-tools-mcp.ts",
+        "apps/screenpipe-app-tauri/lib/utils/tauri.ts",
+        "apps/screenpipe-app-tauri/src-tauri/src/skills.rs",
+        "crates/screenpipe-engine/src/cli/agent.rs"
+      ],
+      "tags": ["regression", "escaped-failure", "mcp", "configuration", "symlink", "data-integrity", "false-positive"],
+      "prompt": "Explicit MCP connect and disconnect in Settings replace a symlinked config with a regular file, leaving its dotfiles target unchanged. Preserve absolute and relative link chains when updating Codex TOML or Cursor JSON configurations: update the actual target, keep unrelated settings and servers, and back up the previous target contents beside that target. Dangling links, loops, and resolution errors must fail without replacing the link or creating a fresh config. Ordinary missing files must remain creatable, invalid or unreadable configs must remain untouched, backups must stay bounded, and disconnect must remain idempotent. Keep the existing public connect/remove interfaces usable. This task covers Settings-side configuration IO at the platform path-resolution boundary, not native desktop acceptance or launch-time reconciliation.",
+      "agent_timeout_seconds": 1200,
+      "grader_dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 300,
+        "fixtures": [
+          {
+            "source_path": "apps/screenpipe-app-tauri/lib/__tests__/ai-tools-mcp.test.ts"
+          },
+          {
+            "local_path": "graders/app-mcp-config-symlinks.test.ts",
+            "destination_path": "apps/screenpipe-app-tauri/lib/__tests__/eval-mcp-config-symlinks.test.ts"
+          }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && NODE_OPTIONS=--localstorage-file=.eval-localstorage bun x vitest run --config vitest.config.ts lib/__tests__/ai-tools-mcp.test.ts lib/__tests__/eval-mcp-config-symlinks.test.ts"
+      }
+    },
+    {
+      "id": "app-provider-outage-vs-limit",
+      "name": "Separate hosted outages from usage limits",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "42593c9b330a66ff39bc632bf87b2f34ad801b55",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/6897"
+      },
+      "base_ref": "f04a0c8071ee38397cfe138e4ec3e1f433229ddd",
+      "oracle_ref": "42593c9b330a66ff39bc632bf87b2f34ad801b55",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/lib/chat/provider-errors.ts"
+      ],
+      "gate": "advisory",
+      "trigger_paths": [
+        "apps/screenpipe-app-tauri/lib/chat/provider-errors.ts"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "classification",
+        "preserved-behavior"
+      ],
+      "prompt": "Screenpipe hosted chat labels service-unavailable errors as usage throttling and suggests upgrading. Treat hosted unavailability, including differently cased and status-prefixed messages, as a retryable cloud outage with retry guidance and no quota or upgrade claim. Preserve explicit rate-limit guidance (wait/retry and upgrade options), real daily allowance limits and tomorrow guidance, ordinary cloud connectivity recovery, local Ollama recovery instructions with the configured model, and non-retryable model refusals. Keep the existing public provider error message/presentation interfaces. Grade user-visible semantics rather than exact sentences; no live provider calls are needed.",
+      "agent_timeout_seconds": 900,
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/app-provider-outage-vs-limit.test.ts",
+            "destination_path": "evals/coding-agent/graders/app-provider-outage-vs-limit.test.ts"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test ./evals/coding-agent/graders/app-provider-outage-vs-limit.test.ts"
       }
     }
   ]

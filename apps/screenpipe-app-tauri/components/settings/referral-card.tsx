@@ -50,7 +50,10 @@ export function ReferralCard() {
             `/api/referral?email=${encodeURIComponent(userEmail)}`,
             "https://screenpipe.com",
           ),
-          { signal: controller.signal },
+          {
+            headers: { Authorization: `Bearer ${userToken}` },
+            signal: controller.signal,
+          },
         );
         if (res.status === 404) {
           setReferral(null);

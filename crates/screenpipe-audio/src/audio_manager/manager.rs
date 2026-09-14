@@ -8,7 +8,6 @@ use futures::FutureExt;
 use std::{
     collections::HashSet,
     panic::AssertUnwindSafe,
-    path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
@@ -61,10 +60,7 @@ use crate::{
         stt::{process_audio_input, SAMPLE_RATE},
         whisper::model::get_cached_whisper_model_path,
     },
-    utils::{
-        audio::resample,
-        ffmpeg::{get_new_file_path_with_timestamp, write_audio_to_file},
-    },
+    utils::{audio::resample, ffmpeg::write_audio_to_new_file},
     vad::{silero::SileroVad, webrtc::WebRtcVad, VadEngine, VadEngineEnum},
     AudioInput, TranscriptionResult,
 };
@@ -1498,19 +1494,22 @@ impl AudioManager {
                     };
                     let capture_dt =
                         chrono::DateTime::from_timestamp(audio.capture_timestamp as i64, 0);
-                    let path = get_new_file_path_with_timestamp(
-                        &audio.device.to_string(),
-                        out,
-                        capture_dt,
-                    );
-                    let path_buf = PathBuf::from(&path);
+                    let device_name = audio.device.to_string();
+                    let out = out.clone();
+                    let write_output = out.clone();
                     let write_result = tokio::task::spawn_blocking(move || {
-                        write_audio_to_file(&resampled, SAMPLE_RATE, &path_buf, false)
+                        write_audio_to_new_file(
+                            &resampled,
+                            SAMPLE_RATE,
+                            &device_name,
+                            &write_output,
+                            capture_dt,
+                        )
                     })
                     .await;
 
                     match write_result {
-                        Ok(Ok(())) => {
+                        Ok(Ok(path)) => {
                             debug!("audio persisted to disk: {}", path);
                             // Insert into DB immediately so retranscribe can find this audio
                             // even if transcription is deferred. No transcription yet — just the chunk.
@@ -1566,7 +1565,7 @@ impl AudioManager {
                                 // re-inserts the row once the write pool recovers.
                                 // See SCREENPIPE-CLI-RC.
                                 super::reconciliation::persist_orphaned_chunk(
-                                    out,
+                                    &out,
                                     path.clone(),
                                     capture_dt,
                                 )

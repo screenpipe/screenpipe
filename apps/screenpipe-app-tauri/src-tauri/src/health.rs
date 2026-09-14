@@ -35,9 +35,8 @@ const CONSECUTIVE_UNHEALTHY_THRESHOLD: u32 = 120;
 /// crashed and respawns it. Reuses the Stopped threshold (30 ≈ 30s at 1Hz),
 /// which already clears the ~20s sleep/wake timeout window.
 const SERVER_DOWN_THRESHOLD: u32 = CONSECUTIVE_FAILURES_THRESHOLD;
-/// Cap auto-respawns within the window so an engine that can't come back up
-/// (bad config, revoked permission, corrupt DB) can't restart-storm — it falls
-/// back to the existing Stopped tray state instead.
+/// Pace non-database crash respawns within a rolling window. Database access
+/// failures use their own retry interval and never exhaust a retry budget.
 const SERVER_RESPAWN_MAX_ATTEMPTS: u32 = 3;
 const SERVER_RESPAWN_WINDOW: Duration = Duration::from_secs(600);
 
@@ -902,8 +901,9 @@ struct EngineRespawnCheck {
     wants_recording: bool,
     /// Active subscription / dev build — don't respawn a lapsed install.
     entitled: bool,
-    /// The server was up at some point → this is a crash, not a boot failure.
+    /// The server was up at some point, or DB startup is awaiting access.
     ever_connected: bool,
+    database_retry: bool,
     past_startup_grace: bool,
     /// Already mid-restart (ours, a manual one, or a settings-applied one).
     in_restart_grace: bool,
@@ -911,8 +911,7 @@ struct EngineRespawnCheck {
     recently_woke: bool,
     /// A start/respawn is already in flight.
     start_in_progress: bool,
-    /// DB recovery was surfaced; automatic retries must stop to preserve the
-    /// quarantined generation until a deliberate repair succeeds.
+    /// Physical damage was verified; stop until protected repair succeeds.
     manual_recovery_required: bool,
     /// Consecutive connection failures, vs `down_threshold`.
     consecutive_failures: u32,
@@ -935,14 +934,14 @@ impl EngineRespawnCheck {
     fn should_respawn(&self) -> bool {
         self.wants_recording
             && self.entitled
-            && self.ever_connected
+            && (self.ever_connected || self.database_retry)
             && self.past_startup_grace
             && !self.in_restart_grace
             && !self.recently_woke
             && !self.start_in_progress
             && !self.manual_recovery_required
             && self.consecutive_failures >= self.down_threshold
-            && self.respawns_in_window < self.max_respawns
+            && (self.database_retry || self.respawns_in_window < self.max_respawns)
     }
 }
 
@@ -985,14 +984,18 @@ fn respawn_engine_if_crashed(
         return;
     }
 
-    // Once DB recovery has been surfaced, preserve the quarantined database
-    // and stop every automatic restart path (including the port-conflict
-    // shortcut below). A deliberate start that proves the server healthy
-    // clears this gate via `reset_db_boot_failures`.
+    // Only verified physical damage requires repair. Access failures remain
+    // retryable, including failures before the first successful engine start.
     let manual_recovery_required = crate::db_relaunch::manual_recovery_required();
     if manual_recovery_required {
+        crate::db_recovery_notifications::notify_quarantined_database(
+            crate::db_relaunch::active_data_dir(),
+        );
         return;
     }
+    let database_retry = crate::db_relaunch::should_retry_database(
+        get_boot_phase_snapshot().error.as_deref().unwrap_or(""),
+    );
 
     // Port conflict — restarting into the same occupied port is futile. But
     // the boot-phase error is a snapshot from the last failed bind. Re-probe
@@ -1038,13 +1041,7 @@ fn respawn_engine_if_crashed(
                         *last_restart_triggered = Some(now);
                         let app_clone = app.clone();
                         tokio::spawn(async move {
-                            match crate::recording::spawn_screenpipe(
-                                app_clone.state::<crate::recording::RecordingState>(),
-                                app_clone.clone(),
-                                None,
-                            )
-                            .await
-                            {
+                            match crate::db_self_heal::retry_recording(app_clone).await {
                                 Ok(()) => info!("engine restarted after port conflict resolved"),
                                 Err(e) => warn!("engine restart after port conflict failed: {}", e),
                             }
@@ -1085,9 +1082,17 @@ fn respawn_engine_if_crashed(
             .map(|s| crate::recording::recording_access_allowed(app, &s))
             .unwrap_or(false),
         ever_connected,
+        database_retry,
         past_startup_grace: start_elapsed > STARTUP_GRACE_PERIOD,
         in_restart_grace: last_restart_triggered
-            .map(|t| t.elapsed() < NOTIFICATION_COOLDOWN)
+            .map(|t| {
+                t.elapsed()
+                    < if database_retry {
+                        crate::db_relaunch::DATABASE_RETRY_DELAY
+                    } else {
+                        NOTIFICATION_COOLDOWN
+                    }
+            })
             .unwrap_or(false),
         recently_woke: screenpipe_engine::sleep_monitor::recently_woke_from_sleep(),
         start_in_progress,
@@ -1103,10 +1108,10 @@ fn respawn_engine_if_crashed(
 
     warn!(
         "embedded engine unreachable for {} checks while recording should be ON \
-         — auto-respawning (attempt {}/{})",
+         — auto-respawning ({} attempts in the last {}s)",
         consecutive_failures,
-        server_respawns.len() + 1,
-        SERVER_RESPAWN_MAX_ATTEMPTS
+        server_respawns.len(),
+        SERVER_RESPAWN_WINDOW.as_secs()
     );
     server_respawns.push_back(now);
     // Share the post-restart grace so stall detection and a second respawn both
@@ -1114,22 +1119,11 @@ fn respawn_engine_if_crashed(
     *last_restart_triggered = Some(now);
     let app_for_respawn = app.clone();
     tokio::spawn(async move {
-        match crate::recording::spawn_screenpipe(
-            app_for_respawn.state::<crate::recording::RecordingState>(),
-            app_for_respawn.clone(),
-            None,
-        )
-        .await
-        {
-            Ok(()) => crate::db_relaunch::reset_db_boot_failures(),
-            Err(e) => {
-                warn!("engine auto-respawn failed: {}", e);
-                // Repeated DB-init failures mean a poisoned WAL-index pinned
-                // by a leaked connection — unrecoverable in-process. Surface
-                // manual recovery instead of looping a doomed respawn every 5
-                // minutes forever (2026-07-02).
-                crate::db_relaunch::note_respawn_failure(&app_for_respawn, &e).await;
-            }
+        if let Err(e) = crate::db_self_heal::retry_recording(app_for_respawn).await {
+            warn!(
+                "engine auto-respawn failed; later attempts remain scheduled: {}",
+                e
+            );
         }
     });
 }
@@ -4215,6 +4209,7 @@ mod tests {
             wants_recording: true,
             entitled: true,
             ever_connected: true,
+            database_retry: false,
             past_startup_grace: true,
             in_restart_grace: false,
             recently_woke: false,
@@ -4266,6 +4261,22 @@ mod tests {
         assert!(!EngineRespawnCheck {
             ever_connected: false,
             ..crash_baseline()
+        }
+        .should_respawn());
+    }
+
+    #[test]
+    fn database_access_failure_retries_before_first_connection_and_after_old_budget() {
+        let check = EngineRespawnCheck {
+            ever_connected: false,
+            database_retry: true,
+            respawns_in_window: SERVER_RESPAWN_MAX_ATTEMPTS + 100,
+            ..crash_baseline()
+        };
+        assert!(check.should_respawn());
+        assert!(!EngineRespawnCheck {
+            wants_recording: false,
+            ..check
         }
         .should_respawn());
     }

@@ -132,6 +132,14 @@ async calendarStatus() : Promise<Result<CalendarStatus, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async cancelStorageMigration(root: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("cancel_storage_migration", { root }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async chatgptOauthCheckToken() : Promise<Result<boolean, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("chatgpt_oauth_check_token") };
@@ -408,6 +416,14 @@ async deleteCloudData() : Promise<Result<null, string>> {
 async deleteDeviceLocalData(machineId: string) : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("delete_device_local_data", { machineId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async deleteOriginalStorageDatabase(root: string, generation: string, confirmPermanentDeletion: boolean) : Promise<Result<number, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_original_storage_database", { root, generation, confirmPermanentDeletion }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -810,13 +826,23 @@ async getScreenpipeAiGatewayUrl() : Promise<Result<string, string>> {
 },
 /**
  * Tauri command: absolute path of the screenpipe base dir (where store.bin
- * lives). Honors SCREENPIPE_DATA_DIR; the webview must use this instead of
- * hardcoding ~/.screenpipe, or it reads/writes a different settings file
- * than the Rust side whenever the override is set.
+ * lives). Honors SCREENPIPE_DATA_DIR at launch and remains stable when startup
+ * selects a different recording folder, so the webview and Rust share a store.
  */
 async getScreenpipeBaseDir() : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_screenpipe_base_dir") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async getStorageMigrationActivity() : Promise<StorageMigrationActivity> {
+    return await TAURI_INVOKE("get_storage_migration_activity");
+},
+async getStorageMigrationStatus() : Promise<Result<StorageMigrationStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_storage_migration_status") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -857,6 +883,14 @@ async getSyncStatus() : Promise<Result<SyncStatusResponse, string>> {
 },
 async getWorkflowsRuntime() : Promise<JsonValue> {
     return await TAURI_INVOKE("get_workflows_runtime");
+},
+async grokbotConnection(action: string) : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("grokbot_connection", { action }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 async hideMainWindow() : Promise<void> {
     await TAURI_INVOKE("hide_main_window");
@@ -2284,6 +2318,17 @@ async resizeSearchWindow(width: number, height: number) : Promise<Result<null, s
 }
 },
 /**
+ * Resolve a local AI tool config without replacing a symlink during setup.
+ */
+async resolveAiToolConfigPath(path: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("resolve_ai_tool_config_path", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Restart only after the user explicitly clicks the in-app action. macOS's
  * native Screen Recording sheet includes a "Later" choice; closing that sheet
  * must never be treated as consent to relaunch screenpipe.
@@ -2857,6 +2902,17 @@ async startFeedbackUpload(request: FeedbackUploadRequest) : Promise<Result<strin
 }
 },
 /**
+ * Own the stop/convert/restart sequence in the native app even if settings closes.
+ */
+async startStorageMigration(root: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("start_storage_migration", { root }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Stop recording without killing the server.
  * Pipes, memories, search, and the HTTP API remain accessible.
  */
@@ -3417,7 +3473,12 @@ downloaded: boolean;
 /**
  * True when download failed with 401/403 — user must sign in.
  */
-auth_required: boolean }
+auth_required: boolean;
+/**
+ * True when the privileged persistence supervisor must apply the complete
+ * system package rather than the ordinary Tauri app-only artifact.
+ */
+persistent: boolean }
 export type PersistedActivityHistory = { entries: ActivityHistoryEntry[]; coverage: ActivityHistoryCoverage[] }
 export type PiBackend = "acp"
 export type PiCheckResult = { available: boolean; path: string | null }
@@ -4325,6 +4386,8 @@ headless?: boolean;
 headlessRecordOnly?: boolean }
 export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery"
 export type StartExportRecordingResponse = { jobId: string }
+export type StorageMigrationActivity = { root: string | null; busy: boolean; message: string; error: string | null; elapsed_seconds: number; completed_records: number | null; total_records: number | null; bytes_saved: number | null; available_bytes: number | null; completed: boolean }
+export type StorageMigrationStatus = { root: string; app_session_id: string; busy: boolean; message: string; error: string | null; pending: boolean; in_place: boolean; completed: boolean; using_new_storage: boolean; generation: string | null; source_bytes: number; migrated_bytes: number | null; bytes_saved: number | null; available_bytes: number | null; can_migrate: boolean; can_cancel: boolean; can_delete_source: boolean; blocked_reason: string | null }
 export type Suggestion = { text: string;
 /**
  * Short preview with real data (e.g. "1h20m in VS Code — auth.rs, api.rs")

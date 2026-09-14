@@ -8,6 +8,7 @@
     "e2e/specs/**/*.spec.ts",
     "e2e/tests/**/*.js",
     "e2e/helpers/**/*.ts",
+    "e2e/mock-updates/windows-persistence-server.ts",
     "e2e/scripts/verify-spotlight-exclusion.ts",
     "scripts/timeline-parity-export.ts",
     "scripts/**/*.js"

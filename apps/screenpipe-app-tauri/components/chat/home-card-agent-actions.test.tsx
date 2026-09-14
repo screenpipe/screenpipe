@@ -6,10 +6,15 @@ import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import tauriConfig from "../../src-tauri/tauri.conf.json";
+import productionConfig from "../../src-tauri/tauri.prod.conf.json";
+import enterpriseConfig from "../../src-tauri/tauri.enterprise.conf.json";
+import {
+  agentHandoffTargetForPrompt,
+  handoffTargets,
+} from "@/lib/first-run/agent-handoff";
 
 import {
   buildHomeCardAgentPrompt,
-  HOME_CARD_AGENT_TOOLTIP,
   HomeCardAgentActions,
 } from "./home-card-agent-actions";
 
@@ -51,7 +56,7 @@ describe("HomeCardAgentActions", () => {
     vi.clearAllMocks();
   });
 
-  it("offers named Claude, Cursor, and Codex actions", () => {
+  it("offers named Claude, Cursor, and Codex actions and tooltips", async () => {
     render(<HomeCardAgentActions pipe={DAY_RECAP} />);
 
     expect(
@@ -68,9 +73,15 @@ describe("HomeCardAgentActions", () => {
         .getByRole("button", { name: "Run in Codex" })
         .querySelector("img"),
     ).toHaveAttribute("src", "/images/openai.svg");
-    expect(HOME_CARD_AGENT_TOOLTIP).toBe(
-      "run this in your favorite agent",
-    );
+    for (const agent of ["Claude", "Cursor", "Codex"]) {
+      const button = screen.getByRole("button", { name: `Run in ${agent}` });
+      fireEvent.focus(button);
+      expect(
+        await screen.findByRole("tooltip", { name: `Run in ${agent}` }),
+      ).toBeInTheDocument();
+      expect(button).toHaveAccessibleDescription(`Run in ${agent}`);
+      fireEvent.blur(button);
+    }
   });
 
   it("centers the action cluster over compact chips", () => {
@@ -253,13 +264,38 @@ describe("HomeCardAgentActions", () => {
     );
   });
 
-  it("allows every agent deeplink through the cross-platform shell validator", () => {
-    const validator = new RegExp(`^${tauriConfig.plugins.shell.open}$`);
+  it.each([
+    ["development", tauriConfig],
+    ["production", productionConfig],
+    ["enterprise", enterpriseConfig],
+  ])("allows home-card deeplinks in the %s shell config", (_, config) => {
+    // Release workflows replace the base config, so each packaged config
+    // must retain the same narrow shell allowlist.
+    expect(config.plugins).toHaveProperty(
+      "shell.open",
+      tauriConfig.plugins.shell.open,
+    );
+    const validator = new RegExp(`^${config.plugins.shell.open}$`);
 
-    expect(validator.test("claude://claude.ai/new?q=test")).toBe(true);
-    expect(
-      validator.test("cursor://anysphere.cursor-deeplink/prompt?text=test"),
-    ).toBe(true);
-    expect(validator.test("codex://threads/new?prompt=test")).toBe(true);
+    for (const target of handoffTargets()) {
+      if (
+        target.id !== "claude" &&
+        target.id !== "cursor" &&
+        target.id !== "codex"
+      ) continue;
+      const prompt = buildHomeCardAgentPrompt(DAY_RECAP, target.id);
+      const { deeplink } = agentHandoffTargetForPrompt(target, prompt);
+      expect(validator.test(deeplink!)).toBe(true);
+    }
+
+    for (const url of [
+      "file:///tmp/prompt",
+      "claude://unrelated",
+      "cursor://unrelated",
+      "codex://unrelated",
+      "--help",
+    ]) {
+      expect(validator.test(url)).toBe(false);
+    }
   });
 });

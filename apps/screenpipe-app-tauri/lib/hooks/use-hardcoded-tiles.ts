@@ -18,6 +18,8 @@ export interface HardcodedTile {
   detected?: boolean;
 }
 
+import { isGrokBotConnected } from "@/lib/grokbot-connection";
+
 export async function getClaudeConfigPath(): Promise<string | null> {
   try {
     const os = platform();
@@ -199,6 +201,7 @@ export function useHardcodedTiles(): HardcodedTile[] {
   const [claudeInstalled, setClaudeInstalled] = useState(false);
   const [cursorInstalled, setCursorInstalled] = useState(false);
   const [codexInstalled, setCodexInstalled] = useState(false);
+  const [grokBotInstalled, setGrokBotInstalled] = useState(false);
   const [grokInstalled, setGrokInstalled] = useState(false);
   const [chatgptConnected, setChatgptConnected] = useState(false);
   const [customMcpConnected, setCustomMcpConnected] = useState(false);
@@ -212,6 +215,7 @@ export function useHardcodedTiles(): HardcodedTile[] {
 
     isCursorMcpInstalled().then(setCursorInstalled).catch(() => {});
     isCodexMcpInstalled().then(setCodexInstalled).catch(() => {});
+    isGrokBotConnected().then(setGrokBotInstalled).catch(() => setGrokBotInstalled(false));
     isGrokMcpInstalled().then(setGrokInstalled).catch(() => {});
 
     commands.chatgptOauthStatus()
@@ -245,7 +249,8 @@ export function useHardcodedTiles(): HardcodedTile[] {
     { id: "claude", name: "Claude Desktop", icon: "claude", connected: claudeInstalled },
     { id: "cursor", name: "Cursor", icon: "cursor", connected: cursorInstalled },
     { id: "codex", name: "Codex", icon: "codex", connected: codexInstalled },
-    { id: "grok", name: "Grok", icon: "grok", connected: grokInstalled },
+    { id: "grokbot", name: "Grok Bot", icon: "grokbot", connected: grokBotInstalled },
+    { id: "grok", name: "Grok CLI", icon: "grok", connected: grokInstalled },
     { id: "claude-code", name: "Claude Code", icon: "claude-code", connected: false },
     { id: "warp", name: "Warp", icon: "warp", connected: false },
     { id: "chatgpt", name: "ChatGPT", icon: "chatgpt", connected: chatgptConnected },

@@ -1769,7 +1769,7 @@ export const AIPresetsSelector = ({
     });
   };
 
-  const handleRemovePreset = (preset: AIPreset) => {
+  const handleRemovePreset = async (preset: AIPreset) => {
     if (!settings?.aiPresets) return;
     if (!canManageEmployeePresets || isEnterpriseManagedPreset(preset)) {
       toast.error("Managed by your organization", {
@@ -1791,13 +1791,16 @@ export const AIPresetsSelector = ({
     if (preset.defaultPreset && updatedPresets.length > 0 && !updatedPresets.some((p) => p.defaultPreset)) {
       updatedPresets = updatedPresets.map((p, index) => ({ ...p, defaultPreset: index === 0 }));
     }
-    updateSettings({
-      aiPresets: updatedPresets,
-    });
-
-    toast.success("Preset removed", {
-      description: `${preset.id} has been removed`,
-    });
+    try {
+      await updateSettings({ aiPresets: updatedPresets });
+      toast.success("Preset removed", {
+        description: `${preset.id} has been removed`,
+      });
+    } catch (error) {
+      toast.error("Cannot delete preset", {
+        description: error instanceof Error ? error.message : "Preset changes could not be saved",
+      });
+    }
   };
 
   const isOnlyPreset = (settings?.aiPresets || []).length <= 1;

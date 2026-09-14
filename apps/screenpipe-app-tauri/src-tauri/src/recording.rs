@@ -68,7 +68,7 @@ impl LocalApiContext {
 /// Build a `RecordingConfig` from the current settings store.
 fn build_config(app: &tauri::AppHandle) -> Result<RecordingConfig, String> {
     let store = SettingsStore::get(app).ok().flatten().unwrap_or_default();
-    let (data_dir, _) = config::resolve_data_dir(&store.data_dir)
+    let data_dir = config::resolve_data_dir(&store.data_dir)
         .map_err(|e| format!("failed to prepare recording data directory: {e}"))?;
     Ok(store.to_recording_config(data_dir))
 }
@@ -219,8 +219,7 @@ pub(crate) fn recording_access_allowed(app: &tauri::AppHandle, store: &SettingsS
             crate::enterprise_policy::recording_authorized()
         } else {
             store.has_cloud_authentication()
-        }
-    {
+        } {
         crate::startup_auth::AuthenticationStatus::Authenticated
     } else {
         resolved_authentication
@@ -344,6 +343,7 @@ pub struct RecordingState {
     /// recording" that keeps the server up. `last_spawn_epoch` can't carry this
     /// — it's reset to 0 on a failed spawn too, and never sees the tray toggle.
     pub wants_recording: Arc<AtomicBool>,
+    pub(crate) deferred_account_start: crate::startup_auth::DeferredAccountStart,
     /// Recently active meeting to revive when capture is immediately restarted.
     pub(crate) interrupted_meeting: Arc<Mutex<Option<InterruptedMeeting>>>,
     /// App-scoped cloud-auth token (Clerk JWT). Outlives the Server (which
@@ -365,10 +365,7 @@ pub struct RecordingState {
 
 /// Install a fully constructed capture session before activating any monitor
 /// that can synchronously request its teardown.
-pub(crate) fn install_capture_session(
-    slot: &mut Option<CaptureSession>,
-    session: CaptureSession,
-) {
+pub(crate) fn install_capture_session(slot: &mut Option<CaptureSession>, session: CaptureSession) {
     *slot = Some(session);
     slot.as_ref()
         .expect("capture session was just installed")
@@ -382,6 +379,9 @@ impl RecordingState {
     /// `stop_screenpipe` clear it. (Capture has two on-paths and two off-paths;
     /// missing any one is how a tray-stopped capture got resurrected.)
     pub fn set_capture_intent(&self, on: bool) {
+        // An explicit start owns the lifecycle now; an explicit stop must not
+        // be undone by a later background account refresh.
+        self.deferred_account_start.cancel();
         self.wants_recording.store(on, Ordering::SeqCst);
     }
 
@@ -757,6 +757,9 @@ pub async fn start_capture(
     state: State<'_, RecordingState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    if crate::storage_migration::is_running(&app) {
+        return Err("Storage migration is running. Recording resumes when it finishes.".into());
+    }
     info!("Starting capture session");
     let store = SettingsStore::get(&app).ok().flatten().unwrap_or_default();
     require_recording_access(&app, &store)?;
@@ -858,7 +861,7 @@ pub async fn stop_screenpipe(
     stop_screenpipe_inner(&state).await
 }
 
-async fn stop_screenpipe_inner(state: &RecordingState) -> Result<(), String> {
+pub(crate) async fn stop_screenpipe_inner(state: &RecordingState) -> Result<(), String> {
     info!("stop_screenpipe: stopping capture and server");
 
     // Stop capture first
@@ -950,6 +953,9 @@ pub async fn spawn_screenpipe(
     app: tauri::AppHandle,
     _override_args: Option<Vec<String>>,
 ) -> Result<(), String> {
+    if crate::storage_migration::is_running(&app) {
+        return Err("Storage migration is running. Recording resumes when it finishes.".into());
+    }
     // A summary-paywall install still needs the long-lived local read server
     // for Timeline, but it must not publish capture intent or restart capture.
     let store = SettingsStore::get(&app).ok().flatten().unwrap_or_default();
@@ -983,7 +989,83 @@ pub async fn spawn_screenpipe(
     spawn_screenpipe_inner(&state, app).await
 }
 
-async fn spawn_screenpipe_inner(
+/// Account verification can complete on either side of the native startup
+/// check, without the frontend ever rendering an access gate. Reconcile both
+/// events against current settings and the same native access policy.
+pub(crate) fn resume_deferred_account_start(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<RecordingState>();
+        // Wait before claiming the deferred start so a busy lifecycle cannot
+        // discard recovery. An explicit start/stop or sign-out cancels it.
+        let _lifecycle_guard = state.server_lifecycle.lock().await;
+        if crate::process_exit::QUIT_REQUESTED.load(Ordering::SeqCst) {
+            return;
+        }
+        let Some(settings) = SettingsStore::get(&app).ok().flatten() else {
+            return;
+        };
+        let access_allowed =
+            state.cloud_token.load().as_ref().is_some() && server_access_allowed(&app, &settings);
+        let capture_allowed = recording_access_allowed(&app, &settings);
+        if !state
+            .deferred_account_start
+            .take_if_allowed(access_allowed, || {
+                state
+                    .wants_recording
+                    .store(capture_allowed, Ordering::SeqCst);
+            })
+        {
+            return;
+        }
+        info!("Account access verified; resuming deferred server auto-start");
+        if let Err(error) = spawn_screenpipe_inner(&state, app.clone()).await {
+            error!(
+                "Failed to resume server after account verification: {}",
+                error
+            );
+        }
+    });
+}
+
+/// Automatic retry preserves capture intent; unlike the user command it must
+/// not turn recording back on after the user stopped it.
+pub(crate) async fn retry_screenpipe(
+    state: State<'_, RecordingState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let Ok(_lifecycle_guard) = state.server_lifecycle.try_lock() else {
+        return Ok(());
+    };
+    if !state.capture_intended() || crate::process_exit::QUIT_REQUESTED.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    // The watchdog owns retry timing. Do not enter the user command's
+    // cooldown path, which schedules a frontend restart request later.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let last_spawn = state.last_spawn_epoch.load(Ordering::SeqCst);
+    if last_spawn > 0 && now.saturating_sub(last_spawn) < RESTART_COOLDOWN_SECS {
+        return Ok(());
+    }
+    spawn_screenpipe_inner(&state, app).await
+}
+
+pub(crate) async fn spawn_screenpipe_inner(
+    state: &RecordingState,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let resumed = crate::storage_migration::resume_before_startup(&app, state).await?;
+    let result = spawn_screenpipe_after_migration(state, app.clone()).await;
+    if let Some(resumed) = resumed {
+        crate::storage_migration::finish_startup(&app, resumed, result).await
+    } else {
+        result
+    }
+}
+
+async fn spawn_screenpipe_after_migration(
     state: &RecordingState,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
@@ -1318,15 +1400,22 @@ async fn spawn_screenpipe_inner(
         permissions_check.microphone
     );
 
-    let (data_dir, fell_back) = config::resolve_data_dir(&store.data_dir)
-        .map_err(|e| format!("failed to prepare recording data directory: {e}"))?;
-    if fell_back {
-        warn!(
-            "Custom data dir '{}' unavailable, using default: {}",
-            store.data_dir,
-            data_dir.display()
-        );
+    if let Ok(selected) = config::selected_recording_data_dir(&store.data_dir) {
+        crate::db_relaunch::set_active_database(&selected);
     }
+    let data_dir = match config::resolve_data_dir(&store.data_dir) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            let message = format!(
+                "Failed to initialize database: cannot access recording data directory: {error}"
+            );
+            crate::health::set_boot_error(&message);
+            state.is_starting.store(false, Ordering::SeqCst);
+            state.is_starting_capture.store(false, Ordering::SeqCst);
+            return Err(message);
+        }
+    };
+    crate::db_relaunch::set_active_database(&data_dir);
 
     // Build the effective config before deciding whether auth needs a key.
     // `from_settings` force-enables auth when LAN access is enabled, even if
@@ -1402,11 +1491,12 @@ async fn spawn_screenpipe_inner(
         owned_browser.clone(),
     );
     let pipe_agent_events = crate::agent_event_emitter::PipeAgentEventEmitter::new(app_for_pipe);
-    let on_pipe_output: Option<screenpipe_core::pipes::OnPipeOutputLine> = Some(
-        std::sync::Arc::new(move |pipe_name: &str, exec_id: i64, continues_chat: bool, line: &str| {
-            pipe_agent_events.emit_line(pipe_name, exec_id, continues_chat, line);
-        }),
-    );
+    let on_pipe_output: Option<screenpipe_core::pipes::OnPipeOutputLine> =
+        Some(std::sync::Arc::new(
+            move |pipe_name: &str, exec_id: i64, continues_chat: bool, line: &str| {
+                pipe_agent_events.emit_line(pipe_name, exec_id, continues_chat, line);
+            },
+        ));
     let chat_destination: Option<
         screenpipe_core::agents::chat_destination::ChatDestinationDispatch,
     > = Some(std::sync::Arc::new(move |request| {
@@ -1698,7 +1788,103 @@ mod local_api_auth_tests {
 #[cfg(test)]
 mod recording_access_tests {
     use super::{recording_access_policy, server_access_policy};
-    use crate::startup_auth::AuthenticationStatus;
+    use crate::startup_auth::{AuthenticationStatus, DeferredAccountStart};
+    use crate::store::{LocalPlanPolicy, SettingsStore};
+
+    #[test]
+    fn account_refresh_recovers_deferred_start_without_a_frontend_gate() {
+        let pending = DeferredAccountStart::default();
+        let mut settings = SettingsStore::default();
+        settings.user.id = Some("subscribed-user".into());
+        settings.user.subscription_plan = Some("pro".into());
+        settings.user.app_entitled = Some(true);
+        let access = |settings: &SettingsStore| {
+            server_access_policy(
+                false,
+                false,
+                settings.local_plan_policy() != LocalPlanPolicy::Unknown,
+                false,
+                false,
+            )
+        };
+
+        // Boot has a signed-in paid account but no verified cached evidence.
+        assert!(!access(&settings));
+        pending.defer();
+        assert!(!pending.take_if_allowed(access(&settings), || {}));
+
+        // /api/user refresh supplies verified evidence before any UI gate
+        // mounts. Recovery must not require a frontend stop or gate transition.
+        settings.user.entitlement = Some(serde_json::json!({
+            "plan": "pro",
+            "active": true,
+            "source": "subscription",
+            "checked_at": chrono::Utc::now().to_rfc3339(),
+            "features": { "app": true }
+        }));
+        assert!(access(&settings));
+        assert!(pending.take_if_allowed(access(&settings), || {}));
+        assert!(!pending.take_if_allowed(access(&settings), || {}));
+    }
+
+    #[test]
+    fn account_refresh_does_not_start_an_unrequested_or_cancelled_engine() {
+        let pending = DeferredAccountStart::default();
+        assert!(!pending.take_if_allowed(true, || {}));
+        pending.defer();
+        pending.cancel(); // explicit capture stop or sign-out
+        assert!(!pending.take_if_allowed(true, || {}));
+    }
+
+    #[test]
+    fn account_refresh_before_native_deferral_is_reconciled_at_deferral() {
+        let pending = DeferredAccountStart::default();
+        // A refresh before the native gate has nothing to resume yet.
+        assert!(!pending.take_if_allowed(true, || {}));
+        pending.defer();
+        // Native deferral also checks current access, not its old snapshot.
+        assert!(pending.take_if_allowed(true, || {}));
+        assert!(!pending.take_if_allowed(true, || {}));
+    }
+
+    #[test]
+    fn concurrent_account_refreshes_claim_only_one_deferred_start() {
+        let pending = std::sync::Arc::new(DeferredAccountStart::default());
+        pending.defer();
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let pending = pending.clone();
+                std::thread::spawn(move || pending.take_if_allowed(true, || {}))
+            })
+            .collect();
+        let starts = workers
+            .into_iter()
+            .map(|worker| usize::from(worker.join().unwrap()))
+            .sum::<usize>();
+        assert_eq!(starts, 1);
+    }
+
+    #[test]
+    fn explicit_stop_wins_over_an_in_flight_account_resume() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let pending = DeferredAccountStart::default();
+        let wants_recording = AtomicBool::new(false);
+        pending.defer();
+        let (stop_requested, stop_request) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            pending.take_if_allowed(true, || {
+                scope.spawn(|| {
+                    stop_requested.send(()).unwrap();
+                    pending.cancel();
+                    wants_recording.store(false, Ordering::SeqCst);
+                });
+                stop_request.recv().unwrap();
+                wants_recording.store(true, Ordering::SeqCst);
+            });
+        });
+        assert!(!wants_recording.load(Ordering::SeqCst));
+        assert!(!pending.take_if_allowed(true, || panic!("stop was lost")));
+    }
 
     #[test]
     fn verified_free_consumer_can_record_without_a_paid_entitlement() {

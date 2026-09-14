@@ -7,6 +7,7 @@
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
+use anyhow::Context;
 use clap::{CommandFactory, FromArgMatches};
 #[allow(unused_imports)]
 use colored::Colorize;
@@ -255,6 +256,42 @@ fn setup_logging(
     Ok(guard)
 }
 
+use screenpipe_db::SQLITE_ACCESS_RETRY_DELAY as DATABASE_RETRY_DELAY;
+
+async fn wait_for_cli_stop(parent_pid: Option<u32>) {
+    if let Some(pid) = parent_pid {
+        tokio::select! {
+            _ = signal::ctrl_c() => {}
+            _ = watch_pid(pid) => {}
+        }
+    } else {
+        let _ = signal::ctrl_c().await;
+    }
+}
+
+/// Replace all detached owners rather than constructing another recorder over
+/// their handles. No failed batch is replayed; shared startup verifies the
+/// committed database before admitting the new connection generation.
+fn restart_after_database_fault() -> anyhow::Result<()> {
+    let mut command = std::process::Command::new(env::current_exe()?);
+    command.args(env::args_os().skip(1));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        Err(command.exec().into())
+    }
+    #[cfg(windows)]
+    {
+        // The child cannot open SQLite until this process has fully exited.
+        command.env(
+            "SCREENPIPE_DB_RESTART_PARENT",
+            std::process::id().to_string(),
+        );
+        command.spawn()?;
+        std::process::exit(0);
+    }
+}
+
 #[tokio::main]
 #[tracing::instrument]
 async fn main() -> anyhow::Result<()> {
@@ -269,6 +306,17 @@ async fn main() -> anyhow::Result<()> {
     // Writes dhat-heap.json on drop (Ctrl+C / graceful exit).
     #[cfg(feature = "heap-prof")]
     let _profiler = dhat::Profiler::new_heap();
+
+    #[cfg(windows)]
+    if let Ok(parent) = env::var("SCREENPIPE_DB_RESTART_PARENT") {
+        env::remove_var("SCREENPIPE_DB_RESTART_PARENT");
+        let pid: u32 = parent.parse()?;
+        tokio::select! {
+            biased;
+            _ = signal::ctrl_c() => return Ok(()),
+            _ = watch_pid(pid) => {}
+        }
+    }
 
     // Set file descriptor limit early, before any resources are allocated.
     // Single source of truth shared with the desktop app (see fd_limit module).
@@ -379,6 +427,17 @@ async fn main() -> anyhow::Result<()> {
             screenpipe_engine::cli::db::handle_db_command(subcommand).await?;
             return Ok(());
         }
+        Command::Storage {
+            ref operation,
+            ref root,
+            ref destination,
+        } => {
+            let result =
+                screenpipe_db::storage::run_command(operation, root, destination.as_deref())
+                    .await?;
+            println!("{}", serde_json::to_string(&result)?);
+            return Ok(());
+        }
         Command::Backup {
             ref subcommand,
             ref data_dir,
@@ -450,7 +509,24 @@ async fn main() -> anyhow::Result<()> {
         Command::Record(args) => args,
     };
 
-    let local_data_dir = get_base_dir(&record_args.data_dir)?;
+    let stop_requested = wait_for_cli_stop(record_args.auto_destruct_pid);
+    pin_mut!(stop_requested);
+    let local_data_dir = loop {
+        match get_base_dir(&record_args.data_dir) {
+            Ok(path) => break path,
+            Err(error) => {
+                eprintln!(
+                    "recording directory unavailable; retrying in {}s: {error:#}",
+                    DATABASE_RETRY_DELAY.as_secs()
+                );
+                tokio::select! {
+                    biased;
+                    _ = &mut stop_requested => return Ok(()),
+                    _ = tokio::time::sleep(DATABASE_RETRY_DELAY) => {}
+                }
+            }
+        }
+    };
     let local_data_dir_clone = local_data_dir.clone();
 
     // One-time, TTY-only equivalent of the desktop onboarding's "connect all
@@ -942,17 +1018,43 @@ async fn main() -> anyhow::Result<()> {
     // This helps track users who may have screen capture issues due to old macOS
     analytics::check_macos_version();
 
-    let db = Arc::new(
-        DatabaseManager::new(
-            &format!("{}/db.sqlite", local_data_dir.to_string_lossy()),
-            config.db_config.clone(),
-        )
-        .await
-        .map_err(|e| {
-            eprintln!("failed to initialize database: {:?}", e);
-            e
-        })?,
-    );
+    let database_path =
+        screenpipe_db::storage::resolve_database_path(&local_data_dir.join("db.sqlite"))?;
+    let (db, startup_guard) = loop {
+        let open = async {
+            let startup_guard =
+                screenpipe_engine::cli::db::prepare_database_startup(&local_data_dir).await?;
+            DatabaseManager::new(&database_path.to_string_lossy(), config.db_config.clone())
+                .await
+                .map(|database| (Arc::new(database), startup_guard))
+                .map_err(anyhow::Error::from)
+        };
+        let result = tokio::select! {
+            biased;
+            _ = &mut stop_requested => return Ok(()),
+            result = open => result,
+        };
+        match result {
+            Ok(database) => break database,
+            Err(error) if screenpipe_db::sqlite_confirmed_corruption_exists(&database_path) => {
+                return Err(error).context("database damage verified; recording stopped for protected repair (`screenpipe db recover`)");
+            }
+            Err(error) => {
+                warn!(
+                    "database unavailable; recording interrupted — retrying in {}s: {error:#}",
+                    DATABASE_RETRY_DELAY.as_secs()
+                );
+                tokio::select! {
+                    biased;
+                    _ = &mut stop_requested => return Ok(()),
+                    _ = tokio::time::sleep(DATABASE_RETRY_DELAY) => {}
+                }
+            }
+        }
+    };
+    let database_failure = Arc::new(tokio::sync::Notify::new());
+    let notify_failure = database_failure.clone();
+    db.set_persistent_failure_hook(Arc::new(move || notify_failure.notify_one()));
 
     // Start sleep/wake monitor for telemetry (macOS only)
     // This tracks sleep/wake events and checks if recording is degraded after wake
@@ -1815,7 +1917,13 @@ async fn main() -> anyhow::Result<()> {
         let drm_pause = config.pause_on_drm_content;
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(10)).await;
-            audio_manager_clone.start().await.unwrap();
+            if let Err(error) = audio_manager_clone.start().await {
+                tracing::error!(
+                    "audio startup failed; vision and the local server will continue: {:?}",
+                    error
+                );
+                return;
+            }
             // If DRM content was already focused at launch, the DRM callback
             // fired before audio was ready. Stop the output device now so we
             // don't hold an SCK session while DRM is active.
@@ -1878,7 +1986,20 @@ async fn main() -> anyhow::Result<()> {
     // WAL checkpoint maintenance now starts inside DatabaseManager::new(), so
     // every caller (CLI + in-process desktop app) gets it — no explicit call here.
 
-    let server_future = server.start();
+    // Keep startup reconciliation exclusive until the listener exists. Use
+    // the existing pre-bound serve path and preserve CLI route validation and
+    // mDNS behavior from SCServer::start.
+    let router = server.try_create_router().await?;
+    let server_address = SocketAddr::new(IpAddr::V4(config.listen_address), config.port);
+    let listener = screenpipe_engine::server::bind_listener(server_address).await?;
+    drop(startup_guard);
+    info!("Server listening on {}", server_address);
+    if server.advertise_mdns {
+        if let Err(error) = screenpipe_connect::mdns::advertise(config.port) {
+            warn!("mdns advertisement failed (non-fatal): {error}");
+        }
+    }
+    let server_future = SCServer::serve_router_with_listener(server_address, listener, router);
     pin_mut!(server_future);
 
     // Auto-enable local data retention for CLI users.
@@ -1966,6 +2087,7 @@ async fn main() -> anyhow::Result<()> {
     // Off by default — only runs when `--async-pii-redaction` is set.
     // The capture path is unaffected either way.
     if !config.async_pii_redaction {
+        db.set_frame_privacy_policy(&Default::default()).await?;
         info!(
             "text-PII worker skipped at startup — async_pii_redaction=false. \
              OPF model (~2.8 GB) will NOT be downloaded or loaded. \
@@ -2005,6 +2127,7 @@ async fn main() -> anyhow::Result<()> {
         //   4. Regex-only otherwise (still destructive — overwrites
         //      regex-redacted text into the source columns).
         let pool = db.pool.clone();
+        let frame_storage_db = Arc::clone(&db);
         let writer = db.coordinated_writer();
         let labels = config.pii_redaction_labels.clone();
         let database_error_hook = redact_database_error_hook.clone();
@@ -2130,6 +2253,7 @@ async fn main() -> anyhow::Result<()> {
                 ..Default::default()
             };
             let _worker_handle = Worker::new_with_writer(pool, writer, pipeline_arc, worker_cfg)
+                .with_frame_storage(frame_storage_db)
                 .with_database_error_hook(database_error_hook)
                 .spawn();
             // The worker runs for the lifetime of the engine. We don't
@@ -2239,45 +2363,63 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Add auto-destruct watcher
-    if let Some(pid) = record_args.auto_destruct_pid {
-        info!("watching pid {} for auto-destruction", pid);
-        let shutdown_tx_clone = shutdown_tx.clone();
-        tokio::spawn(async move {
-            // sleep for 1 seconds
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            if watch_pid(pid).await {
-                info!("Watched pid ({}) has stopped, initiating shutdown", pid);
-                let _ = shutdown_tx_clone.send(());
-            }
-        });
-    }
-
-    let ctrl_c_future = signal::ctrl_c();
-    pin_mut!(ctrl_c_future);
-
-    tokio::select! {
-        _ = handle => info!("recording completed"),
+    let restart_database = tokio::select! {
+        biased;
+        _ = &mut stop_requested => {
+            info!("stop requested, initiating shutdown");
+            false
+        }
+        _ = database_failure.notified() => {
+            warn!("database owner reported persistent failure; retiring recorder before retry");
+            true
+        }
+        _ = handle => {
+            info!("recording completed");
+            false
+        }
         result = &mut server_future => {
             match result {
                 Ok(_) => info!("server stopped normally"),
                 Err(e) => error!("server stopped with error: {:?}", e),
             }
+            false
         }
-        _ = ctrl_c_future => {
-            info!("received ctrl+c, initiating shutdown");
-            audio_manager.shutdown().await?;
-            // Stop UI recorder if running
-            if let Some(ref handle) = ui_recorder_handle {
-                info!("stopping UI event capture");
-                handle.stop();
+    };
+
+    let _ = shutdown_tx.send(());
+    if let Some(ref handle) = ui_recorder_handle {
+        handle.stop();
+    }
+    let teardown = async {
+        if let Err(error) = audio_manager.shutdown().await {
+            warn!("audio shutdown during database recovery: {error}");
+        }
+        if let Some(ref handle) = sync_service_handle {
+            let _ = handle.stop().await;
+        }
+        db.close().await;
+        screenpipe_secrets::close_all_secret_pools().await;
+    };
+    if tokio::time::timeout(Duration::from_secs(15), teardown)
+        .await
+        .is_err()
+    {
+        warn!(
+            "recorder shutdown incomplete; old database handles will be released by process exit"
+        );
+    }
+    if restart_database {
+        loop {
+            // The process replacement is paced even if the next generation
+            // immediately fails again. Ctrl+C and --auto-destruct-pid always win.
+            tokio::select! {
+                biased;
+                _ = &mut stop_requested => return Ok(()),
+                _ = tokio::time::sleep(DATABASE_RETRY_DELAY) => {}
             }
-            // Stop sync service if running
-            if let Some(ref handle) = sync_service_handle {
-                info!("stopping sync service");
-                let _ = handle.stop().await;
+            if let Err(error) = restart_after_database_fault() {
+                warn!("could not restart recorder; retry remains scheduled: {error:#}");
             }
-            let _ = shutdown_tx.send(());
         }
     }
 
@@ -2299,6 +2441,17 @@ async fn main() -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use reqwest::header::AUTHORIZATION;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn database_retry_stop_wait_honors_an_exited_parent() {
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        tokio::time::timeout(Duration::from_secs(1), wait_for_cli_stop(Some(pid)))
+            .await
+            .expect("parent termination must stop a database retry without Ctrl+C");
+    }
 
     #[test]
     fn local_retention_configure_url_uses_ipv4_loopback() {

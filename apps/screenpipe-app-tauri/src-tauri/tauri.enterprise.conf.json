@@ -61,6 +61,9 @@
     }
   },
   "plugins": {
+    "shell": {
+      "open": "(?:https?://.*|mailto:.*|tel:.*|x-apple-reminderkit://.*|claude://claude\\.ai/new\\?q=.*|cursor://anysphere\\.cursor-deeplink/prompt\\?text=.*|codex://threads/new\\?prompt=.*)"
+    },
     "updater": {
       "active": true,
       "dialog": false,

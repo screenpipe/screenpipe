@@ -7,9 +7,8 @@ SENTRY_DSN=https://xxx@xxx.ingest.us.sentry.io/xxx
 # Existing API keys
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
-# Hosted chat stays direct unless explicitly switched. The Gateway must exist
-# in the same Cloudflare account and have default OpenAI/Anthropic BYOK keys.
-HOSTED_CHAT_GATEWAY_MODE=legacy
+# Hosted chat always uses the Gateway. It must exist in the same Cloudflare
+# account and have default OpenAI/Anthropic BYOK keys.
 CLOUDFLARE_AI_GATEWAY_ID=screenpipe-hosted-chat-staging
 # Local development only. Use the token created in Gateway Settings when
 # enabling Authenticated Gateway; Wrangler's OAuth token is not a Gateway run

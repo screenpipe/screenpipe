@@ -427,6 +427,8 @@ jobs:
         shell: pwsh
         env:
           CI: true
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
           ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
           ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
           ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
@@ -455,6 +457,13 @@ jobs:
 
           powershell -ExecutionPolicy Bypass -File src-tauri\sign-ssl.ps1 $persistent
           if ($LASTEXITCODE -ne 0) { throw "Persistent installer signing failed" }
+
+          # The Authenticode pass changes the installer bytes. Sign those final
+          # bytes with the same updater key the LocalSystem supervisor pins.
+          bunx tauri signer sign $persistent
+          if ($LASTEXITCODE -ne 0) { throw "Persistent updater signing failed" }
+          $updaterSignature = Get-Item "$persistent.sig" -ErrorAction Stop
+          if ($updaterSignature.Length -eq 0) { throw "Persistent updater signature is empty" }
 
           $signature = Get-AuthenticodeSignature -LiteralPath $persistent
           if ($signature.Status -ne 'Valid') {
@@ -1266,6 +1275,8 @@ jobs:
       - name: Build standard and persistent enterprise .pkg installers
         shell: bash
         env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
@@ -1405,6 +1416,13 @@ jobs:
             echo ".pkg notarized and stapled: $(basename "$PKG_OUTPUT")"
           done
 
+          # The app verifies the immutable persistent package before handing it
+          # to the root supervisor. Sign only after notarization/stapling, since
+          # stapling changes the package bytes.
+          rm -f "${PERSISTENT_PKG}.sig"
+          ( cd "${GITHUB_WORKSPACE}/apps/screenpipe-app-tauri" && bunx tauri signer sign "${GITHUB_WORKSPACE}/${PERSISTENT_PKG}" )
+          test -s "${PERSISTENT_PKG}.sig"
+
       - name: Upload to R2
         if: github.event.inputs.dry_run != 'true'
         shell: bash
@@ -1418,6 +1436,7 @@ jobs:
           .github/scripts/upload-release-artifacts.sh enterprise "$VERSION" "$TARGET" \
             "${BUNDLE_DIR}"/dmg/*.dmg \
             "${BUNDLE_DIR}"/pkg/*.pkg \
+            "${BUNDLE_DIR}"/pkg/*.pkg.sig \
             "${BUNDLE_DIR}"/macos/*.app.tar.gz \
             "${BUNDLE_DIR}"/macos/*.app.tar.gz.sig
 
@@ -1428,6 +1447,7 @@ jobs:
           path: |
             apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
             apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/pkg/*.pkg
+            apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/pkg/*.pkg.sig
             apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
             apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
 

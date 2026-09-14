@@ -19,6 +19,14 @@ export SCREENPIPE_API_KEY="$(npx -y screenpipe@latest auth token)"
 
 you can also reveal it in **Settings → Privacy → API security**. the examples below include the required bearer header. `/health` is the exception.
 
+For scripts that call the API directly, add `X-Screenpipe-Client: api` as a fixed header. This identifies the request as an external API client; do not put an agent name, customer name, or prompt in this header:
+
+```bash
+curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
+  -H "X-Screenpipe-Client: api" \
+  "http://localhost:3030/search?limit=20&start_time=24h+ago&end_time=now"
+```
+
 ## 1. check that screenpipe is alive
 
 ```bash

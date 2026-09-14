@@ -88,6 +88,10 @@ describe("connection suggestions", () => {
 });
 
 describe("connection search", () => {
+  it.each(["grokbot", "grok bot", "x.ai"])("finds Grok Bot with %s", (query) => {
+    expect(connectionMatchesSearch(tile("grokbot", { name: "Grok Bot" }), query)).toBe(true);
+  });
+
   const gmail = tile("gmail", {
     name: "Gmail",
     description: "Read your Gmail inbox",

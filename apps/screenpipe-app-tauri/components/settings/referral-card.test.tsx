@@ -32,6 +32,7 @@ vi.mock("@/lib/utils/tauri", () => ({
 vi.mock("@/components/ui/use-toast", () => ({ toast: mocks.toast }));
 
 import { ReferralCard } from "./referral-card";
+import { installAuthInterceptor } from "@/lib/auth-guard";
 
 const referral = {
   code: "REF-A1B2C3D4",
@@ -76,17 +77,23 @@ describe("ReferralCard", () => {
     );
   });
 
-  it("explains paid-plan eligibility instead of showing a broken trial link", async () => {
+  it("keeps a free account signed in when it has no referral code", async () => {
     mocks.user = { email: "trial@screenpipe.com", token: "token-1" };
+    const clearSession = vi.fn(async () => {
+      mocks.user = null;
+    });
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ error: "no referral code found" }), {
-          status: 404,
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const authenticated =
+          new Headers(init?.headers).get("Authorization") === "Bearer token-1";
+        return new Response(
+          JSON.stringify({ error: authenticated ? "no referral code found" : "unauthorized" }),
+          { status: authenticated ? 404 : 401 },
+        );
+      }),
     );
+    installAuthInterceptor(() => mocks.user?.token, clearSession);
 
     render(<ReferralCard />);
 
@@ -94,6 +101,8 @@ describe("ReferralCard", () => {
       await screen.findByText(/free Business trial does not create a referral code/i),
     ).toBeInTheDocument();
     expect(screen.queryByDisplayValue(/REF-/i)).not.toBeInTheDocument();
+    expect(clearSession).not.toHaveBeenCalled();
+    expect(mocks.user?.token).toBe("token-1");
   });
 
   it("shows a retry path when referral loading fails", async () => {

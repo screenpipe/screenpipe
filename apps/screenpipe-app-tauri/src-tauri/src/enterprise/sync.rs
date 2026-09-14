@@ -30,7 +30,7 @@
 //!   (15min) so first batch isn't empty
 //! - **Body too large** — paginate via `limit` + advance cursor incrementally
 //! - **Clock skew** — cursor is the *server's* timestamp from frames table, not
-//!   wall-clock; idempotency is by `(device_id, frame_id)` server-side
+//!   wall-clock; explicit backfills use deterministic batch storage keys
 //! - **Graceful shutdown** — task respects cancellation token, drains in flight
 
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,9 @@ use tracing::{debug, error, info, warn};
 
 #[path = "upload.rs"]
 mod enterprise_upload;
+
+#[path = "backfill.rs"]
+mod backfill;
 use enterprise_upload::{
     upload_direct_readable_batch, upload_direct_write_only_batch, DirectUploadRecordCounts,
     EnterpriseUploadMode,
@@ -250,6 +253,9 @@ pub struct Cursor {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct CursorBoundary {
+    /// Recovery-only counter, checkpointed atomically with the acknowledged cursor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    backfill_records: Option<u64>,
     frames: u32,
     audio: u32,
     ui: u32,
@@ -307,7 +313,16 @@ impl Cursor {
 /// inject a mock without spinning up the real server. Implemented in the
 /// desktop crate against `LocalApiContext`.
 #[async_trait::async_trait]
+pub trait ExportAdmission: Send + Sync {
+    async fn admit(&self) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, EnterpriseSyncError>;
+}
+
+#[async_trait::async_trait]
 pub trait LocalApiClient: Send + Sync {
+    async fn begin_export(&self) -> Result<Option<Box<dyn ExportAdmission>>, EnterpriseSyncError> {
+        Ok(None)
+    }
+
     async fn initialized_upload_source_id(&self) -> Option<String> {
         None
     }
@@ -544,7 +559,7 @@ pub async fn post_jsonl(
     license_key: &str,
     body: Vec<u8>,
 ) -> Result<(), EnterpriseSyncError> {
-    post_jsonl_with_identity(client, url, license_key, body, None).await
+    post_jsonl_with_identity(client, url, license_key, body, None, false).await
 }
 
 async fn post_jsonl_with_identity(
@@ -553,11 +568,15 @@ async fn post_jsonl_with_identity(
     license_key: &str,
     body: Vec<u8>,
     stable_device_id: Option<&str>,
+    backfill: bool,
 ) -> Result<(), EnterpriseSyncError> {
     let mut request = client
         .post(url)
         .header("X-License-Key", license_key)
         .header("Content-Type", "application/x-ndjson");
+    if backfill {
+        request = request.header("X-Screenpipe-Backfill", "1");
+    }
     if let Some(device) = stable_device_id {
         request = request.header("X-Screenpipe-Stable-Device-Id", device);
     }
@@ -748,7 +767,7 @@ pub async fn run_one_sync(
     local: &dyn LocalApiClient,
     http: &reqwest::Client,
 ) -> Result<SyncTickReport, EnterpriseSyncError> {
-    run_one_sync_inner(cfg, cursor, local, http, true).await
+    run_one_sync_inner(cfg, cursor, local, http, true, None).await
 }
 
 async fn run_one_sync_inner(
@@ -757,12 +776,14 @@ async fn run_one_sync_inner(
     local: &dyn LocalApiClient,
     http: &reqwest::Client,
     include_snapshot: bool,
+    backfill: Option<&backfill::BackfillRequest>,
 ) -> Result<SyncTickReport, EnterpriseSyncError> {
     if let EnterpriseUploadMode::Blocked(reason) = &cfg.upload_mode {
         return Err(EnterpriseSyncError::Configuration(reason.clone()));
     }
 
     let prepared = prepare_upload_identity(cfg, local, http).await?;
+    let export = local.begin_export().await?;
     let cfg = &prepared;
     if cfg.stable_device_id.is_none()
         && cursor.source_id.is_some()
@@ -774,10 +795,22 @@ async fn run_one_sync_inner(
     }
     if cfg.stable_device_id.is_some() && cursor.source_id.as_deref() != Some(cfg.device_id.as_str())
     {
-        *cursor = Cursor {
-            source_id: Some(cfg.device_id.clone()),
-            ..Cursor::default()
-        };
+        if backfill.is_some() {
+            if cursor.source_id.is_some() {
+                return Err(EnterpriseSyncError::Configuration(
+                    "backfill database changed; request a new recovery".into(),
+                ));
+            }
+            // Pin this recovery to its database without resetting the admin's
+            // historical start to the normal first-run safety window.
+            cursor.source_id = Some(cfg.device_id.clone());
+            cursor.save(&cfg.cursor_path)?;
+        } else {
+            *cursor = Cursor {
+                source_id: Some(cfg.device_id.clone()),
+                ..Cursor::default()
+            };
+        }
     }
 
     // First-run safeguard: if cursor is empty, backfill SAFE_BACKFILL only —
@@ -824,9 +857,12 @@ async fn run_one_sync_inner(
     // API for its rows; the cursor for that kind stays put, so re-enabling
     // resumes from where the toggle-off happened (capped by SAFE_BACKFILL
     // anyway).
-    let streams = crate::enterprise_policy::current_sync_streams();
+    let mut streams = crate::enterprise_policy::current_sync_streams();
+    if let Some(request) = backfill {
+        streams = request.restrict_streams(streams)?;
+    }
 
-    let frames = if streams.frames {
+    let mut frames = if streams.frames {
         local
             .fetch_frames_since(
                 cursor.last_frame_ts.as_deref(),
@@ -837,7 +873,7 @@ async fn run_one_sync_inner(
     } else {
         Vec::new()
     };
-    let audio = if streams.audio {
+    let mut audio = if streams.audio {
         local
             .fetch_audio_since(
                 cursor.last_audio_ts.as_deref(),
@@ -851,13 +887,16 @@ async fn run_one_sync_inner(
     // UI events are best-effort — a backend that doesn't expose them yet
     // (or blocks the search query) shouldn't kill the whole sync batch.
     // The frame + audio paths are the load-bearing ones.
-    let ui = if streams.ui_events {
+    let mut ui = if streams.ui_events {
         match local
             .fetch_ui_events_since(cursor.last_ui_ts.as_deref(), cursor.boundary.ui, PAGE_LIMIT)
             .await
         {
             Ok(rows) => rows,
             Err(e) => {
+                if backfill.is_some() {
+                    return Err(e);
+                }
                 warn!("enterprise sync: ui fetch failed (skipping): {}", e);
                 Vec::new()
             }
@@ -882,7 +921,7 @@ async fn run_one_sync_inner(
     // Memories are best-effort too — a client that predates the trait
     // method, or a server without the /memories route, must not kill
     // the frame+audio path. The default trait impl returns empty.
-    let memories = if streams.memories {
+    let mut memories = if streams.memories {
         match local
             .fetch_memories_since(
                 cursor.last_memory_ts.as_deref(),
@@ -893,6 +932,9 @@ async fn run_one_sync_inner(
         {
             Ok(rows) => rows,
             Err(e) => {
+                if backfill.is_some() {
+                    return Err(e);
+                }
                 warn!("enterprise sync: memory fetch failed (skipping): {}", e);
                 Vec::new()
             }
@@ -911,6 +953,9 @@ async fn run_one_sync_inner(
         {
             Ok(rows) => rows,
             Err(error) => {
+                if backfill.is_some() {
+                    return Err(error);
+                }
                 warn!(
                     "enterprise sync: feedback fetch failed (skipping): {}",
                     error
@@ -931,7 +976,7 @@ async fn run_one_sync_inner(
     // Parsed app data is a separate privacy-sensitive stream. It is best
     // effort because parser support is optional and older local servers do
     // not expose content_type=parsed.
-    let parsed = if streams.parsed {
+    let mut parsed = if streams.parsed {
         match local
             .fetch_parsed_since(
                 cursor.last_parsed_ts.as_deref(),
@@ -942,6 +987,9 @@ async fn run_one_sync_inner(
         {
             Ok(rows) => rows,
             Err(e) => {
+                if backfill.is_some() {
+                    return Err(e);
+                }
                 warn!("enterprise sync: parsed fetch failed (skipping): {}", e);
                 Vec::new()
             }
@@ -956,13 +1004,25 @@ async fn run_one_sync_inner(
         {
             Ok(rows) => rows,
             Err(error) => {
-                warn!("enterprise sync: activity fetch failed (skipping): {}", error);
+                warn!(
+                    "enterprise sync: activity fetch failed (skipping): {}",
+                    error
+                );
                 Vec::new()
             }
         }
     } else {
         Vec::new()
     };
+
+    if let Some(request) = backfill {
+        request.retain_in_range(&mut frames, |r| &r.timestamp)?;
+        request.retain_in_range(&mut audio, |r| &r.timestamp)?;
+        request.retain_in_range(&mut ui, |r| &r.timestamp)?;
+        request.retain_in_range(&mut memories, |r| &r.created_at)?;
+        request.retain_in_range(&mut parsed, |r| &r.timestamp)?;
+        request.retain_in_range(&mut feedback, |r| &r.updated_at)?;
+    }
 
     if frames.is_empty()
         && audio.is_empty()
@@ -1045,14 +1105,20 @@ async fn run_one_sync_inner(
     match &cfg.upload_mode {
         EnterpriseUploadMode::HostedIngest => {
             for request_body in split_jsonl_requests(body, HOSTED_INGEST_REQUEST_BYTES) {
-                post_jsonl_with_identity(
+                let admission = match &export {
+                    Some(token) => token.admit().await?,
+                    None => None,
+                };
+                let upload = post_jsonl_with_identity(
                     http,
                     &cfg.ingest_url,
                     &cfg.license_key,
                     request_body,
                     cfg.stable_device_id.as_deref(),
-                )
-                .await?;
+                    backfill.is_some(),
+                );
+                drop(admission);
+                upload.await?;
             }
         }
         EnterpriseUploadMode::DirectWriteOnly(direct) => {
@@ -1066,15 +1132,20 @@ async fn run_one_sync_inner(
                 memories: memories.len(),
                 feedback: feedback.len(),
             };
-            upload_direct_write_only_batch(
+            let admission = match &export {
+                Some(token) => token.admit().await?,
+                None => None,
+            };
+            let upload = upload_direct_write_only_batch(
                 http,
                 cfg,
                 direct,
                 body,
                 counts,
                 enterprise_upload::direct_upload_cursors(&next_cursor),
-            )
-            .await?;
+            );
+            drop(admission);
+            upload.await?;
         }
         EnterpriseUploadMode::DirectReadable(direct) => {
             let counts = DirectUploadRecordCounts {
@@ -1087,19 +1158,31 @@ async fn run_one_sync_inner(
                 memories: memories.len(),
                 feedback: feedback.len(),
             };
-            upload_direct_readable_batch(
+            let admission = match &export {
+                Some(token) => token.admit().await?,
+                None => None,
+            };
+            let upload = upload_direct_readable_batch(
                 http,
                 cfg,
                 direct,
                 body,
                 counts,
                 enterprise_upload::direct_upload_cursors(&next_cursor),
-            )
-            .await?;
+            );
+            drop(admission);
+            upload.await?;
         }
         EnterpriseUploadMode::Blocked(reason) => {
             return Err(EnterpriseSyncError::Configuration(reason.clone()));
         }
+    }
+
+    if backfill.is_some() {
+        let records =
+            frames.len() + audio.len() + ui.len() + parsed.len() + memories.len() + feedback.len();
+        next_cursor.boundary.backfill_records =
+            Some(cursor.boundary.backfill_records.unwrap_or(0) + records as u64);
     }
 
     // Advance cursor only on success — partial failure must not skip records.
@@ -1205,7 +1288,7 @@ pub async fn run_sync_burst(
     let mut include_snapshot = true;
 
     loop {
-        let page = run_one_sync_inner(cfg, cursor, local, http, include_snapshot).await?;
+        let page = run_one_sync_inner(cfg, cursor, local, http, include_snapshot, None).await?;
         include_snapshot = false;
         let more_pending = page.may_have_more();
         burst.total.add_assign(&page);
@@ -1719,10 +1802,18 @@ async fn acknowledge_log_request(
 /// a session even if the ack POST is lost); `None` when there was nothing new.
 /// Best-effort; never panics.
 async fn fulfill_log_requests(
-    cfg: &EnterpriseSyncConfig,
+    cfg: &mut EnterpriseSyncConfig,
     http: &reqwest::Client,
     already_handled: Option<&str>,
 ) -> Option<String> {
+    // This worker owns a separate config from the recording sync loop. Resolve
+    // its policy before polling: the startup clone is Blocked, and later policy
+    // changes must also reach this worker while recording is unavailable.
+    if let Err(error) = cfg.resolve_upload_mode().await {
+        debug!("log-requests: policy resolution failed: {error}");
+        return None;
+    }
+
     // Only strict write-only storage disables remote support logs.
     // Existing readable customer-storage orgs deliberately grant Screenpipe
     // read access so cloud pipes and support workflows continue to work.
@@ -1787,14 +1878,15 @@ async fn fulfill_log_requests(
 }
 
 async fn run_log_request_loop(
-    cfg: EnterpriseSyncConfig,
+    mut cfg: EnterpriseSyncConfig,
     http: reqwest::Client,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     let mut last_log_req: Option<String> = None;
 
     loop {
-        if let Some(handled) = fulfill_log_requests(&cfg, &http, last_log_req.as_deref()).await {
+        if let Some(handled) = fulfill_log_requests(&mut cfg, &http, last_log_req.as_deref()).await
+        {
             last_log_req = Some(handled);
         }
 
@@ -2045,6 +2137,14 @@ pub async fn run(
                 }
                 backoff = BACKOFF_INITIAL;
 
+                // Historical recovery has its own cursor and a bounded work budget.
+                // Live syncing always runs first. Failure here never rewinds it.
+                if let Err(error) =
+                    backfill::fulfill_requests(&cfg, local.as_ref(), &http, &shutdown).await
+                {
+                    warn!("enterprise backfill: will retry: {}", error);
+                }
+
                 // On-demand frame fulfillment — best-effort, gated on the
                 // frame_images stream + hosted mode inside; never affects
                 // the sync cursor or backoff.
@@ -2209,21 +2309,55 @@ mod tests {
 
     #[tokio::test]
     async fn strict_customer_storage_never_collects_remote_diagnostic_logs() {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _mode_env = UploadModeEnvGuard::clear();
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path(
+                "/api/enterprise/storage-binding/mode",
+            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({ "desired_mode": "direct_upload_write_only" }),
+                ),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::path("/api/enterprise/log-requests"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
         let dir = TempDir::new().unwrap();
-        let cfg = direct_test_cfg(
-            &dir,
-            "http://should-not-be-called/ticket".to_string(),
-            "http://should-not-be-called/complete".to_string(),
-        );
+        // A previously readable worker must stop polling when policy changes.
+        let mut cfg = test_cfg(&dir, format!("{}/api/enterprise/ingest", server.uri()));
 
-        let handled = fulfill_log_requests(&cfg, &reqwest::Client::new(), None).await;
+        let handled = fulfill_log_requests(&mut cfg, &enterprise_http_client(), None).await;
 
         assert!(handled.is_none());
+        assert!(matches!(
+            cfg.upload_mode,
+            EnterpriseUploadMode::DirectWriteOnly(_)
+        ));
     }
 
     #[tokio::test]
     async fn readable_customer_storage_keeps_remote_diagnostic_logs_available() {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _mode_env = UploadModeEnvGuard::clear();
         let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path(
+                "/api/enterprise/storage-binding/mode",
+            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "desired_mode": "direct_upload_readable" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path("/api/enterprise/log-requests"))
             .respond_with(
@@ -2242,9 +2376,69 @@ mod tests {
         );
         cfg.ingest_url = format!("{}/api/enterprise/ingest", server.uri());
 
-        let handled = fulfill_log_requests(&cfg, &reqwest::Client::new(), None).await;
+        let handled = fulfill_log_requests(&mut cfg, &enterprise_http_client(), None).await;
 
         assert!(handled.is_none());
+    }
+
+    #[tokio::test]
+    async fn log_requests_recover_initially_blocked_policy_after_lookup_failure() {
+        let _env_lock = ENV_LOCK.lock().unwrap();
+        let _mode_env = UploadModeEnvGuard::clear();
+        let server = wiremock::MockServer::start().await;
+        let dir = TempDir::new().unwrap();
+        let mut cfg = test_cfg(&dir, format!("{}/api/enterprise/ingest", server.uri()));
+        cfg.upload_mode = EnterpriseUploadMode::Blocked("startup policy unresolved".to_string());
+        let http = enterprise_http_client();
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path(
+                "/api/enterprise/storage-binding/mode",
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(503))
+            .expect(1)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::path("/api/enterprise/log-requests"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        assert!(fulfill_log_requests(&mut cfg, &http, None).await.is_none());
+        assert!(matches!(cfg.upload_mode, EnterpriseUploadMode::Blocked(_)));
+        server.verify().await;
+        server.reset().await;
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path(
+                "/api/enterprise/storage-binding/mode",
+            ))
+            .and(wiremock::matchers::header("x-license-key", "sek_test"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "desired_mode": "hosted_ingest" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/enterprise/log-requests"))
+            .and(wiremock::matchers::header("x-device-id", "dev-1"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "requested": false })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // The log worker recovers without running recording sync or changing keys.
+        assert!(fulfill_log_requests(&mut cfg, &http, None).await.is_none());
+        assert!(matches!(
+            cfg.upload_mode,
+            EnterpriseUploadMode::HostedIngest
+        ));
     }
 
     #[tokio::test]
@@ -3603,6 +3797,7 @@ mod tests {
 
     #[tokio::test]
     async fn first_run_seeds_cursor_to_recent_window() {
+        let _guard = crate::enterprise_policy::sync_streams_test_lock();
         let dir = TempDir::new().unwrap();
         let cfg = test_cfg(&dir, "http://does-not-matter".into());
         let mut cursor = Cursor::default();
@@ -4226,10 +4421,9 @@ mod tests {
             "2026-09-02T18:15:00Z",
         )]]);
 
-        let disabled_report =
-            run_one_sync(&cfg, &mut cursor, &local, &reqwest::Client::new())
-                .await
-                .unwrap();
+        let disabled_report = run_one_sync(&cfg, &mut cursor, &local, &reqwest::Client::new())
+            .await
+            .unwrap();
         assert_eq!(disabled_report.activities, 0);
         assert!(local.last_activity_since.lock().unwrap().is_none());
         assert!(server.received_requests().await.unwrap().is_empty());
@@ -4245,7 +4439,10 @@ mod tests {
         );
         let requests = server.received_requests().await.unwrap();
         let batch = screenpipe_telemetry_wire::parse_jsonl(&requests[0].body);
-        assert!(matches!(batch.records.as_slice(), [TelemetryRecord::Activity { .. }]));
+        assert!(matches!(
+            batch.records.as_slice(),
+            [TelemetryRecord::Activity { .. }]
+        ));
     }
 
     #[tokio::test]

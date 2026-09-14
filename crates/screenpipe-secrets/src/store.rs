@@ -16,8 +16,10 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 use crate::crypto;
 use crate::telemetry::ReportSecretStoreSqliteIntegrity;
 use screenpipe_sqlite_coordinator::{
-    latch_sqlite_error, prepare_sqlite_quarantine_reserve, registered_sqlite_hard_fault,
-    sqlite_write_lock, verify_sqlite_runtime,
+    admit_verified_sqlite_generation, begin_sqlite_verification, inspect_database_health,
+    latch_sqlite_error, prepare_sqlite_quarantine_reserve, quarantine_verified_sqlite_generation,
+    registered_sqlite_hard_fault, sqlite_confirmed_corruption_exists, sqlite_write_lock,
+    verify_sqlite_runtime, DatabaseHealthError,
 };
 
 pub const SECRETS_DATABASE_FILENAME: &str = "secrets.sqlite";
@@ -108,17 +110,38 @@ fn secret_connect_options(db_path: &str) -> SqliteConnectOptions {
 pub async fn shared_secret_pool(db_path: &str) -> Result<SqlitePool> {
     verify_sqlite_runtime().map_err(|error| anyhow::anyhow!(error))?;
     let pool_key = secret_pool_key(db_path);
-    if let Some(code) = registered_sqlite_hard_fault(&pool_key) {
-        anyhow::bail!(
-            "refusing to open quarantined secret database {} (SQLite code {})",
-            db_path,
-            code
-        );
-    }
     let mut cache = secret_pools().lock().await;
-    if let Some(pool) = cache.get(&pool_key) {
-        return Ok(pool.clone());
+    if registered_sqlite_hard_fault(&pool_key).is_some() {
+        // close() reaches every clone held by long-lived SecretStore owners.
+        // Keep a timed-out pool registered: a later retry must finish teardown.
+        if let Some(pool) = cache.get(&pool_key) {
+            tokio::time::timeout(Duration::from_secs(15), pool.close())
+                .await
+                .context("waiting for previous secret database connections to close")?;
+        }
+        if sqlite_confirmed_corruption_exists(&pool_key) {
+            anyhow::bail!("secret database has verified damage; protected repair required");
+        }
+        let token = begin_sqlite_verification(&pool_key)?;
+        if !token.is_new_database() {
+            match inspect_database_health(&pool_key).await {
+                Ok(_) => {}
+                Err(DatabaseHealthError::Unavailable(error)) => return Err(error.into()),
+                Err(DatabaseHealthError::Corrupt(detail)) => {
+                    quarantine_verified_sqlite_generation(token, Some(11), &detail)?;
+                    anyhow::bail!("secret database has verified damage: {detail}");
+                }
+            }
+        }
+        admit_verified_sqlite_generation(token)?;
+        cache.remove(&pool_key);
     }
+    if let Some(pool) = cache.get(&pool_key) {
+        if !pool.is_closed() {
+            return Ok(pool.clone());
+        }
+    }
+    cache.remove(&pool_key);
     // Reserve creation and first open are one serialized lifecycle step.
     // Preparing before the cache lock lets concurrent first-open callers race
     // while the database file gains its initial identity: one caller can
@@ -149,6 +172,10 @@ pub async fn shared_secret_pool(db_path: &str) -> Result<SqlitePool> {
             return Err(error).context("failed to open shared secret-store pool");
         }
     };
+    if let Err(error) = prepare_sqlite_quarantine_reserve(&pool_key) {
+        pool.close().await;
+        return Err(error).context("failed to identify initialized secret database");
+    }
     cache.insert(pool_key, pool.clone());
     Ok(pool)
 }
@@ -171,6 +198,9 @@ pub async fn close_all_secret_pools() {
 
 pub struct SecretStore {
     pool: SqlitePool,
+    // Owned stores resolve current pools on every operation so long-lived
+    // Arc<SecretStore> users do not retain a retired writer generation.
+    database_path: Option<String>,
     key: Option<[u8; 32]>, // None = encryption disabled (keychain unavailable)
     write_lock: Option<Arc<Semaphore>>,
     database_error_hook: Option<DatabaseErrorHook>,
@@ -238,6 +268,7 @@ impl SecretStore {
 
         Ok(Self {
             pool,
+            database_path: None,
             key,
             write_lock,
             database_error_hook,
@@ -255,13 +286,15 @@ impl SecretStore {
         let hook: DatabaseErrorHook = Arc::new(move |error| {
             latch_sqlite_error(&path, error);
         });
-        Self::new_with_write_lock(
+        let mut store = Self::new_with_write_lock(
             pool,
             key,
             Some(sqlite_write_lock(&canonical_path)),
             Some(hook),
         )
-        .await
+        .await?;
+        store.database_path = Some(canonical_path);
+        Ok(store)
     }
 
     /// Open the production credential database with an explicitly selected
@@ -294,7 +327,8 @@ impl SecretStore {
     }
 
     async fn migrate_legacy_main_database(&self, legacy_path: &Path) -> Result<()> {
-        let _write_permit = acquire_write_permit(&self.write_lock).await?;
+        let (pool, write_lock) = self.operation_database().await?;
+        let _write_permit = acquire_write_permit(&write_lock).await?;
         self.observe(
             sqlx::query(
                 "CREATE TABLE IF NOT EXISTS secret_store_metadata (
@@ -302,7 +336,7 @@ impl SecretStore {
                     value TEXT NOT NULL
                 )",
             )
-            .execute(&self.pool)
+            .execute(&pool)
             .await,
         )
         .context("failed to initialize secret-store metadata")?;
@@ -313,7 +347,7 @@ impl SecretStore {
                     "SELECT EXISTS(SELECT 1 FROM secret_store_metadata WHERE key = ?)",
                 )
                 .bind(LEGACY_MIGRATION_KEY)
-                .fetch_one(&self.pool)
+                .fetch_one(&pool)
                 .await,
             )
             .context("failed to inspect legacy secret migration state")?;
@@ -383,7 +417,7 @@ impl SecretStore {
         };
 
         let mut transaction = self
-            .observe(self.pool.begin().await)
+            .observe(pool.begin().await)
             .context("failed to begin legacy secret migration")?;
         for row in rows {
             self.observe(
@@ -421,6 +455,16 @@ impl SecretStore {
         Ok(())
     }
 
+    async fn operation_database(&self) -> Result<(SqlitePool, Option<Arc<Semaphore>>)> {
+        match self.database_path.as_ref() {
+            Some(path) => {
+                let pool = shared_secret_pool(path).await?;
+                Ok((pool, Some(sqlite_write_lock(path))))
+            }
+            None => Ok((self.pool.clone(), self.write_lock.clone())),
+        }
+    }
+
     fn observe<T>(
         &self,
         result: std::result::Result<T, sqlx::Error>,
@@ -430,7 +474,8 @@ impl SecretStore {
 
     /// Store a secret value, encrypting it if an encryption key is available.
     pub async fn set(&self, key: &str, value: &[u8]) -> Result<()> {
-        let _write_permit = acquire_write_permit(&self.write_lock).await?;
+        let (pool, write_lock) = self.operation_database().await?;
+        let _write_permit = acquire_write_permit(&write_lock).await?;
         let (stored_value, nonce) = match &self.key {
             Some(enc_key) => {
                 let (ciphertext, nonce) = crypto::encrypt(value, enc_key)?;
@@ -455,7 +500,7 @@ impl SecretStore {
             .bind(key)
             .bind(&stored_value)
             .bind(&nonce)
-            .execute(&self.pool)
+            .execute(&pool)
             .await,
         )
         .report_secret_store_integrity("set", Some(key), Some(self.key.is_some()))
@@ -475,7 +520,8 @@ impl SecretStore {
         owner: &str,
         lease_seconds: u64,
     ) -> Result<bool> {
-        let _write_permit = acquire_write_permit(&self.write_lock).await?;
+        let (pool, write_lock) = self.operation_database().await?;
+        let _write_permit = acquire_write_permit(&write_lock).await?;
         let lease_seconds = i64::try_from(lease_seconds).unwrap_or(i64::MAX);
         let result = self
             .observe(
@@ -491,7 +537,7 @@ impl SecretStore {
                 .bind(key)
                 .bind(owner)
                 .bind(lease_seconds)
-                .execute(&self.pool)
+                .execute(&pool)
                 .await,
             )
             .report_secret_store_integrity(
@@ -505,12 +551,13 @@ impl SecretStore {
 
     /// Release a refresh lease without disturbing a newer owner.
     pub async fn release_refresh_lease(&self, key: &str, owner: &str) -> Result<()> {
-        let _write_permit = acquire_write_permit(&self.write_lock).await?;
+        let (pool, write_lock) = self.operation_database().await?;
+        let _write_permit = acquire_write_permit(&write_lock).await?;
         self.observe(
             sqlx::query("DELETE FROM credential_refresh_leases WHERE key = ? AND owner = ?")
                 .bind(key)
                 .bind(owner)
-                .execute(&self.pool)
+                .execute(&pool)
                 .await,
         )
         .report_secret_store_integrity("release_refresh_lease", Some(key), Some(self.key.is_some()))
@@ -520,11 +567,12 @@ impl SecretStore {
 
     /// Retrieve and decrypt a secret value. Returns None if the key doesn't exist.
     pub async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        let (pool, _) = self.operation_database().await?;
         let row: Option<(Vec<u8>, Vec<u8>)> = self
             .observe(
                 sqlx::query_as("SELECT value, nonce FROM secrets WHERE key = ?")
                     .bind(key)
-                    .fetch_optional(&self.pool)
+                    .fetch_optional(&pool)
                     .await,
             )
             .report_secret_store_integrity("get", Some(key), Some(self.key.is_some()))
@@ -562,11 +610,12 @@ impl SecretStore {
 
     /// Get the updated_at timestamp for a secret. Returns None if key doesn't exist.
     pub async fn get_updated_at(&self, key: &str) -> Result<Option<String>> {
+        let (pool, _) = self.operation_database().await?;
         let row: Option<(String,)> = self
             .observe(
                 sqlx::query_as("SELECT updated_at FROM secrets WHERE key = ?")
                     .bind(key)
-                    .fetch_optional(&self.pool)
+                    .fetch_optional(&pool)
                     .await,
             )
             .report_secret_store_integrity("get_updated_at", Some(key), Some(self.key.is_some()))
@@ -576,11 +625,12 @@ impl SecretStore {
 
     /// Delete a secret by key.
     pub async fn delete(&self, key: &str) -> Result<()> {
-        let _write_permit = acquire_write_permit(&self.write_lock).await?;
+        let (pool, write_lock) = self.operation_database().await?;
+        let _write_permit = acquire_write_permit(&write_lock).await?;
         self.observe(
             sqlx::query("DELETE FROM secrets WHERE key = ?")
                 .bind(key)
-                .execute(&self.pool)
+                .execute(&pool)
                 .await,
         )
         .report_secret_store_integrity("delete", Some(key), Some(self.key.is_some()))
@@ -590,12 +640,13 @@ impl SecretStore {
 
     /// List all secret keys matching a prefix.
     pub async fn list(&self, prefix: &str) -> Result<Vec<String>> {
+        let (pool, _) = self.operation_database().await?;
         let pattern = format!("{}%", prefix);
         let rows: Vec<(String,)> = self
             .observe(
                 sqlx::query_as("SELECT key FROM secrets WHERE key LIKE ?")
                     .bind(&pattern)
-                    .fetch_all(&self.pool)
+                    .fetch_all(&pool)
                     .await,
             )
             .report_secret_store_integrity("list", Some(prefix), Some(self.key.is_some()))
@@ -625,11 +676,12 @@ impl SecretStore {
     /// Called when the user enables keychain encryption after previously
     /// running without it. Returns the number of secrets re-encrypted.
     pub async fn reencrypt_unencrypted_secrets(&self, new_key: &[u8; 32]) -> Result<usize> {
-        let _write_permit = acquire_write_permit(&self.write_lock).await?;
+        let (pool, write_lock) = self.operation_database().await?;
+        let _write_permit = acquire_write_permit(&write_lock).await?;
         let rows: Vec<(String, Vec<u8>, Vec<u8>)> = self
             .observe(
                 sqlx::query_as("SELECT key, value, nonce FROM secrets")
-                    .fetch_all(&self.pool)
+                    .fetch_all(&pool)
                     .await,
             )
             .report_secret_store_integrity("reencrypt_list", None, Some(self.key.is_some()))
@@ -653,7 +705,7 @@ impl SecretStore {
             .bind(&ciphertext)
             .bind(new_nonce.as_slice())
             .bind(&secret_key)
-            .execute(&self.pool)
+            .execute(&pool)
             .await)
             .report_secret_store_integrity(
                 "reencrypt_update",
@@ -672,7 +724,8 @@ impl SecretStore {
     /// Called before disabling keychain encryption so CLI/app transitions do
     /// not strand older encrypted OAuth tokens behind a removed opt-in flag.
     pub async fn decrypt_encrypted_secrets(&self) -> Result<usize> {
-        let _write_permit = acquire_write_permit(&self.write_lock).await?;
+        let (pool, write_lock) = self.operation_database().await?;
+        let _write_permit = acquire_write_permit(&write_lock).await?;
         let enc_key = self
             .key
             .as_ref()
@@ -681,7 +734,7 @@ impl SecretStore {
         let rows: Vec<(String, Vec<u8>, Vec<u8>)> = self
             .observe(
                 sqlx::query_as("SELECT key, value, nonce FROM secrets")
-                    .fetch_all(&self.pool)
+                    .fetch_all(&pool)
                     .await,
             )
             .report_secret_store_integrity("decrypt_list", None, Some(self.key.is_some()))
@@ -707,7 +760,7 @@ impl SecretStore {
             .bind(&encoded)
             .bind(&zero_nonce)
             .bind(&secret_key)
-            .execute(&self.pool)
+            .execute(&pool)
             .await)
             .report_secret_store_integrity(
                 "decrypt_update",
@@ -724,12 +777,13 @@ impl SecretStore {
 
     /// Count rows that still require the keychain key to read.
     pub async fn encrypted_secret_count(&self) -> Result<usize> {
+        let (pool, _) = self.operation_database().await?;
         let row: (i64,) = self
             .observe(
                 sqlx::query_as(
                     "SELECT COUNT(*) FROM secrets WHERE hex(nonce) != '000000000000000000000000'",
                 )
-                .fetch_one(&self.pool)
+                .fetch_one(&pool)
                 .await,
             )
             .report_secret_store_integrity("encrypted_count", None, Some(self.key.is_some()))
@@ -790,6 +844,126 @@ mod tests {
 
         assert!(store.get("test:key").await.is_err());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn existing_owned_store_recovers_transient_fault_and_preserves_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("secrets.sqlite");
+        let store = SecretStore::open(db.to_str().unwrap(), None).await.unwrap();
+        store.set("test:before", b"preserved").await.unwrap();
+        let old_pool = store.pool.clone();
+        let old_lane = sqlite_write_lock(&db);
+        screenpipe_sqlite_coordinator::latch_sqlite_hard_fault(&db, 10);
+        assert!(old_lane.is_closed());
+        assert!(!screenpipe_sqlite_coordinator::sqlite_quarantine_exists(
+            &db
+        ));
+
+        // The same long-lived SecretStore resolves the replacement pool.
+        assert_eq!(
+            store.get("test:before").await.unwrap(),
+            Some(b"preserved".to_vec())
+        );
+        assert!(old_pool.is_closed());
+        assert!(old_lane.is_closed());
+        store.set("test:after", b"recorded").await.unwrap();
+        let reopened = SecretStore::open(db.to_str().unwrap(), None).await.unwrap();
+        assert_eq!(
+            reopened.get("test:after").await.unwrap(),
+            Some(b"recorded".to_vec())
+        );
+        assert!(!screenpipe_sqlite_coordinator::sqlite_verification_pending_exists(&db));
+        close_all_secret_pools().await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn refresh_leases_use_verified_replacement_pool_after_access_fault() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("leases.sqlite");
+        let store = SecretStore::open(db.to_str().unwrap(), None).await.unwrap();
+        assert!(store
+            .try_acquire_refresh_lease("oauth:test", "owner-a", 60)
+            .await
+            .unwrap());
+        let old_lane = sqlite_write_lock(&db);
+        screenpipe_sqlite_coordinator::latch_sqlite_hard_fault(&db, 10);
+        // Release must diagnose/reopen even when it is the first operation
+        // on this long-lived store after the old writer generation retired.
+        store
+            .release_refresh_lease("oauth:test", "owner-a")
+            .await
+            .unwrap();
+        assert!(old_lane.is_closed());
+        assert!(store
+            .try_acquire_refresh_lease("oauth:test", "owner-b", 60)
+            .await
+            .unwrap());
+        screenpipe_sqlite_coordinator::latch_sqlite_hard_fault(&db, 13);
+        // Acquisition can also be the first operation after recovery, while
+        // the persisted lease continues excluding competing refresh owners.
+        assert!(!store
+            .try_acquire_refresh_lease("oauth:test", "owner-c", 60)
+            .await
+            .unwrap());
+        store
+            .release_refresh_lease("oauth:test", "owner-b")
+            .await
+            .unwrap();
+        assert!(store
+            .try_acquire_refresh_lease("oauth:test", "owner-c", 60)
+            .await
+            .unwrap());
+        assert!(!screenpipe_sqlite_coordinator::sqlite_quarantine_exists(
+            &db
+        ));
+        close_all_secret_pools().await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn unavailable_secret_file_stays_retryable_then_same_store_resumes() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("secrets.sqlite");
+        let detached = dir.path().join("detached.sqlite");
+        let store = SecretStore::open(db.to_str().unwrap(), None).await.unwrap();
+        store.set("test:key", b"original").await.unwrap();
+        screenpipe_sqlite_coordinator::latch_sqlite_hard_fault(&db, 13);
+        store.pool.close().await;
+        std::fs::rename(&db, &detached).unwrap();
+        assert!(store.get("test:key").await.is_err());
+        assert!(store.get("test:key").await.is_err());
+        assert!(
+            !db.exists(),
+            "missing existing credentials must not be replaced with empty DB"
+        );
+        assert!(!screenpipe_sqlite_coordinator::sqlite_quarantine_exists(
+            &db
+        ));
+        std::fs::rename(&detached, &db).unwrap();
+        assert_eq!(
+            store.get("test:key").await.unwrap(),
+            Some(b"original".to_vec())
+        );
+        close_all_secret_pools().await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn verified_secret_damage_stays_closed_without_rebuilding() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("secrets.sqlite");
+        let store = SecretStore::open(db.to_str().unwrap(), None).await.unwrap();
+        screenpipe_sqlite_coordinator::latch_sqlite_hard_fault(&db, 10);
+        store.pool.close().await;
+        std::fs::write(&db, b"not a SQLite database").unwrap();
+        assert!(store.get("test:key").await.is_err());
+        assert!(sqlite_confirmed_corruption_exists(&db));
+        assert_eq!(std::fs::read(&db).unwrap(), b"not a SQLite database");
+        assert!(store.get("test:key").await.is_err());
+        close_all_secret_pools().await;
     }
 
     #[tokio::test]

@@ -8,7 +8,9 @@ use anyhow::{bail, Context, Result};
 use screenpipe_sqlite_coordinator::{sqlite_file_identity, SqliteFileIdentity};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 use sqlx::{ConnectOptions, Connection};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -19,56 +21,109 @@ pub struct RecoveryVerification {
     pub foreign_key_violations: usize,
 }
 
-/// Outcome of probing a quarantined generation that is still installed.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct QuarantineHealthProbe {
-    pub file_identity: SqliteFileIdentity,
-    pub quick_check_rows: usize,
+pub use screenpipe_sqlite_coordinator::{
+    inspect_database_health, DatabaseHealthError, QuarantineHealthProbe,
+};
+
+type LifecycleLocks = HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>;
+static LIFECYCLES: OnceLock<Mutex<LifecycleLocks>> = OnceLock::new();
+static OWNED_POOLS: OnceLock<Mutex<HashMap<PathBuf, Vec<sqlx::SqlitePool>>>> = OnceLock::new();
+
+fn lifecycle_key(path: &Path) -> PathBuf {
+    screenpipe_sqlite_coordinator::sqlite_quarantine_marker_path(path)
+        .unwrap_or_else(|| path.to_path_buf())
 }
 
-/// Read-only health probe for a quarantined generation still installed at its
-/// live path.
-///
-/// Distinct from [`verify_fresh_sqlite_recovery_candidate`], which vets a
-/// freshly rebuilt file before installation and may write to it. This one runs
-/// against the database the app refused to open, so it must not perturb that
-/// durable database or WAL bytes: the connection is strictly read-only, which
-/// keeps SQLite from checkpointing, truncating, or appending to them. SQLite
-/// may rebuild the disposable `-shm` WAL index while opening the connection.
-///
-/// `quick_check` — not `integrity_check` — because this runs at launch on a
-/// database that can be tens of gigabytes, and it is the same bar
-/// `screenpipe db check` already reports as "database is healthy". Callers
-/// that are about to *install* a generation still owe it the full battery.
+/// Serialize open/verification; fault admission itself is closed synchronously
+/// by the shared coordinator. The old pools stay registered until fully closed.
+pub(crate) async fn database_lifecycle(path: &Path) -> tokio::sync::OwnedMutexGuard<()> {
+    let lock = LIFECYCLES
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(lifecycle_key(path))
+        .or_default()
+        .clone();
+    lock.lock_owned().await
+}
+
+pub(crate) fn register_database_pool(path: &Path, pool: &sqlx::SqlitePool) {
+    let mut pools = OWNED_POOLS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let owners = pools.entry(lifecycle_key(path)).or_default();
+    owners.retain(|pool| !(pool.is_closed() && pool.size() == 0));
+    owners.push(pool.clone());
+}
+
+async fn close_registered_database_pools(path: &Path) -> Result<(), sqlx::Error> {
+    let pools = OWNED_POOLS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&lifecycle_key(path))
+        .cloned()
+        .unwrap_or_default();
+    // Start closing every pool together; wait for checked-out handles too.
+    tokio::time::timeout(
+        Duration::from_secs(15),
+        futures::future::join_all(pools.iter().map(|pool| pool.close())),
+    )
+    .await
+    .map_err(|_| {
+        sqlx::Error::Protocol(
+            "database verification waiting for previous connections to close".into(),
+        )
+    })?;
+    OWNED_POOLS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&lifecycle_key(path));
+    Ok(())
+}
+
+/// Called under database_lifecycle before any startup write. Both interrupted
+/// faults and legacy markers are diagnosed; only verified damage blocks repair.
+pub(crate) async fn verify_database_before_reopen(path: &Path) -> Result<(), sqlx::Error> {
+    use screenpipe_sqlite_coordinator as coordinator;
+    if coordinator::sqlite_confirmed_corruption_exists(path) {
+        return Err(sqlx::Error::Protocol(
+            "database has verified damage; protected repair required".into(),
+        ));
+    }
+    if !coordinator::sqlite_verification_pending_exists(path)
+        && !coordinator::sqlite_quarantine_exists(path)
+        && !coordinator::sqlite_hard_fault_latched(path)
+    {
+        return Ok(());
+    }
+    close_registered_database_pools(path).await?;
+    let token = coordinator::begin_sqlite_verification(path).map_err(sqlx::Error::Io)?;
+    if token.is_new_database() {
+        return coordinator::admit_verified_sqlite_generation(token).map_err(sqlx::Error::Io);
+    }
+    match inspect_database_health(path).await {
+        Ok(_) => coordinator::admit_verified_sqlite_generation(token).map_err(sqlx::Error::Io),
+        Err(DatabaseHealthError::Unavailable(error)) => Err(error),
+        Err(DatabaseHealthError::Corrupt(detail)) => {
+            coordinator::quarantine_verified_sqlite_generation(token, Some(11), &detail)
+                .map_err(sqlx::Error::Io)?;
+            Err(sqlx::Error::Protocol(format!(
+                "database has verified damage; protected repair required: {detail}"
+            )))
+        }
+    }
+}
+
+/// Verify a previously blocked generation. The shared verifier permits only
+/// SQLite-native hot-journal rollback when read-only verification requires it.
+/// Access failures remain distinct from confirmed damage in the shared verifier.
 pub async fn probe_quarantined_generation_health(
     path: impl AsRef<Path>,
 ) -> Result<QuarantineHealthProbe> {
-    let path = path.as_ref();
-    let file_identity = sqlite_file_identity(path)
-        .with_context(|| format!("reading identity of {}", path.display()))?;
-    let options = SqliteConnectOptions::new()
-        .filename(path)
-        .create_if_missing(false)
-        .read_only(true)
-        .busy_timeout(Duration::from_secs(5))
-        .disable_statement_logging();
-    let mut connection = SqliteConnection::connect_with(&options)
-        .await
-        .with_context(|| {
-            format!(
-                "opening quarantined generation {} read-only",
-                path.display()
-            )
-        })?;
-    let quick_check_rows = check_pragma_is_ok(&mut connection, "quick_check").await?;
-    connection
-        .close()
-        .await
-        .context("closing the quarantine health probe connection")?;
-    Ok(QuarantineHealthProbe {
-        file_identity,
-        quick_check_rows,
-    })
+    inspect_database_health(path).await.map_err(Into::into)
 }
 
 fn sqlite_sidecar(database_path: &Path, suffix: &str) -> PathBuf {

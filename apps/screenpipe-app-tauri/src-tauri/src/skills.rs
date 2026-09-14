@@ -25,7 +25,9 @@ use sha2::{Digest, Sha256};
 use specta::Type;
 use tracing::{info, warn};
 
-const AI_TOOL_AUTO_CONNECT_TARGETS: [&str; 9] = [
+pub(crate) const AI_TOOL_CHECK_INTERVAL: Duration = Duration::from_secs(60);
+
+const AI_TOOL_AUTO_CONNECT_TARGETS: [&str; 10] = [
     "claude",
     "claude-code",
     "codex",
@@ -35,16 +37,17 @@ const AI_TOOL_AUTO_CONNECT_TARGETS: [&str; 9] = [
     "hermes",
     "runner",
     "windsurf",
+    "grokbot",
 ];
 
-/// Orders the launch reconciler and Settings opt-out writes. Disconnect sets
+/// Orders the background reconciler and Settings opt-out writes. Disconnect sets
 /// its marker while holding this lock before removing MCP/skills, so an
-/// already-running launch repair cannot finish after the user's explicit
+/// already-running repair cannot finish after the user's explicit
 /// choice and reconnect that target.
 static AI_TOOL_AUTO_CONNECT_LOCK: Lazy<tokio::sync::Mutex<()>> =
     Lazy::new(|| tokio::sync::Mutex::new(()));
 
-fn ai_tool_auto_connect_opt_out_dir() -> PathBuf {
+pub(crate) fn ai_tool_auto_connect_opt_out_dir() -> PathBuf {
     screenpipe_core::paths::default_screenpipe_data_dir().join("ai-tool-auto-connect-opt-outs-v1")
 }
 
@@ -56,7 +59,7 @@ fn ai_tool_auto_connect_opt_outs_in(dir: &Path) -> BTreeSet<String> {
         .collect()
 }
 
-fn set_ai_tool_auto_connect_opt_out_in(
+pub(crate) fn set_ai_tool_auto_connect_opt_out_in(
     dir: &Path,
     target: &str,
     opt_out: bool,
@@ -84,7 +87,11 @@ async fn set_ai_tool_auto_connect_opt_out_serialized_in(
     target: String,
     opt_out: bool,
 ) -> Result<(), String> {
-    let _guard = AI_TOOL_AUTO_CONNECT_LOCK.lock().await;
+    let _guard = if target == "grokbot" {
+        crate::grokbot::GROKBOT_CONNECTION_LOCK.lock().await
+    } else {
+        AI_TOOL_AUTO_CONNECT_LOCK.lock().await
+    };
     tokio::task::spawn_blocking(move || {
         set_ai_tool_auto_connect_opt_out_in(&dir, &target, opt_out)
     })
@@ -160,11 +167,14 @@ async fn wait_for_background_api_key(api_auth_enabled: bool) -> Option<String> {
     }
 }
 
-/// On every app launch, connect detected local AI tools in a native background
-/// task. The task is non-blocking, retries naturally across
-/// permission-triggered app restarts, and is safe to run on every launch: it
-/// changes only missing or stale screenpipe-managed MCP and skill entries.
-pub fn connect_detected_ai_tools_in_background(api_auth_enabled: bool, api_port: u16) {
+/// Repair detected AI tools at startup, then watch for later installs. Successful
+/// targets are cached for this session; an explicit Settings disconnect still
+/// wins. Filesystem work stays off the async/UI threads.
+pub fn connect_detected_ai_tools_in_background(
+    _app: tauri::AppHandle,
+    api_auth_enabled: bool,
+    api_port: u16,
+) {
     let Some(home) = background_ai_tools_home() else {
         info!("AI tool background setup skipped: no home directory");
         return;
@@ -173,54 +183,60 @@ pub fn connect_detected_ai_tools_in_background(api_auth_enabled: bool, api_port:
         warn!("AI tool background setup skipped: bundled Bun was not found");
         return;
     };
+    // Grok Bot requires explicit credential access from Connections.
+    // Keep ordinary local MCP/skill configuration automatic.
     tauri::async_runtime::spawn(async move {
         let api_key = wait_for_background_api_key(api_auth_enabled).await;
+        connect_detected_ai_tools_in(
+            home,
+            bun_path,
+            api_key,
+            format!("http://localhost:{api_port}"),
+            ai_tool_auto_connect_opt_out_dir(),
+            AI_TOOL_CHECK_INTERVAL,
+        )
+        .await;
+    });
+}
 
-        let api_url = format!("http://localhost:{api_port}");
-        for attempt in 1..=3 {
-            let home = home.clone();
-            let bun_path = bun_path.clone();
-            let api_key = api_key.clone();
-            let api_url = api_url.clone();
-            // Read intent immediately before every attempt. The shared lock
-            // makes the marker write an ordering barrier: after Disconnect
-            // returns, no older launch repair can still reconnect that target.
-            let result = {
-                let _guard = AI_TOOL_AUTO_CONNECT_LOCK.lock().await;
-                let opted_out =
-                    ai_tool_auto_connect_opt_outs_in(&ai_tool_auto_connect_opt_out_dir());
-                tokio::task::spawn_blocking(move || {
-                    screenpipe_engine::cli::agent::reconcile_detected_desktop_in(
-                        &home,
-                        &bun_path,
-                        api_key.as_deref(),
-                        &api_url,
-                        &opted_out,
-                    )
-                })
-                .await
-            };
-            match result {
-                Ok(report) if report.failures.is_empty() => {
-                    info!(
-                        detected = report.detected,
-                        connected = report.connected,
-                        already_connected = report.already_connected,
-                        opted_out = report.opted_out,
-                        "AI tool background setup finished"
-                    );
-                    return;
-                }
-                Ok(report) => {
-                    if attempt < 3 {
-                        warn!(
-                            attempt,
-                            failures = report.failures.len(),
-                            "AI tool background setup had failures; retrying"
-                        );
-                        tokio::time::sleep(Duration::from_secs(attempt * 2)).await;
-                        continue;
-                    }
+async fn connect_detected_ai_tools_in(
+    home: PathBuf,
+    bun_path: PathBuf,
+    api_key: Option<String>,
+    api_url: String,
+    opt_out_dir: PathBuf,
+    check_interval: Duration,
+) {
+    let mut reconciler = screenpipe_engine::cli::agent::DesktopAgentReconciler::default();
+    let mut previous_report = None;
+    let mut attempt = 0;
+    loop {
+        attempt = (attempt + 1).min(3);
+        let home = home.clone();
+        let bun_path = bun_path.clone();
+        let api_key = api_key.clone();
+        let api_url = api_url.clone();
+        let opt_out_dir = opt_out_dir.clone();
+        let mut current = std::mem::take(&mut reconciler);
+        // Read intent immediately before every attempt. The shared lock
+        // makes the marker write an ordering barrier: after Disconnect
+        // returns, no older launch repair can still reconnect that target.
+        let result = {
+            let _guard = AI_TOOL_AUTO_CONNECT_LOCK.lock().await;
+            tokio::task::spawn_blocking(move || {
+                let opted_out = ai_tool_auto_connect_opt_outs_in(&opt_out_dir);
+                let report =
+                    current.reconcile(&home, &bun_path, api_key.as_deref(), &api_url, &opted_out);
+                (current, report)
+            })
+            .await
+        };
+        let failed = match result {
+            Ok((current, report)) => {
+                reconciler = current;
+                let failed = !report.failures.is_empty();
+                // Idle checks and unchanged failures must not fill the log.
+                if previous_report.as_ref() != Some(&report) {
                     info!(
                         detected = report.detected,
                         connected = report.connected,
@@ -229,22 +245,27 @@ pub fn connect_detected_ai_tools_in_background(api_auth_enabled: bool, api_port:
                         failures = report.failures.len(),
                         "AI tool background setup finished"
                     );
-                    for failure in report.failures {
+                    for failure in &report.failures {
                         warn!(failure = %failure, "AI tool background setup could not connect one tool");
                     }
-                    return;
                 }
-                Err(error) if attempt < 3 => {
-                    warn!(attempt, %error, "AI tool background setup task failed; retrying");
-                    tokio::time::sleep(Duration::from_secs(attempt * 2)).await;
-                }
-                Err(error) => {
-                    warn!(%error, "AI tool background setup task failed");
-                    return;
-                }
+                previous_report = Some(report);
+                failed
             }
-        }
-    });
+            Err(error) => {
+                warn!(%error, "AI tool background setup task failed");
+                true
+            }
+        };
+        // Preserve the short startup retries, then sleep after each scan:
+        // no overlap and no catch-up burst when the computer wakes.
+        tokio::time::sleep(if failed && attempt < 3 {
+            Duration::from_secs(attempt * 2)
+        } else {
+            check_interval
+        })
+        .await;
+    }
 }
 
 /// Baseline skills screenpipe writes itself on every session. Importing a skill
@@ -766,6 +787,15 @@ fn write_managed_team_skill_package(
             .map_err(|error| format!("failed to install {}: {error}", dest.display()))?;
     }
     Ok(())
+}
+
+/// Resolve a local AI tool config without replacing a symlink during setup.
+#[tauri::command]
+#[specta::specta]
+pub fn resolve_ai_tool_config_path(path: String) -> Result<String, String> {
+    screenpipe_engine::cli::agent::resolve_config_path(std::path::Path::new(&path))
+        .map(|resolved| resolved.to_string_lossy().into_owned())
+        .map_err(|error| format!("{error:#}"))
 }
 
 /// Install the two built-in screenpipe skills into a supported external agent.
@@ -1692,6 +1722,91 @@ pub async fn install_registry_skill(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn ai_tool_poll_connects_later_installs_and_honors_disconnect() {
+        let fixture = tempfile::tempdir().unwrap();
+        let home = fixture.path().join("home");
+        let opt_out_dir = fixture.path().join("opt-outs");
+        std::fs::create_dir_all(&home).unwrap();
+        let task = tokio::spawn(connect_detected_ai_tools_in(
+            home.clone(),
+            home.join("bun"),
+            Some("sp-fixture".into()),
+            "http://localhost:3137".into(),
+            opt_out_dir.clone(),
+            Duration::from_millis(20),
+        ));
+        let outcome = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert!(
+                !task.is_finished(),
+                "empty startup must keep watching for installs"
+            );
+            std::fs::create_dir_all(home.join(".cursor")).unwrap();
+            let cursor_config = home.join(".cursor/mcp.json");
+            while !cursor_config.is_file() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            let config: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&cursor_config).unwrap()).unwrap();
+            assert_eq!(
+                config["mcpServers"]["screenpipe"]["env"]["SCREENPIPE_API_URL"],
+                "http://localhost:3137"
+            );
+            assert!(home
+                .join(".cursor/skills/screenpipe-api/SKILL.md")
+                .is_file());
+
+            set_ai_tool_auto_connect_opt_out_serialized_in(opt_out_dir, "cursor".into(), true)
+                .await
+                .unwrap();
+            std::fs::remove_file(&cursor_config).unwrap();
+            std::fs::create_dir_all(home.join(".runner")).unwrap();
+            while !home.join(".runner/mcp.json").is_file() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            assert!(
+                !cursor_config.exists(),
+                "later scans must preserve disconnects"
+            );
+        })
+        .await;
+        // Wait out any blocking scan before stopping our task and deleting only
+        // this fixture. No real agent config or running app is involved.
+        let _guard = AI_TOOL_AUTO_CONNECT_LOCK.lock().await;
+        task.abort();
+        let _ = task.await;
+        outcome.expect("background poll did not connect later installs");
+    }
+
+    #[tokio::test]
+    async fn grokbot_network_work_does_not_block_other_ai_tool_choices() {
+        let root = tempfile::tempdir().unwrap();
+        let grok_guard = crate::grokbot::GROKBOT_CONNECTION_LOCK.lock().await;
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            set_ai_tool_auto_connect_opt_out_serialized_in(
+                root.path().to_owned(),
+                "codex".into(),
+                true,
+            ),
+        )
+        .await
+        .expect("Grok Bot network work must not hold up other AI tools")
+        .unwrap();
+        assert!(root.path().join("codex").is_file());
+        let pending = tokio::spawn(set_ai_tool_auto_connect_opt_out_serialized_in(
+            root.path().to_owned(),
+            "grokbot".into(),
+            true,
+        ));
+        tokio::task::yield_now().await;
+        assert!(!pending.is_finished());
+        drop(grok_guard);
+        pending.await.unwrap().unwrap();
+        assert!(root.path().join("grokbot").is_file());
+    }
 
     #[test]
     fn ai_tool_auto_connect_opt_out_is_per_target_and_reversible() {

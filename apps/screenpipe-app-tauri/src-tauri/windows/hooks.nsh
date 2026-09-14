@@ -9,6 +9,64 @@
 !include "x64.nsh"
 !include "LogicLib.nsh"
 
+; Stop the service through SCM without executing an installed helper. This is
+; required when an administrator removed a hostile ProgramData namespace: old
+; helpers logged from prepare-upgrade and could recreate that namespace with
+; inherited user-write access before the new package reached POSTINSTALL.
+!macro _SP_StopPersistenceService
+  !define _SP_STOP_WRITE_FAILED sp_stop_write_failed_${__LINE__}
+  !define _SP_STOP_DONE sp_stop_done_${__LINE__}
+  Push $0
+  Push $1
+  InitPluginsDir
+  ClearErrors
+  FileOpen $1 "$PLUGINSDIR\screenpipe-stop-persistence.ps1" w
+  IfErrors ${_SP_STOP_WRITE_FAILED}
+    FileWriteUTF16LE /BOM $1 '$$ErrorActionPreference = "Stop"$\r$\n'
+    ; Resolve the registered common-data known folder rather than depending on
+    ; ProgramData being present in the elevated child's environment.
+    FileWriteUTF16LE $1 '$$common = [Environment]::GetFolderPath("CommonApplicationData"); $$root = Join-Path $$common "screenpipe"; $$state = Join-Path $$root "persistence"$\r$\n'
+    FileWriteUTF16LE $1 'function Assert-Trusted([string]$$path, [bool]$$private) {$\r$\n'
+    FileWriteUTF16LE $1 '  $$item = [IO.DirectoryInfo]::new($$path); if (($$item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or -not $$item.Exists) { exit 40 }$\r$\n'
+    FileWriteUTF16LE $1 '  $$acl = [IO.Directory]::GetAccessControl($$path); $$owner = $$acl.Owner; try { $$owner = ([Security.Principal.NTAccount]$$owner).Translate([Security.Principal.SecurityIdentifier]).Value } catch {}$\r$\n'
+    FileWriteUTF16LE $1 '  if ($$owner -notin @("S-1-5-18", "S-1-5-32-544") -or -not $$acl.AreAccessRulesProtected) { exit 41 }$\r$\n'
+    FileWriteUTF16LE $1 '  $$write = [Security.AccessControl.FileSystemRights]::WriteData -bor [Security.AccessControl.FileSystemRights]::AppendData -bor [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor [Security.AccessControl.FileSystemRights]::WriteAttributes$\r$\n'
+    FileWriteUTF16LE $1 '  $$write = $$write -bor [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership -bor [Security.AccessControl.FileSystemRights]::Delete$\r$\n'
+    FileWriteUTF16LE $1 '  foreach ($$rule in $$acl.Access) {$\r$\n'
+    FileWriteUTF16LE $1 '    if ($$rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { continue }; $$sid = $$rule.IdentityReference$\r$\n'
+    FileWriteUTF16LE $1 '    try { $$sid = ([Security.Principal.NTAccount]$$sid).Translate([Security.Principal.SecurityIdentifier]).Value } catch { $$sid = $$sid.Value }$\r$\n'
+    FileWriteUTF16LE $1 '    if ($$sid -notin @("S-1-5-18", "S-1-5-32-544") -and (($$rule.FileSystemRights -band $$write) -ne 0)) { exit 42 }$\r$\n'
+    FileWriteUTF16LE $1 '    if ($$private -and $$sid -notin @("S-1-5-18", "S-1-5-32-544")) { exit 43 }$\r$\n'
+    FileWriteUTF16LE $1 '  }$\r$\n'
+    FileWriteUTF16LE $1 '}$\r$\n'
+    FileWriteUTF16LE $1 'function New-Protected([string]$$path, [string]$$sddl, [bool]$$private) { if (-not [IO.Directory]::Exists($$path)) { $$security = New-Object Security.AccessControl.DirectorySecurity; $$security.SetSecurityDescriptorSddlForm($$sddl); [IO.Directory]::CreateDirectory($$path, $$security) | Out-Null }; Assert-Trusted $$path $$private }$\r$\n'
+    FileWriteUTF16LE $1 'try { New-Protected $$root "O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;BU)" $$false } catch { exit 50 }$\r$\n'
+    FileWriteUTF16LE $1 'try { New-Protected $$state "O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)" $$true } catch { exit 51 }$\r$\n'
+    FileWriteUTF16LE $1 '$$service = Get-Service -Name "ScreenpipeEnterprisePersistence" -ErrorAction SilentlyContinue$\r$\n'
+    FileWriteUTF16LE $1 'if ($$service -and $$service.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Stopped) { try { Stop-Service -InputObject $$service -ErrorAction Stop } catch { exit 52 } }$\r$\n'
+    FileWriteUTF16LE $1 'if ($$service) { $$deadline = [DateTime]::UtcNow.AddSeconds(20); do {$\r$\n'
+    FileWriteUTF16LE $1 '  $$service = Get-Service -Name "ScreenpipeEnterprisePersistence" -ErrorAction SilentlyContinue$\r$\n'
+    FileWriteUTF16LE $1 '  if (-not $$service -or $$service.Status -eq [System.ServiceProcess.ServiceControllerStatus]::Stopped) { break }; Start-Sleep -Milliseconds 100$\r$\n'
+    FileWriteUTF16LE $1 '} while ([DateTime]::UtcNow -lt $$deadline); if ($$service -and $$service.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Stopped) { exit 2 } }$\r$\n'
+    FileWriteUTF16LE $1 'exit 0$\r$\n'
+    FileClose $1
+    nsExec::ExecToLog /TIMEOUT=30000 '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -inputformat none -ExecutionPolicy RemoteSigned -File "$PLUGINSDIR\screenpipe-stop-persistence.ps1"'
+    Pop $0
+    Goto ${_SP_STOP_DONE}
+  ${_SP_STOP_WRITE_FAILED}:
+    StrCpy $0 "error"
+  ${_SP_STOP_DONE}:
+  ${If} $0 != 0
+    MessageBox MB_OK|MB_ICONSTOP "Setup could not stop the Screenpipe persistence supervisor (exit $0)." /SD IDOK
+    SetErrorLevel $0
+    Abort "persistence supervisor preparation failed"
+  ${EndIf}
+  Pop $1
+  Pop $0
+  !undef _SP_STOP_DONE
+  !undef _SP_STOP_WRITE_FAILED
+!macroend
+
 ; ---------------------------------------------------------------------------
 ; _SP_KillProcesses -- shared helper called by both PREINSTALL and PREUNINSTALL
 ; Kills all screenpipe processes by name and by install-directory path.
@@ -184,21 +242,7 @@
 !macro NSIS_HOOK_PREINSTALL
   !ifdef SCREENPIPE_PERSISTENT_INSTALLER
     DetailPrint "Stopping the Screenpipe persistence supervisor before installation..."
-    ${If} ${FileExists} "$INSTDIR\screenpipe-persistence-supervisor.exe"
-      nsExec::ExecToLog /TIMEOUT=30000 '"$INSTDIR\screenpipe-persistence-supervisor.exe" prepare-upgrade'
-      Pop $0
-      ${If} $0 != 0
-        MessageBox MB_OK|MB_ICONSTOP "Setup could not stop the Screenpipe persistence supervisor (exit $0)." /SD IDOK
-        Abort "persistence supervisor preparation failed"
-      ${EndIf}
-    ${Else}
-      ; Recovery for an interrupted older installation whose service entry
-      ; survived but whose supervisor file did not.
-      nsExec::ExecToLog /TIMEOUT=30000 '"$SYSDIR\sc.exe" stop ScreenpipeEnterprisePersistence'
-      Pop $0
-      nsExec::ExecToLog /TIMEOUT=30000 '"$SYSDIR\sc.exe" delete ScreenpipeEnterprisePersistence'
-      Pop $0
-    ${EndIf}
+    !insertmacro _SP_StopPersistenceService
   !endif
 
   !insertmacro _SP_KillProcesses

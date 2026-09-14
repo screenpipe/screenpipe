@@ -590,6 +590,25 @@ async fn checkpoint_hard_fault_fixture(database: &DatabaseManager) -> Result<(),
     ))
 }
 
+/// Match the live capture connection's platform locking regime while allowing
+/// queries only. A default read-only Unix VFS must not coexist with unix-excl.
+fn db_fault_observer_options(path: &std::path::Path) -> sqlx::sqlite::SqliteConnectOptions {
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(false)
+        .busy_timeout(std::time::Duration::from_secs(5))
+        .pragma("wal_autocheckpoint", "0")
+        .pragma("query_only", "ON");
+    #[cfg(target_os = "macos")]
+    {
+        options.vfs("unix-excl").read_only(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        options.read_only(true)
+    }
+}
+
 /// Damage only an E2E-owned table in the disposable database, then route the
 /// real SQLITE_CORRUPT result through the production manager and app hook.
 pub(super) async fn inject_db_hard_fault(
@@ -673,13 +692,7 @@ pub(super) async fn inject_db_hard_fault(
     file.sync_all()
         .map_err(|error| format!("failed to persist isolated database fixture: {error}"))?;
 
-    let options = sqlx::sqlite::SqliteConnectOptions::new()
-        .filename(&database_path)
-        .read_only(true)
-        .create_if_missing(false)
-        .busy_timeout(std::time::Duration::from_secs(5))
-        .pragma("wal_autocheckpoint", "0")
-        .pragma("query_only", "ON");
+    let options = db_fault_observer_options(&database_path);
     let mut observer = options
         .connect()
         .await
@@ -717,6 +730,74 @@ pub(super) async fn inject_db_hard_fault(
         "databasePath": database_path.display().to_string(),
         "hardFaulted": database.write_queue_health().is_hard_faulted(),
     }))
+}
+
+/// Exercise the actual desktop retry dispatch with a synthetic IOERR status.
+/// Real SQLite xRead/xWrite injection is covered by screenpipe-db VFS tests;
+/// this feature-gated hook proves the packaged app resumes its recording owner.
+pub(super) async fn inject_db_transient_fault(
+    state: State<'_, RecordingState>,
+) -> Result<serde_json::Value, String> {
+    let database_path = require_isolated_db_hard_fault_seed()?;
+    let database = state
+        .server
+        .lock()
+        .await
+        .as_ref()
+        .map(|server| server.db.clone())
+        .ok_or_else(|| "embedded server is not running".to_string())?;
+    let preserved_id = database
+        .insert_audio_chunk("e2e-transient-before", None)
+        .await
+        .map_err(|error| error.to_string())?;
+    let error = sqlx::Error::Protocol(
+        "error returned from database: (code: 10) disk I/O error [synthetic E2E status]".into(),
+    );
+    if !database.report_sqlite_error(&error) {
+        return Err("synthetic IOERR did not enter the production fault dispatch".into());
+    }
+    Ok(serde_json::json!({
+        "databasePath": database_path.display().to_string(),
+        "preservedChunkId": preserved_id,
+        "hardFaulted": database.write_queue_health().is_hard_faulted(),
+        "syntheticStatus": true,
+    }))
+}
+
+/// A new production queue write after retry must be visible from a freshly
+/// opened query-only SQLite connection, alongside the pre-fault sentinel.
+pub(super) async fn db_retry_write_probe(
+    state: State<'_, RecordingState>,
+) -> Result<serde_json::Value, String> {
+    let database_path = require_isolated_db_hard_fault_seed()?;
+    let database = state
+        .server
+        .lock()
+        .await
+        .as_ref()
+        .map(|server| server.db.clone())
+        .ok_or_else(|| "embedded server is not running".to_string())?;
+    let new_id = database
+        .insert_audio_chunk("e2e-transient-after", None)
+        .await
+        .map_err(|error| error.to_string())?;
+    let options = db_fault_observer_options(&database_path);
+    let mut observer = options.connect().await.map_err(|error| error.to_string())?;
+    let preserved: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM audio_chunks WHERE file_path = 'e2e-transient-before'",
+    )
+    .fetch_one(&mut observer)
+    .await
+    .map_err(|error| error.to_string())?;
+    let persisted: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM audio_chunks WHERE id = ? AND file_path = 'e2e-transient-after'",
+    )
+    .bind(new_id)
+    .fetch_one(&mut observer)
+    .await
+    .map_err(|error| error.to_string())?;
+    observer.close().await.map_err(|error| error.to_string())?;
+    Ok(serde_json::json!({ "preservedRows": preserved, "persistedRows": persisted }))
 }
 
 /// Read-only lifecycle snapshot for the packaged desktop regression.

@@ -264,7 +264,7 @@ describe('/v1/chat/completions free-plan route policy', () => {
 			cost_limit_reached: boolean;
 			hosted_ai: {
 				plan: string;
-				included_credits: number;
+				included_credits: number | null;
 				model_access: string[];
 			};
 		};
@@ -272,10 +272,11 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		expect(response.status).toBe(200);
 		expect(body).toMatchObject({
 			tier: 'anonymous',
-			cost_limit_reached: false,
+			cost_limit_reached: null,
 			hosted_ai: {
 				plan: 'free',
-				included_credits: 10,
+				included_credits: null,
+				allowance_managed_by: 'cloudflare',
 			},
 		});
 		expect(body.hosted_ai.model_access).toContain('auto');
@@ -675,7 +676,7 @@ describe('/v1/chat/completions free-plan route policy', () => {
 			hosted_ai: {
 				plan: string;
 				trial: boolean;
-				included_credits: number;
+				included_credits: number | null;
 				model_access: string[];
 			};
 		};
@@ -684,13 +685,14 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		expect(result.hosted_ai).toMatchObject({
 			plan: 'business',
 			trial: true,
-			included_credits: 400,
+			included_credits: null,
+			allowance_managed_by: 'cloudflare',
 		});
 		expect(result.hosted_ai.model_access).toContain('claude-fable-5');
 		expect(result.hosted_ai.model_access).not.toContain('*');
 	});
 
-	it('fails the usage endpoint closed when private controls are missing', async () => {
+	it('does not depend on retired private text-cost controls for usage', async () => {
 		globalThis.fetch = mock(async (input: RequestInfo | URL) => {
 			const url = String(input);
 			if (url === 'https://screenpipe.com/api/user') {
@@ -722,8 +724,10 @@ describe('/v1/chat/completions free-plan route policy', () => {
 			headers: { Authorization: 'Bearer eyJ.missing.private.controls' },
 		}), missingControlsEnv as unknown as Env, ctx);
 
-		expect(response.status).toBe(503);
-		expect(await errorCode(response)).toBe('cost_control_unavailable');
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			hosted_ai: { allowance_managed_by: 'cloudflare' },
+		});
 	});
 
 	it.each([
@@ -824,7 +828,6 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		}) as typeof fetch;
 		const cloudflareEnv = {
 			...env,
-			HOSTED_CHAT_GATEWAY_MODE: 'cloudflare',
 			CLOUDFLARE_AI_GATEWAY_ID: gatewayId,
 			CLOUDFLARE_ACCOUNT_ID: '9850df1eb8fd807eb8e06f4057b473f1',
 			CLOUDFLARE_API_TOKEN: 'read-only-token',
@@ -890,7 +893,7 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		]);
 	});
 
-	it('bypasses legacy paid admission and reaches Gateway routing when D1 is unavailable', async () => {
+	it('always reaches Gateway routing when legacy D1 admission is unavailable', async () => {
 		let gatewayCalls = 0;
 		const d1Statements: string[] = [];
 		globalThis.fetch = mock(async (input: RequestInfo | URL) => {
@@ -911,7 +914,6 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		}) as typeof fetch;
 		const cloudflareEnv = {
 			...env,
-			HOSTED_CHAT_GATEWAY_MODE: 'cloudflare',
 			CLOUDFLARE_AI_GATEWAY_ID: 'hosted-chat-test',
 			OPENAI_API_KEY: '',
 			AI: {
@@ -942,8 +944,8 @@ describe('/v1/chat/completions free-plan route policy', () => {
 			ctx,
 		);
 
-		// A legacy admission read would return cost_control_unavailable before
-		// provider routing. The intentional 502 proves Gateway resolution ran.
+		// The intentional 502 proves Gateway resolution ran without a mode variable
+		// or a legacy admission read.
 		expect(response.status).toBe(502);
 		expect(gatewayCalls).toBeGreaterThan(0);
 		expect(await response.text()).not.toContain('cost_control_unavailable');
@@ -951,9 +953,9 @@ describe('/v1/chat/completions free-plan route policy', () => {
 	});
 
 	it('returns canonical Max and Ultra capacity from desktop-compatible user responses', async () => {
-		for (const [billingPlan, usageTier, dailyLimit] of [
-			['pro_max', 'business_max', 120],
-			['pro_ultra', 'business_ultra', 240],
+		for (const [billingPlan, usageTier, dailyLimit, upgradeEligible] of [
+			['pro_max', 'business_max', 120, true],
+			['pro_ultra', 'business_ultra', 240, false],
 		] as const) {
 			const clerkId = `user_${billingPlan}`;
 			verifyTokenMock.mockImplementation(async () => ({ sub: clerkId }) as any);
@@ -980,8 +982,8 @@ describe('/v1/chat/completions free-plan route policy', () => {
 				limit_today: dailyLimit,
 				remaining: dailyLimit,
 				upsell_banner: false,
-				upgrade_eligible: false,
-				cost_limit_reached: false,
+				upgrade_eligible: upgradeEligible,
+				cost_limit_reached: null,
 			});
 		}
 	});
@@ -1075,7 +1077,6 @@ describe('/v1/chat/completions free-plan route policy', () => {
 	});
 
 	it.each([
-		'/v1/chat/completions',
 		'/v1/web-search',
 		'/v1/tinfoil/chat/completions',
 		'/v1/tinfoil/responses',

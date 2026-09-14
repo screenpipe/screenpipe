@@ -5,6 +5,7 @@
 import { homeDir } from "@tauri-apps/api/path";
 import { getVersion } from "@tauri-apps/api/app";
 import { commands } from "@/lib/utils/tauri";
+import { saveWithPresetReassignment } from "@/lib/ai-preset-deletion";
 import { platform } from "@tauri-apps/plugin-os";
 import { Store } from "@tauri-apps/plugin-store";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -964,9 +965,9 @@ export const getStore = async () => {
 	if (!_store) {
 		_store = (async () => {
 			// Resolve the base dir via the backend so the webview opens the same
-			// store.bin as Rust (get_base_dir honors SCREENPIPE_DATA_DIR); a
-			// hardcoded ~/.screenpipe here splits the settings store in two
-			// whenever that override is set.
+			// store.bin as Rust. The backend pins this to the launch directory,
+			// even when recordings use another folder or SCREENPIPE_DATA_DIR
+			// was supplied to isolate the entire app at launch.
 			let baseDir: string | null = null;
 			try {
 				const res = await commands.getScreenpipeBaseDir();
@@ -1442,8 +1443,10 @@ function createSettingsStore() {
 			) as Settings;
 			if (managedValues) newSettings.enterpriseManagedSettings = managedValues;
 			else delete newSettings.enterpriseManagedSettings;
-			await setSettingsStripped(store, newSettings);
-			await saveAndEncrypt(store);
+			await saveWithPresetReassignment(current, newSettings, async (reassigned) => {
+				await setSettingsStripped(store, reassigned);
+				await saveAndEncrypt(store);
+			});
 		});
 
 	const reset = () =>

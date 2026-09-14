@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::ffi::CStr;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -13,12 +14,20 @@ use sqlx::SqlitePool;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 mod quarantine;
+mod verification;
+pub use verification::{
+    classify_verification_error, inspect_database_health, DatabaseHealthError,
+    QuarantineHealthProbe,
+};
 
 pub use quarantine::{
     archive_resolved_sqlite_quarantine, persist_sqlite_quarantine,
-    prepare_sqlite_quarantine_reserve, read_sqlite_quarantine, resolve_verified_sqlite_quarantine,
-    sqlite_file_identity, sqlite_quarantine_exists, sqlite_quarantine_marker_path,
-    sqlite_quarantine_self_heal_prerequisite, SqliteFileIdentity, SqliteQuarantineMarker,
+    persist_sqlite_verification_pending, prepare_sqlite_quarantine_reserve, read_sqlite_quarantine,
+    read_sqlite_verification_pending, resolve_verified_sqlite_quarantine,
+    sqlite_confirmed_corruption_exists, sqlite_file_identity, sqlite_quarantine_exists,
+    sqlite_quarantine_is_self_healable, sqlite_quarantine_marker_path,
+    sqlite_quarantine_self_heal_prerequisite, sqlite_verification_pending_exists,
+    sqlite_verification_pending_path, SqliteFileIdentity, SqliteQuarantineMarker,
     SqliteQuarantineSelfHealPrerequisite,
 };
 
@@ -27,10 +36,10 @@ pub const FIRST_WAL_RESET_SAFE_SQLITE: i32 = 3_051_003;
 static SQLITE_WRITE_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Semaphore>>>> = OnceLock::new();
 static SQLITE_MANAGER_OWNERS: OnceLock<Mutex<HashMap<PathBuf, u64>>> = OnceLock::new();
 static NEXT_SQLITE_MANAGER_OWNER: AtomicU64 = AtomicU64::new(1);
-/// Process-lifetime path tombstones. These deliberately outlive individual
-/// DatabaseManager generations so an in-process respawn cannot reopen a path
-/// after SQLite reported IOERR, CORRUPT, FULL, or NOTADB.
+/// Faulted owners stay closed until teardown and independent verification.
+/// This admission barrier is not evidence of physical database corruption.
 static SQLITE_HARD_FAULTS: OnceLock<Mutex<HashMap<PathBuf, i32>>> = OnceLock::new();
+static SQLITE_TRANSITIONS: OnceLock<Mutex<HashMap<PathBuf, u64>>> = OnceLock::new();
 static SQLITE_RUNTIME_CHECK: OnceLock<Result<SqliteRuntimeIdentity, String>> = OnceLock::new();
 
 /// A cloneable capability for a SQLite pool whose callers must participate in
@@ -43,11 +52,21 @@ static SQLITE_RUNTIME_CHECK: OnceLock<Result<SqliteRuntimeIdentity, String>> = O
 pub struct SqliteWritePool {
     pool: SqlitePool,
     coordinator: Arc<Semaphore>,
+    admission_gate: Option<Arc<tokio::sync::Mutex<()>>>,
 }
 
 impl SqliteWritePool {
     pub fn new(pool: SqlitePool, coordinator: Arc<Semaphore>) -> Self {
-        Self { pool, coordinator }
+        Self {
+            pool,
+            coordinator,
+            admission_gate: None,
+        }
+    }
+
+    pub fn with_admission_gate(mut self, gate: Option<Arc<tokio::sync::Mutex<()>>>) -> Self {
+        self.admission_gate = gate;
+        self
     }
 
     /// Build a standalone capability for tests or independently owned
@@ -70,6 +89,10 @@ impl SqliteWritePool {
         Ok(SqliteWritePermit {
             pool: self.pool.clone(),
             _permit: permit,
+            _admission: match &self.admission_gate {
+                Some(gate) => Some(Arc::clone(gate).lock_owned().await),
+                None => None,
+            },
         })
     }
 }
@@ -78,6 +101,7 @@ impl SqliteWritePool {
 pub struct SqliteWritePermit {
     pool: SqlitePool,
     _permit: OwnedSemaphorePermit,
+    _admission: Option<tokio::sync::OwnedMutexGuard<()>>,
 }
 
 impl SqliteWritePermit {
@@ -107,6 +131,7 @@ pub struct SqliteManagerLease {
     key: PathBuf,
     owner: u64,
     released: AtomicBool,
+    process_lock: Mutex<Option<std::fs::File>>,
 }
 
 impl SqliteManagerLease {
@@ -121,6 +146,10 @@ impl SqliteManagerLease {
         if owners.get(&self.key) == Some(&self.owner) {
             owners.remove(&self.key);
         }
+        self.process_lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
     }
 }
 
@@ -146,11 +175,26 @@ pub fn acquire_sqlite_manager_lease(
         ));
     }
     let owner = NEXT_SQLITE_MANAGER_OWNER.fetch_add(1, Ordering::Relaxed);
+    let ownership_path = PathBuf::from(format!("{}.owner", key.display()));
+    let process_lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&ownership_path)
+        .map_err(|e| format!("cannot open database ownership file: {e}"))?;
+    fs2::FileExt::try_lock_exclusive(&process_lock).map_err(|_| {
+        format!(
+            "another process owns the database {}; close it before changing storage",
+            key.display()
+        )
+    })?;
     owners.insert(key.clone(), owner);
     Ok(SqliteManagerLease {
         key,
         owner,
         released: AtomicBool::new(false),
+        process_lock: Mutex::new(Some(process_lock)),
     })
 }
 
@@ -189,8 +233,8 @@ fn hard_fault_code_from_message(message: &str) -> Option<i32> {
 }
 
 /// Preserve the exact extended SQLite hard-fault result when available.
-/// IOERR, CORRUPT, FULL, and NOTADB all invalidate the whole physical
-/// generation; ordinary contention and pool pressure deliberately do not.
+/// IOERR, CORRUPT, FULL, and NOTADB require retiring failed owners and
+/// diagnosis; no result code alone proves physical database damage.
 pub fn sqlite_hard_fault_code(error: &sqlx::Error) -> Option<i32> {
     match error {
         sqlx::Error::Io(_) => Some(10),
@@ -216,14 +260,20 @@ pub fn latch_sqlite_error(db_path: impl AsRef<Path>, error: &sqlx::Error) -> boo
         .unwrap_or(false)
 }
 
-/// Permanently quarantine one SQLite path for this process. Returns true only
-/// when this call records the first hard fault for the path.
+/// Retire the failed writer generation and record pending verification.
+/// Returns true only for the first fault in the current owner generation.
+/// Even repeated I/O errors never create confirmed-corruption quarantine.
 pub fn latch_sqlite_hard_fault(db_path: impl AsRef<Path>, code: i32) -> bool {
     if !is_sqlite_hard_fault_code(code) {
         return false;
     }
 
     let key = lock_key(db_path.as_ref());
+    let mut transitions = SQLITE_TRANSITIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *transitions.entry(key.clone()).or_default() += 1;
     let inserted = {
         let faults = SQLITE_HARD_FAULTS.get_or_init(|| Mutex::new(HashMap::new()));
         let mut faults = faults
@@ -250,9 +300,9 @@ pub fn latch_sqlite_hard_fault(db_path: impl AsRef<Path>, code: i32) -> bool {
     }
 
     // Only after process admission is closed do filesystem work. The reserve
-    // makes the durable transition a metadata rename even for SQLITE_FULL.
+    // makes pending diagnosis a metadata rename even for SQLITE_FULL.
     if sqlite_quarantine_marker_path(db_path.as_ref()).is_some() {
-        if let Err(error) = persist_sqlite_quarantine(
+        if let Err(error) = persist_sqlite_verification_pending(
             db_path.as_ref(),
             Some(code),
             format!("SQLite hard fault (extended result code {code})"),
@@ -261,7 +311,7 @@ pub fn latch_sqlite_hard_fault(db_path: impl AsRef<Path>, code: i32) -> bool {
                 error = %error,
                 database = %db_path.as_ref().display(),
                 sqlite_code = code,
-                "failed to persist durable SQLite quarantine marker"
+                "failed to persist pending SQLite verification"
             );
         }
     }
@@ -273,10 +323,9 @@ pub fn latch_sqlite_hard_fault(db_path: impl AsRef<Path>, code: i32) -> bool {
 ///
 /// Unlike [`registered_sqlite_hard_fault`] this never promotes a durable
 /// marker into the in-memory map, so it answers "did we fault since launch?"
-/// rather than "is this path quarantined?". Self-heal needs that distinction:
-/// latching also permanently closes the write semaphore, which cannot be
-/// reopened, so resolving a marker after a fault would clear the metadata and
-/// still leave every writer blocked.
+/// rather than "does this path need verification?". Clearing metadata alone
+/// cannot resume writers; verified admission installs a fresh semaphore while
+/// every old semaphore remains closed.
 pub fn sqlite_hard_fault_latched(db_path: impl AsRef<Path>) -> bool {
     let key = lock_key(db_path.as_ref());
     SQLITE_HARD_FAULTS
@@ -288,11 +337,20 @@ pub fn sqlite_hard_fault_latched(db_path: impl AsRef<Path>) -> bool {
 
 /// Return the first hard SQLite code recorded for this path in this process.
 pub fn registered_sqlite_hard_fault(db_path: impl AsRef<Path>) -> Option<i32> {
-    let key = lock_key(db_path.as_ref());
-    if sqlite_quarantine_exists(db_path.as_ref()) {
-        let durable_code = read_sqlite_quarantine(db_path.as_ref())
+    let _transition = SQLITE_TRANSITIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    registered_fault_under_transition(db_path.as_ref())
+}
+
+fn registered_fault_under_transition(db_path: &Path) -> Option<i32> {
+    let key = lock_key(db_path);
+    if sqlite_quarantine_exists(db_path) || sqlite_verification_pending_exists(db_path) {
+        let durable_code = read_sqlite_verification_pending(db_path)
             .ok()
             .flatten()
+            .or_else(|| read_sqlite_quarantine(db_path).ok().flatten())
             .and_then(|marker| marker.sqlite_code)
             // A reserve-only or malformed marker is still fail-closed. Code 10
             // represents the conservative IOERR class for the in-memory gate.
@@ -310,6 +368,161 @@ pub fn registered_sqlite_hard_fault(db_path: impl AsRef<Path>) -> Option<i32> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&key)
         .copied()
+}
+
+/// Snapshot taken after the lifecycle owner has closed every old pool/task.
+/// The token is single-use and must span the independent health verification.
+#[derive(Debug)]
+pub struct SqliteVerificationToken {
+    path: PathBuf,
+    identity: Option<SqliteFileIdentity>,
+    revision: u64,
+    incidents: Vec<(PathBuf, Vec<u8>)>,
+}
+
+impl SqliteVerificationToken {
+    /// Only true for an explicitly pre-armed, never-created database path.
+    pub fn is_new_database(&self) -> bool {
+        self.identity.is_none()
+    }
+}
+
+fn verification_identity(path: &Path) -> io::Result<Option<SqliteFileIdentity>> {
+    match sqlite_file_identity(path) {
+        Ok(identity) => Ok(Some(identity)),
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound
+                && !sqlite_quarantine_exists(path)
+                && read_sqlite_verification_pending(path)?.is_some_and(|incident| {
+                    incident.new_database && incident.file_identity.is_none()
+                }) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Caller must serialize database lifecycle and prove all old owners closed.
+/// Missing/unreadable files are inconclusive and remain retryable.
+pub fn begin_sqlite_verification(
+    database_path: impl AsRef<Path>,
+) -> io::Result<SqliteVerificationToken> {
+    let path = lock_key(database_path.as_ref());
+    let transitions = SQLITE_TRANSITIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    Ok(SqliteVerificationToken {
+        identity: verification_identity(&path)?,
+        revision: transitions.get(&path).copied().unwrap_or(0),
+        incidents: quarantine::incident_snapshot(&path)?,
+        path,
+    })
+}
+
+fn verify_token_current(
+    token: &SqliteVerificationToken,
+    transitions: &HashMap<PathBuf, u64>,
+) -> io::Result<()> {
+    if transitions.get(&token.path).copied().unwrap_or(0) != token.revision
+        || verification_identity(&token.path)? != token.identity
+        || quarantine::incident_snapshot(&token.path)? != token.incidents
+    {
+        return Err(io::Error::other(
+            "SQLite generation or fault changed during verification",
+        ));
+    }
+    Ok(())
+}
+
+/// Apply a corruption verdict only to the unchanged verification generation.
+/// A new fault, file replacement, or incident change invalidates this verdict.
+pub fn quarantine_verified_sqlite_generation(
+    token: SqliteVerificationToken,
+    sqlite_code: Option<i32>,
+    reason: impl Into<String>,
+) -> io::Result<SqliteQuarantineMarker> {
+    let mut transitions = SQLITE_TRANSITIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    verify_token_current(&token, &transitions)?;
+    if token.identity.is_none() {
+        return Err(io::Error::other(
+            "an absent new database has no verified physical damage",
+        ));
+    }
+    *transitions.entry(token.path.clone()).or_default() += 1;
+    if let Some(lock) = SQLITE_WRITE_LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&token.path)
+        .and_then(Weak::upgrade)
+    {
+        lock.close();
+    }
+    quarantine::persist_verified_damage(&token.path, sqlite_code, reason)
+}
+
+/// Admit new owners only after the caller's structural and write verification
+/// has passed (or the token proves an absent, never-created database).
+/// Old semaphores stay closed forever. New faults, replaced files,
+/// changed incident evidence, and confirmed damage all reject stale admission.
+pub fn admit_verified_sqlite_generation(token: SqliteVerificationToken) -> io::Result<()> {
+    let mut transitions = SQLITE_TRANSITIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    verify_token_current(&token, &transitions)?;
+    if sqlite_confirmed_corruption_exists(&token.path) {
+        return Err(io::Error::other(
+            "verified SQLite damage requires a verified replacement",
+        ));
+    }
+    let mut locks = SQLITE_WRITE_LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(lock) = locks.get(&token.path).and_then(Weak::upgrade) {
+        lock.close();
+    }
+    quarantine::archive_verified_incidents(&token.incidents)?;
+    SQLITE_HARD_FAULTS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&token.path);
+    locks.remove(&token.path);
+    *transitions.entry(token.path).or_default() += 1;
+    Ok(())
+}
+
+/// Persist only the explicit result of independent damage verification.
+/// Caller owns lifecycle serialization and has already stopped old owners.
+pub fn persist_verified_sqlite_quarantine(
+    database_path: impl AsRef<Path>,
+    sqlite_code: Option<i32>,
+    reason: impl Into<String>,
+) -> io::Result<SqliteQuarantineMarker> {
+    let path = lock_key(database_path.as_ref());
+    let mut transitions = SQLITE_TRANSITIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *transitions.entry(path.clone()).or_default() += 1;
+    // Damage confirmation cannot reopen an existing failed lane.
+    if let Some(lock) = SQLITE_WRITE_LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&path)
+        .and_then(Weak::upgrade)
+    {
+        lock.close();
+    }
+    quarantine::persist_verified_damage(&path, sqlite_code, reason)
 }
 
 fn sqlite_runtime_string(value: *const std::os::raw::c_char) -> String {
@@ -364,6 +577,10 @@ pub fn verify_sqlite_runtime() -> Result<&'static SqliteRuntimeIdentity, String>
 /// writes. The separate `secrets.sqlite` store uses the same primitive to make
 /// its single connection and hard-fault admission explicit.
 pub fn sqlite_write_lock(db_path: impl AsRef<Path>) -> Arc<Semaphore> {
+    let _transition = SQLITE_TRANSITIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let key = lock_key(db_path.as_ref());
     let locks = SQLITE_WRITE_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut locks = locks
@@ -372,14 +589,14 @@ pub fn sqlite_write_lock(db_path: impl AsRef<Path>) -> Arc<Semaphore> {
 
     locks.retain(|_, lock| lock.strong_count() > 0);
     if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
-        if registered_sqlite_hard_fault(&key).is_some() {
+        if registered_fault_under_transition(&key).is_some() {
             lock.close();
         }
         return lock;
     }
 
     let lock = Arc::new(Semaphore::new(1));
-    if registered_sqlite_hard_fault(&key).is_some() {
+    if registered_fault_under_transition(&key).is_some() {
         lock.close();
     }
     locks.insert(key, Arc::downgrade(&lock));
@@ -459,6 +676,178 @@ mod tests {
             Some(522),
             "the first hard fault remains the diagnostic source of truth"
         );
+    }
+
+    #[test]
+    fn operational_faults_retire_owners_without_claiming_damage() {
+        for code in [10, 522, 778, 1034, 13, 11, 26] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = dir.path().join("db.sqlite");
+            std::fs::write(&db, b"generation").unwrap();
+            prepare_sqlite_quarantine_reserve(&db).unwrap();
+            let old = sqlite_write_lock(&db);
+            assert!(latch_sqlite_hard_fault(&db, code));
+            assert!(old.is_closed());
+            assert!(sqlite_verification_pending_exists(&db));
+            assert!(!sqlite_quarantine_exists(&db));
+            assert!(!sqlite_confirmed_corruption_exists(&db));
+            let token = begin_sqlite_verification(&db).unwrap();
+            // This coordinator test supplies the verifier's verdict; real
+            // database integrity/write probes belong to screenpipe-db.
+            admit_verified_sqlite_generation(token).unwrap();
+            assert!(old.is_closed());
+            let new = sqlite_write_lock(&db);
+            assert!(!new.is_closed());
+            assert!(!Arc::ptr_eq(&old, &new));
+            assert!(!sqlite_verification_pending_exists(&db));
+        }
+    }
+
+    #[test]
+    fn newer_fault_invalidates_verification_even_when_first_code_is_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("db.sqlite");
+        std::fs::write(&db, b"generation").unwrap();
+        latch_sqlite_hard_fault(&db, 10);
+        let token = begin_sqlite_verification(&db).unwrap();
+        latch_sqlite_hard_fault(&db, 10);
+        assert!(admit_verified_sqlite_generation(token).is_err());
+        assert!(sqlite_write_lock(&db).is_closed());
+        assert!(sqlite_verification_pending_exists(&db));
+    }
+
+    #[test]
+    fn replacement_and_confirmed_damage_reject_old_verification() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("db.sqlite");
+        std::fs::write(&db, b"generation").unwrap();
+        latch_sqlite_hard_fault(&db, 10);
+        let token = begin_sqlite_verification(&db).unwrap();
+        std::fs::rename(&db, dir.path().join("old.sqlite")).unwrap();
+        std::fs::write(&db, b"replacement").unwrap();
+        assert!(admit_verified_sqlite_generation(token).is_err());
+        persist_verified_sqlite_quarantine(
+            &db,
+            Some(11),
+            "independent integrity check found damaged page",
+        )
+        .unwrap();
+        assert!(sqlite_confirmed_corruption_exists(&db));
+        let token = begin_sqlite_verification(&db).unwrap();
+        assert!(admit_verified_sqlite_generation(token).is_err());
+        assert!(sqlite_quarantine_exists(&db));
+        assert!(sqlite_write_lock(&db).is_closed());
+    }
+
+    #[test]
+    fn corrupt_verdict_cannot_quarantine_a_new_fault_or_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("db.sqlite");
+        std::fs::write(&db, b"old generation").unwrap();
+        latch_sqlite_hard_fault(&db, 10);
+        let token = begin_sqlite_verification(&db).unwrap();
+        latch_sqlite_hard_fault(&db, 10);
+        assert!(quarantine_verified_sqlite_generation(token, Some(11), "stale verdict").is_err());
+        assert!(!sqlite_confirmed_corruption_exists(&db));
+        let token = begin_sqlite_verification(&db).unwrap();
+        std::fs::rename(&db, dir.path().join("old.sqlite")).unwrap();
+        std::fs::write(&db, b"new generation").unwrap();
+        assert!(
+            quarantine_verified_sqlite_generation(token, Some(11), "wrong generation").is_err()
+        );
+        assert!(!sqlite_quarantine_exists(&db));
+    }
+
+    #[test]
+    fn verified_replacement_does_not_inherit_old_damage() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("db.sqlite");
+        std::fs::write(&db, b"old generation").unwrap();
+        persist_verified_sqlite_quarantine(&db, Some(11), "old verified damage").unwrap();
+        std::fs::rename(&db, dir.path().join("old.sqlite")).unwrap();
+        std::fs::write(&db, b"new generation").unwrap();
+        assert!(!sqlite_confirmed_corruption_exists(&db));
+        assert!(
+            sqlite_quarantine_exists(&db),
+            "replacement still needs verification"
+        );
+        let token = begin_sqlite_verification(&db).unwrap();
+        admit_verified_sqlite_generation(token).unwrap();
+        assert!(!sqlite_quarantine_exists(&db));
+        assert!(!sqlite_write_lock(&db).is_closed());
+    }
+
+    #[test]
+    fn legacy_unknown_or_malformed_marker_can_be_diagnosed() {
+        for raw in [b"{truncated".as_slice(), b"{}".as_slice()] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = dir.path().join("db.sqlite");
+            std::fs::write(&db, b"generation").unwrap();
+            std::fs::write(sqlite_quarantine_marker_path(&db).unwrap(), raw).unwrap();
+            let old = sqlite_write_lock(&db);
+            assert!(old.is_closed());
+            let token = begin_sqlite_verification(&db).unwrap();
+            admit_verified_sqlite_generation(token).unwrap();
+            assert!(old.is_closed());
+            assert!(!sqlite_write_lock(&db).is_closed());
+        }
+    }
+
+    #[test]
+    fn absent_path_retries_only_when_prearmed_as_never_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let new_db = dir.path().join("new.sqlite");
+        prepare_sqlite_quarantine_reserve(&new_db).unwrap();
+        latch_sqlite_hard_fault(&new_db, 13);
+        let token = begin_sqlite_verification(&new_db).unwrap();
+        assert!(token.is_new_database());
+        admit_verified_sqlite_generation(token).unwrap();
+        assert!(!sqlite_write_lock(&new_db).is_closed());
+
+        let missing_db = dir.path().join("missing.sqlite");
+        std::fs::write(&missing_db, b"existing generation").unwrap();
+        prepare_sqlite_quarantine_reserve(&missing_db).unwrap();
+        std::fs::rename(&missing_db, dir.path().join("detached.sqlite")).unwrap();
+        latch_sqlite_hard_fault(&missing_db, 10);
+        assert!(begin_sqlite_verification(&missing_db).is_err());
+        assert!(sqlite_write_lock(&missing_db).is_closed());
+
+        let unknown_db = dir.path().join("unknown.sqlite");
+        persist_sqlite_verification_pending(&unknown_db, None, "unknown incident").unwrap();
+        assert!(begin_sqlite_verification(&unknown_db).is_err());
+    }
+
+    #[test]
+    fn pending_verification_survives_process_exit_without_quarantine() {
+        const PHASE: &str = "SCREENPIPE_PENDING_VERIFICATION_PHASE";
+        const DATABASE: &str = "SCREENPIPE_PENDING_VERIFICATION_DATABASE";
+        if let Ok(phase) = std::env::var(PHASE) {
+            let db = PathBuf::from(std::env::var(DATABASE).unwrap());
+            if phase == "fault" {
+                prepare_sqlite_quarantine_reserve(&db).unwrap();
+                latch_sqlite_hard_fault(&db, 13);
+            } else {
+                assert!(!sqlite_quarantine_exists(&db));
+                assert!(sqlite_verification_pending_exists(&db));
+                assert!(sqlite_write_lock(&db).is_closed());
+                let token = begin_sqlite_verification(&db).unwrap();
+                admit_verified_sqlite_generation(token).unwrap();
+                assert!(!sqlite_write_lock(&db).is_closed());
+            }
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("db.sqlite");
+        std::fs::write(&db, b"generation").unwrap();
+        for phase in ["fault", "verify"] {
+            assert!(std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("pending_verification_survives_process_exit_without_quarantine")
+                .env(PHASE, phase)
+                .env(DATABASE, &db)
+                .status()
+                .unwrap()
+                .success());
+        }
     }
 
     #[test]
