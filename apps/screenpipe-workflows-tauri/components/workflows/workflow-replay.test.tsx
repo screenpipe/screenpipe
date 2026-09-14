@@ -21,27 +21,29 @@ describe("workflow replay", () => {
     const { unmount } = render(<WorkflowReplay workflow={fixture()} loadRecording={load} />);
     expect(screen.queryByText("Open replay")).not.toBeInTheDocument();
     expect(screen.queryByText("Watch the captured moments")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByText("Original captured text")).not.toBeInTheDocument();
     expect(await screen.findByRole("img")).toHaveAttribute("src", "blob:test-image");
     expect(load).toHaveBeenCalledWith("2026-09-01T10:00:00Z", "Editor");
-    expect(screen.getByText(/Still image, not a video/)).toBeInTheDocument();
+    expect(screen.getByText(/Screenshot ·/)).toBeInTheDocument();
     unmount();
     expect(revoke).toHaveBeenCalledWith("blob:test-image");
   });
-  it("keeps text visible when media is absent and does not claim a continuous run", async () => {
+  it("keeps a concise caption and navigation when media is absent", async () => {
     render(<WorkflowReplay workflow={fixture()} loadRecording={vi.fn().mockResolvedValue(null)} />);
     expect(await screen.findByText(/No playable recording/)).toBeVisible();
-    expect(screen.getByText("Real observed detail 0")).toBeInTheDocument();
-    expect(screen.getByText("Previous moment")).toBeDisabled();
-    await act(async () => fireEvent.click(screen.getByText("Next moment")));
-    expect(screen.getByText("Real observed detail 1")).toBeInTheDocument();
-    expect(screen.getByText("Next moment")).toBeDisabled();
+    expect(screen.getByText(fixture().stages[0].name)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Previous moment" })).toBeDisabled();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Next moment" })));
+    expect(screen.getByText(fixture().stages[1].name)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next moment" })).toBeDisabled();
   });
   it("ignores a late response after switching moments", async () => {
     let resolve!: (media: WorkflowRecording) => void;
     const load = vi.fn().mockImplementationOnce(() => new Promise((done) => { resolve = done; }))
       .mockResolvedValue({ ...image, url: "blob:second" });
     render(<WorkflowReplay workflow={fixture()} loadRecording={load} />);
-    fireEvent.click(screen.getByText("Next moment"));
+    fireEvent.click(screen.getByRole("button", { name: "Next moment" }));
     await waitFor(() => expect(screen.getByRole("img")).toHaveAttribute("src", "blob:second"));
     await act(async () => resolve(image));
     expect(screen.getByRole("img")).toHaveAttribute("src", "blob:second");
@@ -108,10 +110,10 @@ describe("workflow replay", () => {
   it("clamps selection when the same workflow receives fewer moments", async () => {
     const workflow = fixture();
     const { rerender } = render(<WorkflowReplay workflow={workflow} />);
-    fireEvent.click(screen.getByText("Next moment"));
+    fireEvent.click(screen.getByRole("button", { name: "Next moment" }));
     const shorter = { ...workflow, stages: workflow.stages.slice(0, 1) };
     rerender(<WorkflowReplay workflow={shorter} />);
-    expect(screen.getByText("Real observed detail 0")).toBeInTheDocument();
+    expect(screen.getByText(fixture().stages[0].name)).toBeInTheDocument();
     expect(screen.getByText("1 / 1")).toBeVisible();
   });
 });
