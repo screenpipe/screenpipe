@@ -118,7 +118,7 @@ describe("shared workflows experience", () => {
     platform.analyzeCapturedWork = vi.fn().mockResolvedValue(smaller);
     platform.saveCapturedWork = vi.fn().mockResolvedValue(undefined);
     render(<WorkflowsApp platform={platform} initialAnalysis={fixtureWorkflowAnalysis} storageKey={null} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Refresh catalog" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
     await waitFor(() => expect(platform.saveCapturedWork).toHaveBeenCalled());
     expect(screen.getByText("5 of 5 shown")).toBeVisible();
     expect(screen.getAllByText("Kept from earlier scan")).toHaveLength(4);
@@ -167,9 +167,9 @@ describe("shared workflows experience", () => {
     analysis.analysis.workflows[0].evidenceVersion = 2;
     render(<WorkflowsApp platform={createFixtureWorkflowsPlatform()} initialAnalysis={analysis} storageKey={null} />);
     fireEvent.click(await screen.findByRole("button", { name: /customer feedback triage/i }));
-    expect(screen.getByText("Candidate · detailed evidence review needed")).toBeVisible();
+    expect(screen.getByText("Needs review")).toBeVisible();
     expect(screen.queryByText(/% stage confidence/)).not.toBeInTheDocument();
-    expect(screen.getByText(/Do not treat this outline as complete instructions/)).toBeVisible();
+    expect(screen.queryByText(/Do not treat this outline as complete instructions/)).not.toBeInTheDocument();
   });
 
   it("shows refresh progress and failure while keeping the previous catalog", async () => {
@@ -177,13 +177,13 @@ describe("shared workflows experience", () => {
     let rejectAnalysis!: (error: Error) => void;
     platform.analyzeCapturedWork = vi.fn(() => new Promise((_, reject) => { rejectAnalysis = reject; }));
     render(<WorkflowsApp platform={platform} initialAnalysis={fixtureWorkflowAnalysis} storageKey={null} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Refresh catalog" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("checking proposed steps");
+    fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Updating…");
     await waitFor(() => expect(platform.analyzeCapturedWork).toHaveBeenCalled());
     await act(async () => rejectAnalysis(new Error("Evidence review could not finish.")));
     expect(await screen.findByRole("alert")).toHaveTextContent("Evidence review could not finish.");
     expect(screen.getByText("5 of 5 shown")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Refresh catalog" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Update now" })).toBeEnabled();
   });
 
   it("reveals procedural details, sources, and gaps without claiming execution", async () => {
@@ -199,9 +199,12 @@ describe("shared workflows experience", () => {
     stage.openQuestions = ["What happens when the request is incomplete?"];
     render(<WorkflowsApp platform={createFixtureWorkflowsPlatform()} initialAnalysis={analysis} storageKey={null} />);
     fireEvent.click(await screen.findByRole("button", { name: /customer feedback triage/i }));
-    expect(screen.getByText("Steps have sources · not execution-tested")).toBeVisible();
+    expect(screen.getByText("Source-backed steps · not execution-tested")).toBeVisible();
     expect(screen.getByText("Who approves the handoff?")).toBeVisible();
+    expect(screen.queryByText("Use the approved request, not an unfinished draft.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Expand all" }));
     expect(screen.getByText("Use the approved request, not an unfinished draft.")).toBeVisible();
+    fireEvent.click(screen.getByText("Unresolved details"));
     expect(screen.getByText("What happens when the request is incomplete?")).toBeVisible();
     const source = screen.getByText("Source excerpt · Inbox");
     expect(source.closest("details")).not.toHaveAttribute("open");
@@ -210,7 +213,6 @@ describe("shared workflows experience", () => {
     fireEvent.click(screen.getByText("Evidence and limitations"));
     expect(screen.getByRole("region", { name: "Ordered capture example" })).toBeVisible();
     expect(screen.getByText("No successful second execution was observed.")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Expand all" }));
     fireEvent.click(screen.getByRole("button", { name: "Collapse all" }));
     expect(screen.queryByText("Use the approved request, not an unfinished draft.")).not.toBeInTheDocument();
   });

@@ -27,6 +27,11 @@ export type WorkflowAnalysisJob = {
 };
 
 export type WorkflowsPlatform = {
+  /** The existing scheduled-task runtime owns reconciliation and persistence. */
+  managesAnalysis?: boolean;
+  ensureAnalysisTask?: () => Promise<void>;
+  getLatestAnalysisJob?: () => Promise<WorkflowAnalysisJob | null>;
+  cancelAnalysisJob?: () => Promise<void>;
   /** Local, on-demand media only. Never persist the returned URL or upload it. */
   loadWorkflowRecording?: (timestamp: string, app: string) => Promise<WorkflowRecording | null>;
   releaseWorkflowRecording?: (url: string) => Promise<void>;

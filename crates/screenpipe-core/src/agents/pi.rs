@@ -1127,6 +1127,11 @@ impl PiExecutor {
         let ext_path = ext_dir.join("self-improvement.ts");
         std::fs::write(&ext_path, ext_content)?;
         debug!("self-improvement extension installed at {:?}", ext_path);
+        if project_dir.file_name().and_then(|name| name.to_str()) == Some("workflow-discovery") && project_dir.join("pipe.md").is_file() {
+            std::fs::write(ext_dir.join("workflow-memory.ts"), include_str!("../../assets/extensions/workflow-memory.ts"))?;
+            std::fs::write(ext_dir.join("workflow-catalog.ts"), include_str!("../../assets/extensions/workflow-catalog.ts"))?;
+        }
+
         if project_dir.file_name().and_then(|name| name.to_str()) == Some("skill-learning")
             && project_dir.join("pipe.md").is_file()
         {

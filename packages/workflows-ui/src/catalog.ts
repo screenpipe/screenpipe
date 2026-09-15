@@ -71,10 +71,11 @@ function evidenceContainment(left: WorkflowMap, right: WorkflowMap) {
 }
 
 export function workflowIdentity(workflow: WorkflowMap) {
-  return identityTokens(workflow.title).join("-");
+  return workflow.id || identityTokens(workflow.title).join("-");
 }
 
 function workflowsMatch(left: WorkflowMap, right: WorkflowMap) {
+  if (left.id && right.id) return left.id === right.id;
   const leftTokens = identityTokens(left.title);
   const rightTokens = identityTokens(right.title);
   if (leftTokens.join("|") === rightTokens.join("|")) return true;
@@ -141,6 +142,7 @@ export function sanitizeWorkflowAnalysis(analysis: WorkflowAnalysis): WorkflowAn
       frequency: `Observed on ${workflow.quality.distinctDays} captured day${workflow.quality.distinctDays === 1 ? "" : "s"} in a ${workflow.analysisDays}-day scan`,
       stages: workflow.stages.map((stage) => ({
         ...stage,
+        screenshot: stage.screenshot?.visualVerified ? stage.screenshot : undefined,
         activeMinutes: 0,
         waitingMinutes: 0,
         durationSource: "unknown" as const,
@@ -149,13 +151,17 @@ export function sanitizeWorkflowAnalysis(analysis: WorkflowAnalysis): WorkflowAn
         ...bottleneck,
         estimatedMinutesPerRun: 0,
       })),
-      quality: evidenceHasProvenance ? workflow.quality : {
+      quality: {
+        ...(evidenceHasProvenance ? workflow.quality : {
         ...workflow.quality,
         grade: "limited" as const,
         reasons: [
           ...workflow.quality.reasons.filter((reason) => !reason.toLocaleLowerCase().includes("verified")),
           "Refresh to recheck evidence type and speaker ambiguity",
         ],
+        }),
+        screenshotCount: workflow.stages.filter(stage => stage.screenshot?.visualVerified).length,
+        stageScreenshotCoverage: workflow.stages.length ? Math.round(100 * workflow.stages.filter(stage => stage.screenshot?.visualVerified).length / workflow.stages.length) : 0,
       },
     };
   });
@@ -166,6 +172,8 @@ export function sanitizeWorkflowAnalysis(analysis: WorkflowAnalysis): WorkflowAn
     analysis: { workflows },
     quality: {
       ...analysis.quality,
+      screenshotCount: workflows.reduce((sum, workflow) => sum + workflow.quality.screenshotCount, 0),
+      screenshotCoverage: workflows.some(workflow => workflow.stages.length) ? Math.round(100 * workflows.reduce((sum, workflow) => sum + workflow.quality.screenshotCount, 0) / workflows.reduce((sum, workflow) => sum + workflow.stages.length, 0)) : 0,
       warnings: workflows.length === analysis.analysis.workflows.length
         ? analysis.quality.warnings
         : [...analysis.quality.warnings, "Overlapping workflow aliases were hidden"],

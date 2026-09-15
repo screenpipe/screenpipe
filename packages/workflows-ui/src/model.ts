@@ -82,6 +82,7 @@ export type WorkflowEvidence = {
 };
 
 export type WorkflowScreenshot = {
+  visualVerified?: boolean;
   frameId: number;
   timestamp: string;
   app: string;
@@ -137,6 +138,8 @@ export type WorkflowBottleneck = {
 };
 
 export type WorkflowMap = {
+  id?: string;
+  revision?: number;
   userCorrection?: string;
   catalogStatus?: "current" | "not-reobserved";
   lastReviewedAt?: string;
@@ -214,6 +217,9 @@ export type AnalysisQuality = {
 };
 
 export type WorkflowAnalysis = {
+  revision?: number;
+  checkedThrough?: string;
+  changes?: { created: number; updated: number };
   schemaVersion: 5;
   analysis: { workflows: WorkflowMap[] };
   analyzedAt: string;

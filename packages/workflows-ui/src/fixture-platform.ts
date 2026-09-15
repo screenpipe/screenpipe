@@ -60,6 +60,7 @@ function screenshot(label: string, app: string, frameId: number) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="960" height="540" fill="#f3f0e9"/><rect x="28" y="28" width="904" height="54" rx="12" fill="#1c2723"/><circle cx="58" cy="55" r="7" fill="#ff8577"/><circle cx="82" cy="55" r="7" fill="#ffd066"/><circle cx="106" cy="55" r="7" fill="#75d39b"/><text x="140" y="63" font-family="Arial" font-size="22" fill="#fff">${safeApp}</text><rect x="48" y="116" width="250" height="374" rx="16" fill="#e1ddd4"/><rect x="328" y="116" width="584" height="98" rx="16" fill="#fff"/><rect x="328" y="236" width="280" height="254" rx="16" fill="#fff"/><rect x="632" y="236" width="280" height="254" rx="16" fill="#fff"/><text x="356" y="172" font-family="Arial" font-size="26" font-weight="700" fill="#1c2723">${safeLabel}</text><text x="356" y="198" font-family="Arial" font-size="16" fill="#68736f">Fictional preview evidence</text></svg>`;
   return {
     frameId,
+    visualVerified: true,
     timestamp: "2026-09-03T16:15:03.000Z",
     app,
     matchDistanceSeconds: 3,

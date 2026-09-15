@@ -87,6 +87,7 @@ const AUTOMATE_MY_WORK_LEGACY_PROMPT_HASHES: &[&str] = &[
     "c2c3b9e35495fd5b",
 ];
 const BUNDLED_BUILTIN_PIPES: &[(&str, &str)] = &[
+    ("workflow-discovery", include_str!("../../assets/pipes/workflow-discovery/pipe.md")),
     (
         "skill-learning",
         include_str!("../../assets/pipes/skill-learning/pipe.md"),
@@ -2799,7 +2800,10 @@ async fn setup_pipe_permissions(
 
         // Write permissions JSON for the extension to read
         let perms_path = pipe_dir.join(".screenpipe-permissions.json");
-        match serde_json::to_string(&perms) {
+        match serde_json::to_value(&perms).and_then(|mut value| {
+            value["api_base"] = serde_json::json!(format!("http://127.0.0.1:{api_port}"));
+            serde_json::to_string(&value)
+        }) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&perms_path, &json) {
                     warn!("failed to write permissions file: {}", e);

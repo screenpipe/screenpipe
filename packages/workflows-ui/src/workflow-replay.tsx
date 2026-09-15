@@ -90,8 +90,8 @@ export function WorkflowReplay({ workflow, loadRecording, releaseRecording, open
   }, [moment, loadRecording, releaseRecording, retry]);
   if (!moments.length) return <section className={styles.replay}><p>No recorded moments linked yet</p></section>;
   const screenshot = moment?.stage.screenshot;
-  const matchingImage = screenshot && screenshot.app.toLowerCase() === moment.entry.app.toLowerCase()
-    && Math.abs(Date.parse(screenshot.timestamp) - Date.parse(moment.entry.timestamp)) <= 120_000 ? screenshot : null;
+  const matchingImage = screenshot?.visualVerified && screenshot.app.toLowerCase() === moment.entry.app.toLowerCase()
+    && Date.parse(screenshot.timestamp) === Date.parse(moment.entry.timestamp) ? screenshot : null;
   return <section className={`${styles.replay} ph-no-capture ph-mask`} aria-label="Workflow recording replay">
       <div className={styles.replayMedia}>
         {loading ? <p role="status">Loading local recording…</p> : media?.kind === "video" ? <RecordingVideo
@@ -102,7 +102,7 @@ export function WorkflowReplay({ workflow, loadRecording, releaseRecording, open
       {error && <p role="alert">{error} <button type="button" onClick={() => setRetry((value) => value + 1)}>Retry</button></p>}
       <footer className={styles.replayFooter}>
         <div className={styles.replayCaption}>
-          <strong>{moment.stage.name}</strong>
+          <strong>{matchingImage ? moment.stage.name : "Captured source"}</strong>
           <span>{media?.kind === "image" || (!media && matchingImage) ? "Screenshot · " : ""}{new Date(moment.entry.timestamp).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} · {moment.entry.app}</span>
         </div>
         <nav className={styles.replayNavigation} aria-label="Captured moments">

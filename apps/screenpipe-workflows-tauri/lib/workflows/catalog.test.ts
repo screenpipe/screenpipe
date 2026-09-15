@@ -291,3 +291,20 @@ describe("workflow catalog", () => {
     expect(mergeWorkflowCatalog(previous, next).timeProfile).toEqual(previous.timeProfile);
   });
 });
+
+
+describe("scheduled catalog provenance", () => {
+  it("uses immutable IDs when a title changes", () => {
+    const original = { ...workflow("Old title", "2026-09-01T12:00:00Z"), id: "wf-stable" };
+    expect(workflowIdentity(original)).toBe(workflowIdentity({ ...original, title: "Clearer title" }));
+  });
+  it("hides legacy uninspected frames and corrects their coverage count", () => {
+    const item = workflow("Review", "2026-09-01T12:00:00Z");
+    item.stages = [{ name: "Review", screenshot: { frameId: 7, dataUrl: "data:image/png;base64,AA==" } } as any];
+    item.quality.screenshotCount = 1;
+    const result = sanitizeWorkflowAnalysis(analysis([item]));
+    expect(result.analysis.workflows[0].stages[0].screenshot).toBeUndefined();
+    expect(result.analysis.workflows[0].quality.screenshotCount).toBe(0);
+    expect(result.quality.screenshotCount).toBe(0);
+  });
+});

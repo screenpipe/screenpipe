@@ -114,7 +114,7 @@ fn source_points(payload: &Value, at: DateTime<Utc>, app: &str) -> Vec<EvidenceP
         .collect()
 }
 
-pub(super) async fn resolve_references(
+pub async fn resolve_references(
     endpoint: &RecorderEndpoint,
     value: &Value,
     mut catalog: EvidenceCatalog,
@@ -180,7 +180,24 @@ pub(super) async fn resolve_references(
                             .to_string(),
                     );
                 }
-                Ok((at, app.clone(), source_points(&payload, at, &app)))
+                let frames: Vec<i64> = payload["data"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|row| {
+                        let content = &row["content"];
+                        let timestamp = content["timestamp"]
+                            .as_str()
+                            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())?;
+                        if timestamp != at
+                            || !content["app_name"].as_str()?.eq_ignore_ascii_case(&app)
+                        {
+                            return None;
+                        }
+                        content["frame_id"].as_i64().filter(|id| *id > 0)
+                    })
+                    .collect();
+                Ok((at, app.clone(), source_points(&payload, at, &app), frames))
             }
         })
         .buffered(HISTORY_QUERY_CONCURRENCY)
@@ -189,7 +206,10 @@ pub(super) async fn resolve_references(
     // New source reads replace sampled text at the same identity. Missing or
     // revoked sources cannot survive merely because they were in the index.
     for result in results {
-        let (at, app, points) = result?;
+        let (at, app, points, frames) = result?;
+        for id in frames {
+            catalog.frames.insert(id, (at, app.clone()));
+        }
         catalog
             .points
             .retain(|p| p.timestamp != at || !p.app.eq_ignore_ascii_case(&app));

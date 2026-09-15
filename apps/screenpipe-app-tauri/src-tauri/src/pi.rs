@@ -1854,7 +1854,7 @@ fn ensure_workflow_memory_extension(project_dir: &str) -> Result<(), String> {
     let ext_dir = std::path::Path::new(project_dir).join(".pi").join("extensions");
     std::fs::create_dir_all(&ext_dir).map_err(|e| e.to_string())?;
     std::fs::write(ext_dir.join("workflow-memory.ts"),
-        include_str!("../../../screenpipe-workflows-tauri/src-tauri/assets/extensions/workflow-memory.ts"))
+        include_str!("../../../../crates/screenpipe-core/assets/extensions/workflow-memory.ts"))
         .map_err(|e| format!("Failed to install memory lookup tools: {}", e))
 }
 
