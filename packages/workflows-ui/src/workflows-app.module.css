@@ -569,19 +569,38 @@
 .skillDialogHeader > button:hover { border-color: #20221e; background: #20221e; color: #fff; }
 .skillDialogHeader > button:disabled { opacity: .45; cursor: default; }
 .skillDialogBody { min-height: 0; flex: 1; overflow-y: auto; }
-.skillGenerating, .skillSaved { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; padding: 42px 24px; text-align: center; }
-.skillGenerating strong, .skillSaved h3 { margin: 6px 0 0; font-size: 15px; }
-.skillGenerating p, .skillSaved p { max-width: 430px; margin: 0; color: #7d8178; font-size: 9px; line-height: 1.55; }
-.skillGenerating .primaryButton, .skillSaved .primaryButton { margin-top: 12px; }
-.skillSaved details { max-width: 100%; margin-top: 7px; color: #777b72; font-size: 8px; }
-.skillSaved summary { cursor: pointer; }
-.skillSaved code { display: block; max-width: 560px; overflow-wrap: anywhere; margin-top: 7px; padding: 8px 10px; border: 1px solid #dddfd8; border-radius: 4px; background: #fff; font-size: 7.5px; text-align: left; }
-.skillSaved .skillLocations { width: 100%; font-size: 11px; }
-.skillLocations ul { list-style: none; padding: 0; margin: 12px 0 0; text-align: left; }
-.skillLocations li { margin-bottom: 14px; }
+.skillGenerating { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; padding: 42px 24px; text-align: center; }
+.skillGenerating strong { margin: 6px 0 0; font-size: 15px; }
+.skillGenerating p { max-width: 430px; margin: 0; color: #7d8178; font-size: 9px; line-height: 1.55; }
+.skillGenerating .primaryButton { margin-top: 12px; }
+.skillCompleteBackdrop { align-items: center; justify-content: center; }
+.skillCompleteDialog { width: min(480px, calc(100vw - 24px)); height: auto; max-height: calc(100svh - 24px); animation: skillFade .15s ease; }
+.skillCompleteDialog .skillDialogHeader { padding: 20px 24px 16px; border-bottom: 0; background: transparent; align-items: center; gap: 12px; }
+.skillCompleteDialog .skillDialogHeader h2 { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 21px; letter-spacing: -.02em; }
+.skillSaved { display: flex; flex-direction: column; align-items: stretch; gap: 16px; padding: 0 24px 20px; text-align: left; }
+.skillSaved h3 { margin: 0; font-size: 16px; line-height: 1.4; font-weight: 600; overflow-wrap: anywhere; }
+.skillSaved p { margin: 0; color: #78786f; font-size: 13px; line-height: 1.5; }
+.skillDestinations { display: flex; flex-wrap: wrap; gap: 8px 14px; list-style: none; margin: -6px 0 0; padding: 0; }
+.skillDestinations li { display: flex; align-items: center; gap: 5px; color: #62665e; font-size: 12px; }
+.skillNextStep { padding: 16px; border: 1px solid #dddfd8; border-radius: 8px; background: #fff; }
+.skillNextStep > strong { font-size: 13px; }
+.skillNextStep > p { margin-top: 4px; font-size: 12px; }
+.skillNextStep > div { margin: 12px 0; font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; user-select: text; }
+.skillNextStep .secondaryButton { font-size: 12px; min-height: 34px; }
+.skillSaved details { color: #62665e; font-size: 12px; }
+.skillSaved summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; }
+.skillSaved summary::-webkit-details-marker { display: none; }
+.skillLocations summary { justify-content: space-between; padding: 12px 0; border-top: 1px solid #dddfd8; }
+.skillLocations[open] summary svg { transform: rotate(180deg); }
+.skillLocations ul { max-height: 180px; overflow: auto; list-style: none; padding: 0; margin: 0; text-align: left; }
+.skillLocations li { padding: 8px 0; border-bottom: 1px solid #e6e7e1; }
 .skillLocations li > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.skillLocations button { padding: 3px 7px; border: 1px solid #dddfd8; border-radius: 4px; background: #fff; color: inherit; font-size: 10px; cursor: pointer; }
-.skillLocations code { font-size: 10px; user-select: text; }
+.skillLocations button { min-height: 30px; padding: 3px 7px; border: 1px solid #dddfd8; border-radius: 4px; background: #fff; color: inherit; font-size: 11px; cursor: pointer; }
+.skillLocations code { display: block; max-width: 100%; margin-top: 5px; overflow-wrap: anywhere; font-size: 11px; line-height: 1.5; user-select: text; }
+.skillInstallWarnings summary { color: #815915; }
+.skillInstallWarnings ul { padding-left: 18px; margin: 8px 0 0; line-height: 1.5; }
+.skillCompleteActions { display: flex; justify-content: flex-end; }
+.skillCompleteActions .primaryButton { min-height: 36px; padding: 0 18px; font-size: 12px; }
 .skillAgentRun { min-height: 100%; display: flex; flex-direction: column; padding: 24px 22px 28px; }
 .skillRunStatus { display: flex; align-items: center; gap: 12px; }
 .skillAgentMark { width: 34px; height: 34px; display: grid; flex: 0 0 auto; place-items: center; border-radius: 8px; background: var(--ink); color: var(--lime); }
@@ -811,6 +830,7 @@
   .profileAdvancedGrid { padding-left: 17px; }
   .skillBackdrop { padding: 8px; }
   .skillDialog { width: calc(100vw - 16px); height: calc(100svh - 16px); }
+  .skillCompleteDialog { width: calc(100vw - 16px); height: auto; max-height: calc(100svh - 16px); }
   .skillDialogHeader, .skillFields { padding-left: 16px; padding-right: 16px; }
   .skillEvidenceNote, .skillError, .skillEdit { margin-left: 16px; margin-right: 16px; }
   .skillReview { padding-left: 16px; padding-right: 16px; }

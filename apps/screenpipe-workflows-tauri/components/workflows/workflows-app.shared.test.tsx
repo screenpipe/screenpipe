@@ -359,9 +359,11 @@ describe("shared workflows experience", () => {
     expect(await screen.findByRole("heading", { name: "Review this skill" })).toBeInTheDocument();
     expect(screen.getAllByText(draft.description).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Install in my agents" }));
-    expect(await screen.findByRole("heading", { name: "Ready in your agents" })).toBeInTheDocument();
-    expect(screen.getByText(/Screenpipe, Claude Code, and Codex/)).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Installed files"));
+    expect(await screen.findByRole("heading", { name: "Ready to use" })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Available in" })).toHaveTextContent("ScreenpipeClaude CodeCodex");
+    expect(screen.getByText("Installation details").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText("Try it in a new chat")).toBeVisible();
+    fireEvent.click(screen.getByText("Installation details"));
     const locations = (await vi.mocked(platform.saveWorkflowSkill).mock.results[0].value).locations!;
     for (const location of locations) expect(screen.getByText(location.path)).toBeVisible();
     expect(screen.queryByText(`/Users/screenpipe/.screenpipe/skills/${draft.name}/SKILL.md`)).not.toBeInTheDocument();
@@ -369,6 +371,9 @@ describe("shared workflows experience", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     try {
+      fireEvent.click(screen.getByRole("button", { name: "Copy prompt" }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith(`Use the ${draft.name} skill. Ask me for any missing inputs before taking action.`));
+      expect(await screen.findByText("Prompt copied")).toBeVisible();
       fireEvent.click(screen.getByRole("button", { name: "Copy Codex file path" }));
       await waitFor(() => expect(writeText).toHaveBeenCalledWith(locations[2].path));
       expect(await screen.findByText("Copied")).toBeInTheDocument();
@@ -396,7 +401,7 @@ describe("shared workflows experience", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Preview installation" }));
     expect(await screen.findByRole("heading", { name: "Preview complete" })).toBeInTheDocument();
     expect(screen.getByText("No files were installed")).toBeInTheDocument();
-    expect(screen.queryByText("Installed files")).not.toBeInTheDocument();
+    expect(screen.queryByText("Installation details")).not.toBeInTheDocument();
     expect(screen.queryByText(/Installed in .* on this computer/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Skill installed" })).not.toBeInTheDocument();
   });
@@ -411,8 +416,8 @@ describe("shared workflows experience", () => {
     fireEvent.click(await screen.findByRole("button", { name: /customer feedback triage/i }));
     fireEvent.click(screen.getByRole("button", { name: "Create skill" }));
     fireEvent.click(await screen.findByRole("button", { name: "Install in my agents" }));
-    expect(await screen.findByRole("heading", { name: "Saved to Screenpipe" })).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Installed files"));
+    expect(await screen.findByRole("heading", { name: "Ready to use" })).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Installation details"));
     expect(screen.getByText("/custom/profile/skills/review/SKILL.md")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Copy Codex file path" })).not.toBeInTheDocument();
   });

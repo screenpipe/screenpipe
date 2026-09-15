@@ -706,12 +706,6 @@ function WorkflowsView({ workflows, knownWorkflowCount, activityPeriod, filters,
   );
 }
 
-function destinationList(items: string[]) {
-  if (items.length < 2) return items[0] || "Screenpipe";
-  if (items.length === 2) return `${items[0]} and ${items[1]}`;
-  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
-}
-
 function readableSkillInstructions(value: string) {
   return value
     .replace(/^#{1,6}\s+/gm, "")
@@ -748,15 +742,16 @@ function WorkflowSkillDialog({
   close: () => void;
 }) {
   const [copiedPath, setCopiedPath] = useState("");
-  const [copyError, setCopyError] = useState(false);
+  const [copyError, setCopyError] = useState<"path" | "prompt" | null>(null);
   // Legacy receipts only identify Screenpipe's own copy. Never infer agent
   // paths from their names or claim a failed destination was installed.
   const locations = saved?.locations ?? (saved?.path ? [{ destination: "Screenpipe", path: saved.path }] : []);
   const hasExternalInstall = saved?.destinations.some((destination) => destination !== "Screenpipe");
-  const completedTitle = preview ? "Preview complete" : hasExternalInstall ? "Ready in your agents" : "Saved to Screenpipe";
-  async function copyPath(path: string) {
-    try { await navigator.clipboard.writeText(path); setCopiedPath(path); setCopyError(false); }
-    catch { setCopyError(true); }
+  const completedTitle = preview ? "Preview complete" : saved?.destinations.length ? "Ready to use" : "Installation incomplete";
+  const starterPrompt = `Use the ${saved?.name || draft?.name || "workflow"} skill. Ask me for any missing inputs before taking action.`;
+  async function copyPath(path: string, kind: "path" | "prompt" = "path") {
+    try { await navigator.clipboard.writeText(path); setCopiedPath(path); setCopyError(null); }
+    catch { setCopyError(kind); }
   }
   const phases = [
     ["reading", "Read the map"],
@@ -774,12 +769,12 @@ function WorkflowSkillDialog({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [close, saving]);
 
-  return <div className={styles.skillBackdrop} role="presentation" onMouseDown={(event) => {
+  return <div className={`${styles.skillBackdrop} ${saved ? styles.skillCompleteBackdrop : ""}`} role="presentation" onMouseDown={(event) => {
     if (event.target === event.currentTarget && !saving) close();
   }}>
-    <section className={styles.skillDialog} role="dialog" aria-modal="true" aria-labelledby="workflow-skill-title" onKeyDown={(event) => event.stopPropagation()}>
+    <section className={`${styles.skillDialog} ${saved ? styles.skillCompleteDialog : ""}`} role="dialog" aria-modal="true" aria-labelledby="workflow-skill-title" onKeyDown={(event) => event.stopPropagation()}>
       <div className={styles.skillDialogHeader}>
-        <div><span>{workflow.title}</span><h2 id="workflow-skill-title">{generating ? "Creating your skill" : saved ? completedTitle : "Review this skill"}</h2><p>{generating ? "The repeatable parts of this workflow will appear as they are drafted." : preview ? "This is a preview. Installation is available in the desktop app." : saved ? "Your skill has been saved on this computer." : "Make any changes, then install it in your local agents."}</p></div>
+        <div>{!saved && <span>{workflow.title}</span>}<h2 id="workflow-skill-title">{generating ? "Creating your skill" : saved ? <><CheckCircle2 size={20} aria-hidden="true" />{completedTitle}</> : "Review this skill"}</h2>{!saved && <p>{generating ? "The repeatable parts of this workflow will appear as they are drafted." : preview ? "This is a preview. Installation is available in the desktop app." : "Make any changes, then install it in your local agents."}</p>}</div>
         <button type="button" onClick={close} disabled={saving} aria-label="Close skill editor"><X size={16} /></button>
       </div>
 
@@ -792,14 +787,17 @@ function WorkflowSkillDialog({
             <pre>{progress.preview ? readableSkillInstructions(progress.preview) : "The reusable instructions will appear here."}<i aria-hidden="true" /></pre>
           </div>
         </div> : saved ? <div className={styles.skillSaved}>
-          <CheckCircle2 size={23} />
-          <h3>{preview ? "No files were installed" : "Installed"}</h3>
-          {!preview && <>
-            <p>Installed in {destinationList(saved.destinations)} on this computer.</p>
-            {!!saved.warnings.length && <details><summary>Not added everywhere</summary><ul>{saved.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></details>}
-            {locations.length > 0 && <details className={styles.skillLocations}><summary>Installed files</summary><ul>{locations.map((location) => <li key={`${location.destination}:${location.path}`}><div><strong>{location.destination}</strong><button type="button" aria-label={`Copy ${location.destination} file path`} onClick={() => void copyPath(location.path)}>{copiedPath === location.path ? "Copied" : "Copy path"}</button></div><code>{location.path}</code></li>)}</ul>{copyError && <p role="alert">Couldn’t copy the path. Select it to copy manually.</p>}</details>}
+          <h3>{workflow.title}</h3>
+          {preview ? <p>No files were installed</p> : <>
+            {saved.destinations.length > 0 && <>
+              <ul className={styles.skillDestinations} aria-label="Available in">{saved.destinations.map(destination => <li key={destination}><CheckCircle2 size={13} aria-hidden="true" />{destination}</li>)}</ul>
+              <div className={styles.skillNextStep}><strong>Try it in a new chat</strong><p>Paste this into {hasExternalInstall ? "one of these apps" : "Screenpipe"} to get started.</p><div>{starterPrompt}</div><button type="button" className={styles.secondaryButton} onClick={() => void copyPath(starterPrompt, "prompt")}>{copiedPath === starterPrompt ? "Prompt copied" : "Copy prompt"}</button></div>
+            </>}
+            {!!saved.warnings.length && <details className={styles.skillInstallWarnings}><summary><AlertTriangle size={14} />{saved.warnings.length} installation issue{saved.warnings.length === 1 ? "" : "s"}</summary><ul>{saved.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></details>}
+            {locations.length > 0 && <details className={styles.skillLocations}><summary>Installation details <ChevronDown size={14} /></summary><ul>{locations.map((location) => <li key={`${location.destination}:${location.path}`}><div><strong>{location.destination}</strong><button type="button" aria-label={`Copy ${location.destination} file path`} onClick={() => void copyPath(location.path)}>{copiedPath === location.path ? "Copied" : "Copy path"}</button></div><code>{location.path}</code></li>)}</ul></details>}
+            {copyError && <p role="alert">{copyError === "path" ? "Couldn’t copy the path. Select it to copy manually." : "Couldn’t copy the prompt. Select it to copy manually."}</p>}
           </>}
-          <button className={styles.primaryButton} type="button" onClick={close}>Done</button>
+          <div className={styles.skillCompleteActions}><button className={styles.primaryButton} type="button" onClick={close}>Done</button></div>
         </div> : draft ? <>
           <div className={styles.skillEvidenceNote}><FileCheck2 size={15} /><span>Based on {workflow.stages.length} mapped stages observed across {workflow.quality.distinctDays} captured day{workflow.quality.distinctDays === 1 ? "" : "s"}.</span></div>
           {error && <div className={styles.skillError}><AlertTriangle size={14} />{error}</div>}
