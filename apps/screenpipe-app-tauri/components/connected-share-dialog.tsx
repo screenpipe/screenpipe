@@ -207,12 +207,17 @@ export function ConnectedShareDialog({
   onOpenChange,
   artifact,
   initialDestination = null,
+  onConnect,
+  connectionsRevision = 0,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   artifact: ConnectedShareArtifact;
   /** A deliberate app-icon click. Still checked against live availability. */
   initialDestination?: ConnectedShareDestination | null;
+  /** Host setup can stay over the current workspace without discarding this draft. */
+  onConnect?: (connectionId: ConnectedShareApp) => void;
+  connectionsRevision?: number;
 }) {
   const { toast } = useToast();
   const allSectionIds = useMemo(
@@ -470,6 +475,7 @@ export function ConnectedShareDialog({
   }, [
     artifact.surface,
     connectionsRefresh,
+    connectionsRevision,
     initialDestination,
     open,
     rememberModeDestination,
@@ -704,6 +710,10 @@ export function ConnectedShareDialog({
       surface: artifact.surface,
       connection: connectionId,
     });
+    if (onConnect) {
+      onConnect(connectionId);
+      return;
+    }
     onOpenChange(false);
     window.dispatchEvent(
       new CustomEvent("open-settings", {

@@ -3740,6 +3740,9 @@ interface ConnectionsSectionProps {
   focusScopeVariant?: string | null;
   focusRequestId?: number;
   onFocusRequestConsumed?: () => void;
+  /** Reuse the focused setup dialog over another workspace. */
+  panelOnly?: boolean;
+  onConnectionClose?: () => void;
 }
 
 export function ConnectionsSection({
@@ -3748,6 +3751,8 @@ export function ConnectionsSection({
   focusScopeVariant,
   focusRequestId = 0,
   onFocusRequestConsumed,
+  panelOnly = false,
+  onConnectionClose,
 }: ConnectionsSectionProps = {}) {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState(ALL_CONNECTION_CATEGORIES);
@@ -4449,6 +4454,7 @@ export function ConnectionsSection({
 
   return (
     <div className="space-y-5">
+      {!panelOnly && <>
       {/* Header: title + inline search */}
       <div className="flex items-center gap-3">
         <p className="flex-1 text-sm text-muted-foreground">Connect your apps</p>
@@ -4584,12 +4590,14 @@ export function ConnectionsSection({
         <p className="py-8 text-center text-sm text-muted-foreground">No matching apps</p>
       )}
 
+      </>}
       <Dialog
         open={!!selected && !!selectedTile}
         onOpenChange={(open) => {
           if (!open) {
             setSelected(null);
             setRequestedScopeVariant(null);
+            onConnectionClose?.();
           }
         }}
       >

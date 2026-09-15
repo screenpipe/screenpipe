@@ -285,6 +285,27 @@ describe("ConnectedShareDialog", () => {
     window.removeEventListener("open-settings", openSettings);
   });
 
+  it("keeps the edited draft while host connection setup refreshes availability", async () => {
+    mocks.localFetch.mockResolvedValue(jsonResponse({ data: [{ id: "notion", connected: false }] }));
+    const onOpenChange = vi.fn(), onConnect = vi.fn(), openSettings = vi.fn();
+    window.addEventListener("open-settings", openSettings);
+    const props = { open: true, onOpenChange, onConnect, artifact };
+    const view = render(<ConnectedShareDialog {...props} />);
+    await openDestinations();
+    fireEvent.click(await screen.findByTestId("connected-share-connect-notion"));
+    expect(onConnect).toHaveBeenCalledWith("notion");
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(openSettings).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("connected-share-preview-toggle"));
+    fireEvent.change(screen.getByLabelText("edit before sending"), { target: { value: "My edited workflow" } });
+    const checks = mocks.localFetch.mock.calls.length;
+    view.rerender(<ConnectedShareDialog {...props} connectionsRevision={1} />);
+    await waitFor(() => expect(mocks.localFetch.mock.calls.length).toBeGreaterThan(checks));
+    expect(screen.getByLabelText("edit before sending")).toHaveValue("My edited workflow");
+    expect(onOpenChange).not.toHaveBeenCalled();
+    window.removeEventListener("open-settings", openSettings);
+  });
+
   it("prepares an MCP Notion handoff without running Chat or sending", async () => {
     mocks.localFetch.mockResolvedValue(
       jsonResponse({
