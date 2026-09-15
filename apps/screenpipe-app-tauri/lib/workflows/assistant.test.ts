@@ -19,7 +19,7 @@ vi.mock("@/lib/utils/tauri", () => ({ commands: {
   getCloudToken: mocks.token, piStart: mocks.start, piPrompt: mocks.prompt, piStop: mocks.stop,
 } }));
 import { ASSISTANT_TOOLS, assistantProviderConfig, buildAssistantPrompt, desktopAssistant } from "./assistant";
-import { fillWorkContext } from "./context";
+import { CONTEXT_TOOLS, fillWorkContext } from "./context";
 import { fixturePersonalWorkProfile } from "@screenpipe/workflows-ui/fixture";
 
 describe("workflow assistant agent transport", () => {
@@ -51,7 +51,7 @@ describe("workflow assistant agent transport", () => {
     for (const token of ["first-account-token", "refreshed-account-token"]) {
       const onField = vi.fn();
       await fillWorkContext({ documents: [{ name: "Notes", text: "I own support operations." }], website: "", profile: fixturePersonalWorkProfile, signal: new AbortController().signal, onField, onActivity: vi.fn() });
-      expect(mocks.start).toHaveBeenLastCalledWith(expect.stringContaining("workflow-context"), "/isolated/profile/pi-workflows-context", token, expect.objectContaining({ provider: "screenpipe-cloud", allowedTools: ["fill_work_context"] }));
+      expect(mocks.start).toHaveBeenLastCalledWith(expect.stringContaining("workflow-context"), "/isolated/profile/pi-workflows-context", token, expect.objectContaining({ provider: "screenpipe-cloud", allowedTools: CONTEXT_TOOLS }));
       expect(onField).toHaveBeenCalledWith({ field: "summary", value: "I own support operations." });
     }
     expect(mocks.handlers.size).toBe(0);

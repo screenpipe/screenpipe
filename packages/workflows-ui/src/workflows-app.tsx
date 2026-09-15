@@ -1108,6 +1108,7 @@ function ProfileView({
   profile,
   workspaceView,
   fillContext,
+  contextDiscovery,
   saving,
   saved,
   error,
@@ -1117,6 +1118,7 @@ function ProfileView({
   profile: WorkProfile;
   workspaceView: boolean;
   fillContext?: WorkflowsAppProps["platform"]["fillContext"];
+  contextDiscovery?: boolean;
   saving: boolean;
   saved: boolean;
   error: string;
@@ -1139,7 +1141,7 @@ function ProfileView({
     <div className={styles.contextHeader}>
       <div><h1>Context</h1><p>Help Screenpipe understand your work and what matters.</p></div>
     </div>
-    {fillContext && <ContextComposer profile={profile} update={update} fillContext={fillContext} onBusy={setFilling} onFields={setFilled} />}
+    {fillContext && <ContextComposer discoverContext={contextDiscovery} profile={profile} update={update} fillContext={fillContext} onBusy={setFilling} onFields={setFilled} />}
     <section className={styles.profileSteps}>
       <article className={styles.profileCard}>
         <div className={styles.profileCardHead}><div><h2>{workspaceView ? "Organization overview" : "Your work"}{fieldStatus("summary")}</h2></div></div>
@@ -1538,7 +1540,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
       setAnalysis(updated);
     } : undefined} />; break;
     case "bottlenecks": content = <BottlenecksView workflows={workflows} openWorkflow={openWorkflow} />; break;
-    case "profile": content = <ProfileView fillContext={platform.fillContext} profile={workProfile ?? emptyWorkProfile(workspaceProfile)} workspaceView={workspaceProfile} saving={profileSaving} saved={profileSaved} error={profileError} update={(profile) => { setWorkProfile(profile); setProfileSaved(false); setProfileError(""); }} save={() => void saveWorkProfile()} />; break;
+    case "profile": content = <ProfileView contextDiscovery={platform.contextDiscovery} fillContext={platform.fillContext} profile={workProfile ?? emptyWorkProfile(workspaceProfile)} workspaceView={workspaceProfile} saving={profileSaving} saved={profileSaved} error={profileError} update={(profile) => { setWorkProfile(profile); setProfileSaved(false); setProfileError(""); }} save={() => void saveWorkProfile()} />; break;
     case "evidence": content = <EvidenceView workflows={workflows} openWorkflow={openWorkflow} runtime={runtime} />; break;
     case "privacy": content = <PrivacyView runtime={runtime} />; break;
   }

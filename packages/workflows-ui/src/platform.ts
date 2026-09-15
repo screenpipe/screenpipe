@@ -32,6 +32,8 @@ export type WorkflowsPlatform = {
   releaseWorkflowRecording?: (url: string) => Promise<void>;
   openCapturedMoment?: (frameId: number, timestamp: string) => Promise<void>;
   assistant?: WorkflowsAssistantPlatform;
+  /** The host can discover context without uploaded sources. */
+  contextDiscovery?: boolean;
   fillContext?: (request: import("./context-tool").ContextFillRequest) => Promise<void>;
   ensureRuntime: () => Promise<WorkflowRuntime>;
   analyzeCapturedWork: (days: number, options?: WorkflowAnalysisOptions) => Promise<WorkflowAnalysis>;

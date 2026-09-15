@@ -354,6 +354,7 @@ export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixt
   let profile = fixturePersonalWorkProfile;
   return {
     assistant: fixtureAssistant(),
+    contextDiscovery: true,
     fillContext: async ({ signal, onField, onActivity }) => {
       onActivity("Filling preview context…");
       await new Promise((resolve) => setTimeout(resolve, 450));

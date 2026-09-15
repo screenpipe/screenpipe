@@ -43,3 +43,20 @@ it("stops pending fills and ignores any later field result", async () => {
   pending.onField({ field: "company", value: "Too late" });
   expect(screen.getByLabelText("Company overview")).not.toHaveValue("Too late");
 });
+
+it("can discover context without inputs only when the host supports it", async () => {
+  window.history.replaceState(null, "", "/?view=profile");
+  const platform = createFixtureWorkflowsPlatform();
+  platform.fillContext = vi.fn(async () => {});
+  const view = render(<WorkflowsApp platform={platform} storageKey={null} />);
+  const website = await screen.findByLabelText("Company website");
+  fireEvent.change(website, { target: { value: "" } });
+  const fill = screen.getByRole("button", { name: "Fill context" });
+  expect(fill).toBeEnabled();
+  fireEvent.click(fill);
+  await waitFor(() => expect(platform.fillContext).toHaveBeenCalledWith(expect.objectContaining({ documents: [], website: "" })));
+  view.unmount();
+  render(<WorkflowsApp platform={{ ...platform, contextDiscovery: false }} storageKey={null} />);
+  fireEvent.change(await screen.findByLabelText("Company website"), { target: { value: "" } });
+  expect(screen.getByRole("button", { name: "Fill context" })).toBeDisabled();
+});

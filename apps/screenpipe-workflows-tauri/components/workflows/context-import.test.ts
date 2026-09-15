@@ -26,9 +26,20 @@ it("keeps a user edit made after the run began", () => {
 });
 it("the real tool returns typed field updates and cannot modify visibility or hourly value", async () => {
   let tool: any;
-  contextTool({ registerTool: (registered) => { tool = registered; } });
+  contextTool({ on: vi.fn(), registerTool: (registered) => { tool = registered; } });
   const result = await tool.execute("call", { field: "summary", value: "I lead support." });
   expect(parseContextUpdate(JSON.parse(result.content[0].text))).toEqual({ field: "summary", value: "I lead support." });
   await expect(tool.execute("call", { field: "visibility", value: "public" })).rejects.toThrow();
   await expect(tool.execute("call", { field: "hourlyValue", value: "1000" })).rejects.toThrow();
+});
+
+it("Context blocks writes through shared profile and skill tools", () => {
+  let guard: any;
+  contextTool({ on: (_event, handler) => { guard = handler; }, registerTool: vi.fn() });
+  for (const [toolName, action] of [["user_profile", "save"], ["user_profile", "delete"], ["skill_manage", "create"], ["skill_manage", "patch"]]) {
+    expect(guard({ toolName, input: { action, confirmed: true } })).toMatchObject({ block: true });
+  }
+  for (const [toolName, action] of [["user_profile", "list"], ["skill_manage", "list"], ["skill_manage", "read"]]) {
+    expect(guard({ toolName, input: { action } })).toBeUndefined();
+  }
 });

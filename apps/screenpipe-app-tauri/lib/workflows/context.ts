@@ -2,18 +2,19 @@
 // https://screenpipe.com
 
 import { type ContextFillRequest, buildContextPrompt, normalizeContextWebsite, parseContextUpdate, validateContextDocuments } from "@screenpipe/workflows-ui/context";
-import { assistantProviderConfig } from "./assistant";
+import { ASSISTANT_TOOLS, assistantProviderConfig } from "./assistant";
 import { runWorkflowAgent } from "./agent-runner";
+
+export const CONTEXT_TOOLS = [...ASSISTANT_TOOLS, "user_profile", "skill_manage", "read", "screenpipe_list_connections", "sp_mcp_list_tools", "sp_mcp_read", "fill_work_context"];
 
 export async function fillWorkContext({ documents, website, profile, signal, onField, onActivity }: ContextFillRequest) {
   validateContextDocuments(documents);
   website = normalizeContextWebsite(website);
-  if (!documents.length && !website) throw new Error("Add some text, files, or a company website.");
   const received = new Set<string>();
   await runWorkflowAgent({
     name: "context", signal, allowEmpty: true,
-    config: { ...assistantProviderConfig, maxTokens: 8000, allowedTools: ["fill_work_context", ...(website ? ["sp_web_search"] : [])] },
-    prompt: buildContextPrompt({ documents, website, profile }),
+    config: { ...assistantProviderConfig, maxTokens: 8000, allowedTools: [...CONTEXT_TOOLS, ...(website ? ["sp_web_search"] : [])] },
+    prompt: buildContextPrompt({ documents, website, profile, discoverContext: true }),
     onProgress: ({ activity }) => onActivity(activity === "searching" ? "Reading sources…" : "Filling context…"),
     onEvent: (event) => {
       if (event.type !== "tool_execution_end" || event.toolName !== "fill_work_context" || event.isError) return;

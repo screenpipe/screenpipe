@@ -133,6 +133,7 @@ export const desktopWorkflowsPlatform: WorkflowsPlatform = {
   } : {}),
   ...(!browserPreview ? { assistant: desktopAssistant } : {}),
   // The main app owns startup. Opening a workspace never starts a recorder.
+  contextDiscovery: true,
   fillContext: fillWorkContext,
   ensureRuntime: getWorkflowRuntime,
   analyzeCapturedWork: (days, options) => analyzeCapturedWork(days, options?.workProfile),

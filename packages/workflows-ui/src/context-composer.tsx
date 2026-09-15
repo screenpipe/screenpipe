@@ -9,7 +9,8 @@ import { CONTEXT_LABELS, MAX_CONTEXT_SOURCE_TEXT, mergeContextUpdate, normalizeC
 import type { ImportResult } from "./context-import";
 import styles from "./workflows-app.module.css";
 
-export function ContextComposer({ profile, update, fillContext, onBusy, onFields }: {
+export function ContextComposer({ profile, update, fillContext, discoverContext = false, onBusy, onFields }: {
+  discoverContext?: boolean;
   profile: WorkProfile;
   update: (profile: WorkProfile) => void;
   fillContext: NonNullable<WorkflowsPlatform["fillContext"]>;
@@ -65,7 +66,7 @@ export function ContextComposer({ profile, update, fillContext, onBusy, onFields
       const sources = [...documents, ...(text.trim() ? [{ name: "Pasted context", text: text.trim() }] : [])];
       validateContextDocuments(sources);
       const website = normalizeContextWebsite(base.website || "");
-      if (!sources.length && !website) throw new Error("Add text, files, or a company website.");
+      if (!discoverContext && !sources.length && !website) throw new Error("Add text, files, or a company website.");
       request.current = controller; setBusy(true); onBusy(true); onFields([]);
       await fillContext({ documents: sources, website, profile: base, signal: controller.signal,
         onActivity: (activity) => { if (!controller.signal.aborted) setMessage(activity); },
@@ -89,12 +90,12 @@ export function ContextComposer({ profile, update, fillContext, onBusy, onFields
     onDragOver={(event) => { event.preventDefault(); }}
     onDrop={(event) => { event.preventDefault(); readFiles(Array.from(event.dataTransfer.files)); }}>
     <label className={styles.contextWebsite}><span>Company website</span><input aria-label="Company website" value={profile.website || ""} onChange={(event) => update({ ...profile, website: event.target.value })} placeholder="company.com" autoComplete="url" maxLength={253} disabled={busy} /></label>
-    <textarea aria-label="Paste context" placeholder="Paste notes about your work, or drop documents here…" value={text} onChange={(event) => setText(event.target.value)} maxLength={MAX_CONTEXT_SOURCE_TEXT} disabled={busy || reading} />
+    <textarea aria-label="Paste context" placeholder={discoverContext ? "Add notes or files, or let Screenpipe learn from your work history and connections…" : "Paste notes about your work, or drop documents here…"} value={text} onChange={(event) => setText(event.target.value)} maxLength={MAX_CONTEXT_SOURCE_TEXT} disabled={busy || reading} />
     {documents.length > 0 && <div className={styles.contextAttachments}>{documents.map((document, index) => <span key={`${index}:${document.name}`}>{document.name}<button aria-label={`Remove ${document.name}`} onClick={() => setDocuments(documents.filter((_, i) => i !== index))} disabled={busy || reading}><X size={12} /></button></span>)}</div>}
     <div className={styles.contextToolbar}>
       <input ref={input} type="file" multiple accept=".pdf,.txt,.md,.markdown,.csv,.json,.zip" hidden onChange={(event) => { readFiles(Array.from(event.target.files || [])); event.target.value = ""; }} />
       <button type="button" onClick={() => input.current?.click()} disabled={busy || reading}><Paperclip size={15} />{reading ? "Reading files…" : "Add files or ZIP"}</button>
-      {busy ? <button type="button" onClick={() => { request.current?.abort(); setMessage("Stopped. Filled fields are ready to review."); }}><Square size={13} />Stop</button> : <button className={styles.contextFillButton} type="button" onClick={() => void fill()} disabled={reading || (!text.trim() && !documents.length && !profile.website?.trim())}><ArrowUp size={15} />Fill context</button>}
+      {busy ? <button type="button" onClick={() => { request.current?.abort(); setMessage("Stopped. Filled fields are ready to review."); }}><Square size={13} />Stop</button> : <button className={styles.contextFillButton} type="button" onClick={() => void fill()} disabled={reading || (!discoverContext && !text.trim() && !documents.length && !profile.website?.trim())}><ArrowUp size={15} />Fill context</button>}
     </div>
     {(message || error || warnings.length > 0) && <div className={styles.contextStatus} role={error ? "alert" : "status"}>{error || message}{warnings.length > 0 && <details><summary>{warnings.length} file notice{warnings.length === 1 ? "" : "s"}</summary>{warnings.map((warning) => <p key={warning}>{warning}</p>)}</details>}</div>}
   </section>;
