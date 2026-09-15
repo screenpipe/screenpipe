@@ -1329,6 +1329,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   }, [platform, active]);
 
   const analyze = useCallback(async () => {
+    setAnalysisJob(null);
     setAnalyzing(true);
     setAnalysisError("");
     try {

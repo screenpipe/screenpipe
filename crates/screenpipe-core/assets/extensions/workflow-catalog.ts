@@ -77,7 +77,7 @@ export default function workflowCatalog(pi: ExtensionAPI) {
   });
   tool("activity-summary", "Read a measured activity index for a chosen interval. Summaries guide investigation; they do not prove task completion.", {
     start_time: { type: "string" }, end_time: { type: "string" },
-  }, ["start_time", "end_time"], async (input, signal) => ({ content: [{ type: "text", text: compactEvidence(await readJson(`/activity-summary?${new URLSearchParams(input)}`, undefined, signal)) }] }));
+  }, ["start_time", "end_time"], async (input, signal) => ({ content: [{ type: "text", text: compactEvidence(await readJson(`/activity-summary?${new URLSearchParams({ ...input, include_key_texts: "false", include_snippets: "false", include_memories: "false", include_parsed_count: "false" })}`, undefined, signal)) }] }));
   tool("workflow_inspect_frame", "View the actual captured image. Attach it only if it visibly supports the claimed step. Blank/loading pages are not useful evidence.", {
     frame_id: { type: "integer", minimum: 1 },
   }, ["frame_id"], async (input, signal) => {

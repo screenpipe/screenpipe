@@ -68,7 +68,15 @@ export default function workflowMemory(pi: ExtensionAPI) {
           method: "GET", headers: AUTH_KEY ? { Authorization: `Bearer ${AUTH_KEY}` } : {},
           signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000),
         });
-        if (!response.ok) throw new Error(`Memory lookup failed (${response.status}). Try a narrower time range.`);
+        if (!response.ok) {
+          let message = `Memory lookup failed (${response.status}).`;
+          try {
+            const failure = await response.json();
+            if (typeof failure.error === "string") message = failure.error;
+            if (typeof failure.retry_after_ms === "number") message += ` Retry after ${failure.retry_after_ms} ms.`;
+          } catch {}
+          throw new Error(message);
+        }
         const data = await response.json();
         if (typeof data?.error === "string") throw new Error(data.error);
         return { content: [{ type: "text" as const, text: compactEvidence(data) }], details: {} };

@@ -31,7 +31,12 @@ that checkpoint, including an overlapping previous day for late recordings.
 On the first run, start with recent work and investigate older periods within
 historyStart when useful. Daily activity summaries are an index, not proof.
 Paginate and inspect the original sources for the steps you intend to save.
-Use small time windows and narrow searches so source responses remain useful.
+Read one history request at a time: the recorder gives recording priority over
+concurrent database scans. The activity index omits raw text; use the memory tools
+for original evidence. Use small time windows and narrow searches so responses
+remain useful. On a busy response, respect the returned retry delay. Before
+ending on retrieval failure, retry that tool with a substantially smaller range
+or a focused app/content filter; do not repeat the same expensive request.
 If a read times out or is too large, narrow that tool's request and retry. Resolve
 retrieval failures before saving; do not treat a failed broad query as no data.
 If no new useful evidence is available, keep existing workflows and commit an
