@@ -4,6 +4,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { compactEvidence } from "./workflow-memory";
 
 const TOOLS = ["workflow_context", "workflow_commit", "workflow_inspect_frame", "activity-summary", "search-content", "list-meetings", "get-meeting", "frame-context"];
 const result = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }] });
@@ -37,6 +38,11 @@ export default function workflowCatalog(pi: ExtensionAPI) {
     }
     return response;
   }
+  async function readJson(path: string, body?: unknown, signal?: AbortSignal) {
+    const value = await (await request(path, body, signal)).json();
+    if (typeof value?.error === "string") throw new Error(value.error);
+    return value;
+  }
   pi.on("session_start", async (_event: any, ctx: any) => {
     const permissions = JSON.parse(readFileSync(join(ctx.cwd, ".screenpipe-permissions.json"), "utf8"));
     if (!permissions.pipe_token) throw new Error("Workflow task permissions are unavailable.");
@@ -54,7 +60,7 @@ export default function workflowCatalog(pi: ExtensionAPI) {
   // merely because the model decides it has finished investigating.
   pi.on("tool_result", async (event: any) => {
     if (!["activity-summary", "search-content", "list-meetings", "get-meeting", "frame-context"].includes(event.toolName)) return;
-    const key = `${event.toolName}:${JSON.stringify(event.input, Object.keys(event.input || {}).sort())}`;
+    const key = event.toolName;
     if (event.isError) failedHistoryReads.add(key);
     else { successfulHistoryRead = true; failedHistoryReads.delete(key); }
   });
@@ -62,22 +68,21 @@ export default function workflowCatalog(pi: ExtensionAPI) {
     pi.registerTool({ name, label: name.replaceAll("_", " "), description,
       parameters: { type: "object", properties, required, additionalProperties: false } as any,
       async execute(_id: string, input: any, signal?: AbortSignal) {
-        try { return await run(input, signal); }
-        catch (error: any) { return { ...result({ error: error.message }), isError: true }; }
+        return run(input, signal);
       } });
   };
   tool("workflow_context", "Read saved workflows, user corrections, Context, checkpoint and the output contract before investigating changes.", {}, [], async (_input, signal) => {
-    context = await (await request("/workflows/context", undefined, signal)).json();
+    context = await readJson("/workflows/context", undefined, signal);
     return result(context);
   });
   tool("activity-summary", "Read a measured activity index for a chosen interval. Summaries guide investigation; they do not prove task completion.", {
     start_time: { type: "string" }, end_time: { type: "string" },
-  }, ["start_time", "end_time"], async (input, signal) => result(await (await request(`/activity-summary?${new URLSearchParams(input)}`, undefined, signal)).json()));
+  }, ["start_time", "end_time"], async (input, signal) => ({ content: [{ type: "text", text: compactEvidence(await readJson(`/activity-summary?${new URLSearchParams(input)}`, undefined, signal)) }] }));
   tool("workflow_inspect_frame", "View the actual captured image. Attach it only if it visibly supports the claimed step. Blank/loading pages are not useful evidence.", {
     frame_id: { type: "integer", minimum: 1 },
   }, ["frame_id"], async (input, signal) => {
     if (!Number.isSafeInteger(input.frame_id) || input.frame_id <= 0) throw new Error("A positive frame ID is required.");
-    const metadata = await (await request(`/frames/${input.frame_id}/metadata`, undefined, signal)).json();
+    const metadata = await readJson(`/frames/${input.frame_id}/metadata`, undefined, signal);
     const response = await request(`/frames/${input.frame_id}/thumbnail?width=1024&quality=80&fallback=false`, undefined, signal);
     const mimeType = response.headers.get("content-type")?.split(";")[0] || "";
     if (!/^image\/(jpeg|png|webp)$/.test(mimeType)) throw new Error("No usable captured image is available.");
@@ -93,7 +98,7 @@ export default function workflowCatalog(pi: ExtensionAPI) {
     if (!context || input.expected_revision !== context.revision || input.checked_through !== context.now) throw new Error("Use the revision and current time returned by workflow_context.");
     if (!successfulHistoryRead || failedHistoryReads.size > 0) throw new Error("Cannot advance the checkpoint while source reads have failed. Retry the failed reads successfully or finish without saving.");
     requireInspectedFrames(input.workflows, inspected);
-    const receipt = await (await request("/workflows/catalog", input, signal)).json();
+    const receipt = await readJson("/workflows/catalog", input, signal);
     context = undefined;
     return result(receipt);
   });

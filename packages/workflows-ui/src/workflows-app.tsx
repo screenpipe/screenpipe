@@ -1294,9 +1294,15 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   useEffect(() => {
     if (!active || !platform.managesAnalysis || !platform.getLatestAnalysisJob || !platform.getAnalysisJob) return;
     let disposed = false;
+    let prepared = false;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
+        if (!prepared) {
+          await platform.ensureAnalysisTask?.();
+          prepared = true;
+          if (!disposed) setAnalysisError("");
+        }
         const job = await platform.getLatestAnalysisJob!();
         if (disposed) return;
         if (job && (job.status === "queued" || job.status === "processing")) {
@@ -1315,10 +1321,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
       } catch (error) { if (!disposed) setAnalysisError(error instanceof Error ? error.message : "Could not check the workflow task."); }
       if (!disposed) timer = setTimeout(poll, 3000);
     };
-    void (async () => {
-      try { await platform.ensureAnalysisTask?.(); if (!disposed) await poll(); }
-      catch (error) { if (!disposed) setAnalysisError(error instanceof Error ? error.message : "Could not prepare the workflow task."); }
-    })();
+    void poll();
     return () => { disposed = true; clearTimeout(timer); };
   }, [platform, active]);
 

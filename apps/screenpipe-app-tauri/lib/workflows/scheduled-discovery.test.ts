@@ -22,6 +22,15 @@ describe("workflow scheduled-task adapter", () => {
     expect(await startWorkflowJob()).toMatchObject({ id: "23", status: "processing" });
     expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith("/run"))).toBe(false);
   });
+  it("activates a startup-installed template only when no local pause preference exists", async () => {
+    fetchMock.mockResolvedValueOnce(response({ installed: false, enabled_override: null })).mockResolvedValueOnce(response({ success: true }));
+    await ensureWorkflowTask();
+    expect(fetchMock.mock.calls[1][0]).toBe("/pipes/workflow-discovery/enable");
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValueOnce(response({ installed: false, enabled_override: false }));
+    await ensureWorkflowTask();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
   it("does not mistake an old saved catalog for a successful new run", async () => {
     fetchMock.mockResolvedValueOnce(response({ data: { id: 24, status: "completed", started_at: "2026-09-15T12:00:00Z" } }))
       .mockResolvedValueOnce(response({ analyzedAt: "2026-09-14T12:00:00Z", checkedThrough: "2026-09-14T12:00:00Z" }));

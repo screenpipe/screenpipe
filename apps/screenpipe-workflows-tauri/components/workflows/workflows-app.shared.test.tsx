@@ -185,6 +185,18 @@ describe("shared workflows experience", () => {
     expect(screen.getByText("5 of 5 shown")).toBeVisible();
     expect(screen.getByRole("button", { name: "Update now" })).toBeEnabled();
   });
+  it("keeps the saved catalog and recovers task setup after recorder startup", async () => {
+    const platform = createFixtureWorkflowsPlatform();
+    platform.managesAnalysis = true;
+    platform.ensureAnalysisTask = vi.fn().mockRejectedValueOnce(new Error("Recorder starting")).mockResolvedValue(undefined);
+    platform.getLatestAnalysisJob = vi.fn().mockResolvedValue(null);
+    platform.getAnalysisJob = vi.fn();
+    render(<WorkflowsApp platform={platform} initialAnalysis={fixtureWorkflowAnalysis} storageKey={null} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Recorder starting");
+    expect(screen.getByText("5 of 5 shown")).toBeVisible();
+    await waitFor(() => expect(platform.getLatestAnalysisJob).toHaveBeenCalled(), { timeout: 4500 });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
 
   it("reveals procedural details, sources, and gaps without claiming execution", async () => {
     const analysis = structuredClone(fixtureWorkflowAnalysis);

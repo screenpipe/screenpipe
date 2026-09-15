@@ -31,14 +31,15 @@ export function memoryPath(name: string, args: Record<string, unknown>): string 
   throw new Error("Unsupported memory lookup.");
 }
 
-function compactEvidence(value: unknown): string {
+export function compactEvidence(value: unknown): string {
   let truncated = false;
   const text = JSON.stringify(value, (key, item) => {
     if (["frame", "image", "image_base64", "file_path", "data_url"].includes(key)) return undefined;
     if (typeof item === "string" && item.length > 2500) { truncated = true; return `${item.slice(0, 2500)}… [excerpt]`; }
     return item;
   });
-  const bounded = text.length > 32000 ? `${text.slice(0, 32000)}\n[Response truncated. Narrow the search or page through results.]` : text;
+  // Stay below the shared harness's tool-result pruning threshold.
+  const bounded = text.length > 16000 ? `${text.slice(0, 16000)}\n[Response truncated. Narrow the search or page through results.]` : text;
   return truncated ? `${bounded}\n[Long text fields are excerpts, not the complete recording.]` : bounded;
 }
 
@@ -68,7 +69,9 @@ export default function workflowMemory(pi: ExtensionAPI) {
           signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000),
         });
         if (!response.ok) throw new Error(`Memory lookup failed (${response.status}). Try a narrower time range.`);
-        return { content: [{ type: "text" as const, text: compactEvidence(await response.json()) }], details: {} };
+        const data = await response.json();
+        if (typeof data?.error === "string") throw new Error(data.error);
+        return { content: [{ type: "text" as const, text: compactEvidence(data) }], details: {} };
       },
     });
   }

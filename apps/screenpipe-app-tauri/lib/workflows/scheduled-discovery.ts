@@ -17,7 +17,9 @@ async function request(path: string, body?: unknown) {
 // Installation is idempotent and never re-enables a task the user paused.
 export async function ensureWorkflowTask() {
   const result = await request(`/pipes/bundled/${TASK}/install`, {});
-  if (result.installed) await request(`/pipes/${TASK}/enable`, { enabled: true });
+  // Startup may already have copied the disabled template. Only an explicit
+  // local preference distinguishes a paused task from its untouched template.
+  if (result.installed || result.enabled_override === null) await request(`/pipes/${TASK}/enable`, { enabled: true });
 }
 
 export async function loadScheduledCatalog(): Promise<WorkflowAnalysis | null> {
@@ -68,9 +70,10 @@ export async function stopWorkflowJob() { await request(`/pipes/${TASK}/stop`, {
 export async function saveWorkflowCorrections(analysis: WorkflowAnalysis) {
   const current = await loadScheduledCatalog();
   for (const workflow of analysis.analysis.workflows) {
-    if (!workflow.id) continue;
-    const prior = current?.analysis.workflows.find(w => w.id === workflow.id);
+    const prior = current?.analysis.workflows.find(w => workflow.id ? w.id === workflow.id
+      : w.title === workflow.title && w.trigger === workflow.trigger && w.outcome === workflow.outcome);
+    if (!prior?.id) continue;
     if (JSON.stringify(prior?.userCorrection) === JSON.stringify(workflow.userCorrection)) continue;
-    await request("/workflows/corrections", { id: workflow.id, correction: workflow.userCorrection ?? null });
+    await request("/workflows/corrections", { id: prior.id, correction: workflow.userCorrection ?? null });
   }
 }

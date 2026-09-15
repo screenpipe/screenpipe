@@ -31,6 +31,9 @@ that checkpoint, including an overlapping previous day for late recordings.
 On the first run, start with recent work and investigate older periods within
 historyStart when useful. Daily activity summaries are an index, not proof.
 Paginate and inspect the original sources for the steps you intend to save.
+Use small time windows and narrow searches so source responses remain useful.
+If a read times out or is too large, narrow that tool's request and retry. Resolve
+retrieval failures before saving; do not treat a failed broad query as no data.
 If no new useful evidence is available, keep existing workflows and commit an
 empty update with the returned checkpoint time. Retrieval failure is not no data;
 report the failure without advancing the checkpoint.
