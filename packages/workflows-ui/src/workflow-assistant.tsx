@@ -279,7 +279,6 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
             <div>{suggestions.map((question) => <button key={question} onClick={() => void send(question)}><Search size={15} /><span>{question}</span><ArrowUp size={13} /></button>)}</div>
           </div>}
           {conversation.messages.map((message) => <article key={message.id} className={message.role === "user" ? styles.user : styles.assistant} aria-label={message.role === "user" ? "Your question" : "Screenpipe answer"}>
-            {message.context && <small>{message.context.title}</small>}
             {message.role === "user" ? <p>{message.text}</p> : <ChatMarkdown text={message.text} streaming={busy && message.id === lastAnswer?.id} allowLink={isAssistantLink} onOpenLink={platform.openLink ? openSource : undefined} />}
             {message.status === "stopped" && <small>Stopped</small>}
             {message.role === "assistant" && message.text && (!busy || message.id !== lastAnswer?.id) && <div className={styles.messageActions}>
