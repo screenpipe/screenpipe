@@ -357,6 +357,7 @@ function AppShell({
   embedded,
   active,
   navigationBrand,
+  navigationFooter,
   recordingStatus,
   startWindowDrag,
   openCommandPalette,
@@ -377,6 +378,7 @@ function AppShell({
   embedded: boolean;
   active: boolean;
   navigationBrand?: React.ReactNode;
+  navigationFooter?: WorkflowsAppProps["navigationFooter"];
   recordingStatus?: React.ReactNode;
   startWindowDrag?: () => Promise<void> | void;
   openCommandPalette: () => void;
@@ -451,7 +453,7 @@ function AppShell({
           ))}
         </nav>
         <div className={styles.sidebarBottom}>
-          <button className={styles.shortcutsButton} onClick={openCommandPalette}><Keyboard size={14} /><span>Keyboard shortcuts</span><kbd>?</kbd></button>
+          {navigationFooter ? navigationFooter({ openKeyboardShortcuts: openCommandPalette }) : <button className={styles.shortcutsButton} onClick={openCommandPalette}><Keyboard size={14} /><span>Keyboard shortcuts</span><kbd>?</kbd></button>}
         </div>
       </aside>
       <section className={styles.workspace} data-workflows-scroll-region>
@@ -1209,7 +1211,7 @@ function PrivacyView({ runtime }: { runtime: WorkflowRuntime | null }) {
   </>;
 }
 
-export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "screenpipe-workflows:last-analysis-v2", initialScopeId, embedded = false, active = true, navigationBrand, recordingStatus }: WorkflowsAppProps) {
+export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "screenpipe-workflows:last-analysis-v2", initialScopeId, embedded = false, active = true, navigationBrand, recordingStatus, navigationFooter }: WorkflowsAppProps) {
   const shortcuts = useSidebarShortcuts();
   const [runtime, setRuntime] = useState<WorkflowRuntime | null>(null);
   const [analysis, setAnalysis] = useState<WorkflowAnalysis | null>(() => initialAnalysis ? sanitizeWorkflowAnalysis(initialAnalysis) : null);
@@ -1542,7 +1544,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   }
 
   return <>
-    <AppShell active={active} navigationBrand={navigationBrand} recordingStatus={recordingStatus} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={filters.query} setQuery={(query) => setFilters((current) => ({ ...current, query }))} activityPeriod={activityPeriod} setActivityPeriod={(period) => { setActivityPeriod(period); setSelectedWorkflow(0); }} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: "Context", profile: workProfile } : { key: "workflows", title: "Your workflows", catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{content}</AppShell>
+    <AppShell active={active} navigationFooter={navigationFooter} navigationBrand={navigationBrand} recordingStatus={recordingStatus} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={filters.query} setQuery={(query) => setFilters((current) => ({ ...current, query }))} activityPeriod={activityPeriod} setActivityPeriod={(period) => { setActivityPeriod(period); setSelectedWorkflow(0); }} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: "Context", profile: workProfile } : { key: "workflows", title: "Your workflows", catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{content}</AppShell>
     <CommandPalette open={active && commandPaletteOpen} commands={paletteCommands} close={() => setCommandPaletteOpen(false)} />
   </>;
 }

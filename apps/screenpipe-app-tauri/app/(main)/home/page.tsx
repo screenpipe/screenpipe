@@ -5,12 +5,10 @@
 
 import React, { useEffect, useState, useRef, Suspense, useCallback } from "react";
 import {
-  Settings as SettingsIcon,
   TimerReset,
   Plus,
   Brain,
   MonitorPlay,
-  HelpCircle,
   PanelLeftClose,
   PanelLeftOpen,
   Search,
@@ -132,6 +130,7 @@ import {
 import { blocksTrialActivationApp } from "@/lib/first-run/trial-activation";
 
 import { ProductSwitcher, type ProductMode } from "@/components/workflows/product-switcher";
+import { SidebarFooter } from "@/components/sidebar-footer";
 import { IntegratedWorkflows } from "@/components/workflows/integrated-workflows";
 import { readProductMode, saveProductMode } from "@/lib/workflows/entry-preference";
 
@@ -1619,66 +1618,8 @@ function HomeContent() {
                 <div id="announcement-sidebar-slot" />
               </div>
 
-              {/* Bottom items */}
-              <div className={cn("flex items-center gap-1 border-t pt-2", isTranslucent ? "vibrant-sidebar-border" : "border-border")}>
-                {/* Settings — always visible; individual sections are enterprise-filtered inside /settings */}
-                <button
-                  data-testid="nav-settings"
-                  data-announcement-anchor="sidebar-settings"
-                  onClick={() => openSettings()}
-                  className={cn(
-                    "flex min-w-0 flex-1 items-center space-x-2.5 rounded-lg px-2.5 py-1.5 text-left transition-all duration-150 group",
-                    isTranslucent
-                      ? "vibrant-nav-item vibrant-nav-hover"
-                      : "text-muted-foreground hover:bg-card/50 hover:text-foreground",
-                  )}
-                >
-                  <div className={cn(
-                    "flex-shrink-0 transition-colors",
-                    isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground"
-                  )}>
-                    <SettingsIcon className="h-3.5 w-3.5" />
-                  </div>
-                  <span className="truncate text-xs font-medium">Settings</span>
-                </button>
-
-                {/* Help stays discoverable without taking a second row. */}
-                {!isSectionHidden("help") && (() => {
-                  const isActive = activeSection === "help";
-                  return (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          data-testid="nav-help"
-                          data-announcement-anchor="sidebar-help"
-                          aria-label="Help"
-                          disabled={trialActivationLocked}
-                          onClick={() => {
-                            setActiveSection("help");
-                          }}
-                          className={cn(
-                            "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-all duration-150",
-                            trialActivationLocked && "cursor-not-allowed",
-                            isActive
-                              ? isTranslucent
-                                ? "vibrant-nav-active"
-                                : "border border-border bg-card text-primary shadow-sm"
-                              : isTranslucent
-                                ? "vibrant-nav-item vibrant-nav-hover"
-                                : "text-muted-foreground hover:bg-card/50 hover:text-foreground",
-                          )}
-                        >
-                          <HelpCircle className="h-4 w-4" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-xs">
-                        Help
-                      </TooltipContent>
-                    </Tooltip>
-                  );
-                })()}
-              </div>
+              <SidebarFooter onSettings={() => openSettings()} onHelp={() => { void setActiveSection("help"); }}
+                isTranslucent={isTranslucent} hideHelp={isSectionHidden("help")} helpActive={activeSection === "help"} trialActivationLocked={trialActivationLocked} />
             </div>
           </AppSidebar>
           )}
@@ -1758,7 +1699,10 @@ function HomeContent() {
 
           </div>
 
-          {workflowsAvailable && (workflowsActive || workflowsVisited) && <div className={cn("flex-1 min-w-0 h-full", !workflowsActive && "hidden")}><IntegratedWorkflows active={workflowsActive} onModeChange={changeMode} recordingStatus={<RecordingStatus {...recordingStatusProps} />} /></div>}
+          {workflowsAvailable && (workflowsActive || workflowsVisited) && <div className={cn("flex-1 min-w-0 h-full", !workflowsActive && "hidden")}><IntegratedWorkflows active={workflowsActive} onModeChange={changeMode} recordingStatus={<RecordingStatus {...recordingStatusProps} />}
+            navigationFooter={({ openKeyboardShortcuts }) => <SidebarFooter onSettings={() => openSettings()}
+              onHelp={() => { changeMode("screenpipe"); void setActiveSection("help"); }} onKeyboardShortcuts={openKeyboardShortcuts}
+              hideHelp={isSectionHidden("help")} trialActivationLocked={trialActivationLocked} />} /></div>}
           {!workflowsActive && showFirstRunGuide && (
             <FirstRunGuide
               onDone={markFirstRunGuideDone}
