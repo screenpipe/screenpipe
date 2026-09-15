@@ -88,11 +88,13 @@ import {
   type TimeProfileDimension,
 } from "./model";
 import type { WorkflowAnalysisJob, WorkflowsAppProps, WorkflowsPlatform } from "./platform";
+import { ContextComposer } from "./context-composer";
+import { type ContextField } from "./context-tool";
 import styles from "./workflows-app.module.css";
 
 const primaryNavigation = [
   ["workflows", ListTree, "Workflows", ["G", "W"]],
-  ["profile", UserRoundCog, "Work profile", ["G", "P"]],
+  ["profile", UserRoundCog, "Context", ["G", "P"]],
 ] as const;
 
 type TimeLens = "categories" | "projects";
@@ -629,7 +631,7 @@ function OverviewView({
       {workProfile && profileCompletion(workProfile) < 2 && <section className={styles.profilePrompt}>
         <Target size={17} />
         <div><strong>Make the maps relevant to your goals</strong><p>Add your role and current outcomes. Measures and the value of time stay optional.</p></div>
-        <button type="button" onClick={() => navigate("profile")}>Complete work profile <ArrowRight size={12} /></button>
+        <button type="button" onClick={() => navigate("profile")}>Add context <ArrowRight size={12} /></button>
       </section>}
       {analysis?.quality && <AnalysisQualityPanel quality={analysis.quality} />}
       {!knownWorkflowCount ? <EmptyWorkMap analyzing={analyzing} analyze={analyze} /> : !workflows.length ? (
@@ -1103,6 +1105,7 @@ const EMPTY_PROFILE_KPI: WorkProfileKpi = {
 function ProfileView({
   profile,
   workspaceView,
+  fillContext,
   saving,
   saved,
   error,
@@ -1111,12 +1114,16 @@ function ProfileView({
 }: {
   profile: WorkProfile;
   workspaceView: boolean;
+  fillContext?: WorkflowsAppProps["platform"]["fillContext"];
   saving: boolean;
   saved: boolean;
   error: string;
   update: (profile: WorkProfile) => void;
   save: () => void;
 }) {
+  const [filling, setFilling] = useState(false);
+  const [filled, setFilled] = useState<ContextField[]>([]);
+  const fieldStatus = (field: ContextField) => filled.includes(field) ? <small className={styles.contextAdded}>Added</small> : null;
   const updateKpi = (index: number, changes: Partial<WorkProfileKpi>) => update({
     ...profile,
     kpis: profile.kpis.map((kpi, kpiIndex) => kpiIndex === index ? { ...kpi, ...changes } : kpi),
@@ -1126,22 +1133,27 @@ function ProfileView({
     ? formatCurrency(profile.hourlyValue.amount * 40, profile.hourlyValue.currency)
     : null;
 
-  return <>
-    <div className={styles.pageHeader}>
-      <div><h1>Teach Screenpipe what matters</h1><p>Add context for more relevant workflow maps.</p></div>
+  return <div className={styles.contextPage}>
+    <div className={styles.contextHeader}>
+      <div><h1>Context</h1><p>Help Screenpipe understand your work and what matters.</p></div>
     </div>
+    {fillContext && <ContextComposer profile={profile} update={update} fillContext={fillContext} onBusy={setFilling} onFields={setFilled} />}
     <section className={styles.profileSteps}>
       <article className={styles.profileCard}>
-        <div className={styles.profileCardHead}><span>01</span><div><h2>{workspaceView ? "Describe the organization" : "Describe your work"}</h2></div></div>
+        <div className={styles.profileCardHead}><div><h2>{workspaceView ? "Organization overview" : "Your work"}{fieldStatus("summary")}</h2></div></div>
         <textarea value={profile.summary} onChange={(event) => update({ ...profile, summary: event.target.value })} maxLength={2_000} placeholder={workspaceView ? "We help operations teams understand and improve how work gets done." : "I lead product and customer development. I own prioritization, enterprise pilots, and fundraising."} aria-label={workspaceView ? "Organization overview" : "Role and responsibilities"} />
       </article>
       <article className={styles.profileCard}>
-        <div className={styles.profileCardHead}><span>02</span><div><h2>Choose the outcomes that matter now</h2></div></div>
+        <div className={styles.profileCardHead}><div><h2>Company{fieldStatus("company")}</h2></div></div>
+        <textarea value={profile.company || ""} onChange={(event) => update({ ...profile, company: event.target.value })} maxLength={2000} placeholder="What the company does and who it serves." aria-label="Company overview" />
+      </article>
+      <article className={`${styles.profileCard} ${styles.contextWide}`}>
+        <div className={styles.profileCardHead}><div><h2>Current priorities{fieldStatus("priorities")}</h2></div></div>
         <textarea value={profile.priorities} onChange={(event) => update({ ...profile, priorities: event.target.value })} maxLength={1_000} placeholder="Reduce customer response time. Shorten enterprise onboarding. Increase successful weekly workflow reviews." aria-label="Current outcomes" />
       </article>
-      <article className={styles.profileCard}>
-        <div className={styles.profileCardHead}><span>03</span><div><h2>Define success and the value of time</h2></div></div>
-        <div className={styles.profileKpiHeader}><div><Target size={15} /><strong>Success measures</strong></div><button type="button" onClick={() => update({ ...profile, kpis: [...profile.kpis, { ...EMPTY_PROFILE_KPI }] })} disabled={profile.kpis.length >= 6}><Plus size={13} />Add measure</button></div>
+      <article className={`${styles.profileCard} ${styles.contextWide}`}>
+        <div className={styles.profileCardHead}><div><h2>Success measures{fieldStatus("kpis")}</h2></div></div>
+        <div className={styles.profileKpiHeader}><div><Target size={15} /><strong>Measures</strong></div><button type="button" onClick={() => update({ ...profile, kpis: [...profile.kpis, { ...EMPTY_PROFILE_KPI }] })} disabled={profile.kpis.length >= 6}><Plus size={13} />Add measure</button></div>
         {profile.kpis.length ? <div className={styles.profileKpis}>{profile.kpis.map((kpi, index) => <fieldset key={index}>
           <legend>Measure {index + 1}</legend>
           <div className={styles.profileKpiRow}>
@@ -1168,15 +1180,15 @@ function ProfileView({
     <details className={styles.profileAdvanced}>
       <summary><SlidersHorizontal size={15} /><div><strong>More context</strong><span>Vocabulary, ownership, and analysis guidance</span></div><ChevronDown size={14} /></summary>
       <div className={styles.profileAdvancedGrid}>
-        <label><span>Terms and responsibilities</span><textarea value={profile.vocabulary} onChange={(event) => update({ ...profile, vocabulary: event.target.value })} maxLength={1_000} placeholder="Support owns incident triage. Finance approves refunds over $500." /></label>
-        <label><span>Analysis guidance</span><textarea value={profile.guidance} onChange={(event) => update({ ...profile, guidance: event.target.value })} maxLength={1_000} placeholder="Separate required approvals from avoidable waiting. Keep uncertain project names unattributed." /></label>
+        <label><span>Terms and responsibilities {fieldStatus("vocabulary")}</span><textarea value={profile.vocabulary} onChange={(event) => update({ ...profile, vocabulary: event.target.value })} maxLength={1_000} placeholder="Support owns incident triage. Finance approves refunds over $500." /></label>
+        <label><span>Analysis guidance {fieldStatus("guidance")}</span><textarea value={profile.guidance} onChange={(event) => update({ ...profile, guidance: event.target.value })} maxLength={1_000} placeholder="Separate required approvals from avoidable waiting. Keep uncertain project names unattributed." /></label>
       </div>
     </details>
     <section className={styles.profileSaveBar}>
-      <div>{error ? <strong className={styles.profileError}>{error}</strong> : saved ? <strong>Profile saved</strong> : null}</div>
-      <button className={styles.primaryButton} type="button" onClick={save} disabled={saving}>{saving ? <><span className={styles.spinnerSmall} />Saving…</> : <><Save size={14} />Save profile</>}</button>
+      <div>{error ? <strong className={styles.profileError}>{error}</strong> : saved ? <strong>Context saved</strong> : null}</div>
+      <button className={styles.primaryButton} type="button" onClick={save} disabled={saving || filling}>{saving ? <><span className={styles.spinnerSmall} />Saving…</> : <><Save size={14} />Save context</>}</button>
     </section>
-  </>;
+  </div>;
 }
 
 function PrivacyView({ runtime }: { runtime: WorkflowRuntime | null }) {
@@ -1316,7 +1328,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
       .catch((error) => {
         if (!cancelled) {
           setWorkProfile(emptyWorkProfile(workspaceProfile));
-          setProfileError(error instanceof Error ? error.message : "Could not load the work profile.");
+          setProfileError(error instanceof Error ? error.message : "Could not load context.");
         }
       });
     return () => { cancelled = true; };
@@ -1335,7 +1347,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
       setWorkProfile(savedProfile);
       setProfileSaved(true);
     } catch (error) {
-      setProfileError(error instanceof Error ? error.message : "Could not save the work profile.");
+      setProfileError(error instanceof Error ? error.message : "Could not save context.");
     } finally {
       setProfileSaving(false);
     }
@@ -1524,13 +1536,13 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
       setAnalysis(updated);
     } : undefined} />; break;
     case "bottlenecks": content = <BottlenecksView workflows={workflows} openWorkflow={openWorkflow} />; break;
-    case "profile": content = <ProfileView profile={workProfile ?? emptyWorkProfile(workspaceProfile)} workspaceView={workspaceProfile} saving={profileSaving} saved={profileSaved} error={profileError} update={(profile) => { setWorkProfile(profile); setProfileSaved(false); setProfileError(""); }} save={() => void saveWorkProfile()} />; break;
+    case "profile": content = <ProfileView fillContext={platform.fillContext} profile={workProfile ?? emptyWorkProfile(workspaceProfile)} workspaceView={workspaceProfile} saving={profileSaving} saved={profileSaved} error={profileError} update={(profile) => { setWorkProfile(profile); setProfileSaved(false); setProfileError(""); }} save={() => void saveWorkProfile()} />; break;
     case "evidence": content = <EvidenceView workflows={workflows} openWorkflow={openWorkflow} runtime={runtime} />; break;
     case "privacy": content = <PrivacyView runtime={runtime} />; break;
   }
 
   return <>
-    <AppShell active={active} navigationBrand={navigationBrand} recordingStatus={recordingStatus} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={filters.query} setQuery={(query) => setFilters((current) => ({ ...current, query }))} activityPeriod={activityPeriod} setActivityPeriod={(period) => { setActivityPeriod(period); setSelectedWorkflow(0); }} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: "Work profile", profile: workProfile } : { key: "workflows", title: "Your workflows", catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{content}</AppShell>
+    <AppShell active={active} navigationBrand={navigationBrand} recordingStatus={recordingStatus} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={filters.query} setQuery={(query) => setFilters((current) => ({ ...current, query }))} activityPeriod={activityPeriod} setActivityPeriod={(period) => { setActivityPeriod(period); setSelectedWorkflow(0); }} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: "Context", profile: workProfile } : { key: "workflows", title: "Your workflows", catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{content}</AppShell>
     <CommandPalette open={active && commandPaletteOpen} commands={paletteCommands} close={() => setCommandPaletteOpen(false)} />
   </>;
 }

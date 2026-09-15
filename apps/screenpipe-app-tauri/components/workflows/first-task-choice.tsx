@@ -34,7 +34,7 @@ export function FirstTaskChoice({ onComplete }: { onComplete: (mode: ProductMode
     </> : <>
       <button disabled={busy} onClick={() => setStep("choice")} className="mb-6 flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft size={15} /> Back</button>
       <h1 className="text-3xl font-medium tracking-tight">What work do you repeat?</h1>
-      <p className="mt-3 text-sm text-muted-foreground">An optional starting point for your work profile. You can change it later.</p>
+      <p className="mt-3 text-sm text-muted-foreground">An optional starting point for your context. You can change it later.</p>
       <label htmlFor="workflow-goal" className="mt-7 block text-sm font-medium">A task or process</label>
       <textarea id="workflow-goal" value={goal} onChange={event => setGoal(event.target.value)} maxLength={1000} rows={3} placeholder="For example, preparing a customer follow-up" className="mt-2 w-full resize-none rounded-md border border-border bg-background p-4 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
       <div className="mt-3 flex flex-wrap gap-2">{["Customer follow-ups", "Weekly reporting", "Meeting preparation"].map(example => <button disabled={busy} key={example} onClick={() => setGoal(example)} className="rounded-md border border-border px-3 py-2 text-xs hover:bg-muted">{example}</button>)}</div>

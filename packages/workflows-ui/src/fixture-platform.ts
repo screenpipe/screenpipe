@@ -354,6 +354,13 @@ export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixt
   let profile = fixturePersonalWorkProfile;
   return {
     assistant: fixtureAssistant(),
+    fillContext: async ({ signal, onField, onActivity }) => {
+      onActivity("Filling preview context…");
+      await new Promise((resolve) => setTimeout(resolve, 450));
+      if (signal.aborted) throw new DOMException("Stopped", "AbortError");
+      onField({ field: "company", value: "Preview company: a team that helps businesses resolve customer requests." });
+      onField({ field: "summary", value: "Preview role: I manage customer operations and improve how our team handles requests." });
+    },
     ensureRuntime: async () => fixtureWorkflowRuntime,
     analyzeCapturedWork: async () => analysis,
     loadWorkProfile: async () => profile,

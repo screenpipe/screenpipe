@@ -58,6 +58,8 @@ export type WorkProfileKpi = {
 export type WorkProfile = {
   scope: "personal" | "workspace";
   summary: string;
+  company?: string;
+  website?: string;
   priorities: string;
   kpis: WorkProfileKpi[];
   hourlyValue: {

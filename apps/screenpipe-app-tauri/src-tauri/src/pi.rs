@@ -255,7 +255,7 @@ static REQUIRED_PI_PACKAGE_INSTALL_LOCK: std::sync::OnceLock<Mutex<()>> =
 static PI_EXTENSION_SAFE_MODE_PROJECTS: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
     std::sync::OnceLock::new();
 
-const MANAGED_PI_EXTENSION_FILES: [&str; 7] = [
+const MANAGED_PI_EXTENSION_FILES: [&str; 8] = [
     "web-search.ts",
     "mcp-bridge.ts",
     "save-artifact.ts",
@@ -263,6 +263,7 @@ const MANAGED_PI_EXTENSION_FILES: [&str; 7] = [
     "connection-gate.ts",
     "context-pruning.ts",
     "workflow-memory.ts",
+    "work-context.ts",
 ];
 
 fn extension_safe_mode_projects() -> &'static std::sync::Mutex<HashSet<String>> {
@@ -1841,6 +1842,14 @@ const SHARED_PI_EXTENSION_FILES: &[&str] = &[
     "connection-gate.ts",
 ];
 
+fn ensure_work_context_extension(project_dir: &str) -> Result<(), String> {
+    let ext_dir = std::path::Path::new(project_dir).join(".pi").join("extensions");
+    std::fs::create_dir_all(&ext_dir).map_err(|e| e.to_string())?;
+    std::fs::write(ext_dir.join("work-context.ts"),
+        include_str!("../../../../packages/workflows-ui/src/context-tool.ts"))
+        .map_err(|e| format!("Failed to install context tool: {}", e))
+}
+
 fn ensure_workflow_memory_extension(project_dir: &str) -> Result<(), String> {
     let ext_dir = std::path::Path::new(project_dir).join(".pi").join("extensions");
     std::fs::create_dir_all(&ext_dir).map_err(|e| e.to_string())?;
@@ -2946,6 +2955,11 @@ pub async fn pi_start_inner(
             == Some("pi-acp");
 
     if !use_acp || is_pi_acp {
+        // The form tool has a receiver only in explicitly scoped Context runs.
+        if provider_config.as_ref().and_then(|config| config.allowed_tools.as_ref())
+            .is_some_and(|tools| tools.iter().any(|tool| tool == "fill_work_context")) {
+            ensure_work_context_extension(&project_dir)?;
+        }
         screenpipe_core::agents::pi::PiExecutor::ensure_context_pruning_extension(
             std::path::Path::new(&project_dir),
         )

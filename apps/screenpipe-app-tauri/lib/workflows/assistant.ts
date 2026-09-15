@@ -2,11 +2,9 @@
 // https://screenpipe.com
 
 import type { WorkflowsAssistantPlatform, AssistantContext, AssistantMessage } from "@screenpipe/workflows-ui";
-import { commands, type PiProviderConfig } from "@/lib/utils/tauri";
-import { mountAgentEventBus, registerForeground, onTerminated, onEvicted } from "@/lib/events/bus";
-import { advanceMeetingChatStream, emptyStreamState } from "@/components/meeting-notes/meeting-chat-stream";
-import { INTERNAL_TITLE_PREFIX } from "@/lib/utils/internal-session";
+import { type PiProviderConfig } from "@/lib/utils/tauri";
 import { loadAssistantFromDisk, saveAssistantToDisk } from "./disk-storage";
+import { runWorkflowAgent } from "./agent-runner";
 import { LUNA_MODEL } from "./luna";
 import { open } from "@tauri-apps/plugin-shell";
 import { isAssistantLink } from "@screenpipe/workflows-ui";
@@ -44,60 +42,6 @@ export const desktopAssistant: WorkflowsAssistantPlatform = {
   load: loadAssistantFromDisk,
   save: saveAssistantToDisk,
   async ask({ question, context, history, signal, onProgress }) {
-    const sessionId = `${INTERNAL_TITLE_PREFIX}workflow-assistant-${crypto.randomUUID()}`;
-    let stream = emptyStreamState();
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let resolve!: (text: string) => void;
-    let reject!: (error: Error) => void;
-    const result = new Promise<string>((yes, no) => { resolve = yes; reject = no; });
-    // Startup can still be awaiting IPC when stop/termination arrives.
-    void result.catch(() => {});
-    const fail = (error: Error) => { if (!settled) { settled = true; reject(error); } };
-    const abort = () => { fail(new DOMException("Stopped", "AbortError")); void commands.piStop(sessionId).catch(() => {}); };
-    const assertActive = () => { if (signal.aborted || settled) { void commands.piStop(sessionId).catch(() => {}); throw new DOMException("Stopped", "AbortError"); } };
-    const unregister: Array<() => void> = [];
-    signal.addEventListener("abort", abort, { once: true });
-    try {
-      const startup = (async () => {
-      assertActive();
-      timer = setTimeout(() => fail(new Error("This is taking longer than expected. Try a narrower question.")), 180000);
-      onProgress({ text: "", activity: "starting" });
-      await mountAgentEventBus(); assertActive();
-      const base = await commands.getScreenpipeBaseDir(); assertActive();
-      if (base.status === "error") throw new Error("Couldn’t open your local workspace.");
-      // The native companion path also resolves the already-signed-in
-      // Screenpipe account without exposing its token to this webview.
-      unregister.push(registerForeground(sessionId, (envelope) => {
-        if (settled || envelope.sessionId !== sessionId || envelope.source !== "pi") return;
-        if (envelope.event.type === "message_start" && envelope.event.message?.role === "assistant") stream = emptyStreamState();
-        stream = advanceMeetingChatStream(stream, envelope);
-        if (stream.error) { fail(new Error(stream.error)); return; }
-        if (envelope.event.type === "message_end" && envelope.event.message?.stopReason === "error") { fail(new Error(envelope.event.message.errorMessage || "Couldn’t finish the answer.")); return; }
-        onProgress({ text: stream.text, activity: envelope.event.type?.startsWith("tool_execution") ? "searching" : stream.text ? "writing" : "starting" });
-        if (stream.done) {
-          if (!stream.text.trim()) { fail(new Error("No answer came back. Try again.")); return; }
-          settled = true; resolve(stream.text);
-        }
-      }));
-      unregister.push(onTerminated((event) => { if (event.sessionId === sessionId) fail(new Error("The conversation was interrupted. Try again.")); }));
-      unregister.push(onEvicted((event) => { if (event.sessionId === sessionId) fail(new Error("The conversation was interrupted. Try again.")); }));
-      const started = await commands.piStart(sessionId, `${base.data}/pi-workflows-assistant`, null, assistantProviderConfig);
-      assertActive();
-      if (started.status === "error" || !started.data.running) throw new Error(started.status === "error" ? started.error : "Couldn’t start the assistant.");
-      const prompted = await commands.piPrompt(sessionId, buildAssistantPrompt(question, context, history), null, null);
-      if (prompted.status === "error") throw new Error(prompted.error);
-      return await result;
-      })();
-      // Stop/timeout must settle the UI even when native startup is slow. The
-      // post-await guards stop a late-starting process before it can prompt.
-      return await Promise.race([startup, result]);
-    } finally {
-      settled = true;
-      clearTimeout(timer);
-      unregister.forEach((off) => off());
-      signal.removeEventListener("abort", abort);
-      await commands.piStop(sessionId).catch(() => {});
-    }
+    return runWorkflowAgent({ name: "assistant", prompt: buildAssistantPrompt(question, context, history), config: assistantProviderConfig, signal, onProgress });
   },
 };

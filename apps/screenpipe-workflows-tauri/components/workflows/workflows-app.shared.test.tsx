@@ -141,13 +141,13 @@ describe("shared workflows experience", () => {
     const scrollRegion = container.querySelector<HTMLElement>("[data-workflows-scroll-region]");
     expect(scrollRegion).not.toBeNull();
     if (scrollRegion) scrollRegion.scrollTop = 420;
-    fireEvent.click(screen.getByRole("button", { name: /^work profile$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^context$/i }));
     fireEvent.click(screen.getByRole("button", { name: /workflows 5/i }));
     expect(scrollRegion?.scrollTop).toBe(0);
     expect(screen.getByRole("heading", { name: "Your workflows" })).toBeInTheDocument();
   });
 
-  it("keeps the product focused on workflows and the work profile", async () => {
+  it("keeps the product focused on workflows and the context", async () => {
     render(
       <WorkflowsApp
         platform={createFixtureWorkflowsPlatform()}
@@ -230,9 +230,9 @@ describe("shared workflows experience", () => {
     expect(screen.queryByText("Only while this app is focused")).not.toBeInTheDocument();
 
     const commandSearch = screen.getByRole("textbox", { name: "Search commands and workflows" });
-    fireEvent.change(commandSearch, { target: { value: "Work profile" } });
+    fireEvent.change(commandSearch, { target: { value: "Context" } });
     fireEvent.keyDown(commandSearch, { key: "Enter" });
-    expect(screen.getByRole("heading", { name: "Teach Screenpipe what matters" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Context" })).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "g" });
     fireEvent.keyDown(window, { key: "w" });
     expect(screen.getByRole("heading", { name: "Your workflows" })).toBeInTheDocument();
@@ -268,7 +268,7 @@ describe("shared workflows experience", () => {
     expect(screen.queryByText(/raw employee history|contributing seats/i)).not.toBeInTheDocument();
   });
 
-  it("keeps a simple personal work profile private and saves explicit context", async () => {
+  it("keeps a simple personal context private and saves explicit context", async () => {
     const platform = createFixtureWorkflowsPlatform();
     const saveWorkProfile = vi.fn(platform.saveWorkProfile!);
     platform.saveWorkProfile = saveWorkProfile;
@@ -280,18 +280,18 @@ describe("shared workflows experience", () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: /^work profile$/i }));
-    expect(screen.getByRole("heading", { name: "Teach Screenpipe what matters" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: /^context$/i }));
+    expect(screen.getByRole("heading", { name: "Context" })).toBeInTheDocument();
     expect(screen.queryByText("Private on this device")).not.toBeInTheDocument();
     expect((screen.getByLabelText("Role and responsibilities") as HTMLTextAreaElement).value).toContain("product");
 
     fireEvent.change(screen.getByLabelText("Current outcomes"), { target: { value: "Shorten pilot onboarding" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save context" }));
     await waitFor(() => expect(saveWorkProfile).toHaveBeenCalledWith(
       expect.objectContaining({ priorities: "Shorten pilot onboarding", visibility: "device-only" }),
       undefined,
     ));
-    expect(screen.getByText("Profile saved")).toBeInTheDocument();
+    expect(screen.getByText("Context saved")).toBeInTheDocument();
   });
 
   it("streams agent progress into a calm review and local install flow", async () => {

@@ -4,6 +4,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import type { WorkflowRecording } from "@screenpipe/workflows-ui";
+import { fillWorkContext } from "./context";
 import { desktopAssistant } from "./assistant";
 import type { WorkProfile, WorkflowAnalysis, WorkflowsPlatform } from "@screenpipe/workflows-ui";
 import { commands } from "@/lib/utils/tauri";
@@ -132,6 +133,7 @@ export const desktopWorkflowsPlatform: WorkflowsPlatform = {
   } : {}),
   ...(!browserPreview ? { assistant: desktopAssistant } : {}),
   // The main app owns startup. Opening a workspace never starts a recorder.
+  fillContext: fillWorkContext,
   ensureRuntime: getWorkflowRuntime,
   analyzeCapturedWork: (days, options) => analyzeCapturedWork(days, options?.workProfile),
   loadCapturedWork: () => loadSavedAnalysis(),

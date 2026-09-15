@@ -13,11 +13,15 @@
     "./model": "./packages/workflows-ui/src/model.ts",
     "./navigation": "./packages/workflows-ui/src/navigation.ts",
     "./platform": "./packages/workflows-ui/src/platform.ts",
-    "./web": "./packages/workflows-ui/src/web-platform.ts"
+    "./web": "./packages/workflows-ui/src/web-platform.ts",
+    "./context": "./packages/workflows-ui/src/context-tool.ts",
+    "./context-import": "./packages/workflows-ui/src/context-import.ts"
   },
   "dependencies": {
     "react-markdown": "^9.1.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "fflate": "^0.8.2",
+    "unpdf": "^1.6.2"
   },
   "peerDependencies": {
     "lucide-react": ">=0.414.0 <1",

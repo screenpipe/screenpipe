@@ -876,3 +876,38 @@
 
 /* The host supplies the same product menu in both workspaces. */
 .integratedBrand { padding: 12px 0 20px; }
+
+.contextPage { max-width: 880px; margin: 0 auto; padding-bottom: 24px; }
+.contextHeader { margin: 0 0 22px; }
+.contextHeader h1 { margin: 0; font-size: 26px; font-weight: 650; letter-spacing: -.03em; }
+.contextHeader p { margin: 8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.contextComposer { margin-bottom: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); overflow: hidden; }
+.contextWebsite { display: flex; align-items: center; gap: 16px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.contextWebsite span { flex-shrink: 0; font-size: 12px; color: var(--muted); }
+.contextWebsite input { width: 100%; min-width: 0; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 13px; outline-offset: 4px; }
+.contextComposer > textarea { display: block; width: 100%; min-height: 100px; padding: 16px; border: 0; resize: vertical; color: var(--ink); background: transparent; font: inherit; font-size: 13px; line-height: 1.6; outline-offset: -3px; }
+.contextToolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; }
+.contextToolbar button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: inherit; font-size: 12px; cursor: pointer; }
+.contextToolbar .contextFillButton { border-color: var(--ink); background: var(--ink); color: var(--panel); }
+.contextToolbar button:disabled { opacity: .45; cursor: default; }
+.contextAttachments { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 14px 8px; }
+.contextAttachments > span { display: inline-flex; align-items: center; max-width: 100%; gap: 8px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px; font-size: 11px; overflow-wrap: anywhere; }
+.contextAttachments button { display: flex; padding: 2px; border: 0; background: none; color: var(--muted); cursor: pointer; }
+.contextStatus { padding: 10px 16px; border-top: 1px solid var(--line); font-size: 12px; line-height: 1.5; color: var(--muted); }
+.contextStatus[role="alert"] { color: #a13b30; }
+.contextStatus details { margin-top: 4px; }
+.contextPage .profileSteps { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.contextPage .profileCard { padding: 16px; background: var(--panel); }
+.contextPage .profileCardHead { display: block; margin-bottom: 10px; }
+.contextPage .profileCardHead h2 { display: flex; align-items: center; justify-content: space-between; font-size: 13px; font-weight: 600; }
+.contextPage .profileCard > textarea, .contextPage .profileAdvanced textarea { min-height: 96px; padding: 10px; background: var(--paper); border-color: var(--line); font: inherit; font-size: 13px; line-height: 1.6; }
+.contextWide { grid-column: 1 / -1; }
+.contextAdded { color: var(--muted); font-size: 11px; font-weight: 400; }
+.contextPage .profileKpiHeader strong { font-size: 12px; }
+.contextPage .profileKpiHeader button, .contextPage .profileKpis label, .contextPage .profileKpis input, .contextPage .profileAdvancedGrid label { font-size: 12px; }
+.contextPage .profileAdvanced { background: var(--panel); }
+@media (max-width: 680px) {
+  .contextPage .profileSteps { grid-template-columns: 1fr; }
+  .contextWebsite { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .contextPage .profileKpiRow { grid-template-columns: minmax(0,1fr) minmax(0,1fr) 30px; }
+}

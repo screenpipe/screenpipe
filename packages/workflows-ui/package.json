@@ -13,11 +13,15 @@
     "./model": "./src/model.ts",
     "./navigation": "./src/navigation.ts",
     "./platform": "./src/platform.ts",
-    "./web": "./src/web-platform.ts"
+    "./web": "./src/web-platform.ts",
+    "./context": "./src/context-tool.ts",
+    "./context-import": "./src/context-import.ts"
   },
   "dependencies": {
     "react-markdown": "^9.1.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "fflate": "^0.8.2",
+    "unpdf": "^1.6.2"
   },
   "peerDependencies": {
     "lucide-react": ">=0.414.0 <1",
