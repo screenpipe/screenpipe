@@ -466,6 +466,7 @@
 .detailHeader { display: grid; grid-template-columns: minmax(0,1fr) 245px; gap: 60px; align-items: end; margin-bottom: 29px; }
 .detailHeader h1 { margin: 16px 0 9px; font-size: clamp(32px,4vw,49px); letter-spacing: -.052em; }
 .detailHeader > div > p { max-width: 760px; margin: 0; color: #70746a; font-size: 12px; line-height: 1.6; }
+.workflowActions { display: flex; flex-wrap: wrap; gap: 8px; }
 .skillButton { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; margin-top: 17px; padding: 0 12px; border: 1px solid #20221e; border-radius: 6px; background: #fff; color: #20221e; font-size: 8.5px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; cursor: pointer; transition: .15s ease; }
 .skillButton:hover { background: #20221e; color: #fff; }
 .detailTotal { padding: 18px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }

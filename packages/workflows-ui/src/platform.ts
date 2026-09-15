@@ -79,6 +79,8 @@ export type WorkflowsAppProps = {
   active?: boolean;
   navigationFooter?: (actions: { openKeyboardShortcuts: () => void }) => import("react").ReactNode;
   navigationBrand?: import("react").ReactNode;
+  /** Open the host sharing review; clicking must not send the workflow. */
+  onShareWorkflow?: (workflow: WorkflowMap) => void;
   /** Host-owned live recorder status and controls. */
   recordingStatus?: import("react").ReactNode;
 };

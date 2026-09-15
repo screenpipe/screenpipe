@@ -12,6 +12,9 @@ vi.mock("@/lib/workflows/desktop-platform", async () => {
   const { createFixtureWorkflowsPlatform } = await import("@screenpipe/workflows-ui/fixture");
   return { desktopWorkflowsPlatform: createFixtureWorkflowsPlatform() };
 });
+vi.mock("@/components/connected-share-dialog", () => ({
+  ConnectedShareDialog: ({ open, artifact, onOpenChange }: any) => open ? <div role="dialog" aria-label="Sharing review"><h2>{artifact.title}</h2><p>{artifact.surface}</p><button onClick={() => onOpenChange(false)}>Close sharing</button></div> : null,
+}));
 vi.mock("posthog-js", () => ({ default: { capture: vi.fn() } }));
 
 it("renders the native recording dot and opens device controls in Workflows", async () => {
@@ -36,4 +39,18 @@ it("keeps Settings and Help in the footer and opens workspace shortcuts from Hel
   fireEvent.keyDown(screen.getByRole("button", { name: "Help" }), { key: "Enter" });
   fireEvent.click(await screen.findByRole("menuitem", { name: "Keyboard shortcuts" }));
   expect(await screen.findByRole("dialog", { name: /command/i })).toBeVisible();
+});
+
+it("opens the existing sharing review from the selected workflow in the main app", async () => {
+  window.history.replaceState(null, "", "/home?mode=workflows");
+  render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Build my workflow catalog" }));
+  fireEvent.click(await screen.findByRole("button", { name: /research synthesis/i }));
+  expect(screen.queryByRole("dialog", { name: "Sharing review" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Share with team" }));
+  expect(screen.getByRole("dialog", { name: "Sharing review" })).toHaveTextContent("Research synthesis");
+  expect(screen.getByRole("dialog", { name: "Sharing review" })).toHaveTextContent("workflow");
+  fireEvent.click(screen.getByRole("button", { name: "Close sharing" }));
+  expect(screen.queryByRole("dialog", { name: "Sharing review" })).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Research synthesis" })).toBeVisible();
 });
