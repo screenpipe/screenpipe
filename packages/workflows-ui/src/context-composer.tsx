@@ -9,12 +9,11 @@ import { CONTEXT_LABELS, MAX_CONTEXT_SOURCE_TEXT, mergeContextUpdate, normalizeC
 import type { ImportResult } from "./context-import";
 import styles from "./workflows-app.module.css";
 
-export function ContextComposer({ profile, update, fillContext, discoverContext = false, onBusy, onFields }: {
+export function ContextComposer({ profile, update, fillContext, discoverContext = false, onFields }: {
   discoverContext?: boolean;
   profile: WorkProfile;
   update: (profile: WorkProfile) => void;
   fillContext: NonNullable<WorkflowsPlatform["fillContext"]>;
-  onBusy: (busy: boolean) => void;
   onFields: (fields: ContextField[]) => void;
 }) {
   const [text, setText] = useState("");
@@ -35,8 +34,8 @@ export function ContextComposer({ profile, update, fillContext, discoverContext 
   }, []);
   const readFiles = (files: File[]) => {
     if (!files.length || reading || busy) return;
-    setError(""); setWarnings([]); setReading(true); onBusy(true);
-    const done = () => { worker.current?.terminate(); worker.current = null; clearTimeout(timer.current); setReading(false); onBusy(false); };
+    setError(""); setWarnings([]); setReading(true);
+    const done = () => { worker.current?.terminate(); worker.current = null; clearTimeout(timer.current); setReading(false); };
     try {
       const current = new Worker(new URL("./context-import.worker.ts", import.meta.url), { type: "module" });
       worker.current = current;
@@ -67,7 +66,7 @@ export function ContextComposer({ profile, update, fillContext, discoverContext 
       validateContextDocuments(sources);
       const website = normalizeContextWebsite(base.website || "");
       if (!discoverContext && !sources.length && !website) throw new Error("Add text, files, or a company website.");
-      request.current = controller; setBusy(true); onBusy(true); onFields([]);
+      request.current = controller; setBusy(true); onFields([]);
       await fillContext({ documents: sources, website, profile: base, signal: controller.signal,
         onActivity: (activity) => { if (!controller.signal.aborted) setMessage(activity); },
         onField: (result) => {
@@ -79,11 +78,11 @@ export function ContextComposer({ profile, update, fillContext, discoverContext 
           setMessage(`Added ${CONTEXT_LABELS[result.field].toLowerCase()}`);
         },
       });
-      if (!controller.signal.aborted) setMessage(`${applied} section${applied === 1 ? "" : "s"} filled. Review and save.${skipped ? " Your edits were kept." : ""}`);
+      if (!controller.signal.aborted) setMessage(`${applied} section${applied === 1 ? "" : "s"} filled.${skipped ? " Your edits were kept." : ""}`);
     } catch (error) {
       if (!controller.signal.aborted) setError(error instanceof Error ? error.message : "Could not fill context. Try again.");
     } finally {
-      if (request.current === controller) { request.current = null; setBusy(false); onBusy(false); }
+      if (request.current === controller) { request.current = null; setBusy(false); }
     }
   };
   return <section className={styles.contextComposer} aria-label="Add context"
@@ -95,7 +94,7 @@ export function ContextComposer({ profile, update, fillContext, discoverContext 
     <div className={styles.contextToolbar}>
       <input ref={input} type="file" multiple accept=".pdf,.txt,.md,.markdown,.csv,.json,.zip" hidden onChange={(event) => { readFiles(Array.from(event.target.files || [])); event.target.value = ""; }} />
       <button type="button" onClick={() => input.current?.click()} disabled={busy || reading}><Paperclip size={15} />{reading ? "Reading files…" : "Add files or ZIP"}</button>
-      {busy ? <button type="button" onClick={() => { request.current?.abort(); setMessage("Stopped. Filled fields are ready to review."); }}><Square size={13} />Stop</button> : <button className={styles.contextFillButton} type="button" onClick={() => void fill()} disabled={reading || (!discoverContext && !text.trim() && !documents.length && !profile.website?.trim())}><ArrowUp size={15} />Fill context</button>}
+      {busy ? <button type="button" onClick={() => { request.current?.abort(); setMessage("Stopped. Filled fields were kept."); }}><Square size={13} />Stop</button> : <button className={styles.contextFillButton} type="button" onClick={() => void fill()} disabled={reading || (!discoverContext && !text.trim() && !documents.length && !profile.website?.trim())}><ArrowUp size={15} />Fill context</button>}
     </div>
     {(message || error || warnings.length > 0) && <div className={styles.contextStatus} role={error ? "alert" : "status"}>{error || message}{warnings.length > 0 && <details><summary>{warnings.length} file notice{warnings.length === 1 ? "" : "s"}</summary>{warnings.map((warning) => <p key={warning}>{warning}</p>)}</details>}</div>}
   </section>;

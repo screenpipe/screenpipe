@@ -268,7 +268,7 @@ describe("shared workflows experience", () => {
     expect(screen.queryByText(/raw employee history|contributing seats/i)).not.toBeInTheDocument();
   });
 
-  it("keeps a simple personal context private and saves explicit context", async () => {
+  it("keeps personal context private and automatically saves edits", async () => {
     const platform = createFixtureWorkflowsPlatform();
     const saveWorkProfile = vi.fn(platform.saveWorkProfile!);
     platform.saveWorkProfile = saveWorkProfile;
@@ -286,12 +286,12 @@ describe("shared workflows experience", () => {
     expect((screen.getByLabelText("Role and responsibilities") as HTMLTextAreaElement).value).toContain("product");
 
     fireEvent.change(screen.getByLabelText("Current outcomes"), { target: { value: "Shorten pilot onboarding" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save context" }));
+    expect(screen.queryByRole("button", { name: "Save context" })).not.toBeInTheDocument();
     await waitFor(() => expect(saveWorkProfile).toHaveBeenCalledWith(
       expect.objectContaining({ priorities: "Shorten pilot onboarding", visibility: "device-only" }),
       undefined,
     ));
-    expect(screen.getByText("Context saved")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Context save status" })).toHaveTextContent("Saved");
   });
 
   it("streams agent progress into a calm review and local install flow", async () => {

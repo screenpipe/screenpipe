@@ -711,11 +711,6 @@
 .profileAdvanced > summary span { color: #858980; font-size: 8px; }
 .profileAdvancedGrid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; padding: 0 17px 17px 46px; }
 .profileAdvanced textarea { min-height: 105px; margin-top: 1px; }
-.profileSaveBar { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 13px; padding: 15px 17px; border: 1px solid #cfd5bf; border-radius: 8px; background: #f5f8ed; }
-.profileSaveBar > div { display: flex; flex-direction: column; gap: 4px; }
-.profileSaveBar strong { color: #46502f; font-size: 10px; }
-.profileSaveBar span { color: #7a816d; font-size: 8px; }
-.profileSaveBar .profileError { color: #8c3e31; }
 
 @media (max-width: 1050px) {
   .app { grid-template-columns: 190px minmax(0,1fr); }
@@ -814,7 +809,6 @@
   .profileValue { grid-template-columns: 1fr; }
   .profileValueInputs { justify-self: start; }
   .profileAdvancedGrid { padding-left: 17px; }
-  .profileSaveBar { align-items: flex-start; flex-direction: column; }
   .skillBackdrop { padding: 8px; }
   .skillDialog { width: calc(100vw - 16px); height: calc(100svh - 16px); }
   .skillDialogHeader, .skillFields { padding-left: 16px; padding-right: 16px; }
@@ -911,3 +905,7 @@
   .contextWebsite { flex-direction: column; align-items: flex-start; gap: 8px; }
   .contextPage .profileKpiRow { grid-template-columns: minmax(0,1fr) minmax(0,1fr) 30px; }
 }
+
+.contextSaveStatus { color: #777b72; font-size: 11px; white-space: nowrap; }
+.contextSaveStatus button { margin-left: 6px; text-decoration: underline; }
+.contextSaveStatus [role="alert"] { color: #8c3e31; white-space: normal; }

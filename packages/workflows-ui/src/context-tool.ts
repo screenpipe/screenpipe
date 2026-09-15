@@ -60,7 +60,7 @@ export function validateContextDocuments(documents: ContextDocument[]) {
 }
 
 // Installed unchanged into the existing Pi harness. This tool only returns a
-// typed proposal through the event bus; the page owns merging and saving it.
+// typed proposal through the event bus; the page owns merging and autosaving it.
 export default function contextTool(pi: {
   registerTool: (tool: any) => void;
   on: (event: "tool_call", handler: (event: { toolName: string; input: Record<string, unknown> }) => { block: true; reason: string } | undefined) => void;
@@ -75,7 +75,7 @@ export default function contextTool(pi: {
   });
   pi.registerTool({
     name: "fill_work_context", label: "Fill context",
-    description: "Fill one editable Context field from supplied or retrieved evidence. Preserve existing facts, omit unsupported claims, and never infer private priorities or metrics from a public website. This proposes a field; the user can review and save it.",
+    description: "Fill one editable Context field from supplied or retrieved evidence. Preserve existing facts, omit unsupported claims, and never infer private priorities or metrics from a public website. This proposes a field; the page autosaves it and the user can edit it.",
     parameters: {
       type: "object", additionalProperties: false, required: ["field", "value"],
       properties: {
@@ -94,7 +94,7 @@ export default function contextTool(pi: {
 }
 
 export function buildContextPrompt({ documents, website, profile, discoverContext = false }: Pick<ContextFillRequest, "documents" | "website" | "profile"> & { discoverContext?: boolean }): string {
-  return `Help the user fill their Context page. Use fill_work_context for each supported field, once per field. Do not put field values in prose. Keep writing concise and preserve useful existing context. The user will review and save the proposed changes.
+  return `Help the user fill their Context page. Use fill_work_context for each supported field, once per field. Do not put field values in prose. Keep writing concise and preserve useful existing context. The page autosaves filled fields; the user can edit them.
 Fields: summary (their role and responsibilities, max 2000 chars), company (what the company does, max 2000), priorities (max 1000), kpis (up to 6, exact stated targets only), vocabulary (max 1000), guidance (max 1000).
 Only fill what evidence supports. Never invent priorities, personal responsibilities, numerical targets or the value of time. Leave unsupported fields unchanged. Distinguish a company from this person's work. Prefer current first-person commitments over old public descriptions or someone else's goals. A reported result, baseline, pitch-deck claim, or current value is NOT a target: put it in the definition with its source and leave target empty unless the evidence explicitly states a desired future goal.
 ${discoverContext ? `Today is ${new Date().toISOString()}. Actively gather context before filling fields, even when no documents or website were supplied:

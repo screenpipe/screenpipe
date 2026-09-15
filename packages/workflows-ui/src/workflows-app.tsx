@@ -89,6 +89,7 @@ import {
 } from "./model";
 import type { WorkflowAnalysisJob, WorkflowsAppProps, WorkflowsPlatform } from "./platform";
 import { ContextComposer } from "./context-composer";
+import { useContextProfile } from "./use-context-profile";
 import { type ContextField } from "./context-tool";
 import styles from "./workflows-app.module.css";
 
@@ -149,19 +150,6 @@ function formatCurrency(value: number, currency: string) {
   } catch {
     return `${currency || "USD"} ${Math.round(value)}`;
   }
-}
-
-function emptyWorkProfile(workspace: boolean): WorkProfile {
-  return {
-    scope: workspace ? "workspace" : "personal",
-    summary: "",
-    priorities: "",
-    kpis: [],
-    hourlyValue: null,
-    vocabulary: "",
-    guidance: "",
-    visibility: workspace ? "aggregate-workspace" : "device-only",
-  };
 }
 
 function profileCompletion(profile: WorkProfile | null) {
@@ -1113,7 +1101,7 @@ function ProfileView({
   saved,
   error,
   update,
-  save,
+  retry,
 }: {
   profile: WorkProfile;
   workspaceView: boolean;
@@ -1123,9 +1111,8 @@ function ProfileView({
   saved: boolean;
   error: string;
   update: (profile: WorkProfile) => void;
-  save: () => void;
+  retry: () => void;
 }) {
-  const [filling, setFilling] = useState(false);
   const [filled, setFilled] = useState<ContextField[]>([]);
   const fieldStatus = (field: ContextField) => filled.includes(field) ? <small className={styles.contextAdded}>Added</small> : null;
   const updateKpi = (index: number, changes: Partial<WorkProfileKpi>) => update({
@@ -1140,8 +1127,9 @@ function ProfileView({
   return <div className={styles.contextPage}>
     <div className={styles.contextHeader}>
       <div><h1>Context</h1><p>Help Screenpipe understand your work and what matters.</p></div>
+      <div className={styles.contextSaveStatus}>{error ? <span role="alert">{error} <button type="button" onClick={retry}>Retry</button></span> : <span role="status" aria-label="Context save status">{saving ? "Saving…" : saved ? "Saved" : ""}</span>}</div>
     </div>
-    {fillContext && <ContextComposer discoverContext={contextDiscovery} profile={profile} update={update} fillContext={fillContext} onBusy={setFilling} onFields={setFilled} />}
+    {fillContext && <ContextComposer discoverContext={contextDiscovery} profile={profile} update={update} fillContext={fillContext} onFields={setFilled} />}
     <section className={styles.profileSteps}>
       <article className={styles.profileCard}>
         <div className={styles.profileCardHead}><div><h2>{workspaceView ? "Organization overview" : "Your work"}{fieldStatus("summary")}</h2></div></div>
@@ -1188,10 +1176,6 @@ function ProfileView({
         <label><span>Analysis guidance {fieldStatus("guidance")}</span><textarea value={profile.guidance} onChange={(event) => update({ ...profile, guidance: event.target.value })} maxLength={1_000} placeholder="Separate required approvals from avoidable waiting. Keep uncertain project names unattributed." /></label>
       </div>
     </details>
-    <section className={styles.profileSaveBar}>
-      <div>{error ? <strong className={styles.profileError}>{error}</strong> : saved ? <strong>Context saved</strong> : null}</div>
-      <button className={styles.primaryButton} type="button" onClick={save} disabled={saving || filling}>{saving ? <><span className={styles.spinnerSmall} />Saving…</> : <><Save size={14} />Save context</>}</button>
-    </section>
   </div>;
 }
 
@@ -1226,14 +1210,12 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   const [view, setView] = useState<AppView>("workflows");
   const [timeLens, setTimeLens] = useState<TimeLens>("categories");
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
-  const [workProfile, setWorkProfile] = useState<WorkProfile | null>(null);
-  const [profileSaving, setProfileSaving] = useState(false);
-  const [profileSaved, setProfileSaved] = useState(false);
-  const [profileError, setProfileError] = useState("");
   const shortcutPrefix = useRef<{ key: string; at: number } | null>(null);
   const scopes = runtime?.availableScopes ?? (analysis?.scope ? [analysis.scope] : []);
   const activeScope = scopes.find((scope) => scope.id === scopeId) ?? scopes[0] ?? analysis?.scope ?? null;
   const workspaceProfile = Boolean(runtime?.workspace) || (activeScope ? activeScope.kind !== "personal" : false);
+  const contextProfile = useContextProfile(platform, activeScope ?? undefined, workspaceProfile, Boolean(runtime));
+  const workProfile = contextProfile.profile;
   const navigate = useCallback((target: AppView) => {
     setView(target);
     if (typeof window === "undefined") return;
@@ -1315,47 +1297,6 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
       });
     return () => { cancelled = true; };
   }, [activeScope?.id, platform, Boolean(runtime)]);
-
-  useEffect(() => {
-    if (!runtime) return;
-    let cancelled = false;
-    setProfileSaved(false);
-    setProfileError("");
-    if (!platform.loadWorkProfile) {
-      setWorkProfile(emptyWorkProfile(workspaceProfile));
-      return;
-    }
-    void platform.loadWorkProfile(activeScope ?? undefined)
-      .then((profile) => {
-        if (!cancelled) setWorkProfile(profile ?? emptyWorkProfile(workspaceProfile));
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setWorkProfile(emptyWorkProfile(workspaceProfile));
-          setProfileError(error instanceof Error ? error.message : "Could not load context.");
-        }
-      });
-    return () => { cancelled = true; };
-  }, [activeScope?.id, platform, runtime, workspaceProfile]);
-
-  const saveWorkProfile = useCallback(async () => {
-    const draft = workProfile ?? emptyWorkProfile(workspaceProfile);
-    const nextProfile = { ...draft, updatedAt: new Date().toISOString() };
-    setProfileSaving(true);
-    setProfileSaved(false);
-    setProfileError("");
-    try {
-      const savedProfile = platform.saveWorkProfile
-        ? await platform.saveWorkProfile(nextProfile, activeScope ?? undefined)
-        : nextProfile;
-      setWorkProfile(savedProfile);
-      setProfileSaved(true);
-    } catch (error) {
-      setProfileError(error instanceof Error ? error.message : "Could not save context.");
-    } finally {
-      setProfileSaving(false);
-    }
-  }, [activeScope, platform, workProfile, workspaceProfile]);
 
   const analyze = useCallback(async () => {
     setAnalyzing(true);
@@ -1540,7 +1481,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
       setAnalysis(updated);
     } : undefined} />; break;
     case "bottlenecks": content = <BottlenecksView workflows={workflows} openWorkflow={openWorkflow} />; break;
-    case "profile": content = <ProfileView contextDiscovery={platform.contextDiscovery} fillContext={platform.fillContext} profile={workProfile ?? emptyWorkProfile(workspaceProfile)} workspaceView={workspaceProfile} saving={profileSaving} saved={profileSaved} error={profileError} update={(profile) => { setWorkProfile(profile); setProfileSaved(false); setProfileError(""); }} save={() => void saveWorkProfile()} />; break;
+    case "profile": content = workProfile ? <ProfileView contextDiscovery={platform.contextDiscovery} fillContext={platform.fillContext} profile={workProfile} workspaceView={workspaceProfile} saving={contextProfile.status === "saving"} saved={contextProfile.status === "saved"} error={contextProfile.error} update={contextProfile.update} retry={contextProfile.retry} /> : <div className={styles.contextPage}><h1>Context</h1>{contextProfile.error ? <p role="alert">{contextProfile.error} <button type="button" onClick={contextProfile.retry}>Retry</button></p> : <p role="status">Loading context…</p>}</div>; break;
     case "evidence": content = <EvidenceView workflows={workflows} openWorkflow={openWorkflow} runtime={runtime} />; break;
     case "privacy": content = <PrivacyView runtime={runtime} />; break;
   }

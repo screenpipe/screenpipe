@@ -17,7 +17,7 @@ it("streams tool proposals into editable fields, preserves concurrent edits, and
   await waitFor(() => expect(summary).not.toHaveValue(""));
   fireEvent.change(screen.getByLabelText("Paste context"), { target: { value: "I lead support. Our company builds helpdesk software." } });
   fireEvent.click(screen.getByRole("button", { name: "Fill context" }));
-  expect(screen.getByRole("button", { name: "Save context" })).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "Save context" })).not.toBeInTheDocument();
   fireEvent.change(summary, { target: { value: "Keep my correction" } });
   await React.act(async () => {
     pending.onField({ field: "summary", value: "AI role" });
@@ -26,8 +26,7 @@ it("streams tool proposals into editable fields, preserves concurrent edits, and
   });
   expect(summary).toHaveValue("Keep my correction");
   expect(screen.getByLabelText("Company overview")).toHaveValue("We build helpdesk software.");
-  expect(screen.getByRole("status")).toHaveTextContent("Your edits were kept");
-  fireEvent.click(screen.getByRole("button", { name: "Save context" }));
+  expect(screen.getByText(/Your edits were kept/)).toBeInTheDocument();
   await waitFor(() => expect(platform.saveWorkProfile).toHaveBeenCalledWith(expect.objectContaining({ company: "We build helpdesk software.", summary: "Keep my correction" }), undefined));
 });
 it("stops pending fills and ignores any later field result", async () => {
