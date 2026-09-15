@@ -142,7 +142,7 @@ describe("shared workflows experience", () => {
     expect(scrollRegion).not.toBeNull();
     if (scrollRegion) scrollRegion.scrollTop = 420;
     fireEvent.click(screen.getByRole("button", { name: /^context$/i }));
-    fireEvent.click(screen.getByRole("button", { name: /workflows 5/i }));
+    fireEvent.click(screen.getByRole("button", { name: /home 5/i }));
     expect(scrollRegion?.scrollTop).toBe(0);
     expect(screen.getByRole("heading", { name: "Your workflows" })).toBeInTheDocument();
   });
@@ -328,7 +328,7 @@ describe("shared workflows experience", () => {
     }));
 
     render(<WorkflowsApp platform={platform} initialAnalysis={fixtureWorkflowAnalysis} storageKey={null} />);
-    fireEvent.click(await screen.findByRole("button", { name: /workflows 5/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /home 5/i }));
     fireEvent.click(screen.getByRole("button", { name: /customer feedback triage/i }));
     fireEvent.click(screen.getByRole("button", { name: "Create skill" }));
 

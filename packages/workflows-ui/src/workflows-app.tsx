@@ -93,7 +93,7 @@ import { type ContextField } from "./context-tool";
 import styles from "./workflows-app.module.css";
 
 const primaryNavigation = [
-  ["workflows", ListTree, "Workflows", ["G", "W"]],
+  ["workflows", ListTree, "Home", ["G", "W"]],
   ["profile", UserRoundCog, "Context", ["G", "P"]],
 ] as const;
 
