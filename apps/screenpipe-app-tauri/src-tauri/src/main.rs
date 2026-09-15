@@ -1240,7 +1240,9 @@ async fn main() {
                 }
                 if !app_ui_hidden {
                     app_submenu_builder = app_submenu_builder
-                        .item(&MenuItemBuilder::with_id("settings", "Settings...")
+                        // Tauri menu listeners are global, including tray menus.
+                        // Keep this id distinct so Settings opens exactly once.
+                        .item(&MenuItemBuilder::with_id("app_settings", "Settings...")
                             .accelerator("CmdOrCtrl+,")
                             .build(app)?)
                         .separator();
@@ -1288,7 +1290,7 @@ async fn main() {
                 app.set_menu(menu)?;
                 app.on_menu_event(|app_handle, event| {
                     match event.id().as_ref() {
-                        "settings" => {
+                        "app_settings" => {
                             // Defer off event stack (same as tray: runs from tao::send_event).
                             let app_for_closure = app_handle.clone();
                             let _ = app_handle.run_on_main_thread(move || {

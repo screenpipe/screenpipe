@@ -131,6 +131,8 @@ import { blocksTrialActivationApp } from "@/lib/first-run/trial-activation";
 
 import { ProductSwitcher, type ProductMode } from "@/components/workflows/product-switcher";
 import { SidebarFooter } from "@/components/sidebar-footer";
+import { WorkflowsHelpDialog } from "@/components/workflows/workflows-help-dialog";
+import { navigationProductMode } from "@/lib/workflows/navigation";
 import { IntegratedWorkflows } from "@/components/workflows/integrated-workflows";
 import { readProductMode, saveProductMode } from "@/lib/workflows/entry-preference";
 
@@ -173,7 +175,12 @@ function HomeContent() {
     void saveProductMode(next).catch(() => {});
   }, [setRequestedMode]);
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).has("mode")) return;
+    const params = new URLSearchParams(window.location.search);
+    const destinationMode = navigationProductMode(params);
+    if (destinationMode) {
+      void setRequestedMode(destinationMode);
+      return;
+    }
     void readProductMode().then(saved => {
       if (!modeInteraction.current && saved === "workflows") void setRequestedMode(saved);
     }).catch(() => {});
@@ -1242,8 +1249,12 @@ function HomeContent() {
   useTauriEvent<{ url: string }>("navigate", (event) => {
     const url = new URL(event.payload.url, window.location.origin);
     const section = url.searchParams.get("section");
-    if (url.searchParams.get("mode") === "workflows") changeMode("workflows");
-    else if (section) changeMode("screenpipe");
+    // Shared destinations never change the saved workspace preference.
+    const destinationMode = navigationProductMode(url.searchParams);
+    if (destinationMode) {
+      modeInteraction.current = true;
+      void setRequestedMode(destinationMode);
+    }
     if (!section) return;
     const settingsSection = resolveSettingsSection(section);
     if (settingsSection) {
@@ -1701,8 +1712,10 @@ function HomeContent() {
 
           {workflowsAvailable && (workflowsActive || workflowsVisited) && <div className={cn("flex-1 min-w-0 h-full", !workflowsActive && "hidden")}><IntegratedWorkflows active={workflowsActive} onModeChange={changeMode} recordingStatus={<RecordingStatus {...recordingStatusProps} />}
             navigationFooter={({ openKeyboardShortcuts }) => <SidebarFooter onSettings={() => openSettings()}
-              onHelp={() => { changeMode("screenpipe"); void setActiveSection("help"); }} onKeyboardShortcuts={openKeyboardShortcuts}
+              onHelp={() => { void setActiveSection("help"); }} onKeyboardShortcuts={openKeyboardShortcuts}
               hideHelp={isSectionHidden("help")} trialActivationLocked={trialActivationLocked} />} /></div>}
+          <WorkflowsHelpDialog open={workflowsActive && (activeSection === "help" || activeSection === "feedback") && !isSectionHidden("help")}
+            onOpenChange={open => { if (!open) void setActiveSection("home"); }} />
           {!workflowsActive && showFirstRunGuide && (
             <FirstRunGuide
               onDone={markFirstRunGuideDone}
