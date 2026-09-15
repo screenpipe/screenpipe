@@ -39,8 +39,12 @@ export async function runWorkflowAgent({ name, prompt, config, signal, onProgres
       await mountAgentEventBus(); assertActive();
       const base = await commands.getScreenpipeBaseDir(); assertActive();
       if (base.status === "error") throw new Error("Couldn’t open your local workspace.");
-      // The native companion path also resolves the already-signed-in
-      // Screenpipe account without exposing its token to this webview.
+      // Use the same encrypted account token that hydrates normal chat's
+      // settings.user.token. Read it for each run so login/logout is current.
+      const userToken = await commands.getCloudToken(); assertActive();
+      if (config.provider === "screenpipe-cloud" && !userToken) {
+        throw new Error("Sign in to Screenpipe in Settings to continue.");
+      }
       unregister.push(registerForeground(sessionId, (envelope) => {
         if (settled || envelope.sessionId !== sessionId || envelope.source !== "pi") return;
         try { onEvent?.(envelope.event); } catch (error) { fail(error instanceof Error ? error : new Error(String(error))); return; }
@@ -56,7 +60,7 @@ export async function runWorkflowAgent({ name, prompt, config, signal, onProgres
       }));
       unregister.push(onTerminated((event) => { if (event.sessionId === sessionId) fail(new Error("The conversation was interrupted. Try again.")); }));
       unregister.push(onEvicted((event) => { if (event.sessionId === sessionId) fail(new Error("The conversation was interrupted. Try again.")); }));
-      const started = await commands.piStart(sessionId, `${base.data}/pi-workflows-${name}`, null, config);
+      const started = await commands.piStart(sessionId, `${base.data}/pi-workflows-${name}`, userToken, config);
       assertActive();
       if (started.status === "error" || !started.data.running) throw new Error(started.status === "error" ? started.error : "Couldn’t start the assistant.");
       const prompted = await commands.piPrompt(sessionId, prompt, null, null);
