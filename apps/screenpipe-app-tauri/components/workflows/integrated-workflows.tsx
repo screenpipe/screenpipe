@@ -14,6 +14,5 @@ const platform = process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock"
   : desktopWorkflowsPlatform;
 export function IntegratedWorkflows({ active, onModeChange }: { active: boolean; onModeChange: (mode: ProductMode) => void }) {
   return <WorkflowsApp platform={platform} active={active} storageKey={null}
-    navigationBrand={<ProductSwitcher mode="workflows" onChange={onModeChange} />}
-    collapsedNavigationBrand={<ProductSwitcher mode="workflows" compact onChange={onModeChange} />} />;
+    navigationBrand={<ProductSwitcher mode="workflows" onChange={onModeChange} />} />;
 }

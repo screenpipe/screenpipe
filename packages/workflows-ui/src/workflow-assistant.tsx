@@ -260,7 +260,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
             </div>}
           </div>
           <button aria-label={state.mode === "floating" ? "Minimize chat" : "Collapse right sidebar"} title={`${state.mode === "floating" ? "Minimize chat" : "Collapse right sidebar"} (${shortcuts.right.keys.join(" ")})`} aria-expanded={true}
-            aria-controls="workflows-assistant" aria-keyshortcuts={shortcuts.right.aria} onClick={close}>{state.mode === "floating" ? <Minus size={18} /> : <PanelRightClose size={18} />}</button>
+            aria-controls="workflows-assistant" aria-keyshortcuts={shortcuts.right.aria} onClick={close}>{state.mode === "floating" ? <Minus size={18} /> : <PanelRightClose size={14} strokeWidth={1.5} />}</button>
         </div>
       </header>
       <div className={styles.body} ref={scroll} data-workflows-chat-scroll role={historyOpen ? undefined : "log"} aria-label={historyOpen ? undefined : "Conversation"} aria-live="off"

@@ -355,7 +355,6 @@ function AppShell({
   embedded,
   active,
   navigationBrand,
-  collapsedNavigationBrand,
   startWindowDrag,
   openCommandPalette,
   assistant,
@@ -375,7 +374,6 @@ function AppShell({
   embedded: boolean;
   active: boolean;
   navigationBrand?: React.ReactNode;
-  collapsedNavigationBrand?: React.ReactNode;
   startWindowDrag?: () => Promise<void> | void;
   openCommandPalette: () => void;
   assistant?: { platform: NonNullable<WorkflowsAppProps["platform"]["assistant"]>; context: AssistantContext };
@@ -449,9 +447,8 @@ function AppShell({
             aria-label={navigationCollapsed ? "Open left sidebar" : "Collapse left sidebar"}
             title={`${navigationCollapsed ? "Open" : "Collapse"} left sidebar (${shortcuts.left.keys.join(" ")})`}
             aria-expanded={!navigationCollapsed} aria-controls="workflows-navigation" aria-keyshortcuts={shortcuts.left.aria}>
-            {navigationCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+            {navigationCollapsed ? <PanelLeftOpen size={14} strokeWidth={1.5} /> : <PanelLeftClose size={14} strokeWidth={1.5} />}
           </button>}
-          {navigationCollapsed && collapsedNavigationBrand}
           <div className={styles.search}><Search size={15} /><input data-workflows-search value={query} onChange={(event) => setQuery(event.target.value)} onFocus={() => navigate("workflows")} placeholder="Search workflows" aria-label="Search workflows" />{query ? <button type="button" onClick={() => setQuery("")} aria-label="Clear search"><X size={12} /></button> : <button type="button" className={styles.commandTrigger} onMouseDown={(event) => event.preventDefault()} onClick={openCommandPalette} aria-label="Open command palette"><CommandIcon size={12} /><kbd>⌘ K</kbd></button>}</div>
           {scopes.length > 1 && <label className={styles.scopeControl}>
             {activeScope?.kind === "organization" ? <Building2 size={13} /> : <Users size={13} />}
@@ -475,7 +472,7 @@ function AppShell({
             aria-label={assistantToggleLabel}
             title={`${assistantToggleLabel} (${shortcuts.right.keys.join(" ")})`}
             aria-expanded={assistantOpen} aria-controls="workflows-assistant" aria-keyshortcuts={shortcuts.right.aria}>
-            {assistantOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
+            {assistantOpen ? <PanelRightClose size={14} strokeWidth={1.5} /> : <PanelRightOpen size={14} strokeWidth={1.5} />}
           </button>}
         </header>
         {embedded && <nav className={styles.embeddedNav} aria-label="Workflows sections">
@@ -1194,7 +1191,7 @@ function PrivacyView({ runtime }: { runtime: WorkflowRuntime | null }) {
   </>;
 }
 
-export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "screenpipe-workflows:last-analysis-v2", initialScopeId, embedded = false, active = true, navigationBrand, collapsedNavigationBrand }: WorkflowsAppProps) {
+export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "screenpipe-workflows:last-analysis-v2", initialScopeId, embedded = false, active = true, navigationBrand }: WorkflowsAppProps) {
   const shortcuts = useSidebarShortcuts();
   const [runtime, setRuntime] = useState<WorkflowRuntime | null>(null);
   const [analysis, setAnalysis] = useState<WorkflowAnalysis | null>(() => initialAnalysis ? sanitizeWorkflowAnalysis(initialAnalysis) : null);
@@ -1527,7 +1524,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   }
 
   return <>
-    <AppShell active={active} navigationBrand={navigationBrand} collapsedNavigationBrand={collapsedNavigationBrand} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={filters.query} setQuery={(query) => setFilters((current) => ({ ...current, query }))} activityPeriod={activityPeriod} setActivityPeriod={(period) => { setActivityPeriod(period); setSelectedWorkflow(0); }} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: "Work profile", profile: workProfile } : { key: "workflows", title: "Your workflows", catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{content}</AppShell>
+    <AppShell active={active} navigationBrand={navigationBrand} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={filters.query} setQuery={(query) => setFilters((current) => ({ ...current, query }))} activityPeriod={activityPeriod} setActivityPeriod={(period) => { setActivityPeriod(period); setSelectedWorkflow(0); }} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: "Work profile", profile: workProfile } : { key: "workflows", title: "Your workflows", catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{content}</AppShell>
     <CommandPalette open={active && commandPaletteOpen} commands={paletteCommands} close={() => setCommandPaletteOpen(false)} />
   </>;
 }

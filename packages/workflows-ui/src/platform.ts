@@ -69,5 +69,4 @@ export type WorkflowsAppProps = {
   /** Keep mounted while another workspace is visible, without global shortcuts. */
   active?: boolean;
   navigationBrand?: import("react").ReactNode;
-  collapsedNavigationBrand?: import("react").ReactNode;
 };
