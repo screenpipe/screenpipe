@@ -1169,6 +1169,18 @@ function HomeContent() {
   const meetingsInSidebar = visibleSidebarIds.includes("meetings");
   const meetingsInToolbar = false;
 
+  // Chat and Workflows share the same recorder state, events and controls.
+  const recordingStatusProps = {
+    devices: recordingDevices,
+    onDevicesChange: setRecordingDevices,
+    meetingActive: meetingState.active ?? false,
+    onPauseRecording: pauseRecording,
+    onResumeRecording: resumeRecording,
+    isGloballyPaused: isCapturePaused,
+    allCaptureDisabled: !!(settings.disableAudio && settings.disableVision),
+    onOpenRecordingSettings: () => openSettings("recording"),
+  };
+
   const persistSidebarLayout = (next: ReturnType<typeof normalizeSidebarNavLayout>) => {
     void updateSettings({ sidebarNavLayout: next });
   };
@@ -1506,17 +1518,7 @@ function HomeContent() {
             )}
 
             {!sidebarCollapsed && (
-              <RecordingStatus
-                devices={recordingDevices}
-                onDevicesChange={setRecordingDevices}
-                meetingActive={meetingState.active ?? false}
-                onPauseRecording={pauseRecording}
-                onResumeRecording={resumeRecording}
-                isGloballyPaused={isCapturePaused}
-                isTranslucent={isTranslucent}
-                allCaptureDisabled={!!(settings.disableAudio && settings.disableVision)}
-                onOpenRecordingSettings={() => openSettings("recording")}
-              />
+              <RecordingStatus {...recordingStatusProps} isTranslucent={isTranslucent} />
             )}
           </div>
 
@@ -1756,7 +1758,7 @@ function HomeContent() {
 
           </div>
 
-          {workflowsAvailable && (workflowsActive || workflowsVisited) && <div className={cn("flex-1 min-w-0 h-full", !workflowsActive && "hidden")}><IntegratedWorkflows active={workflowsActive} onModeChange={changeMode} /></div>}
+          {workflowsAvailable && (workflowsActive || workflowsVisited) && <div className={cn("flex-1 min-w-0 h-full", !workflowsActive && "hidden")}><IntegratedWorkflows active={workflowsActive} onModeChange={changeMode} recordingStatus={<RecordingStatus {...recordingStatusProps} />} /></div>}
           {!workflowsActive && showFirstRunGuide && (
             <FirstRunGuide
               onDone={markFirstRunGuideDone}

@@ -10,6 +10,21 @@ import { createFixtureEnterpriseWorkflowsPlatform, createFixtureWorkflowsPlatfor
 describe("shared workflows experience", () => {
   beforeEach(() => { window.history.replaceState(null, "", "/"); window.localStorage.removeItem("workflows:navigation-collapsed"); });
 
+  it("uses live host recording controls instead of the runtime badge", async () => {
+    const platform = createFixtureWorkflowsPlatform();
+    const onClick = vi.fn();
+    const view = render(<WorkflowsApp platform={platform} initialAnalysis={fixtureWorkflowAnalysis} storageKey={null}
+      recordingStatus={<button onClick={onClick}>recording</button>} />);
+    fireEvent.click(screen.getByRole("button", { name: "recording" }));
+    expect(onClick).toHaveBeenCalledOnce();
+    expect(screen.queryByText("Starting")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Using Screenpipe")).not.toBeInTheDocument());
+    view.rerender(<WorkflowsApp platform={platform} initialAnalysis={fixtureWorkflowAnalysis} storageKey={null}
+      recordingStatus={<button>2 devices paused</button>} />);
+    fireEvent.click(screen.getByRole("button", { name: "Collapse left sidebar" }));
+    expect(screen.getByRole("button", { name: "2 devices paused" })).toBeVisible();
+  });
+
   it("collapses both panes independently and preserves the chat draft", async () => {
     const platform = createFixtureWorkflowsPlatform();
     const view = render(<WorkflowsApp platform={platform} initialAnalysis={fixtureWorkflowAnalysis} storageKey={null} />);

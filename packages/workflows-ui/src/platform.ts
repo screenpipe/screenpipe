@@ -69,4 +69,6 @@ export type WorkflowsAppProps = {
   /** Keep mounted while another workspace is visible, without global shortcuts. */
   active?: boolean;
   navigationBrand?: import("react").ReactNode;
+  /** Host-owned live recorder status and controls. */
+  recordingStatus?: import("react").ReactNode;
 };

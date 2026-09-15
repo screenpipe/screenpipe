@@ -12,7 +12,7 @@ import { ProductSwitcher, type ProductMode } from "./product-switcher";
 const platform = process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock"
   ? createFixtureWorkflowsPlatform()
   : desktopWorkflowsPlatform;
-export function IntegratedWorkflows({ active, onModeChange }: { active: boolean; onModeChange: (mode: ProductMode) => void }) {
-  return <WorkflowsApp platform={platform} active={active} storageKey={null}
+export function IntegratedWorkflows({ active, onModeChange, recordingStatus }: { active: boolean; onModeChange: (mode: ProductMode) => void; recordingStatus: React.ReactNode }) {
+  return <WorkflowsApp platform={platform} active={active} storageKey={null} recordingStatus={recordingStatus}
     navigationBrand={<ProductSwitcher mode="workflows" onChange={onModeChange} />} />;
 }
