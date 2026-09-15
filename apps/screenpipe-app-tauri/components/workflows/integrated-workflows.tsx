@@ -2,6 +2,7 @@
 // https://screenpipe.com
 "use client";
 
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorkflowsApp } from "@screenpipe/workflows-ui";
 import { createFixtureWorkflowsPlatform } from "@screenpipe/workflows-ui/fixture";
 import { desktopWorkflowsPlatform } from "@/lib/workflows/desktop-platform";
@@ -13,6 +14,6 @@ const platform = process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock"
   ? createFixtureWorkflowsPlatform()
   : desktopWorkflowsPlatform;
 export function IntegratedWorkflows({ active, onModeChange, recordingStatus }: { active: boolean; onModeChange: (mode: ProductMode) => void; recordingStatus: React.ReactNode }) {
-  return <WorkflowsApp platform={platform} active={active} storageKey={null} recordingStatus={recordingStatus}
-    navigationBrand={<ProductSwitcher mode="workflows" onChange={onModeChange} />} />;
+  return <TooltipProvider><WorkflowsApp platform={platform} active={active} storageKey={null} recordingStatus={recordingStatus}
+    navigationBrand={<ProductSwitcher mode="workflows" onChange={onModeChange} />} /></TooltipProvider>;
 }
