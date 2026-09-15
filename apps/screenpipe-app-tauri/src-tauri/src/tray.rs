@@ -1553,7 +1553,7 @@ fn create_dynamic_menu(
 /// Reuse the normal recording action IDs, timers, settings and Help handlers.
 fn create_workflows_menu(app: &AppHandle, data: &TrayMenuData) -> Result<tauri::menu::Menu<Wry>> {
     let mut menu = MenuBuilder::new(app)
-        .item(&MenuItemBuilder::with_id("open_app", "Open Workflows").build(app)?)
+        .item(&MenuItemBuilder::with_id("open_app", "Open Screenpipe").build(app)?)
         .item(&PredefinedMenuItem::separator(app)?);
     if !is_tray_item_hidden("tray_recording_controls") {
         let status = get_effective_recording_status();
