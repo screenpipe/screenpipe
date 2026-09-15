@@ -31,7 +31,7 @@ function job(execution: any): WorkflowAnalysisJob {
   const status = execution.status === "completed" ? "complete"
     : ["failed", "cancelled", "interrupted"].includes(execution.status) ? "failed"
     : execution.status === "running" ? "processing" : "queued";
-  return { id: String(execution.id), status,
+  return { id: String(execution.id), status, startedAt: execution.started_at,
     message: execution.status === "cancelled" ? "Update stopped. Your saved workflows are still available."
       : status === "failed" ? "Could not update workflows. See the scheduled task for details."
       : status === "processing" ? "Updating workflows" : "Waiting to update workflows",

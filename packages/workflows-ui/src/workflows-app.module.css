@@ -918,3 +918,17 @@
 @media (max-width: 640px) { .refreshControls { flex-wrap: wrap; justify-content: flex-end; } }
 
 .cardMetrics { grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); }
+
+/* Catalog controls remain compact in both empty and populated states. */
+.catalogHeader { align-items: center; margin: 0 0 24px; gap: 20px; }
+.catalogHeader h1 { font-size: 28px; letter-spacing: -.04em; }
+.secondaryButton { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: inherit; font-size: 12px; font-weight: 550; cursor: pointer; }
+.secondaryButton:hover { border-color: var(--muted); }
+.secondaryButton:focus-visible { outline: 2px solid var(--muted); outline-offset: 2px; }
+.secondaryButton:disabled { opacity: .5; cursor: default; }
+.processing { padding: 24px 0; border: 0; border-radius: 0; background: transparent; }
+.processingHead { align-items: flex-start; padding: 0; border: 0; }
+.processingHead h2 { font-size: 16px; font-weight: 550; }
+.processingHead p { font-size: 12px; line-height: 1.5; }
+.processingHead .spinner { width: 20px; height: 20px; flex: 0 0 20px; margin-top: 2px; }
+@media (max-width: 640px) { .catalogHeader { align-items: flex-start; flex-direction: column; gap: 12px; } .catalogHeader .refreshControls { justify-content: flex-start; } }

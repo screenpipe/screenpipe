@@ -22,6 +22,7 @@ export type WorkflowAnalysisJob = {
   id: string;
   status: "queued" | "processing" | "complete" | "failed";
   progress?: number;
+  startedAt?: string;
   message?: string;
   result?: WorkflowAnalysis;
 };
