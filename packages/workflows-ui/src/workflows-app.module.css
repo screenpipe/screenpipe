@@ -868,9 +868,10 @@
   .topbar > .pill { display: none; }
 }
 
-.app[data-native-window="true"].navigationCollapsed .topbar { padding-left: 84px; }
+.nativeNavigationToggle { position: absolute; top: 0; left: 84px; z-index: 4; }
+.app[data-native-window="true"].navigationCollapsed .topbar { padding-left: 128px; }
 @media (max-width: 680px) {
-  .app[data-native-window="true"] .topbar { padding-left: 84px; }
+  .app[data-native-window="true"] .topbar { padding-left: 128px; }
 }
 
 /* The host supplies the same product menu in both workspaces. */

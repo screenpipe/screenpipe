@@ -422,8 +422,17 @@ function AppShell({
       ? runtime.source === "screenpipe" ? "Using Screenpipe" : "Recording"
       : "Starting";
 
+  const nativeMacWindow = Boolean(startWindowDrag) && shortcuts.left.aria === "Meta+B";
+  const navigationToggle = !embedded && <button className={`${styles.panelToggle} ${nativeMacWindow ? styles.nativeNavigationToggle : ""}`} onClick={toggleNavigation}
+    aria-label={navigationCollapsed ? "Open left sidebar" : "Collapse left sidebar"}
+    title={`${navigationCollapsed ? "Open" : "Collapse"} left sidebar (${shortcuts.left.keys.join(" ")})`}
+    aria-expanded={!navigationCollapsed} aria-controls="workflows-navigation" aria-keyshortcuts={shortcuts.left.aria}>
+    {navigationCollapsed ? <PanelLeftOpen size={14} strokeWidth={1.5} /> : <PanelLeftClose size={14} strokeWidth={1.5} />}
+  </button>;
+
   return (
-    <div data-native-window={Boolean(startWindowDrag) && shortcuts.left.aria === "Meta+B"} className={`ph-no-capture ph-mask ${styles.app} ${embedded ? styles.appEmbedded : ""} ${assistantDocked ? styles.appDocked : ""} ${navigationCollapsed ? styles.navigationCollapsed : ""}`} style={{ "--assistant-width": assistantWidth + "px" } as React.CSSProperties}>
+    <div data-native-window={nativeMacWindow} className={`ph-no-capture ph-mask ${styles.app} ${embedded ? styles.appEmbedded : ""} ${assistantDocked ? styles.appDocked : ""} ${navigationCollapsed ? styles.navigationCollapsed : ""}`} style={{ "--assistant-width": assistantWidth + "px" } as React.CSSProperties}>
+      {nativeMacWindow && navigationToggle}
       <aside id="workflows-navigation" className={styles.sidebar} hidden={navigationCollapsed} aria-label="Navigation sidebar">
         {navigationBrand ? <div className={styles.integratedBrand}>{navigationBrand}</div> : <div className={styles.brand} data-tauri-drag-region onMouseDown={(event) => handleWindowDrag(event, startWindowDrag)}>
           <BrandMark />
@@ -443,12 +452,7 @@ function AppShell({
       </aside>
       <section className={styles.workspace} data-workflows-scroll-region>
         <header className={styles.topbar} data-tauri-drag-region>
-          {!embedded && <button className={styles.panelToggle} onClick={toggleNavigation}
-            aria-label={navigationCollapsed ? "Open left sidebar" : "Collapse left sidebar"}
-            title={`${navigationCollapsed ? "Open" : "Collapse"} left sidebar (${shortcuts.left.keys.join(" ")})`}
-            aria-expanded={!navigationCollapsed} aria-controls="workflows-navigation" aria-keyshortcuts={shortcuts.left.aria}>
-            {navigationCollapsed ? <PanelLeftOpen size={14} strokeWidth={1.5} /> : <PanelLeftClose size={14} strokeWidth={1.5} />}
-          </button>}
+          {!nativeMacWindow && navigationToggle}
           <div className={styles.search}><Search size={15} /><input data-workflows-search value={query} onChange={(event) => setQuery(event.target.value)} onFocus={() => navigate("workflows")} placeholder="Search workflows" aria-label="Search workflows" />{query ? <button type="button" onClick={() => setQuery("")} aria-label="Clear search"><X size={12} /></button> : <button type="button" className={styles.commandTrigger} onMouseDown={(event) => event.preventDefault()} onClick={openCommandPalette} aria-label="Open command palette"><CommandIcon size={12} /><kbd>⌘ K</kbd></button>}</div>
           {scopes.length > 1 && <label className={styles.scopeControl}>
             {activeScope?.kind === "organization" ? <Building2 size={13} /> : <Users size={13} />}
