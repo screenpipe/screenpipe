@@ -7,6 +7,7 @@ import { WorkflowsApp, type WorkflowsAppProps } from "@screenpipe/workflows-ui";
 import { createFixtureWorkflowsPlatform } from "@screenpipe/workflows-ui/fixture";
 import { desktopWorkflowsPlatform } from "@/lib/workflows/desktop-platform";
 import { ProductSwitcher, type ProductMode } from "./product-switcher";
+import { WorkflowTasksPrompt } from "./workflow-tasks-prompt";
 
 // Only the existing browser-mock build gets synthetic data. Native builds use
 // the parent PR's adapter, native recorder and app-local persistent storage.
@@ -14,6 +15,6 @@ const platform = process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock"
   ? createFixtureWorkflowsPlatform()
   : desktopWorkflowsPlatform;
 export function IntegratedWorkflows({ active, onModeChange, recordingStatus, navigationFooter }: { active: boolean; onModeChange: (mode: ProductMode) => void; recordingStatus: React.ReactNode; navigationFooter?: WorkflowsAppProps["navigationFooter"] }) {
-  return <TooltipProvider><WorkflowsApp platform={platform} active={active} storageKey={null} recordingStatus={recordingStatus} navigationFooter={navigationFooter}
+  return <TooltipProvider>{platform.managesAnalysis && <WorkflowTasksPrompt active={active} />}<WorkflowsApp platform={platform} active={active} storageKey={null} recordingStatus={recordingStatus} navigationFooter={navigationFooter}
     navigationBrand={<ProductSwitcher mode="workflows" onChange={onModeChange} />} /></TooltipProvider>;
 }

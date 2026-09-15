@@ -14,12 +14,28 @@ async function request(path: string, body?: unknown) {
   return value;
 }
 
-// Installation is idempotent and never re-enables a task the user paused.
+// Installing the disabled template must never opt the user into background AI.
 export async function ensureWorkflowTask() {
-  const result = await request(`/pipes/bundled/${TASK}/install`, {});
-  // Startup may already have copied the disabled template. Only an explicit
-  // local preference distinguishes a paused task from its untouched template.
-  if (result.installed || result.enabled_override === null) await request(`/pipes/${TASK}/enable`, { enabled: true });
+  await request(`/pipes/bundled/${TASK}/install`, {});
+}
+
+export interface WorkflowTaskSetup {
+  enabled: boolean;
+  title: string;
+  schedule: string;
+}
+
+export async function loadWorkflowTaskSetup(): Promise<WorkflowTaskSetup> {
+  await ensureWorkflowTask();
+  const { data } = await request(`/pipes/${TASK}`);
+  if (typeof data?.config?.enabled !== "boolean") throw new Error("Could not read the workflow task settings.");
+  return { enabled: data.config.enabled, title: data.config.title || "Update my workflows", schedule: data.config.schedule };
+}
+
+// Only the explicit enable action opts in. Scheduling stays in the Pipe harness.
+export async function enableWorkflowTask() {
+  await ensureWorkflowTask();
+  await request(`/pipes/${TASK}/enable`, { enabled: true });
 }
 
 export async function loadScheduledCatalog(): Promise<WorkflowAnalysis | null> {

@@ -2,7 +2,7 @@
 // https://screenpipe.com
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { localFetch } from "@/lib/api";
-import { ensureWorkflowTask, getWorkflowJob, startWorkflowJob, saveWorkflowCorrections } from "./scheduled-discovery";
+import { ensureWorkflowTask, enableWorkflowTask, loadWorkflowTaskSetup, getWorkflowJob, startWorkflowJob, saveWorkflowCorrections } from "./scheduled-discovery";
 import { requireInspectedFrames } from "@screenpipe-ext/workflow-catalog";
 
 vi.mock("@/lib/api", () => ({ localFetch: vi.fn() }));
@@ -22,14 +22,21 @@ describe("workflow scheduled-task adapter", () => {
     expect(await startWorkflowJob()).toMatchObject({ id: "23", status: "processing" });
     expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith("/run"))).toBe(false);
   });
-  it("activates a startup-installed template only when no local pause preference exists", async () => {
-    fetchMock.mockResolvedValueOnce(response({ installed: false, enabled_override: null })).mockResolvedValueOnce(response({ success: true }));
-    await ensureWorkflowTask();
-    expect(fetchMock.mock.calls[1][0]).toBe("/pipes/workflow-discovery/enable");
-    fetchMock.mockReset();
-    fetchMock.mockResolvedValueOnce(response({ installed: false, enabled_override: false }));
+  it.each([{ installed: true }, { installed: false, enabled_override: null }, { installed: false, enabled_override: false }])("never enables on entry: %j", async (state) => {
+    fetchMock.mockResolvedValueOnce(response(state));
     await ensureWorkflowTask();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it("reads the actual enabled state and schedule", async () => {
+    fetchMock.mockResolvedValueOnce(response({ installed: false })).mockResolvedValueOnce(response({ data: { config: { enabled: false, title: "My discovery", schedule: "every 48h" } } }));
+    expect(await loadWorkflowTaskSetup()).toEqual({ enabled: false, title: "My discovery", schedule: "every 48h" });
+    expect(fetchMock).toHaveBeenLastCalledWith("/pipes/workflow-discovery", undefined);
+  });
+  it("enables only through the explicit action without starting a second runner", async () => {
+    fetchMock.mockResolvedValueOnce(response({ installed: false })).mockResolvedValueOnce(response({ success: true }));
+    await enableWorkflowTask();
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(["/pipes/bundled/workflow-discovery/install", "/pipes/workflow-discovery/enable"]);
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ enabled: true });
   });
   it("does not mistake an old saved catalog for a successful new run", async () => {
     fetchMock.mockResolvedValueOnce(response({ data: { id: 24, status: "completed", started_at: "2026-09-15T12:00:00Z" } }))
