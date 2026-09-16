@@ -399,18 +399,33 @@ label.result {
     margin: 40px auto;
   }
 }
-.videoPanel { margin: 24px 0; padding: 20px; background: var(--panel, #fff); border: 1px solid var(--line, #dfe1d9); border-radius: 10px; }
-.guideComposer { display: flex; gap: 8px; margin-bottom: 14px; }
-.guideComposer input { flex: 1; min-width: 0; padding: 10px; border: 0; background: transparent; color: inherit; font: inherit; }
-.videoScript { display: grid; gap: 16px; margin-top: 24px; }
-.videoScript h2, .videoScript p { margin: 0; }
-.videoScript p, .videoScript small { color: var(--muted, #777b70); }
-.videoScript label { display: grid; gap: 8px; }
-.videoScript label span { font-weight: 600; }
-.videoScript textarea { box-sizing: border-box; width: 100%; min-height: 90px; padding: 12px; resize: vertical; border: 1px solid var(--line, #dfe1d9); border-radius: 6px; background: var(--paper, #fafaf7); color: inherit; font: inherit; line-height: 1.5; }
-.videoScript .videoImages { display: flex; align-items: center; gap: 8px; }
-.videoScript > button { justify-self: start; }
-.videoProgress { display: flex; gap: 10px; align-items: center; margin-top: 16px; }
-.videoProgress span { flex: 1; }
-.videoPreview { margin-top: 20px; }
-.videoPreview video { width: 100%; border-radius: 8px; background: #20221d; margin-bottom: 12px; }
+.assistantPanel {
+  margin: 24px 0;
+  padding: 20px;
+  background: var(--panel, #fff);
+  border: 1px solid var(--line, #dfe1d9);
+  border-radius: 10px;
+}
+.guideComposer {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.guideComposer input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+.assistantProgress {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 16px;
+}
+.assistantProgress span {
+  flex: 1;
+}

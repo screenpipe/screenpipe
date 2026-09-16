@@ -41,31 +41,64 @@ export type WorkflowsPlatform = {
   getLatestAnalysisJob?: () => Promise<WorkflowAnalysisJob | null>;
   cancelAnalysisJob?: () => Promise<void>;
   /** Observe the existing harness. Does not start or enable a task. */
-  subscribeAnalysisActivity?: (jobId: string, onActivity: (items: WorkflowRunActivity[]) => void) => Promise<() => void>;
+  subscribeAnalysisActivity?: (
+    jobId: string,
+    onActivity: (items: WorkflowRunActivity[]) => void,
+  ) => Promise<() => void>;
   /** Local, on-demand media only. Never persist the returned URL or upload it. */
-  loadWorkflowRecording?: (timestamp: string, app: string) => Promise<WorkflowRecording | null>;
+  loadWorkflowRecording?: (
+    timestamp: string,
+    app: string,
+  ) => Promise<WorkflowRecording | null>;
   releaseWorkflowRecording?: (url: string) => Promise<void>;
   openCapturedMoment?: (frameId: number, timestamp: string) => Promise<void>;
   assistant?: WorkflowsAssistantPlatform;
   /** The host can discover context without uploaded sources. */
   contextDiscovery?: boolean;
-  fillContext?: (request: import("./context-tool").ContextFillRequest) => Promise<void>;
+  fillContext?: (
+    request: import("./context-tool").ContextFillRequest,
+  ) => Promise<void>;
   ensureRuntime: () => Promise<WorkflowRuntime>;
-  analyzeCapturedWork: (days: number, options?: WorkflowAnalysisOptions) => Promise<WorkflowAnalysis>;
-  loadCapturedWork?: (days: number, options?: WorkflowAnalysisOptions) => Promise<WorkflowAnalysis | null>;
-  saveCapturedWork?: (analysis: WorkflowAnalysis, options?: WorkflowAnalysisOptions) => Promise<void>;
-  startAnalysisJob?: (days: number, options?: WorkflowAnalysisOptions) => Promise<WorkflowAnalysisJob>;
+  analyzeCapturedWork: (
+    days: number,
+    options?: WorkflowAnalysisOptions,
+  ) => Promise<WorkflowAnalysis>;
+  loadCapturedWork?: (
+    days: number,
+    options?: WorkflowAnalysisOptions,
+  ) => Promise<WorkflowAnalysis | null>;
+  saveCapturedWork?: (
+    analysis: WorkflowAnalysis,
+    options?: WorkflowAnalysisOptions,
+  ) => Promise<void>;
+  startAnalysisJob?: (
+    days: number,
+    options?: WorkflowAnalysisOptions,
+  ) => Promise<WorkflowAnalysisJob>;
   getAnalysisJob?: (jobId: string) => Promise<WorkflowAnalysisJob>;
   loadWorkProfile?: (scope?: WorkflowScope) => Promise<WorkProfile | null>;
-  saveWorkProfile?: (profile: WorkProfile, scope?: WorkflowScope) => Promise<WorkProfile>;
+  saveWorkProfile?: (
+    profile: WorkProfile,
+    scope?: WorkflowScope,
+  ) => Promise<WorkProfile>;
   guides?: {
-    generate: (workflow: WorkflowMap, signal: AbortSignal, progress: (message: string) => void) => Promise<import("./guide").WorkflowGuide>;
-    load: (workflow: WorkflowMap) => Promise<import("./guide").WorkflowGuide | null>;
+    generate: (
+      workflow: WorkflowMap,
+      signal: AbortSignal,
+      progress: (message: string) => void,
+    ) => Promise<import("./guide").WorkflowGuide>;
+    load: (
+      workflow: WorkflowMap,
+    ) => Promise<import("./guide").WorkflowGuide | null>;
     save: (guide: import("./guide").WorkflowGuide) => Promise<void>;
-    edit?: (guide: WorkflowGuide, workflow: WorkflowMap, instruction: string, signal: AbortSignal, progress: (message: string) => void) => Promise<WorkflowGuide>;
-    video?: {
-      render: (guide: WorkflowGuide, workflow: WorkflowMap, images: boolean, signal: AbortSignal, progress: (message: string) => void) => Promise<{ url: string; export: () => Promise<boolean>; dispose: () => void }>;
-    };
+    edit?: (
+      guide: WorkflowGuide,
+      workflow: WorkflowMap,
+      instruction: string,
+      signal: AbortSignal,
+      progress: (message: string) => void,
+    ) => Promise<WorkflowGuide>;
+    openWeb?: (guide: WorkflowGuide) => Promise<void>;
     export: (html: string, title: string) => Promise<boolean>;
   };
   generateWorkflowSkill?: (
@@ -73,7 +106,9 @@ export type WorkflowsPlatform = {
     profile?: WorkProfile | null,
     onProgress?: (progress: WorkflowSkillProgress) => void,
   ) => Promise<WorkflowSkillDraft>;
-  saveWorkflowSkill?: (draft: WorkflowSkillDraft) => Promise<SavedWorkflowSkill>;
+  saveWorkflowSkill?: (
+    draft: WorkflowSkillDraft,
+  ) => Promise<SavedWorkflowSkill>;
   skillInstallMode?: "local" | "preview";
   openAccount?: () => Promise<void>;
   startWindowDrag?: () => Promise<void> | void;
@@ -98,7 +133,9 @@ export type WorkflowsAppProps = {
   active?: boolean;
   /** Native fullscreen state supplied by the host window. */
   fullscreen?: boolean;
-  navigationFooter?: (actions: { openKeyboardShortcuts: () => void }) => import("react").ReactNode;
+  navigationFooter?: (actions: {
+    openKeyboardShortcuts: () => void;
+  }) => import("react").ReactNode;
   navigationBrand?: import("react").ReactNode;
   composerAccessory?: import("./assistant").WorkflowComposerAccessory;
   /** Open the host sharing review; clicking must not send the workflow. */

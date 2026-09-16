@@ -2,12 +2,18 @@
 // https://screenpipe.com
 import { it, expect, vi, beforeEach } from "vitest";
 const mocks = vi.hoisted(() => ({
+  token: vi.fn(),
+  open: vi.fn(),
   run: vi.fn(),
   load: vi.fn(),
   save: vi.fn(),
   dialog: vi.fn(),
   write: vi.fn(),
 }));
+vi.mock("@/lib/utils/tauri", () => ({
+  commands: { getCloudToken: mocks.token },
+}));
+vi.mock("@tauri-apps/plugin-shell", () => ({ open: mocks.open }));
 vi.mock("./agent-runner", () => ({ runWorkflowAgent: mocks.run }));
 vi.mock("./assistant", () => ({
   assistantProviderConfig: { provider: "screenpipe-cloud", model: "auto" },
@@ -71,4 +77,45 @@ it("does not write when the native export dialog is cancelled", async () => {
   mocks.dialog.mockResolvedValue("/selected/guide.html");
   expect(await desktopGuides.export("html", "Title")).toBe(true);
   expect(mocks.write).toHaveBeenCalledWith("/selected/guide.html", "html");
+});
+
+it("uploads only reviewed SOP text with existing authentication", async () => {
+  mocks.token.mockResolvedValue("test-token");
+  const id = "12345678-1234-1234-1234-123456789abc";
+  const fetcher = vi
+    .fn()
+    .mockResolvedValue(new Response(JSON.stringify({ id }), { status: 201 }));
+  vi.stubGlobal("fetch", fetcher);
+  try {
+    await desktopGuides.openWeb!(guide as any);
+    const request = fetcher.mock.calls[0][1];
+    expect(request.headers.Authorization).toBe("Bearer test-token");
+    const payload = JSON.parse(request.body);
+    expect(Object.keys(payload).sort()).toEqual([
+      "content",
+      "title",
+      "workflowKey",
+    ]);
+    expect(payload.content).toContain("Read sources");
+    expect(mocks.open).toHaveBeenCalledWith(
+      `https://screenpipe.com/sops/${id}`,
+    );
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+it("keeps the local draft when hosting is unavailable", async () => {
+  mocks.token.mockResolvedValue("test-token");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(new Response("", { status: 503 })),
+  );
+  try {
+    await expect(desktopGuides.openWeb!(guide as any)).rejects.toThrow(
+      "saved on this device",
+    );
+    expect(mocks.open).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

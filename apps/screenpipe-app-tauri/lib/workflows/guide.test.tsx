@@ -126,7 +126,7 @@ describe("guide editor", () => {
     );
     await screen.findByRole("heading", { name: "Research guide" });
     expect(platform.generate).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Edit guide" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit SOP" }));
     fireEvent.change(screen.getByLabelText("Guide title"), {
       target: { value: "Team research handbook" },
     });
@@ -227,29 +227,55 @@ describe("guide editor", () => {
   });
 });
 
-describe('guide assistant and video', () => {
-  it('autosaves narration edits and explicitly opts in to screenshots', async () => {
-    const save = vi.fn().mockResolvedValue(undefined);
-    const renderVideo = vi.fn().mockRejectedValue(new Error('Narration unavailable'));
-    render(<WorkflowGuide workflow={workflow} close={() => {}} platform={{ load: async () => guide, generate: vi.fn(), save, export: vi.fn(), video: { render: renderVideo } }} />);
-    fireEvent.click(await screen.findByText('Create a short video'));
-    fireEvent.change(screen.getByLabelText('Scene 1 narration'), { target: { value: 'Open the brief.' } });
-    await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ steps: expect.arrayContaining([expect.objectContaining({ narration: 'Open the brief.' })]) })));
-    fireEvent.click(screen.getByText('Create video'));
-    await screen.findByText('Narration unavailable');
-    expect(renderVideo.mock.calls[0][2]).toBe(false);
-    expect(screen.getByLabelText('Scene 1 narration')).toHaveValue('Open the brief.');
+describe("SOP assistant and web editor", () => {
+  it("requires review before sending SOP text to the web editor", async () => {
+    const openWeb = vi.fn().mockResolvedValue(undefined);
+    render(
+      <WorkflowGuide
+        workflow={workflow}
+        close={() => {}}
+        platform={{
+          load: async () => guide,
+          generate: vi.fn(),
+          save: vi.fn(),
+          export: vi.fn(),
+          openWeb,
+        }}
+      />,
+    );
+    fireEvent.click(await screen.findByText("Open web editor"));
+    expect(openWeb).not.toHaveBeenCalled();
+    expect(screen.queryByText("Create a short video")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Continue to web editor"));
+    await waitFor(() => expect(openWeb).toHaveBeenCalledWith(guide));
   });
-  it('edits with the existing harness adapter and cancels an in-flight edit', async () => {
+  it("edits with the existing harness adapter and cancels an in-flight edit", async () => {
     let signal: AbortSignal | undefined;
-    const edit = vi.fn((_g, _w, _q, s) => { signal = s; return new Promise<Guide>(() => {}); });
-    render(<WorkflowGuide workflow={workflow} close={() => {}} platform={{ load: async () => guide, generate: vi.fn(), save: vi.fn(), export: vi.fn(), edit }} />);
-    const input = await screen.findByLabelText('Ask Screenpipe to edit the guide');
-    fireEvent.change(input, { target: { value: 'Make it shorter' } });
-    fireEvent.click(screen.getByLabelText('Edit with Screenpipe'));
-    expect(edit.mock.calls[0][2]).toBe('Make it shorter');
-    fireEvent.click(screen.getByText('Stop'));
+    const edit = vi.fn((_g, _w, _q, s) => {
+      signal = s;
+      return new Promise<Guide>(() => {});
+    });
+    render(
+      <WorkflowGuide
+        workflow={workflow}
+        close={() => {}}
+        platform={{
+          load: async () => guide,
+          generate: vi.fn(),
+          save: vi.fn(),
+          export: vi.fn(),
+          edit,
+        }}
+      />,
+    );
+    const input = await screen.findByLabelText(
+      "Ask Screenpipe to edit the SOP",
+    );
+    fireEvent.change(input, { target: { value: "Make it shorter" } });
+    fireEvent.click(screen.getByLabelText("Edit with Screenpipe"));
+    expect(edit.mock.calls[0][2]).toBe("Make it shorter");
+    fireEvent.click(screen.getByText("Stop"));
     expect(signal?.aborted).toBe(true);
-    expect(screen.getByText('Stopped. Your guide is saved.')).toBeInTheDocument();
+    expect(screen.getByText("Stopped. Your SOP is saved.")).toBeInTheDocument();
   });
 });

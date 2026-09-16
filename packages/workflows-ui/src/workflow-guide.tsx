@@ -9,6 +9,7 @@ import {
   BookOpen,
   Check,
   Download,
+  ExternalLink,
   ImageOff,
   Loader2,
   Pencil,
@@ -19,7 +20,7 @@ import {
 import type { WorkflowMap } from "./model";
 import type { WorkflowsPlatform } from "./platform";
 import { guideHtml, guideImage, type WorkflowGuide as Guide } from "./guide";
-import { GuideVideo } from "./guide-video";
+import { GuideAssistant } from "./guide-assistant";
 import styles from "./workflow-guide.module.css";
 
 export function WorkflowGuide({
@@ -33,12 +34,15 @@ export function WorkflowGuide({
 }) {
   const [draft, setDraft] = useState<Guide | null>(null);
   const [busy, setBusy] = useState(true);
-  const [progress, setProgress] = useState("Opening your guide");
+  const [progress, setProgress] = useState("Opening your SOP");
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
   const [editing, setEditing] = useState(false);
   const [images, setImages] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [openingWeb, setOpeningWeb] = useState(false);
+  const [webReview, setWebReview] = useState(false);
+  const [webError, setWebError] = useState("");
   const [exportError, setExportError] = useState("");
   const dialog = useRef<HTMLDialogElement>(null);
   const controller = useRef<AbortController>();
@@ -81,7 +85,7 @@ export function WorkflowGuide({
         setError(
           e instanceof Error
             ? e.message
-            : "Could not create the guide. Try again.",
+            : "Could not create the SOP. Try again.",
         );
     } finally {
       if (!run.signal.aborted) setBusy(false);
@@ -91,7 +95,7 @@ export function WorkflowGuide({
     const version = ++loadVersion.current;
     setBusy(true);
     setError("");
-    setProgress("Opening your guide");
+    setProgress("Opening your SOP");
     try {
       const existing = await platform.load(workflow);
       if (version !== loadVersion.current) return;
@@ -180,12 +184,23 @@ export function WorkflowGuide({
           )}
           {draft && (
             <>
+              {platform.openWeb && (
+                <button
+                  className={styles.primary}
+                  onClick={() => {
+                    setWebReview(true);
+                    setWebError("");
+                  }}
+                >
+                  <ExternalLink size={15} />
+                  Open web editor
+                </button>
+              )}
               <button onClick={() => setEditing(!editing)}>
                 {editing ? <Check size={15} /> : <Pencil size={15} />}
-                {editing ? "Done editing" : "Edit guide"}
+                {editing ? "Done editing" : "Edit SOP"}
               </button>
               <button
-                className={styles.primary}
                 onClick={() => {
                   setImages(false);
                   setExportError("");
@@ -193,12 +208,45 @@ export function WorkflowGuide({
                 }}
               >
                 <Download size={15} />
-                Export guide
+                Export SOP
               </button>
             </>
           )}
         </div>
       </header>
+      {draft && webReview && (
+        <section className={styles.section} aria-label="Open SOP on the web">
+          <h2>Open your SOP on the web</h2>
+          <p>
+            Save the reviewed SOP text to your Screenpipe account to edit and
+            share it. Recordings and screenshots stay on this device. Existing
+            web edits are preserved when you reopen.
+          </p>
+          {webError && <p role="alert">{webError}</p>}
+          <button
+            disabled={openingWeb}
+            onClick={async () => {
+              setOpeningWeb(true);
+              setWebError("");
+              try {
+                await platform.openWeb?.(draft);
+                setWebReview(false);
+              } catch (e) {
+                setWebError(
+                  e instanceof Error ? e.message : "Could not open SOP",
+                );
+              } finally {
+                setOpeningWeb(false);
+              }
+            }}
+          >
+            {openingWeb ? "Opening…" : "Continue to web editor"}
+          </button>
+          <button disabled={openingWeb} onClick={() => setWebReview(false)}>
+            Cancel
+          </button>
+        </section>
+      )}
       {!draft ? (
         <div className={styles.empty}>
           <div className={styles.mark}>
@@ -208,11 +256,11 @@ export function WorkflowGuide({
               <BookOpen size={25} />
             )}
           </div>
-          <p className={styles.eyebrow}>WORKFLOW GUIDE</p>
+          <p className={styles.eyebrow}>STANDARD OPERATING PROCEDURE</p>
           <h1>
             {busy
-              ? "Turning your work into a guide"
-              : "Your guide needs another try"}
+              ? "Turning your work into an SOP"
+              : "Your SOP needs another try"}
           </h1>
           <p>{workflow.title}</p>
           {busy ? (
@@ -277,7 +325,7 @@ export function WorkflowGuide({
           <article className={styles.document}>
             <div className={styles.intro}>
               <p className={styles.eyebrow}>
-                WORKFLOW GUIDE <span>Draft for review</span>
+                STANDARD OPERATING PROCEDURE <span>Draft for review</span>
               </p>
               {editing ? (
                 <>
@@ -307,12 +355,19 @@ export function WorkflowGuide({
                 {draft.sourceRevision}
               </small>
             </div>
-            {(platform.edit || platform.video) && <GuideVideo guide={draft} workflow={workflow} platform={platform} update={update} />}
+            {platform.edit && (
+              <GuideAssistant
+                guide={draft}
+                workflow={workflow}
+                platform={platform}
+                update={update}
+              />
+            )}
             {stale && (
               <p className={styles.notice}>
-                This workflow has changed since the guide was drafted. Your
-                edits are preserved. Screenshots are unavailable until the guide
-                is reconciled with the new revision.
+                This workflow has changed since the SOP was drafted. Your edits
+                are preserved. Screenshots are unavailable until the SOP is
+                reconciled with the new revision.
               </p>
             )}
             {lines(
@@ -526,7 +581,7 @@ export function WorkflowGuide({
       )}
       <dialog ref={dialog} className={styles.exportDialog}>
         <div>
-          <h2>Export your guide</h2>
+          <h2>Export your SOP</h2>
           <button
             aria-label="Close export"
             onClick={() => dialog.current?.close()}

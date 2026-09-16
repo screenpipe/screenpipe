@@ -255,7 +255,7 @@ static REQUIRED_PI_PACKAGE_INSTALL_LOCK: std::sync::OnceLock<Mutex<()>> =
 static PI_EXTENSION_SAFE_MODE_PROJECTS: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
     std::sync::OnceLock::new();
 
-const MANAGED_PI_EXTENSION_FILES: [&str; 9] = [
+const MANAGED_PI_EXTENSION_FILES: [&str; 8] = [
     "web-search.ts",
     "mcp-bridge.ts",
     "save-artifact.ts",
@@ -264,7 +264,6 @@ const MANAGED_PI_EXTENSION_FILES: [&str; 9] = [
     "context-pruning.ts",
     "work-context.ts",
     "workflow-feedback.ts",
-    "guide-video.ts",
 ];
 
 fn extension_safe_mode_projects() -> &'static std::sync::Mutex<HashSet<String>> {
@@ -920,10 +919,10 @@ pub struct PiManager {
     release_when_idle: bool,
 }
 
-/// Terminate the owned agent process group, including tool subprocesses.
-/// ACP first gets its graceful-shutdown window; native Pi tools also need
-/// process-tree cleanup when Stop or a forced shutdown kills their parent.
-fn terminate_agent_process_tree(pid: u32) {
+/// Terminate the process group rooted at the hidden ACP runtime. The runtime
+/// normally shuts its adapter and terminals down on stdin EOF; this is the
+/// final safety net for wedged or unexpectedly terminated harnesses.
+fn terminate_acp_process_tree(pid: u32) {
     #[cfg(unix)]
     {
         let process_group = -(pid as i32);
@@ -1030,7 +1029,7 @@ impl PiManager {
         self.queue_handle = None;
 
         if let Some(mut child) = self.child.take() {
-            let mut process_tree_owned = true;
+            let mut acp_tree_owned = self.is_acp;
             // Send abort command before killing
             if let Some(ref mut stdin) = self.stdin {
                 let _ = writeln!(stdin, r#"{{"type":"abort"}}"#);
@@ -1049,24 +1048,24 @@ impl PiManager {
                             // `try_wait` reaped the runtime. Its internal Unix
                             // group guards / Windows root Job own descendant
                             // cleanup; a numeric PID is no longer ours to use.
-                            process_tree_owned = false;
+                            acp_tree_owned = false;
                             break;
                         }
                         Ok(None) => tokio::time::sleep(std::time::Duration::from_millis(25)).await,
                         Err(error) => {
                             warn!("Failed to check ACP runtime during shutdown: {}", error);
-                            process_tree_owned = false;
+                            acp_tree_owned = false;
                             break;
                         }
                     }
                 }
             }
 
-            if process_tree_owned {
+            if acp_tree_owned {
                 // No other task owns or waits on this Child. If it exits after
                 // the last `None`, it remains our unreaped zombie and pins the
                 // PID/PGID until this identity-safe group kill completes.
-                terminate_agent_process_tree(child.id());
+                terminate_acp_process_tree(child.id());
             }
 
             if child.try_wait().ok().flatten().is_none() {
@@ -1840,14 +1839,6 @@ const SHARED_PI_EXTENSION_FILES: &[&str] = &[
     "live-views.ts",
     "connection-gate.ts",
 ];
-
-fn ensure_guide_video_extension(project_dir: &str) -> Result<(), String> {
-    let ext_dir = std::path::Path::new(project_dir).join(".pi").join("extensions");
-    std::fs::create_dir_all(&ext_dir).map_err(|e| e.to_string())?;
-    std::fs::write(ext_dir.join("guide-video.ts"),
-        include_str!("../../../../packages/workflows-ui/src/guide-video-tool.ts"))
-        .map_err(|e| format!("Failed to install guide video tool: {}", e))
-}
 
 fn ensure_workflow_feedback_extension(project_dir: &str) -> Result<(), String> {
     let ext_dir = std::path::Path::new(project_dir).join(".pi").join("extensions");
@@ -2966,10 +2957,6 @@ pub async fn pi_start_inner(
             .is_some_and(|tools| tools.iter().any(|tool| tool == "refine_workflow")) {
             ensure_workflow_feedback_extension(&project_dir)?;
         }
-        if provider_config.as_ref().and_then(|config| config.allowed_tools.as_ref())
-            .is_some_and(|tools| tools.iter().any(|tool| tool == "render_guide_video")) {
-            ensure_guide_video_extension(&project_dir)?;
-        }
         // The form tool has a receiver only in explicitly scoped Context runs.
         if provider_config.as_ref().and_then(|config| config.allowed_tools.as_ref())
             .is_some_and(|tools| tools.iter().any(|tool| tool == "fill_work_context")) {
@@ -3266,10 +3253,11 @@ pub async fn pi_start_inner(
         );
     }
 
-    // Every agent owns a process group, including native Pi tools such as
-    // FFmpeg. Stop must terminate their children, not only the agent process.
+    // Isolate the hidden runtime from the desktop process group. The runtime
+    // supervises its adapter and terminals in their own groups and reports
+    // those PIDs back to this reader as an additional crash-cleanup backstop.
     #[cfg(unix)]
-    {
+    if use_acp {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
@@ -3588,10 +3576,6 @@ pub async fn pi_start_inner(
         if let Some(ref token) = user_token {
             cmd.env("SCREENPIPE_API_KEY", token);
         }
-    }
-
-    if let Some(ffmpeg) = screenpipe_core::find_ffmpeg_path() {
-        cmd.env("SCREENPIPE_FFMPEG_PATH", ffmpeg);
     }
 
     // Pass local API config so the Pi agent can authenticate to the runtime local API.
@@ -5089,7 +5073,7 @@ pub async fn pi_acp_probe_agent(app: AppHandle, agent: AcpAgentConfig) -> Result
     drop(child.stdin.take());
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await;
     if let Some(pid) = child.id() {
-        terminate_agent_process_tree(pid);
+        terminate_acp_process_tree(pid);
     }
     let _ = child.start_kill();
 
@@ -7863,39 +7847,11 @@ error: InstallFailed extracting tarball"#;
     }
 
     #[test]
-    #[cfg(unix)]
-    fn test_agent_stop_terminates_tool_process_group() {
-        use std::os::unix::process::CommandExt;
-        use std::io::{BufRead, Read};
-        let mut child = Command::new("sh")
-            .args(["-c", "sleep 30 & echo ready; wait"])
-            .process_group(0)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn().unwrap();
-        let mut output = std::io::BufReader::new(child.stdout.take().unwrap());
-        let mut ready = String::new();
-        output.read_line(&mut ready).unwrap();
-        assert_eq!(ready.trim(), "ready");
-        let (send, receive) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let mut rest = Vec::new();
-            let _ = output.read_to_end(&mut rest);
-            let _ = send.send(());
-        });
-        super::terminate_agent_process_tree(child.id());
-        let _ = child.wait();
-        assert!(receive.recv_timeout(std::time::Duration::from_secs(2)).is_ok(),
-            "a tool child kept the agent output pipe open after Stop");
-    }
-
-    #[test]
     fn test_extension_safe_mode_loads_only_managed_project_extensions() {
         let temp = tempfile::tempdir().unwrap();
         let extension_dir = temp.path().join(".pi").join("extensions");
         std::fs::create_dir_all(&extension_dir).unwrap();
         super::ensure_workflow_feedback_extension(temp.path().to_str().unwrap()).unwrap();
-        super::ensure_guide_video_extension(temp.path().to_str().unwrap()).unwrap();
         let header = "// screenpipe — AI that knows everything you've seen, said, or heard\n";
         std::fs::write(extension_dir.join("mcp-bridge.ts"), header).unwrap();
         std::fs::write(extension_dir.join("live-views.ts"), header).unwrap();
@@ -7910,12 +7866,11 @@ error: InstallFailed extracting tarball"#;
             .collect::<Vec<_>>();
 
         assert_eq!(args[0], "--no-extensions");
-        assert_eq!(args.iter().filter(|arg| *arg == "--extension").count(), 5);
+        assert_eq!(args.iter().filter(|arg| *arg == "--extension").count(), 4);
         assert!(args.iter().any(|arg| arg.ends_with("mcp-bridge.ts")));
         assert!(args.iter().any(|arg| arg.ends_with("live-views.ts")));
         assert!(args.iter().any(|arg| arg.ends_with("context-pruning.ts")));
         assert!(args.iter().any(|arg| arg.ends_with("workflow-feedback.ts")));
-        assert!(args.iter().any(|arg| arg.ends_with("guide-video.ts")));
         assert!(!args.iter().any(|arg| arg.ends_with("third-party.ts")));
     }
 
