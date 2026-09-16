@@ -39,7 +39,7 @@ async def main():
                     result=await response.json()
                     print('live_create_status',response.status,flush=True)
                     if response.status != 201:
-                        print('safe_error_code',result.get('error',{}).get('code'),flush=True)
+                        print('safe_error',json.dumps(result.get('error',{})),flush=True)
                         raise RuntimeError('live_create_failed')
                 call_id=result['session']['id']
                 await pc.setRemoteDescription(RTCSessionDescription(sdp=result['transport']['sdp'],type='answer'))
@@ -47,11 +47,14 @@ async def main():
                 print('live_session_started',True,flush=True)
         finally:
             await pc.close()
-            if call_id:
-                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=12)) as http:
-                    async with http.delete('http://127.0.0.1:8791/v1/admin/studio-voice',headers={'Authorization':'Bearer '+token},json={'call_id':call_id}) as response:
-                        print('live_cleanup_status',response.status,flush=True)
-            os.killpg(process.pid,signal.SIGTERM)
+            try:
+                if call_id:
+                    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=12)) as http:
+                        async with http.delete('http://127.0.0.1:8791/v1/admin/studio-voice',headers={'Authorization':'Bearer '+token},json={'call_id':call_id}) as response:
+                            print('live_cleanup_status',response.status,flush=True)
+            except Exception:
+                print('live_cleanup_failed',True,flush=True)
+            if process.poll() is None: os.killpg(process.pid,signal.SIGTERM)
             try: process.wait(timeout=10)
             except subprocess.TimeoutExpired: os.killpg(process.pid,signal.SIGKILL); process.wait()
             logs.seek(0)

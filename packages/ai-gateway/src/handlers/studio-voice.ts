@@ -38,7 +38,7 @@ export async function handleStudioVoice(request: Request, env: Env): Promise<Res
 	try { body = await boundedJson(request.body); } catch { return failure(400, 'invalid_voice_request'); }
 	const closing = request.method === 'DELETE';
 	const actor = request.headers.get('OpenAI-Safety-Identifier') || '';
-	if (closing ? !CALL_ID.test(body?.call_id || '') : (!ACTOR_ID.test(actor) || body?.session?.model !== 'gpt-live-1' || body?.session?.store !== false || body?.session?.delegation?.type !== 'client' || body?.transport?.type !== 'webrtc' || typeof body?.transport?.sdp !== 'string' || !body.transport.sdp.startsWith('v=0') || typeof body?.session?.instructions !== 'string' || body.session.instructions.length > 16000)) return failure(400, 'invalid_voice_request');
+	if (closing ? (typeof body?.call_id !== 'string' || !CALL_ID.test(body.call_id)) : (!ACTOR_ID.test(actor) || body?.session?.model !== 'gpt-live-1' || body?.session?.store !== false || body?.session?.delegation?.type !== 'client' || body?.transport?.type !== 'webrtc' || typeof body?.transport?.sdp !== 'string' || !body.transport.sdp.startsWith('v=0') || typeof body?.session?.instructions !== 'string' || body.session.instructions.length > 16000)) return failure(400, 'invalid_voice_request');
 	try {
 		const connection = await getHostedChatGatewayConnection(env, 'openai', { user_id: closing ? 'studio-voice-cleanup' : actor, plan: 'internal', lane: 'explicit', workload: 'interactive', trial: false });
 		const headers = new Headers({ 'Content-Type': 'application/json', 'cf-aig-skip-cache': 'true' });
@@ -52,12 +52,18 @@ export async function handleStudioVoice(request: Request, env: Env): Promise<Res
 			return response.ok || response.status === 404 || response.status === 410 ? new Response(null, { status: 204 }) : failure(502, 'voice_cleanup_failed');
 		}
 		if (!response.ok) {
-			await response.body?.cancel().catch(() => {});
-			console.error('[studio-voice] Provider rejected connection', response.status);
-			return failure(response.status === 429 ? 429 : 503, 'voice_provider_unavailable');
+			let upstream: any = {};
+			try { upstream = await boundedJson(response.body); } catch {}
+			const code = upstream?.error?.code;
+			return Response.json({ error: { code: 'voice_provider_unavailable', upstream_status: response.status, provider_code: typeof code === 'string' && /^[a-zA-Z0-9_]{1,80}$/.test(code) ? code : undefined } }, { status: response.status === 429 ? 429 : 503, headers: { 'Cache-Control': 'no-store' } });
 		}
 		const result = await boundedJson(response.body);
-		if (!CALL_ID.test(result?.session?.id || '') || result?.transport?.type !== 'webrtc' || typeof result?.transport?.sdp !== 'string') return failure(502, 'voice_invalid_response');
+		if (typeof result?.session?.id !== 'string' || !CALL_ID.test(result.session.id)) return failure(502, 'voice_invalid_response');
+		if (result?.transport?.type !== 'webrtc' || typeof result?.transport?.sdp !== 'string' || !result.transport.sdp.startsWith('v=0')) {
+			const cleanup = await fetch(`${connection.baseURL.replace(/\/$/, '')}/live/sessions/${result.session.id}/hangup`, { method: 'POST', headers, signal: AbortSignal.timeout(7000) });
+			await cleanup.body?.cancel().catch(() => {});
+			return failure(502, 'voice_invalid_response');
+		}
 		return Response.json({ session: { id: result.session.id }, transport: { type: 'webrtc', sdp: result.transport.sdp } }, { status: 201, headers: { 'Cache-Control': 'no-store' } });
 	} catch {
 		return failure(503, 'voice_gateway_unavailable');
