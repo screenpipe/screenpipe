@@ -17,6 +17,7 @@ import {
 	resolveModelGate,
 } from './services/usage-tracker';
 import { handleChatCompletions } from './handlers/chat';
+import { autoRouteScope } from './services/auto-route';
 import { handleStudioVoice } from './handlers/studio-voice';
 import { handleModelListing } from './handlers/models';
 import { handleFileTranscription, handleABTestAdmin } from './handlers/transcription';
@@ -604,6 +605,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						freePreview: freeChat.mode === 'metered',
 						efficientOnly: getHostedAiPlan(authResult.accountPlan) !== 'business',
 						gatewayContext,
+						autoRouteScope: autoRouteScope(request, authResult.userId),
 						backgroundFallback: shouldEnableBackgroundFallback(request, authResult),
 						safetyRefusalFallback: shouldEnableSafetyRefusalFallback(request, authResult),
 					},

@@ -4,6 +4,8 @@
 
 import { afterEach, describe, expect, test } from 'bun:test';
 import { LOCAL_GATEWAY_DEVICE_ID, LocalGatewayHarness } from './local-gateway-harness';
+import { AUTO_ROUTE_PATH } from '../services/auto-route';
+import { AUTO_WATERFALL } from '../handlers/chat';
 
 const activeHarnesses: LocalGatewayHarness[] = [];
 
@@ -18,6 +20,26 @@ afterEach(async () => {
 });
 
 describe('local AI gateway harness', () => {
+	test('retains Auto decisions and monotonic fallback in the real Durable Object runtime', async () => {
+		const harness = await startHarness({ routerMode: 'heuristic' });
+		const object = await harness.rateLimiterObject('synthetic-auto-turn');
+		const call = async (body: unknown) => {
+			const response = await object.fetch(`https://auto-route.internal${AUTO_ROUTE_PATH}`, {
+				method: 'POST', body: JSON.stringify(body),
+			});
+			expect(response.status).toBe(200);
+			return response.json() as Promise<{ chain: string[]; index: number }>;
+		};
+		const initial = { chain: AUTO_WATERFALL, classify: true, text: 'debug this stack trace and explain the root cause', hasTools: true, continuation: false };
+		const first = await Promise.all([call(initial), call(initial)]);
+		expect(first.map((route) => route.chain[route.index])).toEqual(['gpt-5.6-sol', 'gpt-5.6-sol']);
+		await call({ model: 'gpt-5.6-luna' });
+		const stale = await call({ model: 'gpt-5.6-sol' });
+		expect(stale.chain[stale.index]).toBe('gpt-5.6-luna');
+		const continuation = await call({ ...initial, continuation: true });
+		expect(continuation.chain[continuation.index]).toBe('gpt-5.6-luna');
+		harness.assertNoUnexpectedOutboundRequests();
+	});
 	test('runs the real Worker with migrated D1 and a network-closed fake provider', async () => {
 		const harness = await startHarness({ providerReply: 'local gateway integration ok' });
 

@@ -24,6 +24,7 @@ export interface LocalGatewayHarnessOptions {
 	providerReply?: string;
 	cloudflareSpendRules?: boolean;
 	ttsStatus?: number;
+	routerMode?: 'off' | 'heuristic';
 }
 
 export interface LocalGatewayOutboundRequest {
@@ -192,7 +193,7 @@ export class LocalGatewayHarness {
 					AI_GATEWAY_SERVICE_TOKEN: LOCAL_GATEWAY_SERVICE_TOKEN,
 					MODEL_GATING_ENABLED: 'true',
 					PIPE_FRONTIER_POLICY: 'reject',
-					ROUTER_MODE: 'off',
+					ROUTER_MODE: options.routerMode ?? 'off',
 					CLOUDFLARE_AI_GATEWAY_ID: cloudflareGatewayId,
 					CLOUDFLARE_AI_GATEWAY_BASE_URL: `${cloudflareGatewayRoot}/compat/chat/completions`,
 					CLOUDFLARE_AI_GATEWAY_TOKEN: 'screenpipe-local-e2e-gateway-token',
@@ -400,6 +401,11 @@ export class LocalGatewayHarness {
 					.join(', ')}`,
 			);
 		}
+	}
+
+	async rateLimiterObject(name: string) {
+		const namespace = await this.runtime.getDurableObjectNamespace('RATE_LIMITER');
+		return namespace.get(namespace.idFromName(name));
 	}
 
 	async dispose(): Promise<void> {

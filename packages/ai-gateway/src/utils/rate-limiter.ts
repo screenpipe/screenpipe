@@ -5,6 +5,7 @@
 import { createErrorResponse } from './cors';
 import { Env, UsageTier, AuthResult } from '../types';
 import { getTierConfig } from '../services/usage-tracker';
+import { AUTO_ROUTE_PATH, AutoRouteState } from '../services/auto-route';
 import {
   CLERK_STANDING_STORAGE_KEY,
   ClerkStandingLookupError,
@@ -50,11 +51,13 @@ export class RateLimiter {
   private standingLookup: Promise<ClerkStandingRecord> | null = null;
   private standingLookupUserId: string | null = null;
   private lookupPermitQueue: Promise<void> = Promise.resolve();
+  private autoRoute: AutoRouteState;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
     this.requests = new Map();
+    this.autoRoute = new AutoRouteState(state.storage, env);
   }
 
   private getStandingRecord(userId: string): Promise<ClerkStandingRecord | null> {
@@ -170,6 +173,8 @@ export class RateLimiter {
     const url = new URL(request.url);
     const now = Date.now();
 
+    if (url.pathname === AUTO_ROUTE_PATH) return this.autoRoute.fetch(request);
+
     if (url.pathname === CLERK_LOOKUP_PERMIT_PATH) {
       if (request.method !== 'POST') {
         return new Response(null, { status: 405, headers: { Allow: 'POST' } });
@@ -247,6 +252,10 @@ export class RateLimiter {
         rpm_limit: effectiveRpm,
       })
     );
+  }
+
+  async alarm() {
+    await this.autoRoute.alarm();
   }
 }
 
