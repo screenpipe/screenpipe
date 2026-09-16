@@ -3,7 +3,6 @@
 
 import { timingSafeEqual } from 'node:crypto';
 import type { Env } from '../types';
-import { getHostedChatGatewayConnection } from '../services/cloudflare-ai-gateway';
 
 const MAX_BYTES = 65536;
 const CALL_ID = /^[a-zA-Z0-9_-]{1,200}$/;
@@ -40,9 +39,12 @@ export async function handleStudioVoice(request: Request, env: Env): Promise<Res
 	const actor = request.headers.get('OpenAI-Safety-Identifier') || '';
 	if (closing ? (typeof body?.call_id !== 'string' || !CALL_ID.test(body.call_id)) : (!ACTOR_ID.test(actor) || body?.session?.model !== 'gpt-live-1' || body?.session?.store !== false || body?.session?.delegation?.type !== 'client' || body?.transport?.type !== 'webrtc' || typeof body?.transport?.sdp !== 'string' || !body.transport.sdp.startsWith('v=0') || typeof body?.session?.instructions !== 'string' || body.session.instructions.length > 16000)) return failure(400, 'invalid_voice_request');
 	try {
-		const connection = await getHostedChatGatewayConnection(env, 'openai', { user_id: closing ? 'studio-voice-cleanup' : actor, plan: 'internal', lane: 'explicit', workload: 'interactive', trial: false });
-		const headers = new Headers({ 'Content-Type': 'application/json', 'cf-aig-skip-cache': 'true' });
-		for (const [name, value] of Object.entries(connection.defaultHeaders)) if (value !== null) headers.set(name, value);
+		// Cloudflare's provider-native proxy returns 404 for /live/sessions.
+		// Keep Live inside Screenpipe's authenticated gateway, using its existing backend key.
+		// Studio enforces six starts/hour and a 120-second call lifetime; never fall back/retry creation.
+		if (!env.OPENAI_API_KEY?.trim()) return failure(503, 'voice_provider_not_configured');
+		const connection = { baseURL: 'https://api.openai.com/v1' };
+		const headers = new Headers({ 'Content-Type': 'application/json', Authorization: `Bearer ${env.OPENAI_API_KEY.trim()}` });
 		if (!closing) headers.set('OpenAI-Safety-Identifier', actor);
 		// Only reviewed Live fields may reach the provider; never proxy arbitrary tools or URLs.
 		const session = closing ? undefined : { model: 'gpt-live-1', store: false, delegation: { type: 'client' }, client: { data_channel: { allowed_client_events: ['session.commentary.append', 'session.thinking.append', 'session.close'] } }, audio: { output: { voice: 'marin' } }, instructions: body.session.instructions };
