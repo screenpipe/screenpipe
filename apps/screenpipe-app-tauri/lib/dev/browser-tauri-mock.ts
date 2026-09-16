@@ -653,6 +653,8 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
     }
 
     switch (command) {
+      case "get_env":
+        return options.mode === "mock" && input.name === "SCREENPIPE_STARTUP_AUTHENTICATION_STATUS" ? "authenticated" : "";
       case "get_onboarding_status":
         return {
           isCompleted: true, completedAt: "2026-09-01T12:00:00Z",

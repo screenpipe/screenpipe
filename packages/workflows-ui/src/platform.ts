@@ -18,6 +18,12 @@ export type WorkflowAnalysisOptions = {
   workProfile?: WorkProfile | null;
 };
 
+export type WorkflowRunActivity = {
+  id: string;
+  label: string;
+  status: "running" | "complete" | "error";
+};
+
 export type WorkflowAnalysisJob = {
   id: string;
   status: "queued" | "processing" | "complete" | "failed";
@@ -33,6 +39,8 @@ export type WorkflowsPlatform = {
   ensureAnalysisTask?: () => Promise<void>;
   getLatestAnalysisJob?: () => Promise<WorkflowAnalysisJob | null>;
   cancelAnalysisJob?: () => Promise<void>;
+  /** Observe the existing harness. Does not start or enable a task. */
+  subscribeAnalysisActivity?: (jobId: string, onActivity: (items: WorkflowRunActivity[]) => void) => Promise<() => void>;
   /** Local, on-demand media only. Never persist the returned URL or upload it. */
   loadWorkflowRecording?: (timestamp: string, app: string) => Promise<WorkflowRecording | null>;
   releaseWorkflowRecording?: (url: string) => Promise<void>;

@@ -4,6 +4,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import type { WorkflowRecording } from "@screenpipe/workflows-ui";
+import { subscribeWorkflowActivity } from "./run-activity";
 import { fillWorkContext } from "./context";
 import { desktopAssistant } from "./assistant";
 import type { WorkProfile, WorkflowAnalysis, WorkflowsPlatform } from "@screenpipe/workflows-ui";
@@ -143,7 +144,8 @@ export const desktopWorkflowsPlatform: WorkflowsPlatform = {
   saveCapturedWork: (analysis) => browserPreview ? saveAnalysis(analysis) : saveWorkflowCorrections(analysis),
   ...(!browserPreview ? { managesAnalysis: true, ensureAnalysisTask: ensureWorkflowTask,
     startAnalysisJob: startWorkflowJob, getAnalysisJob: getWorkflowJob,
-    getLatestAnalysisJob: latestWorkflowJob, cancelAnalysisJob: stopWorkflowJob } : {}),
+    getLatestAnalysisJob: latestWorkflowJob, cancelAnalysisJob: stopWorkflowJob,
+    subscribeAnalysisActivity: subscribeWorkflowActivity } : {}),
   loadWorkProfile: () => loadSavedWorkProfile(),
   saveWorkProfile,
   generateWorkflowSkill,

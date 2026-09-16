@@ -5,6 +5,7 @@
 "use client";
 import { matchesSidebarShortcut, useSidebarShortcuts } from "./sidebar-shortcuts";
 import { WorkflowAssistant } from "./workflow-assistant";
+import { WorkflowRunProgress } from "./workflow-run-progress";
 import { workflowTiming } from "./timing";
 import { CapturedMomentButton, WorkflowReplay } from "./workflow-replay";
 import type { AssistantContext, AssistantState } from "./assistant";
@@ -679,9 +680,8 @@ function OverviewView({
   );
 }
 
-function WorkflowsView({ workflows, knownWorkflowCount, activityPeriod, filters, setFilters, openWorkflow, analyze, analyzing, error, stop, updatedAt, changes, job }: { workflows: WorkflowMap[]; knownWorkflowCount: number; activityPeriod: WorkflowActivityPeriod; filters: WorkflowFilters; setFilters: (filters: WorkflowFilters) => void; openWorkflow: (index: number) => void; analyze: () => void; analyzing: boolean; error: string; stop?: () => void; updatedAt?: string; changes?: { created: number; updated: number }; job?: WorkflowAnalysisJob | null }) {
+function WorkflowsView({ workflows, knownWorkflowCount, activityPeriod, filters, setFilters, openWorkflow, analyze, analyzing, error, stop, updatedAt, changes, job, subscribe }: { workflows: WorkflowMap[]; knownWorkflowCount: number; activityPeriod: WorkflowActivityPeriod; filters: WorkflowFilters; setFilters: (filters: WorkflowFilters) => void; openWorkflow: (index: number) => void; analyze: () => void; analyzing: boolean; error: string; stop?: () => void; updatedAt?: string; changes?: { created: number; updated: number }; job?: WorkflowAnalysisJob | null; subscribe?: WorkflowsPlatform["subscribeAnalysisActivity"] }) {
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const elapsed = job?.startedAt ? Math.max(0, Math.floor((Date.now() - Date.parse(job.startedAt)) / 1000)) : null;
   const visible = useMemo(() => filterWorkflows(workflows, filters), [filters, workflows]);
   const availableApps = useMemo(() => [...new Set(workflows.flatMap((workflow) => workflow.apps))].sort((a, b) => a.localeCompare(b)), [workflows]);
   const filterCount = activeFilterCount(filters);
@@ -692,7 +692,7 @@ function WorkflowsView({ workflows, knownWorkflowCount, activityPeriod, filters,
 
   return (
     <>
-      <div className={`${styles.pageHeader} ${styles.catalogHeader}`}><div><h1>Your workflows</h1></div><div className={styles.refreshControls}><span role="status">{analyzing ? `Updating…${elapsed !== null && Number.isFinite(elapsed) ? ` · ${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}` : ""}` : changes && (changes.created || changes.updated) ? `${changes.created} new · ${changes.updated} updated` : updatedAt ? `Updated ${new Date(updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}</span>{analyzing && stop ? <button className={styles.secondaryButton} onClick={stop}>Stop</button> : <button className={styles.secondaryButton} onClick={analyze} disabled={analyzing}><RefreshCw size={14} />Update now</button>}</div></div>
+      <div className={`${styles.pageHeader} ${styles.catalogHeader}`}><div><h1>Your workflows</h1></div><WorkflowRunProgress job={job} active={analyzing} subscribe={subscribe} stop={stop} analyze={analyze} updatedAt={updatedAt} changes={changes} /></div>
       {error && <p role="alert" className={styles.depthNotice}>{error}</p>}
       {!knownWorkflowCount ? <EmptyWorkMap analyzing={analyzing} analyze={analyze} /> : !workflows.length ? <section className={styles.emptyState}><Clock3 size={23} /><h2>No known workflows were active in this period</h2><p>Your {knownWorkflowCount} known workflows are still in the catalog. Choose “All known” to see them.</p></section> : <>
         <section className={styles.filterBar} aria-label="Workflow filters">
@@ -1330,7 +1330,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
         }
         const job = await platform.getLatestAnalysisJob!();
         if (disposed) return;
-        setAnalysisJob(job);
+        if (job?.status !== "complete") setAnalysisJob(job);
         if (job && (job.status === "queued" || job.status === "processing")) {
           setAnalyzing(true);
         } else {
@@ -1338,6 +1338,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
           if (job && observedJob.current !== job.id) {
             if (job.status === "complete") {
               const completed = await platform.getAnalysisJob!(job.id);
+              if (!disposed) setAnalysisJob(completed);
               if (!disposed && completed.result) { setAnalysis(sanitizeWorkflowAnalysis(completed.result)); setAnalysisError(""); }
               else if (!disposed && completed.message) setAnalysisError(completed.message);
             } else setAnalysisError(job.message || "Could not update workflows.");
@@ -1531,7 +1532,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   switch (view) {
     case "overview": content = <OverviewView analysis={analysis ? { ...analysis, analysis: { workflows } } : null} analyzing={analyzing} error={analysisError} analyze={() => void analyze()} openWorkflow={openWorkflow} navigate={navigate} knownWorkflowCount={knownWorkflows.length} activityPeriod={activityPeriod} runtime={runtime} workProfile={workProfile} refreshRuntime={refreshRuntime} openAccount={platform.openAccount} />; break;
     case "time": content = <TimeView analysis={analysis} analyze={() => void analyze()} analyzing={analyzing} workProfile={workProfile} lens={timeLens} setLens={setTimeLens} />; break;
-    case "workflows": content = <WorkflowsView workflows={workflows} knownWorkflowCount={knownWorkflows.length} activityPeriod={activityPeriod} filters={filters} setFilters={setFilters} openWorkflow={openWorkflow} analyze={() => void analyze()} analyzing={analyzing} error={analysisError} stop={platform.cancelAnalysisJob ? () => { void platform.cancelAnalysisJob!().catch(error => setAnalysisError(String(error))); } : undefined} updatedAt={analysis?.analyzedAt} changes={analysis?.changes} job={analysisJob} />; break;
+    case "workflows": content = <WorkflowsView workflows={workflows} knownWorkflowCount={knownWorkflows.length} activityPeriod={activityPeriod} filters={filters} setFilters={setFilters} openWorkflow={openWorkflow} analyze={() => void analyze()} analyzing={analyzing} error={analysisError} stop={platform.cancelAnalysisJob ? () => { void platform.cancelAnalysisJob!().catch(error => setAnalysisError(String(error))); } : undefined} updatedAt={analysis?.analyzedAt} changes={analysis?.changes} job={analysisJob} subscribe={platform.subscribeAnalysisActivity} />; break;
     case "workflow": content = <WorkflowDetail onShareWorkflow={onShareWorkflow} workflow={activeWorkflow} navigate={navigate} platform={platform} workProfile={workProfile} saveCorrection={!analyzing && platform.saveCapturedWork && (!activeScope || activeScope.kind === "personal") ? async (note) => {
       if (!analysis || !activeWorkflow) return;
       const updated = { ...analysis, analysis: { workflows: analysis.analysis.workflows.map((workflow) => (workflow.id && activeWorkflow.id ? workflow.id === activeWorkflow.id : workflow.title === activeWorkflow.title) ? { ...workflow, userCorrection: note } : workflow) } };

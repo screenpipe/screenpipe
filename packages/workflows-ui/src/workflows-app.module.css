@@ -956,3 +956,26 @@
 .processingHead p { font-size: 12px; line-height: 1.5; }
 .processingHead .spinner { width: 20px; height: 20px; flex: 0 0 20px; margin-top: 2px; }
 @media (max-width: 640px) { .catalogHeader { align-items: flex-start; flex-direction: column; gap: 12px; } .catalogHeader .refreshControls { justify-content: flex-start; } }
+
+/* One live agent signal, with bounded details revealed on request. */
+.runProgress { position: relative; min-width: 0; }
+.runToggle { display: flex; align-items: center; gap: 8px; max-width: 340px; min-height: 34px; border: 0; border-radius: 6px; padding: 0 7px; background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
+.runToggle:hover { background: var(--soft); color: var(--ink); }
+.runToggle:focus-visible { outline: 2px solid var(--muted); outline-offset: 2px; }
+.runToggle > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink); }
+.runToggle svg, .runActivity svg { flex-shrink: 0; }
+.runToggle time { font-variant-numeric: tabular-nums; font-size: 11px; }
+.runSpinner { animation: runSpin 1.4s linear infinite; }
+.runToggle > .runSpinner { color: var(--ink); background: #c7ff3e; border-radius: 50%; padding: 2px; box-sizing: content-box; }
+.runActivity { position: absolute; z-index: 30; right: 0; top: calc(100% + 8px); width: min(340px, calc(100vw - 64px)); background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 16px #0000000d; }
+.runActivity header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.runActivity header strong { font-size: 12px; font-weight: 600; }
+.runActivity header span { font-size: 10px; color: var(--muted); }
+.runActivity ol { list-style: none; margin: 0; padding: 8px 16px; max-height: 230px; overflow-y: auto; }
+.runActivity li { display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; font-size: 12px; line-height: 1.5; }
+.runActivity li svg { margin-top: 3px; color: var(--muted); }
+.runActivity p { margin: 16px; line-height: 1.5; }
+.runActivity footer { padding: 12px 16px; border-top: 1px solid var(--line); font-size: 11px; line-height: 1.5; color: var(--muted); }
+@keyframes runSpin { to { transform: rotate(360deg); } }
+@media (max-width: 640px) { .runToggle { max-width: min(270px, calc(100vw - 140px)); } .runActivity { left: 0; right: auto; } }
+@media (prefers-reduced-motion: reduce) { .runSpinner { animation: none; } }

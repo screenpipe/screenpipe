@@ -3,7 +3,7 @@
 "use client";
 
 import { useState } from "react";
-import { WorkflowsApp, type WorkflowAnalysis, type WorkflowSkillDraft } from "@screenpipe/workflows-ui";
+import { WorkflowsApp, type WorkflowAnalysis, type WorkflowRunActivity, type WorkflowSkillDraft } from "@screenpipe/workflows-ui";
 import { createFixtureWorkflowsPlatform, fixtureWorkflowAnalysis } from "@screenpipe/workflows-ui/fixture";
 import { FirstTaskChoice } from "@/components/workflows/first-task-choice";
 import { WorkflowTasksPrompt } from "@/components/workflows/workflow-tasks-prompt";
@@ -17,11 +17,24 @@ const installedSkillFixture = { ...fixture, skillInstallMode: "local" as const,
     destinations: ["Screenpipe", "Claude Code", "Codex", "Hermes"],
     locations: ["Screenpipe", "Claude Code", "Codex", "Hermes"].map(destination => ({ destination, path: `/example/${destination}/skills/${draft.name}/SKILL.md` })), warnings: [] }),
 };
-const processingFixture = { ...fixture, analyzeCapturedWork: () => new Promise<WorkflowAnalysis>(() => {}) };
+let previewRun = { id: "preview", status: "processing" as "processing" | "failed", startedAt: new Date().toISOString(), message: "Update stopped. Your saved workflows are still available." };
+const processingFixture = { ...fixture, managesAnalysis: true,
+  getLatestAnalysisJob: async () => previewRun,
+  getAnalysisJob: async () => previewRun,
+  cancelAnalysisJob: async () => { previewRun = { ...previewRun, status: "failed" }; },
+  startAnalysisJob: async () => { previewRun = { ...previewRun, id: String(Date.now()), status: "processing", startedAt: new Date().toISOString() }; return previewRun; },
+  subscribeAnalysisActivity: async (_id: string, onActivity: (items: WorkflowRunActivity[]) => void) => {
+    // Fictional tool summaries exercise the same UI subscription contract.
+    onActivity([{ id: "1", label: "Read work context", status: "complete" },
+      { id: "2", label: "Searched captured activity", status: "complete" },
+      { id: "3", label: "Inspecting captured moments", status: "running" }]);
+    return () => {};
+  },
+};
 // Maintained browser-mock harness: real product components, synthetic history.
 // This route never enables fixtures in a packaged application.
 export default function WorkflowUxPreview() {
-  const [screen, setScreen] = useState<"onboarding" | "empty" | "catalog" | "processing" | "tasks" | "skill">("onboarding");
+  const [screen, setScreen] = useState<"onboarding" | "empty" | "catalog" | "processing" | "tasks" | "skill">("processing");
   if (process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV !== "mock") return null;
   return <div className="h-screen bg-background text-foreground">
     <nav aria-label="Preview states" className="flex h-10 items-center justify-between gap-4 border-b border-border px-4 text-xs">
@@ -31,7 +44,7 @@ export default function WorkflowUxPreview() {
     <WorkflowTasksPrompt active={screen === "tasks"} tasks={previewTasks} />
     <div style={{height:"calc(100vh - 40px)", overflow:"auto"}}>
       {screen === "onboarding" ? <div className="flex min-h-full items-center"><FirstTaskChoice onComplete={async (mode) => { if(mode === "screenpipe") window.location.assign("/home?mode=screenpipe"); else setScreen("empty"); }} /></div>
-        : <WorkflowsApp key={screen} platform={screen === "processing" ? processingFixture : screen === "skill" ? installedSkillFixture : fixture} storageKey={null} initialAnalysis={(screen === "catalog" || screen === "tasks" || screen === "skill") ? fixtureWorkflowAnalysis : null} navigationBrand={<ProductSwitcher mode="workflows" onChange={mode => {if(mode === "screenpipe") window.location.assign("/home?mode=screenpipe");}} />} />}
+        : <WorkflowsApp key={screen} platform={screen === "processing" ? processingFixture : screen === "skill" ? installedSkillFixture : fixture} storageKey={null} initialAnalysis={(screen === "catalog" || screen === "tasks" || screen === "skill" || screen === "processing") ? fixtureWorkflowAnalysis : null} navigationBrand={<ProductSwitcher mode="workflows" onChange={mode => {if(mode === "screenpipe") window.location.assign("/home?mode=screenpipe");}} />} />}
     </div>
   </div>;
 }
