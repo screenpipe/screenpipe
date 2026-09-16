@@ -16,7 +16,7 @@ vi.mock("@/components/connected-share-dialog", () => ({
   ConnectedShareDialog: ({ open, artifact, onOpenChange, onConnect, connectionsRevision }: any) => open ? <div role="dialog" aria-label="Sharing review"><h2>{artifact.title}</h2><p>{artifact.surface}</p><span>Connections revision {connectionsRevision}</span><button onClick={() => onConnect("slack")}>Connect Slack</button><button onClick={() => onOpenChange(false)}>Close sharing</button></div> : null,
 }));
 vi.mock("@/components/settings/connections-section", () => ({
-  ConnectionsSection: ({ panelOnly, focusConnectionId, focusScopeVariant, onConnectionClose }: any) => <div role="dialog" aria-label="Connection setup"><p>{panelOnly ? "Panel only" : "All connections"} {focusConnectionId} {focusScopeVariant}</p><button onClick={onConnectionClose}>Close connection</button></div>,
+  ConnectionsSection: ({ panelOnly, focusConnectionId, focusScopeVariant, focusRequestId, onConnectionClose }: any) => !focusRequestId ? null : <div role="dialog" aria-label="Connection setup"><p>{panelOnly ? "Panel only" : "All connections"} {focusConnectionId} {focusScopeVariant}</p><button onClick={onConnectionClose}>Close connection</button></div>,
 }));
 vi.mock("posthog-js", () => ({ default: { capture: vi.fn() } }));
 
@@ -58,6 +58,11 @@ it("opens the existing sharing review from the selected workflow in the main app
   fireEvent.click(screen.getByRole("button", { name: "Close connection" }));
   expect(screen.queryByRole("dialog", { name: "Connection setup" })).not.toBeInTheDocument();
   expect(screen.getByRole("dialog", { name: "Sharing review" })).toHaveTextContent("Connections revision 1");
+  // Reopening must issue another focus request after the first panel unmounts.
+  fireEvent.click(screen.getByRole("button", { name: "Connect Slack" }));
+  expect(screen.getByRole("dialog", { name: "Connection setup" })).toHaveTextContent("Panel only slack send");
+  fireEvent.click(screen.getByRole("button", { name: "Close connection" }));
+  expect(screen.getByRole("dialog", { name: "Sharing review" })).toHaveTextContent("Connections revision 2");
   fireEvent.click(screen.getByRole("button", { name: "Close sharing" }));
   expect(screen.queryByRole("dialog", { name: "Sharing review" })).not.toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Research synthesis" })).toBeVisible();

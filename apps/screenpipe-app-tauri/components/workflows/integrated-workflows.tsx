@@ -48,6 +48,7 @@ export function IntegratedWorkflows({ active, fullscreen = false, onModeChange, 
       />}
       {active && connectionId && <ConnectionsSection
         panelOnly focusConnectionId={connectionId}
+        focusRequestId={connectionsRevision + 1}
         focusScopeVariant={connectionId === "slack" ? "send" : null}
         onConnectionClose={closeConnections}
       />}
