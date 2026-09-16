@@ -81,6 +81,7 @@ export type WorkflowsAppProps = {
   fullscreen?: boolean;
   navigationFooter?: (actions: { openKeyboardShortcuts: () => void }) => import("react").ReactNode;
   navigationBrand?: import("react").ReactNode;
+  composerAccessory?: import("./assistant").WorkflowComposerAccessory;
   /** Open the host sharing review; clicking must not send the workflow. */
   onShareWorkflow?: (workflow: WorkflowMap) => void;
   /** Host-owned live recorder status and controls. */

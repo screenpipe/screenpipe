@@ -2,7 +2,8 @@
 // https://screenpipe.com
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { localFetch } from "@/lib/api";
-import { ensureWorkflowTask, enableWorkflowTask, loadWorkflowTaskSetup, getWorkflowJob, startWorkflowJob, saveWorkflowCorrections } from "./scheduled-discovery";
+import { ensureWorkflowTask, enableWorkflowTask, loadWorkflowTaskSetup, getWorkflowJob, startWorkflowJob, saveWorkflowCorrections, saveWorkflowFeedback } from "./scheduled-discovery";
+import { fixtureWorkflowAnalysis } from "@screenpipe/workflows-ui/fixture";
 import { requireInspectedFrames } from "@screenpipe-ext/workflow-catalog";
 
 vi.mock("@/lib/api", () => ({ localFetch: vi.fn() }));
@@ -53,5 +54,18 @@ describe("workflow scheduled-task adapter", () => {
     expect(() => requireInspectedFrames([{ stages: [{ screenshotFrameId: 7 }] }], new Set())).toThrow(/Inspect/);
     expect(() => requireInspectedFrames([{ stages: [{ screenshotFrameId: 7 }] }], new Set([7]))).not.toThrow();
     expect(() => requireInspectedFrames([{ stages: [{}] }], new Set())).not.toThrow();
+  });
+  it("saves feedback through the authenticated correction endpoint without starting a task", async () => {
+    fetchMock.mockResolvedValueOnce(response({ success: true }));
+    await saveWorkflowFeedback({ ...fixtureWorkflowAnalysis.analysis.workflows[0], id: "wf-selected" }, "Use Attio.");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith("/workflows/corrections", expect.objectContaining({ method: "POST", body: JSON.stringify({ id: "wf-selected", correction: "Use Attio." }) }));
+  });
+  it("rejects missing workflow identity and reports server save failures", async () => {
+    const workflow = { ...fixtureWorkflowAnalysis.analysis.workflows[0], id: undefined };
+    await expect(saveWorkflowFeedback(workflow, "Use Attio.")).rejects.toThrow("Refresh this workflow");
+    expect(fetchMock).not.toHaveBeenCalled();
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "Workflow no longer exists" }), { status: 404 }));
+    await expect(saveWorkflowFeedback({ ...workflow, id: "deleted" }, "Use Attio.")).rejects.toThrow("Workflow no longer exists");
   });
 });

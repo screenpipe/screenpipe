@@ -2367,6 +2367,7 @@ export function StandaloneChat({
       />
 
       <ChatComposer
+        dictationEnabled={chatShortcutsEnabled}
         jumpToLatest={{
           hasMessages: messages.length > 0,
           scrolledUp: isUserScrolledUp,

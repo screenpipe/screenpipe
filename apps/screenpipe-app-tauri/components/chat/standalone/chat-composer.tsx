@@ -24,6 +24,7 @@ import { getComposerPrimaryAction } from "@/lib/chat-queue-controls";
 const CHAT_RAIL_CLASS = "max-w-4xl mx-auto w-full";
 
 export function ChatComposer({
+  dictationEnabled = true,
   prefill,
   suggestions,
   attachments,
@@ -115,7 +116,7 @@ export function ChatComposer({
               inputValue: input.value,
               inputRef: input.inputRef,
               onValueChange: input.onValueChange,
-              disabled: !input.canChat,
+              disabled: !input.canChat || !dictationEnabled,
               sessionId: modelControls.currentQueueSessionId,
               isMac: queue.isMac,
             }}

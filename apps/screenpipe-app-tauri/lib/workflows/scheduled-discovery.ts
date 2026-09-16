@@ -2,7 +2,7 @@
 // https://screenpipe.com
 
 import { localFetch } from "@/lib/api";
-import type { WorkflowAnalysis, WorkflowAnalysisJob } from "@screenpipe/workflows-ui";
+import type { WorkflowAnalysis, WorkflowAnalysisJob, WorkflowMap } from "@screenpipe/workflows-ui";
 
 const TASK = "workflow-discovery";
 async function request(path: string, body?: unknown) {
@@ -92,4 +92,10 @@ export async function saveWorkflowCorrections(analysis: WorkflowAnalysis) {
     if (JSON.stringify(prior?.userCorrection) === JSON.stringify(workflow.userCorrection)) continue;
     await request("/workflows/corrections", { id: prior.id, correction: workflow.userCorrection ?? null });
   }
+}
+
+/** Uses the same catalog writer and correction storage as manual edits. */
+export async function saveWorkflowFeedback(workflow: WorkflowMap, feedback: string) {
+  if (!workflow.id) throw new Error("Refresh this workflow before sending feedback.");
+  await request("/workflows/corrections", { id: workflow.id, correction: feedback });
 }

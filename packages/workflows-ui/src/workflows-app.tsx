@@ -346,6 +346,7 @@ function AppShell({
   embedded,
   active,
   navigationBrand,
+  composerAccessory,
   navigationFooter,
   recordingStatus,
   startWindowDrag,
@@ -368,6 +369,7 @@ function AppShell({
   embedded: boolean;
   active: boolean;
   navigationBrand?: React.ReactNode;
+  composerAccessory?: WorkflowsAppProps["composerAccessory"];
   navigationFooter?: WorkflowsAppProps["navigationFooter"];
   recordingStatus?: React.ReactNode;
   startWindowDrag?: () => Promise<void> | void;
@@ -483,7 +485,7 @@ function AppShell({
         </nav>}
         <main className={styles.main}>{children}</main>
       </section>
-      {assistant && <WorkflowAssistant active={active} platform={assistant.platform} context={assistant.context} onDockChange={setAssistantDocked} onWidthChange={setAssistantWidth} onOpenChange={setAssistantOpen} onModeChange={setAssistantMode} headerToggle />}
+      {assistant && <WorkflowAssistant composerAccessory={composerAccessory} active={active} platform={assistant.platform} context={assistant.context} onDockChange={setAssistantDocked} onWidthChange={setAssistantWidth} onOpenChange={setAssistantOpen} onModeChange={setAssistantMode} headerToggle />}
     </div>
   );
 }
@@ -901,13 +903,12 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile, saveCorrect
     <>
       <button className={styles.backButton} onClick={() => navigate("workflows")}><ArrowLeft size={14} />All workflows</button>
       <section className={styles.detailHeader}>
-        <div><Pill>Evidence on {workflow.repetitions} captured day{workflow.repetitions === 1 ? "" : "s"}</Pill><h1>{workflow.title}</h1><p>{workflow.description}</p><div className={styles.workflowActions}>{platform.generateWorkflowSkill && platform.saveWorkflowSkill && <button className={styles.skillButton} type="button" onClick={openSkill}><Sparkles size={14} />{skillGenerating ? "Creating skill…" : skillSaved ? platform.skillInstallMode === "preview" ? "Skill preview" : "Skill installed" : skillDraft ? "Review skill" : "Create skill"}</button>}{onShareWorkflow && <button className={styles.skillButton} type="button" onClick={() => onShareWorkflow(workflow)}><Share2 size={14} />Share with team</button>}</div></div>
+        <div><Pill>Evidence on {workflow.repetitions} captured day{workflow.repetitions === 1 ? "" : "s"}</Pill><h1>{workflow.title}</h1><p>{workflow.description}</p><div className={styles.workflowActions}>{platform.generateWorkflowSkill && platform.saveWorkflowSkill && <button className={styles.skillButton} type="button" onClick={openSkill}><Sparkles size={14} />{skillGenerating ? "Creating skill…" : skillSaved ? platform.skillInstallMode === "preview" ? "Skill preview" : "Skill installed" : skillDraft ? "Review skill" : "Create skill"}</button>}{onShareWorkflow && <button className={styles.skillButton} type="button" onClick={() => onShareWorkflow(workflow)}><Share2 size={14} />Share with team</button>}{platform.assistant?.saveFeedback && <button className={styles.skillButton} type="button" onClick={() => window.dispatchEvent(new CustomEvent("workflows:feedback", { detail: { key: `feedback:${workflow.id || workflow.title}`, title: workflow.title, workflow, purpose: "feedback" } }))}><MessageCircle size={14} />Feedback</button>}</div></div>
         {measuredDuration && <div className={styles.detailTotal}><span>Observed meeting duration</span><strong>{workflowDurationLabel(workflow)}</strong></div>}
       </section>
       <p className={styles.workflowReviewState}>{workflow.evidenceStatus === "supported-steps" ? "Source-backed steps · not execution-tested" : "Needs review"}</p>
       <WorkflowReplay key={`replay:${workflow.title}`} workflow={workflow} loadRecording={platform.loadWorkflowRecording} releaseRecording={platform.releaseWorkflowRecording} openCapturedMoment={platform.openCapturedMoment} />
-      {saveCorrection && <WorkflowCorrection key={`correction:${workflow.title}`} workflow={workflow} save={saveCorrection} />}
-      {!!workflow.openQuestions?.length && <section className={styles.depthNotice} aria-label="Confirm before use"><strong>Confirm before use</strong><ul>{workflow.openQuestions.map((question) => <li key={question}>{question}</li>)}</ul></section>}
+      {saveCorrection && !platform.assistant?.saveFeedback && <WorkflowCorrection key={`correction:${workflow.title}`} workflow={workflow} save={saveCorrection} />}
       <section className={styles.flowMap}>
         <div className={styles.flowMapHeader}><div><strong>Steps</strong></div><button onClick={() => setExpandedStages(allStagesOpen ? new Set() : new Set(workflow.stages.map((_, index) => index)))}>{allStagesOpen ? "Collapse all" : "Expand all"}</button></div>
         <div className={styles.flowEndpoint}><span>Starts when</span><strong>{workflow.trigger}</strong></div>
@@ -959,6 +960,7 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile, saveCorrect
         <ul>{workflow.quality.reasons.map((reason) => <li key={reason}><CheckCircle2 size={12} />{reason}</li>)}</ul>
         <p className={styles.panelEmpty}>References show where text was captured. They do not prove task completion or a continuous sequence. Model confidence is not an accuracy score.</p>
         {!!workflow.captureSequence?.length && <section aria-label="Ordered capture example"><strong>Ordered capture example</strong><p className={styles.panelEmpty}>Check that these moments concern the same task. Time order alone does not establish this.</p><ol>{workflow.captureSequence.map((entry, index) => <li key={`${entry.timestamp}-${index}`}><details><summary>{workflow.stages[index]?.name} · {formatEvidenceTimestamp(entry.timestamp)} · {entry.app}</summary><p>{entry.detail}</p></details></li>)}</ol></section>}
+        {!!workflow.openQuestions?.length && <section aria-label="Open questions"><strong>Open questions</strong><ul>{workflow.openQuestions.map(question => <li key={question}>{question}</li>)}</ul></section>}
         {!!workflow.limitations?.length && <ul>{workflow.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul>}
       </details>
       {skillOpen && <WorkflowSkillDialog workflow={workflow} draft={skillDraft} generating={skillGenerating} saving={skillSaving} saved={skillSaved} preview={platform.skillInstallMode === "preview"} progress={skillProgress} error={skillError} update={setSkillDraft} retry={generateSkill} save={saveSkill} close={() => setSkillOpen(false)} />}
@@ -1191,7 +1193,7 @@ function PrivacyView({ runtime }: { runtime: WorkflowRuntime | null }) {
   </>;
 }
 
-export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "screenpipe-workflows:last-analysis-v2", initialScopeId, embedded = false, active = true, fullscreen = false, navigationBrand, recordingStatus, navigationFooter, onShareWorkflow }: WorkflowsAppProps) {
+export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "screenpipe-workflows:last-analysis-v2", initialScopeId, embedded = false, active = true, fullscreen = false, navigationBrand, composerAccessory, recordingStatus, navigationFooter, onShareWorkflow }: WorkflowsAppProps) {
   const shortcuts = useSidebarShortcuts();
   const [runtime, setRuntime] = useState<WorkflowRuntime | null>(null);
   const [analysis, setAnalysis] = useState<WorkflowAnalysis | null>(() => initialAnalysis ? sanitizeWorkflowAnalysis(initialAnalysis) : null);
@@ -1523,7 +1525,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   }
 
   return <>
-    <AppShell active={active} fullscreen={fullscreen} navigationFooter={navigationFooter} navigationBrand={navigationBrand} recordingStatus={recordingStatus} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={filters.query} setQuery={(query) => setFilters((current) => ({ ...current, query }))} activityPeriod={activityPeriod} setActivityPeriod={(period) => { setActivityPeriod(period); setSelectedWorkflow(0); }} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: "Context", profile: workProfile } : { key: "workflows", title: "Your workflows", catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{content}</AppShell>
+    <AppShell composerAccessory={composerAccessory} active={active} fullscreen={fullscreen} navigationFooter={navigationFooter} navigationBrand={navigationBrand} recordingStatus={recordingStatus} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={filters.query} setQuery={(query) => setFilters((current) => ({ ...current, query }))} activityPeriod={activityPeriod} setActivityPeriod={(period) => { setActivityPeriod(period); setSelectedWorkflow(0); }} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: "Context", profile: workProfile } : { key: "workflows", title: "Your workflows", catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{content}</AppShell>
     <CommandPalette open={active && commandPaletteOpen} commands={paletteCommands} close={() => setCommandPaletteOpen(false)} />
   </>;
 }

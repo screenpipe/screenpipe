@@ -5,12 +5,12 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowUp, Check, ChevronDown, Copy, MessageCircle, Minus, PanelRight, PanelRightClose, Plus, Search, Square, SquarePen, RotateCcw, X, Maximize2 } from "lucide-react";
-import { assistantContextSnapshot, emptyAssistantState, newAssistantConversation, isAssistantLink, type AssistantContext, type AssistantMessage, type AssistantState, type WorkflowsAssistantPlatform } from "./assistant";
+import { assistantContextSnapshot, emptyAssistantState, newAssistantConversation, isAssistantLink, type AssistantContext, type AssistantMessage, type AssistantState, type WorkflowsAssistantPlatform, type WorkflowComposerAccessory } from "./assistant";
 import { ChatMarkdown, ComposerTextArea, ChatJumpToLatest } from "./chat-primitives";
 import { matchesSidebarShortcut, useSidebarShortcuts } from "./sidebar-shortcuts";
 import styles from "./workflow-assistant.module.css";
 
-export function WorkflowAssistant({ platform, context, onDockChange, onWidthChange, onOpenChange, onModeChange, headerToggle = false, active = true }: {
+export function WorkflowAssistant({ platform, context, onDockChange, onWidthChange, onOpenChange, onModeChange, headerToggle = false, active = true, composerAccessory }: {
   platform: WorkflowsAssistantPlatform;
   context: AssistantContext;
   onDockChange: (docked: boolean) => void;
@@ -19,6 +19,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
   onModeChange?: (mode: AssistantState["mode"]) => void;
   headerToggle?: boolean;
   active?: boolean;
+  composerAccessory?: WorkflowComposerAccessory;
 }) {
   const shortcuts = useSidebarShortcuts();
   const [open, setOpen] = useState(false);
@@ -36,6 +37,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyQuery, setHistoryQuery] = useState("");
   const [displayOpen, setDisplayOpen] = useState(false);
+  const [pendingFeedback, setPendingFeedback] = useState<AssistantContext | null>(null);
   const [includeContext, setIncludeContext] = useState(true);
   const [atBottom, setAtBottom] = useState(true);
   const [copied, setCopied] = useState("");
@@ -53,6 +55,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
   const mounted = useRef(true);
   const loadInFlight = useRef(false);
   const conversation = state.conversations.find((c) => c.id === state.activeId)!;
+  const feedbackContext = conversation.feedbackContext;
   const width = Number.isFinite(state.sidebarWidth) ? Math.max(340, Math.min(560, state.sidebarWidth!)) : 420;
 
   const persist = useCallback(async (snapshot: AssistantState) => {
@@ -144,6 +147,35 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
     };
   }, [active, open, close, historyOpen, displayOpen]);
 
+  useEffect(() => {
+    if (!active || !platform.saveFeedback) return;
+    const openFeedback = (event: Event) => {
+      const selected = (event as CustomEvent<AssistantContext>).detail;
+      if (!selected?.workflow || selected.purpose !== "feedback") return;
+      const snapshot = assistantContextSnapshot(selected);
+      // Preserve previous corrections locally while keeping media out of chat history.
+      snapshot.workflow!.userCorrection = selected.workflow.userCorrection;
+      setPendingFeedback(snapshot);
+      setHistoryOpen(false);
+      setOpen(true);
+    };
+    window.addEventListener("workflows:feedback", openFeedback);
+    return () => window.removeEventListener("workflows:feedback", openFeedback);
+  }, [active, platform.saveFeedback]);
+
+  useEffect(() => {
+    if (!pendingFeedback || !loaded || busy) return;
+    update(current => {
+      const existing = [...current.conversations].reverse().find(item => item.feedbackContext?.key === pendingFeedback.key);
+      const fresh = existing || { ...newAssistantConversation(), feedbackContext: pendingFeedback };
+      return { ...current, activeId: fresh.id, conversations: existing ? current.conversations : [...current.conversations, fresh] };
+    });
+    setPendingFeedback(null);
+    setIncludeContext(true);
+    setError("");
+    requestAnimationFrame(() => input.current?.focus());
+  }, [pendingFeedback, loaded, busy, update]);
+
   const patchMessage = (conversationId: string, messageId: string, patch: Partial<AssistantMessage>) => update((current) => ({
     ...current, conversations: current.conversations.map((c) => c.id !== conversationId ? c : { ...c, messages: c.messages.map((m) => m.id === messageId ? { ...m, ...patch } : m) }),
   }), 1000);
@@ -153,16 +185,18 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
     const current = stateRef.current.conversations.find((c) => c.id === stateRef.current.activeId)!;
     const previousUserIndex = current.messages.findLastIndex((m) => m.role === "user");
     const history = retry ? current.messages.slice(0, previousUserIndex) : current.messages;
-    const turnContext = retry ? current.messages[previousUserIndex]?.context ?? null : includeContext ? assistantContextSnapshot(context) : null;
+    const turnContext = retry ? current.messages[previousUserIndex]?.context ?? null : current.feedbackContext ? assistantContextSnapshot(current.feedbackContext) : includeContext ? assistantContextSnapshot(context) : null;
+    const userId = crypto.randomUUID();
+    const alreadySavedFeedback = retry && current.messages[previousUserIndex]?.feedbackSaved;
     const answerId = crypto.randomUUID();
     const abort = new AbortController();
     controller.current = abort;
     setBusy(true); setError(""); setHistoryOpen(false); setActivity("Starting…");
     follow.current = true; setAtBottom(true);
     const snapshot = update((s) => ({ ...s, conversations: s.conversations.map((c) => c.id !== current.id ? c : {
-      ...c, draft: retry ? c.draft : "", title: history.length ? c.title : question.trim().slice(0, 64),
+      ...c, draft: retry ? c.draft : "", title: c.feedbackContext ? `Feedback: ${c.feedbackContext.title}` : history.length ? c.title : question.trim().slice(0, 64),
       messages: [...history,
-        { id: crypto.randomUUID(), role: "user", text: question.trim(), at: new Date().toISOString(), ...(turnContext ? { context: turnContext } : {}) },
+        { id: userId, role: "user", feedbackSaved: alreadySavedFeedback || undefined, text: question.trim(), at: new Date().toISOString(), ...(turnContext ? { context: turnContext } : {}) },
         { id: answerId, role: "assistant", text: "", at: new Date().toISOString() }],
     }) }));
     try {
@@ -170,6 +204,15 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = null;
       await persist(snapshot);
+      if (abort.signal.aborted) throw new DOMException("Stopped", "AbortError");
+      if (current.feedbackContext?.workflow && platform.saveFeedback && !alreadySavedFeedback) {
+        const previousNotes = typeof current.feedbackContext.workflow.userCorrection === "string" ? current.feedbackContext.workflow.userCorrection.trim() : "";
+        const discussion = [...history.filter(m => m.text && !m.status).map(m => `${m.role === "user" ? "User" : "Assistant"}: ${m.text}`), `User: ${question.trim()}`].join("\n\n");
+        const feedback = [previousNotes, discussion].filter(Boolean).join("\n\n");
+        await platform.saveFeedback(current.feedbackContext.workflow, feedback);
+        patchMessage(current.id, userId, { feedbackSaved: true });
+        await persist(stateRef.current);
+      }
       if (abort.signal.aborted) throw new DOMException("Stopped", "AbortError");
       const text = await platform.ask({ question: question.trim(), context: turnContext, history, signal: abort.signal, onProgress: (progress) => {
         if (abort.signal.aborted || !mounted.current) return;
@@ -238,7 +281,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
       <header className={styles.header}>
         <button className={styles.title} aria-label="Conversation history" aria-expanded={historyOpen} disabled={!loaded}
           title={conversation.messages.length ? conversation.title : "New chat"} onClick={() => { setHistoryOpen(!historyOpen); setDisplayOpen(false); }}>
-          <span>{conversation.messages.length ? conversation.title : "New chat"}</span><ChevronDown size={13} />
+          <span>{feedbackContext ? "Feedback" : conversation.messages.length ? conversation.title : "New chat"}</span><ChevronDown size={13} />
         </button>
         <div className={styles.headerActions}>
           <button aria-label="New conversation" title="New chat" disabled={busy || !loaded} onClick={newConversation}><SquarePen size={16} /></button>
@@ -275,11 +318,12 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
           {!history.length && <p>{historyQuery ? "No matching conversations." : "Your conversations will appear here."}</p>}
         </div> : loaded && <>
           {!conversation.messages.length && <div className={styles.empty}>
-            <h2>{context.workflow ? "Ask about this workflow" : "Search your memory"}</h2>
-            <div>{suggestions.map((question) => <button key={question} onClick={() => void send(question)}><Search size={15} /><span>{question}</span><ArrowUp size={13} /></button>)}</div>
+            <h2>{feedbackContext ? "What should change?" : context.workflow ? "Ask about this workflow" : "Search your memory"}</h2>
+            {!feedbackContext && <div>{suggestions.map((question) => <button key={question} onClick={() => void send(question)}><Search size={15} /><span>{question}</span><ArrowUp size={13} /></button>)}</div>}
           </div>}
           {conversation.messages.map((message) => <article key={message.id} className={message.role === "user" ? styles.user : styles.assistant} aria-label={message.role === "user" ? "Your question" : "Screenpipe answer"}>
             {message.role === "user" ? <p>{message.text}</p> : <ChatMarkdown text={message.text} streaming={busy && message.id === lastAnswer?.id} allowLink={isAssistantLink} onOpenLink={platform.openLink ? openSource : undefined} />}
+            {message.feedbackSaved && message.id === lastUser?.id && <small>Feedback saved for the next update</small>}
             {message.status === "stopped" && <small>Stopped</small>}
             {message.role === "assistant" && message.text && (!busy || message.id !== lastAnswer?.id) && <div className={styles.messageActions}>
               <button aria-label="Copy answer" title="Copy answer" onClick={() => void navigator.clipboard.writeText(message.text).then(() => { setCopied(message.id); setTimeout(() => setCopied(""), 1500); }).catch(() => setError("Couldn’t copy. You can select the answer and copy it."))}>{copied === message.id ? <Check size={14} /> : <Copy size={14} />}</button>
@@ -295,14 +339,18 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
       }} />}
       {saveError && <div className={styles.saveError} role="alert">Couldn’t save this conversation.<button onClick={() => void persist(stateRef.current).catch(() => {})}>Retry save</button></div>}
       {!historyOpen && <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(conversation.draft); }}>
-        <button type="button" className={styles.context} aria-pressed={includeContext} title={includeContext ? "Remove current page from the next message" : "Include current page in the next message"} onClick={() => setIncludeContext(!includeContext)}>{includeContext ? <><span className={styles.contextDot} /><span>{context.title}</span><X size={12} /></> : <><Plus size={13} /><span>Add current page</span></>}</button>
-        <ComposerTextArea ref={input} aria-label="Ask Screenpipe" placeholder={includeContext && context.workflow ? "Ask about this workflow…" : "Ask or find anything…"} rows={1}
+        {feedbackContext ? <span className={styles.context}><span className={styles.contextDot} /><span>{feedbackContext.title}</span></span> : <button type="button" className={styles.context} aria-pressed={includeContext} title={includeContext ? "Remove current page from the next message" : "Include current page in the next message"} onClick={() => setIncludeContext(!includeContext)}>{includeContext ? <><span className={styles.contextDot} /><span>{context.title}</span><X size={12} /></> : <><Plus size={13} /><span>Add current page</span></>}</button>}
+        <ComposerTextArea ref={input} aria-label="Ask Screenpipe" placeholder={feedbackContext ? "Type a correction, or use the microphone…" : includeContext && context.workflow ? "Ask about this workflow…" : "Ask or find anything…"} rows={1}
           value={conversation.draft} maxLength={8000} disabled={!loaded} onChange={(event) => update((current) => ({
             ...current, conversations: current.conversations.map((item) => item.id === current.activeId ? { ...item, draft: event.target.value } : item),
           }))} onSend={() => void send(conversation.draft)} />
         <div className={styles.composerFooter}>
+          {open && active && composerAccessory?.({ inputValue: conversation.draft, inputRef: input,
+            onValueChange: value => update(current => ({ ...current, conversations: current.conversations.map(item => item.id === current.activeId ? { ...item, draft: value } : item) })),
+            disabled: !loaded || busy, sessionId: conversation.id,
+          })}
           {busy ? <button type="button" className={styles.send} aria-label="Stop answer" title="Stop answer" onClick={() => controller.current?.abort()}><Square size={12} fill="currentColor" /></button>
-            : <button className={styles.send} type="submit" aria-label="Send message" title="Send (Enter)" disabled={!loaded || !conversation.draft.trim()}><ArrowUp size={18} /></button>}
+            : <button className={styles.send} type="submit" aria-label={feedbackContext ? "Send feedback" : "Send message"} title="Send (Enter)" disabled={!loaded || !conversation.draft.trim()}><ArrowUp size={18} /></button>}
         </div>
       </form>}
     </aside>

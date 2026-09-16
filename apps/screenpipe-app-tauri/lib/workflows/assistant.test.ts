@@ -56,6 +56,20 @@ describe("workflow assistant agent transport", () => {
     }
     expect(mocks.handlers.size).toBe(0);
   });
+  it("uses the same account and harness for feedback with read-only connected tools", async () => {
+    mocks.prompt.mockImplementation(async (id: string) => {
+      const emit = (event: AgentEventEnvelope["event"]) => mocks.handlers.get(id)?.({ sessionId: id, source: "pi", event });
+      emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "What should the final step be?" } });
+      emit({ type: "agent_end" });
+      return { status: "ok" };
+    });
+    const context = { key: "feedback:wf-a", title: "Research", purpose: "feedback" as const };
+    await desktopAssistant.ask({ question: "The final step is wrong", context, history: [], signal: new AbortController().signal, onProgress: vi.fn() });
+    expect(mocks.start).toHaveBeenCalledWith(expect.stringContaining("workflow-assistant"), "/isolated/profile/pi-workflows-assistant", "test-token", expect.objectContaining({ ...assistantProviderConfig, allowedTools: [...ASSISTANT_TOOLS, "screenpipe_list_connections", "sp_mcp_list_tools", "sp_mcp_read"] }));
+    const prompt = buildAssistantPrompt("The final step is wrong", context, []);
+    expect(prompt).toContain("Do not claim the map has changed or start a new task");
+    expect(prompt).toContain("Ask at most one consequential clarification");
+  });
   it("does not launch Context without an account or expose Pi login instructions", async () => {
     mocks.token.mockResolvedValue(null);
     await expect(fillWorkContext({ documents: [{ name: "Notes", text: "Support" }], website: "", profile: fixturePersonalWorkProfile, signal: new AbortController().signal, onField: vi.fn(), onActivity: vi.fn() })).rejects.toThrow("Sign in to Screenpipe in Settings to continue.");

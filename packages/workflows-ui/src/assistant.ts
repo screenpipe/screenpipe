@@ -4,6 +4,7 @@
 import type { WorkProfile, WorkflowMap } from "./model";
 
 export type AssistantContext = {
+  purpose?: "feedback";
   key: string;
   title: string;
   workflow?: WorkflowMap;
@@ -17,8 +18,9 @@ export type AssistantMessage = {
   at: string;
   context?: AssistantContext;
   status?: "stopped" | "error";
+  feedbackSaved?: boolean;
 };
-export type AssistantConversation = { id: string; title: string; messages: AssistantMessage[]; draft: string };
+export type AssistantConversation = { id: string; title: string; messages: AssistantMessage[]; draft: string; feedbackContext?: AssistantContext };
 export type AssistantState = {
   version: 1;
   mode: "floating" | "sidebar";
@@ -29,6 +31,8 @@ export type AssistantState = {
 export type AssistantProgress = { text: string; activity: "starting" | "searching" | "writing" };
 export type WorkflowsAssistantPlatform = {
   openLink?: (url: string) => Promise<void>;
+  /** Save user feedback locally for the existing discovery task, without starting AI. */
+  saveFeedback?: (workflow: WorkflowMap, feedback: string) => Promise<void>;
   load: () => Promise<AssistantState | null>;
   save: (state: AssistantState) => Promise<void>;
   ask: (request: {
@@ -74,3 +78,12 @@ export function assistantContextSnapshot(context: AssistantContext): AssistantCo
   return JSON.parse(JSON.stringify(context, (key, value) =>
     ["dataUrl", "filePath", "screenshot", "screenshots", "userCorrection"].includes(key) ? undefined : value));
 }
+
+export type WorkflowComposerAccessoryProps = {
+  inputValue: string;
+  inputRef: import("react").RefObject<HTMLTextAreaElement>;
+  onValueChange: (value: string) => void;
+  disabled: boolean;
+  sessionId: string;
+};
+export type WorkflowComposerAccessory = (props: WorkflowComposerAccessoryProps) => import("react").ReactNode;

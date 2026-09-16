@@ -7,11 +7,19 @@ import { ConnectedShareDialog } from "@/components/connected-share-dialog";
 import { createWorkflowShareArtifact, type ConnectedShareArtifact, type ConnectedShareApp } from "@/lib/connected-share";
 import { ConnectionsSection } from "@/components/settings/connections-section";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { WorkflowsApp, type WorkflowsAppProps, type WorkflowMap } from "@screenpipe/workflows-ui";
+import { WorkflowsApp, type WorkflowsAppProps, type WorkflowMap, type WorkflowComposerAccessoryProps } from "@screenpipe/workflows-ui";
 import { createFixtureWorkflowsPlatform } from "@screenpipe/workflows-ui/fixture";
 import { desktopWorkflowsPlatform } from "@/lib/workflows/desktop-platform";
 import { ProductSwitcher, type ProductMode } from "./product-switcher";
+import { ComposerDictationControl } from "@/components/chat/standalone/composer-dictation-control";
+import { usePlatform } from "@/lib/hooks/use-platform";
 import { WorkflowTasksPrompt } from "./workflow-tasks-prompt";
+
+function WorkflowDictation(props: WorkflowComposerAccessoryProps) {
+  const { isMac } = usePlatform();
+  return <ComposerDictationControl {...props} isMac={isMac} />;
+}
+const composerAccessory = (props: WorkflowComposerAccessoryProps) => <WorkflowDictation key={props.sessionId} {...props} />;
 
 // Only the existing browser-mock build gets synthetic data. Native builds use
 // the parent PR's adapter, native recorder and app-local persistent storage.
@@ -42,7 +50,7 @@ export function IntegratedWorkflows({ active, fullscreen = false, onModeChange, 
         onConnectionClose={closeConnections}
       />}
       {platform.managesAnalysis && <WorkflowTasksPrompt active={active} />}
-      <WorkflowsApp fullscreen={fullscreen} onShareWorkflow={openShare} platform={platform} active={active} storageKey={null}
+      <WorkflowsApp composerAccessory={composerAccessory} fullscreen={fullscreen} onShareWorkflow={openShare} platform={platform} active={active} storageKey={null}
         recordingStatus={recordingStatus} navigationFooter={navigationFooter}
         navigationBrand={<ProductSwitcher mode="workflows" onChange={onModeChange} />} />
     </TooltipProvider>

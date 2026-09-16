@@ -28,8 +28,11 @@ function fixtureAssistant(): WorkflowsAssistantPlatform {
       saved = state;
       if (typeof window !== "undefined") window.localStorage.setItem("workflows-preview-assistant", JSON.stringify(state));
     },
+    saveFeedback: async (workflow, feedback) => { window.localStorage.setItem(`workflows-preview-feedback:${workflow.id || workflow.title}`, feedback); },
     ask: async ({ context, signal, onProgress }) => {
-      const answer = context?.workflow
+      const answer = context?.purpose === "feedback"
+        ? "Your feedback is saved in this fictional preview. In the desktop app, the next workflow update uses it to refine this map. No live workflow was changed here."
+        : context?.workflow
         ? `The friction is in **${context.workflow.stages[1]?.name ?? "the handoff"}**. In this fictional preview, information gets checked in several places before the next step can begin.\n\nLook at the evidence under that step to see the repeated checks. The map alone doesn’t establish how much time could be saved.\n\nI’d start by bringing those inputs together, then compare the next few occurrences.`
         : "This browser preview uses fictional workflows. In the desktop app, I can search your captured work and return specific moments with dates and evidence.\n\nOpen a workflow to ask about its steps here.";
       onProgress({ text: "", activity: "searching" });

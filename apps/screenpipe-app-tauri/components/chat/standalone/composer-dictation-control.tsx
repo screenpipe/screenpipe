@@ -215,6 +215,7 @@ export function ComposerDictationControl({
               "h-8 w-8 shrink-0 rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-signal focus-visible:ring-offset-1 motion-reduce:transition-none",
             )}
             onPointerDown={handlePointerDown}
+            onClick={event => { if (event.detail === 0 && !disabled) void dictation.start(); }}
             aria-label={`Dictate message (${shortcut})`}
           >
             <Mic className="h-4 w-4" />
