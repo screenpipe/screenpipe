@@ -8959,6 +8959,23 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     #[test]
+    fn oversized_agent_history_preserves_terminal_success_and_error() {
+        for reason in ["stop", "error"] {
+            let mut output = crate::agents::pi::BoundedOutput::default();
+            output.push_line(r#"{"type":"agent_start"}"#);
+            let event = serde_json::json!({"type":"agent_end","messages":[
+                {"role":"toolResult","content":[{"type":"text","text":"x".repeat(300_000)}]},
+                {"role":"assistant","stopReason":reason,"content":[{"type":"text","text":"Saved the update."}]}
+            ]});
+            output.push_line(&event.to_string());
+            output.push_line(r#"{"type":"agent_settled"}"#);
+            let stored = filter_ndjson_stdout(&output.into_string());
+            assert!(stored.len() < 10_000);
+            assert_eq!(stdout_has_verified_pipe_result(&stored), reason == "stop");
+        }
+    }
+
+    #[test]
     fn missing_save_receipt_fails_despite_normal_assistant_text() {
         let stdout = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"No changes saved."}]}]}"#;
         let stderr = r#"{"error":{"code":"missing_output","message":"The agent could not save a supported update."}}"#;

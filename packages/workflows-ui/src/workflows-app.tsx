@@ -1333,6 +1333,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
         if (job?.status !== "complete") setAnalysisJob(job);
         if (job && (job.status === "queued" || job.status === "processing")) {
           setAnalyzing(true);
+          setAnalysisError("");
         } else {
           if (job && observedJob.current !== job.id) {
             if (job.status === "complete") {
