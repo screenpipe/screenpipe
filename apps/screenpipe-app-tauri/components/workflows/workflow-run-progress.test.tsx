@@ -43,6 +43,15 @@ it("shows no-change success and never labels a failed run with older change coun
   const view = render(<WorkflowRunProgress active={false} job={{ id: "1", status: "complete" }} changes={{ created: 0, updated: 0 }} analyze={vi.fn()} />);
   expect(screen.getByRole("status")).toHaveTextContent("Up to date");
   view.rerender(<WorkflowRunProgress active={false} job={{ id: "2", status: "failed" }} changes={{ created: 0, updated: 2 }} analyze={vi.fn()} />);
-  expect(screen.getByRole("status")).toHaveTextContent("Update not saved");
+  expect(screen.getByRole("status")).toHaveTextContent("Update failed");
   expect(screen.queryByText("0 new · 2 updated")).not.toBeInTheDocument();
+});
+
+it("shows an incomplete pipeline as resumable without claiming the catalog saved", () => {
+  const analyze = vi.fn();
+  render(<WorkflowRunProgress active={false} job={{ id: "activity:48", status: "incomplete", message: "Resume to continue" }} changes={{ created: 0, updated: 2 }} analyze={analyze} />);
+  expect(screen.getByRole("status")).toHaveTextContent("Update incomplete");
+  expect(screen.queryByText("0 new · 2 updated")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Resume update" }));
+  expect(analyze).toHaveBeenCalledOnce();
 });

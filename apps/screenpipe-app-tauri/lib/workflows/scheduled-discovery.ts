@@ -56,7 +56,7 @@ export async function loadScheduledCatalog(): Promise<WorkflowAnalysis | null> {
 
 function job(execution: any): WorkflowAnalysisJob {
   const status = execution.status === "completed" ? "complete"
-    : ["failed", "cancelled", "interrupted"].includes(execution.status) ? "failed"
+    : ["failed", "cancelled", "interrupted", "timed_out"].includes(execution.status) ? "failed"
     : execution.status === "running" ? "processing" : "queued";
   return { id: String(execution.id), status, startedAt: execution.started_at,
     message: execution.status === "cancelled" ? "Update stopped. Your saved workflows are still available."
@@ -106,7 +106,7 @@ export async function getWorkflowJob(id: string): Promise<WorkflowAnalysisJob> {
   // A later dependency can finish without input. It must not hide the failure
   // that prevented this cycle's activity scan from producing any input.
   const cycleStart = Date.parse(tasks.find(item => item.task === WORKFLOW_TASKS[0])?.execution?.started_at || data.started_at);
-  const failure = tasks.find(item => item.execution && ["failed", "cancelled", "interrupted"].includes(item.execution.status)
+  const failure = tasks.find(item => item.execution && ["failed", "cancelled", "interrupted", "timed_out"].includes(item.execution.status)
     && Date.parse(item.execution.started_at) >= cycleStart);
   if (failure) return tracked(failure.execution, failure.task);
   const pipeline = await request(`/workflows/pipeline?task=${TASK}`);
@@ -122,7 +122,8 @@ export async function getWorkflowJob(id: string): Promise<WorkflowAnalysisJob> {
   // so a missed event or disabled task never leaves a permanent spinner.
   const latest = tasks.filter(item => item.execution).sort((a,b) => Date.parse(b.execution.finished_at || b.execution.started_at) - Date.parse(a.execution.finished_at || a.execution.started_at))[0];
   const finished = Date.parse(latest?.execution.finished_at || data.started_at);
-  if (Date.now() - finished > 30_000) return { ...original, status: "failed", message: "Workflow progress saved. Update now to resume the remaining stages." };
+  // Allow several 30-second scheduler ticks, including its run stagger.
+  if (Date.now() - finished > 90_000) return { ...original, status: "incomplete", message: "Update paused before all stages finished. Resume to continue; your saved workflows are still available." };
   return { ...original, status: "queued", message: "Preparing the next enrichment task" };
 }
 

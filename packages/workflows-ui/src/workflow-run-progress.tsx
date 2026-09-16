@@ -48,12 +48,12 @@ export function WorkflowRunProgress({ job, active, subscribe, stop, analyze, upd
   const seconds = job?.startedAt ? Math.max(0, Math.floor((now - Date.parse(job.startedAt)) / 1000)) : NaN;
   const result = changes ? changes.created === 0 && changes.updated === 0 ? "Up to date" : `${changes.created} new · ${changes.updated} updated` : "Workflows updated";
   const label = active ? current?.label ?? (job?.message || (job?.status === "queued" ? "Waiting for agent" : "Agent working"))
-    : job?.status === "failed" ? "Update not saved" : job?.status === "complete" ? result
+    : job?.status === "incomplete" ? "Update incomplete" : job?.status === "failed" ? "Update failed" : job?.status === "complete" ? result
     : updatedAt ? `Updated ${new Date(updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "";
   return <div className={styles.refreshControls}>
     {(active || items.length > 0) ? <div ref={root} className={styles.runProgress}>
       <button ref={toggle} type="button" className={styles.runToggle} aria-expanded={open} aria-label={`${label}. Show agent activity`} onClick={() => setOpen(!open)}>
-        {active ? <Loader2 size={14} className={styles.runSpinner} /> : job?.status === "failed" ? <AlertCircle size={14} /> : <Check size={14} />}
+        {active ? <Loader2 size={14} className={styles.runSpinner} /> : job?.status === "failed" ? <AlertCircle size={14} /> : job?.status === "incomplete" ? <Circle size={14} /> : <Check size={14} />}
         <span role="status">{label}</span>
         {active && Number.isFinite(seconds) && <time>{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}</time>}
         <ChevronDown size={12} style={{ transform: open ? "rotate(180deg)" : undefined }} />
@@ -64,10 +64,10 @@ export function WorkflowRunProgress({ job, active, subscribe, stop, analyze, upd
           {item.status === "error" ? <AlertCircle size={13} /> : item.status === "complete" ? <Check size={13} /> : active ? <Loader2 size={13} className={styles.runSpinner} /> : <Circle size={13} />}
           <span>{item.label}{!active && item.status === "running" ? " · ended" : ""}</span>
         </li>)}</ol> : <p>{unavailable ? "Live activity is unavailable. The task status will keep updating." : "Waiting for the next agent action…"}</p>}
-        <footer>{active ? "Your saved workflows stay available." : job?.status === "failed" ? job.message : result}</footer>
+        <footer>{active ? "Your saved workflows stay available." : (job?.status === "failed" || job?.status === "incomplete") ? job.message : result}</footer>
       </section>}
     </div> : <span role="status">{label}</span>}
     {active && stop ? <button className={styles.secondaryButton} onClick={stop}><Square size={11} />Stop</button>
-      : <button className={styles.secondaryButton} onClick={analyze} disabled={active || !!disabledReason} title={disabledReason}><RefreshCw size={14} />Update now</button>}
+      : <button className={styles.secondaryButton} onClick={analyze} disabled={active || !!disabledReason} title={disabledReason}><RefreshCw size={14} />{job?.status === "incomplete" ? "Resume update" : "Update now"}</button>}
   </div>;
 }
