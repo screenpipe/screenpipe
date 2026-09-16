@@ -12,6 +12,7 @@
     "e2e/scripts/verify-spotlight-exclusion.ts",
     "scripts/timeline-parity-export.ts",
     "scripts/eval-workflow-discovery.ts",
+    "scripts/eval-workflow-guide.ts",
     "scripts/eval-workflow-pipeline.ts",
     "scripts/eval-workflows-context.ts",
     "scripts/**/*.js"
