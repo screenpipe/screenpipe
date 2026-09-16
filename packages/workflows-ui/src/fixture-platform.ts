@@ -15,6 +15,7 @@ import type {
 } from "./model";
 import type { WorkflowsPlatform } from "./platform";
 import { isAssistantState, type AssistantState, type WorkflowsAssistantPlatform } from "./assistant";
+import { guideKey, parseGuide, type WorkflowGuide } from "./guide";
 import { workflowTiming } from "./timing";
 
 function fixtureAssistant(): WorkflowsAssistantPlatform {
@@ -363,6 +364,42 @@ function fixtureSkillReceipt(draft: WorkflowSkillDraft) {
   };
 }
 
+async function rasterizeFixture(workflow: WorkflowMap) {
+      // Rasterize this file's fictional SVGs so previews exercise the same raster-only export.
+      for (const stage of workflow.stages) {
+        if (!stage.screenshot?.dataUrl.startsWith("data:image/svg+xml")) continue;
+        const image = new Image();image.src=stage.screenshot.dataUrl;await image.decode();
+        const canvas=document.createElement("canvas");canvas.width=image.width;canvas.height=image.height;
+        canvas.getContext("2d")!.drawImage(image,0,0);stage.screenshot.dataUrl=canvas.toDataURL("image/png");
+      }
+}
+
+// Maintained browser-only guide fixture. No model, recorder or native filesystem access.
+export function fixtureGuides(): NonNullable<WorkflowsPlatform["guides"]> {
+  return {
+    load: async workflow => { await rasterizeFixture(workflow); const raw=localStorage.getItem(`workflow-guide-preview:${guideKey(workflow)}`); return raw ? parseGuide(JSON.parse(raw)) : null; },
+    save: async guide => { localStorage.setItem(`workflow-guide-preview:${guide.workflowKey}`,JSON.stringify(guide)); },
+    export: async (html,title) => {
+      const url=URL.createObjectURL(new Blob([html],{type:"text/html"}));
+      const link=document.createElement("a");link.href=url;link.download=`${title}.html`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);return true;
+    },
+    generate: async (workflow,signal,progress) => {
+      for (const message of ["Reading your workflow","Checking the source material","Writing steps and completion checks"]) {
+        progress(message);await new Promise(r=>setTimeout(r,1000));
+        if(signal.aborted)throw new DOMException("Stopped","AbortError");
+      }
+      return {version:1,workflowKey:guideKey(workflow),sourceRevision:workflow.revision??0,
+        title:workflow.title,summary:workflow.description,
+        prerequisites:["A clearly defined research question and the intended audience.","Access to the source documents and a place to collect the findings."],
+        steps:workflow.stages.map((stage,i)=>({title:stage.name,instruction:stage.description,expectedResult:i===workflow.stages.length-1?workflow.outcome:"The relevant information is ready for the next step.",sourceStage:i,includeImage:true})),
+        exceptions:["If sources disagree, preserve both references and flag the disagreement before drawing a conclusion."],
+        completion:["Each conclusion links to its supporting source.","Open questions are separated from confirmed findings."],
+        questions:["Who should review the synthesis before it is shared?"],
+      } satisfies WorkflowGuide;
+    },
+  };
+}
+
 export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixtureWorkflowAnalysis): WorkflowsPlatform {
   let profile = fixturePersonalWorkProfile;
   return {
@@ -379,6 +416,7 @@ export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixt
     analyzeCapturedWork: async () => analysis,
     loadWorkProfile: async () => profile,
     saveWorkProfile: async (nextProfile) => (profile = nextProfile),
+    guides: fixtureGuides(),
     generateWorkflowSkill: async (workflow, _profile, onProgress) => fixtureSkillDraftWithProgress(workflow, onProgress),
     saveWorkflowSkill: async (draft) => fixtureSkillReceipt(draft),
     skillInstallMode: "preview",

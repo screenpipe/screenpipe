@@ -9,7 +9,7 @@ import { INTERNAL_TITLE_PREFIX } from "@/lib/utils/internal-session";
 import type { WorkflowsAssistantPlatform } from "@screenpipe/workflows-ui";
 
 export async function runWorkflowAgent({ name, prompt, config, signal, onProgress, onEvent, allowEmpty = false }: {
-  name: "assistant" | "context";
+  name: "assistant" | "context" | "guide";
   prompt: string;
   config: PiProviderConfig;
   signal: AbortSignal;

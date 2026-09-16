@@ -1,5 +1,6 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
+import { desktopGuides } from "./guides";
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
@@ -150,6 +151,7 @@ export const desktopWorkflowsPlatform: WorkflowsPlatform = {
   saveWorkProfile,
   generateWorkflowSkill,
   saveWorkflowSkill,
+  guides: desktopGuides,
   openAccount: async () => {
     const result = await commands.openLoginWindow(null, "sign-up");
     if (result.status !== "ok") throw new Error(result.error);

@@ -1,0 +1,401 @@
+/* screenpipe — AI that knows everything you've seen, said, or heard */
+/* https://screenpipe.com */
+.guide {
+  color: var(--ink, #171815);
+  font-size: 14px;
+}
+.guide button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--line, #dfe1d9);
+  border-radius: 7px;
+  min-height: 36px;
+  padding: 8px 12px;
+  background: var(--panel, #fff);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.guide button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.guide button:focus-visible,
+.guide a:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+}
+.guide .primary {
+  background: var(--ink, #171815);
+  color: var(--panel, #fff);
+  border-color: var(--ink, #171815);
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 0 24px;
+  border-bottom: 1px solid var(--line, #dfe1d9);
+}
+.toolbar > button {
+  border: 0;
+  padding-left: 0;
+  background: transparent;
+}
+.toolbar > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.toolbar span {
+  color: var(--muted, #777b70);
+  font-size: 12px;
+}
+.layout {
+  display: grid;
+  grid-template-columns: 205px minmax(0, 820px);
+  gap: 48px;
+  justify-content: center;
+  padding-top: 38px;
+}
+.outline {
+  align-self: start;
+  position: sticky;
+  top: 25px;
+}
+.eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.11em;
+  font-weight: 600;
+  color: var(--muted, #777b70);
+}
+.outline a {
+  display: flex;
+  gap: 12px;
+  padding: 10px 0;
+  text-decoration: none;
+  font-size: 12px;
+  line-height: 1.6;
+  color: inherit;
+}
+.outline a span {
+  color: var(--muted, #777b70);
+  font-size: 10px;
+  padding-top: 2px;
+}
+.note {
+  border-top: 1px solid var(--line, #dfe1d9);
+  margin-top: 30px;
+  padding-top: 22px;
+  color: var(--muted, #777b70);
+}
+.note p {
+  color: var(--ink, #171815);
+  margin: 10px 0 5px;
+  font-weight: 600;
+}
+.note small {
+  line-height: 1.7;
+  display: block;
+}
+.document {
+  min-width: 0;
+  padding-bottom: 70px;
+}
+.intro {
+  margin-bottom: 32px;
+}
+.intro h1 {
+  font-size: clamp(28px, 3vw, 42px);
+  letter-spacing: -0.035em;
+  line-height: 1.15;
+  margin: 18px 0;
+}
+.intro p:not(.eyebrow) {
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--muted, #777b70);
+}
+.intro small {
+  color: var(--muted, #777b70);
+  font-size: 11px;
+}
+.eyebrow span {
+  display: inline-block;
+  margin-left: 12px;
+  border: 1px solid var(--line, #dfe1d9);
+  padding: 4px 8px;
+  border-radius: 20px;
+  letter-spacing: 0;
+  font-size: 11px;
+}
+.section {
+  padding: 22px 26px;
+  background: var(--soft, #f1f2ec);
+  border: 1px solid var(--line, #dfe1d9);
+  border-radius: 9px;
+  margin: 20px 0;
+  scroll-margin-top: 25px;
+}
+.section h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  letter-spacing: -0.02em;
+}
+.section ul {
+  margin: 0;
+  padding-left: 19px;
+  line-height: 1.9;
+}
+.muted {
+  color: var(--muted, #777b70);
+  font-size: 13px;
+  line-height: 1.65;
+  margin: 0;
+}
+.steps {
+  margin-top: 30px;
+}
+.step {
+  padding: 26px 0;
+  border-top: 1px solid var(--line, #dfe1d9);
+  scroll-margin-top: 25px;
+}
+.stepHeading {
+  display: flex;
+  gap: 13px;
+  align-items: center;
+}
+.stepHeading h2 {
+  font-size: 19px;
+  letter-spacing: -0.025em;
+  margin: 0;
+  flex: 1;
+}
+.number {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--ink, #171815);
+  color: var(--panel, #fff);
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.step p {
+  line-height: 1.75;
+  margin: 15px 0;
+  white-space: pre-wrap;
+}
+.step figure {
+  margin: 20px 0;
+  position: relative;
+}
+.step img {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--line, #dfe1d9);
+  border-radius: 8px;
+}
+.step figure button {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+}
+.stepTools {
+  display: flex;
+  gap: 4px;
+}
+.stepTools button {
+  min-height: 30px;
+  padding: 6px;
+}
+.result {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--muted, #777b70);
+  font-size: 13px;
+}
+label.result {
+  display: block;
+  margin-top: 18px;
+}
+.noImage {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  min-height: 60px;
+  border: 1px dashed var(--line, #dfe1d9);
+  border-radius: 7px;
+  padding: 12px 16px;
+  font-size: 12px;
+  color: var(--muted, #777b70);
+}
+.guide input:not([type="checkbox"]),
+.guide textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--panel, #fff);
+  color: var(--ink, #171815);
+  border: 1px solid var(--line, #dfe1d9);
+  border-radius: 6px;
+  padding: 12px;
+  margin: 8px 0;
+  font: inherit;
+  line-height: 1.6;
+}
+.guide textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+.guide input[aria-label="Guide title"] {
+  font-size: 28px;
+  font-weight: 600;
+}
+.empty {
+  max-width: 650px;
+  min-height: 470px;
+  margin: 70px auto;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.empty h1 {
+  font-size: 30px;
+  letter-spacing: -0.04em;
+  margin: 8px 0;
+}
+.empty p {
+  margin: 0;
+  line-height: 1.7;
+  color: var(--muted, #777b70);
+}
+.empty small {
+  margin-top: 16px;
+  color: var(--muted, #777b70);
+}
+.mark {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--line, #dfe1d9);
+  border-radius: 14px;
+  margin-bottom: 14px;
+}
+.phases {
+  display: flex;
+  gap: 24px;
+  margin: 20px 0;
+  font-size: 12px;
+  color: var(--muted, #777b70);
+}
+.notice {
+  border-left: 2px solid #aaa;
+  padding: 12px 18px;
+  line-height: 1.65;
+  font-size: 13px;
+}
+.exportDialog {
+  width: min(480px, calc(100vw - 36px));
+  box-sizing: border-box;
+  border: 1px solid var(--line, #dfe1d9);
+  border-radius: 12px;
+  padding: 26px;
+  background: var(--panel, #fff);
+  color: var(--ink, #171815);
+}
+.exportDialog::backdrop {
+  background: rgba(0, 0, 0, 0.35);
+}
+.exportDialog > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.exportDialog h2 {
+  font-size: 23px;
+  letter-spacing: -0.025em;
+  margin: 0;
+}
+.exportDialog p,
+.exportDialog small {
+  color: var(--muted, #777b70);
+  line-height: 1.65;
+}
+.exportDialog input[type="checkbox"] {
+  appearance: auto;
+  accent-color: #171815;
+  color-scheme: light;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.exportDialog label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 0;
+}
+.exportDialog small {
+  display: block;
+  margin-bottom: 24px;
+}
+.spin {
+  animation: turn 1.5s linear infinite;
+}
+@keyframes turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+@media (max-width: 1050px) {
+  .layout {
+    grid-template-columns: minmax(0, 820px);
+    gap: 0;
+  }
+  .outline {
+    display: none;
+  }
+}
+@media (max-width: 650px) {
+  .toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .toolbar > div {
+    flex-wrap: wrap;
+  }
+  .toolbar span {
+    width: 100%;
+  }
+  .section {
+    padding: 18px;
+  }
+  .stepHeading {
+    flex-wrap: wrap;
+  }
+  .stepTools {
+    margin-left: auto;
+  }
+  .phases {
+    gap: 12px;
+  }
+  .empty {
+    margin: 40px auto;
+  }
+}

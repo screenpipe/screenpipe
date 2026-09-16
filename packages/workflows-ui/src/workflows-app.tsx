@@ -4,6 +4,7 @@
 
 "use client";
 import { matchesSidebarShortcut, useSidebarShortcuts } from "./sidebar-shortcuts";
+import { WorkflowGuide } from "./workflow-guide";
 import { WorkflowAssistant } from "./workflow-assistant";
 import { WorkflowRunProgress } from "./workflow-run-progress";
 import { workflowTiming } from "./timing";
@@ -17,6 +18,7 @@ import {
   ArrowRight,
   BadgeDollarSign,
   Building2,
+  BookOpen,
   CalendarRange,
   Camera,
   ChartPie,
@@ -862,6 +864,7 @@ function WorkflowCorrection({ workflow, save }: { workflow: WorkflowMap; save: (
 
 function WorkflowDetail({ workflow, navigate, platform, workProfile, saveCorrection, onShareWorkflow }: { workflow: WorkflowMap | null; navigate: (view: AppView) => void; platform: WorkflowsPlatform; workProfile: WorkProfile | null; saveCorrection?: (note: string) => Promise<void>; onShareWorkflow?: WorkflowsAppProps["onShareWorkflow"] }) {
   const [expandedStages, setExpandedStages] = useState<Set<number>>(() => new Set());
+  const [guideOpen, setGuideOpen] = useState(false);
   const [skillOpen, setSkillOpen] = useState(false);
   const [skillDraft, setSkillDraft] = useState<WorkflowSkillDraft | null>(null);
   const [skillGenerating, setSkillGenerating] = useState(false);
@@ -872,6 +875,7 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile, saveCorrect
   useEffect(() => {
     setExpandedStages(new Set());
     setSkillOpen(false);
+    setGuideOpen(false);
     setSkillDraft(null);
     setSkillSaved(null);
     setSkillError("");
@@ -906,6 +910,7 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile, saveCorrect
       .catch((error) => setSkillError(error instanceof Error ? error.message : String(error || "Could not save the skill.")))
       .finally(() => setSkillSaving(false));
   }, [platform, skillDraft]);
+  if (workflow && guideOpen && platform.guides) return <WorkflowGuide key={workflow.id || workflow.title} workflow={workflow} platform={platform.guides} close={() => setGuideOpen(false)} />;
   if (!workflow) return <section className={styles.emptyState}><ListTree size={23} /><h2>No workflow selected</h2><button className={styles.primaryButton} onClick={() => navigate("workflows")}>View workflows</button></section>;
   const measuredDuration = hasMeasuredDuration(workflow);
   const timing = workflowTiming(workflow.timing);
@@ -922,7 +927,7 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile, saveCorrect
     <>
       <button className={styles.backButton} onClick={() => navigate("workflows")}><ArrowLeft size={14} />All workflows</button>
       <section className={styles.detailHeader}>
-        <div><Pill>Evidence on {workflow.repetitions} captured day{workflow.repetitions === 1 ? "" : "s"}</Pill><h1>{workflow.title}</h1><p>{workflow.description}</p><div className={styles.workflowActions}>{platform.generateWorkflowSkill && platform.saveWorkflowSkill && <button className={styles.skillButton} type="button" onClick={openSkill}><Sparkles size={14} />{skillGenerating ? "Creating skill…" : skillSaved ? platform.skillInstallMode === "preview" ? "Skill preview" : "Skill installed" : skillDraft ? "Review skill" : "Create skill"}</button>}{onShareWorkflow && <button className={styles.skillButton} type="button" onClick={() => onShareWorkflow(workflow)}><Share2 size={14} />Share with team</button>}{platform.assistant?.saveFeedback && <button className={styles.skillButton} type="button" onClick={() => window.dispatchEvent(new CustomEvent("workflows:feedback", { detail: { key: `feedback:${workflow.id || workflow.title}`, title: workflow.title, workflow, purpose: "feedback" } }))}><MessageCircle size={14} />Feedback</button>}</div></div>
+        <div><Pill>Evidence on {workflow.repetitions} captured day{workflow.repetitions === 1 ? "" : "s"}</Pill><h1>{workflow.title}</h1><p>{workflow.description}</p><div className={styles.workflowActions}>{platform.guides && <button className={styles.skillButton} type="button" onClick={() => setGuideOpen(true)}><BookOpen size={14}/>Create guide</button>}{platform.generateWorkflowSkill && platform.saveWorkflowSkill && <button className={styles.skillButton} type="button" onClick={openSkill}><Sparkles size={14} />{skillGenerating ? "Creating skill…" : skillSaved ? platform.skillInstallMode === "preview" ? "Skill preview" : "Skill installed" : skillDraft ? "Review skill" : "Create skill"}</button>}{onShareWorkflow && <button className={styles.skillButton} type="button" onClick={() => onShareWorkflow(workflow)}><Share2 size={14} />Share with team</button>}{platform.assistant?.saveFeedback && <button className={styles.skillButton} type="button" onClick={() => window.dispatchEvent(new CustomEvent("workflows:feedback", { detail: { key: `feedback:${workflow.id || workflow.title}`, title: workflow.title, workflow, purpose: "feedback" } }))}><MessageCircle size={14} />Feedback</button>}</div></div>
         {timing ? <div className={styles.detailTotal}><span>{timing.sampleCount > 1 ? "Avg. time / run" : "Time for one run"}</span><strong>{formatEstimatedMinutes(timing.averageMinutes)}</strong><small>{timing.sampleCount} run{timing.sampleCount === 1 ? "" : "s"} · estimated elapsed time</small></div> : measuredDuration && <div className={styles.detailTotal}><span>Observed meeting duration</span><strong>{workflowDurationLabel(workflow)}</strong></div>}
       </section>
       <p className={styles.workflowReviewState}>{workflow.evidenceStatus === "supported-steps" ? "Source-backed steps · not execution-tested" : "Needs review"}</p>

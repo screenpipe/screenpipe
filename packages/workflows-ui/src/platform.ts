@@ -57,6 +57,12 @@ export type WorkflowsPlatform = {
   getAnalysisJob?: (jobId: string) => Promise<WorkflowAnalysisJob>;
   loadWorkProfile?: (scope?: WorkflowScope) => Promise<WorkProfile | null>;
   saveWorkProfile?: (profile: WorkProfile, scope?: WorkflowScope) => Promise<WorkProfile>;
+  guides?: {
+    generate: (workflow: WorkflowMap, signal: AbortSignal, progress: (message: string) => void) => Promise<import("./guide").WorkflowGuide>;
+    load: (workflow: WorkflowMap) => Promise<import("./guide").WorkflowGuide | null>;
+    save: (guide: import("./guide").WorkflowGuide) => Promise<void>;
+    export: (html: string, title: string) => Promise<boolean>;
+  };
   generateWorkflowSkill?: (
     workflow: WorkflowMap,
     profile?: WorkProfile | null,

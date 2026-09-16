@@ -1,0 +1,583 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+"use client";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
+import {
+  ArrowLeft,
+  ArrowDown,
+  ArrowUp,
+  BookOpen,
+  Check,
+  Download,
+  ImageOff,
+  Loader2,
+  Pencil,
+  Plus,
+  Trash2,
+  X,
+} from "lucide-react";
+import type { WorkflowMap } from "./model";
+import type { WorkflowsPlatform } from "./platform";
+import { guideHtml, guideImage, type WorkflowGuide as Guide } from "./guide";
+import styles from "./workflow-guide.module.css";
+
+export function WorkflowGuide({
+  workflow,
+  platform,
+  close,
+}: {
+  workflow: WorkflowMap;
+  platform: NonNullable<WorkflowsPlatform["guides"]>;
+  close: () => void;
+}) {
+  const [draft, setDraft] = useState<Guide | null>(null);
+  const [busy, setBusy] = useState(true);
+  const [progress, setProgress] = useState("Opening your guide");
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [images, setImages] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
+  const dialog = useRef<HTMLDialogElement>(null);
+  const controller = useRef<AbortController>();
+  const latest = useRef<Guide | null>(null);
+  const saveVersion = useRef(0);
+  const loadVersion = useRef(0);
+  const mounted = useRef(true);
+  async function persist(next: Guide) {
+    const version = ++saveVersion.current;
+    setSaved("Saving…");
+    try {
+      await platform.save(next);
+      if (mounted.current && version === saveVersion.current)
+        setSaved("Saved on this device");
+    } catch {
+      if (mounted.current && version === saveVersion.current)
+        setSaved("Could not save. Retry before leaving.");
+    }
+  }
+  function update(next: Guide) {
+    latest.current = next;
+    setDraft(next);
+    void persist(next);
+  }
+  async function generate() {
+    controller.current?.abort();
+    const run = new AbortController();
+    controller.current = run;
+    setBusy(true);
+    setError("");
+    setProgress("Reading your workflow");
+    try {
+      const next = await platform.generate(workflow, run.signal, (message) => {
+        if (!run.signal.aborted) setProgress(message);
+      });
+      if (run.signal.aborted) return;
+      update(next);
+    } catch (e) {
+      if (!run.signal.aborted)
+        setError(
+          e instanceof Error
+            ? e.message
+            : "Could not create the guide. Try again.",
+        );
+    } finally {
+      if (!run.signal.aborted) setBusy(false);
+    }
+  }
+  async function openGuide() {
+    const version = ++loadVersion.current;
+    setBusy(true);
+    setError("");
+    setProgress("Opening your guide");
+    try {
+      const existing = await platform.load(workflow);
+      if (version !== loadVersion.current) return;
+      if (existing) {
+        latest.current = existing;
+        setDraft(existing);
+        setSaved("Saved on this device");
+        setBusy(false);
+      } else void generate();
+    } catch {
+      if (version === loadVersion.current) {
+        setError(
+          "Your saved guide could not be opened. Its files are unchanged.",
+        );
+        setBusy(false);
+      }
+    }
+  }
+  useEffect(() => {
+    mounted.current = true;
+    void openGuide();
+    return () => {
+      loadVersion.current++;
+      mounted.current = false;
+      controller.current?.abort();
+    };
+  }, []);
+  function jump(event: MouseEvent<HTMLAnchorElement>) {
+    // The host uses the URL hash for workflow navigation. Keep section links local.
+    event.preventDefault();
+    document
+      .getElementById(event.currentTarget.hash.slice(1))
+      ?.scrollIntoView({ block: "start" });
+  }
+  const stale = draft && draft.sourceRevision !== (workflow.revision ?? 0);
+  function lines(
+    label: string,
+    key: "prerequisites" | "exceptions" | "completion" | "questions",
+    placeholder: string,
+  ) {
+    if (!draft) return null;
+    return (
+      <section className={styles.section} id={`guide-${key}`}>
+        <h2>{label}</h2>
+        {editing ? (
+          <textarea
+            aria-label={label}
+            placeholder={placeholder}
+            value={draft[key].join("\n")}
+            onChange={(e) =>
+              update({ ...draft, [key]: e.target.value.split("\n") })
+            }
+          />
+        ) : draft[key].filter(Boolean).length ? (
+          <ul>
+            {draft[key].filter(Boolean).map((line, i) => (
+              <li key={i}>{line}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className={styles.muted}>{placeholder}</p>
+        )}
+      </section>
+    );
+  }
+  return (
+    <div className={styles.guide}>
+      <header className={styles.toolbar}>
+        <button
+          onClick={() => {
+            controller.current?.abort();
+            close();
+          }}
+        >
+          <ArrowLeft size={16} />
+          Back to workflow
+        </button>
+        <div>
+          <span role="status">{saved}</span>
+          {saved.startsWith("Could not") && (
+            <button
+              onClick={() => latest.current && void persist(latest.current)}
+            >
+              Retry save
+            </button>
+          )}
+          {draft && (
+            <>
+              <button onClick={() => setEditing(!editing)}>
+                {editing ? <Check size={15} /> : <Pencil size={15} />}
+                {editing ? "Done editing" : "Edit guide"}
+              </button>
+              <button
+                className={styles.primary}
+                onClick={() => {
+                  setImages(false);
+                  setExportError("");
+                  dialog.current?.showModal();
+                }}
+              >
+                <Download size={15} />
+                Export guide
+              </button>
+            </>
+          )}
+        </div>
+      </header>
+      {!draft ? (
+        <div className={styles.empty}>
+          <div className={styles.mark}>
+            {busy ? (
+              <Loader2 className={styles.spin} size={25} />
+            ) : (
+              <BookOpen size={25} />
+            )}
+          </div>
+          <p className={styles.eyebrow}>WORKFLOW GUIDE</p>
+          <h1>
+            {busy
+              ? "Turning your work into a guide"
+              : "Your guide needs another try"}
+          </h1>
+          <p>{workflow.title}</p>
+          {busy ? (
+            <>
+              <p role="status">{progress}</p>
+              <div className={styles.phases}>
+                <span>Source material</span>
+                <span>Clear steps</span>
+                <span>Ready to review</span>
+              </div>
+              <button
+                onClick={() => {
+                  loadVersion.current++;
+                  controller.current?.abort();
+                  setBusy(false);
+                  setError(
+                    "Generation stopped. You can try again when you’re ready.",
+                  );
+                }}
+              >
+                Stop
+              </button>
+            </>
+          ) : (
+            <>
+              <p role="alert">{error}</p>
+              <button
+                className={styles.primary}
+                onClick={() => void openGuide()}
+              >
+                Try again
+              </button>
+            </>
+          )}
+          <small>Your workflow stays unchanged.</small>
+        </div>
+      ) : (
+        <div className={styles.layout}>
+          <aside className={styles.outline}>
+            <p className={styles.eyebrow}>IN THIS GUIDE</p>
+            <a onClick={jump} href="#guide-prerequisites">
+              Before you start
+            </a>
+            {draft.steps.map((step, i) => (
+              <a onClick={jump} href={`#guide-step-${i}`} key={i}>
+                <span>{String(i + 1).padStart(2, "0")}</span>
+                {step.title || "Untitled step"}
+              </a>
+            ))}
+            <a onClick={jump} href="#guide-completion">
+              Check your result
+            </a>
+            <div className={styles.note}>
+              <BookOpen size={18} />
+              <p>A draft for your team</p>
+              <small>
+                Review the steps and remove sensitive information before
+                sharing.
+              </small>
+            </div>
+          </aside>
+          <article className={styles.document}>
+            <div className={styles.intro}>
+              <p className={styles.eyebrow}>
+                WORKFLOW GUIDE <span>Draft for review</span>
+              </p>
+              {editing ? (
+                <>
+                  <input
+                    aria-label="Guide title"
+                    value={draft.title}
+                    onChange={(e) =>
+                      update({ ...draft, title: e.target.value })
+                    }
+                  />
+                  <textarea
+                    aria-label="Guide summary"
+                    value={draft.summary}
+                    onChange={(e) =>
+                      update({ ...draft, summary: e.target.value })
+                    }
+                  />
+                </>
+              ) : (
+                <>
+                  <h1>{draft.title}</h1>
+                  <p>{draft.summary}</p>
+                </>
+              )}
+              <small>
+                {draft.steps.length} steps · Based on workflow revision{" "}
+                {draft.sourceRevision}
+              </small>
+            </div>
+            {stale && (
+              <p className={styles.notice}>
+                This workflow has changed since the guide was drafted. Your
+                edits are preserved. Screenshots are unavailable until the guide
+                is reconciled with the new revision.
+              </p>
+            )}
+            {lines(
+              "Before you start",
+              "prerequisites",
+              "No prerequisites confirmed yet. Add the information someone needs before starting.",
+            )}
+            <div className={styles.steps}>
+              {draft.steps.map((step, i) => {
+                const image =
+                  !stale && step.includeImage
+                    ? guideImage(workflow, step.sourceStage)
+                    : null;
+                return (
+                  <section
+                    className={styles.step}
+                    key={i}
+                    id={`guide-step-${i}`}
+                  >
+                    <div className={styles.stepHeading}>
+                      <span className={styles.number}>{i + 1}</span>
+                      {editing ? (
+                        <input
+                          aria-label={`Step ${i + 1} title`}
+                          value={step.title}
+                          onChange={(e) =>
+                            update({
+                              ...draft,
+                              steps: draft.steps.map((s, j) =>
+                                j === i ? { ...s, title: e.target.value } : s,
+                              ),
+                            })
+                          }
+                        />
+                      ) : (
+                        <h2>{step.title}</h2>
+                      )}
+                      {editing && (
+                        <div className={styles.stepTools}>
+                          <button
+                            aria-label={`Move step ${i + 1} up`}
+                            disabled={i === 0}
+                            onClick={() => {
+                              const steps = [...draft.steps];
+                              [steps[i - 1], steps[i]] = [
+                                steps[i],
+                                steps[i - 1],
+                              ];
+                              update({ ...draft, steps });
+                            }}
+                          >
+                            <ArrowUp size={14} />
+                          </button>
+                          <button
+                            aria-label={`Move step ${i + 1} down`}
+                            disabled={i === draft.steps.length - 1}
+                            onClick={() => {
+                              const steps = [...draft.steps];
+                              [steps[i + 1], steps[i]] = [
+                                steps[i],
+                                steps[i + 1],
+                              ];
+                              update({ ...draft, steps });
+                            }}
+                          >
+                            <ArrowDown size={14} />
+                          </button>
+                          <button
+                            aria-label={`Remove step ${i + 1}`}
+                            disabled={draft.steps.length === 1}
+                            onClick={() =>
+                              update({
+                                ...draft,
+                                steps: draft.steps.filter((_, j) => j !== i),
+                              })
+                            }
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    {editing ? (
+                      <textarea
+                        aria-label={`Step ${i + 1} instructions`}
+                        value={step.instruction}
+                        onChange={(e) =>
+                          update({
+                            ...draft,
+                            steps: draft.steps.map((s, j) =>
+                              j === i
+                                ? { ...s, instruction: e.target.value }
+                                : s,
+                            ),
+                          })
+                        }
+                      />
+                    ) : (
+                      <p>{step.instruction}</p>
+                    )}
+                    {image ? (
+                      <figure>
+                        <img
+                          src={image}
+                          alt={`Source for ${step.title}`}
+                          draggable={false}
+                        />
+                        {editing && (
+                          <button
+                            onClick={() =>
+                              update({
+                                ...draft,
+                                steps: draft.steps.map((s, j) =>
+                                  j === i ? { ...s, includeImage: false } : s,
+                                ),
+                              })
+                            }
+                          >
+                            <ImageOff size={14} />
+                            Remove screenshot
+                          </button>
+                        )}
+                      </figure>
+                    ) : (
+                      <div className={styles.noImage}>
+                        <ImageOff size={15} />
+                        <span>No screenshot included</span>
+                        {editing &&
+                          !stale &&
+                          guideImage(workflow, step.sourceStage) && (
+                            <button
+                              onClick={() =>
+                                update({
+                                  ...draft,
+                                  steps: draft.steps.map((s, j) =>
+                                    j === i ? { ...s, includeImage: true } : s,
+                                  ),
+                                })
+                              }
+                            >
+                              Include source screenshot
+                            </button>
+                          )}
+                      </div>
+                    )}
+                    {editing ? (
+                      <label className={styles.result}>
+                        Expected result
+                        <input
+                          aria-label={`Step ${i + 1} expected result`}
+                          value={step.expectedResult}
+                          onChange={(e) =>
+                            update({
+                              ...draft,
+                              steps: draft.steps.map((s, j) =>
+                                j === i
+                                  ? { ...s, expectedResult: e.target.value }
+                                  : s,
+                              ),
+                            })
+                          }
+                        />
+                      </label>
+                    ) : (
+                      step.expectedResult && (
+                        <p className={styles.result}>
+                          <Check size={15} />
+                          {step.expectedResult}
+                        </p>
+                      )
+                    )}
+                  </section>
+                );
+              })}
+            </div>
+            {editing && draft.steps.length < 40 && (
+              <button
+                onClick={() =>
+                  update({
+                    ...draft,
+                    steps: [
+                      ...draft.steps,
+                      {
+                        title: "New step",
+                        instruction: "",
+                        expectedResult: "",
+                        sourceStage: null,
+                        includeImage: false,
+                      },
+                    ],
+                  })
+                }
+              >
+                <Plus size={15} />
+                Add step
+              </button>
+            )}
+            {lines("Exceptions", "exceptions", "No exceptions confirmed yet.")}
+            {lines(
+              "Check your result",
+              "completion",
+              "Add a check that confirms the workflow is complete.",
+            )}
+            {lines(
+              "Still to confirm",
+              "questions",
+              "No open questions in this draft.",
+            )}
+          </article>
+        </div>
+      )}
+      <dialog ref={dialog} className={styles.exportDialog}>
+        <div>
+          <h2>Export your guide</h2>
+          <button
+            aria-label="Close export"
+            onClick={() => dialog.current?.close()}
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <p>
+          A self-contained HTML document. Open it in a browser, share the file,
+          or print it to PDF.
+        </p>
+        <label>
+          <input
+            type="checkbox"
+            checked={images}
+            disabled={Boolean(stale)}
+            onChange={(e) => setImages(e.target.checked)}
+          />
+          Include screenshots I have reviewed
+        </label>
+        <small>
+          Screenshots can contain customer information. Only the selected guide
+          content is exported. Original audio and recordings are never attached.
+        </small>
+        {exportError && <p role="alert">{exportError}</p>}
+        <button
+          className={styles.primary}
+          disabled={exporting || !draft?.title.trim()}
+          onClick={async () => {
+            if (!draft) return;
+            setExporting(true);
+            setExportError("");
+            try {
+              if (
+                await platform.export(
+                  guideHtml(draft, workflow, images),
+                  draft.title,
+                )
+              )
+                dialog.current?.close();
+            } catch {
+              setExportError(
+                "Could not export. Your draft is still open here. Try again.",
+              );
+            } finally {
+              setExporting(false);
+            }
+          }}
+        >
+          <Download size={15} />
+          {exporting ? "Exporting…" : "Export HTML"}
+        </button>
+      </dialog>
+    </div>
+  );
+}

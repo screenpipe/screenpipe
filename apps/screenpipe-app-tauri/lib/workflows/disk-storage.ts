@@ -11,7 +11,7 @@ import {
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
 import type { WorkProfile, WorkflowAnalysis } from "@screenpipe/workflows-ui";
-import { isAssistantState, type AssistantState } from "@screenpipe/workflows-ui";
+import { parseGuide, type WorkflowGuide, isAssistantState, type AssistantState } from "@screenpipe/workflows-ui";
 
 const STORAGE_DIRECTORY = "workflows";
 const CATALOG_PATH = `${STORAGE_DIRECTORY}/catalog.json`;
@@ -133,4 +133,25 @@ export function loadAssistantFromDisk() {
 
 export function saveAssistantToDisk(state: AssistantState) {
   return queueWrite(() => replaceWithBackup("workflows/assistant.json", "workflows/assistant.backup.json", state));
+}
+
+// Guide drafts share the app's serialized, recoverable file writes.
+function isGuideStore(value: unknown): value is Record<string, WorkflowGuide> {
+  if (!asRecord(value) || Array.isArray(value)) return false;
+  try {
+    return Object.entries(value as Record<string, unknown>).every(([key, guide]) => parseGuide(guide).workflowKey === key);
+  } catch { return false; }
+}
+const readGuides = () => readValidated("workflows/guides.json", "workflows/guides.backup.json", isGuideStore, "guides");
+
+export async function loadGuideFromDisk(key: string) {
+  const guides = await readGuides();
+  return guides && Object.hasOwn(guides, key) ? parseGuide(guides[key]) : null;
+}
+export function saveGuideToDisk(guide: WorkflowGuide) {
+  return queueWrite(async () => {
+    const validated = parseGuide(guide);
+    const guides = await readGuides();
+    await replaceWithBackup("workflows/guides.json", "workflows/guides.backup.json", { ...guides, [validated.workflowKey]: validated });
+  });
 }
