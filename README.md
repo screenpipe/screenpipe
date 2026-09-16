@@ -246,7 +246,7 @@ Full REST API running on localhost (default port 3030). Endpoints for searching 
 
 ## Privacy and security
 
-- **Local history by default**: Screen frames, audio, transcripts, and the search index are stored on your device. Cloud features and telemetry have separate data flows; see [the privacy FAQ](#does-screenpipe-send-my-data-to-the-cloud).
+- **Local history by default**: Screen frames, audio, transcripts, and the search index are stored on your device. Cloud features and telemetry have separate data flows; see [the privacy FAQ](#frequently-asked-questions).
 - **Source-available**: fully auditable codebase; personal, non-commercial use permitted.
 - **Local AI support**: Use local transcription and a local model such as Ollama to process captured context on-device. Configure sync and telemetry separately.
 - **No account required**: Core application works without any sign-up.
@@ -368,7 +368,7 @@ Yes. screenpipe captures all connected monitors simultaneously.
 screenpipe primarily uses the OS accessibility tree to get structured text (buttons, labels, text fields) — this is faster and more accurate than OCR. When accessibility data isn't available (remote desktops, games, some Linux apps), it falls back to OCR: Apple Vision on macOS, Windows native OCR, or Tesseract on Linux.
 
 **Can I deploy screenpipe to my team?**
-Yes. Screenpipe Teams provides central config management, shared AI pipes, and per-pipe data permissions. Admins control what gets captured and what AI can access — configured cloud AI, integrations, and sync can process relevant data off-device. See [screenpi.pe/team](https://screenpi.pe/team).
+Yes. Screenpipe Teams provides central config management, shared AI pipes, and per-pipe data permissions. Admins control what gets captured and what AI can access. Configured cloud AI, integrations, and sync can process relevant data off-device. See [screenpi.pe/team](https://screenpi.pe/team).
 
 **How do AI data permissions work?**
 Each pipe supports YAML frontmatter fields (allow-apps, deny-apps, deny-windows, allow-content-types, time-range, days, allow-raw-sql, allow-frames) that deterministically control what data the AI agent can access. Enforcement happens at three OS-level layers — not by prompting the AI to behave. Even a compromised agent cannot access denied data.
