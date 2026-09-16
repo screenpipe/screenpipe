@@ -193,7 +193,7 @@ export class LocalGatewayHarness {
 					MODEL_GATING_ENABLED: 'true',
 					PIPE_FRONTIER_POLICY: 'reject',
 					ROUTER_MODE: 'off',
-					...(cloudflareSpendRules ? {
+					...(cloudflareSpendRules || options.narrationStatus !== undefined ? {
 						HOSTED_CHAT_GATEWAY_MODE: 'cloudflare',
 						CLOUDFLARE_ACCOUNT_ID: cloudflareAccountId,
 						CLOUDFLARE_AI_GATEWAY_ID: cloudflareGatewayId,
