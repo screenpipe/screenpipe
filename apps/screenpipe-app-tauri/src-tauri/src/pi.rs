@@ -255,14 +255,13 @@ static REQUIRED_PI_PACKAGE_INSTALL_LOCK: std::sync::OnceLock<Mutex<()>> =
 static PI_EXTENSION_SAFE_MODE_PROJECTS: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
     std::sync::OnceLock::new();
 
-const MANAGED_PI_EXTENSION_FILES: [&str; 9] = [
+const MANAGED_PI_EXTENSION_FILES: [&str; 8] = [
     "web-search.ts",
     "mcp-bridge.ts",
     "save-artifact.ts",
     "live-views.ts",
     "connection-gate.ts",
     "context-pruning.ts",
-    "workflow-memory.ts",
     "work-context.ts",
     "workflow-feedback.ts",
 ];
@@ -1814,7 +1813,6 @@ fn ensure_shared_pi_extensions(project_dir: &str) -> Result<(), String> {
     ensure_chat_control_extension(project_dir)?;
     ensure_context_usage_extension(project_dir)?;
     ensure_context_pruning_extension(project_dir)?;
-    ensure_workflow_memory_extension(project_dir)?;
     // MCP bridge: lets the agent reach user-registered MCP servers.
     ensure_mcp_bridge_extension(project_dir)?;
     // Save artifact: lets the agent register deliverables in the Artifacts library.
@@ -1836,7 +1834,6 @@ const SHARED_PI_EXTENSION_FILES: &[&str] = &[
     "chat-control.ts",
     "context-usage.ts",
     "context-pruning.ts",
-    "workflow-memory.ts",
     "mcp-bridge.ts",
     "save-artifact.ts",
     "live-views.ts",
@@ -1857,14 +1854,6 @@ fn ensure_work_context_extension(project_dir: &str) -> Result<(), String> {
     std::fs::write(ext_dir.join("work-context.ts"),
         include_str!("../../../../packages/workflows-ui/src/context-tool.ts"))
         .map_err(|e| format!("Failed to install context tool: {}", e))
-}
-
-fn ensure_workflow_memory_extension(project_dir: &str) -> Result<(), String> {
-    let ext_dir = std::path::Path::new(project_dir).join(".pi").join("extensions");
-    std::fs::create_dir_all(&ext_dir).map_err(|e| e.to_string())?;
-    std::fs::write(ext_dir.join("workflow-memory.ts"),
-        include_str!("../../../../crates/screenpipe-core/assets/extensions/workflow-memory.ts"))
-        .map_err(|e| format!("Failed to install memory lookup tools: {}", e))
 }
 
 /// Stage the Enterprise-only team skill outside Pi's auto-discovery tree.
@@ -8343,9 +8332,11 @@ error: InstallFailed extracting tarball"#;
         let project = tempfile::tempdir().expect("project dir");
         let project_dir = project.path().to_str().expect("utf8 path");
 
-        super::ensure_shared_pi_extensions(project_dir).expect("seed shared extensions");
-
         let ext_dir = project.path().join(".pi").join("extensions");
+        std::fs::create_dir_all(&ext_dir).unwrap();
+        std::fs::write(ext_dir.join("workflow-memory.ts"), "legacy override").unwrap();
+        super::ensure_shared_pi_extensions(project_dir).expect("seed shared extensions");
+        assert!(!ext_dir.join("workflow-memory.ts").exists());
         for file in super::SHARED_PI_EXTENSION_FILES {
             assert!(
                 ext_dir.join(file).is_file(),

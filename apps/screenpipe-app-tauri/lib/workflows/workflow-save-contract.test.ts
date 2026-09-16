@@ -29,7 +29,6 @@ async function harness() {
 }
 it("recovers a rejected commit through Pi follow-up and accepts a no-change receipt", async () => {
   const h = await harness();
-  await h.events.tool_result({ toolName: "search-content", isError: false });
   h.fetch.mockResolvedValueOnce(Response.json({ error: "Source quote does not support the claim" }, { status: 422 }));
   await expect(h.commit()).rejects.toThrow("Source quote");
   await h.events.agent_end(stopped);
@@ -51,10 +50,8 @@ it("bounds recovery and fails the process when the agent stops without a receipt
   expect(process.exitCode).toBe(1);
   expect(JSON.parse(String(h.stderr.mock.calls[0][0]))).toMatchObject({ error: { code: "missing_output" } });
 });
-it("never checkpoints failed source reads or retries an aborted/provider-error turn", async () => {
+it("does not retry an aborted or provider-error turn", async () => {
   const h = await harness();
-  await h.events.tool_result({ toolName: "search-content", isError: true });
-  await expect(h.commit()).rejects.toThrow("source reads have failed");
   for (const stopReason of ["aborted", "error"]) {
     await h.events.agent_end({ messages: [{ role: "assistant", stopReason }] });
     await h.events.agent_settled();
@@ -74,40 +71,16 @@ it("fails a truncated response without pretending the task saved", async () => {
 });
 it("requires an actual save receipt, not merely an HTTP 200", async () => {
   const h = await harness();
-  await h.events.tool_result({ toolName: "search-content", isError: false });
   h.fetch.mockResolvedValueOnce(Response.json({}));
   await expect(h.commit()).rejects.toThrow("valid save receipt");
   await h.events.agent_end(stopped);
   expect(h.pi.sendMessage).toHaveBeenCalledOnce();
 });
 
-it("checks actual index reads and pagination before advancing an activity interval", async () => {
-  const { checkedCoverage } = await import("@screenpipe-ext/workflow-catalog");
-  const interval = {start:"2026-09-15T10:00:00Z",end:"2026-09-15T11:00:00Z",complete:true};
-  const page = {tool:"search-content",query:{start_time:interval.start,end_time:interval.end},offset:0,count:2,total:3};
-  expect(() => checkedCoverage([interval],[],[])).toThrow("activity index");
-  expect(() => checkedCoverage([interval],[interval],[page])).toThrow("unread pages");
-  expect(checkedCoverage([interval],[interval],[page,{...page,offset:2,count:1}])[0]).toMatchObject({method:"activity-index-and-targeted-sources"});
-});
-
-it("identifies the unfinished query even after a different query completes", async () => {
-  const { checkedCoverage } = await import("@screenpipe-ext/workflow-catalog");
-  const interval = {start:"2026-09-15T10:00:00Z",end:"2026-09-15T11:00:00Z",complete:true};
-  const query = {q:"meeting",start_time:interval.start,end_time:interval.end};
-  const pages = [
-    {tool:"search-content",query,offset:0,count:30,total:549},
-    {tool:"search-content",query:{...query,q:"receipt"},offset:0,count:17,total:17},
-  ];
-  expect(() => checkedCoverage([interval],[interval],pages)).toThrow(JSON.stringify({tool:"search-content",arguments:{...query,offset:30,limit:30}}));
-});
-
-it("requires retrying the failed query, not just any successful search", async () => {
+it("adds workflow save tools without replacing normal harness tools", async () => {
   const h = await harness();
-  const failed = {toolName:"search-content",input:{q:"meeting",offset:30}};
-  await h.events.tool_result({...failed,isError:true});
-  await h.events.tool_result({toolName:"search-content",input:{q:"receipt"},isError:false});
-  await expect(h.commit()).rejects.toThrow('"q":"meeting"');
-  await h.events.tool_result({...failed,isError:false});
-  h.fetch.mockResolvedValueOnce(Response.json({revision:4,checkedThrough:h.context.now}));
-  await expect(h.commit()).resolves.toBeDefined();
+  expect(h.pi.setActiveTools).not.toHaveBeenCalled();
+  expect(h.events.tool_call).toBeUndefined();
+  expect(h.events.tool_result).toBeUndefined();
+  expect(h.fetch).toHaveBeenCalledTimes(2);
 });

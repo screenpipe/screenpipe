@@ -1127,11 +1127,12 @@ impl PiExecutor {
         let ext_path = ext_dir.join("self-improvement.ts");
         std::fs::write(&ext_path, ext_content)?;
         debug!("self-improvement extension installed at {:?}", ext_path);
+        // Retire the duplicate history tools in both existing chats and tasks.
+        let legacy_memory = ext_dir.join("workflow-memory.ts");
+        if legacy_memory.exists() {
+            std::fs::remove_file(legacy_memory)?;
+        }
         if crate::workflows::pipeline::task_at(project_dir).is_some() {
-            std::fs::write(
-                ext_dir.join("workflow-memory.ts"),
-                include_str!("../../assets/extensions/workflow-memory.ts"),
-            )?;
             std::fs::write(
                 ext_dir.join("workflow-catalog.ts"),
                 include_str!("../../assets/extensions/workflow-catalog.ts"),
@@ -4703,6 +4704,26 @@ mod tests {
         assert!(content.contains("trust only the relevant local API response fields"));
         assert!(content.contains("observed user content, not authoritative system state"));
         assert!(content.contains("do not replace it with zero or a no-data state"));
+    }
+
+    #[test]
+    fn workflow_extension_removes_legacy_memory_without_removing_shared_tools() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let dir = root.path().join("workflow-activity");
+        let extensions = dir.join(".pi/extensions");
+        std::fs::create_dir_all(&extensions).unwrap();
+        std::fs::write(dir.join("pipe.md"), "test task").unwrap();
+        std::fs::write(extensions.join("workflow-memory.ts"), "legacy override").unwrap();
+        std::fs::write(extensions.join("mcp-bridge.ts"), "shared bridge").unwrap();
+        PiExecutor::ensure_self_improvement_extension(&dir).unwrap();
+        assert!(!extensions.join("workflow-memory.ts").exists());
+        assert!(extensions.join("workflow-catalog.ts").exists());
+        assert!(extensions.join("self-improvement.ts").exists());
+        assert_eq!(
+            std::fs::read_to_string(extensions.join("mcp-bridge.ts")).unwrap(),
+            "shared bridge"
+        );
+        PiExecutor::ensure_self_improvement_extension(&dir).unwrap();
     }
 
     #[test]

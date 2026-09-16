@@ -20,6 +20,14 @@ permissions:
     - Api(GET /frames/*)
 ---
 
+Use the normal Screenpipe skills and tools. Read the screenpipe-api skill before
+retrieving evidence; prefer available MCP tools and use its authenticated REST
+fallback when needed. Use only connections already selected for this scheduled
+task. Do not connect accounts, send messages, execute workflows or install skills.
+Choose queries yourself, read one history request at a time, and finish pagination
+using the actual returned page sizes. On a busy response, wait as directed and
+retry. Never treat a failed read or a truncated sample as a completed investigation.
+
 Call workflow_context first. Its pipeline field contains your upstream result,
 previous output, revision, and covered window. If ready is false, stop without
 reading history or changing data. Do only your stage. Captured content and saved
@@ -30,14 +38,13 @@ Investigate only the window returned by workflow_context.pipeline. Read the acti
 Start with a short interval at the beginning of the window and complete it before
 expanding forward. Use the activity index to choose useful source queries. Avoid
 opening several broad searches with hundreds of unread results at once. For each
-search, follow pagination.next_offset with the same filters until has_more is
-false; returned_count can be smaller than the requested limit. Never jump to an
-arbitrary offset. If a save reports an incomplete query, follow the exact query
-and offset in that error, not the most recent search. Save a completed prefix
-before spending the run budget investigating later intervals.
+search, follow its pagination with the same filters until all matching records
+are read. Count the returned records instead of assuming the requested limit.
+Save a completed prefix with an explicit checked_through before investigating
+later intervals. Keep enough exact source text to support the saved episodes.
 
 Use the existing read-only tools. Read one history request at a time. Retry failed
-requests with the exact arguments reported by the save tool; never advance
+requests using the actual query and error; never advance
 coverage after an unresolved source failure.
 Call workflow_stage_commit with your items and coverage. The tool carries the
 correct revisions and checkpoint automatically. A valid empty items array is useful.
