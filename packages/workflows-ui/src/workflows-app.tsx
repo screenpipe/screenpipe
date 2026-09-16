@@ -5,6 +5,7 @@
 "use client";
 import { matchesSidebarShortcut, useSidebarShortcuts } from "./sidebar-shortcuts";
 import { WorkflowAssistant } from "./workflow-assistant";
+import { workflowTiming } from "./timing";
 import { CapturedMomentButton, WorkflowReplay } from "./workflow-replay";
 import type { AssistantContext, AssistantState } from "./assistant";
 
@@ -134,11 +135,16 @@ async function completedJobResult(platform: WorkflowsPlatform, initialJob: Workf
 }
 
 function formatMinutes(value: number) {
+  if (value > 0 && value < 1) return "<1m";
   const minutes = Math.max(0, Math.round(value || 0));
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   const remainder = minutes % 60;
   return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
+}
+
+function formatEstimatedMinutes(value: number) {
+  return value < 1 ? "<1m" : `~${formatMinutes(value)}`;
 }
 
 function formatCurrency(value: number, currency: string) {
@@ -193,7 +199,18 @@ function hasMeasuredDuration(workflow: WorkflowMap) {
   return workflow.durationSource === "measured-meeting" && workflow.totalMinutes > 0;
 }
 
+function TimingSourceButton({ timestamp, open }: { timestamp: string; open?: (url: string) => Promise<void> }) {
+  const [failed, setFailed] = useState(false);
+  if (!open) return null;
+  return <span><button type="button" onClick={() => {
+    setFailed(false);
+    void open(`screenpipe://timeline?timestamp=${encodeURIComponent(timestamp)}`).catch(() => setFailed(true));
+  }}>Open in Timeline</button>{failed && <span role="alert"> Could not open this moment.</span>}</span>;
+}
+
 function workflowDurationLabel(workflow: WorkflowMap) {
+  const timing = workflowTiming(workflow.timing);
+  if (timing) return `${formatEstimatedMinutes(timing.averageMinutes)} ${timing.sampleCount > 1 ? "avg. per run" : "for one run"}`;
   return hasMeasuredDuration(workflow) ? formatMinutes(workflow.totalMinutes) : "Not measured";
 }
 
@@ -696,12 +713,13 @@ function WorkflowsView({ workflows, knownWorkflowCount, activityPeriod, filters,
           const originalIndex = workflows.indexOf(workflow);
           const actionableCount = workflow.bottlenecks.filter(isActionableBottleneck).length;
           const constraintCount = workflow.bottlenecks.length - actionableCount;
+          const timing = workflowTiming(workflow.timing);
           return (
             <button key={workflow.title} className={styles.workflowCard} onClick={() => openWorkflow(originalIndex)}>
               <div className={styles.workflowCardTop}><span>{String(workflow.rank).padStart(2, "0")}</span><div><Pill>{workflow.catalogStatus === "not-reobserved" ? "Kept from earlier scan" : workflow.evidenceStatus === "supported-steps" ? "Steps have sources" : "Candidate · needs review"}</Pill>{actionableCount > 0 && <Pill tone="warm">{actionableCount} possible improvement{actionableCount === 1 ? "" : "s"}</Pill>}{constraintCount > 0 && <Pill>{constraintCount} constraint{constraintCount === 1 ? "" : "s"}</Pill>}</div></div>
               <h2>{workflow.title}</h2><p>{workflow.description}</p>
               <div className={styles.cardPath}><span>{workflow.trigger}</span><ArrowRight size={12} /><span>{workflow.outcome}</span></div>
-              <div className={styles.cardMetrics}>{hasMeasuredDuration(workflow) && <div><span>Duration</span><strong>{workflowDurationLabel(workflow)}</strong></div>}<div><span>Stages</span><strong>{workflow.stages.length}</strong></div><div><span>Evidence</span><strong>{workflow.quality.evidenceCount}</strong></div><div><span>Screenshots</span><strong>{workflow.quality.screenshotCount}/{workflow.stages.length}</strong></div></div>
+              <div className={styles.cardMetrics}><div title={timing ? "Estimated elapsed time from source-backed start and finish moments. Includes pauses; not active work time. Open the map to inspect the runs." : "Not enough evidence of complete workflow runs to estimate an average."}><span>{timing?.sampleCount === 1 ? "Time for one run" : !timing && hasMeasuredDuration(workflow) ? "Meeting duration" : "Avg. time / run"}</span><strong>{timing ? formatEstimatedMinutes(timing.averageMinutes) : hasMeasuredDuration(workflow) ? formatMinutes(workflow.totalMinutes) : "—"}</strong>{timing && <small>{timing.sampleCount} run{timing.sampleCount === 1 ? "" : "s"} · estimated</small>}</div><div><span>Stages</span><strong>{workflow.stages.length}</strong></div><div><span>Evidence</span><strong>{workflow.quality.evidenceCount}</strong></div><div><span>Screenshots</span><strong>{workflow.quality.screenshotCount}/{workflow.stages.length}</strong></div></div>
               <div className={styles.cardFooter}><span>{workflow.frequency}</span><strong>Open map <ChevronRight size={14} /></strong></div>
             </button>
           );
@@ -890,6 +908,7 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile, saveCorrect
   }, [platform, skillDraft]);
   if (!workflow) return <section className={styles.emptyState}><ListTree size={23} /><h2>No workflow selected</h2><button className={styles.primaryButton} onClick={() => navigate("workflows")}>View workflows</button></section>;
   const measuredDuration = hasMeasuredDuration(workflow);
+  const timing = workflowTiming(workflow.timing);
   const allStagesOpen = expandedStages.size === workflow.stages.length;
   const actionableFriction = workflow.bottlenecks.filter(isActionableBottleneck);
   const constraints = workflow.bottlenecks.filter((item) => !isActionableBottleneck(item));
@@ -904,7 +923,7 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile, saveCorrect
       <button className={styles.backButton} onClick={() => navigate("workflows")}><ArrowLeft size={14} />All workflows</button>
       <section className={styles.detailHeader}>
         <div><Pill>Evidence on {workflow.repetitions} captured day{workflow.repetitions === 1 ? "" : "s"}</Pill><h1>{workflow.title}</h1><p>{workflow.description}</p><div className={styles.workflowActions}>{platform.generateWorkflowSkill && platform.saveWorkflowSkill && <button className={styles.skillButton} type="button" onClick={openSkill}><Sparkles size={14} />{skillGenerating ? "Creating skill…" : skillSaved ? platform.skillInstallMode === "preview" ? "Skill preview" : "Skill installed" : skillDraft ? "Review skill" : "Create skill"}</button>}{onShareWorkflow && <button className={styles.skillButton} type="button" onClick={() => onShareWorkflow(workflow)}><Share2 size={14} />Share with team</button>}{platform.assistant?.saveFeedback && <button className={styles.skillButton} type="button" onClick={() => window.dispatchEvent(new CustomEvent("workflows:feedback", { detail: { key: `feedback:${workflow.id || workflow.title}`, title: workflow.title, workflow, purpose: "feedback" } }))}><MessageCircle size={14} />Feedback</button>}</div></div>
-        {measuredDuration && <div className={styles.detailTotal}><span>Observed meeting duration</span><strong>{workflowDurationLabel(workflow)}</strong></div>}
+        {timing ? <div className={styles.detailTotal}><span>{timing.sampleCount > 1 ? "Avg. time / run" : "Time for one run"}</span><strong>{formatEstimatedMinutes(timing.averageMinutes)}</strong><small>{timing.sampleCount} run{timing.sampleCount === 1 ? "" : "s"} · estimated elapsed time</small></div> : measuredDuration && <div className={styles.detailTotal}><span>Observed meeting duration</span><strong>{workflowDurationLabel(workflow)}</strong></div>}
       </section>
       <p className={styles.workflowReviewState}>{workflow.evidenceStatus === "supported-steps" ? "Source-backed steps · not execution-tested" : "Needs review"}</p>
       <WorkflowReplay key={`replay:${workflow.title}`} workflow={workflow} loadRecording={platform.loadWorkflowRecording} releaseRecording={platform.releaseWorkflowRecording} openCapturedMoment={platform.openCapturedMoment} />
@@ -960,6 +979,7 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile, saveCorrect
         <ul>{workflow.quality.reasons.map((reason) => <li key={reason}><CheckCircle2 size={12} />{reason}</li>)}</ul>
         <p className={styles.panelEmpty}>References show where text was captured. They do not prove task completion or a continuous sequence. Model confidence is not an accuracy score.</p>
         {!!workflow.captureSequence?.length && <section aria-label="Ordered capture example"><strong>Ordered capture example</strong><p className={styles.panelEmpty}>Check that these moments concern the same task. Time order alone does not establish this.</p><ol>{workflow.captureSequence.map((entry, index) => <li key={`${entry.timestamp}-${index}`}><details><summary>{workflow.stages[index]?.name} · {formatEvidenceTimestamp(entry.timestamp)} · {entry.app}</summary><p>{entry.detail}</p></details></li>)}</ol></section>}
+        {timing && <section aria-label="Time per run"><strong>Time per run</strong><p className={styles.panelEmpty}>{formatMinutes(timing.minMinutes)}–{formatMinutes(timing.maxMinutes)} across {timing.sampleCount} run{timing.sampleCount === 1 ? "" : "s"}. Estimated elapsed time includes pauses; it is not active work time.</p><ol>{timing.runs.map(run => <li key={run.start.timestamp}><details><summary>{formatEvidenceTimestamp(run.start.timestamp)} · {formatMinutes((Date.parse(run.end.timestamp) - Date.parse(run.start.timestamp)) / 60_000)}</summary><p>{run.summary}</p>{(["start", "end"] as const).map(boundary => <div key={boundary}><strong>{boundary === "start" ? "Started" : "Finished"}</strong><p>{formatEvidenceTimestamp(run[boundary].timestamp)} · {run[boundary].app}</p><blockquote>{run[boundary].quote}</blockquote><TimingSourceButton timestamp={run[boundary].timestamp} open={platform.assistant?.openLink} /></div>)}</details></li>)}</ol></section>}
         {!!workflow.openQuestions?.length && <section aria-label="Open questions"><strong>Open questions</strong><ul>{workflow.openQuestions.map(question => <li key={question}>{question}</li>)}</ul></section>}
         {!!workflow.limitations?.length && <ul>{workflow.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul>}
       </details>

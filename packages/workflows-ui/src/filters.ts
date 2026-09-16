@@ -8,6 +8,7 @@ import type {
   WorkflowQualityGrade,
 } from "./model";
 import { bottleneckControl, type WorkflowControlLevel } from "./controllability";
+import { workflowTiming } from "./timing";
 
 export type WorkflowDurationFilter = "all" | "short" | "medium" | "long";
 export type WorkflowQualityFilter = "all" | "good" | "strong";
@@ -42,10 +43,12 @@ const qualityRank: Record<WorkflowQualityGrade, number> = {
 };
 
 function matchesDuration(workflow: WorkflowMap, filter: WorkflowDurationFilter) {
-  if (filter !== "all" && workflow.durationSource !== "measured-meeting") return false;
-  if (filter === "short") return workflow.totalMinutes <= 15;
-  if (filter === "medium") return workflow.totalMinutes > 15 && workflow.totalMinutes <= 45;
-  if (filter === "long") return workflow.totalMinutes > 45;
+  const minutes = workflowTiming(workflow.timing)?.averageMinutes
+    ?? (workflow.durationSource === "measured-meeting" ? workflow.totalMinutes : null);
+  if (filter !== "all" && (minutes === null || !Number.isFinite(minutes) || minutes <= 0)) return false;
+  if (filter === "short") return minutes! <= 15;
+  if (filter === "medium") return minutes! > 15 && minutes! <= 45;
+  if (filter === "long") return minutes! > 45;
   return true;
 }
 

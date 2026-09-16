@@ -15,6 +15,7 @@ import type {
 } from "./model";
 import type { WorkflowsPlatform } from "./platform";
 import { isAssistantState, type AssistantState, type WorkflowsAssistantPlatform } from "./assistant";
+import { workflowTiming } from "./timing";
 
 function fixtureAssistant(): WorkflowsAssistantPlatform {
   let saved: AssistantState | null = null;
@@ -100,6 +101,14 @@ function fixtureWorkflow(input: FixtureWorkflow, index: number): WorkflowMap {
     trigger: input.trigger,
     outcome: input.outcome,
     totalMinutes: input.activeMinutes + input.waitingMinutes,
+    // Explicit fictional occurrences exercise average, single-run and unknown states.
+    timing: workflowTiming({ basis: "estimated-elapsed", runs: (index === 4 ? [18, 24, 30] : index === 3 ? [12] : []).map((minutes, i) => {
+      const start = new Date(Date.UTC(2026, 8, i + 1, 16));
+      const end = new Date(start.getTime() + minutes * 60_000);
+      return { start: { timestamp: start.toISOString(), app: input.apps[0], quote: "Started this fictional workflow run" },
+        end: { timestamp: end.toISOString(), app: input.apps.at(-1)!, quote: "Completed this fictional workflow run" },
+        summary: "Fictional complete run for timing preview" };
+    }) }),
     activeMinutes: input.activeMinutes,
     waitingMinutes: input.waitingMinutes,
     appSwitches: input.apps.length + 2,

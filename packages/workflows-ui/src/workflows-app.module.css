@@ -459,6 +459,7 @@
 .cardMetrics > div { padding: 13px 8px 13px 0; }
 .cardMetrics span { display: block; color: #989b93; font-size: 7.5px; }
 .cardMetrics strong { display: block; margin-top: 5px; font-size: 11px; }
+.cardMetrics small { display: block; margin-top: 3px; color: #78786f; font-size: 9px; }
 .cardFooter { display: flex; justify-content: space-between; align-items: center; margin-top: auto; padding-top: 17px; }
 .cardFooter span { color: #83867e; font-size: 8px; }
 .cardFooter strong { display: inline-flex; align-items: center; gap: 4px; font-size: 9px; }

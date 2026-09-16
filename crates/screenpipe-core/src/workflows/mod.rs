@@ -885,6 +885,7 @@ pub fn normalize_analysis(
             "waitingMinutes": 0,
             "durationSource": duration_source,
             "durationSampleCount": duration_sample_count,
+            "timing": timing::normalize_timing(item, catalog)?,
             "appSwitches": 0,
             "confidence": confidence,
             "apps": apps,
@@ -1468,3 +1469,4 @@ pub fn work_profile_payload(profile: Option<&Value>) -> Option<Value> {
 }
 
 pub mod evidence;
+pub mod timing;

@@ -8,6 +8,7 @@ export * from "./catalog";
 export * from "./controllability";
 export * from "./filters";
 export * from "./model";
+export * from "./timing";
 export * from "./navigation";
 export * from "./platform";
 export * from "./assistant";

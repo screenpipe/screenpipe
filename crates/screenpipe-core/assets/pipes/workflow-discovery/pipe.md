@@ -66,6 +66,20 @@ from scattered captures. Leave unknowns unknown, without pages of disclaimers.
 Write short titles and descriptions. Put only a consequential unresolved question
 on the workflow; do not repeat generic warnings in every step.
 
+Investigate time per workflow run when the history supports it. Use the existing
+memory tools to locate a specific occurrence's actual trigger and completed
+outcome, and inspect the intervening work to confirm they belong together.
+Return optional timingRuns with exact start/end source timestamps, apps and
+verbatim quotes, plus one short summary identifying the occurrence. These are
+estimated elapsed times, not active work or savings. Do not turn two incidental
+screenshots, a meeting within a broader process, an unanswered request, overnight
+gaps or incomplete work into a full run. Omit ambiguous occurrences. Do not invent
+durations or a target sample count. The catalog calculates the average and range
+from distinct non-overlapping runs; it does not use generated minute totals.
+Retain still-relevant existing timingRuns when updating a workflow and add new
+supported occurrences. Keep up to 30 recent representative runs, without choosing
+only fast or slow examples. Return [] if earlier boundaries are no longer valid.
+
 When a source supplies a frame ID, call workflow_inspect_frame to see the image.
 Attach screenshotFrameId only if that exact image visibly supports that step.
 A blank/loading page or unrelated tab is not evidence. Look for a better source

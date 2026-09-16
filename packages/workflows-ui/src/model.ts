@@ -137,6 +137,20 @@ export type WorkflowBottleneck = {
   evidence: string;
 };
 
+export type WorkflowTimingRun = {
+  start: { timestamp: string; app: string; quote: string };
+  end: { timestamp: string; app: string; quote: string };
+  summary: string;
+};
+export type WorkflowTiming = {
+  basis: "estimated-elapsed";
+  sampleCount: number;
+  averageMinutes: number;
+  minMinutes: number;
+  maxMinutes: number;
+  runs: WorkflowTimingRun[];
+};
+
 export type WorkflowMap = {
   id?: string;
   revision?: number;
@@ -161,6 +175,7 @@ export type WorkflowMap = {
   waitingMinutes: number;
   durationSource?: "measured-meeting" | "unknown";
   durationSampleCount?: number;
+  timing?: WorkflowTiming | null;
   appSwitches: number;
   confidence: number;
   apps: string[];

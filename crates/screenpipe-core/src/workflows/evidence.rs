@@ -38,6 +38,14 @@ fn references(
                     .and_then(Value::as_array)
                     .into_iter()
                     .flatten(),
+            )
+            .chain(
+                workflow
+                    .get("timingRuns")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|run| [run.get("start"), run.get("end")].into_iter().flatten()),
             );
         for entry in entries {
             let Some(at) = entry
@@ -329,6 +337,18 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+    }
+    #[test]
+    fn resolves_timing_boundaries_even_when_not_stage_citations() {
+        let start = DateTime::parse_from_rfc3339("2026-08-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let end = start + ChronoDuration::minutes(20);
+        let value = json!({"workflows":[{"timingRuns":[{"start":{"timestamp":start,"app":"Editor"},"end":{"timestamp":end,"app":"Browser"}}]}]});
+        assert_eq!(
+            references(&value, start, start + ChronoDuration::days(1)).unwrap(),
+            vec![(start, "Editor".into()), (end, "Browser".into())]
         );
     }
 }
