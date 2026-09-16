@@ -255,7 +255,7 @@ export default function guideVideoTool(pi: any) {
           onUpdate?.({ content: [{ type: "text", text: message }] }),
         async narrate(text, signal) {
           const response = await fetch(
-            "https://api.screenpi.pe/v1/guide-narration",
+            "https://api.screenpi.pe/v1/tts",
             {
               method: "POST",
               headers: {
