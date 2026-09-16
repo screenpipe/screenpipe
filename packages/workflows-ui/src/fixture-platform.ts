@@ -377,6 +377,18 @@ async function rasterizeFixture(workflow: WorkflowMap) {
 // Maintained browser-only guide fixture. No model, recorder or native filesystem access.
 export function fixtureGuides(): NonNullable<WorkflowsPlatform["guides"]> {
   return {
+    edit: async (guide, _workflow, _request, signal, progress) => {
+      progress("Editing your guide"); await new Promise(r => setTimeout(r, 1500));
+      if (signal.aborted) throw new DOMException("Stopped", "AbortError");
+      return { ...guide, summary: "Collect sources, compare findings, and share a traceable research brief." };
+    },
+    video: { render: async (_guide, _workflow, _images, signal, progress) => {
+      for (const message of ["Preparing your scenes", "Recording narration 1 of 3"]) {
+        progress(message); await new Promise(r => setTimeout(r, 2000));
+        if (signal.aborted) throw new DOMException("Stopped", "AbortError");
+      }
+      throw new Error("Browser preview only. Video rendering uses the desktop app’s local harness.");
+    } },
     load: async workflow => { await rasterizeFixture(workflow); const raw=localStorage.getItem(`workflow-guide-preview:${guideKey(workflow)}`); return raw ? parseGuide(JSON.parse(raw)) : null; },
     save: async guide => { localStorage.setItem(`workflow-guide-preview:${guide.workflowKey}`,JSON.stringify(guide)); },
     export: async (html,title) => {

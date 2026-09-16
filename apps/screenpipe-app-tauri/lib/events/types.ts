@@ -61,6 +61,7 @@ export interface AgentInnerEvent {
   kind?: string;
   args?: Record<string, unknown>;
   result?: { content?: Array<{ text?: string }> };
+  partialResult?: { content?: Array<{ text?: string }> };
   isError?: boolean;
   /** Pi keeps the logical turn active across provider retry backoff. */
   willRetry?: boolean;

@@ -226,3 +226,30 @@ describe("guide editor", () => {
     await screen.findByRole("button", { name: "Retry save" });
   });
 });
+
+describe('guide assistant and video', () => {
+  it('autosaves narration edits and explicitly opts in to screenshots', async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const renderVideo = vi.fn().mockRejectedValue(new Error('Narration unavailable'));
+    render(<WorkflowGuide workflow={workflow} close={() => {}} platform={{ load: async () => guide, generate: vi.fn(), save, export: vi.fn(), video: { render: renderVideo } }} />);
+    fireEvent.click(await screen.findByText('Create a short video'));
+    fireEvent.change(screen.getByLabelText('Scene 1 narration'), { target: { value: 'Open the brief.' } });
+    await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ steps: expect.arrayContaining([expect.objectContaining({ narration: 'Open the brief.' })]) })));
+    fireEvent.click(screen.getByText('Create video'));
+    await screen.findByText('Narration unavailable');
+    expect(renderVideo.mock.calls[0][2]).toBe(false);
+    expect(screen.getByLabelText('Scene 1 narration')).toHaveValue('Open the brief.');
+  });
+  it('edits with the existing harness adapter and cancels an in-flight edit', async () => {
+    let signal: AbortSignal | undefined;
+    const edit = vi.fn((_g, _w, _q, s) => { signal = s; return new Promise<Guide>(() => {}); });
+    render(<WorkflowGuide workflow={workflow} close={() => {}} platform={{ load: async () => guide, generate: vi.fn(), save: vi.fn(), export: vi.fn(), edit }} />);
+    const input = await screen.findByLabelText('Ask Screenpipe to edit the guide');
+    fireEvent.change(input, { target: { value: 'Make it shorter' } });
+    fireEvent.click(screen.getByLabelText('Edit with Screenpipe'));
+    expect(edit.mock.calls[0][2]).toBe('Make it shorter');
+    fireEvent.click(screen.getByText('Stop'));
+    expect(signal?.aborted).toBe(true);
+    expect(screen.getByText('Stopped. Your guide is saved.')).toBeInTheDocument();
+  });
+});

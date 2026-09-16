@@ -11,6 +11,7 @@ import type {
   WorkflowSkillDraft,
   WorkflowSkillProgress,
 } from "./model";
+import type { WorkflowGuide } from "./guide";
 import type { WorkflowsAssistantPlatform } from "./assistant";
 
 export type WorkflowAnalysisOptions = {
@@ -61,6 +62,10 @@ export type WorkflowsPlatform = {
     generate: (workflow: WorkflowMap, signal: AbortSignal, progress: (message: string) => void) => Promise<import("./guide").WorkflowGuide>;
     load: (workflow: WorkflowMap) => Promise<import("./guide").WorkflowGuide | null>;
     save: (guide: import("./guide").WorkflowGuide) => Promise<void>;
+    edit?: (guide: WorkflowGuide, workflow: WorkflowMap, instruction: string, signal: AbortSignal, progress: (message: string) => void) => Promise<WorkflowGuide>;
+    video?: {
+      render: (guide: WorkflowGuide, workflow: WorkflowMap, images: boolean, signal: AbortSignal, progress: (message: string) => void) => Promise<{ url: string; export: () => Promise<boolean>; dispose: () => void }>;
+    };
     export: (html: string, title: string) => Promise<boolean>;
   };
   generateWorkflowSkill?: (

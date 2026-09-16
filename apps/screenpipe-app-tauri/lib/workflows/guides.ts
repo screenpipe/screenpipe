@@ -12,7 +12,10 @@ import { loadGuideFromDisk, saveGuideToDisk } from "./disk-storage";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 
+import { guideVideo } from "./guide-video";
+
 export const desktopGuides: NonNullable<WorkflowsPlatform["guides"]> = {
+  video: guideVideo,
   load: (workflow) => loadGuideFromDisk(guideKey(workflow)),
   save: saveGuideToDisk,
   async generate(workflow, signal, progress) {
@@ -59,4 +62,15 @@ export const desktopGuides: NonNullable<WorkflowsPlatform["guides"]> = {
     await writeTextFile(path, html);
     return true;
   },
+};
+
+/** Edits run in the same local harness as creation; only the validated draft is saved. */
+desktopGuides.edit = async (guide, workflow, instruction, signal, progress) => {
+  const text = await runWorkflowAgent({ name: 'guide', signal,
+    config: { ...assistantProviderConfig, maxTokens: 8192, allowedTools: ASSISTANT_TOOLS },
+    prompt: `${guidePrompt(workflow)}\nThis is an editing request. Preserve existing content unless the user asks to change it. Keep narration under 800 characters per scene, factual, and easy to speak. Never render, share or execute anything.\nCurrent editable guide:\n${JSON.stringify(guide)}\nUser edit request:\n${instruction}`,
+    onProgress: () => progress('Editing your guide'),
+  });
+  if (signal.aborted) throw new DOMException('Stopped', 'AbortError');
+  return parseGuide(JSON.parse(text.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '')), workflow);
 };

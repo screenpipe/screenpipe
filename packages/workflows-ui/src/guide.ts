@@ -15,6 +15,7 @@ export type WorkflowGuide = {
     expectedResult: string;
     sourceStage: number | null;
     includeImage: boolean;
+    narration?: string;
   }>;
   exceptions: string[];
   completion: string[];
@@ -50,6 +51,7 @@ export function parseGuide(
         text(s.title) &&
         text(s.instruction) &&
         text(s.expectedResult) &&
+        (s.narration === undefined || (text(s.narration) && [...s.narration].length <= 800)) &&
         typeof s.includeImage === "boolean" &&
         (s.sourceStage === null ||
           (Number.isInteger(s.sourceStage) && s.sourceStage >= 0)),
@@ -79,12 +81,13 @@ export function parseGuide(
     summary: g.summary,
     prerequisites: g.prerequisites,
     steps: g.steps.map(
-      ({ title, instruction, expectedResult, sourceStage, includeImage }) => ({
+      ({ title, instruction, expectedResult, sourceStage, includeImage, narration }) => ({
         title,
         instruction,
         expectedResult,
         sourceStage,
         includeImage,
+        ...(narration !== undefined ? { narration } : {}),
       }),
     ),
     exceptions: g.exceptions,
@@ -101,7 +104,7 @@ export function guidePrompt(workflow: WorkflowMap) {
 Preserve explicit user corrections. State only supported prerequisites, steps, exceptions and completion checks. Put missing information in questions; do not invent URLs, field names, actions or successful outcomes. Screenshots are mapped by sourceStage (zero-based index in the attached workflow), never by invented URLs. Use null when no attached stage supports a step. Only choose includeImage:true for an attached stage with a visually verified screenshot. Do not include personal values, credentials or local file paths. Write reusable field names instead of customer-specific values.
 Return one JSON object, no markdown fences, matching this exact shape:
 ${JSON.stringify({ version: 1, workflowKey: guideKey(workflow), sourceRevision: workflow.revision ?? 0, title: "", summary: "", prerequisites: [], steps: [{ title: "", instruction: "", expectedResult: "", sourceStage: 0, includeImage: false }], exceptions: [], completion: [], questions: [] })}
-Keep the key and revision exactly as supplied. Aim for one concrete action per step. Empty lists are valid when no information is known.
+Keep the key and revision exactly as supplied. Aim for one concrete action per step. Empty lists are valid when no information is known. For video edits, each step may also include narration: a natural spoken explanation of at most 800 characters.
 Attached workflow evidence:
 ${evidence}`;
 }

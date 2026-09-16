@@ -19,6 +19,7 @@ import {
 import type { WorkflowMap } from "./model";
 import type { WorkflowsPlatform } from "./platform";
 import { guideHtml, guideImage, type WorkflowGuide as Guide } from "./guide";
+import { GuideVideo } from "./guide-video";
 import styles from "./workflow-guide.module.css";
 
 export function WorkflowGuide({
@@ -306,6 +307,7 @@ export function WorkflowGuide({
                 {draft.sourceRevision}
               </small>
             </div>
+            {(platform.edit || platform.video) && <GuideVideo guide={draft} workflow={workflow} platform={platform} update={update} />}
             {stale && (
               <p className={styles.notice}>
                 This workflow has changed since the guide was drafted. Your
