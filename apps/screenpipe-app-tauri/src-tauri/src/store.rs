@@ -2080,7 +2080,33 @@ impl SettingsStore {
     /// in the stored JSON, serde rejects it as a duplicate field.
     /// Also sanitize unknown AI provider types to prevent deserialization failures
     /// (e.g. synced settings from a newer version with a provider this version doesn't know).
-    fn sanitize_legacy_fields(mut val: Value) -> Value {
+    /// Recursively remove every object key whose value is `Value::Null`.
+    ///
+    /// Legacy store.bin files can contain explicit `null` for fields that are
+    /// now non-nullable (e.g. `ocrEngine`, `platform`).  serde's
+    /// `#[serde(default)]` only fills in *missing* keys, so an explicit null
+    /// triggers "invalid type: null, expected a string".  Stripping those keys
+    /// before deserialization lets the `Default` impl supply the correct value.
+    fn strip_nulls(val: Value) -> Value {
+        match val {
+            Value::Object(map) => Value::Object(
+                map.into_iter()
+                    .filter(|(_, v)| !v.is_null())
+                    .map(|(k, v)| (k, Self::strip_nulls(v)))
+                    .collect(),
+            ),
+            Value::Array(arr) => {
+                Value::Array(arr.into_iter().map(|v| Self::strip_nulls(v)).collect())
+            }
+            other => other,
+        }
+    }
+
+    fn sanitize_legacy_fields(val: Value) -> Value {
+        // Strip explicit nulls first so that #[serde(default)] can populate the
+        // correct default values for non-nullable fields (e.g. ocrEngine,
+        // platform) that legacy store.bin files stored as null.
+        let mut val = Self::strip_nulls(val);
         if let Some(obj) = val.as_object_mut() {
             if obj.contains_key("enableAccessibility") {
                 obj.remove("enableUiEvents");
@@ -5131,6 +5157,35 @@ mod tests {
         let preset = &sanitized_acp["aiPresets"][0];
         assert_eq!(preset["provider"].as_str(), Some("acp"));
         assert_eq!(preset["acpAgent"]["id"].as_str(), Some("codex-acp"));
+    }
+
+    /// Regression test for SCREENPIPE-APP-KE:
+    /// Legacy store.bin files contain explicit `null` for non-nullable String
+    /// fields such as `ocrEngine` and `platform`. serde's `#[serde(default)]`
+    /// only activates for *missing* keys, so an explicit null used to produce
+    /// "invalid type: null, expected a string". After strip_nulls the keys are
+    /// absent and serde falls back to the Default impl.
+    #[test]
+    fn legacy_null_string_fields_deserialize_via_strip_nulls() {
+        let legacy = json!({
+            "ocrEngine": null,
+            "platform": null,
+            "aiModel": null,
+        });
+
+        let sanitized = SettingsStore::sanitize_legacy_fields(legacy);
+        let result: Result<SettingsStore, _> = serde_json::from_value(sanitized);
+        assert!(
+            result.is_ok(),
+            "settings with legacy null string fields must deserialize after sanitization: {:?}",
+            result.err()
+        );
+        let settings = result.unwrap();
+        // Defaults supplied by the Default impl must be non-empty strings.
+        assert!(
+            !settings.ocr_engine.is_empty(),
+            "ocrEngine default must be a non-empty string"
+        );
     }
 
     #[test]
