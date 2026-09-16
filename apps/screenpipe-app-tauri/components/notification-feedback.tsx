@@ -20,6 +20,7 @@ interface NotificationFeedbackProps {
   notification: FeedbackableNotification;
   submitFeedback?: typeof submitNotificationFeedback;
   variant?: "panel" | "inbox";
+  revealOnHover?: boolean;
 }
 
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -28,6 +29,7 @@ export function NotificationFeedback({
   notification,
   submitFeedback = submitNotificationFeedback,
   variant = "panel",
+  revealOnHover = true,
 }: NotificationFeedbackProps) {
   const [rating, setRating] = useState<AiFeedbackRating | null>(null);
   const [correction, setCorrection] = useState("");
@@ -84,7 +86,7 @@ export function NotificationFeedback({
     height: "20px",
     padding: 0,
     border: "1px solid hsl(var(--border))",
-    borderRadius: 0,
+    borderRadius: "4px",
     background: selected ? "hsl(var(--foreground))" : "transparent",
     color: selected ? "hsl(var(--background))" : "hsl(var(--muted-foreground))",
     cursor: saveState === "saving" ? "wait" : "pointer",
@@ -93,7 +95,11 @@ export function NotificationFeedback({
 
   return (
     <div
-      className="ph-no-capture pointer-events-none grid grid-rows-[0fr] opacity-0 transition-[grid-template-rows,opacity] duration-150 motion-reduce:transition-none group-hover/notif:pointer-events-auto group-hover/notif:grid-rows-[1fr] group-hover/notif:opacity-100 group-focus-within/notif:pointer-events-auto group-focus-within/notif:grid-rows-[1fr] group-focus-within/notif:opacity-100"
+      className={
+        revealOnHover
+          ? "ph-no-capture pointer-events-none grid grid-rows-[0fr] opacity-0 transition-[grid-template-rows,opacity] duration-150 motion-reduce:transition-none group-hover/notif:pointer-events-auto group-hover/notif:grid-rows-[1fr] group-hover/notif:opacity-100 group-focus-within/notif:pointer-events-auto group-focus-within/notif:grid-rows-[1fr] group-focus-within/notif:opacity-100"
+          : "ph-no-capture"
+      }
       data-testid="notification-feedback"
       onClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => event.stopPropagation()}
@@ -171,7 +177,7 @@ export function NotificationFeedback({
                       height: "28px",
                       padding: "0 8px",
                       border: "1px solid hsl(var(--border))",
-                      borderRadius: 0,
+                      borderRadius: "4px",
                       outline: "none",
                       background: "hsl(var(--background))",
                       color: "hsl(var(--foreground))",
@@ -192,7 +198,7 @@ export function NotificationFeedback({
                       height: "28px",
                       padding: 0,
                       border: "1px solid hsl(var(--border))",
-                      borderRadius: 0,
+                      borderRadius: "4px",
                       background: correction.trim()
                         ? "hsl(var(--foreground))"
                         : "transparent",

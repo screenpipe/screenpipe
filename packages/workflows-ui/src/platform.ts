@@ -27,7 +27,7 @@ export type WorkflowRunActivity = {
 
 export type WorkflowAnalysisJob = {
   id: string;
-  status: "queued" | "processing" | "complete" | "failed";
+  status: "queued" | "processing" | "complete" | "incomplete" | "failed";
   progress?: number;
   startedAt?: string;
   message?: string;
