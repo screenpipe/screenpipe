@@ -26,6 +26,15 @@ async def main():
                 pc.addTrack(AudioStreamTrack())  # Synthetic silence; no device capture.
                 channel = pc.createDataChannel('oai-events')
                 started = asyncio.Event()
+                spoken = asyncio.Event()
+                receivers = []
+                @pc.on('track')
+                def track(track):
+                    async def receive():
+                        while True:
+                            frame = await track.recv()
+                            if started.is_set() and (frame.to_ndarray() != 0).any(): spoken.set()
+                    receivers.append(asyncio.create_task(receive()))
                 @channel.on('message')
                 def message(data):
                     try:
@@ -45,6 +54,10 @@ async def main():
                 await pc.setRemoteDescription(RTCSessionDescription(sdp=result['transport']['sdp'],type='answer'))
                 await asyncio.wait_for(started.wait(),30)
                 print('live_session_started',True,flush=True)
+                channel.send(json.dumps({'type':'session.commentary.append','event_id':'synthetic-connectivity-check','delegation_id':None,'content':'Voice connection check complete.'}))
+                await asyncio.wait_for(spoken.wait(),20)
+                print('live_spoken_audio_received',True,flush=True)
+                for receiver in receivers: receiver.cancel()
         finally:
             await pc.close()
             try:
