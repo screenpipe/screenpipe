@@ -30,11 +30,21 @@ bindings = settings.get('result',{}).get('bindings',[]) if status==200 else []
 print('credential_bindings', json.dumps([b['name'] for b in bindings if b.get('name') in ['OPENAI_API_KEY','ADMIN_SECRET','AI_GATEWAY_SERVICE_TOKEN','CLOUDFLARE_AI_GATEWAY_TOKEN']]))
 values={b.get('name'):b.get('text') for b in bindings if b.get('type')=='plain_text'}
 gateway = values.get('CLOUDFLARE_AI_GATEWAY_ID')
+print('gateway_binding_types',json.dumps([{k:b.get(k) for k in ('name','type')} for b in bindings if 'GATEWAY' in b.get('name','')]))
+if not gateway:
+    status, listed = request(f'https://api.cloudflare.com/client/v4/accounts/{account}/ai-gateway/gateways', cf_token)
+    print('gateway_list_status',status)
+    candidates = listed.get('result',[]) if status==200 else []
+    print('gateway_count',len(candidates))
+    if len(candidates)==1: gateway=candidates[0].get('id')
 print('cloudflare_gateway_configured',bool(gateway))
 status, deployments=request(base+'/deployments',cf_token)
 if status==200:
     for deployment in deployments.get('result',{}).get('deployments',[])[:1]:
         print('current_versions',json.dumps(deployment.get('versions',[])))
+        for version in deployment.get('versions',[]):
+            vs, details = request(base+'/versions/'+version['version_id'],cf_token)
+            print('version_annotations',json.dumps(details.get('result',{}).get('annotations',{})))
 key = os.environ.get('OPENAI_API_KEY','')
 if key:
     status, result=request('https://api.openai.com/v1/models/gpt-live-1',key)
