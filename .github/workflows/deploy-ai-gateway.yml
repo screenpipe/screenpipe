@@ -32,6 +32,7 @@ on:
         required: true
         type: choice
         options:
+          - inspect
           - upload
           - promote
       candidate_version:
@@ -162,3 +163,16 @@ jobs:
               --yes \
               --message "manual hosted-AI rollout ${CANDIDATE_VERSION} at ${ROLLOUT_PERCENTAGE}%"
           fi
+
+  inspect:
+    if: ${{ inputs.operation == 'inspect' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect voice provider access and gateway bindings
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python3 packages/ai-gateway/scripts/inspect-studio-voice.py
