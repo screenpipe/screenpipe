@@ -16,6 +16,7 @@ import {
 	resolveModelGate,
 } from './services/usage-tracker';
 import { handleChatCompletions } from './handlers/chat';
+import { handleStudioVoice } from './handlers/studio-voice';
 import { handleModelListing } from './handlers/models';
 import { handleFileTranscription, handleABTestAdmin } from './handlers/transcription';
 import { handleRealtimeTranscriptionUpgrade } from './handlers/realtime-transcription';
@@ -322,6 +323,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 		if (request.method === 'OPTIONS') {
 			return handleOptions(request);
 		}
+
+		// Dedicated backend credential; never send it to Clerk JWT verification.
+		if (path === '/v1/admin/studio-voice') return handleStudioVoice(request, env);
 
 		console.log('path', path);
 

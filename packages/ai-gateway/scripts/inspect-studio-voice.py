@@ -30,6 +30,8 @@ bindings = settings.get('result',{}).get('bindings',[]) if status==200 else []
 print('credential_bindings', json.dumps([b['name'] for b in bindings if b.get('name') in ['OPENAI_API_KEY','ADMIN_SECRET','AI_GATEWAY_SERVICE_TOKEN','CLOUDFLARE_AI_GATEWAY_TOKEN']]))
 values={b.get('name'):b.get('text') for b in bindings if b.get('type')=='plain_text'}
 gateway = values.get('CLOUDFLARE_AI_GATEWAY_ID')
+release=values.get('SENTRY_RELEASE','')
+print('deployed_source_release',release if re.fullmatch(r'[a-zA-Z0-9_.@/-]{1,100}',release) else 'unavailable')
 print('gateway_binding_types',json.dumps([{k:b.get(k) for k in ('name','type')} for b in bindings if 'GATEWAY' in b.get('name','')]))
 if not gateway:
     status, listed = request(f'https://api.cloudflare.com/client/v4/accounts/{account}/ai-gateway/gateways', cf_token)
