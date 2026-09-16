@@ -23,9 +23,9 @@ async function harness() {
   const fetch = vi.fn().mockImplementation(async () => Response.json(context));
   vi.stubGlobal("fetch", fetch);
   await tools.workflow_context.execute("context", {});
-  const commit = () => tools.workflow_commit.execute("save", { expected_revision: 3, checked_through: context.now, workflows: [] });
+  const commit = () => tools.workflow_commit.execute("save", { workflows: [] });
   const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-  return { events, pi, fetch, commit, stderr, context };
+  return { events, pi, fetch, commit, stderr, context, tools };
 }
 it("recovers a rejected commit through Pi follow-up and accepts a no-change receipt", async () => {
   const h = await harness();
@@ -83,4 +83,32 @@ it("adds workflow save tools without replacing normal harness tools", async () =
   expect(h.events.tool_call).toBeUndefined();
   expect(h.events.tool_result).toBeUndefined();
   expect(h.fetch).toHaveBeenCalledTimes(2);
+});
+
+it("uses the catalog revision rather than the pipeline revision when saving", async () => {
+  const h = await harness();
+  h.fetch.mockResolvedValueOnce(Response.json({revision:4,checkedThrough:h.context.now}));
+  await h.commit();
+  expect(JSON.parse(h.fetch.mock.calls.at(-1)?.[1].body)).toMatchObject({expected_revision:3,pipeline_revision:2,checked_through:h.context.now,workflows:[]});
+});
+
+it("does not checkpoint an unresolved screenshot verification failure", async () => {
+  const h = await harness();
+  h.fetch.mockResolvedValueOnce(Response.json({error:"Recorder unavailable"},{status:503}));
+  await expect(h.tools.workflow_inspect_frame.execute("inspect",{frame_id:7})).rejects.toThrow("Recorder unavailable");
+  await expect(h.commit()).rejects.toThrow("Screenshot verification failed");
+  h.fetch.mockResolvedValueOnce(Response.json({frame_id:7}));
+  h.fetch.mockResolvedValueOnce(new Response(new Uint8Array([1]),{headers:{"content-type":"image/png"}}));
+  await h.tools.workflow_inspect_frame.execute("retry",{frame_id:7});
+  h.fetch.mockResolvedValueOnce(Response.json({revision:4,checkedThrough:h.context.now}));
+  await expect(h.commit()).resolves.toBeDefined();
+});
+
+
+it("allows a missing capture to be omitted without blocking a supported update", async () => {
+  const h = await harness();
+  h.fetch.mockResolvedValueOnce(Response.json({error:"Capture was deleted"},{status:404}));
+  await expect(h.tools.workflow_inspect_frame.execute("inspect",{frame_id:7})).rejects.toThrow("Capture was deleted");
+  h.fetch.mockResolvedValueOnce(Response.json({revision:4,checkedThrough:h.context.now}));
+  await expect(h.commit()).resolves.toBeDefined();
 });

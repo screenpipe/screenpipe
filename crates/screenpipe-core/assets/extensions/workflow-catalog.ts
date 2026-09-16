@@ -25,6 +25,7 @@ export default function workflowCatalog(pi: ExtensionAPI) {
   let recoveryRequested = false;
   let lastStopReason: string | undefined;
   const inspected = new Set<number>();
+  const failedFrames = new Set<number>();
   let base = "";
   async function request(path: string, body?: unknown, signal?: AbortSignal) {
     if (!ready) throw new Error("Workflow task is not initialized.");
@@ -35,7 +36,7 @@ export default function workflowCatalog(pi: ExtensionAPI) {
     if (!response.ok) {
       let message = `Workflow request failed (${response.status}).`;
       try { const data = await response.json(); if (typeof data.error === "string") message = data.error; } catch {}
-      throw new Error(message);
+      throw Object.assign(new Error(message), { status: response.status });
     }
     return response;
   }
@@ -98,14 +99,22 @@ export default function workflowCatalog(pi: ExtensionAPI) {
     frame_id: { type: "integer", minimum: 1 },
   }, ["frame_id"], async (input, signal) => {
     if (!Number.isSafeInteger(input.frame_id) || input.frame_id <= 0) throw new Error("A positive frame ID is required.");
-    const metadata = await readJson(`/frames/${input.frame_id}/metadata`, undefined, signal);
-    const response = await request(`/frames/${input.frame_id}/thumbnail?width=1024&quality=80&fallback=false`, undefined, signal);
-    const mimeType = response.headers.get("content-type")?.split(";")[0] || "";
-    if (!/^image\/(jpeg|png|webp)$/.test(mimeType)) throw new Error("No usable captured image is available.");
-    const bytes = await response.arrayBuffer();
-    if (!bytes.byteLength || bytes.byteLength > 2_000_000) throw new Error("Captured image is unavailable or too large.");
-    inspected.add(input.frame_id);
-    return { content: [{ type: "text", text: JSON.stringify(metadata) }, { type: "image", mimeType, data: Buffer.from(bytes).toString("base64") }] };
+    failedFrames.add(input.frame_id);
+    try {
+      const metadata = await readJson(`/frames/${input.frame_id}/metadata`, undefined, signal);
+      const response = await request(`/frames/${input.frame_id}/thumbnail?width=1024&quality=80&fallback=false`, undefined, signal);
+      const mimeType = response.headers.get("content-type")?.split(";")[0] || "";
+      if (!/^image\/(jpeg|png|webp)$/.test(mimeType)) throw new Error("No usable captured image is available.");
+      const bytes = await response.arrayBuffer();
+      if (!bytes.byteLength || bytes.byteLength > 2_000_000) throw new Error("Captured image is unavailable or too large.");
+      inspected.add(input.frame_id);
+      failedFrames.delete(input.frame_id);
+      return { content: [{ type: "text", text: JSON.stringify(metadata) }, { type: "image", mimeType, data: Buffer.from(bytes).toString("base64") }] };
+    } catch (error) {
+      // A deleted capture can be omitted; an interrupted read cannot be checkpointed.
+      if ([404, 410].includes((error as any)?.status)) failedFrames.delete(input.frame_id);
+      throw error;
+    }
   });
   tool("workflow_stage_commit", "Save this enrichment stage, preserving its upstream revision and actual completed coverage. Only final review publishes workflows.", {
     checked_through: { type: "string", description: "Only for a partially completed activity batch; otherwise omit. Revisions are managed automatically." },
@@ -128,10 +137,11 @@ export default function workflowCatalog(pi: ExtensionAPI) {
     return result(receipt);
   });
   tool("workflow_commit", "Validate and save only new or materially improved workflows. An empty array checkpoints a successful no-change investigation. Existing IDs and corrections remain intact.", {
-    expected_revision: { type: "integer" }, checked_through: { type: "string" },
     workflows: { type: "array", maxItems: 30, items: { type: "object", additionalProperties: true } },
-  }, ["expected_revision", "checked_through", "workflows"], async (input, signal) => {
-    if (!context?.pipeline?.ready || task !== "workflow-discovery" || input.expected_revision !== context.revision || input.checked_through !== context.pipeline.checkedThrough) throw new Error("Use the catalog revision and pipeline checkedThrough returned by workflow_context.");
+  }, ["workflows"], async (input, signal) => {
+    if (!context?.pipeline?.ready || task !== "workflow-discovery") throw new Error("Read workflow_context before saving the final review.");
+    input = { workflows: input.workflows, expected_revision: context.revision, checked_through: context.pipeline.checkedThrough };
+    if (failedFrames.size) throw new Error(`Screenshot verification failed. Retry workflow_inspect_frame for IDs ${[...failedFrames].join(", ")} before saving, or finish without a checkpoint.`);
     requireInspectedFrames(input.workflows, inspected);
     const receipt = await readJson("/workflows/catalog", { ...input, pipeline_revision: context.pipeline.inputRevision }, signal);
     if (!Number.isInteger(receipt?.revision) || receipt.revision <= input.expected_revision || receipt.checkedThrough !== input.checked_through) throw new Error("The recorder did not return a valid save receipt. Read workflow_context to check whether the update persisted before trying again.");
