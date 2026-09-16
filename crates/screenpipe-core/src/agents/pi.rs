@@ -1128,8 +1128,14 @@ impl PiExecutor {
         std::fs::write(&ext_path, ext_content)?;
         debug!("self-improvement extension installed at {:?}", ext_path);
         if crate::workflows::pipeline::task_at(project_dir).is_some() {
-            std::fs::write(ext_dir.join("workflow-memory.ts"), include_str!("../../assets/extensions/workflow-memory.ts"))?;
-            std::fs::write(ext_dir.join("workflow-catalog.ts"), include_str!("../../assets/extensions/workflow-catalog.ts"))?;
+            std::fs::write(
+                ext_dir.join("workflow-memory.ts"),
+                include_str!("../../assets/extensions/workflow-memory.ts"),
+            )?;
+            std::fs::write(
+                ext_dir.join("workflow-catalog.ts"),
+                include_str!("../../assets/extensions/workflow-catalog.ts"),
+            )?;
         }
 
         if project_dir.file_name().and_then(|name| name.to_str()) == Some("skill-learning")
@@ -2106,9 +2112,18 @@ impl AgentExecutor for PiExecutor {
         // 1. Explicit provider from pipe frontmatter → use it
         // 2. No provider specified → screenpipe cloud (default)
         if crate::workflows::pipeline::task_at(working_dir).is_some() {
-            crate::workflows::pipeline::check_admission(&self.api_url, self.current_user_token().as_deref()).await?;
+            crate::workflows::pipeline::check_admission(
+                &self.api_url,
+                self.current_user_token().as_deref(),
+            )
+            .await?;
             if !crate::workflows::pipeline::has_pending_input(working_dir).await? {
-                return Ok(AgentOutput { stdout: "No new workflow input; saved results kept.".into(), stderr: String::new(), success: true, pid: None });
+                return Ok(AgentOutput {
+                    stdout: "No new workflow input; saved results kept.".into(),
+                    stderr: String::new(),
+                    success: true,
+                    pid: None,
+                });
             }
         }
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
@@ -2230,9 +2245,18 @@ impl AgentExecutor for PiExecutor {
         _executor_config: Option<&serde_json::Value>,
     ) -> Result<AgentOutput> {
         if crate::workflows::pipeline::task_at(working_dir).is_some() {
-            crate::workflows::pipeline::check_admission(&self.api_url, self.current_user_token().as_deref()).await?;
+            crate::workflows::pipeline::check_admission(
+                &self.api_url,
+                self.current_user_token().as_deref(),
+            )
+            .await?;
             if !crate::workflows::pipeline::has_pending_input(working_dir).await? {
-                return Ok(AgentOutput { stdout: "No new workflow input; saved results kept.".into(), stderr: String::new(), success: true, pid: None });
+                return Ok(AgentOutput {
+                    stdout: "No new workflow input; saved results kept.".into(),
+                    stderr: String::new(),
+                    success: true,
+                    pid: None,
+                });
             }
         }
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
@@ -3054,18 +3078,40 @@ fn compact_oversized_agent_end(line: &str) -> Option<String> {
         return None;
     }
     let event: serde_json::Value = serde_json::from_str(line).ok()?;
-    if event["type"] != "agent_end" { return None; }
-    let last = event["messages"].as_array()?.iter().rev().find(|m| m["role"] == "assistant")?;
+    if event["type"] != "agent_end" {
+        return None;
+    }
+    let last = event["messages"]
+        .as_array()?
+        .iter()
+        .rev()
+        .find(|m| m["role"] == "assistant")?;
     let reason = last["stopReason"].as_str()?;
-    if !matches!(reason, "stop" | "error" | "aborted" | "length") { return None; }
-    let text: String = last["content"].as_array().into_iter().flatten()
-        .filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str())
-        .flat_map(str::chars).take(8192).collect();
-    let error: String = last["errorMessage"].as_str().unwrap_or("").chars().take(2048).collect();
-    Some(serde_json::json!({"type":"agent_end","messages":[{
-        "role":"assistant","stopReason":reason,"errorMessage":error,
-        "content":[{"type":"text","text":text}]
-    }]}).to_string())
+    if !matches!(reason, "stop" | "error" | "aborted" | "length") {
+        return None;
+    }
+    let text: String = last["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|b| b["type"] == "text")
+        .filter_map(|b| b["text"].as_str())
+        .flat_map(str::chars)
+        .take(8192)
+        .collect();
+    let error: String = last["errorMessage"]
+        .as_str()
+        .unwrap_or("")
+        .chars()
+        .take(2048)
+        .collect();
+    Some(
+        serde_json::json!({"type":"agent_end","messages":[{
+            "role":"assistant","stopReason":reason,"errorMessage":error,
+            "content":[{"type":"text","text":text}]
+        }]})
+        .to_string(),
+    )
 }
 
 /// Last `max` bytes of a captured process stream, lossy-decoded and

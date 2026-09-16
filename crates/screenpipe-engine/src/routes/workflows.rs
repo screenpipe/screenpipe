@@ -31,7 +31,9 @@ fn error(status: StatusCode, code: &str) -> ApiError {
 /// Maintained workflows keep their stored identity through title and step edits.
 /// Legacy entries retain their content-derived ID until their first save.
 pub fn workflow_id(workflow: &Value) -> String {
-    if let Some(id) = workflow["id"].as_str().filter(|id| id.starts_with("wf-")) { return id.to_string(); }
+    if let Some(id) = workflow["id"].as_str().filter(|id| id.starts_with("wf-")) {
+        return id.to_string();
+    }
     let identity = json!([workflow["title"], workflow["trigger"], workflow["outcome"]]);
     format!("wf-{:x}", Sha256::digest(identity.to_string().as_bytes()))
 }

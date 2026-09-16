@@ -87,11 +87,26 @@ const AUTOMATE_MY_WORK_LEGACY_PROMPT_HASHES: &[&str] = &[
     "c2c3b9e35495fd5b",
 ];
 const BUNDLED_BUILTIN_PIPES: &[(&str, &str)] = &[
-    ("workflow-activity", include_str!("../../assets/pipes/workflow-activity/pipe.md")),
-    ("workflow-patterns", include_str!("../../assets/pipes/workflow-patterns/pipe.md")),
-    ("workflow-procedures", include_str!("../../assets/pipes/workflow-procedures/pipe.md")),
-    ("workflow-timing", include_str!("../../assets/pipes/workflow-timing/pipe.md")),
-    ("workflow-discovery", include_str!("../../assets/pipes/workflow-discovery/pipe.md")),
+    (
+        "workflow-activity",
+        include_str!("../../assets/pipes/workflow-activity/pipe.md"),
+    ),
+    (
+        "workflow-patterns",
+        include_str!("../../assets/pipes/workflow-patterns/pipe.md"),
+    ),
+    (
+        "workflow-procedures",
+        include_str!("../../assets/pipes/workflow-procedures/pipe.md"),
+    ),
+    (
+        "workflow-timing",
+        include_str!("../../assets/pipes/workflow-timing/pipe.md"),
+    ),
+    (
+        "workflow-discovery",
+        include_str!("../../assets/pipes/workflow-discovery/pipe.md"),
+    ),
     (
         "skill-learning",
         include_str!("../../assets/pipes/skill-learning/pipe.md"),
@@ -2618,7 +2633,10 @@ fn classify_llm_error_value(value: &serde_json::Value) -> Option<(Option<String>
     if code.as_deref() == Some("missing_output") {
         return Some((
             Some("missing_output".to_string()),
-            Some(message.unwrap_or_else(|| "automation did not save its required output".to_string())),
+            Some(
+                message
+                    .unwrap_or_else(|| "automation did not save its required output".to_string()),
+            ),
         ));
     }
     if has_safety_refusal_token(&combined) {
@@ -8995,8 +9013,14 @@ mod tests {
         let result = classify_pipe_process_result(false, false, stderr, stdout);
         assert_eq!(result.status, "failed");
         assert_eq!(result.error_type.as_deref(), Some("missing_output"));
-        assert_eq!(result.error_message.as_deref(), Some("The agent could not save a supported update."));
-        assert_eq!(classify_pipe_process_result(false, true, stderr, stdout).status, "cancelled");
+        assert_eq!(
+            result.error_message.as_deref(),
+            Some("The agent could not save a supported update.")
+        );
+        assert_eq!(
+            classify_pipe_process_result(false, true, stderr, stdout).status,
+            "cancelled"
+        );
     }
 
     #[test]

@@ -256,7 +256,11 @@ pub struct McpToolDescriptor {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(default, rename = "inputSchema", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "inputSchema",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub input_schema: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<serde_json::Value>,

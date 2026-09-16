@@ -408,13 +408,28 @@ pub struct CorrectionRequest {
 fn apply_feedback(workflow: &mut Value, body: &CorrectionRequest) -> Result<(), ApiError> {
     if let Some(changes) = &body.changes {
         if body.expected_revision != Some(workflow["revision"].as_u64().unwrap_or(0)) {
-            return Err(error(StatusCode::CONFLICT, "Workflow changed. Retry feedback against the latest version."));
+            return Err(error(
+                StatusCode::CONFLICT,
+                "Workflow changed. Retry feedback against the latest version.",
+            ));
         }
-        let fields = changes.as_object().ok_or_else(|| error(StatusCode::BAD_REQUEST, "Invalid workflow changes."))?;
-        if fields.iter().any(|(key, value)| !["title", "description", "trigger", "outcome"].contains(&key.as_str()) || !value.as_str().is_some_and(|s| !s.trim().is_empty() && s.len() <= 8000)) {
-            return Err(error(StatusCode::BAD_REQUEST, "Only small descriptive workflow corrections are allowed."));
+        let fields = changes
+            .as_object()
+            .ok_or_else(|| error(StatusCode::BAD_REQUEST, "Invalid workflow changes."))?;
+        if fields.iter().any(|(key, value)| {
+            !["title", "description", "trigger", "outcome"].contains(&key.as_str())
+                || !value
+                    .as_str()
+                    .is_some_and(|s| !s.trim().is_empty() && s.len() <= 8000)
+        }) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "Only small descriptive workflow corrections are allowed.",
+            ));
         }
-        for (key, value) in fields { workflow[key] = value.clone(); }
+        for (key, value) in fields {
+            workflow[key] = value.clone();
+        }
     }
     workflow["userCorrection"] = body.correction.clone();
     workflow["revision"] = json!(workflow["revision"].as_u64().unwrap_or(0) + 1);
@@ -465,7 +480,12 @@ mod tests {
     fn feedback_refinement_is_scoped_and_revision_checked() {
         let original = json!({"id":"wf-a","revision":2,"description":"Old","timing":{"average":10},"stages":[{"name":"Recorded"}]});
         let mut workflow = original.clone();
-        let mut request = CorrectionRequest { id:"wf-a".into(), correction:json!("User feedback: CRM is reference only."), expected_revision:Some(1), changes:Some(json!({"description":"Corrected"})) };
+        let mut request = CorrectionRequest {
+            id: "wf-a".into(),
+            correction: json!("User feedback: CRM is reference only."),
+            expected_revision: Some(1),
+            changes: Some(json!({"description":"Corrected"})),
+        };
         assert!(apply_feedback(&mut workflow, &request).is_err());
         assert_eq!(workflow, original);
         request.expected_revision = Some(2);
