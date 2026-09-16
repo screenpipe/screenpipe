@@ -127,7 +127,7 @@ async function completedJobResult(platform: WorkflowsPlatform, initialJob: Workf
       if (job.result) return job.result;
       throw new Error("The workflow report finished without a readable result.");
     }
-    if (job.status === "failed") throw new Error(job.message || "The workflow report failed.");
+    if (job.status === "failed" || job.status === "incomplete") throw new Error(job.message || "The workflow report failed.");
     if (!platform.getAnalysisJob) throw new Error("The workflow report cannot be checked yet.");
     await new Promise((resolve) => setTimeout(resolve, 2_000));
     job = await platform.getAnalysisJob(job.id);

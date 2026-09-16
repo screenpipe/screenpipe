@@ -82,6 +82,24 @@ describe("workflow scheduled-task adapter", () => {
     });
     expect(await getWorkflowJob("workflow-discovery:27")).toMatchObject({status:"complete",result:{changes:{created:0,updated:0}}});
   });
+  it("allows scheduler handoff time, then offers to resume without a false save failure", async () => {
+    const finished = new Date(Date.now() - 45_000).toISOString();
+    const execution = {id:48,status:"completed",started_at:finished,finished_at:finished};
+    fetchMock.mockImplementation(async path => {
+      const url = String(path);
+      if (url.includes("/executions/")) return response({data:execution});
+      if (url.includes("/executions?")) return response({data:url.includes("workflow-activity")?[execution]:[]});
+      if (url.includes("/pipeline")) return response({inputRevision:0,upToDate:false,blockedReason:null});
+      return response({analyzedAt:"2026-09-14T12:00:00Z",pipelineRevision:0});
+    });
+    expect(await getWorkflowJob("workflow-activity:48")).toMatchObject({status:"queued"});
+    execution.finished_at = new Date(Date.now() - 120_000).toISOString();
+    expect(await getWorkflowJob("workflow-activity:48")).toMatchObject({status:"incomplete",message:expect.stringContaining("Resume")});
+  });
+  it("treats a timed-out task as a terminal failure instead of waiting forever", async () => {
+    fetchMock.mockResolvedValueOnce(response({data:{id:48,status:"timed_out"}}));
+    expect(await getWorkflowJob("48")).toMatchObject({status:"failed"});
+  });
   it("saves only the edited correction, never a stale full catalog", async () => {
     const prior = { analyzedAt: "2026-09-15T12:00:00Z", analysis: { workflows: [{ id: "wf-a", title: "Updated elsewhere", userCorrection: "Old" }] } };
     fetchMock.mockResolvedValueOnce(response(prior)).mockResolvedValueOnce(response({ success: true }));

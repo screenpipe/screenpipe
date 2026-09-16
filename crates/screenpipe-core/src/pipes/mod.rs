@@ -4530,6 +4530,10 @@ impl PipeManager {
             push_run_log_status(entry, log);
             drop(l);
 
+            // Manual/API runs notify the same scheduler after saving output
+            // and clearing the running state, so dependents can safely start.
+            emit_pipe_completed(&name_for_cb, success, duration_secs);
+
             if let Some(ref cb) = on_complete {
                 cb(
                     &name_for_cb,
@@ -4552,10 +4556,17 @@ impl PipeManager {
 
     /// Run a pipe once with an explicit trigger type.
     async fn run_pipe_with_trigger(&self, name: &str, trigger: &str) -> Result<PipeRunLog> {
-        Ok(self
+        let outcome = self
             .run_pipe_with_trigger_inner(name, trigger, 0, None, None)
-            .await?
-            .log)
+            .await?;
+        // The inner runner retries presets and is also called by the scheduler.
+        // Emit only the final outcome here, never intermediate attempts.
+        emit_pipe_completed(
+            name,
+            outcome.log.success,
+            (outcome.log.finished_at - outcome.log.started_at).num_milliseconds() as f64 / 1000.0,
+        );
+        Ok(outcome.log)
     }
 
     /// Inner implementation with retry depth tracking for preset fallback.
@@ -7247,16 +7258,7 @@ impl PipeManager {
                         }
 
                         // Emit pipe_completed event so other pipes can chain
-                        let event_name = format!("pipe_completed:{}", name_for_cb);
-                        let _ = screenpipe_events::send_event(
-                            &event_name,
-                            screenpipe_events::PipeCompletedEvent {
-                                pipe_name: name_for_cb.clone(),
-                                success,
-                                duration_secs,
-                                timestamp: chrono::Utc::now(),
-                            },
-                        );
+                        emit_pipe_completed(&name_for_cb, success, duration_secs);
 
                         // Fire run-complete callback (analytics, etc.)
                         if let Some(ref cb) = on_complete {
@@ -8028,6 +8030,18 @@ fn event_dedupe_key(event_name: &str, data: &serde_json::Value) -> Option<String
         Some(value) => format!("{}@{}", identity, value),
         None => identity,
     })
+}
+
+fn emit_pipe_completed(pipe_name: &str, success: bool, duration_secs: f64) {
+    let _ = screenpipe_events::send_event(
+        &format!("{PIPE_COMPLETED_EVENT_PREFIX}{pipe_name}"),
+        screenpipe_events::PipeCompletedEvent {
+            pipe_name: pipe_name.to_string(),
+            success,
+            duration_secs,
+            timestamp: Utc::now(),
+        },
+    );
 }
 
 fn pipe_completed_source(event_name: &str) -> Option<&str> {
@@ -8987,6 +9001,7 @@ mod tests {
     use super::*;
     use crate::agents::{AgentOutput, ExecutionHandle, SharedPid};
     use chrono::{TimeZone, Timelike};
+    use futures::{FutureExt, StreamExt};
     use std::path::Path;
     use std::sync::atomic::Ordering;
 
@@ -9094,6 +9109,157 @@ mod tests {
         fn name(&self) -> &str {
             "sequenced-test"
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn manual_completion_starts_dependent_task_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let pipes_dir = temp.path().join("pipes");
+        for (name, trigger) in [
+            ("manual-chain-source", ""),
+            (
+                "manual-chain-dependent",
+                "trigger:\n  events:\n    - pipe_completed:manual-chain-source\n",
+            ),
+            (
+                "manual-chain-disabled",
+                "enabled: false\ntrigger:\n  events:\n    - pipe_completed:manual-chain-source\n",
+            ),
+        ] {
+            let dir = pipes_dir.join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("pipe.md"),
+                format!(
+                "---\nschedule: manual\nagent: mock\nmodel: test\n{trigger}---\nSave the result.\n"
+            ),
+            )
+            .unwrap();
+        }
+        let executor = Arc::new(SequencedExecutor {
+            outputs: std::sync::Mutex::new(VecDeque::from([
+                AgentOutput {
+                    stdout: "source saved".into(),
+                    stderr: String::new(),
+                    success: true,
+                    pid: None,
+                },
+                AgentOutput {
+                    stdout: "dependent saved".into(),
+                    stderr: String::new(),
+                    success: true,
+                    pid: None,
+                },
+            ])),
+            attempts: std::sync::Mutex::new(Vec::new()),
+        });
+        let mut executors: HashMap<String, Arc<dyn AgentExecutor>> = HashMap::new();
+        executors.insert("mock".into(), executor.clone());
+        let mut manager = PipeManager::new(pipes_dir, executors, None, 0);
+        manager.load_pipes().await.unwrap();
+        let mut events = screenpipe_events::subscribe_to_event::<serde_json::Value>(
+            "pipe_completed:manual-chain-source",
+        );
+        manager.start_scheduler().await.unwrap();
+        // Let the scheduler subscribe before the manual API entry point runs.
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        manager
+            .start_pipe_background("manual-chain-source")
+            .await
+            .unwrap();
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), events.next())
+            .await
+            .expect("manual completion event missing")
+            .unwrap();
+        assert_eq!(event.data["success"], true);
+        assert!(
+            manager.logs.lock().await["manual-chain-source"]
+                .back()
+                .unwrap()
+                .success
+        );
+        assert!(!manager
+            .running
+            .lock()
+            .await
+            .contains_key("manual-chain-source"));
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        for _ in 0..100 {
+            if manager
+                .logs
+                .lock()
+                .await
+                .get("manual-chain-dependent")
+                .and_then(|logs| logs.back())
+                .is_some()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        manager.stop_scheduler().await;
+        assert!(
+            manager.logs.lock().await["manual-chain-dependent"]
+                .back()
+                .unwrap()
+                .success
+        );
+        assert_eq!(executor.attempts.lock().unwrap().len(), 2);
+        assert!(
+            events.next().now_or_never().is_none(),
+            "duplicate source completion"
+        );
+        assert!(!manager
+            .logs
+            .lock()
+            .await
+            .contains_key("manual-chain-disabled"));
+    }
+
+    #[tokio::test]
+    async fn manual_completion_reports_failure_after_persisting_log() {
+        let temp = tempfile::tempdir().unwrap();
+        let pipes_dir = temp.path().join("pipes");
+        let dir = pipes_dir.join("manual-failed-event");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("pipe.md"),
+            "---\nschedule: manual\nagent: mock\nmodel: test\n---\nDo work.\n",
+        )
+        .unwrap();
+        let executor = Arc::new(SequencedExecutor {
+            outputs: std::sync::Mutex::new(VecDeque::from([AgentOutput {
+                stdout: String::new(),
+                stderr: "missing output".into(),
+                success: false,
+                pid: None,
+            }])),
+            attempts: std::sync::Mutex::new(Vec::new()),
+        });
+        let mut executors: HashMap<String, Arc<dyn AgentExecutor>> = HashMap::new();
+        executors.insert("mock".into(), executor);
+        let manager = PipeManager::new(pipes_dir, executors, None, 0);
+        manager.load_pipes().await.unwrap();
+        let mut events = screenpipe_events::subscribe_to_event::<serde_json::Value>(
+            "pipe_completed:manual-failed-event",
+        );
+        manager
+            .start_pipe_background("manual-failed-event")
+            .await
+            .unwrap();
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), events.next())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.data["success"], false);
+        assert!(
+            !manager.logs.lock().await["manual-failed-event"]
+                .back()
+                .unwrap()
+                .success
+        );
     }
 
     #[test]
@@ -10807,6 +10973,9 @@ Do resilient work.
 
         let manager = PipeManager::new(pipes_dir, executors, None, 0);
         manager.load_pipes().await.unwrap();
+        let mut events = screenpipe_events::subscribe_to_event::<serde_json::Value>(
+            "pipe_completed:resilient-pipe",
+        );
         let log = manager
             .run_pipe_with_trigger("resilient-pipe", "manual")
             .await
@@ -10814,6 +10983,12 @@ Do resilient work.
 
         assert!(log.success);
         assert_eq!(log.stdout, "fallback completed");
+        let event = events.next().await.unwrap();
+        assert_eq!(event.data["success"], true);
+        assert!(
+            events.next().now_or_never().is_none(),
+            "fallback attempts emitted extra completion events"
+        );
         assert_eq!(
             executor.attempts.lock().unwrap().as_slice(),
             [
