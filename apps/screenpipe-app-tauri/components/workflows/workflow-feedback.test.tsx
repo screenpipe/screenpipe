@@ -15,7 +15,8 @@ function setup(overrides: Partial<WorkflowsAssistantPlatform> = {}) {
 }
 async function openFeedback() {
   act(() => { window.dispatchEvent(new CustomEvent("workflows:feedback", { detail: feedback })); });
-  await screen.findByRole("heading", { name: "What should change?" });
+  await screen.findByText("I suggest tracking this in Attio.");
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Stop answer" })).not.toBeInTheDocument());
 }
 function submit() {
   fireEvent.change(screen.getByRole("textbox", { name: "Ask Screenpipe" }), { target: { value: "Use Attio, not Gmail." } });
@@ -23,41 +24,64 @@ function submit() {
 }
 
 describe("workflow feedback conversation", () => {
-  it("opens without AI or recording and preserves the ordinary chat draft", async () => {
+  it("automatically reviews a fresh chat on every click and preserves ordinary drafts", async () => {
     const saved = emptyAssistantState(); saved.conversations[0].draft = "An unfinished question";
     const { platform } = setup({ load: vi.fn().mockResolvedValue(saved) });
     await openFeedback();
-    expect(platform.ask).not.toHaveBeenCalled();
+    expect(platform.ask).toHaveBeenCalledTimes(1);
+    expect(platform.ask).toHaveBeenLastCalledWith(expect.objectContaining({ question: expect.stringContaining("3 specific questions"), history: [], context: expect.objectContaining({ workflow: expect.objectContaining({ id: "wf-original" }) }) }));
     expect(platform.saveFeedback).not.toHaveBeenCalled();
-    expect(screen.getByRole("textbox")).toHaveValue("");
-    submit();
-    await screen.findByText("I suggest tracking this in Attio.");
-    expect(platform.save).toHaveBeenCalledWith(expect.objectContaining({ conversations: expect.arrayContaining([expect.objectContaining({ draft: "An unfinished question" })]) }));
+    expect(screen.queryByRole("button", { name: "Save feedback" })).not.toBeInTheDocument();
+    await openFeedback();
+    await waitFor(() => expect(platform.ask).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(platform.ask).mock.calls[1][0].history).toEqual([]);
+    const latest = vi.mocked(platform.save).mock.calls.at(-1)![0];
+    expect(latest.conversations).toHaveLength(3);
+    expect(latest.conversations[0].draft).toBe("An unfinished question");
   });
 
-  it("saves before inference, stays scoped after navigation and does not save twice on retry", async () => {
+  it("keeps discussion scoped after navigation and saves only on an explicit click", async () => {
     const { platform, props, rerender } = setup(); await openFeedback();
     rerender(<WorkflowAssistant {...props} context={{ key: "different", title: "Another workflow" }} />);
-    submit(); await screen.findByText("I suggest tracking this in Attio.");
-    expect(platform.saveFeedback).toHaveBeenCalledWith(expect.objectContaining({ id: "wf-original" }), expect.stringContaining("Keep the reviewed step.\n\nUser: Use Attio, not Gmail."));
-    expect(platform.ask).toHaveBeenCalledWith(expect.objectContaining({ context: expect.objectContaining({ purpose: "feedback", workflow: expect.objectContaining({ id: "wf-original" }) }) }));
-    expect(vi.mocked(platform.saveFeedback!).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(platform.ask).mock.invocationCallOrder[0]);
-    expect(screen.getByText("Feedback saved for the next update")).toBeVisible();
+    submit();
+    await screen.findByRole("button", { name: "Save feedback" });
+    expect(platform.saveFeedback).not.toHaveBeenCalled();
+    expect(platform.ask).toHaveBeenLastCalledWith(expect.objectContaining({ context: expect.objectContaining({ purpose: "feedback", workflow: expect.objectContaining({ id: "wf-original" }) }) }));
+    fireEvent.click(screen.getByRole("button", { name: "Save feedback" }));
+    await screen.findByText("Feedback saved for the next update");
+    expect(platform.saveFeedback).toHaveBeenCalledWith(expect.objectContaining({ id: "wf-original" }), expect.stringContaining("User: Use Attio, not Gmail."));
+    const correction = vi.mocked(platform.saveFeedback!).mock.calls[0][1];
+    expect(correction).toContain("Keep the reviewed step.");
+    expect(correction).not.toContain("Review this workflow and ask me");
     fireEvent.click(screen.getByRole("button", { name: "Retry answer" }));
-    await waitFor(() => expect(platform.ask).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(platform.ask).toHaveBeenCalledTimes(3));
     expect(platform.saveFeedback).toHaveBeenCalledTimes(1);
   });
 
-  it("does not run AI or show a saved receipt when saving feedback fails", async () => {
+  it("retains the conversation and allows a failed feedback save to be retried", async () => {
     const saveFeedback = vi.fn().mockRejectedValueOnce(new Error("Could not save feedback")).mockResolvedValue(undefined);
     const { platform } = setup({ saveFeedback }); await openFeedback(); submit();
+    fireEvent.click(await screen.findByRole("button", { name: "Save feedback" }));
     await screen.findByText("Could not save feedback");
-    expect(platform.ask).not.toHaveBeenCalled();
     expect(screen.queryByText("Feedback saved for the next update")).not.toBeInTheDocument();
     expect(screen.getByText("Use Attio, not Gmail.")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-    await screen.findByText("I suggest tracking this in Attio.");
+    fireEvent.click(screen.getByRole("button", { name: "Save feedback" }));
+    await screen.findByText("Feedback saved for the next update");
     expect(saveFeedback).toHaveBeenCalledTimes(2);
+    expect(platform.ask).toHaveBeenCalledTimes(2);
+  });
+
+  it("starts only once when feedback is opened before saved chats finish loading", async () => {
+    let resolveLoad!: (value: null) => void;
+    const { platform } = setup({ load: vi.fn(() => new Promise(resolve => { resolveLoad = resolve; })) });
+    act(() => { window.dispatchEvent(new CustomEvent("workflows:feedback", { detail: feedback })); });
+    expect(platform.ask).not.toHaveBeenCalled();
+    await act(async () => resolveLoad(null));
+    await screen.findByText("I suggest tracking this in Attio.");
+    expect(platform.ask).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Minimize chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ask Screenpipe" }));
+    expect(platform.ask).toHaveBeenCalledTimes(1);
   });
 
   it("inserts dictation into the draft without sending and removes the control when hidden", async () => {
@@ -67,7 +91,7 @@ describe("workflow feedback conversation", () => {
     await openFeedback();
     fireEvent.click(screen.getByRole("button", { name: "Test microphone" }));
     expect(screen.getByRole("textbox")).toHaveValue("Dictated correction");
-    expect(platform.ask).not.toHaveBeenCalled();
+    expect(platform.ask).toHaveBeenCalledTimes(1);
     expect(platform.saveFeedback).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Minimize chat" }));
     expect(screen.queryByText("Test microphone")).not.toBeInTheDocument();

@@ -10,6 +10,8 @@ import { ChatMarkdown, ComposerTextArea, ChatJumpToLatest } from "./chat-primiti
 import { matchesSidebarShortcut, useSidebarShortcuts } from "./sidebar-shortcuts";
 import styles from "./workflow-assistant.module.css";
 
+const FEEDBACK_PROMPT = "Review this workflow and ask me 3 specific questions to help refine it. Also invite any general feedback I have.";
+
 export function WorkflowAssistant({ platform, context, onDockChange, onWidthChange, onOpenChange, onModeChange, headerToggle = false, active = true, composerAccessory }: {
   platform: WorkflowsAssistantPlatform;
   context: AssistantContext;
@@ -38,6 +40,10 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
   const [historyQuery, setHistoryQuery] = useState("");
   const [displayOpen, setDisplayOpen] = useState(false);
   const [pendingFeedback, setPendingFeedback] = useState<AssistantContext | null>(null);
+  const consumedFeedback = useRef<AssistantContext | null>(null);
+  const savingFeedback = useRef(false);
+  const [feedbackSaving, setFeedbackSaving] = useState(false);
+  const [feedbackError, setFeedbackError] = useState("");
   const [includeContext, setIncludeContext] = useState(true);
   const [atBottom, setAtBottom] = useState(true);
   const [copied, setCopied] = useState("");
@@ -164,15 +170,15 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
   }, [active, platform.saveFeedback]);
 
   useEffect(() => {
-    if (!pendingFeedback || !loaded || busy) return;
-    update(current => {
-      const existing = [...current.conversations].reverse().find(item => item.feedbackContext?.key === pendingFeedback.key);
-      const fresh = existing || { ...newAssistantConversation(), feedbackContext: pendingFeedback };
-      return { ...current, activeId: fresh.id, conversations: existing ? current.conversations : [...current.conversations, fresh] };
-    });
+    if (!pendingFeedback || !loaded || busy || controller.current || consumedFeedback.current === pendingFeedback) return;
+    consumedFeedback.current = pendingFeedback;
+    const fresh = { ...newAssistantConversation(), feedbackContext: pendingFeedback };
+    update(current => ({ ...current, activeId: fresh.id, conversations: [...current.conversations, fresh] }));
     setPendingFeedback(null);
     setIncludeContext(true);
     setError("");
+    setFeedbackError("");
+    void send(FEEDBACK_PROMPT);
     requestAnimationFrame(() => input.current?.focus());
   }, [pendingFeedback, loaded, busy, update]);
 
@@ -205,15 +211,6 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
       saveTimer.current = null;
       await persist(snapshot);
       if (abort.signal.aborted) throw new DOMException("Stopped", "AbortError");
-      if (current.feedbackContext?.workflow && platform.saveFeedback && !alreadySavedFeedback) {
-        const previousNotes = typeof current.feedbackContext.workflow.userCorrection === "string" ? current.feedbackContext.workflow.userCorrection.trim() : "";
-        const discussion = [...history.filter(m => m.text && !m.status).map(m => `${m.role === "user" ? "User" : "Assistant"}: ${m.text}`), `User: ${question.trim()}`].join("\n\n");
-        const feedback = [previousNotes, discussion].filter(Boolean).join("\n\n");
-        await platform.saveFeedback(current.feedbackContext.workflow, feedback);
-        patchMessage(current.id, userId, { feedbackSaved: true });
-        await persist(stateRef.current);
-      }
-      if (abort.signal.aborted) throw new DOMException("Stopped", "AbortError");
       const text = await platform.ask({ question: question.trim(), context: turnContext, history, signal: abort.signal, onProgress: (progress) => {
         if (abort.signal.aborted || !mounted.current) return;
         setActivity(progress.activity === "searching" ? "Searching your memory…" : progress.activity === "writing" ? "Writing…" : "Starting…");
@@ -235,6 +232,24 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
         void persist(stateRef.current).catch(() => {});
       }
     }
+  }
+
+  async function saveFeedback() {
+    const current = stateRef.current.conversations.find(c => c.id === stateRef.current.activeId)!;
+    const user = [...current.messages].reverse().find(m => m.role === "user");
+    if (!current.feedbackContext?.workflow || !platform.saveFeedback || !user || user.feedbackSaved || savingFeedback.current) return;
+    savingFeedback.current = true;
+    setFeedbackSaving(true); setFeedbackError("");
+    try {
+      const previousNotes = current.feedbackContext.workflow.userCorrection?.trim() || "";
+      const discussion = current.messages.filter(m => m.text && !m.status && m.text !== FEEDBACK_PROMPT)
+        .map(m => `${m.role === "user" ? "User" : "Assistant (proposal)"}: ${m.text}`).join("\n\n");
+      await platform.saveFeedback(current.feedbackContext.workflow, [previousNotes, discussion].filter(Boolean).join("\n\n"));
+      patchMessage(current.id, user.id, { feedbackSaved: true });
+      await persist(stateRef.current);
+    } catch (cause) {
+      setFeedbackError(cause instanceof Error ? cause.message : "Couldn’t save feedback. Try again.");
+    } finally { savingFeedback.current = false; setFeedbackSaving(false); }
   }
 
   const lastUser = [...conversation.messages].reverse().find((message) => message.role === "user");
@@ -337,10 +352,14 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
       {!historyOpen && <ChatJumpToLatest hasMessages={!!conversation.messages.length} scrolledUp={!atBottom} onJump={() => {
         follow.current = true; setAtBottom(true); scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: "auto" });
       }} />}
+      {!historyOpen && feedbackContext && !busy && conversation.messages.some(m => m.role === "user" && m.text !== FEEDBACK_PROMPT) && lastUser && !lastUser.feedbackSaved && <div className={styles.feedbackActions}>
+        <button disabled={feedbackSaving} onClick={() => void saveFeedback()}>{feedbackSaving ? "Saving…" : "Save feedback"}</button>
+      </div>}
+      {feedbackError && <div className={styles.saveError} role="alert">{feedbackError}</div>}
       {saveError && <div className={styles.saveError} role="alert">Couldn’t save this conversation.<button onClick={() => void persist(stateRef.current).catch(() => {})}>Retry save</button></div>}
       {!historyOpen && <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(conversation.draft); }}>
         {feedbackContext ? <span className={styles.context}><span className={styles.contextDot} /><span>{feedbackContext.title}</span></span> : <button type="button" className={styles.context} aria-pressed={includeContext} title={includeContext ? "Remove current page from the next message" : "Include current page in the next message"} onClick={() => setIncludeContext(!includeContext)}>{includeContext ? <><span className={styles.contextDot} /><span>{context.title}</span><X size={12} /></> : <><Plus size={13} /><span>Add current page</span></>}</button>}
-        <ComposerTextArea ref={input} aria-label="Ask Screenpipe" placeholder={feedbackContext ? "Type a correction, or use the microphone…" : includeContext && context.workflow ? "Ask about this workflow…" : "Ask or find anything…"} rows={1}
+        <ComposerTextArea ref={input} aria-label="Ask Screenpipe" placeholder={feedbackContext ? "Answer a question or share feedback…" : includeContext && context.workflow ? "Ask about this workflow…" : "Ask or find anything…"} rows={1}
           value={conversation.draft} maxLength={8000} disabled={!loaded} onChange={(event) => update((current) => ({
             ...current, conversations: current.conversations.map((item) => item.id === current.activeId ? { ...item, draft: event.target.value } : item),
           }))} onSend={() => void send(conversation.draft)} />

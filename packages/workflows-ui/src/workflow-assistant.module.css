@@ -87,3 +87,7 @@
 :global(.dark) .context, :global(.dark) .empty button { color: #afb2a3; }
 :global(.dark) .send { background: #dfe2d5; color: #20221c; }
 :global(.dark) .send:disabled { background: #36392f; color: #767d68; }
+
+.feedbackActions { display: flex; justify-content: flex-end; padding: 8px 16px 0; }
+.feedbackActions button { padding: 7px 12px; border: 1px solid var(--chat-line); border-radius: 7px; background: var(--chat-soft); color: var(--chat-ink); font: inherit; font-size: 12px; cursor: pointer; }
+.feedbackActions button:disabled { opacity: .5; cursor: wait; }

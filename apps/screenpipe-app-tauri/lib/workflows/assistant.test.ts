@@ -56,6 +56,14 @@ describe("workflow assistant agent transport", () => {
     }
     expect(mocks.handlers.size).toBe(0);
   });
+  it("asks three grounded opening questions and does not claim corrections were saved", () => {
+    const prompt = buildAssistantPrompt("Review this workflow", { key: "feedback:a", title: "Hiring", purpose: "feedback" }, []);
+    expect(prompt).toContain("Ask exactly 3 short, numbered, workflow-specific questions");
+    expect(prompt).toContain("one brief invitation");
+    expect(prompt).toContain("Do not restart the three-question interview");
+    expect(prompt).not.toContain("feedback has already been saved");
+    expect(prompt).toContain("only submitted when the user clicks Save feedback");
+  });
   it("uses the same account and harness for feedback with read-only connected tools", async () => {
     mocks.prompt.mockImplementation(async (id: string) => {
       const emit = (event: AgentEventEnvelope["event"]) => mocks.handlers.get(id)?.({ sessionId: id, source: "pi", event });
@@ -67,8 +75,8 @@ describe("workflow assistant agent transport", () => {
     await desktopAssistant.ask({ question: "The final step is wrong", context, history: [], signal: new AbortController().signal, onProgress: vi.fn() });
     expect(mocks.start).toHaveBeenCalledWith(expect.stringContaining("workflow-assistant"), "/isolated/profile/pi-workflows-assistant", "test-token", expect.objectContaining({ ...assistantProviderConfig, allowedTools: [...ASSISTANT_TOOLS, "screenpipe_list_connections", "sp_mcp_list_tools", "sp_mcp_read"] }));
     const prompt = buildAssistantPrompt("The final step is wrong", context, []);
-    expect(prompt).toContain("Do not claim the map has changed or start a new task");
-    expect(prompt).toContain("Ask at most one consequential clarification");
+    expect(prompt).toContain("Do not claim feedback was applied or saved, or start a new task");
+    expect(prompt).toContain("Ask exactly 3 short, numbered, workflow-specific questions");
   });
   it("does not launch Context without an account or expose Pi login instructions", async () => {
     mocks.token.mockResolvedValue(null);
