@@ -2602,6 +2602,12 @@ fn classify_llm_error_value(value: &serde_json::Value) -> Option<(Option<String>
     .join(" ")
     .to_lowercase();
 
+    if code.as_deref() == Some("missing_output") {
+        return Some((
+            Some("missing_output".to_string()),
+            Some(message.unwrap_or_else(|| "automation did not save its required output".to_string())),
+        ));
+    }
     if has_safety_refusal_token(&combined) {
         return Some((
             Some("safety_refusal".to_string()),
@@ -8951,6 +8957,17 @@ mod tests {
     use chrono::{TimeZone, Timelike};
     use std::path::Path;
     use std::sync::atomic::Ordering;
+
+    #[test]
+    fn missing_save_receipt_fails_despite_normal_assistant_text() {
+        let stdout = r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"No changes saved."}]}]}"#;
+        let stderr = r#"{"error":{"code":"missing_output","message":"The agent could not save a supported update."}}"#;
+        let result = classify_pipe_process_result(false, false, stderr, stdout);
+        assert_eq!(result.status, "failed");
+        assert_eq!(result.error_type.as_deref(), Some("missing_output"));
+        assert_eq!(result.error_message.as_deref(), Some("The agent could not save a supported update."));
+        assert_eq!(classify_pipe_process_result(false, true, stderr, stdout).status, "cancelled");
+    }
 
     #[test]
     fn skill_learning_is_opt_in_and_bounded() {

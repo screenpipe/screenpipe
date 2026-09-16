@@ -38,3 +38,11 @@ it("cleans up late subscriptions and ignores stale events after switching runs",
   act(() => publish([{ id: "late", label: "Old run", status: "running" }]));
   expect(screen.queryByText("Old run")).not.toBeInTheDocument();
 });
+
+it("shows no-change success and never labels a failed run with older change counts", () => {
+  const view = render(<WorkflowRunProgress active={false} job={{ id: "1", status: "complete" }} changes={{ created: 0, updated: 0 }} analyze={vi.fn()} />);
+  expect(screen.getByRole("status")).toHaveTextContent("Up to date");
+  view.rerender(<WorkflowRunProgress active={false} job={{ id: "2", status: "failed" }} changes={{ created: 0, updated: 2 }} analyze={vi.fn()} />);
+  expect(screen.getByRole("status")).toHaveTextContent("Update not saved");
+  expect(screen.queryByText("0 new · 2 updated")).not.toBeInTheDocument();
+});

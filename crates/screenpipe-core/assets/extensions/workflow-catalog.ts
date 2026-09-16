@@ -21,6 +21,9 @@ export default function workflowCatalog(pi: ExtensionAPI) {
   let ready = false;
   let token = "";
   let context: any;
+  let committed = false;
+  let recoveryRequested = false;
+  let lastStopReason: string | undefined;
   const inspected = new Set<number>();
   let successfulHistoryRead = false;
   const failedHistoryReads = new Set<string>();
@@ -64,6 +67,33 @@ export default function workflowCatalog(pi: ExtensionAPI) {
     if (event.isError) failedHistoryReads.add(key);
     else { successfulHistoryRead = true; failedHistoryReads.delete(key); }
   });
+  // Pi owns continuation, cancellation and the task timeout. Give the agent
+  // one follow-up to satisfy its save contract, never a second processing loop.
+  pi.on("agent_end", async (event: any) => {
+    const last = event.messages?.findLast((message: any) => message.role === "assistant");
+    lastStopReason = last?.stopReason;
+    if (!ready || committed || lastStopReason !== "stop" || recoveryRequested) return;
+    recoveryRequested = true;
+    pi.sendMessage({
+      customType: "workflow-save-required",
+      content: "This update has no successful workflow_commit receipt yet. Continue from the tool results: repair any rejected claims using their sources, or omit unsupported changes. If investigation succeeded and nothing qualifies, commit workflows: [] to preserve the catalog and record the check. If a source read failed, retry that read; do not checkpoint an incomplete investigation. A validation rejection alone is not a saved result. Finish only after a successful receipt, or explain the unresolved failure.",
+      display: true,
+    }, { deliverAs: "followUp", triggerTurn: true });
+  });
+  pi.on("agent_settled", async () => {
+    if (!ready || committed) return;
+    process.exitCode = 1;
+    // Preserve provider and cancellation errors rather than relabeling them.
+    if (lastStopReason === "error" || lastStopReason === "aborted") return;
+    // The existing Pipe result classifier consumes structured stderr. A normal
+    // assistant sentence cannot turn a rejected save into a completed task.
+    process.stderr.write(JSON.stringify({ error: {
+      code: "missing_output",
+      message: failedHistoryReads.size > 0
+        ? "Could not finish reading work history. Your saved workflows are unchanged."
+        : "The agent could not save a supported update. Your saved workflows are unchanged.",
+    } }) + "\n");
+  });
   const tool = (name: string, description: string, properties: any, required: string[], run: (input: any, signal?: AbortSignal) => Promise<any>) => {
     pi.registerTool({ name, label: name.replaceAll("_", " "), description,
       parameters: { type: "object", properties, required, additionalProperties: false } as any,
@@ -99,6 +129,8 @@ export default function workflowCatalog(pi: ExtensionAPI) {
     if (!successfulHistoryRead || failedHistoryReads.size > 0) throw new Error("Cannot advance the checkpoint while source reads have failed. Retry the failed reads successfully or finish without saving.");
     requireInspectedFrames(input.workflows, inspected);
     const receipt = await readJson("/workflows/catalog", input, signal);
+    if (!Number.isInteger(receipt?.revision) || receipt.revision <= input.expected_revision || receipt.checkedThrough !== input.checked_through) throw new Error("The recorder did not return a valid save receipt. Read workflow_context to check whether the update persisted before trying again.");
+    committed = true;
     context = undefined;
     return result(receipt);
   });

@@ -45,9 +45,9 @@ export function WorkflowRunProgress({ job, active, subscribe, stop, analyze, upd
   const items = activity.jobId === job?.id ? activity.items : [];
   const current = [...items].reverse().find(item => item.status === "running") ?? items.at(-1);
   const seconds = job?.startedAt ? Math.max(0, Math.floor((now - Date.parse(job.startedAt)) / 1000)) : NaN;
-  const result = changes ? `${changes.created} new · ${changes.updated} updated` : "Workflows updated";
+  const result = changes ? changes.created === 0 && changes.updated === 0 ? "Up to date" : `${changes.created} new · ${changes.updated} updated` : "Workflows updated";
   const label = active ? current?.label ?? (job?.status === "queued" ? "Waiting for agent" : "Agent working")
-    : job?.status === "failed" ? "Update ended" : job?.status === "complete" ? result
+    : job?.status === "failed" ? "Update not saved" : job?.status === "complete" ? result
     : updatedAt ? `Updated ${new Date(updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "";
   return <div className={styles.refreshControls}>
     {(active || items.length > 0) ? <div ref={root} className={styles.runProgress}>

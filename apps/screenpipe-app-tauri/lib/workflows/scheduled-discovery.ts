@@ -49,7 +49,8 @@ function job(execution: any): WorkflowAnalysisJob {
     : execution.status === "running" ? "processing" : "queued";
   return { id: String(execution.id), status, startedAt: execution.started_at,
     message: execution.status === "cancelled" ? "Update stopped. Your saved workflows are still available."
-      : status === "failed" ? "Could not update workflows. See the scheduled task for details."
+      : execution.error_type === "missing_output" ? "The update could not be saved. Your previous workflows are still available. Try again."
+      : status === "failed" ? "Could not update workflows. Your saved workflows are still available. See the scheduled task for details."
       : status === "processing" ? "Updating workflows" : "Waiting to update workflows",
   };
 }
@@ -64,7 +65,9 @@ export async function getWorkflowJob(id: string): Promise<WorkflowAnalysisJob> {
   const state = job(value.data);
   if (state.status === "complete") {
     const result = await loadScheduledCatalog();
-    if (!result || !result.checkedThrough || Date.parse(result.checkedThrough) < Date.parse(value.data.started_at)) return { ...state, status: "failed", message: "The task finished without saving workflows." };
+    const started = Date.parse(value.data.started_at);
+    const checked = result?.checkedThrough ? Date.parse(result.checkedThrough) : NaN;
+    if (!result || !Number.isFinite(started) || !Number.isFinite(checked) || checked < started) return { ...state, status: "failed", message: "The update could not be saved. Your previous workflows are still available. Try again." };
     state.result = result;
   }
   return state;

@@ -282,7 +282,7 @@ pub(crate) async fn commit(
         )
     })?
     .map_err(|e| error(StatusCode::UNPROCESSABLE_ENTITY, &e))?;
-    let mut normalized = normalize_analysis(raw.clone(), 90, &evidence)
+    let mut normalized = normalize_updates(raw.clone(), &evidence)
         .map_err(|e| error(StatusCode::UNPROCESSABLE_ENTITY, &e))?;
     let updates = normalized["workflows"].as_array_mut().unwrap();
     if updates.len() != body.workflows.len()
@@ -367,6 +367,16 @@ pub(crate) async fn commit(
     ))
 }
 
+// A catalog commit is incremental. An explicit empty proposal records a
+// successful investigation; full-analysis normalization still rejects empty or
+// unsupported generated catalogs everywhere else.
+fn normalize_updates(raw: Value, evidence: &EvidenceCatalog) -> Result<Value, String> {
+    if raw["workflows"].as_array().is_some_and(Vec::is_empty) {
+        return Ok(raw);
+    }
+    normalize_analysis(raw, 90, evidence)
+}
+
 #[derive(Deserialize, OaSchema)]
 pub struct CorrectionRequest {
     pub id: String,
@@ -410,6 +420,36 @@ pub(crate) async fn correct(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn empty_commit_checkpoints_without_replacing_saved_workflows() {
+        let old = json!({"revision":4,"analysis":{"workflows":[{"id":"wf-a","title":"Original","userCorrection":"Keep this","rank":1}]},"changes":{"created":0,"updated":2}});
+        let normalized = normalize_updates(
+            json!({"evidenceVersion":2,"workflows":[]}),
+            &EvidenceCatalog::default(),
+        )
+        .unwrap();
+        let result = reconcile(
+            old.clone(),
+            normalized["workflows"].as_array().unwrap().clone(),
+            "2026-09-15T00:00:00Z",
+        )
+        .unwrap();
+        assert_eq!(
+            result["analysis"]["workflows"],
+            old["analysis"]["workflows"]
+        );
+        assert_eq!(result["checkedThrough"], "2026-09-15T00:00:00Z");
+        assert_eq!(result["revision"], 5);
+        assert_eq!(result["changes"], json!({"created":0,"updated":0}));
+        assert!(normalize_updates(
+            json!({"workflows":[{"title":"Unsupported claim"}]}),
+            &EvidenceCatalog::default()
+        )
+        .is_err());
+        assert!(
+            normalize_analysis(json!({"workflows":[]}), 90, &EvidenceCatalog::default()).is_err()
+        );
+    }
     #[test]
     fn updates_preserve_identity_corrections_and_unmentioned_workflows() {
         let old = json!({"revision":4,"analysis":{"workflows":[{"id":"wf-a","title":"Old title","userCorrection":{"notes":"Keep this"}},{"id":"wf-b","title":"Other"}]}});

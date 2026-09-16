@@ -44,6 +44,17 @@ describe("workflow scheduled-task adapter", () => {
       .mockResolvedValueOnce(response({ analyzedAt: "2026-09-14T12:00:00Z", checkedThrough: "2026-09-14T12:00:00Z" }));
     expect(await getWorkflowJob("24")).toMatchObject({ status: "failed" });
   });
+  it("accepts a current no-change checkpoint and reports its zero changes", async () => {
+    const now = "2026-09-15T12:00:00Z";
+    fetchMock.mockResolvedValueOnce(response({ data: { id: 25, status: "completed", started_at: now } }))
+      .mockResolvedValueOnce(response({ analyzedAt: now, checkedThrough: now, changes: { created: 0, updated: 0 } }));
+    expect(await getWorkflowJob("25")).toMatchObject({ status: "complete", result: { changes: { created: 0, updated: 0 } } });
+  });
+  it("shows a missing-save failure without loading the prior run's success counts", async () => {
+    fetchMock.mockResolvedValueOnce(response({ data: { id: 25, status: "failed", error_type: "missing_output" } }));
+    expect(await getWorkflowJob("25")).toMatchObject({ status: "failed", message: expect.stringContaining("previous workflows") });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
   it("saves only the edited correction, never a stale full catalog", async () => {
     const prior = { analyzedAt: "2026-09-15T12:00:00Z", analysis: { workflows: [{ id: "wf-a", title: "Updated elsewhere", userCorrection: "Old" }] } };
     fetchMock.mockResolvedValueOnce(response(prior)).mockResolvedValueOnce(response({ success: true }));

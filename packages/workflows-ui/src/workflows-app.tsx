@@ -1334,7 +1334,6 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
         if (job && (job.status === "queued" || job.status === "processing")) {
           setAnalyzing(true);
         } else {
-          setAnalyzing(false);
           if (job && observedJob.current !== job.id) {
             if (job.status === "complete") {
               const completed = await platform.getAnalysisJob!(job.id);
@@ -1344,8 +1343,9 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
             } else setAnalysisError(job.message || "Could not update workflows.");
             observedJob.current = job.id;
           }
+          if (!disposed) setAnalyzing(false);
         }
-      } catch (error) { if (!disposed) setAnalysisError(error instanceof Error ? error.message : "Could not check the workflow task."); }
+      } catch (error) { if (!disposed) { setAnalyzing(false); setAnalysisError(error instanceof Error ? error.message : "Could not check the workflow task."); } }
       if (!disposed) timer = setTimeout(poll, 3000);
     };
     void poll();
