@@ -12,7 +12,7 @@ const commands = vi.hoisted(() => ({
 vi.mock("@/lib/utils/tauri", () => ({ commands }));
 import { StorageMigrationPrompt } from "./storage-migration-prompt";
 
-const idle: StorageMigrationActivity = { root: "/fixture", busy: false, message: "", error: null, elapsed_seconds: 0, completed_records: null, total_records: null, bytes_saved: null, available_bytes: null, completed: false };
+const idle: StorageMigrationActivity = { root: "/fixture", busy: false, recovering: false, message: "", error: null, elapsed_seconds: 0, completed_records: null, total_records: null, bytes_saved: null, available_bytes: null, completed: false };
 let status: StorageMigrationStatus;
 
 beforeEach(() => {
@@ -33,6 +33,25 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("automatic storage migration prompt", () => {
+  it.each([
+    { busy: true },
+    { blocked_reason: "Screenpipe is restarting or restoring recording. Wait for startup to finish." },
+  ])("withholds retry and recording-resumed claims while startup owns storage: %j", async (startup) => {
+    Object.assign(status, {
+      pending: true, in_place: true, error: "The previous storage migration did not finish.",
+      ...startup,
+    });
+    const app = render(<StorageMigrationPrompt activity={idle} />);
+    await waitFor(() => expect(commands.getStorageMigrationStatus).toHaveBeenCalled());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByRole("button", { name: "try again" })).toBeNull();
+    app.unmount();
+    Object.assign(status, { busy: false, blocked_reason: null });
+    render(<StorageMigrationPrompt activity={idle} />);
+    fireEvent.click(await screen.findByRole("button", { name: "try again" }));
+    await waitFor(() => expect(commands.startStorageMigration).toHaveBeenCalledOnce());
+  });
+
   it("offers only resume for an interrupted in-place conversion", async () => {
     Object.assign(status, { pending: true, in_place: true, can_cancel: false, error: "Free more disk space to resume." });
     render(<StorageMigrationPrompt activity={{ ...idle, error: status.error }} />);
@@ -90,6 +109,42 @@ describe("automatic storage migration prompt", () => {
     render(<StorageMigrationPrompt activity={idle} />);
     await waitFor(() => expect(commands.getStorageMigrationStatus).toHaveBeenCalled());
     expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("stays closed across app launches while completed storage is reopening", async () => {
+    Object.assign(status, {
+      completed: true, using_new_storage: false, can_migrate: false,
+      generation: "migrated-generation",
+    });
+    for (const session of ["app-launch-1", "app-launch-2", "app-launch-3"]) {
+      status.app_session_id = session;
+      const app = render(<StorageMigrationPrompt activity={idle} />);
+      await waitFor(() => expect(commands.getStorageMigrationStatus).toHaveBeenCalled());
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      app.unmount();
+      commands.getStorageMigrationStatus.mockClear();
+    }
+    expect(commands.startStorageMigration).not.toHaveBeenCalled();
+  });
+
+  it.each(["failure", "interruption"])("requires an explicit retry after %s across app launches", async (reason) => {
+    Object.assign(status, {
+      pending: true, in_place: true,
+      error: reason === "failure" ? "Not enough free disk space." : "The previous storage migration did not finish.",
+    });
+    for (const session of ["app-launch-1", "app-launch-2"]) {
+      status.app_session_id = session;
+      const app = render(<StorageMigrationPrompt activity={{ ...idle, error: status.error }} />);
+      await screen.findByRole("button", { name: "try again" });
+      expect(commands.startStorageMigration).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "do later" }));
+      app.unmount();
+    }
+    status.app_session_id = "app-launch-3";
+    render(<StorageMigrationPrompt activity={{ ...idle, error: status.error }} />);
+    fireEvent.click(await screen.findByRole("button", { name: "try again" }));
+    await waitFor(() => expect(commands.startStorageMigration).toHaveBeenCalledTimes(1));
+    expect(commands.startStorageMigration).toHaveBeenCalledWith("/fixture");
   });
 
   it("surfaces start failures and permits retry without losing the original", async () => {

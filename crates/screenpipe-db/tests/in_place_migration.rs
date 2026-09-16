@@ -25,6 +25,72 @@ async fn fixture(root: &std::path::Path) {
 }
 
 #[tokio::test]
+#[ignore = "migration throughput benchmark; generates an isolated recording history"]
+async fn migration_throughput() {
+    use std::{sync::Mutex, time::Instant};
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("screenpipe_db::storage=info")
+        .with_writer(std::io::stderr)
+        .try_init();
+    let root = tempfile::tempdir().unwrap();
+    let db = DatabaseManager::new(
+        root.path().join("db.sqlite").to_str().unwrap(),
+        Default::default(),
+    )
+    .await
+    .unwrap();
+    let frames = 4096_i64;
+    let elements = 262144_i64;
+    let detail = "capture detail ".repeat(4096);
+    let properties = "element properties ".repeat(32);
+    let mut tx = db.begin_immediate_with_retry().await.unwrap();
+    for id in 1..=frames {
+        sqlx::query("INSERT INTO frames(id,timestamp,full_text,accessibility_tree_json) VALUES(?,'2026-09-15T12:00:00Z','searchable migration history',?)")
+            .bind(id).bind(&detail).execute(&mut **tx.conn()).await.unwrap();
+    }
+    sqlx::query("WITH RECURSIVE n(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM n WHERE id<?) INSERT INTO elements(id,frame_id,source,role,text,properties) SELECT id,1+(id-1)/?,'accessibility','AXText','searchable element',? FROM n")
+        .bind(elements).bind(elements / frames).bind(&properties).execute(&mut **tx.conn()).await.unwrap();
+    tx.commit().await.unwrap();
+    db.wal_checkpoint().await.unwrap();
+    db.close().await;
+    let started = Instant::now();
+    let previous = Mutex::new(("", started, 0_u64));
+    let report = screenpipe_db::storage::migrate_with_progress(
+        root.path(),
+        Default::default(),
+        Default::default(),
+        |p| {
+            let mut previous = previous.lock().unwrap();
+            let completed = p.completed_records.unwrap_or(previous.2);
+            if p.message != previous.0 || completed >= previous.2 + 32768 {
+                eprintln!(
+                    "migration benchmark: elapsed={:.3}s phase={} records={} interval={:.3}s",
+                    started.elapsed().as_secs_f64(),
+                    p.message,
+                    completed,
+                    previous.1.elapsed().as_secs_f64()
+                );
+                *previous = (p.message, Instant::now(), completed);
+            }
+        },
+    )
+    .await
+    .unwrap();
+    eprintln!("migration benchmark: total={:.3}s frames={frames} elements={elements} source={} payloads={}",
+        started.elapsed().as_secs_f64(), report.source_bytes, report.payload_bytes);
+    assert_eq!(report.frames, frames as u64);
+    assert_eq!(
+        report
+            .tables
+            .iter()
+            .find(|t| t.table == "elements")
+            .unwrap()
+            .rows,
+        elements as u64
+    );
+}
+
+#[tokio::test]
 #[ignore = "requires a marked disposable volume; optional production-default run uses up to 8 GiB"]
 async fn migration_completes_with_less_free_space_than_its_final_payloads() {
     use std::io::Write;
@@ -616,7 +682,9 @@ async fn reuses_index_and_preserves_history_and_compact_backup() {
 #[tokio::test]
 #[cfg(feature = "storage-fault-injection")]
 async fn recording_recovery_keeps_committed_payloads_and_survives_restarts() {
-    use screenpipe_db::storage::{inventory, recover_interrupted_migration, PrivacyPolicy};
+    use screenpipe_db::storage::{
+        inventory, recover_interrupted_migration_with_progress, PrivacyPolicy,
+    };
     for (point, hit) in [
         ("migration_schema_step", 2),
         ("migration_schema_step", 8),
@@ -655,9 +723,27 @@ async fn recording_recovery_keeps_committed_payloads_and_survives_restarts() {
         let before = payloads();
         for id in 49..=50 {
             let started = std::time::Instant::now();
-            recover_interrupted_migration(root.path(), Default::default())
-                .await
-                .unwrap_or_else(|e| panic!("{point}/{hit}: {e}"));
+            let phases = std::sync::Mutex::new(Vec::new());
+            recover_interrupted_migration_with_progress(
+                root.path(),
+                Default::default(),
+                |progress| {
+                    // Recovery describes work without pretending it is another
+                    // conversion or inventing a percentage of the whole archive.
+                    assert!(progress.total_records.is_none());
+                    phases.lock().unwrap().push(progress.message);
+                },
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{point}/{hit}: {e}"));
+            let phases = phases.into_inner().unwrap();
+            if id == 49 {
+                assert_eq!(phases.first(), Some(&"checking interrupted storage"));
+                assert_eq!(phases.last(), Some(&"opening recovered history"));
+                assert!(phases.contains(&"restoring history search indexes"));
+            } else {
+                assert!(phases.is_empty(), "ready storage must not recover again");
+            }
             eprintln!(
                 "recording recovery {point}/{hit} launch {id}: {:?}",
                 started.elapsed()

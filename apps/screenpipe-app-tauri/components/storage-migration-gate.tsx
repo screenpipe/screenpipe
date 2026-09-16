@@ -7,10 +7,12 @@ import { Loader2 } from "lucide-react";
 import { commands, type StorageMigrationActivity } from "@/lib/utils/tauri";
 import { migrationBytes, migrationElapsed, StorageMigrationPrompt } from "./storage-migration-prompt";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
+import { UpdateBanner } from "./update-banner";
 
-/** One blocker per webview, driven only by this native process's active operation. */
+/** Explicit conversion blocks history; startup recovery leaves the shell usable. */
 export function StorageMigrationGate({ offerMigration = false }: { offerMigration?: boolean }) {
-  const [activity, setActivity] = useState<StorageMigrationActivity>({ root: null, busy: false, message: "", error: null, completed: false, elapsed_seconds: 0, completed_records: null, total_records: null, bytes_saved: null, available_bytes: null });
+  const [activity, setActivity] = useState<StorageMigrationActivity>({ root: null, busy: false, recovering: false, message: "", error: null, completed: false, elapsed_seconds: 0, completed_records: null, total_records: null, bytes_saved: null, available_bytes: null });
+  const [recoveryDismissed, setRecoveryDismissed] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
@@ -22,15 +24,16 @@ export function StorageMigrationGate({ offerMigration = false }: { offerMigratio
   }, [activity.busy, activity.elapsed_seconds]);
   const revision = useRef(0);
   const dialog = useRef<HTMLDialogElement>(null);
-  const busy = useRef(activity.busy);
-  busy.current = activity.busy;
+  const modal = activity.busy && !activity.recovering;
+  const busy = useRef(modal);
+  busy.current = modal;
 
   useLayoutEffect(() => {
     const blockAppShortcuts = (event: KeyboardEvent) => {
       if (!busy.current) return;
       event.stopImmediatePropagation();
       if (event.key === "Escape") event.preventDefault();
-      if (event.key === "Tab") {
+      if (event.key === "Tab" && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();
         dialog.current?.focus();
       }
@@ -75,12 +78,27 @@ export function StorageMigrationGate({ offerMigration = false }: { offerMigratio
   useLayoutEffect(() => {
     const element = dialog.current;
     if (!element) return;
-    if (activity.busy && !element.open) element.showModal();
-    if (!activity.busy && element.open) element.close();
+    if (modal && !element.open) element.showModal();
+    if (!modal && element.open) element.close();
     return () => { if (element.open) element.close(); };
-  }, [activity.busy]);
+  }, [modal]);
 
   if (!activity.busy) return offerMigration ? <StorageMigrationPrompt activity={activity} /> : null;
+
+  if (activity.recovering) {
+    if (recoveryDismissed) return null;
+    return (
+      <aside aria-label="storage recovery" className="fixed bottom-4 right-4 z-50 w-[calc(100%-2rem)] max-w-sm space-y-3 rounded-lg border border-border bg-background p-4 text-foreground shadow-lg">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold">restoring recording</h2>
+          <button type="button" onClick={() => setRecoveryDismissed(true)} className="text-xs underline">hide</button>
+        </div>
+        <p className="text-xs text-muted-foreground">Recording and history are unavailable while recovery runs. You can use settings and install updates.</p>
+        <p role="status" className="text-xs">{unavailable ? "Waiting for recovery status…" : activity.message} · {migrationElapsed(elapsed)}</p>
+        <UpdateBanner compact />
+      </aside>
+    );
+  }
 
   const total = activity.total_records ?? 0;
   const converted = activity.completed_records ?? 0;
@@ -101,9 +119,9 @@ export function StorageMigrationGate({ offerMigration = false }: { offerMigratio
     >
       <div className="space-y-5">
         <div className="space-y-2">
-          <h2 id="storage-migration-title" className="text-lg font-semibold">migrating storage</h2>
+          <h2 id="storage-migration-title" className="text-lg font-semibold">preparing storage</h2>
           <p id="storage-migration-description" className="text-sm text-muted-foreground">
-            Recording and history access are paused while your history is converted and verified. Your recording preference will be restored when finished. Keep Screenpipe open; your computer will stay awake.
+            Recording and history access are paused while Screenpipe prepares and verifies your history. Your recording preference will be restored when finished. Keep Screenpipe open; your computer will stay awake.
           </p>
         </div>
         <div className="flex items-center gap-3 text-sm" role="status" aria-live="polite">
@@ -123,8 +141,9 @@ export function StorageMigrationGate({ offerMigration = false }: { offerMigratio
           {activity.available_bytes != null && <p>Free space: {migrationBytes(activity.available_bytes)}</p>}
         </div>
         <p className="border-t border-border pt-4 text-xs text-muted-foreground">
-          Space is recovered as each batch is verified. If interrupted, recording resumes with your saved preference. Migration waits for you to retry.
+          Keep Screenpipe open until storage is ready. If interrupted, Screenpipe restores recording from the saved progress before migration can be retried.
         </p>
+        <UpdateBanner compact />
       </div>
     </dialog>
   );
