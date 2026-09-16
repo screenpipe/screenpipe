@@ -95,5 +95,7 @@ export type WorkflowsAppProps = {
   /** Host-owned live recorder status and controls. */
   recordingStatus?: import("react").ReactNode;
   analysisUnavailableReason?: string;
+  /** Explain access only after the user requests an update. */
+  onAnalysisUnavailable?: () => void;
   statusNotice?: import("react").ReactNode;
 };

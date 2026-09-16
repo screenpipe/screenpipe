@@ -1213,7 +1213,7 @@ function PrivacyView({ runtime }: { runtime: WorkflowRuntime | null }) {
   </>;
 }
 
-export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "screenpipe-workflows:last-analysis-v2", initialScopeId, embedded = false, active = true, fullscreen = false, navigationBrand, composerAccessory, recordingStatus, statusNotice, analysisUnavailableReason, navigationFooter, onShareWorkflow }: WorkflowsAppProps) {
+export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "screenpipe-workflows:last-analysis-v2", initialScopeId, embedded = false, active = true, fullscreen = false, navigationBrand, composerAccessory, recordingStatus, statusNotice, analysisUnavailableReason, onAnalysisUnavailable, navigationFooter, onShareWorkflow }: WorkflowsAppProps) {
   const shortcuts = useSidebarShortcuts();
   const [runtime, setRuntime] = useState<WorkflowRuntime | null>(null);
   const [analysis, setAnalysis] = useState<WorkflowAnalysis | null>(() => initialAnalysis ? sanitizeWorkflowAnalysis(initialAnalysis) : null);
@@ -1354,7 +1354,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   }, [platform, active]);
 
   const analyze = useCallback(async () => {
-    if (analysisUnavailableReason) { setAnalysisError(analysisUnavailableReason); return; }
+    if (analysisUnavailableReason) { if (onAnalysisUnavailable) onAnalysisUnavailable(); else setAnalysisError(analysisUnavailableReason); return; }
     setAnalysisJob(null);
     setAnalyzing(true);
     setAnalysisError("");
@@ -1391,7 +1391,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
     } finally {
       if (!platform.managesAnalysis) setAnalyzing(false);
     }
-  }, [activeScope, analysis, platform, storageKey, workProfile, analysisUnavailableReason]);
+  }, [activeScope, analysis, platform, storageKey, workProfile, analysisUnavailableReason, onAnalysisUnavailable]);
 
   const paletteCommands = useMemo<PaletteCommand[]>(() => {
     const navigationCommands = primaryNavigation
@@ -1534,7 +1534,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   switch (view) {
     case "overview": content = <OverviewView analysis={analysis ? { ...analysis, analysis: { workflows } } : null} analyzing={analyzing} error={analysisError} analyze={() => void analyze()} openWorkflow={openWorkflow} navigate={navigate} knownWorkflowCount={knownWorkflows.length} activityPeriod={activityPeriod} runtime={runtime} workProfile={workProfile} refreshRuntime={refreshRuntime} openAccount={platform.openAccount} />; break;
     case "time": content = <TimeView analysis={analysis} analyze={() => void analyze()} analyzing={analyzing} workProfile={workProfile} lens={timeLens} setLens={setTimeLens} />; break;
-    case "workflows": content = <WorkflowsView analysisUnavailableReason={analysisUnavailableReason} workflows={workflows} knownWorkflowCount={knownWorkflows.length} activityPeriod={activityPeriod} filters={filters} setFilters={setFilters} openWorkflow={openWorkflow} analyze={() => void analyze()} analyzing={analyzing} error={analysisError} stop={platform.cancelAnalysisJob ? () => { void platform.cancelAnalysisJob!().catch(error => setAnalysisError(String(error))); } : undefined} updatedAt={analysis?.analyzedAt} changes={analysis?.changes} job={analysisJob} subscribe={platform.subscribeAnalysisActivity} />; break;
+    case "workflows": content = <WorkflowsView analysisUnavailableReason={onAnalysisUnavailable ? undefined : analysisUnavailableReason} workflows={workflows} knownWorkflowCount={knownWorkflows.length} activityPeriod={activityPeriod} filters={filters} setFilters={setFilters} openWorkflow={openWorkflow} analyze={() => void analyze()} analyzing={analyzing} error={analysisError} stop={platform.cancelAnalysisJob ? () => { void platform.cancelAnalysisJob!().catch(error => setAnalysisError(String(error))); } : undefined} updatedAt={analysis?.analyzedAt} changes={analysis?.changes} job={analysisJob} subscribe={platform.subscribeAnalysisActivity} />; break;
     case "workflow": content = <WorkflowDetail onShareWorkflow={onShareWorkflow} workflow={activeWorkflow} navigate={navigate} platform={platform} workProfile={workProfile} saveCorrection={!analyzing && platform.saveCapturedWork && (!activeScope || activeScope.kind === "personal") ? async (note) => {
       if (!analysis || !activeWorkflow) return;
       const updated = { ...analysis, analysis: { workflows: analysis.analysis.workflows.map((workflow) => (workflow.id && activeWorkflow.id ? workflow.id === activeWorkflow.id : workflow.title === activeWorkflow.title) ? { ...workflow, userCorrection: note } : workflow) } };

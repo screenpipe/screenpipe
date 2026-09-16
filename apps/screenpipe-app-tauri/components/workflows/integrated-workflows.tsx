@@ -27,6 +27,7 @@ const platform = process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock"
   ? createFixtureWorkflowsPlatform()
   : desktopWorkflowsPlatform;
 export function IntegratedWorkflows({ active, fullscreen = false, onModeChange, recordingStatus, navigationFooter }: { active: boolean; fullscreen?: boolean; onModeChange: (mode: ProductMode) => void; recordingStatus: React.ReactNode; navigationFooter?: WorkflowsAppProps["navigationFooter"] }) {
+  const [accessRequested, setAccessRequested] = useState(false);
   const [analysisUnavailableReason, setAnalysisUnavailableReason] = useState<string | undefined>(platform.managesAnalysis ? "Checking workflow access…" : undefined);
   const [shareArtifact, setShareArtifact] = useState<ConnectedShareArtifact | null>(null);
   const openShare = useCallback((workflow: WorkflowMap) => setShareArtifact(createWorkflowShareArtifact(workflow)), []);
@@ -51,8 +52,8 @@ export function IntegratedWorkflows({ active, fullscreen = false, onModeChange, 
         onConnectionClose={closeConnections}
       />}
 
-      <WorkflowsApp analysisUnavailableReason={analysisUnavailableReason} composerAccessory={composerAccessory} fullscreen={fullscreen} onShareWorkflow={openShare} platform={platform} active={active} storageKey={null}
-        statusNotice={platform.managesAnalysis ? <WorkflowAccess active={active} onAccessChange={setAnalysisUnavailableReason} /> : undefined}
+      <WorkflowsApp onAnalysisUnavailable={() => setAccessRequested(true)} analysisUnavailableReason={analysisUnavailableReason} composerAccessory={composerAccessory} fullscreen={fullscreen} onShareWorkflow={openShare} platform={platform} active={active} storageKey={null}
+        statusNotice={platform.managesAnalysis ? <WorkflowAccess requested={accessRequested} onRequestChange={setAccessRequested} active={active} onAccessChange={setAnalysisUnavailableReason} /> : undefined}
         recordingStatus={recordingStatus} navigationFooter={navigationFooter}
         navigationBrand={<ProductSwitcher mode="workflows" onChange={onModeChange} />} />
     </TooltipProvider>
