@@ -1,6 +1,6 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
-import { it, expect, vi, beforeEach } from "vitest";
+import { it, expect, vi, beforeEach, afterEach } from "vitest";
 const mocks = vi.hoisted(() => ({
   token: vi.fn(),
   open: vi.fn(),
@@ -48,7 +48,8 @@ const guide = {
   completion: [],
   questions: [],
 };
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {vi.clearAllMocks(); mocks.token.mockResolvedValue("test-token"); vi.stubGlobal("fetch",vi.fn(async()=>Response.json({allowed:true})));});
+afterEach(()=>vi.unstubAllGlobals());
 it("uses the shared agent runner and validates its output", async () => {
   mocks.run.mockResolvedValue(JSON.stringify(guide));
   const signal = new AbortController().signal;
@@ -118,4 +119,10 @@ it("keeps the local draft when hosting is unavailable", async () => {
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+it.each([403,429,503])("does not start generation when access fails (%s)",async(status)=>{
+ vi.stubGlobal("fetch",vi.fn(async()=>Response.json({error:"Access unavailable"},{status})));
+ await expect(desktopGuides.generate(workflow,new AbortController().signal,()=>{})).rejects.toThrow("Access unavailable");
+ expect(mocks.run).not.toHaveBeenCalled();
 });
