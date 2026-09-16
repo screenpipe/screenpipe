@@ -4,7 +4,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { compactEvidence } from "./workflow-memory";
+import { compactEvidence, readHistoryJson } from "./workflow-memory";
 
 const TOOLS = ["workflow_context", "workflow_stage_commit", "workflow_commit", "workflow_inspect_frame", "activity-summary", "search-content", "list-meetings", "get-meeting", "frame-context"];
 const result = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }] });
@@ -21,7 +21,7 @@ export function requireInspectedFrames(workflows: any[], inspected: Set<number>)
 export function checkedCoverage(coverage: any[], indices: any[], reads: any[]) {
   for (const range of coverage) {
     const start = Date.parse(range.start), end = Date.parse(range.end);
-    if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end || !indices.some(index => Date.parse(index.start) <= start && Date.parse(index.end) >= end)) throw new Error("Read the activity index for every interval before checkpointing it.");
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end || !indices.some(index => Date.parse(index.start) <= start && Date.parse(index.end) >= end)) throw new Error(`Read the activity index for every interval before checkpointing it. Requested coverage: ${JSON.stringify(range)}. Successfully indexed intervals: ${JSON.stringify(indices)}. Read activity-summary with start_time and end_time covering the missing interval, or save only the completed prefix.`);
   }
   const pages = new Map<string, any[]>();
   for (const read of reads) {
@@ -32,11 +32,15 @@ export function checkedCoverage(coverage: any[], indices: any[], reads: any[]) {
   }
   for (const group of pages.values()) {
     let offset = 0;
+    const missing = (message: string) => {
+      const first = group[0];
+      return new Error(`${message} Continue this exact query: ${JSON.stringify({ tool: first.tool, arguments: { ...first.query, offset, limit: 30 } })}`);
+    };
     for (const page of group.sort((a,b) => a.offset-b.offset)) {
-      if (page.offset > offset) throw new Error("Source pagination has an unread gap. Finish reading pages or retry a smaller window.");
+      if (page.offset > offset) throw missing("Source pagination has an unread gap.");
       offset = Math.max(offset, page.offset + page.count);
     }
-    if (offset < Math.max(...group.map(page => page.total))) throw new Error("Source results have unread pages. Finish paging before checkpointing this batch.");
+    if (offset < Math.max(...group.map(page => page.total))) throw missing("Source results have unread pages.");
   }
   return coverage.map(range => ({...range, method:"activity-index-and-targeted-sources", queries:reads}));
 }
@@ -54,7 +58,8 @@ export default function workflowCatalog(pi: ExtensionAPI) {
   let successfulHistoryRead = false;
   const indices: any[] = [];
   const reads: any[] = [];
-  const failedHistoryReads = new Set<string>();
+  const failedHistoryReads = new Map<string, { tool: string; arguments: any }>();
+  const readKey = (event: any) => JSON.stringify([event.toolName, Object.entries(event.input ?? {}).sort()]);
   let base = "";
   async function request(path: string, body?: unknown, signal?: AbortSignal) {
     if (!ready) throw new Error("Workflow task is not initialized.");
@@ -92,8 +97,8 @@ export default function workflowCatalog(pi: ExtensionAPI) {
   // merely because the model decides it has finished investigating.
   pi.on("tool_result", async (event: any) => {
     if (!["activity-summary", "search-content", "list-meetings", "get-meeting", "frame-context"].includes(event.toolName)) return;
-    const key = event.toolName;
-    if (event.isError) failedHistoryReads.add(key);
+    const key = readKey(event);
+    if (event.isError) failedHistoryReads.set(key, { tool: event.toolName, arguments: event.input ?? {} });
     else { successfulHistoryRead = true; failedHistoryReads.delete(key); if (event.details?.lookup) reads.push(event.details.lookup); }
   });
   // Pi owns continuation, cancellation and the task timeout. Give the agent
@@ -139,7 +144,7 @@ export default function workflowCatalog(pi: ExtensionAPI) {
   tool("activity-summary", "Read a measured activity index for a chosen interval. Summaries guide investigation; they do not prove task completion.", {
     start_time: { type: "string" }, end_time: { type: "string" },
   }, ["start_time", "end_time"], async (input, signal) => {
-    const value = await readJson(`/activity-summary?${new URLSearchParams({ ...input, include_key_texts: "false", include_snippets: "false", include_memories: "false", include_parsed_count: "false" })}`, undefined, signal);
+    const value = await readHistoryJson(`${base}/activity-summary?${new URLSearchParams({ ...input, include_key_texts: "false", include_snippets: "false", include_memories: "false", include_parsed_count: "false" })}`, { Authorization: `Bearer ${token}` }, signal, 150_000);
     indices.push({start:input.start_time,end:input.end_time});
     return {content:[{type:"text",text:compactEvidence(value)}]};
   });
@@ -159,12 +164,16 @@ export default function workflowCatalog(pi: ExtensionAPI) {
   tool("workflow_stage_commit", "Save this enrichment stage, preserving its upstream revision and actual completed coverage. Only final review publishes workflows.", {
     checked_through: { type: "string", description: "Only for a partially completed activity batch; otherwise omit. Revisions are managed automatically." },
     items: { type: "array", maxItems: 200, items: { type: "object", additionalProperties: true } },
-    coverage: { type: "array", items: { type: "object", additionalProperties: true } },
+    coverage: { type: "array", items: { type: "object", properties: {
+      start: { type: "string", description: "Exact ISO timestamp at the start of the reviewed interval." },
+      end: { type: "string", description: "Exact ISO timestamp at the end of the reviewed interval." },
+      complete: { type: "boolean", description: "True only after finishing the interval's source reads and pages." },
+    }, required: ["start", "end", "complete"], additionalProperties: true } },
   }, ["items", "coverage"], async (input, signal) => {
     const pipeline = context?.pipeline;
     if (!pipeline?.ready || pipeline.stage === 4) throw new Error("Read this stage's current workflow_context before saving.");
     input = { ...input, expected_revision: pipeline.revision, input_revision: pipeline.inputRevision, checked_through: input.checked_through || pipeline.checkedThrough };
-    if (failedHistoryReads.size || (pipeline.stage === 0 && !successfulHistoryRead)) throw new Error("Resolve source read failures before saving progress.");
+    if (failedHistoryReads.size || (pipeline.stage === 0 && !successfulHistoryRead)) throw new Error(`Resolve source read failures before saving progress. Retry these exact reads: ${JSON.stringify([...failedHistoryReads.values()])}`);
     if (pipeline.stage > 0 && input.checked_through !== pipeline.checkedThrough) throw new Error("Preserve upstream coverage.");
     if (pipeline.stage === 0 && (Date.parse(input.checked_through) > Date.parse(pipeline.checkedThrough) || !input.coverage.length || input.coverage.some((r: any) => Date.parse(r.start) < Date.parse(pipeline.window.start)))) throw new Error("Save only completed coverage inside this batch.");
     const coverage = pipeline.stage === 0 ? checkedCoverage(input.coverage, indices, reads) : pipeline.input.coverage;
@@ -178,7 +187,7 @@ export default function workflowCatalog(pi: ExtensionAPI) {
     workflows: { type: "array", maxItems: 30, items: { type: "object", additionalProperties: true } },
   }, ["expected_revision", "checked_through", "workflows"], async (input, signal) => {
     if (!context?.pipeline?.ready || task !== "workflow-discovery" || input.expected_revision !== context.revision || input.checked_through !== context.pipeline.checkedThrough) throw new Error("Use the catalog revision and pipeline checkedThrough returned by workflow_context.");
-    if (failedHistoryReads.size > 0 || (context.pipeline.input?.items?.length > 0 && !successfulHistoryRead)) throw new Error("Cannot advance the checkpoint while source reads have failed. Retry the failed reads successfully or finish without saving.");
+    if (failedHistoryReads.size > 0 || (context.pipeline.input?.items?.length > 0 && !successfulHistoryRead)) throw new Error(`Cannot advance the checkpoint while source reads have failed. Retry these exact reads: ${JSON.stringify([...failedHistoryReads.values()])}`);
     requireInspectedFrames(input.workflows, inspected);
     const receipt = await readJson("/workflows/catalog", { ...input, pipeline_revision: context.pipeline.inputRevision }, signal);
     if (!Number.isInteger(receipt?.revision) || receipt.revision <= input.expected_revision || receipt.checkedThrough !== input.checked_through) throw new Error("The recorder did not return a valid save receipt. Read workflow_context to check whether the update persisted before trying again.");

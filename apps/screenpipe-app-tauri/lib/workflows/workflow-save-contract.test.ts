@@ -89,3 +89,25 @@ it("checks actual index reads and pagination before advancing an activity interv
   expect(() => checkedCoverage([interval],[interval],[page])).toThrow("unread pages");
   expect(checkedCoverage([interval],[interval],[page,{...page,offset:2,count:1}])[0]).toMatchObject({method:"activity-index-and-targeted-sources"});
 });
+
+it("identifies the unfinished query even after a different query completes", async () => {
+  const { checkedCoverage } = await import("@screenpipe-ext/workflow-catalog");
+  const interval = {start:"2026-09-15T10:00:00Z",end:"2026-09-15T11:00:00Z",complete:true};
+  const query = {q:"meeting",start_time:interval.start,end_time:interval.end};
+  const pages = [
+    {tool:"search-content",query,offset:0,count:30,total:549},
+    {tool:"search-content",query:{...query,q:"receipt"},offset:0,count:17,total:17},
+  ];
+  expect(() => checkedCoverage([interval],[interval],pages)).toThrow(JSON.stringify({tool:"search-content",arguments:{...query,offset:30,limit:30}}));
+});
+
+it("requires retrying the failed query, not just any successful search", async () => {
+  const h = await harness();
+  const failed = {toolName:"search-content",input:{q:"meeting",offset:30}};
+  await h.events.tool_result({...failed,isError:true});
+  await h.events.tool_result({toolName:"search-content",input:{q:"receipt"},isError:false});
+  await expect(h.commit()).rejects.toThrow('"q":"meeting"');
+  await h.events.tool_result({...failed,isError:false});
+  h.fetch.mockResolvedValueOnce(Response.json({revision:4,checkedThrough:h.context.now}));
+  await expect(h.commit()).resolves.toBeDefined();
+});

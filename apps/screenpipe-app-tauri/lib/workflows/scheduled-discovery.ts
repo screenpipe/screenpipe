@@ -103,8 +103,11 @@ export async function getWorkflowJob(id: string): Promise<WorkflowAnalysisJob> {
   const tasks = await latestTasks();
   const running = tasks.find(item => ["running", "queued"].includes(item.execution?.status));
   if (running) return tracked(running.execution, running.task);
+  // A later dependency can finish without input. It must not hide the failure
+  // that prevented this cycle's activity scan from producing any input.
+  const cycleStart = Date.parse(tasks.find(item => item.task === WORKFLOW_TASKS[0])?.execution?.started_at || data.started_at);
   const failure = tasks.find(item => item.execution && ["failed", "cancelled", "interrupted"].includes(item.execution.status)
-    && Date.parse(item.execution.started_at) >= Date.parse(data.started_at));
+    && Date.parse(item.execution.started_at) >= cycleStart);
   if (failure) return tracked(failure.execution, failure.task);
   const pipeline = await request(`/workflows/pipeline?task=${TASK}`);
   const result = await loadScheduledCatalog();

@@ -88,6 +88,17 @@ describe("workflow scheduled-task adapter", () => {
     await saveWorkflowCorrections({ ...prior, analysis: { workflows: [{ id: "wf-a", title: "Stale title", userCorrection: "New" }] } } as any);
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ id: "wf-a", correction: "New" });
   });
+  it("keeps an activity failure visible after downstream tasks finish without input", async () => {
+    const activity = {id:30,status:"failed",error_type:"missing_output",started_at:"2026-09-15T10:00:00Z"};
+    const timing = {id:31,status:"completed",started_at:"2026-09-15T10:01:00Z"};
+    fetchMock.mockImplementation(async path => {
+      const url = String(path);
+      if (url.includes("/executions/")) return response({data:timing});
+      if (url.includes("/executions?")) return response({data:url.includes("workflow-activity")?[activity]:url.includes("workflow-timing")?[timing]:[]});
+      return response({inputRevision:0});
+    });
+    expect(await getWorkflowJob("workflow-timing:31")).toMatchObject({id:"workflow-activity:30",status:"failed",message:expect.stringContaining("previous workflows")});
+  });
   it("requires inspecting selected frames, while allowing text-only evidence", () => {
     expect(() => requireInspectedFrames([{ stages: [{ screenshotFrameId: 7 }] }], new Set())).toThrow(/Inspect/);
     expect(() => requireInspectedFrames([{ stages: [{ screenshotFrameId: 7 }] }], new Set([7]))).not.toThrow();

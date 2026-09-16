@@ -4,6 +4,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 const PIPE_CONFIG = process.env.SCREENPIPE_PIPE_NAME
   ? JSON.parse(readFileSync(join(process.cwd(), ".screenpipe-permissions.json"), "utf8")) : null;
@@ -43,6 +44,54 @@ export function compactEvidence(value: unknown): string {
   return truncated ? `${bounded}\n[Long text fields are excerpts, not the complete recording.]` : bounded;
 }
 
+// Share one queue with the activity index tool. Model tool calls may be parallel
+// even when the prompt asks for serial reads; recording admission stays intact.
+let historyQueue: Promise<unknown> = Promise.resolve();
+export function readHistoryJson(url: string, headers: Record<string, string>, signal?: AbortSignal, timeout = 20000): Promise<any> {
+  const work = historyQueue.then(async () => {
+    for (let attempt = 0; ; attempt++) {
+      signal?.throwIfAborted();
+      const response = await fetch(url, { headers, redirect: "error",
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout) });
+      const data = await response.json();
+      if (response.ok && typeof data?.error !== "string") return data;
+      const message = typeof data?.error === "string" ? data.error : `Memory lookup failed (${response.status}).`;
+      if (attempt < 2 && [429, 503].includes(response.status) && typeof data?.retry_after_ms === "number") {
+        await delay(Math.max(100, Math.min(data.retry_after_ms, 2000)), undefined, { signal });
+        continue;
+      }
+      throw new Error(message);
+    }
+  });
+  historyQueue = work.then(() => {}, () => {});
+  return work;
+}
+
+// Return intact JSON and pagination before the text. Only count records the
+// model actually receives, so the next page never skips records cut by a budget.
+export function memoryPage(data: any, args: Record<string, unknown>) {
+  const offset = data.pagination?.offset ?? args.offset ?? 0;
+  const total = data.pagination?.total ?? null;
+  if (!Array.isArray(data.data)) return { text: compactEvidence(data), offset, total, count: null };
+  const rows: any[] = [];
+  let bytes = 0;
+  for (const row of data.data) {
+    const serialized = JSON.stringify(row, (key, value) => {
+      if (["frame", "image", "image_base64", "file_path", "data_url"].includes(key)) return undefined;
+      return typeof value === "string" && value.length > 2500 ? `${value.slice(0, 2500)}… [excerpt]` : value;
+    });
+    if (bytes + serialized.length > 14000) break;
+    rows.push(JSON.parse(serialized));
+    bytes += serialized.length;
+  }
+  if (data.data.length && !rows.length) throw new Error("A source record exceeds the response budget. Narrow the query or request its frame context.");
+  return { offset, total, count: rows.length, text: JSON.stringify({
+    pagination: { ...data.pagination, offset, returned_count: rows.length,
+      next_offset: offset + rows.length, has_more: typeof total === "number" ? offset + rows.length < total : rows.length < data.data.length },
+    data: rows, note: "Long text fields are excerpts. Continue from next_offset with the same query while has_more is true.",
+  }) };
+}
+
 export default function workflowMemory(pi: ExtensionAPI) {
   const fields = {
     q: { type: "string", description: "Short keyword or phrase; omit for a time-window scan." },
@@ -64,26 +113,10 @@ export default function workflowMemory(pi: ExtensionAPI) {
       async execute(_id: string, args: Record<string, unknown>, signal?: AbortSignal) {
         const url = new URL(API_BASE);
         if (!["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) || url.protocol !== "http:") throw new Error("Memory lookup requires the local Screenpipe recorder.");
-        const response = await fetch(`${API_BASE}${memoryPath(tool.name, args)}`, {
-          method: "GET", headers: AUTH_KEY ? { Authorization: `Bearer ${AUTH_KEY}` } : {},
-          signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000),
-        });
-        if (!response.ok) {
-          let message = `Memory lookup failed (${response.status}).`;
-          try {
-            const failure = await response.json();
-            if (typeof failure.error === "string") message = failure.error;
-            if (typeof failure.retry_after_ms === "number") message += ` Retry after ${failure.retry_after_ms} ms.`;
-          } catch {}
-          throw new Error(message);
-        }
-        const data = await response.json();
-        if (typeof data?.error === "string") throw new Error(data.error);
-        return { content: [{ type: "text" as const, text: compactEvidence(data) }], details: { lookup: {
-          tool: tool.name, query: args,
-          offset: data.pagination?.offset ?? args.offset ?? 0,
-          total: data.pagination?.total ?? null,
-          count: Array.isArray(data.data) ? data.data.length : null,
+        const data = await readHistoryJson(`${API_BASE}${memoryPath(tool.name, args)}`, AUTH_KEY ? { Authorization: `Bearer ${AUTH_KEY}` } : {}, signal);
+        const page = memoryPage(data, args);
+        return { content: [{ type: "text" as const, text: page.text }], details: { lookup: {
+          tool: tool.name, query: args, offset: page.offset, total: page.total, count: page.count,
         } } };
       },
     });

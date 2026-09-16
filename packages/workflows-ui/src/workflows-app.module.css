@@ -966,7 +966,7 @@
 .runToggle svg, .runActivity svg { flex-shrink: 0; }
 .runToggle time { font-variant-numeric: tabular-nums; font-size: 11px; }
 .runSpinner { animation: runSpin 1.4s linear infinite; }
-.runToggle > .runSpinner { color: var(--ink); background: #c7ff3e; border-radius: 50%; padding: 2px; box-sizing: content-box; }
+.runToggle > .runSpinner { color: var(--muted); }
 .runActivity { position: absolute; z-index: 30; right: 0; top: calc(100% + 8px); width: min(340px, calc(100vw - 64px)); background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 16px #0000000d; }
 .runActivity header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
 .runActivity header strong { font-size: 12px; font-weight: 600; }
