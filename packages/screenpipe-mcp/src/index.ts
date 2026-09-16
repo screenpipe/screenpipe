@@ -30,7 +30,7 @@ import {
   createMcpQualifiedValueReporter,
   resolveMcpClient,
 } from "./qualified-value";
-import { discoverTeamApiBase, discoverTeamToken } from "./team-config";
+import { discoverTeamConfig } from "./team-config";
 import { teamFrameContent, teamFramePath } from "./team-frame";
 import { PKG_VERSION } from "./version";
 import { formatForElementPurpose } from "./element-format";
@@ -280,43 +280,27 @@ function ensureApiKey(): Promise<string> {
   return apiKeyDiscovery;
 }
 
-// Enterprise team token — when present, this MCP additionally registers
-// `team-*` tools that query the org-wide telemetry control plane instead of
-// just the local recordings. Same audience: an enterprise admin running
-// screenpipe-mcp inside Claude Desktop / Cursor / Windsurf wants to ask "what
-// did MY machine do" AND "what did MY TEAM do" without juggling two MCPs.
-//
-// TWO independent things get resolved here, both in ./team-config:
-//
-//   TOKEN (discoverTeamToken) — `sk_ent_…`:
-//     1. SCREENPIPE_ENTERPRISE_TOKEN env var (Claude config, terminal)
-//     2. team_api_token in ~/.screenpipe/enterprise.json (written by the
-//        desktop app's Settings → Privacy → Admin Team API Token)
-//
-//   BASE URL (discoverTeamApiBase) — where those tools send their requests:
-//     1. --team-api-url flag
-//     2. SCREENPIPE_TEAM_API_URL env var
-//     3. gateway_url in ~/.screenpipe/enterprise.json
-//     4. the hosted default, https://screenpi.pe/api/enterprise/v1
-//
-// The base is NOT always the hosted API: orgs on the write-only archive tier
-// run their own query gateway inside their network, and the hosted API has no
-// read path to their data — pointing there returns 401. The bearer token is
-// the same `sk_ent_` either way; only the base moves.
-//
-// Empty / missing token → team tools are not registered; non-admin users of
-// screenpipe-mcp see exactly what they see today.
-const TEAM_TOKEN = discoverTeamToken();
-const TEAM_API = discoverTeamApiBase(teamApiOverride);
-
-async function fetchTeam(p: string, init: RequestInit = {}): Promise<Response> {
-  return fetch(`${TEAM_API}${p}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${TEAM_TOKEN}`,
-      ...(init.headers || {}),
-    },
+// Team calls use the current token and matching gateway from team-config.
+// Keep one snapshot for the whole call so a file update cannot pair a new
+// credential with a gateway cached from the previous configuration.
+async function fetchTeam(
+  p: string,
+  config: ReturnType<typeof discoverTeamConfig>
+): Promise<Response> {
+  const response = await fetch(`${config.apiBase}${p}`, {
+    headers: { Authorization: `Bearer ${config.token}` },
   });
+  if (response.status === 401) {
+    const body = await response.clone().json().catch(() => null);
+    if (body?.error === "token expired") {
+      throw new Error(
+        "Enterprise API token expired. Save a current token in Settings → Privacy → Admin Team API Token. " +
+        "If SCREENPIPE_ENTERPRISE_TOKEN is set in your MCP config, replace it or remove that override " +
+        "to use ~/.screenpipe/enterprise.json, then restart the MCP server."
+      );
+    }
+  }
+  return response;
 }
 
 // Initialize server
@@ -1073,9 +1057,8 @@ const TEAM_TOOLS: Tool[] = [
 const SYNTHESIZED_KINDS = new Set(["sop", "skill", "trajectory", "memory", "workflow"]);
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  // Team tools only surface when an enterprise token was discovered at boot.
-  // No token = consumer / non-admin user; their MCP looks identical to today.
-  const tools = TEAM_TOKEN ? [...TOOLS, ...TEAM_TOOLS] : TOOLS;
+  const { token } = discoverTeamConfig(teamApiOverride);
+  const tools = token ? [...TOOLS, ...TEAM_TOOLS] : TOOLS;
   return { tools };
 });
 
@@ -2368,17 +2351,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       // ---------------------------------------------------------------------
-      // Enterprise team tools — only callable when TEAM_TOKEN is set at boot.
-      // If we got this far without one, the tool wasn't in the listed set the
-      // host saw, but a misbehaving client could still try to call it. Fail
-      // loudly so the host surfaces the misconfiguration.
+      // Resolve again for every call: saved credentials can change while the
+      // host keeps this MCP process and its previously listed tools alive.
       // ---------------------------------------------------------------------
       case "team-search":
       case "team-devices":
       case "team-records":
       case "team-frame": {
-        if (!TEAM_TOKEN) {
+        const teamConfig = discoverTeamConfig(teamApiOverride);
+        if (!teamConfig.token) {
           return {
+            isError: true,
             content: [
               {
                 type: "text",
@@ -2392,7 +2375,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   `their own query gateway use the token their gateway accepts, ` +
                   `and must ALSO point this MCP at that gateway — ` +
                   `SCREENPIPE_TEAM_API_URL=https://<gateway>/api/enterprise/v1 ` +
-                  `(or --team-api-url). Requests currently go to ${TEAM_API}.`,
+                  `(or --team-api-url). Requests currently go to ${teamConfig.apiBase}.`,
               },
             ],
           };
@@ -2401,7 +2384,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const deviceId = args.device_id;
           const frameId = args.frame_id;
           const path = teamFramePath(deviceId, frameId);
-          const response = await fetchTeam(path);
+          const response = await fetchTeam(path, teamConfig);
           return teamFrameContent(response, deviceId as string, frameId as number);
         }
         // Map MCP tool name → /api/enterprise/v1 path. team-records also
@@ -2423,7 +2406,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
         const query = params.toString();
-        const response = await fetchTeam(`${subpath}${query ? `?${query}` : ""}`);
+        const response = await fetchTeam(`${subpath}${query ? `?${query}` : ""}`, teamConfig);
         const body = await response.text();
         if (!response.ok) {
           throw new Error(

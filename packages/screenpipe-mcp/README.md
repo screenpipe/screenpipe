@@ -183,6 +183,12 @@ An `sk_ent_…` enterprise admin token, resolved in this order:
 
 No token → the `team-*` tools do not appear at all.
 
+The MCP rereads `enterprise.json` for each team request, so replacing or clearing
+the saved token takes effect without restarting it. An explicit
+`SCREENPIPE_ENTERPRISE_TOKEN` still takes priority. If that override expires,
+replace it or remove it to use the desktop app's saved token, then restart the
+MCP server to reload its environment.
+
 ### 2. The base URL
 
 | Priority | Where | Example |
