@@ -213,6 +213,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
       if (abort.signal.aborted) throw new DOMException("Stopped", "AbortError");
       const text = await platform.ask({ question: question.trim(), context: turnContext, history, signal: abort.signal, onProgress: (progress) => {
         if (abort.signal.aborted || !mounted.current) return;
+        if (progress.workflow && current.feedbackContext) update(s => ({ ...s, conversations: s.conversations.map(c => c.id === current.id ? { ...c, feedbackContext: assistantContextSnapshot({ ...c.feedbackContext!, workflow: progress.workflow, title: progress.workflow!.title }) } : c) }));
         setActivity(progress.activity === "searching" ? "Searching your memory…" : progress.activity === "writing" ? "Writing…" : "Starting…");
         patchMessage(current.id, answerId, { text: progress.text });
       } });
@@ -352,14 +353,14 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
       {!historyOpen && <ChatJumpToLatest hasMessages={!!conversation.messages.length} scrolledUp={!atBottom} onJump={() => {
         follow.current = true; setAtBottom(true); scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: "auto" });
       }} />}
-      {!historyOpen && feedbackContext && !busy && conversation.messages.some(m => m.role === "user" && m.text !== FEEDBACK_PROMPT) && lastUser && !lastUser.feedbackSaved && <div className={styles.feedbackActions}>
+      {!platform.learnsFromFeedback && !historyOpen && feedbackContext && !busy && conversation.messages.some(m => m.role === "user" && m.text !== FEEDBACK_PROMPT) && lastUser && !lastUser.feedbackSaved && <div className={styles.feedbackActions}>
         <button disabled={feedbackSaving} onClick={() => void saveFeedback()}>{feedbackSaving ? "Saving…" : "Save feedback"}</button>
       </div>}
       {feedbackError && <div className={styles.saveError} role="alert">{feedbackError}</div>}
       {saveError && <div className={styles.saveError} role="alert">Couldn’t save this conversation.<button onClick={() => void persist(stateRef.current).catch(() => {})}>Retry save</button></div>}
       {!historyOpen && <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(conversation.draft); }}>
         {feedbackContext ? <span className={styles.context}><span className={styles.contextDot} /><span>{feedbackContext.title}</span></span> : <button type="button" className={styles.context} aria-pressed={includeContext} title={includeContext ? "Remove current page from the next message" : "Include current page in the next message"} onClick={() => setIncludeContext(!includeContext)}>{includeContext ? <><span className={styles.contextDot} /><span>{context.title}</span><X size={12} /></> : <><Plus size={13} /><span>Add current page</span></>}</button>}
-        <ComposerTextArea ref={input} aria-label="Ask Screenpipe" placeholder={feedbackContext ? "Answer a question or share feedback…" : includeContext && context.workflow ? "Ask about this workflow…" : "Ask or find anything…"} rows={1}
+        <ComposerTextArea ref={input} aria-label="Ask Screenpipe" placeholder={feedbackContext ? platform.learnsFromFeedback ? "Share feedback to refine this workflow…" : "Answer a question or share feedback…" : includeContext && context.workflow ? "Ask about this workflow…" : "Ask or find anything…"} rows={1}
           value={conversation.draft} maxLength={8000} disabled={!loaded} onChange={(event) => update((current) => ({
             ...current, conversations: current.conversations.map((item) => item.id === current.activeId ? { ...item, draft: event.target.value } : item),
           }))} onSend={() => void send(conversation.draft)} />

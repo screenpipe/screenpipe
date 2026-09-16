@@ -162,3 +162,14 @@ export async function saveWorkflowFeedback(workflow: WorkflowMap, feedback: stri
   if (!workflow.id) throw new Error("Refresh this workflow before sending feedback.");
   await request("/workflows/corrections", { id: workflow.id, correction: feedback });
 }
+
+/** Compare-and-save a scoped feedback refinement through the catalog writer. */
+export async function applyWorkflowFeedback(workflow: WorkflowMap, learning: string, changes: Record<string, string>) {
+  if (!workflow.id) throw new Error("This workflow no longer exists.");
+  const prior = workflow.userCorrection?.trim() || "";
+  const note = `User feedback: ${learning.trim()}`;
+  const correction = prior.includes(note) ? prior : [prior, note].filter(Boolean).join("\n\n");
+  const result = await request("/workflows/corrections", { id: workflow.id, correction, expected_revision: workflow.revision ?? 0, changes });
+  if (!result.success || result.workflow?.id !== workflow.id) throw new Error("Could not verify the saved workflow refinement.");
+  return result.workflow as WorkflowMap;
+}

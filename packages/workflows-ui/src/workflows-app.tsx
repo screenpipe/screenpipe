@@ -876,7 +876,7 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile, saveCorrect
     setSkillSaved(null);
     setSkillError("");
     setSkillProgress({ phase: "reading", message: "Reading the mapped steps" });
-  }, [workflow?.title]);
+  }, [workflow?.title, workflow?.revision]);
   const generateSkill = useCallback(() => {
     if (!workflow || !platform.generateWorkflowSkill) return;
     setSkillOpen(true);
@@ -1314,6 +1314,16 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
       });
     return () => { cancelled = true; };
   }, [activeScope?.id, platform, Boolean(runtime)]);
+
+  useEffect(() => {
+    const refined = (event: Event) => {
+      const workflow = (event as CustomEvent<WorkflowMap>).detail;
+      if (!workflow?.id) return;
+      setAnalysis(current => current ? sanitizeWorkflowAnalysis({ ...current, analysis: { ...current.analysis, workflows: current.analysis.workflows.map(w => w.id === workflow.id && (workflow.revision ?? 0) >= (w.revision ?? 0) ? workflow : w) } }) : current);
+    };
+    window.addEventListener("workflows:refined", refined);
+    return () => window.removeEventListener("workflows:refined", refined);
+  }, []);
 
   const observedJob = useRef("");
   useEffect(() => {

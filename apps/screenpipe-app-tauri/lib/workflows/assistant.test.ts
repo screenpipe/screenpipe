@@ -62,7 +62,7 @@ describe("workflow assistant agent transport", () => {
     expect(prompt).toContain("one brief invitation");
     expect(prompt).toContain("Do not restart the three-question interview");
     expect(prompt).not.toContain("feedback has already been saved");
-    expect(prompt).toContain("only submitted when the user clicks Save feedback");
+    expect(prompt).toContain("call refine_workflow once");
   });
   it("uses the same account and harness for feedback with read-only connected tools", async () => {
     mocks.prompt.mockImplementation(async (id: string) => {
@@ -75,7 +75,7 @@ describe("workflow assistant agent transport", () => {
     await desktopAssistant.ask({ question: "The final step is wrong", context, history: [], signal: new AbortController().signal, onProgress: vi.fn() });
     expect(mocks.start).toHaveBeenCalledWith(expect.stringContaining("workflow-assistant"), "/isolated/profile/pi-workflows-assistant", "test-token", expect.objectContaining({ ...assistantProviderConfig, allowedTools: [...ASSISTANT_TOOLS, "screenpipe_list_connections", "sp_mcp_list_tools", "sp_mcp_read"] }));
     const prompt = buildAssistantPrompt("The final step is wrong", context, []);
-    expect(prompt).toContain("Do not claim feedback was applied or saved, or start a new task");
+    expect(prompt).toContain("Do not claim to update installed skills or start a new task");
     expect(prompt).toContain("Ask exactly 3 short, numbered, workflow-specific questions");
   });
   it("does not launch Context without an account or expose Pi login instructions", async () => {

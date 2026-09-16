@@ -84,6 +84,23 @@ describe("workflow feedback conversation", () => {
     expect(platform.ask).toHaveBeenCalledTimes(1);
   });
 
+  it("carries refinements into later turns without a save button or media in history", async () => {
+    const updated = { ...workflow, revision: 4, description: "Use Attio", userCorrection: "User feedback: Use Attio.", screenshot: { dataUrl: "private-image" } };
+    const ask = vi.fn().mockResolvedValueOnce("I suggest tracking this in Attio.").mockImplementationOnce(async ({ onProgress }) => {
+      onProgress({ text: "Refined", activity: "writing", workflow: updated }); return "Workflow updated.";
+    }).mockResolvedValue("Anything else?");
+    const { platform } = setup({ learnsFromFeedback: true, ask }); await openFeedback(); submit();
+    await screen.findByText("Workflow updated.");
+    expect(screen.queryByRole("button", { name: "Save feedback" })).not.toBeInTheDocument();
+    submit();
+    await waitFor(() => expect(ask).toHaveBeenCalledTimes(3));
+    const context = ask.mock.calls[2][0].context;
+    expect(context.workflow.revision).toBe(4);
+    expect(context.workflow.userCorrection).toBe("User feedback: Use Attio.");
+    expect(JSON.stringify(context)).not.toContain("private-image");
+    expect(platform.saveFeedback).not.toHaveBeenCalled();
+  });
+
   it("inserts dictation into the draft without sending and removes the control when hidden", async () => {
     const { platform, props, rerender } = setup();
     const accessory = ({ onValueChange }: any) => <button type="button" onClick={() => onValueChange("Dictated correction")}>Test microphone</button>;

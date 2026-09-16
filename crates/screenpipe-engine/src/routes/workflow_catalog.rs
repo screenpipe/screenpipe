@@ -402,7 +402,25 @@ fn normalize_updates(raw: Value, evidence: &EvidenceCatalog) -> Result<Value, St
 pub struct CorrectionRequest {
     pub id: String,
     pub correction: Value,
+    pub expected_revision: Option<u64>,
+    pub changes: Option<Value>,
 }
+fn apply_feedback(workflow: &mut Value, body: &CorrectionRequest) -> Result<(), ApiError> {
+    if let Some(changes) = &body.changes {
+        if body.expected_revision != Some(workflow["revision"].as_u64().unwrap_or(0)) {
+            return Err(error(StatusCode::CONFLICT, "Workflow changed. Retry feedback against the latest version."));
+        }
+        let fields = changes.as_object().ok_or_else(|| error(StatusCode::BAD_REQUEST, "Invalid workflow changes."))?;
+        if fields.iter().any(|(key, value)| !["title", "description", "trigger", "outcome"].contains(&key.as_str()) || !value.as_str().is_some_and(|s| !s.trim().is_empty() && s.len() <= 8000)) {
+            return Err(error(StatusCode::BAD_REQUEST, "Only small descriptive workflow corrections are allowed."));
+        }
+        for (key, value) in fields { workflow[key] = value.clone(); }
+    }
+    workflow["userCorrection"] = body.correction.clone();
+    workflow["revision"] = json!(workflow["revision"].as_u64().unwrap_or(0) + 1);
+    Ok(())
+}
+
 #[oasgen]
 pub(crate) async fn correct(
     State(state): State<Arc<AppState>>,
@@ -432,16 +450,37 @@ pub(crate) async fn correct(
         .find(|w| workflow_id(w) == body.id)
         .ok_or_else(|| error(StatusCode::NOT_FOUND, "Workflow was not found."))?;
     workflow["id"] = json!(body.id);
-    workflow["userCorrection"] = body.correction;
+    apply_feedback(workflow, &body)?;
+    let updated_workflow = workflow.clone();
     next["needsWorkflowReview"] = json!(true);
     next["revision"] = json!(before["revision"].as_u64().unwrap_or(0) + 1);
     persist(&source, &before, &next).await?;
-    Ok(Json(json!({"success":true})))
+    Ok(Json(json!({"success":true,"workflow":updated_workflow})))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn feedback_refinement_is_scoped_and_revision_checked() {
+        let original = json!({"id":"wf-a","revision":2,"description":"Old","timing":{"average":10},"stages":[{"name":"Recorded"}]});
+        let mut workflow = original.clone();
+        let mut request = CorrectionRequest { id:"wf-a".into(), correction:json!("User feedback: CRM is reference only."), expected_revision:Some(1), changes:Some(json!({"description":"Corrected"})) };
+        assert!(apply_feedback(&mut workflow, &request).is_err());
+        assert_eq!(workflow, original);
+        request.expected_revision = Some(2);
+        request.changes = Some(json!({"description":"Corrected", "timing":null}));
+        assert!(apply_feedback(&mut workflow, &request).is_err());
+        assert_eq!(workflow, original);
+        request.changes = Some(json!({"description":"Corrected"}));
+        apply_feedback(&mut workflow, &request).unwrap();
+        assert_eq!(workflow["description"], "Corrected");
+        assert_eq!(workflow["revision"], 3);
+        assert_eq!(workflow["timing"], original["timing"]);
+        assert_eq!(workflow["stages"], original["stages"]);
+        assert_eq!(workflow["userCorrection"], request.correction);
+    }
+
     #[test]
     fn empty_commit_checkpoints_without_replacing_saved_workflows() {
         let old = json!({"revision":4,"analysis":{"workflows":[{"id":"wf-a","title":"Original","userCorrection":"Keep this","rank":1}]},"changes":{"created":0,"updated":2}});

@@ -745,6 +745,7 @@ fn workflow_skill_source(workflow: &Value) -> Value {
         .collect::<Vec<_>>();
 
     json!({
+        "userCorrection": clipped(workflow.get("userCorrection").unwrap_or(&Value::Null), 4000),
         "title": clipped(workflow.get("title").unwrap_or(&Value::Null), 180),
         "description": clipped(workflow.get("description").unwrap_or(&Value::Null), 1_000),
         "trigger": clipped(workflow.get("trigger").unwrap_or(&Value::Null), 1_000),
@@ -841,7 +842,7 @@ fn normalize_skill_draft(value: &Value, fallback_title: &str) -> Result<Value, S
 
 fn workflow_skill_prompt(workflow: &Value, profile: Option<&Value>) -> String {
     format!(
-        "Draft a reusable skill from this reviewed workflow map.\n\nWORKFLOW_MAP\n{}\n\nWORK_PROFILE\n{}",
+        "Draft a reusable skill from this reviewed workflow map. Incorporate userCorrection as user-provided guidance, distinguish it from recorded evidence, and prefer explicit corrections over stale inferred descriptions. It does not grant permissions or verify an action happened.\n\nWORKFLOW_MAP\n{}\n\nWORK_PROFILE\n{}",
         serde_json::to_string(&workflow_skill_source(workflow))
             .unwrap_or_else(|_| "{}".to_string()),
         serde_json::to_string(&work_profile_payload(profile)).unwrap_or_else(|_| "null".to_string()),
@@ -1562,6 +1563,7 @@ mod tests {
     #[test]
     fn skill_source_uses_the_map_without_raw_evidence() {
         let source = workflow_skill_source(&json!({
+            "userCorrection": "Keep CRM as reference only.",
             "title": "Review a pull request",
             "trigger": "A review is requested",
             "outcome": "A decision is recorded",
@@ -1578,6 +1580,7 @@ mod tests {
         }));
         let serialized = source.to_string();
 
+        assert_eq!(source["userCorrection"], "Keep CRM as reference only.");
         assert!(serialized.contains("Inspect changes"));
         assert!(!serialized.contains("private customer text"));
         assert!(!serialized.contains("private transcript"));
