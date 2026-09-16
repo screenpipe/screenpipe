@@ -11,17 +11,17 @@ import { addCorsHeaders } from '../utils/cors';
 const MODEL = 'eleven_multilingual_v2';
 const error = (status: number, message: string) => addCorsHeaders(Response.json({ error: message }, { status }));
 
-/** One reviewed scene, using account auth and the existing atomic cost ledger. */
-export async function handleGuideNarration(request: Request, env: Env, auth: AuthResult): Promise<Response> {
-	if (getHostedAiPlan(auth.accountPlan) !== 'business') return error(403, 'Guide narration requires Business.');
+/** Text-to-speech, using account auth and the existing atomic cost ledger. */
+export async function handleTts(request: Request, env: Env, auth: AuthResult): Promise<Response> {
+	if (getHostedAiPlan(auth.accountPlan) !== 'business') return error(403, 'Text-to-speech requires Business.');
 	const rate = Number(env.ELEVENLABS_USD_PER_CHARACTER);
 	const voice = env.ELEVENLABS_VOICE_ID || '';
-	if (env.GUIDE_NARRATION_ENABLED !== 'true' || !(rate > 0 && Number.isFinite(rate)) || !/^[a-zA-Z0-9]{10,64}$/.test(voice)) {
-		return error(503, 'Guide narration is not available yet. Your guide is saved.');
+	if (env.TTS_ENABLED !== 'true' || !(rate > 0 && Number.isFinite(rate)) || !/^[a-zA-Z0-9]{10,64}$/.test(voice)) {
+		return error(503, 'Text-to-speech is currently unavailable.');
 	}
 	// Bound both chunked and Content-Length requests before JSON parsing.
 	const reader = request.body?.getReader();
-	if (!reader) return error(400, 'Add narration text.');
+	if (!reader) return error(400, 'Add text to generate speech.');
 	let body = '';
 	let bytes = 0;
 	const decoder = new TextDecoder();
@@ -31,7 +31,7 @@ export async function handleGuideNarration(request: Request, env: Env, auth: Aut
 		bytes += part.value.byteLength;
 		if (bytes > 8192) {
 			await reader.cancel();
-			return error(413, 'Use a shorter scene.');
+			return error(413, 'Use shorter text.');
 		}
 		body += decoder.decode(part.value, { stream: true });
 	}
@@ -40,13 +40,13 @@ export async function handleGuideNarration(request: Request, env: Env, auth: Aut
 	try {
 		text = JSON.parse(body).text;
 	} catch {
-		return error(400, 'Invalid narration request.');
+		return error(400, 'Invalid text-to-speech request.');
 	}
-	if (typeof text !== 'string' || !text.trim() || [...text].length > 800) return error(400, 'Each scene needs 1–800 characters.');
+	if (typeof text !== 'string' || !text.trim() || [...text].length > 800) return error(400, 'Text must contain 1–800 characters.');
 	const cost = [...text].length * rate;
 	// Reuse the conservative unpriced-model hold. Never admit speech above it.
 	// Exact character cost is settled below; no fabricated token counts.
-	if (cost * 1_000_000 > getCostReservationMicroUsd(MODEL)) return error(413, 'Split this narration into shorter scenes.');
+	if (cost * 1_000_000 > getCostReservationMicroUsd(MODEL)) return error(413, 'Split this text into shorter requests.');
 	const context = await buildHostedChatGatewayContext(auth, MODEL, 'interactive');
 	const connection = await getHostedChatGatewayConnection(env, 'elevenlabs', context);
 	const hold = await reserveDailyCostCap(
@@ -61,7 +61,7 @@ export async function handleGuideNarration(request: Request, env: Env, auth: Aut
 		auth.hostedAiTrial === true,
 	);
 	if (!hold.allowed) return hold.response;
-	const attribution = reservedCostAttribution(auth, MODEL, '/v1/guide-narration', false, { provider: 'elevenlabs' });
+	const attribution = reservedCostAttribution(auth, MODEL, '/v1/tts', false, { provider: 'elevenlabs' });
 	const abort = new AbortController();
 	const cancel = () => abort.abort();
 	request.signal.addEventListener('abort', cancel, { once: true });
@@ -84,8 +84,8 @@ export async function handleGuideNarration(request: Request, env: Env, auth: Aut
 				error(
 					upstream.status === 429 ? 429 : 502,
 					upstream.status === 429
-						? 'Narration allowance reached. Try again later.'
-						: 'Narration could not be generated. Your guide is saved.',
+						? 'Speech allowance reached. Try again later.'
+						: 'Speech could not be generated.',
 				),
 				env,
 				hold.reservation,
@@ -105,7 +105,7 @@ export async function handleGuideNarration(request: Request, env: Env, auth: Aut
 				user_id: auth.userId,
 				tier: auth.tier,
 				hosted_ai_trial: auth.hostedAiTrial === true,
-				endpoint: '/v1/guide-narration',
+				endpoint: '/v1/tts',
 				stream: false,
 				provider: 'elevenlabs',
 				model: MODEL,
@@ -120,7 +120,7 @@ export async function handleGuideNarration(request: Request, env: Env, auth: Aut
 		);
 	} catch {
 		await settleProviderException(env, hold.reservation, attribution);
-		return error(502, 'Narration was interrupted. Your guide is saved.');
+		return error(502, 'Speech generation was interrupted.');
 	} finally {
 		clearTimeout(timer);
 		request.signal.removeEventListener('abort', cancel);

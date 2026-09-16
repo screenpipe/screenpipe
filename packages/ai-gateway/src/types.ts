@@ -161,7 +161,7 @@ export interface Env {
 	/** Same-account Cloudflare AI Gateway used by the Workers AI binding. */
 	CLOUDFLARE_AI_GATEWAY_ID?: string;
 	/** Narration stays disabled until BYOK and its contracted character price are configured. */
-	GUIDE_NARRATION_ENABLED?: string;
+	TTS_ENABLED?: string;
 	ELEVENLABS_VOICE_ID?: string;
 	ELEVENLABS_USD_PER_CHARACTER?: string;
 	/** Local-dev only: Gateway root or compat chat URL when remote binding URL resolution is unavailable. */

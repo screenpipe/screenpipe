@@ -23,7 +23,7 @@ export interface LocalGatewayHarnessOptions {
 	privateCostControls?: Partial<Record<PrivateControlName, string | undefined>>;
 	providerReply?: string;
 	cloudflareSpendRules?: boolean;
-	narrationStatus?: number;
+	ttsStatus?: number;
 }
 
 export interface LocalGatewayOutboundRequest {
@@ -187,13 +187,13 @@ export class LocalGatewayHarness {
 				port: options.port ?? 0,
 				bindings: {
 					...jsonBindings(options.privateCostControls),
-					...(options.narrationStatus !== undefined ? { GUIDE_NARRATION_ENABLED: 'true', ELEVENLABS_VOICE_ID: 'fictionalVoice123', ELEVENLABS_USD_PER_CHARACTER: '0.0001' } : {}),
+					...(options.ttsStatus !== undefined ? { TTS_ENABLED: 'true', ELEVENLABS_VOICE_ID: 'fictionalVoice123', ELEVENLABS_USD_PER_CHARACTER: '0.0001' } : {}),
 					OPENAI_API_KEY: 'screenpipe-local-e2e-only',
 					AI_GATEWAY_SERVICE_TOKEN: LOCAL_GATEWAY_SERVICE_TOKEN,
 					MODEL_GATING_ENABLED: 'true',
 					PIPE_FRONTIER_POLICY: 'reject',
 					ROUTER_MODE: 'off',
-					...(cloudflareSpendRules || options.narrationStatus !== undefined ? {
+					...(cloudflareSpendRules || options.ttsStatus !== undefined ? {
 						HOSTED_CHAT_GATEWAY_MODE: 'cloudflare',
 						CLOUDFLARE_ACCOUNT_ID: cloudflareAccountId,
 						CLOUDFLARE_AI_GATEWAY_ID: cloudflareGatewayId,
@@ -224,7 +224,7 @@ export class LocalGatewayHarness {
 					const gatewayAnalytics = cloudflareSpendRules &&
 						request.method === 'POST' &&
 						request.url === 'https://api.cloudflare.com/client/v4/graphql';
-					const narration = options.narrationStatus !== undefined && request.method === 'POST' && request.url === `${cloudflareGatewayRoot}/elevenlabs/v1/text-to-speech/fictionalVoice123?output_format=mp3_44100_128`;
+					const narration = options.ttsStatus !== undefined && request.method === 'POST' && request.url === `${cloudflareGatewayRoot}/elevenlabs/v1/text-to-speech/fictionalVoice123?output_format=mp3_44100_128`;
 					const expected = narration || directProvider || gatewayProvider || gatewaySettings || gatewayAnalytics;
 					harness.outboundRequests.push({
 						url: request.url,
@@ -236,7 +236,7 @@ export class LocalGatewayHarness {
 					if (!expected) {
 						return new Response('unexpected local E2E outbound request', { status: 599 });
 					}
-					if (narration) return new Response(options.narrationStatus === 200 ? 'synthetic audio' : 'private provider error', { status: options.narrationStatus, headers: { 'content-type': options.narrationStatus === 200 ? 'audio/mpeg' : 'application/json' } });
+					if (narration) return new Response(options.ttsStatus === 200 ? 'synthetic audio' : 'private provider error', { status: options.ttsStatus, headers: { 'content-type': options.ttsStatus === 200 ? 'audio/mpeg' : 'application/json' } });
 					if (gatewaySettings) {
 						const baseRule = {
 							enabled: true,

@@ -1,27 +1,27 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 import { test, expect } from 'bun:test';
-import { handleGuideNarration } from '../handlers/guide-narration';
+import { handleTts } from '../handlers/tts';
 import { LocalGatewayHarness } from './local-gateway-harness';
 import type { AuthResult, Env } from '../types';
 const auth = { isValid: true, tier: 'subscribed', deviceId: 'synthetic', userId: 'synthetic', accountPlan: 'business_ultra' } as AuthResult;
-const request = (text: string) => new Request('https://example.com/v1/guide-narration', { method: 'POST', body: JSON.stringify({ text }) });
+const request = (text: string) => new Request('https://example.com/v1/tts', { method: 'POST', body: JSON.stringify({ text }) });
 test('Business variants pass the entitlement gate but unavailable narration fails closed', async () => {
 	for (const accountPlan of ['business', 'business_max', 'business_ultra', 'enterprise'] as const)
-		expect((await handleGuideNarration(request('Hello'), {} as Env, { ...auth, accountPlan })).status).toBe(503);
+		expect((await handleTts(request('Hello'), {} as Env, { ...auth, accountPlan })).status).toBe(503);
 	for (const accountPlan of ['free', 'basic', 'unknown'] as const)
-		expect((await handleGuideNarration(request('Hello'), {} as Env, { ...auth, accountPlan })).status).toBe(403);
+		expect((await handleTts(request('Hello'), {} as Env, { ...auth, accountPlan })).status).toBe(403);
 });
 test('rejects oversized and malformed scripts before contacting a provider', async () => {
-	const env = { GUIDE_NARRATION_ENABLED: 'true', ELEVENLABS_VOICE_ID: 'fictionalVoice123', ELEVENLABS_USD_PER_CHARACTER: '0.0001' } as Env;
-	expect((await handleGuideNarration(request('x'.repeat(801)), env, auth)).status).toBe(400);
-	expect((await handleGuideNarration(request('x'.repeat(9000)), env, auth)).status).toBe(413);
-	expect((await handleGuideNarration(request(''), env, auth)).status).toBe(400);
+	const env = { TTS_ENABLED: 'true', ELEVENLABS_VOICE_ID: 'fictionalVoice123', ELEVENLABS_USD_PER_CHARACTER: '0.0001' } as Env;
+	expect((await handleTts(request('x'.repeat(801)), env, auth)).status).toBe(400);
+	expect((await handleTts(request('x'.repeat(9000)), env, auth)).status).toBe(413);
+	expect((await handleTts(request(''), env, auth)).status).toBe(400);
 });
 test('uses Cloudflare BYOK, excludes account tokens and bills narration through real D1', async () => {
-	const harness = await LocalGatewayHarness.start({ narrationStatus: 200 });
+	const harness = await LocalGatewayHarness.start({ ttsStatus: 200 });
 	try {
-		const result = await harness.fetch('/guide-narration', {
+		const result = await harness.fetch('/tts', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ text: 'Hello' }),
@@ -43,9 +43,9 @@ test('uses Cloudflare BYOK, excludes account tokens and bills narration through 
 	}
 }, 30000);
 test('provider failure preserves its cost hold without exposing private errors', async () => {
-	const harness = await LocalGatewayHarness.start({ narrationStatus: 429 });
+	const harness = await LocalGatewayHarness.start({ ttsStatus: 429 });
 	try {
-		const result = await harness.fetch('/guide-narration', {
+		const result = await harness.fetch('/tts', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ text: 'Hello' }),
