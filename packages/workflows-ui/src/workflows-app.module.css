@@ -883,10 +883,12 @@
   .topbar > .pill { display: none; }
 }
 
-.nativeNavigationToggle { position: absolute; top: 0; left: 84px; z-index: 4; }
-.app[data-native-window="true"].navigationCollapsed .topbar { padding-left: 128px; }
+.app[data-native-window="true"] { --native-navigation-left: 84px; }
+.app[data-native-window="true"][data-fullscreen="true"] { --native-navigation-left: 8px; }
+.nativeNavigationToggle { position: absolute; top: 0; left: var(--native-navigation-left); z-index: 4; }
+.app[data-native-window="true"].navigationCollapsed .topbar { padding-left: calc(var(--native-navigation-left) + 44px); }
 @media (max-width: 680px) {
-  .app[data-native-window="true"] .topbar { padding-left: 128px; }
+  .app[data-native-window="true"] .topbar { padding-left: calc(var(--native-navigation-left) + 44px); }
 }
 
 /* The host supplies the same product menu in both workspaces. */

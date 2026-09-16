@@ -1710,7 +1710,7 @@ function HomeContent() {
 
           </div>
 
-          {workflowsAvailable && (workflowsActive || workflowsVisited) && <div className={cn("flex-1 min-w-0 h-full", !workflowsActive && "hidden")}><IntegratedWorkflows active={workflowsActive} onModeChange={changeMode} recordingStatus={<RecordingStatus {...recordingStatusProps} />}
+          {workflowsAvailable && (workflowsActive || workflowsVisited) && <div className={cn("flex-1 min-w-0 h-full", !workflowsActive && "hidden")}><IntegratedWorkflows active={workflowsActive} fullscreen={isFullscreen} onModeChange={changeMode} recordingStatus={<RecordingStatus {...recordingStatusProps} />}
             navigationFooter={({ openKeyboardShortcuts }) => <SidebarFooter onSettings={() => openSettings()}
               onHelp={() => { void setActiveSection("help"); }} onKeyboardShortcuts={openKeyboardShortcuts}
               hideHelp={isSectionHidden("help")} trialActivationLocked={trialActivationLocked} />} /></div>}

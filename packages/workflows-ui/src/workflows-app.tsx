@@ -349,6 +349,7 @@ function AppShell({
   navigationFooter,
   recordingStatus,
   startWindowDrag,
+  fullscreen,
   openCommandPalette,
   assistant,
   children,
@@ -370,6 +371,7 @@ function AppShell({
   navigationFooter?: WorkflowsAppProps["navigationFooter"];
   recordingStatus?: React.ReactNode;
   startWindowDrag?: () => Promise<void> | void;
+  fullscreen: boolean;
   openCommandPalette: () => void;
   assistant?: { platform: NonNullable<WorkflowsAppProps["platform"]["assistant"]>; context: AssistantContext };
   children: React.ReactNode;
@@ -426,7 +428,7 @@ function AppShell({
   </button>;
 
   return (
-    <div data-native-window={nativeMacWindow} className={`ph-no-capture ph-mask ${styles.app} ${embedded ? styles.appEmbedded : ""} ${assistantDocked ? styles.appDocked : ""} ${navigationCollapsed ? styles.navigationCollapsed : ""}`} style={{ "--assistant-width": assistantWidth + "px" } as React.CSSProperties}>
+    <div data-native-window={nativeMacWindow} data-fullscreen={fullscreen} className={`ph-no-capture ph-mask ${styles.app} ${embedded ? styles.appEmbedded : ""} ${assistantDocked ? styles.appDocked : ""} ${navigationCollapsed ? styles.navigationCollapsed : ""}`} style={{ "--assistant-width": assistantWidth + "px" } as React.CSSProperties}>
       {nativeMacWindow && navigationToggle}
       <aside id="workflows-navigation" className={styles.sidebar} hidden={navigationCollapsed} aria-label="Navigation sidebar">
         {navigationBrand ? <div className={styles.integratedBrand}>{navigationBrand}</div> : <div className={styles.brand} data-tauri-drag-region onMouseDown={(event) => handleWindowDrag(event, startWindowDrag)}>
@@ -1189,7 +1191,7 @@ function PrivacyView({ runtime }: { runtime: WorkflowRuntime | null }) {
   </>;
 }
 
-export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "screenpipe-workflows:last-analysis-v2", initialScopeId, embedded = false, active = true, navigationBrand, recordingStatus, navigationFooter, onShareWorkflow }: WorkflowsAppProps) {
+export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "screenpipe-workflows:last-analysis-v2", initialScopeId, embedded = false, active = true, fullscreen = false, navigationBrand, recordingStatus, navigationFooter, onShareWorkflow }: WorkflowsAppProps) {
   const shortcuts = useSidebarShortcuts();
   const [runtime, setRuntime] = useState<WorkflowRuntime | null>(null);
   const [analysis, setAnalysis] = useState<WorkflowAnalysis | null>(() => initialAnalysis ? sanitizeWorkflowAnalysis(initialAnalysis) : null);
@@ -1521,7 +1523,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   }
 
   return <>
-    <AppShell active={active} navigationFooter={navigationFooter} navigationBrand={navigationBrand} recordingStatus={recordingStatus} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={filters.query} setQuery={(query) => setFilters((current) => ({ ...current, query }))} activityPeriod={activityPeriod} setActivityPeriod={(period) => { setActivityPeriod(period); setSelectedWorkflow(0); }} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: "Context", profile: workProfile } : { key: "workflows", title: "Your workflows", catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{content}</AppShell>
+    <AppShell active={active} fullscreen={fullscreen} navigationFooter={navigationFooter} navigationBrand={navigationBrand} recordingStatus={recordingStatus} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={filters.query} setQuery={(query) => setFilters((current) => ({ ...current, query }))} activityPeriod={activityPeriod} setActivityPeriod={(period) => { setActivityPeriod(period); setSelectedWorkflow(0); }} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: "Context", profile: workProfile } : { key: "workflows", title: "Your workflows", catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{content}</AppShell>
     <CommandPalette open={active && commandPaletteOpen} commands={paletteCommands} close={() => setCommandPaletteOpen(false)} />
   </>;
 }

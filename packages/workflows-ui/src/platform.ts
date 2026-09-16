@@ -77,6 +77,8 @@ export type WorkflowsAppProps = {
   embedded?: boolean;
   /** Keep mounted while another workspace is visible, without global shortcuts. */
   active?: boolean;
+  /** Native fullscreen state supplied by the host window. */
+  fullscreen?: boolean;
   navigationFooter?: (actions: { openKeyboardShortcuts: () => void }) => import("react").ReactNode;
   navigationBrand?: import("react").ReactNode;
   /** Open the host sharing review; clicking must not send the workflow. */

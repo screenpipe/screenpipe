@@ -18,7 +18,7 @@ import { WorkflowTasksPrompt } from "./workflow-tasks-prompt";
 const platform = process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock"
   ? createFixtureWorkflowsPlatform()
   : desktopWorkflowsPlatform;
-export function IntegratedWorkflows({ active, onModeChange, recordingStatus, navigationFooter }: { active: boolean; onModeChange: (mode: ProductMode) => void; recordingStatus: React.ReactNode; navigationFooter?: WorkflowsAppProps["navigationFooter"] }) {
+export function IntegratedWorkflows({ active, fullscreen = false, onModeChange, recordingStatus, navigationFooter }: { active: boolean; fullscreen?: boolean; onModeChange: (mode: ProductMode) => void; recordingStatus: React.ReactNode; navigationFooter?: WorkflowsAppProps["navigationFooter"] }) {
   const [shareArtifact, setShareArtifact] = useState<ConnectedShareArtifact | null>(null);
   const openShare = useCallback((workflow: WorkflowMap) => setShareArtifact(createWorkflowShareArtifact(workflow)), []);
   const [connectionId, setConnectionId] = useState<ConnectedShareApp | null>(null);
@@ -42,7 +42,7 @@ export function IntegratedWorkflows({ active, onModeChange, recordingStatus, nav
         onConnectionClose={closeConnections}
       />}
       {platform.managesAnalysis && <WorkflowTasksPrompt active={active} />}
-      <WorkflowsApp onShareWorkflow={openShare} platform={platform} active={active} storageKey={null}
+      <WorkflowsApp fullscreen={fullscreen} onShareWorkflow={openShare} platform={platform} active={active} storageKey={null}
         recordingStatus={recordingStatus} navigationFooter={navigationFooter}
         navigationBrand={<ProductSwitcher mode="workflows" onChange={onModeChange} />} />
     </TooltipProvider>
