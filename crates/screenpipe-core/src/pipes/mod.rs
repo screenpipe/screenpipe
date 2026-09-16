@@ -8998,10 +8998,10 @@ impl Drop for PipeManager {
 
 #[cfg(test)]
 mod tests {
-    use futures::{FutureExt, StreamExt};
     use super::*;
     use crate::agents::{AgentOutput, ExecutionHandle, SharedPid};
     use chrono::{TimeZone, Timelike};
+    use futures::{FutureExt, StreamExt};
     use std::path::Path;
     use std::sync::atomic::Ordering;
 
@@ -9117,19 +9117,39 @@ mod tests {
         let pipes_dir = temp.path().join("pipes");
         for (name, trigger) in [
             ("manual-chain-source", ""),
-            ("manual-chain-dependent", "trigger:\n  events:\n    - pipe_completed:manual-chain-source\n"),
-            ("manual-chain-disabled", "enabled: false\ntrigger:\n  events:\n    - pipe_completed:manual-chain-source\n"),
+            (
+                "manual-chain-dependent",
+                "trigger:\n  events:\n    - pipe_completed:manual-chain-source\n",
+            ),
+            (
+                "manual-chain-disabled",
+                "enabled: false\ntrigger:\n  events:\n    - pipe_completed:manual-chain-source\n",
+            ),
         ] {
             let dir = pipes_dir.join(name);
             std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("pipe.md"), format!(
+            std::fs::write(
+                dir.join("pipe.md"),
+                format!(
                 "---\nschedule: manual\nagent: mock\nmodel: test\n{trigger}---\nSave the result.\n"
-            )).unwrap();
+            ),
+            )
+            .unwrap();
         }
         let executor = Arc::new(SequencedExecutor {
             outputs: std::sync::Mutex::new(VecDeque::from([
-                AgentOutput { stdout: "source saved".into(), stderr: String::new(), success: true, pid: None },
-                AgentOutput { stdout: "dependent saved".into(), stderr: String::new(), success: true, pid: None },
+                AgentOutput {
+                    stdout: "source saved".into(),
+                    stderr: String::new(),
+                    success: true,
+                    pid: None,
+                },
+                AgentOutput {
+                    stdout: "dependent saved".into(),
+                    stderr: String::new(),
+                    success: true,
+                    pid: None,
+                },
             ])),
             attempts: std::sync::Mutex::new(Vec::new()),
         });
@@ -9142,24 +9162,60 @@ mod tests {
         );
         manager.start_scheduler().await.unwrap();
         // Let the scheduler subscribe before the manual API entry point runs.
-        for _ in 0..10 { tokio::task::yield_now().await; }
-        manager.start_pipe_background("manual-chain-source").await.unwrap();
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        manager
+            .start_pipe_background("manual-chain-source")
+            .await
+            .unwrap();
         let event = tokio::time::timeout(std::time::Duration::from_secs(5), events.next())
-            .await.expect("manual completion event missing").unwrap();
+            .await
+            .expect("manual completion event missing")
+            .unwrap();
         assert_eq!(event.data["success"], true);
-        assert!(manager.logs.lock().await["manual-chain-source"].back().unwrap().success);
-        assert!(!manager.running.lock().await.contains_key("manual-chain-source"));
+        assert!(
+            manager.logs.lock().await["manual-chain-source"]
+                .back()
+                .unwrap()
+                .success
+        );
+        assert!(!manager
+            .running
+            .lock()
+            .await
+            .contains_key("manual-chain-source"));
         tokio::time::advance(std::time::Duration::from_secs(31)).await;
         for _ in 0..100 {
-            if manager.logs.lock().await.get("manual-chain-dependent")
-                .and_then(|logs| logs.back()).is_some() { break; }
+            if manager
+                .logs
+                .lock()
+                .await
+                .get("manual-chain-dependent")
+                .and_then(|logs| logs.back())
+                .is_some()
+            {
+                break;
+            }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         manager.stop_scheduler().await;
-        assert!(manager.logs.lock().await["manual-chain-dependent"].back().unwrap().success);
+        assert!(
+            manager.logs.lock().await["manual-chain-dependent"]
+                .back()
+                .unwrap()
+                .success
+        );
         assert_eq!(executor.attempts.lock().unwrap().len(), 2);
-        assert!(events.next().now_or_never().is_none(), "duplicate source completion");
-        assert!(!manager.logs.lock().await.contains_key("manual-chain-disabled"));
+        assert!(
+            events.next().now_or_never().is_none(),
+            "duplicate source completion"
+        );
+        assert!(!manager
+            .logs
+            .lock()
+            .await
+            .contains_key("manual-chain-disabled"));
     }
 
     #[tokio::test]
@@ -9168,22 +9224,42 @@ mod tests {
         let pipes_dir = temp.path().join("pipes");
         let dir = pipes_dir.join("manual-failed-event");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("pipe.md"),
-            "---\nschedule: manual\nagent: mock\nmodel: test\n---\nDo work.\n").unwrap();
+        std::fs::write(
+            dir.join("pipe.md"),
+            "---\nschedule: manual\nagent: mock\nmodel: test\n---\nDo work.\n",
+        )
+        .unwrap();
         let executor = Arc::new(SequencedExecutor {
-            outputs: std::sync::Mutex::new(VecDeque::from([
-                AgentOutput { stdout: String::new(), stderr: "missing output".into(), success: false, pid: None },
-            ])), attempts: std::sync::Mutex::new(Vec::new()),
+            outputs: std::sync::Mutex::new(VecDeque::from([AgentOutput {
+                stdout: String::new(),
+                stderr: "missing output".into(),
+                success: false,
+                pid: None,
+            }])),
+            attempts: std::sync::Mutex::new(Vec::new()),
         });
         let mut executors: HashMap<String, Arc<dyn AgentExecutor>> = HashMap::new();
         executors.insert("mock".into(), executor);
         let manager = PipeManager::new(pipes_dir, executors, None, 0);
         manager.load_pipes().await.unwrap();
-        let mut events = screenpipe_events::subscribe_to_event::<serde_json::Value>("pipe_completed:manual-failed-event");
-        manager.start_pipe_background("manual-failed-event").await.unwrap();
-        let event = tokio::time::timeout(std::time::Duration::from_secs(5), events.next()).await.unwrap().unwrap();
+        let mut events = screenpipe_events::subscribe_to_event::<serde_json::Value>(
+            "pipe_completed:manual-failed-event",
+        );
+        manager
+            .start_pipe_background("manual-failed-event")
+            .await
+            .unwrap();
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), events.next())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(event.data["success"], false);
-        assert!(!manager.logs.lock().await["manual-failed-event"].back().unwrap().success);
+        assert!(
+            !manager.logs.lock().await["manual-failed-event"]
+                .back()
+                .unwrap()
+                .success
+        );
     }
 
     #[test]
@@ -10897,7 +10973,9 @@ Do resilient work.
 
         let manager = PipeManager::new(pipes_dir, executors, None, 0);
         manager.load_pipes().await.unwrap();
-        let mut events = screenpipe_events::subscribe_to_event::<serde_json::Value>("pipe_completed:resilient-pipe");
+        let mut events = screenpipe_events::subscribe_to_event::<serde_json::Value>(
+            "pipe_completed:resilient-pipe",
+        );
         let log = manager
             .run_pipe_with_trigger("resilient-pipe", "manual")
             .await
@@ -10907,7 +10985,10 @@ Do resilient work.
         assert_eq!(log.stdout, "fallback completed");
         let event = events.next().await.unwrap();
         assert_eq!(event.data["success"], true);
-        assert!(events.next().now_or_never().is_none(), "fallback attempts emitted extra completion events");
+        assert!(
+            events.next().now_or_never().is_none(),
+            "fallback attempts emitted extra completion events"
+        );
         assert_eq!(
             executor.attempts.lock().unwrap().as_slice(),
             [
