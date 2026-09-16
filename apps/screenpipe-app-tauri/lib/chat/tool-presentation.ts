@@ -998,6 +998,7 @@ export function presentToolActivity(toolCall: PresentableToolCall): ToolActivity
   }
 
   if (toolName === "workflow_context") return activity("Reading saved workflows", "Read saved workflows", "file");
+  if (toolName === "workflow_stage_commit") return activity("Saving enrichment", "Enrichment saved", "edit");
   if (toolName === "workflow_commit") return activity("Saving workflows", "Saved workflows", "edit");
   if (toolName === "workflow_inspect_frame") return activity("Checking a captured image", "Checked a captured image", "file");
 

@@ -4,6 +4,7 @@
 import { localFetch } from "@/lib/api";
 import type { WorkflowAnalysis, WorkflowAnalysisJob, WorkflowMap } from "@screenpipe/workflows-ui";
 
+export const WORKFLOW_TASKS = ["workflow-activity", "workflow-patterns", "workflow-procedures", "workflow-timing", "workflow-discovery"] as const;
 const TASK = "workflow-discovery";
 async function request(path: string, body?: unknown) {
   const response = await localFetch(path, body === undefined ? undefined : {
@@ -16,26 +17,34 @@ async function request(path: string, body?: unknown) {
 
 // Installing the disabled template must never opt the user into background AI.
 export async function ensureWorkflowTask() {
-  await request(`/pipes/bundled/${TASK}/install`, {});
+  for (const task of WORKFLOW_TASKS) await request(`/pipes/bundled/${task}/install`, {});
 }
 
 export interface WorkflowTaskSetup {
   enabled: boolean;
   title: string;
   schedule: string;
+  tasks?: { name: string; title: string; enabled: boolean }[];
 }
 
 export async function loadWorkflowTaskSetup(): Promise<WorkflowTaskSetup> {
   await ensureWorkflowTask();
-  const { data } = await request(`/pipes/${TASK}`);
-  if (typeof data?.config?.enabled !== "boolean") throw new Error("Could not read the workflow task settings.");
-  return { enabled: data.config.enabled, title: data.config.title || "Update my workflows", schedule: data.config.schedule };
+  const tasks = [];
+  for (const name of WORKFLOW_TASKS) {
+    const { data } = await request(`/pipes/${name}`);
+    if (typeof data?.config?.enabled !== "boolean") throw new Error("Could not read the workflow task settings.");
+    tasks.push({ name, title: data.config.title || name, enabled: data.config.enabled });
+  }
+  return { enabled: tasks.every(task => task.enabled), title: "Keep your workflows current", schedule: "Daily, with dependent updates", tasks };
 }
 
 // Only the explicit enable action opts in. Scheduling stays in the Pipe harness.
 export async function enableWorkflowTask() {
   await ensureWorkflowTask();
-  await request(`/pipes/${TASK}/enable`, { enabled: true });
+  // Enable dependencies last so a scheduled entry cannot outrun setup.
+  for (const task of [...WORKFLOW_TASKS].reverse()) await request(`/pipes/${task}/enable`, { enabled: true });
+  const setup = await loadWorkflowTaskSetup();
+  if (!setup.enabled) throw new Error("Some workflow tasks could not be enabled.");
 }
 
 export async function loadScheduledCatalog(): Promise<WorkflowAnalysis | null> {
@@ -49,40 +58,91 @@ function job(execution: any): WorkflowAnalysisJob {
     : execution.status === "running" ? "processing" : "queued";
   return { id: String(execution.id), status, startedAt: execution.started_at,
     message: execution.status === "cancelled" ? "Update stopped. Your saved workflows are still available."
+      : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_allowance_paused") ? "Workflow updates paused to preserve AI allowance. Manage usage to increase capacity or check reset times."
+      : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_business_required") ? "Automatic workflow discovery requires Business. Your saved workflows are still available."
+      : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_usage_unavailable") ? "Could not check AI allowance. Reconnect and try again."
+      : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_sign_in_required") ? "Sign in again to resume workflow updates."
       : execution.error_type === "missing_output" ? "The update could not be saved. Your previous workflows are still available. Try again."
       : status === "failed" ? "Could not update workflows. Your saved workflows are still available. See the scheduled task for details."
       : status === "processing" ? "Updating workflows" : "Waiting to update workflows",
   };
 }
 
+function tracked(execution: any, task: string): WorkflowAnalysisJob {
+  const state = job(execution);
+  const index = WORKFLOW_TASKS.indexOf(task as any);
+  const names = ["Organizing captured activity", "Grouping recurring workflows", "Understanding workflow steps", "Measuring workflow occurrences", "Reviewing and saving workflows"];
+  return { ...state, id: `${task}:${execution.id}`, ...(state.status === "processing" ? {message:`${names[index]} · ${index+1}/5`} : {}) };
+}
+async function latestTasks() {
+  return Promise.all(WORKFLOW_TASKS.map(async task => {
+    const value = await request(`/pipes/${task}/executions?limit=1&include_output=false`);
+    return { task, execution: value.data?.[0] };
+  }));
+}
 export async function latestWorkflowJob(): Promise<WorkflowAnalysisJob | null> {
-  const value = await request(`/pipes/${TASK}/executions?limit=1&include_output=false`);
-  return value.data?.[0] ? job(value.data[0]) : null;
+  const latest = (await latestTasks()).filter(item => item.execution)
+    .sort((a,b) => Date.parse(b.execution.started_at) - Date.parse(a.execution.started_at))[0];
+  return latest ? getWorkflowJob(`${latest.task}:${latest.execution.id}`) : null;
 }
 
 export async function getWorkflowJob(id: string): Promise<WorkflowAnalysisJob> {
-  const value = await request(`/pipes/${TASK}/executions/${encodeURIComponent(id)}`);
-  const state = job(value.data);
-  if (state.status === "complete") {
+  const [name, executionId] = id.includes(":") ? id.split(":") : [TASK, id];
+  if (!WORKFLOW_TASKS.includes(name as any) || !/^\d+$/.test(executionId)) throw new Error("Invalid workflow execution.");
+  const { data } = await request(`/pipes/${name}/executions/${executionId}`);
+  const original = tracked(data, name);
+  // Compatibility with a saved pre-pipeline job.
+  if (!id.includes(":")) {
+    if (original.status !== "complete") return original;
     const result = await loadScheduledCatalog();
-    const started = Date.parse(value.data.started_at);
-    const checked = result?.checkedThrough ? Date.parse(result.checkedThrough) : NaN;
-    if (!result || !Number.isFinite(started) || !Number.isFinite(checked) || checked < started) return { ...state, status: "failed", message: "The update could not be saved. Your previous workflows are still available. Try again." };
-    state.result = result;
+    if (!result || !Number.isFinite(Date.parse(result.checkedThrough || "")) || !Number.isFinite(Date.parse(data.started_at)) || Date.parse(result.checkedThrough || "") < Date.parse(data.started_at)) return { ...original, status: "failed", message: "The update could not be saved. Your previous workflows are still available." };
+    return { ...original, result };
   }
-  return state;
+  const tasks = await latestTasks();
+  const running = tasks.find(item => ["running", "queued"].includes(item.execution?.status));
+  if (running) return tracked(running.execution, running.task);
+  const failure = tasks.find(item => item.execution && ["failed", "cancelled", "interrupted"].includes(item.execution.status)
+    && Date.parse(item.execution.started_at) >= Date.parse(data.started_at));
+  if (failure) return tracked(failure.execution, failure.task);
+  const pipeline = await request(`/workflows/pipeline?task=${TASK}`);
+  const result = await loadScheduledCatalog();
+  if (pipeline.upToDate && pipeline.inputRevision > 0 && (result as any)?.pipelineRevision === pipeline.inputRevision) return { ...original, status: "complete", result: result! };
+  // An existing completed single-task run predates the enrichment pipeline.
+  // Preserve its verified receipt until the first new pipeline input exists.
+  if (!pipeline.inputRevision && !(result as any)?.pipelineRevision && original.status === "complete"
+    && result?.checkedThrough && Number.isFinite(Date.parse(data.started_at))
+    && Date.parse(result.checkedThrough) >= Date.parse(data.started_at)) return { ...original, result };
+  if (pipeline.blockedReason) return { ...original, status: "failed", message: pipeline.blockedReason };
+  // Completion events normally start the next stage immediately. Bound waiting
+  // so a missed event or disabled task never leaves a permanent spinner.
+  const latest = tasks.filter(item => item.execution).sort((a,b) => Date.parse(b.execution.finished_at || b.execution.started_at) - Date.parse(a.execution.finished_at || a.execution.started_at))[0];
+  const finished = Date.parse(latest?.execution.finished_at || data.started_at);
+  if (Date.now() - finished > 30_000) return { ...original, status: "failed", message: "Workflow progress saved. Update now to resume the remaining stages." };
+  return { ...original, status: "queued", message: "Preparing the next enrichment task" };
 }
 
 export async function startWorkflowJob(): Promise<WorkflowAnalysisJob> {
-  await ensureWorkflowTask();
-  const current = await latestWorkflowJob();
-  if (current && ["queued", "processing"].includes(current.status)) return current;
-  const started = await request(`/pipes/${TASK}/run`, {});
+  const setup = await loadWorkflowTaskSetup();
+  if (!setup.enabled) throw new Error("Enable workflow tasks before updating. Open Workflows again to review setup.");
+  const tasks = await latestTasks();
+  const running = tasks.find(item => ["running", "queued"].includes(item.execution?.status));
+  if (running) return tracked(running.execution, running.task);
+  // Resume unfinished downstream work before reading more history.
+  let next: string = WORKFLOW_TASKS[0];
+  for (const task of WORKFLOW_TASKS.slice(1)) {
+    const input = await request(`/workflows/pipeline?task=${task}`);
+    if (input.ready) { next = task; break; }
+  }
+  const started = await request(`/pipes/${next}/run`, {});
   if (!Number.isInteger(started.execution_id)) throw new Error("The task did not return a tracked execution.");
-  return { id: String(started.execution_id), status: "queued", message: "Waiting to update workflows" };
+  return { id: `${next}:${started.execution_id}`, status: "queued", message: "Preparing workflow updates" };
 }
 
-export async function stopWorkflowJob() { await request(`/pipes/${TASK}/stop`, {}); }
+export async function stopWorkflowJob() {
+  // Pause the group first so completion events cannot launch its next stage.
+  for (const task of WORKFLOW_TASKS) await request(`/pipes/${task}/enable`, { enabled: false });
+  for (const task of WORKFLOW_TASKS) await request(`/pipes/${task}/stop`, {});
+}
 
 // Human edits share the backend writer with background commits. They cannot
 // overwrite a newer catalog snapshot with an old React state object.

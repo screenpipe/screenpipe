@@ -8,14 +8,15 @@ import { getApiBaseUrl } from "@/lib/api";
 
 /** Read-only observer: keep Chat's event ownership and task lifecycle intact. */
 export async function subscribeWorkflowActivity(jobId: string, onActivity: (items: WorkflowRunActivity[]) => void) {
+  const [taskName, executionId] = jobId.includes(":") ? jobId.split(":") : ["workflow-discovery", jobId];
   const apiBase = getApiBaseUrl();
   await mountAgentEventBus();
   const items = new Map<string, WorkflowRunActivity>();
   const presentations = new Map<string, ReturnType<typeof presentToolActivity>>();
   return registerObserver(envelope => {
     const session = parsePipeSessionId(envelope.sessionId);
-    if (getApiBaseUrl() !== apiBase || envelope.source !== "pipe" || session?.pipeName !== "workflow-discovery"
-      || String(envelope.executionId ?? session.executionId) !== jobId) return;
+    if (getApiBaseUrl() !== apiBase || envelope.source !== "pipe" || session?.pipeName !== taskName
+      || String(envelope.executionId ?? session.executionId) !== executionId) return;
     const event = envelope.event;
     if (event.type !== "tool_execution_start" && event.type !== "tool_execution_end") return;
     if (!event.toolCallId || !event.toolName) return;

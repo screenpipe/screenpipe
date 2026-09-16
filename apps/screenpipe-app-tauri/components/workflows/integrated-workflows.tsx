@@ -13,7 +13,7 @@ import { desktopWorkflowsPlatform } from "@/lib/workflows/desktop-platform";
 import { ProductSwitcher, type ProductMode } from "./product-switcher";
 import { ComposerDictationControl } from "@/components/chat/standalone/composer-dictation-control";
 import { usePlatform } from "@/lib/hooks/use-platform";
-import { WorkflowTasksPrompt } from "./workflow-tasks-prompt";
+import { WorkflowAccess } from "./workflow-access";
 
 function WorkflowDictation(props: WorkflowComposerAccessoryProps) {
   const { isMac } = usePlatform();
@@ -27,6 +27,7 @@ const platform = process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock"
   ? createFixtureWorkflowsPlatform()
   : desktopWorkflowsPlatform;
 export function IntegratedWorkflows({ active, fullscreen = false, onModeChange, recordingStatus, navigationFooter }: { active: boolean; fullscreen?: boolean; onModeChange: (mode: ProductMode) => void; recordingStatus: React.ReactNode; navigationFooter?: WorkflowsAppProps["navigationFooter"] }) {
+  const [analysisUnavailableReason, setAnalysisUnavailableReason] = useState<string | undefined>(platform.managesAnalysis ? "Checking workflow access…" : undefined);
   const [shareArtifact, setShareArtifact] = useState<ConnectedShareArtifact | null>(null);
   const openShare = useCallback((workflow: WorkflowMap) => setShareArtifact(createWorkflowShareArtifact(workflow)), []);
   const [connectionId, setConnectionId] = useState<ConnectedShareApp | null>(null);
@@ -49,8 +50,9 @@ export function IntegratedWorkflows({ active, fullscreen = false, onModeChange, 
         focusScopeVariant={connectionId === "slack" ? "send" : null}
         onConnectionClose={closeConnections}
       />}
-      {platform.managesAnalysis && <WorkflowTasksPrompt active={active} />}
-      <WorkflowsApp composerAccessory={composerAccessory} fullscreen={fullscreen} onShareWorkflow={openShare} platform={platform} active={active} storageKey={null}
+
+      <WorkflowsApp analysisUnavailableReason={analysisUnavailableReason} composerAccessory={composerAccessory} fullscreen={fullscreen} onShareWorkflow={openShare} platform={platform} active={active} storageKey={null}
+        statusNotice={platform.managesAnalysis ? <WorkflowAccess active={active} onAccessChange={setAnalysisUnavailableReason} /> : undefined}
         recordingStatus={recordingStatus} navigationFooter={navigationFooter}
         navigationBrand={<ProductSwitcher mode="workflows" onChange={onModeChange} />} />
     </TooltipProvider>

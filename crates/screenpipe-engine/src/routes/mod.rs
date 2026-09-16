@@ -44,3 +44,4 @@ pub mod websocket;
 pub mod workflows;
 
 pub mod workflow_catalog;
+pub mod workflow_pipeline;

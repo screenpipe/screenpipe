@@ -987,6 +987,8 @@ impl SCServer {
             .get("/elements", search_elements)
             .get("/frames/:frame_id/elements", get_frame_elements)
             .get("/workflows/catalog", crate::routes::workflow_catalog::catalog)
+            .get("/workflows/pipeline", crate::routes::workflow_pipeline::context)
+            .post("/workflows/pipeline", crate::routes::workflow_pipeline::commit)
             .get("/workflows/context", crate::routes::workflow_catalog::context)
             .post("/workflows/catalog", crate::routes::workflow_catalog::commit)
             .post("/workflows/corrections", crate::routes::workflow_catalog::correct)

@@ -79,7 +79,12 @@ export default function workflowMemory(pi: ExtensionAPI) {
         }
         const data = await response.json();
         if (typeof data?.error === "string") throw new Error(data.error);
-        return { content: [{ type: "text" as const, text: compactEvidence(data) }], details: {} };
+        return { content: [{ type: "text" as const, text: compactEvidence(data) }], details: { lookup: {
+          tool: tool.name, query: args,
+          offset: data.pagination?.offset ?? args.offset ?? 0,
+          total: data.pagination?.total ?? null,
+          count: Array.isArray(data.data) ? data.data.length : null,
+        } } };
       },
     });
   }

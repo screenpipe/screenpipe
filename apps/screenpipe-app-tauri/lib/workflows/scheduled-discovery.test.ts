@@ -2,7 +2,7 @@
 // https://screenpipe.com
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { localFetch } from "@/lib/api";
-import { ensureWorkflowTask, enableWorkflowTask, loadWorkflowTaskSetup, getWorkflowJob, startWorkflowJob, saveWorkflowCorrections, saveWorkflowFeedback } from "./scheduled-discovery";
+import { WORKFLOW_TASKS, stopWorkflowJob, ensureWorkflowTask, enableWorkflowTask, loadWorkflowTaskSetup, getWorkflowJob, startWorkflowJob, saveWorkflowCorrections, saveWorkflowFeedback } from "./scheduled-discovery";
 import { fixtureWorkflowAnalysis } from "@screenpipe/workflows-ui/fixture";
 import { requireInspectedFrames } from "@screenpipe-ext/workflow-catalog";
 
@@ -12,32 +12,48 @@ const response = (data: unknown) => new Response(JSON.stringify(data), { status:
 beforeEach(() => fetchMock.mockReset());
 
 describe("workflow scheduled-task adapter", () => {
-  it("installs through the existing bundled task endpoint without re-enabling a paused task", async () => {
-    fetchMock.mockResolvedValue(response({ installed: false }));
+  function pipelineMock(running = false) {
+    const enabled = new Map(WORKFLOW_TASKS.map(name => [name, true]));
+    fetchMock.mockImplementation(async (path, init) => {
+      const url = String(path);
+      if (url.includes("/install")) return response({ installed: false });
+      const task = WORKFLOW_TASKS.find(name => url.startsWith(`/pipes/${name}`))!;
+      if (url.endsWith("/enable")) { enabled.set(task, JSON.parse(String(init?.body)).enabled); return response({ success: true }); }
+      if (url.includes("/executions?")) return response({ data: running && task === "workflow-procedures" ? [{ id:23, status:"running", started_at:"2026-09-15T12:00:00Z" }] : [] });
+      if (url.endsWith("/run")) return response({ execution_id:24 });
+      if (url.endsWith("/stop")) return response({ success:true });
+      if (url.includes("/workflows/pipeline")) return response({ ready:url.endsWith("workflow-timing") });
+      return response({ data:{config:{ enabled:enabled.get(task), title:task, schedule:"every 24h" }} });
+    });
+    return enabled;
+  }
+  it("installs all templates without enabling them", async () => {
+    pipelineMock();
     await ensureWorkflowTask();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toBe("/pipes/bundled/workflow-discovery/install");
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(fetchMock.mock.calls.every(([path]) => String(path).endsWith("/install"))).toBe(true);
   });
-  it("coalesces Update now with an already tracked execution", async () => {
-    fetchMock.mockResolvedValueOnce(response({ installed: false })).mockResolvedValueOnce(response({ data: [{ id: 23, status: "running" }] }));
-    expect(await startWorkflowJob()).toMatchObject({ id: "23", status: "processing" });
+  it("coalesces Update now with any running enrichment stage", async () => {
+    pipelineMock(true);
+    expect(await startWorkflowJob()).toMatchObject({ id:"workflow-procedures:23", status:"processing" });
     expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith("/run"))).toBe(false);
   });
-  it.each([{ installed: true }, { installed: false, enabled_override: null }, { installed: false, enabled_override: false }])("never enables on entry: %j", async (state) => {
-    fetchMock.mockResolvedValueOnce(response(state));
-    await ensureWorkflowTask();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+  it("resumes pending downstream work before starting another history scan", async () => {
+    pipelineMock();
+    expect(await startWorkflowJob()).toMatchObject({id:"workflow-timing:24"});
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/pipes/workflow-timing/run");
   });
-  it("reads the actual enabled state and schedule", async () => {
-    fetchMock.mockResolvedValueOnce(response({ installed: false })).mockResolvedValueOnce(response({ data: { config: { enabled: false, title: "My discovery", schedule: "every 48h" } } }));
-    expect(await loadWorkflowTaskSetup()).toEqual({ enabled: false, title: "My discovery", schedule: "every 48h" });
-    expect(fetchMock).toHaveBeenLastCalledWith("/pipes/workflow-discovery", undefined);
-  });
-  it("enables only through the explicit action without starting a second runner", async () => {
-    fetchMock.mockResolvedValueOnce(response({ installed: false })).mockResolvedValueOnce(response({ success: true }));
+  it("keeps a partially disabled group paused until explicit consent", async () => {
+    const enabled = pipelineMock(); enabled.set("workflow-patterns",false);
+    expect(await loadWorkflowTaskSetup()).toMatchObject({enabled:false});
+    await expect(startWorkflowJob()).rejects.toThrow("Enable workflow tasks");
     await enableWorkflowTask();
-    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(["/pipes/bundled/workflow-discovery/install", "/pipes/workflow-discovery/enable"]);
-    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ enabled: true });
+    expect(await loadWorkflowTaskSetup()).toMatchObject({enabled:true});
+  });
+  it("pauses every dependency before stopping running agents", async () => {
+    pipelineMock(); await stopWorkflowJob();
+    expect(fetchMock.mock.calls.slice(0,5).every(([path]) => String(path).endsWith("/enable"))).toBe(true);
+    expect(fetchMock.mock.calls.slice(5).every(([path]) => String(path).endsWith("/stop"))).toBe(true);
   });
   it("does not mistake an old saved catalog for a successful new run", async () => {
     fetchMock.mockResolvedValueOnce(response({ data: { id: 24, status: "completed", started_at: "2026-09-15T12:00:00Z" } }))
@@ -54,6 +70,17 @@ describe("workflow scheduled-task adapter", () => {
     fetchMock.mockResolvedValueOnce(response({ data: { id: 25, status: "failed", error_type: "missing_output" } }));
     expect(await getWorkflowJob("25")).toMatchObject({ status: "failed", message: expect.stringContaining("previous workflows") });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it("preserves a successful legacy receipt before the new tasks are enabled", async () => {
+    const now = "2026-09-15T12:00:00Z";
+    fetchMock.mockImplementation(async path => {
+      const url = String(path);
+      if (url.includes("/executions?")) return response({data:[]});
+      if (url.includes("/executions/")) return response({data:{id:27,status:"completed",started_at:now}});
+      if (url.includes("/pipeline")) return response({inputRevision:0,blockedReason:"Enable workflow-activity"});
+      return response({analyzedAt:now,checkedThrough:now,changes:{created:0,updated:0}});
+    });
+    expect(await getWorkflowJob("workflow-discovery:27")).toMatchObject({status:"complete",result:{changes:{created:0,updated:0}}});
   });
   it("saves only the edited correction, never a stale full catalog", async () => {
     const prior = { analyzedAt: "2026-09-15T12:00:00Z", analysis: { workflows: [{ id: "wf-a", title: "Updated elsewhere", userCorrection: "Old" }] } };

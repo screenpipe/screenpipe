@@ -94,4 +94,6 @@ export type WorkflowsAppProps = {
   onShareWorkflow?: (workflow: WorkflowMap) => void;
   /** Host-owned live recorder status and controls. */
   recordingStatus?: import("react").ReactNode;
+  analysisUnavailableReason?: string;
+  statusNotice?: import("react").ReactNode;
 };

@@ -1127,7 +1127,7 @@ impl PiExecutor {
         let ext_path = ext_dir.join("self-improvement.ts");
         std::fs::write(&ext_path, ext_content)?;
         debug!("self-improvement extension installed at {:?}", ext_path);
-        if project_dir.file_name().and_then(|name| name.to_str()) == Some("workflow-discovery") && project_dir.join("pipe.md").is_file() {
+        if crate::workflows::pipeline::task_at(project_dir).is_some() {
             std::fs::write(ext_dir.join("workflow-memory.ts"), include_str!("../../assets/extensions/workflow-memory.ts"))?;
             std::fs::write(ext_dir.join("workflow-catalog.ts"), include_str!("../../assets/extensions/workflow-catalog.ts"))?;
         }
@@ -2105,6 +2105,12 @@ impl AgentExecutor for PiExecutor {
         // Provider resolution:
         // 1. Explicit provider from pipe frontmatter → use it
         // 2. No provider specified → screenpipe cloud (default)
+        if crate::workflows::pipeline::task_at(working_dir).is_some() {
+            crate::workflows::pipeline::check_admission(&self.api_url, self.current_user_token().as_deref()).await?;
+            if !crate::workflows::pipeline::has_pending_input(working_dir).await? {
+                return Ok(AgentOutput { stdout: "No new workflow input; saved results kept.".into(), stderr: String::new(), success: true, pid: None });
+            }
+        }
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
 
         let (resolved_model, fell_back_from) = self
@@ -2223,6 +2229,12 @@ impl AgentExecutor for PiExecutor {
         session_owner: Option<&str>,
         _executor_config: Option<&serde_json::Value>,
     ) -> Result<AgentOutput> {
+        if crate::workflows::pipeline::task_at(working_dir).is_some() {
+            crate::workflows::pipeline::check_admission(&self.api_url, self.current_user_token().as_deref()).await?;
+            if !crate::workflows::pipeline::has_pending_input(working_dir).await? {
+                return Ok(AgentOutput { stdout: "No new workflow input; saved results kept.".into(), stderr: String::new(), success: true, pid: None });
+            }
+        }
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
         let (resolved_model, fell_back_from) = self
             .resolve_screenpipe_model(model, &resolved_provider)

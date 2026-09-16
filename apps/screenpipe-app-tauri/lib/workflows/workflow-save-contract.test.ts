@@ -2,7 +2,7 @@
 // https://screenpipe.com
 import { afterEach, expect, it, vi } from "vitest";
 import workflowCatalog from "@screenpipe-ext/workflow-catalog";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const directories: string[] = [];
@@ -14,11 +14,12 @@ async function harness() {
   const tools: Record<string, any> = {};
   const pi = { on: (name: string, run: any) => { events[name] = run; }, registerTool: (tool: any) => { tools[tool.name] = tool; }, setActiveTools: vi.fn(), sendMessage: vi.fn() };
   workflowCatalog(pi as any);
-  const cwd = mkdtempSync(join(tmpdir(), "workflow-save-test-"));
-  directories.push(cwd);
+  const parent = mkdtempSync(join(tmpdir(), "workflow-save-test-"));
+  directories.push(parent);
+  const cwd = join(parent, "workflow-discovery"); mkdirSync(cwd);
   writeFileSync(join(cwd, ".screenpipe-permissions.json"), JSON.stringify({ pipe_token: "fixture", api_base: "http://127.0.0.1:3030" }));
   await events.session_start({}, { cwd });
-  const context = { revision: 3, now: "2026-09-15T12:00:00Z" };
+  const context = { revision: 3, now: "2026-09-15T12:00:00Z", ready: true, inputRevision: 2, checkedThrough: "2026-09-15T12:00:00Z" };
   const fetch = vi.fn().mockImplementation(async () => Response.json(context));
   vi.stubGlobal("fetch", fetch);
   await tools.workflow_context.execute("context", {});
@@ -60,7 +61,7 @@ it("never checkpoints failed source reads or retries an aborted/provider-error t
   }
   expect(h.pi.sendMessage).not.toHaveBeenCalled();
   expect(h.stderr).not.toHaveBeenCalled();
-  expect(h.fetch).toHaveBeenCalledTimes(1);
+  expect(h.fetch).toHaveBeenCalledTimes(2);
 });
 
 it("fails a truncated response without pretending the task saved", async () => {
@@ -78,4 +79,13 @@ it("requires an actual save receipt, not merely an HTTP 200", async () => {
   await expect(h.commit()).rejects.toThrow("valid save receipt");
   await h.events.agent_end(stopped);
   expect(h.pi.sendMessage).toHaveBeenCalledOnce();
+});
+
+it("checks actual index reads and pagination before advancing an activity interval", async () => {
+  const { checkedCoverage } = await import("@screenpipe-ext/workflow-catalog");
+  const interval = {start:"2026-09-15T10:00:00Z",end:"2026-09-15T11:00:00Z",complete:true};
+  const page = {tool:"search-content",query:{start_time:interval.start,end_time:interval.end},offset:0,count:2,total:3};
+  expect(() => checkedCoverage([interval],[],[])).toThrow("activity index");
+  expect(() => checkedCoverage([interval],[interval],[page])).toThrow("unread pages");
+  expect(checkedCoverage([interval],[interval],[page,{...page,offset:2,count:1}])[0]).toMatchObject({method:"activity-index-and-targeted-sources"});
 });

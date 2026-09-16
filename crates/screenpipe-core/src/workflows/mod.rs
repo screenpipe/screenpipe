@@ -2,6 +2,8 @@
 // https://screenpipe.com
 
 //! Evidence validation shared by desktop discovery and scheduled catalog updates.
+pub mod pipeline;
+
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use futures::{stream, StreamExt};
 use serde_json::{json, Value};

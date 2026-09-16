@@ -1,7 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { WorkflowTasksPrompt } from "./workflow-tasks-prompt";
 
@@ -41,7 +41,7 @@ describe("workflow task opt-in", () => {
     let finish!: () => void;
     tasks.enable.mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
     render(<WorkflowTasksPrompt active tasks={tasks} />);
-    const button = await screen.findByRole("button", { name: "Enable task" });
+    const button = await screen.findByRole("button", { name: "Enable tasks" });
     fireEvent.click(button);
     fireEvent.click(button);
     expect(tasks.enable).toHaveBeenCalledOnce();
@@ -53,30 +53,19 @@ describe("workflow task opt-in", () => {
     const tasks = service();
     tasks.enable.mockRejectedValueOnce(new Error("offline"));
     render(<WorkflowTasksPrompt active tasks={tasks} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Enable task" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Enable tasks" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not enable");
-    fireEvent.click(screen.getByRole("button", { name: "Enable task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Enable tasks" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(tasks.enable).toHaveBeenCalledTimes(2);
   });
-  it("cannot enable before settings load and retries a failed read", async () => {
-    const tasks = service();
-    tasks.load.mockRejectedValueOnce(new Error("offline"));
+  it("retries recorder startup quietly without opening a false consent dialog", async () => {
+    vi.useFakeTimers();
+    const tasks = service(); tasks.load.mockRejectedValueOnce(new Error("offline"));
     render(<WorkflowTasksPrompt active tasks={tasks} />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Could not check");
-    expect(screen.queryByRole("button", { name: "Enable task" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-    expect(await screen.findByRole("button", { name: "Enable task" })).toBeVisible();
-    expect(tasks.enable).not.toHaveBeenCalled();
-  });
-  it("ignores a late settings read after switching back to Chat", async () => {
-    const tasks = service();
-    let finish!: (value: typeof setup) => void;
-    tasks.load.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
-    const view = render(<WorkflowTasksPrompt active tasks={tasks} />);
-    view.rerender(<WorkflowTasksPrompt active={false} tasks={tasks} />);
-    finish(setup);
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(tasks.enable).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+    expect(tasks.load).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("button", {name:"Enable tasks"})).toBeVisible();
+    vi.useRealTimers();
   });
 });

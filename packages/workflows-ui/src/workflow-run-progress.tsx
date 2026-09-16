@@ -6,7 +6,8 @@ import { Check, ChevronDown, Circle, Loader2, RefreshCw, Square, AlertCircle } f
 import type { WorkflowAnalysisJob, WorkflowRunActivity, WorkflowsPlatform } from "./platform";
 import styles from "./workflows-app.module.css";
 
-export function WorkflowRunProgress({ job, active, subscribe, stop, analyze, updatedAt, changes }: {
+export function WorkflowRunProgress({ job, active, subscribe, stop, analyze, updatedAt, changes, disabledReason }: {
+  disabledReason?: string;
   job?: WorkflowAnalysisJob | null; active: boolean;
   subscribe?: WorkflowsPlatform["subscribeAnalysisActivity"];
   stop?: () => void; analyze: () => void; updatedAt?: string;
@@ -46,7 +47,7 @@ export function WorkflowRunProgress({ job, active, subscribe, stop, analyze, upd
   const current = [...items].reverse().find(item => item.status === "running") ?? items.at(-1);
   const seconds = job?.startedAt ? Math.max(0, Math.floor((now - Date.parse(job.startedAt)) / 1000)) : NaN;
   const result = changes ? changes.created === 0 && changes.updated === 0 ? "Up to date" : `${changes.created} new · ${changes.updated} updated` : "Workflows updated";
-  const label = active ? current?.label ?? (job?.status === "queued" ? "Waiting for agent" : "Agent working")
+  const label = active ? current?.label ?? (job?.message || (job?.status === "queued" ? "Waiting for agent" : "Agent working"))
     : job?.status === "failed" ? "Update not saved" : job?.status === "complete" ? result
     : updatedAt ? `Updated ${new Date(updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "";
   return <div className={styles.refreshControls}>
@@ -67,6 +68,6 @@ export function WorkflowRunProgress({ job, active, subscribe, stop, analyze, upd
       </section>}
     </div> : <span role="status">{label}</span>}
     {active && stop ? <button className={styles.secondaryButton} onClick={stop}><Square size={11} />Stop</button>
-      : <button className={styles.secondaryButton} onClick={analyze} disabled={active}><RefreshCw size={14} />Update now</button>}
+      : <button className={styles.secondaryButton} onClick={analyze} disabled={active || !!disabledReason} title={disabledReason}><RefreshCw size={14} />Update now</button>}
   </div>;
 }

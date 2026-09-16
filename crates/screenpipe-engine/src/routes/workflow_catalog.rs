@@ -21,11 +21,11 @@ use serde_json::{json, Value};
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
 type ApiError = (StatusCode, Json<Value>);
-static WRITER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(super) static WRITER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 fn error(status: StatusCode, message: &str) -> ApiError {
     (status, Json(json!({"error": message})))
 }
-fn allowed(state: &AppState, perms: &OptionalPipePerms) -> Result<(), ApiError> {
+pub(super) fn allowed(state: &AppState, perms: &OptionalPipePerms) -> Result<(), ApiError> {
     if state.history_access.is_restricted()
         || perms.0.as_ref().is_some_and(|p| {
             p.has_data_restrictions() || p.has_content_type_restrictions() || p.privacy_filter
@@ -45,7 +45,11 @@ pub(crate) async fn catalog(
     Extension(source): Extension<WorkflowCatalogSource>,
     perms: OptionalPipePerms,
 ) -> Result<Json<Value>, ApiError> {
-    allowed(&state, &perms)?;
+    // The authenticated desktop owner keeps the derived catalog after a
+    // downgrade. Scoped agent reads still enforce source-history restrictions.
+    if perms.0.is_some() {
+        allowed(&state, &perms)?;
+    }
     let mut value = read_catalog(&source).await?;
     for workflow in value["analysis"]["workflows"]
         .as_array_mut()
@@ -103,6 +107,8 @@ pub struct CommitRequest {
     pub expected_revision: u64,
     pub checked_through: String,
     pub workflows: Vec<Value>,
+    #[serde(default)]
+    pub pipeline_revision: Option<u64>,
 }
 
 /// Preserve identity and user-owned corrections. Absence from a partial scan
@@ -353,12 +359,27 @@ pub(crate) async fn commit(
             "Workflow task stopped before saving.",
         ));
     }
+    if let Some(revision) = body.pipeline_revision {
+        let pipeline = super::workflow_pipeline::read(&source).await?;
+        let input = &pipeline["stages"]["workflow-timing"];
+        if input["revision"] != revision || input["checkedThrough"] != body.checked_through {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "Enrichment changed. Review the latest result before publishing.",
+            ));
+        }
+    }
     let mut next = reconcile(
         previous.clone(),
         normalized["workflows"].as_array().unwrap().clone(),
         &body.checked_through,
     )
     .map_err(|e| error(StatusCode::UNPROCESSABLE_ENTITY, &e))?;
+    if let Some(revision) = body.pipeline_revision {
+        next["pipelineRevision"] = json!(revision);
+        next["needsWorkflowReview"] = json!(false);
+        next["analyzedAt"] = json!(Utc::now().to_rfc3339());
+    }
     next["quality"] = analysis_quality(&[], 90, &next["analysis"]);
     next["diagnostics"] = json!({"sourceReads":reads,"executor":"scheduled-task"});
     persist(&source, &previous, &next).await?;
@@ -412,6 +433,7 @@ pub(crate) async fn correct(
         .ok_or_else(|| error(StatusCode::NOT_FOUND, "Workflow was not found."))?;
     workflow["id"] = json!(body.id);
     workflow["userCorrection"] = body.correction;
+    next["needsWorkflowReview"] = json!(true);
     next["revision"] = json!(before["revision"].as_u64().unwrap_or(0) + 1);
     persist(&source, &before, &next).await?;
     Ok(Json(json!({"success":true})))
