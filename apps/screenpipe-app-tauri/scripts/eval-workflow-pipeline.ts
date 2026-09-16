@@ -57,7 +57,7 @@ try {
     const [stdout,stderr,exit] = await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);clearTimeout(timeout);
     const saved = stageIndex < 4 ? outputs[stageIndex] : final;
     console.log(JSON.stringify({task,exit,saved:!!saved,items:stageIndex<4?saved?.items.length:final?.workflows.length, classifications:stageIndex===0?saved?.items.map((i:any)=>i.classification):undefined}));
-    if(exit !== 0 || !saved) {
+    if(exit !== 0 || !saved || (stageIndex === 0 && !saved.items.some((item:any)=>item.classification === "professional"))) {
       const events = stdout.split("\n").flatMap(line=>{try{return [JSON.parse(line)];}catch{return [];}});
       const messages = events.filter(event=>event.type==="agent_end").at(-1)?.messages || [];
       console.log(JSON.stringify({trace:messages.flatMap((message:any)=>message.role==="toolResult" ? [{tool:message.toolName,error:message.isError,text:message.content?.map((part:any)=>part.text||"").join("").slice(0,1200)}] : (message.content||[]).filter((part:any)=>part.type==="toolCall"))}));
