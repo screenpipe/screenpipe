@@ -1,0 +1,51 @@
+---
+title: "Check enterprise device capture and data coverage"
+sidebarTitle: "Device coverage"
+description: "Check local capture, uploaded data, and generated reports separately for each pilot device."
+---
+
+Check local capture, uploaded data, and generated reports separately for each pilot device. A successful installation or account login does not prove the day’s work is available in a team view.
+
+## Start here
+
+Create a small device inventory using non-sensitive identifiers. Record the owner, platform, version, account or workspace, agreed test window, and expected input sources.
+
+## Copy this prompt
+
+Use this in Screenpipe chat or an assistant with the required connections. Replace the brackets with your details. If the assistant lacks access, provide a reviewed excerpt; a prompt alone does not connect it to your history.
+
+```text
+Build a coverage table for these pilot devices: [approved inventory].
+For [test window, timezone], separately report installation status, last
+verified local capture, transcript availability, remote data availability,
+and generated-output status. Use observed timestamps and evidence.
+Mark unchecked stages as unknown. Do not equate login with healthy capture,
+or a recent upload with complete coverage. Do not change device settings.
+```
+
+## Check the result
+
+For each device, locate the same harmless source moment locally and in the intended remote view if your deployment includes one. Record gaps explicitly rather than turning a dashboard timestamp into a completeness claim.
+
+<AccordionGroup>
+  <Accordion title="See a worked example" id="worked-example">
+
+| Device | Local test | Remote test | Report | Next action |
+| --- | --- | --- | --- | --- |
+| Demo-A | Present | Present | Reviewed | Continue. |
+| Demo-B | Present | Unknown | Not checked | Verify remote account and coverage. |
+| Demo-C | Missing | Not checked | No data | Check recording inputs and permissions. |
+
+  </Accordion>
+  <Accordion title="Go deeper: setup choices and edge cases" id="details">
+
+Device identity and account identity can drift after a reinstall or account change. Match the expected workspace and device before diagnosing missing uploads. Keep a timestamped inventory so old devices are not mistaken for current ones.
+
+For managed deployment, use the applicable [Intune guidance](/intune-deployment) and confirm platform support with your deployment owner. Settings sharing is not a substitute for verifying recorded-data availability or organization-specific access controls.
+
+  </Accordion>
+</AccordionGroup>
+
+## Continue
+
+[intune deployment](/intune-deployment) · [missing recordings](/missing-recordings) · [enterprise pilot](/enterprise-pilot)

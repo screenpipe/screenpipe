@@ -1,0 +1,56 @@
+---
+title: "Share useful team knowledge from recorded work"
+sidebarTitle: "Share team knowledge"
+description: "Share a reviewed answer or process note with its intended audience, rather than assuming everyone should access the underlying workday."
+---
+
+Share a reviewed answer or process note with its intended audience, rather than assuming everyone should access the underlying workday. A shared summary and permission to open its source recordings are separate decisions.
+
+## Start here
+
+Choose one question teammates repeatedly ask. Identify a reviewer, approved source period, destination, and who should be able to read the result.
+
+## Copy this prompt
+
+Use this in Screenpipe chat or an assistant with the required connections. Replace the brackets with your details. If the assistant lacks access, provide a reviewed excerpt; a prompt alone does not connect it to your history.
+
+```text
+Draft a team knowledge note answering [question] from [approved sources].
+Include the answer, when it applies, exceptions, owner, reviewed date, and
+source references. Replace customer values with fictional examples.
+Flag sensitive or unrelated context for removal. State which references
+require access the intended audience may not have.
+Return a draft and a sharing checklist. Do not publish it.
+```
+
+## Check the result
+
+Test the note with a teammate who did not attend the original discussion. Confirm they can understand the rule and open only the sources they are authorized to access.
+
+<AccordionGroup>
+  <Accordion title="See a worked example" id="worked-example">
+
+```text
+Question: When does a support request need a second approval?
+Answer: [reviewed rule]
+Exception: [operator-confirmed exception]
+Owner: Support operations
+Reviewed: [date]
+Evidence: [approved source references]
+Audience: Support team
+Next review: When the approval policy changes
+```
+
+  </Accordion>
+  <Accordion title="Go deeper: setup choices and edge cases" id="details">
+
+Screenpipe settings sharing, recorded-data sync, and a document in your team knowledge base serve different purposes. Check the exact sharing mechanism before assuming it gives teammates access to recordings or enforces your document permissions.
+
+Keep source references in an internal appendix when the published note has a wider audience. Update the note when the rule changes and preserve the owner and review date so an AI can distinguish current guidance from historical context.
+
+  </Accordion>
+</AccordionGroup>
+
+## Continue
+
+[teams](/teams) · [team sop capture](/team-sop-capture) · [role handoffs](/role-handoffs)

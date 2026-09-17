@@ -1,0 +1,55 @@
+---
+title: "Build an engineering decision log from recorded work"
+sidebarTitle: "Engineering decisions"
+description: "A useful engineering memory explains why a decision was made, the evidence behind it, and whether it still applies."
+---
+
+A useful engineering memory explains why a decision was made, the evidence behind it, and whether it still applies. Recorded discussions can recover rationale; the current repository and issue tracker establish what actually shipped.
+
+## Start here
+
+Choose one feature or technical decision and a bounded period. Give the agent access to the relevant history plus the current issue or repository state. Identify a Markdown file where the reviewed log belongs.
+
+## Copy this prompt
+
+Use this in Screenpipe chat or an assistant with the required connections. Replace the brackets with your details. If the assistant lacks access, provide a reviewed excerpt; a prompt alone does not connect it to your history.
+
+```text
+Create a draft decision record for [feature] during [dates, timezone].
+Find the problem, options considered, chosen option, rationale, tradeoffs,
+owner, and unresolved questions. Cite recorded source moments.
+Check the current issue and code before saying a change shipped.
+Mark proposals, accepted decisions, and superseded decisions separately.
+Do not edit code or overwrite an existing decision without comparing it.
+```
+
+## Check the result
+
+Have the owner check the rationale, then open the linked implementation. If the recording and current code disagree, retain both with their dates rather than silently rewriting history.
+
+<AccordionGroup>
+  <Accordion title="See a worked example" id="worked-example">
+
+```text
+Decision: Use a queued export for large reports.
+Status: Proposed, pending owner review.
+Reason: Interactive export interrupted a demonstration.
+Alternatives: Smaller batches; background job.
+Evidence: [reviewed discussion reference]
+Current implementation: [verified issue or code reference]
+Revisit when: Report size or latency requirements change.
+```
+
+  </Accordion>
+  <Accordion title="Go deeper: setup choices and edge cases" id="details">
+
+Keep the durable file concise: one decision, stable identifier, status, and source links. Put long transcripts in an evidence appendix. When a later decision replaces it, add a superseded-by reference so an agent does not revive an abandoned plan.
+
+A coding assistant can read the reviewed log at the start of future work. It still needs current repository instructions and live code. Historical intent is context, not authority to ignore a newer requirement.
+
+  </Accordion>
+</AccordionGroup>
+
+## Continue
+
+[agent memory workflow](/agent-memory-workflow) · [for developers](/for-developers) · [meeting to engineering tickets](/meeting-to-engineering-tickets)

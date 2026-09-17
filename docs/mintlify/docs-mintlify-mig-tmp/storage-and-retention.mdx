@@ -1,0 +1,47 @@
+---
+title: "Plan Screenpipe storage and retention"
+sidebarTitle: "Storage and retention"
+description: "Storage use depends on what you capture and retain."
+---
+
+Storage use depends on what you capture and retain. Measure your own representative workdays before choosing a retention window. Local recordings, cloud copies, generated reports, and AI usage are separate things to manage.
+
+## Start here
+
+Record your data directory size and free disk space before and after a normal day. Note recording hours, enabled inputs, and any retention or archive settings. Use the installed app’s storage controls rather than manually deleting database files.
+
+## Copy this prompt
+
+Use this in Screenpipe chat or an assistant with the required connections. Replace the brackets with your details. If the assistant lacks access, provide a reviewed excerpt; a prompt alone does not connect it to your history.
+
+```text
+Create a storage planning worksheet from these measurements:
+[date, recording hours, starting bytes, ending bytes, free bytes].
+Calculate observed net growth per day and a clearly labeled projection for
+[retention window]. Flag days affected by deletion, uploads, or unusual work.
+List local history, archived copies, exported reports, and backups separately.
+Do not delete anything or present the estimate as a guaranteed requirement.
+```
+
+## Check the result
+
+Check whether older text, screenshots, and audio are still available after your chosen policy takes effect. Confirm that a retained report does not point to evidence you have already removed.
+
+<AccordionGroup>
+  <Accordion title="See a worked example" id="worked-example">
+
+For a fictional measured net increase of 2 GB per day, 14 days projects to 28 GB before extra headroom. This is arithmetic for planning, not a Screenpipe benchmark. Compression, audio, displays, cleanup, and workload can change the result.
+
+  </Accordion>
+  <Accordion title="Go deeper: setup choices and edge cases" id="details">
+
+A retention window answers how long to keep data; an archive setting answers where another copy may live. Neither implies that an exported CSV, an agent memory file, or a backup is removed too.
+
+Before moving or backing up the local database, fully quit Screenpipe and use the [storage guidance](/privacy-data-flow). Keep the copy protected and verify a restore before relying on it. A successful copy operation alone is not a restore test. Avoid opening a live database on an unreliable network drive.
+
+  </Accordion>
+</AccordionGroup>
+
+## Continue
+
+[privacy data flow](/privacy-data-flow) · [ai usage and controls](/ai-usage-and-controls) · [reliable reports](/reliable-reports)

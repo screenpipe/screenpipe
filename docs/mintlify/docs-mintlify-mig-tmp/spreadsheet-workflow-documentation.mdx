@@ -1,0 +1,51 @@
+---
+title: "Document a spreadsheet reconciliation workflow"
+sidebarTitle: "Spreadsheet workflows"
+description: "Screen history can show how a person moves through a reconciliation, but visible cells do not reveal every formula, hidden sheet, macro, or business rule."
+---
+
+Screen history can show how a person moves through a reconciliation, but visible cells do not reveal every formula, hidden sheet, macro, or business rule. Combine the recording with an approved workbook inspection and operator review.
+
+## Start here
+
+Use a fictional workbook or an approved sanitized copy. Record one normal match and one mismatch. Define which source is authoritative and what a completed reconciliation looks like.
+
+## Copy this prompt
+
+Use this in Screenpipe chat or an assistant with the required connections. Replace the brackets with your details. If the assistant lacks access, provide a reviewed excerpt; a prompt alone does not connect it to your history.
+
+```text
+Document [reconciliation] from [recorded interval, timezone] and the
+approved workbook information provided. Describe inputs, sheet and column
+purposes, matching keys, tolerances, decision rules, exception handling,
+and final checks. Cite observed steps. Mark formulas and hidden logic as
+unknown unless inspected or confirmed. Use fictional amounts and records.
+Do not edit the workbook or mark real transactions reconciled.
+```
+
+## Check the result
+
+Ask the operator to review the matching rule and tolerance, then have a second person run the fictional cases. Verify totals against the source workbook, not a generated prose summary.
+
+<AccordionGroup>
+  <Accordion title="See a worked example" id="worked-example">
+
+| Input case | Expected handling | Evidence needed |
+| --- | --- | --- |
+| Demo invoice 100 and payment 100 | Match only after identity checks. | Verified matching rule. |
+| Demo invoice 100 and payment 98 | Follow the confirmed tolerance rule. | Operator approval of tolerance. |
+| Two payments with the same reference | Investigate potential duplicate. | Unique identifiers and source records. |
+
+  </Accordion>
+  <Accordion title="Go deeper: setup choices and edge cases" id="details">
+
+Record the meaning of a column rather than relying only on a position such as column G. Layouts change, and a screenshot may omit filters or hidden rows. Include file version and approved input identifiers in the handoff.
+
+Before automating, test duplicate rows, missing IDs, date formats, currency differences, and rounding. Capture the required stop condition when the inputs cannot be reconciled confidently.
+
+  </Accordion>
+</AccordionGroup>
+
+## Continue
+
+[workflow handoff](/workflow-handoff) · [automation validation](/automation-validation) · [team sop capture](/team-sop-capture)

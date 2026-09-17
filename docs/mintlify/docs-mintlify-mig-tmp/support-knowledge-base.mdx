@@ -1,0 +1,55 @@
+---
+title: "Turn resolved support cases into useful help articles"
+sidebarTitle: "Support knowledge base"
+description: "Use resolved cases to explain a repeatable symptom, diagnosis, correction, and verification."
+---
+
+Use resolved cases to explain a repeatable symptom, diagnosis, correction, and verification. A customer saying something worked is useful evidence for that case, but it does not prove the same fix applies to every version or platform.
+
+## Start here
+
+Select a resolved case and its latest thread replies. Identify the product version, affected platform, actual corrective step, and the evidence that the issue was resolved.
+
+## Copy this prompt
+
+Use this in Screenpipe chat or an assistant with the required connections. Replace the brackets with your details. If the assistant lacks access, provide a reviewed excerpt; a prompt alone does not connect it to your history.
+
+```text
+Draft a help article from [resolved case and relevant source window].
+Include the symptom, affected conditions, checks in order, verified fix,
+expected result, and when to contact support. Check later replies before
+calling the case resolved. Separate confirmed findings from hypotheses.
+Replace customer identifiers with fictional values. Do not expose logs,
+credentials, private links, or unsupported internal workarounds.
+Return a draft and a list of facts needing product verification.
+```
+
+## Check the result
+
+Have someone unfamiliar with the case follow the article using a test scenario. Verify current UI labels and remove any step whose only support is an AI-generated answer inside the original conversation.
+
+<AccordionGroup>
+  <Accordion title="See a worked example" id="worked-example">
+
+```text
+Symptom: A report exists but has no source activity.
+Check: Confirm the requested date range and local recording coverage.
+Correction: [verified action for this case]
+Verify: Repeat the same bounded request and open its source references.
+Escalate: If capture exists but the report still fails, send reviewed diagnostics.
+Applies to: [verified platform/version]
+```
+
+  </Accordion>
+  <Accordion title="Go deeper: setup choices and edge cases" id="details">
+
+Cluster cases by the same underlying failure, not merely the same keyword. Missing audio, a failed transcription job, and an empty summary can look similar but need different instructions.
+
+Keep customer-specific evidence in a private ledger. The public article should stand on reproducible behavior and current documentation. Add links to existing setup pages instead of duplicating their instructions and allowing them to drift.
+
+  </Accordion>
+</AccordionGroup>
+
+## Continue
+
+[missing recordings](/missing-recordings) · [pipe debugging](/pipe-debugging) · [meeting transcription](/meeting-transcription)

@@ -1,0 +1,54 @@
+---
+title: "Prepare a security review for a Screenpipe workflow"
+sidebarTitle: "Security review"
+description: "Review the actual workflow\u2019s data path and enabled controls."
+---
+
+Review the actual workflow’s data path and enabled controls. A local database alone does not answer what an AI provider, transcription service, integration, or team system receives. Product documentation is an input to review, not a substitute for your organization’s approval.
+
+## Start here
+
+Choose the exact deployment and workflow under review. List data categories, devices, users, providers, destinations, retention expectations, and required approvals. Use a harmless sample to verify behavior.
+
+## Copy this prompt
+
+Use this in Screenpipe chat or an assistant with the required connections. Replace the brackets with your details. If the assistant lacks access, provide a reviewed excerpt; a prompt alone does not connect it to your history.
+
+```text
+Prepare a factual data-flow worksheet for [deployment/workflow] using
+these verified settings and documents: [sources]. For each stage, list data
+categories, processing location, recipient, access, retention/deletion scope,
+and evidence. Mark undocumented items unknown.
+Separate capture, transcription, AI inference, sync, exports, and diagnostics.
+List questions for the vendor and our security owner. Do not claim compliance,
+certification, zero retention, or complete redaction without supporting evidence.
+```
+
+## Check the result
+
+Reconcile the worksheet with settings on an actual pilot device and current vendor materials. Assign an owner to each unanswered question before expanding the workflow.
+
+<AccordionGroup>
+  <Accordion title="See a worked example" id="worked-example">
+
+| Stage | Review question |
+| --- | --- |
+| Capture | Which windows and inputs are included, and how were exclusions tested? |
+| AI | Which provider receives which context, including fallbacks? |
+| Sharing | Who can read the result and its source evidence? |
+| Retention | Which local, remote, exported, and backup copies remain? |
+| Operations | Who can investigate failures and what diagnostics are shared? |
+
+  </Accordion>
+  <Accordion title="Go deeper: setup choices and edge cases" id="details">
+
+Use the [privacy data-flow reference](/privacy-data-flow) as a starting map. Verify the chosen configuration rather than applying a general product statement to every integration. Redaction is a mitigation with coverage limits, not a guarantee that sensitive information cannot appear.
+
+Agent and pipe capabilities may include file access or external actions depending on their tools and runtime. Review those permissions separately from what the local Screenpipe API allows. Keep contracts, certifications, and organization-specific approvals in the appropriate procurement or security process.
+
+  </Accordion>
+</AccordionGroup>
+
+## Continue
+
+[privacy data flow](/privacy-data-flow) · [recording controls](/recording-controls) · [enterprise pilot](/enterprise-pilot)

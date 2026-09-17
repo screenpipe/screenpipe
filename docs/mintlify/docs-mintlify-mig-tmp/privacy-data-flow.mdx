@@ -29,7 +29,8 @@ flowchart LR
 
 | feature | leaves your machine by default? | when data leaves |
 | --- | --- | --- |
-| screen and audio capture | no | never unless another feature sends selected context |
+| local screen and audio storage | no | other enabled features may process or upload context |
+| transcription | depends on provider | cloud transcription sends audio to the selected service |
 | local search and timeline | no | local only |
 | MCP server | no | local assistant can read data; remote MCP over HTTP is your responsibility |
 | chat with local Ollama | no | local only |
@@ -113,11 +114,11 @@ turn it off or decline the prompt when:
 
 ## agent and pipe security
 
-local agents and pipes can access your screenpipe data—screen text, OCR, accessibility tree, and transcripts. they cannot steal keyboard input or files, but they can see API keys, passwords, and secrets visible on screen.
+Local agents and pipes can access the Screenpipe context exposed by their tools. Depending on their runtime and permissions, they may also read files, control input, or act in connected apps. Review those capabilities separately from Screenpipe API permissions. Secrets visible in captured content may be accessible to the agent.
 
 secure your setup:
 
-- **exclude sensitive windows** — add your password manager, banking site, or cloud console to **settings → recording → ignored windows**. agents won't see data from ignored apps.
+- **exclude sensitive windows** — add your password manager, banking site, or cloud console to **settings → recording → ignored windows**. test the rule with harmless content; existing recordings and other data sources need separate review.
 - **use connection proxies** — instead of pasting API keys into prompts, create a screenpipe connection so tokens are managed securely.
 - **trust only official pipes** — use pipes from the [official pipe store](https://screenpi.pe/pipe-store) or audit custom pipes before installing.
 - **scope tasks narrowly** — a pipe searching only "the last meeting" is lower-risk than one searching "all screen text."

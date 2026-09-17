@@ -8,7 +8,7 @@
     "dark": "#000000"
   },
   "announcement": {
-    "title": "Get screenpipe — AI that knows everything you've seen, said, or heard →",
+    "title": "Get screenpipe \u2014 AI that knows everything you've seen, said, or heard \u2192",
     "href": "https://screenpi.pe/onboarding"
   },
   "favicon": {
@@ -23,40 +23,157 @@
         "groups": [
           {
             "group": "get started",
-            "pages": ["home", "quickstart", "first-useful-result", "getting-started", "use-cases", "architecture"]
+            "pages": [
+              "home",
+              "quickstart",
+              "first-useful-result",
+              "recording-memory-and-automation",
+              "getting-started",
+              "use-cases",
+              "architecture"
+            ]
+          },
+          {
+            "group": "recording and data",
+            "pages": [
+              "recording-controls",
+              "missing-recordings",
+              "storage-and-retention",
+              "local-or-cloud-ai",
+              "connect-your-assistant"
+            ]
           },
           {
             "group": "pipes",
-            "pages": ["pipe-store", "pipes", "reliable-reports", "ai-usage-and-controls", "pipe-debugging", "pipe-permissions"]
+            "pages": [
+              "pipe-store",
+              "pipes",
+              "reliable-reports",
+              "ai-usage-and-controls",
+              "pipe-debugging",
+              "pipe-permissions"
+            ]
           },
           {
             "group": "connect",
-            "pages": ["mcp-server", "connections", "connection-reference", "privacy-data-flow", "privacy-filter", "teams"]
+            "pages": [
+              "mcp-server",
+              "connections",
+              "connection-reference",
+              "privacy-data-flow",
+              "privacy-filter",
+              "teams"
+            ]
           },
           {
             "group": "use cases",
-            "pages": ["consultant-time-tracking", "remote-support-job-reports", "client-weekly-report", "workflow-discovery", "workflow-handoff", "daily-work-review", "daily-project-brief", "research-brief", "relationship-follow-up", "meeting-follow-up", "meeting-to-crm", "incident-reconstruction", "focused-monitoring", "agent-memory-workflow", "team-sop-capture", "search-screen-history", "meeting-intelligence", "meeting-transcription", "ai-memory", "second-brain", "for-developers"]
+            "pages": [
+              "consultant-time-tracking",
+              "remote-support-job-reports",
+              "client-weekly-report",
+              "workflow-discovery",
+              "workflow-handoff",
+              "daily-work-review",
+              "daily-project-brief",
+              "research-brief",
+              "relationship-follow-up",
+              "meeting-follow-up",
+              "meeting-to-crm",
+              "incident-reconstruction",
+              "focused-monitoring",
+              "agent-memory-workflow",
+              "team-sop-capture",
+              "search-screen-history",
+              "meeting-intelligence",
+              "meeting-transcription",
+              "ai-memory",
+              "second-brain",
+              "for-developers"
+            ]
+          },
+          {
+            "group": "personal and team knowledge",
+            "pages": [
+              "meeting-preparation",
+              "weekly-work-review",
+              "engineering-decision-log",
+              "share-team-knowledge",
+              "role-handoffs",
+              "support-knowledge-base"
+            ]
+          },
+          {
+            "group": "workflow playbooks",
+            "pages": [
+              "spreadsheet-workflow-documentation",
+              "browser-workflow-documentation",
+              "meeting-to-engineering-tickets",
+              "automation-prioritization",
+              "automation-validation"
+            ]
+          },
+          {
+            "group": "enterprise guides",
+            "pages": [
+              "enterprise-pilot",
+              "enterprise-device-coverage",
+              "enterprise-security-review"
+            ]
           },
           {
             "group": "integrations",
-            "pages": ["chatgpt", "ollama", "claude-code", "opencode", "openclaw", "cline", "continue", "gemini-cli", "copilot-cli", "obsidian", "msty"]
+            "pages": [
+              "chatgpt",
+              "ollama",
+              "claude-code",
+              "opencode",
+              "openclaw",
+              "cline",
+              "continue",
+              "gemini-cli",
+              "copilot-cli",
+              "obsidian",
+              "msty"
+            ]
           },
           {
             "group": "reference",
-            "pages": ["api-recipes", "cli-reference"]
+            "pages": [
+              "api-recipes",
+              "cli-reference"
+            ]
           },
           {
             "group": "deployment",
-            "pages": ["intune-deployment"]
+            "pages": [
+              "intune-deployment"
+            ]
           },
-
           {
             "group": "compare",
-            "pages": ["vs-pieces", "vs-littlebird", "vs-omi", "vs-granola", "vs-rewind", "vs-recall", "vs-limitless", "vs-otter", "vs-fathom", "vs-fireflies"]
+            "pages": [
+              "vs-pieces",
+              "vs-littlebird",
+              "vs-omi",
+              "vs-granola",
+              "vs-rewind",
+              "vs-recall",
+              "vs-limitless",
+              "vs-otter",
+              "vs-fathom",
+              "vs-fireflies"
+            ]
           },
           {
             "group": "resources",
-            "pages": ["troubleshooting", "permissions", "faq", "contributing", "docs-maintenance", "changelog"]
+            "pages": [
+              "troubleshooting",
+              "permissions",
+              "faq",
+              "contributing",
+              "docs-maintenance",
+              "changelog"
+            ]
           }
         ]
       },

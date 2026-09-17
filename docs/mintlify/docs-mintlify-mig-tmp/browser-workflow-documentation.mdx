@@ -1,0 +1,53 @@
+---
+title: "Document a browser form or portal workflow"
+sidebarTitle: "Browser workflows"
+description: "A browser workflow needs more than a list of pages."
+---
+
+A browser workflow needs more than a list of pages. Document the input, visible state, action, decision, and success signal at each important step. Historical screen evidence does not prove a selector or button still works today.
+
+## Start here
+
+Choose a test account and fictional record where possible. Capture one normal path and a failure path. Identify which actions submit data or cause other external changes.
+
+## Copy this prompt
+
+Use this in Screenpipe chat or an assistant with the required connections. Replace the brackets with your details. If the assistant lacks access, provide a reviewed excerpt; a prompt alone does not connect it to your history.
+
+```text
+Document [portal workflow] from [time range, timezone]. For each step,
+record the page purpose, required input, visible state, observed action,
+result, and source time. Separate draft/save/submit states.
+Mark hidden clicks, selectors, field values, and server-side results as
+unknown unless independently verified. Include validation errors and retries.
+Use fictional data. Do not log in, submit forms, or change records.
+```
+
+## Check the result
+
+Walk through the draft in a test environment. Verify the current UI and success receipt. A screenshot of a completed form is not evidence that it was submitted.
+
+<AccordionGroup>
+  <Accordion title="See a worked example" id="worked-example">
+
+| State | Required check |
+| --- | --- |
+| Form opened | Correct account and record. |
+| Fields completed | Required values and validation messages. |
+| Draft saved | Draft exists in the expected location. |
+| Submitted | Confirmed submission receipt or authoritative record. |
+| Retry needed | Determine whether the previous submission succeeded first. |
+
+  </Accordion>
+  <Accordion title="Go deeper: setup choices and edge cases" id="details">
+
+Avoid turning historical coordinates into an automation contract. Browser layouts, labels, sessions, and records change. An implementation needs current element or API checks, expected state, and a stop condition when the page differs.
+
+Document duplicate prevention before retrying a submit action. If the network response is ambiguous, check the authoritative record before repeating the operation. Preserve the distinction between an observed step and a proposed shortcut.
+
+  </Accordion>
+</AccordionGroup>
+
+## Continue
+
+[workflow handoff](/workflow-handoff) · [automation validation](/automation-validation) · [recording controls](/recording-controls)

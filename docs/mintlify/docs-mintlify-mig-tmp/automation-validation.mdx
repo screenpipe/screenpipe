@@ -1,0 +1,54 @@
+---
+title: "Test an automation against real workflow requirements"
+sidebarTitle: "Test an automation"
+description: "Validate the output and side effects against agreed requirements, not just a successful run status."
+---
+
+Validate the output and side effects against agreed requirements, not just a successful run status. Recorded examples help define test cases; the automation still needs current system access, current rules, and a controlled test environment.
+
+## Start here
+
+Start with a reviewed workflow handoff. Choose fictional inputs, an isolated destination, expected outputs, and the actions authorized for the test. Keep the first run in draft or preview form when possible.
+
+## Copy this prompt
+
+Use this in Screenpipe chat or an assistant with the required connections. Replace the brackets with your details. If the assistant lacks access, provide a reviewed excerpt; a prompt alone does not connect it to your history.
+
+```text
+Create an evaluation plan for [reviewed workflow and proposed automation].
+Include a normal case, missing input, ambiguous input, exception, no data,
+retry after uncertain completion, and duplicate run. For each, define expected
+output, allowed side effects, stop condition, and evidence of success.
+Use fictional data. Distinguish recorded observations from current verified
+API/UI behavior. Do not execute external actions while drafting the plan.
+```
+
+## Check the result
+
+Inspect the actual destination and compare fields with expected results. Verify that failures leave the external system in an acceptable state. A run log saying “done” is insufficient.
+
+<AccordionGroup>
+  <Accordion title="See a worked example" id="worked-example">
+
+| Case | Expected behavior |
+| --- | --- |
+| Normal input | Correct draft and source references. |
+| Missing required field | Ask for the field; no fabricated value. |
+| No recorded data | Explicit no-data result. |
+| Repeated trigger | Detect or prevent duplicate output/action. |
+| Uncertain submission | Check authoritative state before retrying. |
+| Changed UI or API | Stop with a useful error instead of guessing. |
+
+  </Accordion>
+  <Accordion title="Go deeper: setup choices and edge cases" id="details">
+
+Use a small set of representative examples with an owner who knows the workflow. Keep failures and corrections in an evaluation log so a prompt change does not silently reintroduce an earlier error.
+
+Only add a schedule after manual tests pass. Define who responds to failures, retry limits, usage review, and how to disable future runs. Re-test when a provider, prompt, input format, or external system changes.
+
+  </Accordion>
+</AccordionGroup>
+
+## Continue
+
+[workflow handoff](/workflow-handoff) · [reliable reports](/reliable-reports) · [ai usage and controls](/ai-usage-and-controls)

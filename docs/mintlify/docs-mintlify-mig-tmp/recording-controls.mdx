@@ -1,0 +1,52 @@
+---
+title: "Choose what Screenpipe records"
+sidebarTitle: "Recording controls"
+description: "Use recording and privacy controls to limit the context you capture, then test the result with harmless sample content."
+---
+
+Use recording and privacy controls to limit the context you capture, then test the result with harmless sample content. Screen capture, audio capture, existing history, and context sent to an AI need separate checks.
+
+## Start here
+
+Choose an allowed work surface and an excluded surface. In your installed app, review recording permissions, window or app rules, available URL exclusions, and microphone and system-audio settings. Labels and available controls can differ by platform and build.
+
+## Copy this prompt
+
+Use this in Screenpipe chat or an assistant with the required connections. Replace the brackets with your details. If the assistant lacks access, provide a reviewed excerpt; a prompt alone does not connect it to your history.
+
+```text
+Help me test my recording boundaries using harmless demo content.
+Allowed surface: [app/window]. Excluded surface: [app/window or URL].
+Test window: [start–end, timezone]. Search for [allowed test phrase] and
+[excluded test phrase]. Report sources and uncertainties separately.
+Do not change settings or search older sensitive history.
+Explain what this test proves and what it cannot prove.
+```
+
+## Check the result
+
+Inspect both search and available source media. A missing text match alone does not prove that an image or audio segment was not captured. Repeat the test after changing browsers, device permissions, or recording rules.
+
+<AccordionGroup>
+  <Accordion title="See a worked example" id="worked-example">
+
+| Test | Expected result |
+| --- | --- |
+| Harmless phrase in allowed work app | Relevant history is searchable. |
+| Harmless phrase in excluded surface | No captured match in the test period. |
+| Audio capture disabled | No new transcript from that input in the test period. |
+| Resume after a pause | A fresh allowed test becomes searchable. |
+
+  </Accordion>
+  <Accordion title="Go deeper: setup choices and edge cases" id="details">
+
+A browser may contain both customer work and a password manager. Excluding the whole browser can remove useful work context; a narrower rule needs its own test because titles, URLs, embedded views, and browser behavior vary.
+
+New exclusions do not establish that older recordings, exported notes, or uploaded copies were deleted. Review those separately. Redaction can miss information, so keep secrets out of the demo and review any material you share.
+
+  </Accordion>
+</AccordionGroup>
+
+## Continue
+
+[permissions](/permissions) · [privacy data flow](/privacy-data-flow) · [missing recordings](/missing-recordings)
