@@ -1635,6 +1635,7 @@ export function MessageContent({
   connectionItems = [],
   onImageClick,
   onRetry,
+  retryDisabled = false,
   onOpenViewerPath,
   onOpenRichResult,
   onOpenConnectionSetup,
@@ -1654,7 +1655,8 @@ export function MessageContent({
   forceCollapseTools?: boolean;
   connectionItems?: ConnectionListItem[];
   onImageClick?: (images: string[], index: number) => void;
-  onRetry?: (prompt: string) => void;
+  onRetry?: (prompt: string) => void | Promise<void>;
+  retryDisabled?: boolean;
   onOpenViewerPath?: (path: string) => void;
   onOpenRichResult?: (result: ChatRichResult) => void | Promise<void>;
   onOpenConnectionSetup?: (connectionId: string) => void | Promise<void>;
@@ -1688,8 +1690,9 @@ export function MessageContent({
     <div className="mt-3 pt-3 border-t border-border/40 flex items-center gap-3 flex-wrap">
       <button
         type="button"
+        disabled={retryDisabled}
         onClick={() => onRetry?.(message.retryPrompt!)}
-        className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-foreground text-background hover:bg-foreground/80 transition-colors"
+        className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-foreground text-background hover:bg-foreground/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
         <RefreshCw className="h-3 w-3" />
         Try again

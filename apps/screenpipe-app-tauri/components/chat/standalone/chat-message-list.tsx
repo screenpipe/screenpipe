@@ -159,6 +159,24 @@ export function ChatMessageList({
   onAskSelectedTextInSideChat,
   suppressSourceFooters = false,
 }: ChatMessageListProps) {
+  const retryInFlightRef = React.useRef(false);
+  const [isRetrying, setIsRetrying] = React.useState(false);
+  const retryDisabled = isLoading || isStreaming || isRetrying;
+
+  async function retryFailedMessage(prompt: string) {
+    if (retryDisabled || retryInFlightRef.current) return;
+    // Send preflight is async. Lock all retry buttons before loading updates,
+    // otherwise a second click takes the normal send path into the queue.
+    retryInFlightRef.current = true;
+    setIsRetrying(true);
+    try {
+      await sendMessage(prompt);
+    } finally {
+      retryInFlightRef.current = false;
+      setIsRetrying(false);
+    }
+  }
+
   // Null unless an ACP agent is installing/starting. Ticks only while it is.
   const acpBoot = useAcpBootLabel();
   const messageBubbleRefs = React.useRef(new Map<string, HTMLDivElement>());
@@ -468,7 +486,8 @@ export function ChatMessageList({
                               : false
                           }
                           onImageClick={onOpenImageViewer}
-                          onRetry={(prompt) => sendMessage(prompt)}
+                          onRetry={retryFailedMessage}
+                          retryDisabled={retryDisabled}
                           onOpenViewerPath={openFilePreview}
                           onOpenRichResult={onOpenRichResult}
                           connectionItems={connectionItems}
@@ -553,7 +572,7 @@ export function ChatMessageList({
                               )}
                             />
                           )}
-                          {message.role === "assistant" && !isLoading && !hasFollowingSteeredAssistant && (
+                          {message.role === "assistant" && !retryDisabled && !hasFollowingSteeredAssistant && (
                             <button
                               onClick={() => onRetryAssistantMessage(message.id)}
                               className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
