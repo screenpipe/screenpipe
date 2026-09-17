@@ -68,6 +68,31 @@ describe("PipeTriggerPicker app trigger catalog", () => {
     fetchMock.mockResolvedValue(response({}));
   });
 
+  it("saves multiple spoken phrases without requiring a connection", async () => {
+    const { applyOptimistic } = renderPicker();
+    chooseOption(/^spoken phrase/i);
+    const add = screen.getAllByRole("button", { name: "add trigger" }).at(-1)!;
+    expect(add).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("words or phrases, one per line"), { target: { value: "!!!" } });
+    expect(add).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("words or phrases, one per line"), { target: { value: "  start job  \nstop job\n" } });
+    expect(screen.getByLabelText("listen to")).toHaveValue("input");
+    clickDetailAdd();
+    const expected = { sources: [{ app: "audio", kind: "phrase", filter: { phrases: "start job\nstop job", device: "input" } }] };
+    expect(applyOptimistic).toHaveBeenCalledWith(expected);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/pipes/follow-up/config", expect.objectContaining({ body: JSON.stringify({ trigger: expected }) })));
+    expect(fetchMock.mock.calls.every(([url]) => !String(url).includes("/connections/"))).toBe(true);
+  });
+
+  it("only includes system audio when explicitly selected", () => {
+    const { applyOptimistic } = renderPicker();
+    chooseOption(/^spoken phrase/i);
+    fireEvent.change(screen.getByLabelText("words or phrases, one per line"), { target: { value: "stop job" } });
+    fireEvent.change(screen.getByLabelText("listen to"), { target: { value: "all" } });
+    clickDetailAdd();
+    expect(applyOptimistic).toHaveBeenCalledWith({ sources: [{ app: "audio", kind: "phrase", filter: { phrases: "stop job", device: "all" } }] });
+  });
+
   it("surfaces the expanded popular-app catalog", () => {
     renderPicker();
 

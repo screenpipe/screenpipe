@@ -259,6 +259,28 @@ fn is_empty_str_map(m: &std::collections::HashMap<String, String>) -> bool {
 ///       path: /Users/me/vault/meetings
 /// ```
 ///
+/// Spoken phrases use the same source contract without an external connection:
+/// ```yaml
+/// schedule: manual
+/// trigger:
+///   sources:
+///     - app: audio
+///       kind: phrase
+///       filter:
+///         phrases: |-
+///           start job
+///           stop job
+///         device: input
+/// ```
+/// Voice matching checks newly saved transcript segments every 30 seconds,
+/// ignoring case and punctuation and requiring whole consecutive words. It
+/// does not stitch phrases across segments or identify a particular speaker.
+/// `device: input` (default) watches microphones; `all` includes system audio.
+/// No model runs until a phrase matches. Transcription must already be enabled.
+/// Voice items use the transcription row id for `id` and the cursor `ts`, the
+/// capture timestamp for `title`, and the full matching transcript for `preview`.
+/// Keep related phrases in one source so one run receives all matching items.
+///
 /// The watcher writes the new items to `<pipe-dir>/.trigger-context.json` before
 /// firing, so the pipe prompt can read exactly what changed (cwd is the pipe dir).
 #[derive(Debug, Clone, Serialize, Deserialize)]

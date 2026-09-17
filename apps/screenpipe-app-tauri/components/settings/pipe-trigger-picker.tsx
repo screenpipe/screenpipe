@@ -12,7 +12,7 @@ import { IntegrationIcon } from "@/components/settings/connections-section";
 import { PipeScheduleBuilder } from "./pipe-schedule-builder";
 import type { ScheduleConfig } from "@/lib/utils/schedule-builder";
 import type { AvailableConnection } from "@/lib/pipe-connections";
-import { Plus, Search, Clock, CalendarClock, Workflow, Loader2, Check } from "lucide-react";
+import { Plus, Search, Clock, CalendarClock, Workflow, Loader2, Check, Mic } from "lucide-react";
 
 export interface TriggerSource {
   app: string;
@@ -64,6 +64,7 @@ type SourceApp =
   | "todoist";
 
 type OptionId =
+  | "voice_phrase"
   | "schedule"
   | "meeting_started"
   | "meeting_ended"
@@ -97,6 +98,7 @@ const OPTIONS: Option[] = [
   // "cron" is implementation vocabulary, not the user's — the picker offers
   // plain cadences and keeps the raw expression as an advanced escape hatch.
   { id: "schedule", group: "recurring", label: "on a schedule", sub: "hourly, daily, every N minutes" },
+  { id: "voice_phrase", group: "voice", label: "spoken phrase", sub: "when you say a word or phrase" },
   { id: "meeting_started", group: "meetings", label: "meeting starts", sub: "a call is detected" },
   { id: "meeting_ended", group: "meetings", label: "meeting ends", sub: "a call wraps up" },
   { id: "email_received", group: "email", label: "new email", sub: "Gmail or any IMAP inbox", app: "imap", icon: "gmail", kind: "message" },
@@ -115,10 +117,11 @@ const OPTIONS: Option[] = [
   { id: "obsidian", group: "obsidian", label: "new note", sub: "in a vault folder", app: "obsidian" },
   { id: "pipe", group: "pipes", label: "after a scheduled task finishes", sub: "chain off another scheduled task" },
 ];
-const GROUP_ORDER = ["recurring", "meetings", "email", "calendar", "slack", "notion", "github", "linear", "todoist", "obsidian", "pipes"];
+const GROUP_ORDER = ["recurring", "voice", "meetings", "email", "calendar", "slack", "notion", "github", "linear", "todoist", "obsidian", "pipes"];
 
 function optionIcon(o: Option) {
   if (o.app) return <IntegrationIcon icon={o.icon || o.app} className="w-4 h-4 flex items-center justify-center" fallbackClassName="h-4 w-4 text-muted-foreground" />;
+  if (o.id === "voice_phrase") return <Mic className="h-4 w-4 text-muted-foreground" />;
   if (o.id === "schedule") return <Clock className="h-4 w-4 text-muted-foreground" />;
   if (o.id === "pipe") return <Workflow className="h-4 w-4 text-muted-foreground" />;
   return <CalendarClock className="h-4 w-4 text-muted-foreground" />;
@@ -133,6 +136,7 @@ function eventLabel(e: string): string {
   return e.replace(/_/g, " ");
 }
 function sourceLabel(s: TriggerSource): string {
+  if (s.app === "audio") return `when ${s.filter?.device === "all" ? "audio contains" : "you say"} ${(s.filter?.phrases || "").split("\n").filter(Boolean).map((p) => `“${p}”`).join(" or ")}`;
   const acct = s.instance ? ` (${s.instance})` : "";
   if (s.app === "slack") return `slack${acct} · ${s.filter?.channel_name || s.filter?.channel || "a channel"}`;
   if (s.app === "notion") return `notion${acct} · ${s.filter?.database_name || "any page edited"}`;
@@ -383,6 +387,7 @@ function Detail({
             onAdd={() => onAddEvent(option.id)}
           />
         )}
+        {option.id === "voice_phrase" && <VoicePhraseDetail onAdd={onAddSource} />}
         {option.id === "pipe" && <PipeDetail pipes={otherPipes} onAdd={(name) => onAddEvent(`pipe_completed:${name}`)} />}
         {option.app && (
           <SourceDetail
@@ -401,6 +406,7 @@ function Detail({
 
 function detailTitle(id: OptionId): string {
   switch (id) {
+    case "voice_phrase": return "when a phrase is spoken";
     case "schedule": return "on a schedule";
     case "meeting_started": return "when a meeting starts";
     case "meeting_ended": return "when a meeting ends";
@@ -435,6 +441,35 @@ function SimpleDetail({ text, onAdd }: { text: string; onAdd: () => void }) {
     <div>
       <p className="text-xs text-muted-foreground">{text}</p>
       <PrimaryAdd onClick={onAdd} />
+    </div>
+  );
+}
+
+function VoicePhraseDetail({ onAdd }: { onAdd: (s: TriggerSource) => void }) {
+  const [phrases, setPhrases] = useState("");
+  const [device, setDevice] = useState("input");
+  const cleaned = phrases.split("\n").map((p) => p.trim()).filter(Boolean);
+  const valid = cleaned.length > 0 && cleaned.every((p) => /[\p{L}\p{N}]/u.test(p));
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground mb-3">
+        Run when a new transcript contains any phrase below. Matching ignores case and punctuation.
+        The task receives the matching words and their timestamp.
+      </p>
+      <label htmlFor="voice-trigger-phrases" className={LABEL}>words or phrases, one per line</label>
+      <textarea id="voice-trigger-phrases" value={phrases} onChange={(e) => setPhrases(e.target.value)}
+        placeholder={"start job\nstop job"} className={`${INPUT.replace("h-9", "h-20")} py-2 mt-1`} />
+      <label htmlFor="voice-trigger-device" className={`${LABEL} block mt-3`}>listen to</label>
+      <select id="voice-trigger-device" value={device} onChange={(e) => setDevice(e.target.value)} className={`${INPUT} mt-1`}>
+        <option value="input">microphone</option>
+        <option value="all">microphone and system audio</option>
+      </select>
+      <p className="text-[11px] text-muted-foreground mt-3">
+        Audio recording and transcription must be on. Checks new transcripts every 30 seconds;
+        transcription may add a delay. Phrase matching uses no AI credits. Task runs use your selected model.
+        Existing schedules still run separately. Use manual scheduling to run only on triggers.
+      </p>
+      <PrimaryAdd disabled={!valid} onClick={() => onAdd({ app: "audio", kind: "phrase", filter: { phrases: cleaned.join("\n"), device } })} />
     </div>
   );
 }

@@ -72,7 +72,10 @@ const INFLIGHT_TIMEOUT: Duration = Duration::from_secs(600);
 const CURSOR_FILE: &str = ".connection-triggers.json";
 const TRIGGER_CONTEXT_FILE: &str = ".trigger-context.json";
 
+mod voice;
+
 const SUPPORTED_APPS: &[&str] = &[
+    "audio",
     "obsidian",
     "slack",
     "notion",
@@ -211,6 +214,12 @@ impl SourceCtx<'_> {
 /// instant rather than compare strings — a smoke test against live Notion showed
 /// offset-form timestamps. An unparseable token sorts lowest.
 fn token_cmp(app: &str, a: &str, b: &str) -> Ordering {
+    if app == "audio" {
+        return a
+            .parse::<i64>()
+            .unwrap_or(-1)
+            .cmp(&b.parse::<i64>().unwrap_or(-1));
+    }
     if app == "notion" {
         match (
             chrono::DateTime::parse_from_rfc3339(a),
@@ -305,6 +314,7 @@ fn effective_kind(src: &SourceTrigger) -> &str {
 
 fn default_kind(app: &str) -> &str {
     match app {
+        "audio" => "phrase",
         "obsidian" => "note",
         "slack" => "message",
         "notion" => "page",
@@ -404,6 +414,7 @@ async fn fetch_items(
     since: &str,
 ) -> Option<Vec<DetectedItem>> {
     match src.app.as_str() {
+        "audio" => voice::fetch(ctx, src, since).await,
         "obsidian" => fetch_obsidian(src, since).await,
         "slack" => fetch_slack(ctx, src, since).await,
         "notion" => fetch_notion(ctx, src, since).await,
@@ -1509,7 +1520,23 @@ pub async fn poll_once(
             None => continue,
         };
 
+        // New voice subscriptions baseline at the latest insertion, even when
+        // sharing a source with a subscriber that is still draining old rows.
+        let voice_baseline = if app == "audio"
+            && !min_since.is_empty()
+            && subs.iter().any(|(_, _, k)| !state.committed.contains_key(k))
+        {
+            voice::fetch(ctx, &subs[0].1, "").await
+        } else {
+            None
+        };
         for (pipe, src, key) in subs {
+            if app == "audio" && !min_since.is_empty() && !state.committed.contains_key(key) {
+                if let Some(baseline) = voice_baseline.as_ref() {
+                    process_subscriber(pipes_dir, state, pipe, src, key, baseline);
+                }
+                continue;
+            }
             process_subscriber(pipes_dir, state, pipe, src, key, &raw);
         }
     }
@@ -1558,6 +1585,19 @@ fn process_subscriber(
             token,
             attempts,
         } => {
+            // Advance over nonmatching transcripts without launching an agent.
+            // Keep the scanned watermark, including trailing nonmatches, so a
+            // successful run never reprocesses the same recorded words.
+            let items = if app == "audio" {
+                voice::matching_items(src, items)
+            } else {
+                items
+            };
+            if items.is_empty() {
+                commit(state, key, &token);
+                state.dirty = true;
+                return;
+            }
             let count = items.len();
             write_trigger_context(&pipes_dir.join(pipe), src, &items);
             emit_event(pipe, src, count);
