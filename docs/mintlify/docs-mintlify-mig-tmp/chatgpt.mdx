@@ -1,18 +1,18 @@
 ---
 title: "ChatGPT — use your subscription with screenpipe"
 sidebarTitle: "chatgpt"
-description: "Connect your ChatGPT Plus or Pro subscription to power screenpipe's AI chat and pipes with the latest OpenAI models — no API key required."
+description: "Connect your ChatGPT Plus or Pro subscription to power screenpipe's AI chat and scheduled tasks with the latest OpenAI models — no API key required."
 icon: "message-bot"
 ---
 
 <img src="/chatgpt-icon.svg" alt="ChatGPT" width="80" />
 
-if you have a ChatGPT Plus or Pro subscription, you can connect it directly to screenpipe. this lets you use OpenAI's latest models for chat, summaries, and pipes without managing API keys or paying extra.
+if you have a ChatGPT Plus or Pro subscription, you can connect it directly to screenpipe. this lets you use OpenAI's latest models for chat, summaries, and scheduled tasks without managing API keys or paying extra.
 
 ## what you get
 
 - **AI chat** — ask questions about your screen history, meetings, and activity using GPT models
-- **pipes** — run scheduled or on-demand automations (summaries, time tracking, etc.) powered by your subscription
+- **scheduled tasks** — run scheduled or on-demand automations (summaries, time tracking, etc.) powered by your subscription
 - **no API key needed** — sign in with your OpenAI account, that's it
 
 ## how to connect
@@ -30,20 +30,20 @@ after signing in, you can pick from the latest GPT models available in your Chat
 
 the model list updates automatically based on what your subscription includes.
 
-## using it for pipes
+## using it for scheduled tasks
 
-pipes are automations that run on a schedule or on demand. when you connect your ChatGPT subscription, pipes use it automatically.
+scheduled tasks are automations that run on a schedule or on demand. when you connect your ChatGPT subscription, scheduled tasks use it automatically.
 
 examples:
 - **toggl sync** — auto-track time in Toggl based on your screen activity, every 30 minutes
 - **day recap** — one-click summary of what you accomplished today
 - **meeting summary** — summarize meeting transcripts with action items
 
-to set up a pipe:
-1. go to **pipes** in the sidebar
-2. pick a pipe or create your own
-3. in the pipe settings, select your ChatGPT preset
-4. enable the pipe
+to set up a scheduled task:
+1. go to **scheduled tasks** in the sidebar
+2. pick a scheduled task or create your own
+3. in the scheduled task settings, select your ChatGPT preset
+4. enable the scheduled task
 
 ## how it's different from MCP
 
@@ -51,10 +51,10 @@ screenpipe also supports [MCP integrations](/mcp-server) with ChatGPT Desktop, C
 
 | | ChatGPT subscription | MCP integration |
 |---|---|---|
-| **what it does** | powers screenpipe's built-in AI chat and pipes | lets external apps (ChatGPT Desktop, Claude) query screenpipe data |
+| **what it does** | powers screenpipe's built-in AI chat and scheduled tasks | lets external apps (ChatGPT Desktop, Claude) query screenpipe data |
 | **setup** | sign in with your OpenAI account inside screenpipe | add screenpipe as an MCP server in the external app |
 | **where you chat** | in screenpipe's chat window | in the external app (ChatGPT Desktop, Claude, etc.) |
-| **runs pipes** | yes | no |
+| **runs scheduled tasks** | yes | no |
 
 you can use both at the same time.
 
@@ -80,7 +80,7 @@ this removes the stored tokens from your machine. your data stays local.
 - sign out and sign back in to refresh your token
 - some models are only available on higher subscription tiers
 
-**pipes failing with auth errors?**
+**scheduled tasks failing with auth errors?**
 - tokens refresh automatically, but if it persists, sign out and back in
 
 still stuck? [ask in our discord](https://discord.gg/screenpipe).

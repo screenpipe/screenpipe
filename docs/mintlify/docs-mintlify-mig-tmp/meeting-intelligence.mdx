@@ -59,13 +59,13 @@ Use the meeting transcript sidebar to:
 - search for similar speakers before merging duplicates
 - copy the full transcript as plain text
 - open the related timeline moment when you need visual context
-- summarize the meeting with your default AI or a selected pipe
+- summarize the meeting with your default AI or a selected scheduled task
 
-## summarize with a pipe
+## summarize with a scheduled task
 
-meeting summaries can use any installed or store pipe. use a pipe when you want a repeatable output format, CRM writeback, an Obsidian note, or a sales-call summary that always includes the same fields.
+meeting summaries can use any installed or store scheduled task. use a scheduled task when you want a repeatable output format, CRM writeback, an Obsidian note, or a sales-call summary that always includes the same fields.
 
-good summary-pipe instructions include:
+good summary task instructions include:
 
 ```markdown
 Summarize the meeting in this format:
@@ -161,7 +161,7 @@ use the meetings API when an automation needs meeting lists, search, current mee
 | late transcript | wait for the transcription batch to finish or switch to realtime transcription |
 | speaker names wrong | connect calendar, rename the speaker, then merge similar speakers |
 | duplicated meeting | use merge from the UI or `/meetings/merge` |
-| summary missed context | choose a custom pipe that also searches screen text and accessibility context during the meeting window |
+| summary missed context | choose a custom scheduled task that also searches screen text and accessibility context during the meeting window |
 | audio dropouts | reduce batch duration, select fewer audio devices, or use a faster/cloud transcription engine |
 
 ## related pages
@@ -169,4 +169,4 @@ use the meetings API when an automation needs meeting lists, search, current mee
 - [meeting transcription](/meeting-transcription)
 - [connections](/connections)
 - [API recipes](/api-recipes)
-- [pipe debugging](/pipe-debugging)
+- [scheduled task debugging](/task-troubleshooting)

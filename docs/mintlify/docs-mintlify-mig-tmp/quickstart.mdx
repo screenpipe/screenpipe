@@ -1,7 +1,7 @@
 ---
 title: "screenpipe quickstart: install and connect AI in 5 minutes"
 sidebarTitle: "quickstart"
-description: "Go from install to your first AI-powered insight in under 5 minutes — set up screenpipe, connect your AI assistant, and run your first automation pipe."
+description: "Go from install to your first AI-powered insight in under 5 minutes — set up screenpipe, connect your AI assistant, and run your first scheduled task."
 icon: "bolt"
 ---
 
@@ -21,7 +21,7 @@ Already recording but unsure what to do with it? [Get your first useful result](
 | --- | --- | --- |
 | AI memory in Claude, Codex, Cursor, or another agent | follow the MCP connection step below | your AI can answer "what did I do in the last 5 minutes?" |
 | local search and API access | install, record for a few minutes, then try [API recipes](/api-recipes) | `/search` returns recent screen or audio results |
-| recurring automations | install your first pipe, then read [pipe debugging](/pipe-debugging) | the pipe runs manually, logs clearly, and writes a useful output |
+| recurring automations | install your first scheduled task, then read [scheduled task debugging](/task-troubleshooting) | the scheduled task runs manually, logs clearly, and writes a useful output |
 
 <CardGroup cols={2}>
   <Card title="Ask Home" icon="comments">
@@ -30,8 +30,8 @@ Already recording but unsure what to do with it? [Get your first useful result](
   <Card title="Day Recap" icon="calendar-days">
     create a private draft of accomplishments and unfinished work
   </Card>
-  <Card title="Pipes" icon="diagram-project">
-    install a Store pipe or describe a custom automation
+  <Card title="Scheduled tasks" icon="diagram-project">
+    install a Store scheduled task or describe a custom automation
   </Card>
   <Card title="Timeline" icon="clock-rotate-left">
     verify that the expected screen and audio periods were captured
@@ -97,21 +97,21 @@ Already recording but unsure what to do with it? [Get your first useful result](
     that's it. your AI now has memory of your screen.
   </Step>
 
-  <Step title="install your first pipe (30 sec)">
-    pipes are AI automations that run on a schedule. click **Pipes** in the sidebar to open the pipe store.
+  <Step title="install your first scheduled task (30 sec)">
+    scheduled tasks are AI automations that run on a schedule. click **Scheduled tasks** in the sidebar to open the task library.
 
-    browse **Pipes → Discover** — try installing **Digital Clone** or **Obsidian Daily Summary**. click **GET**; the app switches to **My Pipes**, where you can review and run it. **Day Recap** is already available as a built-in Home shortcut.
+    browse **Scheduled tasks → Discover** — try installing **Digital Clone** or **Obsidian Daily Summary**. click **GET**; the app switches to **My tasks**, where you can review and run it. **Day Recap** is already available as a built-in Home shortcut.
 
-    popular first pipes:
+    popular first scheduled tasks:
 
-    | pipe | what it does |
+    | scheduled task | what it does |
     |------|-------------|
     | **Digital Clone** | builds a persistent AI memory of who you are |
     | **Obsidian Daily Summary** | writes daily summaries to your Obsidian vault |
     | **Focus Assistant** | notifies you when you're distracted |
     | **Todo List Assistant** | tracks tasks and reminds you of what's due |
 
-    [browse all pipes →](/pipe-store)
+    [browse all scheduled tasks →](/task-library)
   </Step>
 </Steps>
 
@@ -121,7 +121,7 @@ Already recording but unsure what to do with it? [Get your first useful result](
   <Card title="search anything you've seen" icon="magnifying-glass" href="/search-screen-history">
     find code snippets, conversations, documents — anything that was on your screen
   </Card>
-  <Card title="browse the pipe store" icon="store" href="/pipe-store">
+  <Card title="browse the task library" icon="store" href="/task-library">
     ready-made automations — CRM sync, meeting intelligence, time tracking, and more
   </Card>
   <Card title="connect more AI tools" icon="server" href="/mcp-server">
@@ -137,8 +137,8 @@ Already recording but unsure what to do with it? [Get your first useful result](
 **"how do I control scheduled AI usage?"**
 Check the selected provider, source window, and schedule. [AI usage and controls](/ai-usage-and-controls) explains available usage information, allowance warnings, and how to stop a run or disable future runs.
 
-**"what are pipes?"**
-pipes are scheduled AI agents that run on your screen data. think of them as automations — a pipe can build your digital memory, track your time, sync notes to Obsidian, or anything you can describe in a prompt. browse them in the sidebar under **Pipes**. [learn more →](/pipes)
+**"what are scheduled tasks?"**
+scheduled tasks are scheduled AI agents that run on your screen data. think of them as automations — a scheduled task can build your digital memory, track your time, sync notes to Obsidian, or anything you can describe in a prompt. browse them in the sidebar under **Scheduled tasks**. [learn more →](/scheduled-tasks)
 
 **"is my data private?"**
 yes. everything is captured and stored locally by default. no data leaves your machine unless you explicitly choose a cloud provider, connected app, team sync, or remote AI workflow. see [privacy data flow](/privacy-data-flow).

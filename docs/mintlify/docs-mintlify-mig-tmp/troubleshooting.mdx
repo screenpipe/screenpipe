@@ -1,7 +1,7 @@
 ---
-title: "troubleshoot screenpipe: install, permissions, and pipes"
+title: "troubleshoot screenpipe: install, permissions, and scheduled tasks"
 sidebarTitle: "troubleshooting"
-description: "Fix common screenpipe issues including installation errors, screen and microphone permissions, missing audio, pipe failures, and MCP connection problems."
+description: "Fix common screenpipe issues including installation errors, screen and microphone permissions, missing audio, scheduled task failures, and MCP connection problems."
 icon: "wrench"
 ---
 
@@ -18,8 +18,8 @@ icon: "wrench"
 | desktop timeline missing after CLI install | install desktop app, not only CLI | [getting started](/getting-started) |
 | app opens but data is empty | `curl http://localhost:3030/health` and wait 1-2 minutes | [API recipes](/api-recipes) |
 | AI tool cannot see screenpipe | MCP config, Node 18+, app running | [MCP server](/mcp-server) |
-| pipe fails or hangs | pipe logs, provider auth, permissions | [pipe debugging](/pipe-debugging) |
-| Windows command window flashes during pipe run | pipe exits immediately; check logs | [pipe debugging](/pipe-debugging) |
+| scheduled task fails or hangs | scheduled task logs, provider auth, permissions | [scheduled task debugging](/task-troubleshooting) |
+| Windows command window flashes during scheduled task run | scheduled task exits immediately; check logs | [scheduled task debugging](/task-troubleshooting) |
 | meeting transcript is empty | microphone, system audio, transcription engine | [meeting intelligence](/meeting-intelligence) |
 | `/api/search` returns 404 | use `/search` on `localhost:3030` | [API recipes](/api-recipes) |
 | privacy question | local/cloud path and enabled toggles | [privacy data flow](/privacy-data-flow) |
@@ -33,7 +33,7 @@ icon: "wrench"
 
 `npx -y screenpipe@latest record` starts local recording and the API. it does not give you the desktop timeline UI by itself.
 
-if you want the visual timeline, pipe store, settings, chat, and guided permissions, install the desktop app from [screenpi.pe/onboarding](https://screenpi.pe/onboarding).
+if you want the visual timeline, task library, settings, chat, and guided permissions, install the desktop app from [screenpi.pe/onboarding](https://screenpi.pe/onboarding).
 
 after installing the desktop app:
 
@@ -120,12 +120,12 @@ if recent results are missing:
 1. confirm recording is still active in settings.
 2. check whether the app/window is ignored.
 3. search without `start_time`, `end_time`, `app_name`, or `window_name` filters first.
-4. if a pipe uses a schedule, remember it may only search its schedule window.
+4. if a scheduled task uses a schedule, remember it may only search its schedule window.
 5. restart screenpipe if the UI is stale but the API is healthy.
 
 ### can I capture only work hours?
 
-use app recording filters when you want to include or exclude specific apps, windows, or URLs. for strict work-hour logic, create a pipe that checks the current time and exits outside your desired window, or configure recording/schedule settings when that control is available in the app.
+use app recording filters when you want to include or exclude specific apps, windows, or URLs. for strict work-hour logic, create a scheduled task that checks the current time and exits outside your desired window, or configure recording/schedule settings when that control is available in the app.
 
 ## audio & transcription
 
@@ -210,7 +210,7 @@ if your chat window freezes, try these fixes in order:
 2. **check health:** `curl http://localhost:3030/health` — if it fails, backend is stuck
 3. **verify you have data** — screenpipe needs screen/audio history; wait 1-2 minutes after startup
 4. **verify AI provider connection** — settings → model selector. for ChatGPT/Claude, sign out/back in
-5. **reduce load** — disable unused pipes under **Pipes → My Pipes**, switch to a faster, lighter model in your configured provider, and check logs for “timeout” errors
+5. **reduce load** — disable unused scheduled tasks under **Scheduled tasks → My tasks**, switch to a faster, lighter model in your configured provider, and check logs for “timeout” errors
 
 ### chat messages disappear
 
@@ -224,59 +224,59 @@ if assistant replies vanish when navigating away, **update to the latest version
 
 ---
 
-## pipes
+## scheduled tasks
 
-### Windows command window opens and closes when a pipe runs
+### Windows command window opens and closes when a scheduled task runs
 
-this usually means the pipe started and crashed immediately.
+this usually means the scheduled task started and crashed immediately.
 
-1. open **Pipes → My Pipes**.
-2. select the pipe and open logs.
-3. run the pipe manually.
-4. check that `pipe.md` exists in the pipe folder and has valid frontmatter.
-5. if the pipe calls a script, run that script from PowerShell so the error stays visible.
+1. open **Scheduled tasks → My tasks**.
+2. select the scheduled task and open logs.
+3. run the scheduled task manually.
+4. check that `pipe.md` exists in the scheduled task folder and has valid frontmatter.
+5. if the scheduled task calls a script, run that script from PowerShell so the error stays visible.
 6. verify the local API with `curl http://localhost:3030/health`.
 
-include the log output when asking for help. "the command window flashes" is the symptom; the useful error is usually in the pipe log or the script output.
+include the log output when asking for help. "the command window flashes" is the symptom; the useful error is usually in the scheduled task log or the script output.
 
-### pipe runs but produces no output
+### scheduled task runs but produces no output
 
-1. check logs: go to **Pipes → My Pipes** → open your pipe → view logs
+1. check logs: go to **Scheduled tasks → My tasks** → open your scheduled task → view logs
 2. make sure your prompt includes concrete instructions to write output or send notifications
-3. test manually: click "run" in the pipe UI and watch the logs in real-time
+3. test manually: click "run" in the scheduled task UI and watch the logs in real-time
 4. verify screenpipe has data to work with: `curl "http://localhost:3030/search?limit=5"`
-5. confirm the prompt says what to do when no data is found, so the pipe does not silently guess
+5. confirm the prompt says what to do when no data is found, so the scheduled task does not silently guess
 
-### pipe doesn't run on schedule
+### scheduled task doesn't run on schedule
 
-- make sure the pipe is enabled under **Pipes → My Pipes**
+- make sure the scheduled task is enabled under **Scheduled tasks → My tasks**
 - check that the schedule format is correct: `every 30m`, `every 2h`, `daily`, or a cron expression
-- only one pipe runs at a time — if another pipe is running, yours will wait in the queue
+- only one scheduled task runs at a time — if another scheduled task is running, yours will wait in the queue
 - start with manual run; only debug the schedule after manual run works
 
-### pipe fails with AI errors
+### scheduled task fails with AI errors
 
 - check your AI provider is configured: settings → AI settings
 - if using screenpipe cloud: make sure you're signed in
 - if using your own API key: verify it's valid and has credits
 - if using ChatGPT/Claude subscription: try signing out and back in to refresh tokens
-- check the pipe logs for the specific error message
+- check the scheduled task logs for the specific error message
 
-### pipe can't find screen data
+### scheduled task can't find screen data
 
 - make sure screenpipe is actively recording (check health endpoint)
-- the pipe only searches within its schedule interval — if schedule is "every 30m", it only looks at the last 30 minutes
+- the scheduled task only searches within its schedule interval — if schedule is "every 30m", it only looks at the last 30 minutes
 - verify data exists for the time range: `curl "http://localhost:3030/search?start_time=30m+ago&limit=5"`
 - search with `content_type=all` before narrowing to `accessibility`, `ocr`, or `audio`
 - remove `window_name` filters until you confirm the exact window title stored by screenpipe
 
-### pipe notifications, sounds, or Telegram messages do not fire
+### scheduled task notifications, sounds, or Telegram messages do not fire
 
 debug the pipeline in pieces:
 
-1. confirm the pipe starts.
+1. confirm the scheduled task starts.
 2. confirm screenpipe search returns the condition you expect.
-3. test the notification or Telegram/API call outside the pipe.
+3. test the notification or Telegram/API call outside the scheduled task.
 4. reconnect the integration if tokens expired.
 5. make the prompt write a log line when it decides not to notify.
 
@@ -356,7 +356,7 @@ some buttons disable themselves while the local engine is cold. wait for:
 curl http://localhost:3030/health
 ```
 
-then retry sync, pipe run, search, or MCP setup.
+then retry sync, scheduled task run, search, or MCP setup.
 
 ---
 
@@ -415,4 +415,4 @@ when asking for help, include:
 - output of `curl http://localhost:3030/health`
 - whether API auth and LAN access are enabled
 - microphone/audio device name, if audio is involved
-- relevant pipe logs or error messages
+- relevant scheduled task logs or error messages

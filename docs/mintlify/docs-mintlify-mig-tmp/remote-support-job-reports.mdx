@@ -27,7 +27,7 @@ Screenpipe on your computer captures the remote session as it appears on your sc
 | Client job | Your support ticket or piece of work. You choose its ID and client. |
 | Job log | A local file you ask the agent to maintain. This guide does not require a built-in ticket system or live billing timer. |
 | Chat | Ask for a report or make a correction once. |
-| Pipe or scheduled task | A saved AI instruction with a trigger or schedule, such as preparing the daily job log. |
+| Scheduled task | A saved AI instruction with a trigger or schedule, such as preparing the daily job log. |
 | Run | One execution of that instruction. It can query recordings and write a report. |
 | Recording | Collecting screen or audio evidence. Stopping an AI run is a separate action. |
 
@@ -144,7 +144,7 @@ rates and disputed time. Save a local draft for review; do not issue invoices.
 ### 9. Build the daily job-report automation
 
 ```text
-Create a manual Screenpipe pipe named support-job-report, or update the
+Create a manual Screenpipe scheduled task named support-job-report, or update the
 existing equivalent after showing me its current configuration.
 
 Use my saved client mapping and job log. For a requested local date, query
@@ -205,7 +205,7 @@ Use the first report to agree on the fields your ticket or billing system needs.
 
 ## Run, schedule, or stop
 
-Open the pipe in your scheduled-task list. Some versions expose this under **Pipes → My Pipes**. Check the task name before changing it.
+Open **Scheduled tasks → My tasks** and select the task. Check the task name before changing it.
 
 | Intent | Action | Verify |
 | --- | --- | --- |
@@ -215,13 +215,13 @@ Open the pipe in your scheduled-task list. Some versions expose this under **Pip
 | Resume automatic reports | Review the schedule and timezone, then turn **auto-run** on | The displayed schedule matches what you intended. |
 | Finish a client job | Update the job log using prompt 3 | The job has a confirmed end timestamp. |
 
-Stopping a run does not undo files or external actions it already completed. Disabling auto-run does not pause screen recording or close a client job. See [pipe debugging](/pipe-debugging) if a run remains stuck.
+Stopping a run does not undo files or external actions it already completed. Disabling auto-run does not pause screen recording or close a client job. See [scheduled task debugging](/task-troubleshooting) if a run remains stuck.
 
 ## AI usage and warnings
 
 Review **Usage** in Settings for available usage statistics and hosted AI limits. Screenpipe Cloud chat and background scheduled tasks can draw on the same account allowance. Using a connected provider or your own API key can have separate provider limits and charges; check the selected model and provider before scheduling.
 
-Versions with background allowance warnings can notify you when the service reports that scheduled Pipes are consuming most of the allowance. These notices depend on the service response and notification preferences. They are not a user-configured dollar cap or a guaranteed warning before every costly run.
+Versions with background allowance warnings can notify you when the service reports that scheduled Scheduled tasks are consuming most of the allowance. These notices depend on the service response and notification preferences. They are not a user-configured dollar cap or a guaranteed warning before every costly run.
 
 Start with a manual report over a short session. After it is useful, schedule one daily report rather than repeatedly analyzing the entire day. Recording evidence and asking an AI to analyze it are separate activities; running more reports creates more AI work. See [AI usage and controls](/ai-usage-and-controls) for missing usage information and [reliable reports](/reliable-reports) for verifying scheduled output.
 
@@ -242,7 +242,7 @@ Start with a manual report over a short session. After it is useful, schedule on
 - [Quickstart](/quickstart): check recording and connect AI.
 - [Consultant time tracking](/consultant-time-tracking): understand active-time evidence and review.
 - [Weekly client reports](/client-weekly-report): report outcomes as well as hours.
-- [Pipes](/pipes): save prompts, schedules, permissions, and output artifacts.
+- [Scheduled tasks](/scheduled-tasks): save prompts, schedules, permissions, and output artifacts.
 - [Connections](/connections): inspect available email and other integrations.
 - [Incident reconstruction](/incident-reconstruction): build a detailed troubleshooting timeline.
 - [Capture an SOP](/team-sop-capture): turn a verified repair procedure into reusable instructions.

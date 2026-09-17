@@ -78,17 +78,17 @@ relative ranges such as `4h ago` and `now` are convenient for a first test. use 
 ## build it without code
 
 <Steps>
-  <Step title="open the pipe builder">
-    Go to **Pipes → My Pipes** and scroll to **create your own pipe**.
+  <Step title="open the scheduled task builder">
+    Go to **Scheduled tasks → My tasks** and scroll to **new scheduled task**.
   </Step>
   <Step title="describe the first version">
-    Paste: “Create a manual pipe that writes a local client work report. use `/activity-summary` for numeric totals, bounded `/search` results for context, put ambiguous time in needs review, and never send or invoice automatically.”
+    Paste: “Create a manual scheduled task that writes a local client work report. use `/activity-summary` for numeric totals, bounded `/search` results for context, put ambiguous time in needs review, and never send or invoice automatically.”
   </Step>
   <Step title="let screenpipe build it">
-    The app opens Home, asks the agent to create the pipe, and installs the result. when it finishes, return to **Pipes → My Pipes**.
+    The app opens Home, asks the agent to create the scheduled task, and installs the result. when it finishes, return to **Scheduled tasks → My tasks**.
   </Step>
   <Step title="run and inspect">
-    Open the new pipe, run it once, and inspect its Markdown artifact and execution log. confirm that an empty window produces an explicit no-data report.
+    Open the new scheduled task, run it once, and inspect its Markdown artifact and execution log. confirm that an empty window produces an explicit no-data report.
   </Step>
   <Step title="add a schedule later">
     Keep the first version manual. add a daily or weekly schedule only after several reports have correct totals and project labels.
@@ -96,7 +96,7 @@ relative ranges such as `4h ago` and `now` are convenient for a first test. use 
 </Steps>
 
 <Note>
-the generated automation is a `pipe.md` file under `~/.screenpipe/pipes/`. advanced users can inspect and version that file; the [pipes guide](/pipes) explains its schedule, permissions, and artifacts.
+the generated automation is a `pipe.md` file under `~/.screenpipe/pipes/`. advanced users can inspect and version that file; the [scheduled tasks guide](/scheduled-tasks) explains its schedule, permissions, and artifacts.
 </Note>
 
 ## prompt for the report
@@ -121,7 +121,7 @@ Output:
 
 ## what not to automate first
 
-do not start by sending reports, creating invoices, writing to a client's system, or synchronizing every inferred block to a time tracker. save a local draft and review it first. once the labels are stable, an optional store pipe can copy reviewed entries into another system.
+do not start by sending reports, creating invoices, writing to a client's system, or synchronizing every inferred block to a time tracker. save a local draft and review it first. once the labels are stable, an optional store scheduled task can copy reviewed entries into another system.
 
 <Tip>
 for a daily personal view, use [daily work review](/daily-work-review). for finding repeated client processes, continue with [workflow discovery](/workflow-discovery).

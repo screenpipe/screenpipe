@@ -86,7 +86,7 @@ screenpipe sends multiple tool calls to the LLM for agentic features. some model
 
 **fixes:**
 - use a model that supports tool use — most current frontier and mid-size open models do; check the model's documentation for tool/function-calling support
-- or disable agentic features in your pipe prompts (remove tool calls, just ask for text summaries)
+- or disable agentic features in your scheduled task prompts (remove tool calls, just ask for text summaries)
 - on Azure, try switching to the latest model version available
 
 ### Error: "max tokens is not supported"
@@ -104,7 +104,7 @@ if screenpipe says "unauthorized" when accessing the local API, but your custom 
 
 **cause:** screenpipe CLI doesn't automatically share API credentials with the local REST API server.
 
-**fix:** configure your pipe or app to use the API key explicitly:
+**fix:** configure your scheduled task or app to use the API key explicitly:
 ```bash
 curl "http://localhost:3030/search?limit=5" \
   -H "Authorization: Bearer YOUR_SCREENPIPE_API_KEY"

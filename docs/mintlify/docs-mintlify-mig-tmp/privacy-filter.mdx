@@ -130,8 +130,8 @@ in local mode, the enclave is not in the path: redaction happens on your machine
   <Tab title="chat">
     toggle the shield icon in the chat composer. the app adds `filter_pii=1` to every search the AI runs on your screen data. persists across sessions.
   </Tab>
-  <Tab title="pipes">
-    set `privacy_filter: true` in a pipe's front-matter (`pipe.md`). the pipe agent's screen searches get the flag automatically.
+  <Tab title="scheduled tasks">
+    set `privacy_filter: true` in a scheduled task's front-matter (`pipe.md`). the scheduled task agent's screen searches get the flag automatically.
   </Tab>
   <Tab title="api">
     append `?filter_pii=1` to any `/search` request against your local screenpipe-server (`http://localhost:3030/search?q=foo&filter_pii=1`).

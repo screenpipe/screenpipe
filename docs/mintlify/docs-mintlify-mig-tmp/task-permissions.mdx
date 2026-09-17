@@ -1,18 +1,22 @@
 ---
-title: "pipe permissions: scope API access for screenpipe pipes"
-sidebarTitle: "pipe permissions"
-description: "Control which screenpipe API endpoints your pipes can access by allowlisting endpoints, restricting writes, and scoping permissions per automation."
+title: "Scheduled task permissions: scope Screenpipe API access"
+sidebarTitle: "Task permissions"
+description: "Control which screenpipe API endpoints your scheduled tasks can access by allowlisting endpoints, restricting writes, and scoping permissions per automation."
 icon: "shield-halved"
 ---
 
+<Note>
+The app calls these **scheduled tasks**. The CLI command `screenpipe pipe`, local API paths under `/pipes`, and configuration file `pipe.md` retain their technical names. Use those exact identifiers in commands and configuration.
+</Note>
+
 ## overview
 
-pipes can access the screenpipe API to read screen data, manage meetings, send notifications, and more. by default, pipes have **full access** to every endpoint — no restrictions.
+scheduled tasks can access the screenpipe API to read screen data, manage meetings, send notifications, and more. by default, scheduled tasks have **full access** to every endpoint — no restrictions.
 
-if you want to limit what a pipe can do, add a `permissions` block to the YAML frontmatter in `pipe.md`. this is useful for:
+if you want to limit what a scheduled task can do, add a `permissions` block to the YAML frontmatter in `pipe.md`. this is useful for:
 
-- **preventing accidents** — a pipe that reads meetings shouldn't be able to stop one
-- **least privilege** — pipes from the store should only access what they need
+- **preventing accidents** — a scheduled task that reads meetings shouldn't be able to stop one
+- **least privilege** — scheduled tasks from the store should only access what they need
 - **safety** — deny destructive endpoints like `/data/delete-range`
 
 ## quick start
@@ -26,11 +30,11 @@ permissions: reader
 Summarize my screen activity...
 ```
 
-that's it. this pipe can only read data — it can't start/stop meetings, delete data, or run raw SQL.
+This preset restricts supported Screenpipe API calls. It blocks meeting start/stop, deletion, and raw SQL, but also allows selected operations such as notifications, speaker-name updates, and submissions to output targets bound to the authenticated task. It does not sandbox shell commands, files, or external tools.
 
 ## presets
 
-### `reader` — safe read-only defaults
+### `reader` — restricted API defaults
 
 ```yaml
 permissions: reader
@@ -50,8 +54,12 @@ allowed endpoints:
 | POST | `/notify` | send notifications |
 | GET | `/speakers` | list speakers |
 | POST | `/speakers/update` | update speaker names |
-| GET | `/pipes/info` | pipe metadata |
+| GET | `/pipes/info` | scheduled task metadata |
 | GET | `/health` | health check |
+| GET | `/workflows`, `/workflows/*` | workflow discovery and details |
+| GET | `/feedback` | feedback attributed to this authenticated task |
+| GET | `/outputs/targets` | discover output targets bound to this task |
+| POST | `/outputs/targets/*/submit` | fill an output target bound to this task |
 | GET | `/connections/*` | connection credentials |
 
 everything else is **denied**.
@@ -115,7 +123,7 @@ rules are evaluated in this order — **first match wins**:
 
 1. **deny** — if the request matches any deny rule, it's blocked (403)
 2. **allow** — if the request matches any allow rule, it passes
-3. **default allowlist** — if `allow` is empty and the pipe uses a preset with defaults (reader/writer), the default list is checked
+3. **default allowlist** — if `allow` is empty and the scheduled task uses a preset with defaults (reader/writer), the default list is checked
 4. **reject** — if nothing matched, the request is blocked
 
 deny always wins over allow, just like firewall rules.
@@ -186,22 +194,22 @@ deny rules always win over allow rules. if no rules of a given type exist, every
 
 ## how it works
 
-when a pipe has any restrictions (permissions block, data filters, etc.):
+when a scheduled task has any restrictions (permissions block, data filters, etc.):
 
-1. screenpipe generates a unique token (`sp_pipe_*`) for the pipe session
+1. screenpipe generates a unique token (`sp_pipe_*`) for the scheduled task session
 2. the token is registered with the server middleware
-3. every API request from the pipe includes the token in `Authorization: Bearer sp_pipe_*`
+3. every API request from the scheduled task includes the token in `Authorization: Bearer sp_pipe_*`
 4. the middleware checks `is_endpoint_allowed(method, path)` before forwarding
 5. the Pi extension also enforces rules client-side (blocks curl commands before they run)
-6. when the pipe finishes, the token is cleaned up
+6. when the scheduled task finishes, the token is cleaned up
 
-pipes without any restrictions run without a token — full access, zero overhead.
+scheduled tasks without any restrictions run without a token — full access, zero overhead.
 
 ## common recipes
 
-### meeting-safe pipe
+### meeting-safe scheduled task
 
-your pipe reads meeting data but should never interfere with active meetings:
+your scheduled task reads meeting data but should never interfere with active meetings:
 
 ```yaml
 ---
@@ -218,7 +226,7 @@ permissions:
 Summarize my meetings from the last hour...
 ```
 
-### read-only analytics pipe
+### read-only analytics scheduled task
 
 ```yaml
 ---
@@ -233,7 +241,7 @@ permissions:
 Generate a daily browsing report...
 ```
 
-### work-hours-only pipe
+### work-hours-only scheduled task
 
 ```yaml
 ---

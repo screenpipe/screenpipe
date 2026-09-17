@@ -31,10 +31,10 @@ flowchart TD
     Search a short window with `app_name`, `window_name`, `browser_url`, and a query term. confirm that it returns the intended surface and excludes a nearby unrelated one.
   </Step>
   <Step title="define all result states">
-    Require the pipe to distinguish **matching event**, **no matching event**, **no captured data**, and **API or execution error**. these states should not collapse into one silent success.
+    Require the scheduled task to distinguish **matching event**, **no matching event**, **no captured data**, and **API or execution error**. these states should not collapse into one silent success.
   </Step>
-  <Step title="create a manual pipe">
-    Under **Pipes → My Pipes → create your own pipe**, describe the exact filter, schedule you may add later, and local artifact. request no external side effects.
+  <Step title="create a manual scheduled task">
+    Under **Scheduled tasks → My tasks → NEW**, describe the exact filter, schedule you may add later, and local artifact. request no external side effects.
   </Step>
   <Step title="test positive and negative cases">
     Run once with a known matching event and once with no event. inspect the artifact and execution log for both cases.
@@ -53,10 +53,10 @@ curl -H "Authorization: Bearer $SCREENPIPE_API_KEY" \
   "http://localhost:3030/search?q=failed&app_name=Terminal&window_name=build&start_time=30m+ago&end_time=now&limit=20"
 ```
 
-## pipe-builder prompt
+## scheduled task setup prompt
 
 ```text
-Create a manual local monitoring pipe for one approved app, window, or website.
+Create a manual local monitoring scheduled task for one approved app, window, or website.
 Use bounded authenticated screenpipe API searches and write a Markdown artifact.
 Report one of four states: matching event, no matching event, no captured data,
 or execution error. Include the source time range and matching UI text.

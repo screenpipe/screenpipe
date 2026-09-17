@@ -19,7 +19,7 @@ flowchart LR
   B --> C["local sqlite and media files"]
   C --> D["desktop app timeline and search"]
   C --> E["local API on localhost:3030"]
-  E --> F["MCP tools and pipes"]
+  E --> F["MCP tools and scheduled tasks"]
   F --> G["optional AI provider"]
   F --> H["optional connected app proxy"]
   C --> I["optional team sync"]
@@ -35,7 +35,7 @@ flowchart LR
 | MCP server | no | local assistant can read data; remote MCP over HTTP is your responsibility |
 | chat with local Ollama | no | local only |
 | chat with cloud AI | yes | selected context is sent to that AI provider |
-| pipes with cloud models | yes | pipe context is sent to the selected model |
+| scheduled tasks with cloud models | yes | scheduled task context is sent to the selected model |
 | connected app proxy | yes | requests go to the connected third-party API |
 | cloud media analysis | yes, if enabled | media snippets can be sent to the configured enclave/provider |
 | PII filter enclave | yes, for enclave mode | text is processed in the confidential enclave |
@@ -61,7 +61,7 @@ you can move screenpipe data to a different drive or external storage:
 3. **set the environment variable** `SCREENPIPE_DATA_DIR=/Volumes/MyDrive/.screenpipe` before starting screenpipe
 4. **restart screenpipe** — the app will now use the new location
 
-**note:** if pipes still read or write to the default location after changing settings, ensure:
+**note:** if scheduled tasks still read or write to the default location after changing settings, ensure:
 - screenpipe itself (the main app) was fully restarted after the change
 - any CLI or scheduled processes use the same `SCREENPIPE_DATA_DIR` value
 - if using the desktop app, the settings change is saved and the app was restarted
@@ -112,17 +112,17 @@ turn it off or decline the prompt when:
 - you do not want agent workflows to access logged-in sessions
 - you are on a shared device
 
-## agent and pipe security
+## agent and scheduled task security
 
-Local agents and pipes can access the Screenpipe context exposed by their tools. Depending on their runtime and permissions, they may also read files, control input, or act in connected apps. Review those capabilities separately from Screenpipe API permissions. Secrets visible in captured content may be accessible to the agent.
+Local agents and scheduled tasks can access the Screenpipe context exposed by their tools. Depending on their runtime and permissions, they may also read files, control input, or act in connected apps. Review those capabilities separately from Screenpipe API permissions. Secrets visible in captured content may be accessible to the agent.
 
 secure your setup:
 
 - **exclude sensitive windows** — add your password manager, banking site, or cloud console to **settings → recording → ignored windows**. test the rule with harmless content; existing recordings and other data sources need separate review.
 - **use connection proxies** — instead of pasting API keys into prompts, create a screenpipe connection so tokens are managed securely.
-- **trust only official pipes** — use pipes from the [official pipe store](https://screenpi.pe/pipe-store) or audit custom pipes before installing.
-- **scope tasks narrowly** — a pipe searching only "the last meeting" is lower-risk than one searching "all screen text."
-- **review logs** — use `screenpipe pipe logs <name>` to see what data a pipe accessed.
+- **trust only official scheduled tasks** — use scheduled tasks from the [official task library](https://screenpi.pe/pipe-store) or audit custom scheduled tasks before installing.
+- **scope tasks narrowly** — a scheduled task searching only "the last meeting" is lower-risk than one searching "all screen text."
+- **review logs** — use `screenpipe pipe logs <name>` to see what data a scheduled task accessed.
 
 if uncomfortable with agents accessing your screen data, disable the embedded agent browser and use CLI or API only.
 

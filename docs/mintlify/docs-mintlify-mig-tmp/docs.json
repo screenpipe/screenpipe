@@ -44,14 +44,14 @@
             ]
           },
           {
-            "group": "pipes",
+            "group": "scheduled tasks",
             "pages": [
-              "pipe-store",
-              "pipes",
+              "task-library",
+              "scheduled-tasks",
               "reliable-reports",
               "ai-usage-and-controls",
-              "pipe-debugging",
-              "pipe-permissions"
+              "task-troubleshooting",
+              "task-permissions"
             ]
           },
           {
@@ -232,5 +232,23 @@
       "apiKey": "phc_Bt8GoTBPgkCpDrbaIZzJIEYt0CrJjhBiuLaBck1clce",
       "apiHost": "https://eu.i.posthog.com"
     }
-  }
+  },
+  "redirects": [
+    {
+      "source": "/pipes",
+      "destination": "/scheduled-tasks"
+    },
+    {
+      "source": "/pipe-store",
+      "destination": "/task-library"
+    },
+    {
+      "source": "/pipe-debugging",
+      "destination": "/task-troubleshooting"
+    },
+    {
+      "source": "/pipe-permissions",
+      "destination": "/task-permissions"
+    }
+  ]
 }

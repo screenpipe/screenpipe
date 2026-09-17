@@ -17,7 +17,7 @@ Microsoft Recall is a Windows 11 feature that captures screenshots and makes the
 | **NPU required** | no | yes (Copilot+ PCs) |
 | **privacy** | auditable source code | closed source |
 | **AI provider** | your choice (local or cloud) | Microsoft AI |
-| **extensibility** | plugins (pipes) | none |
+| **extensibility** | plugins (scheduled tasks) | none |
 
 ## why choose screenpipe?
 
@@ -42,7 +42,7 @@ Microsoft Recall is a Windows 11 feature that captures screenshots and makes the
 
 ### extensible
 
-build custom integrations with the REST API or [pipes](/pipes):
+build custom integrations with the REST API or [scheduled tasks](/scheduled-tasks):
 
 ```bash
 curl "http://localhost:3030/search?q=meeting+notes&content_type=all"
@@ -101,4 +101,4 @@ yes. screenpipe runs on any modern Windows computer — no NPU or Copilot+ hardw
 
 ### how is screenpipe different from Windows Recall?
 
-screenpipe is source-available, cross-platform, and has no cloud dependency by default. Recall is closed source, Windows 11 only, requires Copilot+ hardware, and has faced privacy concerns. screenpipe also offers extensibility through pipes (scheduled AI agents) and a full REST API that Recall doesn't provide.
+screenpipe is source-available, cross-platform, and has no cloud dependency by default. Recall is closed source, Windows 11 only, requires Copilot+ hardware, and has faced privacy concerns. screenpipe also offers extensibility through scheduled tasks (scheduled AI agents) and a full REST API that Recall doesn't provide.

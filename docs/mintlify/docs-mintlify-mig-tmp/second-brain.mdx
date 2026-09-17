@@ -13,9 +13,9 @@ a lot of people connect screenpipe to a personal AI agent — [OpenClaw](/opencl
 
 the bigger win is to let your agent build a **second brain** about you in the background: it watches what you do through screenpipe, splits your day into distinct workflows, writes higher-level summaries of your processes, and keeps a durable memory of who you are and what you're working on — so you never have to re-explain your context again.
 
-this is the same idea as the [digital clone pipe](/pipe-store) (which builds a persistent AI memory of you inside the screenpipe app), but it lives inside *your own* agent's memory. you set it up by pasting one prompt.
+this is the same idea as the [digital clone scheduled task](/task-library) (which builds a persistent AI memory of you inside the screenpipe app), but it lives inside *your own* agent's memory. you set it up by pasting one prompt.
 
-<Tip>this works with any agent that can run a tool/shell and run on a schedule. it does not require the screenpipe app's pipes — your agent does the work.</Tip>
+<Tip>this works with any agent that can run a tool/shell and run on a schedule. it does not require the screenpipe app's scheduled tasks — your agent does the work.</Tip>
 
 ## 1. connect screenpipe first
 
@@ -88,7 +88,7 @@ so you don't pull too much. if screenpipe skills are available, load them first.
 - if you have the screenpipe update-memory tool: write each durable fact as a memory
   with namespaced tags (person:, project:, topic:) and importance 0-1. retrieve later
   with search-content content_type='memory'. this is the same memory the screenpipe
-  digital-clone pipe builds, so it stays queryable from any agent.
+  digital-clone scheduled task builds, so it stays queryable from any agent.
 - also (or instead, if you lack that tool) keep markdown files i can read:
     second-brain/profile.md          - who i am, goals, preferences
     second-brain/people/NAME.md      - one file per person
@@ -105,7 +105,7 @@ link related notes together.
 
 set this to run automatically about once an hour using whatever scheduling you have
 (claude tasks, codex automations, openclaw/hermes automations, a system cron job, or a
-screenpipe pipe — `npx -y screenpipe@latest pipe install <path>` then `... pipe enable <name>`).
+screenpipe scheduled task — `npx -y screenpipe@latest pipe install <path>` then `... pipe enable <name>`).
 between runs, when i ask you anything, read now.md and the relevant project/person
 files first so you already know what i was doing.
 
@@ -134,7 +134,7 @@ the prompt above tells the agent to schedule itself, but you control the cadence
 - **OpenClaw / Hermes** — their built-in automations / scheduled tasks
 - **Claude Code** — claude tasks
 - **Codex** — codex automations
-- **screenpipe pipe** — run it inside screenpipe itself: save the prompt to `~/.screenpipe/pipes/second-brain/pipe.md` with a `schedule` (e.g. `0 * * * *`), then `npx -y screenpipe@latest pipe install ~/.screenpipe/pipes/second-brain && npx -y screenpipe@latest pipe enable second-brain` (`bunx` / `bun x` work too — see [pipes](/pipes))
+- **screenpipe scheduled task** — run it inside screenpipe itself: save the prompt to `~/.screenpipe/pipes/second-brain/pipe.md` with a `schedule` (e.g. `0 * * * *`), then `npx -y screenpipe@latest pipe install ~/.screenpipe/pipes/second-brain && npx -y screenpipe@latest pipe enable second-brain` (`bunx` / `bun x` work too — see [scheduled tasks](/scheduled-tasks))
 - **anything else** — a plain `cron` / `launchd` / `systemd` timer that re-runs the prompt
 
 hourly is a good default. lighter machines can run every few hours; use `activity-summary` first to keep token usage low.
@@ -147,6 +147,6 @@ screenpipe data is local. the agent only sees what you let it reach (MCP on `loc
 
 - [OpenClaw integration](/openclaw) — connect on the same machine or over a VPS
 - [give AI memory of your screen](/ai-memory) — the memory layer, explained
-- [pipes](/pipes) — run the same kind of automation *inside* the screenpipe app instead of your agent
-- [digital clone pipe](/pipe-store) — the one-click version of this
+- [scheduled tasks](/scheduled-tasks) — run the same kind of automation *inside* the screenpipe app instead of your agent
+- [digital clone scheduled task](/task-library) — the one-click version of this
 - [join our discord](https://discord.gg/screenpipe) — share your second-brain setup

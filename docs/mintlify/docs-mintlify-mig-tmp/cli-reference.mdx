@@ -163,7 +163,7 @@ start with `content_type=all`. add `app_name`, `window_name`, or time filters on
 | empty response after startup | capture has not processed yet | wait 1-2 minutes and retry |
 | no result for a specific window | stored title differs | search broad, inspect `window_name`, then filter |
 | OCR result missing app text | app exposes text through accessibility instead | try `content_type=accessibility` or `all` |
-| pipe gets old data | schedule or time range too narrow | widen `start_time`/`end_time` or run manually |
+| scheduled task gets old data | schedule or time range too narrow | widen `start_time`/`end_time` or run manually |
 
 ## debugging
 
@@ -199,8 +199,8 @@ verify screenpipe is running properly:
 curl http://localhost:3030/health
 ```
 
-### check pipe logs
+### check scheduled task logs
 
-for pipe-specific debugging, use the desktop app: **Pipes → My Pipes** → open your pipe → view logs.
+for task-specific debugging, use the desktop app: **Scheduled tasks → My tasks** → open your scheduled task → view logs.
 
 need help? [join our discord](https://discord.gg/screenpipe).

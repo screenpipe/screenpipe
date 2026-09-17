@@ -13,7 +13,7 @@ Before scheduling a report, check which AI provider will run it and how often it
 | --- | --- | --- |
 | Recording | Collects screen and audio evidence | Recording settings, selected devices, filters, storage, and transcription provider |
 | Chat | Runs AI when you submit a request | Selected model and provider |
-| Pipe or scheduled task | Runs a saved instruction manually or on a schedule | Prompt, provider, frequency, recent runs, and output |
+| Scheduled task | Runs a saved instruction manually or on a schedule | Prompt, provider, frequency, recent runs, and output |
 | Data Sync | Transfers configured data for a remote or team workflow | Sync settings and the [data-flow guide](/privacy-data-flow) |
 
 Local capture, cloud transcription, hosted chat, and team sync are separate choices. Turning off a report's schedule does not turn off recording or cloud transcription. A local recording also does not guarantee that an AI analysis stays local: the selected provider determines where its supplied context is processed.
@@ -35,7 +35,7 @@ Use the account's current display for its allowance and reset information. This 
 
 ## Review one task
 
-Open the task in **Pipes → My Pipes**, or the scheduled-task list in your version. Inspect its prompt, schedule, selected provider/model, and latest execution history. Then use this prompt with an assistant that can inspect that configuration:
+Open **Scheduled tasks → My tasks** and select the task. Inspect its prompt, schedule, selected provider/model, and latest execution history. Then use this prompt with an assistant that can inspect that configuration:
 
 ```text
 Review [task name] without changing it. Report its provider and model,
@@ -59,7 +59,7 @@ subscription includes every provider call.
 | Stop both current and future work | Turn auto-run off, then stop the active run | Both states are confirmed |
 | Resume the routine | Review the schedule, then turn auto-run on | The displayed schedule matches your intent |
 
-Stopping does not undo completed writes or already consumed AI usage. Auto-run off does not close a client job or pause recording. Use [pipe debugging](/pipe-debugging) if an execution remains stuck.
+Stopping does not undo completed writes or already consumed AI usage. Auto-run off does not close a client job or pause recording. Use [scheduled task debugging](/task-troubleshooting) if an execution remains stuck.
 
 ## Warnings and spending limits
 
@@ -88,6 +88,6 @@ Check the signed-in account, selected provider, and available refresh control. I
 ## Related guides
 
 - [Reliable scheduled reports](/reliable-reports)
-- [Build pipes](/pipes)
+- [Build scheduled tasks](/scheduled-tasks)
 - [Privacy and data flow](/privacy-data-flow)
 - [Remote-support jobs](/remote-support-job-reports)

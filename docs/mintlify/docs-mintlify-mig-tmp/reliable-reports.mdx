@@ -11,7 +11,7 @@ This guide builds a local draft first. Writing to a connected app adds a separat
 
 ## Define the report
 
-Fill in this small setup card before creating a pipe:
+Fill in this small setup card before creating a scheduled task:
 
 ```text
 Name: daily-project-report
@@ -27,10 +27,10 @@ External actions: none
 
 ## Create the manual version
 
-In **Pipes → My Pipes → create your own pipe**, paste the prompt below. Replace the bracketed fields. Review the generated configuration and keep auto-run off for the first test.
+Open **Scheduled tasks → My tasks** and click **NEW**, or use the creation form when the list is empty. Paste the prompt below. Replace the bracketed fields. Review the generated configuration and keep auto-run off for the first test.
 
 ```text
-Create a Screenpipe pipe named [name] for [project]. Check for an existing
+Create a Screenpipe scheduled task named [name] for [project]. Check for an existing
 equivalent first and show its configuration before updating it.
 
 For [local date or explicit interval and timezone], query bounded screenpipe
@@ -120,4 +120,4 @@ Review the first scheduled result and its receipt. If it fails, turn auto-run of
 | Duplicate tasks | Stable IDs and destination read-back before retries |
 | Stale report with no warning | Last successful receipt and subsequent execution logs |
 
-For endpoint, authentication, or permission errors, continue with [pipe debugging](/pipe-debugging).
+For endpoint, authentication, or permission errors, continue with [scheduled task debugging](/task-troubleshooting).

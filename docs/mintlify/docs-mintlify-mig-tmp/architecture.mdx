@@ -57,7 +57,7 @@ graph LR
     DB --> MCP
     FS --> REST
 
-    REST --> P[pipes / AI agents]
+    REST --> P[scheduled tasks / AI agents]
     MCP --> AI[Claude · Cursor · etc.]
 ```
 
@@ -107,7 +107,7 @@ graph TD
     DB[screenpipe-db<br/><i>SQLite · types</i>]
     VISION[screenpipe-vision<br/><i>screen capture · OCR fallback</i>]
     AUDIO[screenpipe-audio<br/><i>audio capture · STT</i>]
-    CORE[screenpipe-core<br/><i>pipes · config</i>]
+    CORE[screenpipe-core<br/><i>scheduled tasks · config</i>]
     EVENTS[screenpipe-events<br/><i>event system</i>]
     A11Y[screenpipe-accessibility<br/><i>UI events · accessibility tree</i>]
     INT[screenpipe-integrations<br/><i>MCP · reminders</i>]
@@ -183,11 +183,11 @@ REST API on `localhost:3030`:
 
 see [API reference](/cli-reference) for the full endpoint list.
 
-### 5. pipes
+### 5. scheduled tasks
 
-[pipes](/pipes) are AI agents (`.md` prompt files) that run on your screen data. they're executed by an AI agent that reads the prompt, queries the screenpipe API, and takes action.
+[scheduled tasks](/scheduled-tasks) are AI agents (`.md` prompt files) that run on your screen data. they're executed by an AI agent that reads the prompt, queries the screenpipe API, and takes action.
 
-pipes live in `~/.screenpipe/pipes/{name}/` and run on cron-like schedules.
+scheduled tasks live in `~/.screenpipe/pipes/{name}/` and run on cron-like schedules.
 
 ### 6. desktop app
 
@@ -255,6 +255,6 @@ runs 24/7 on a MacBook Pro M3 (32 GB) or a $400 Windows laptop:
 | screen capture | [screenpipe-vision/src/core.rs](https://github.com/screenpipe/screenpipe/blob/main/crates/screenpipe-vision/src/core.rs) |
 | audio capture | [screenpipe-audio/src/](https://github.com/screenpipe/screenpipe/tree/main/crates/screenpipe-audio/src) |
 | database | [screenpipe-db/src/db.rs](https://github.com/screenpipe/screenpipe/blob/main/crates/screenpipe-db/src/db.rs) |
-| pipes | [screenpipe-core/src/pipes/](https://github.com/screenpipe/screenpipe/tree/main/crates/screenpipe-core/src/pipes) |
+| scheduled tasks | [screenpipe-core/src/pipes/](https://github.com/screenpipe/screenpipe/tree/main/crates/screenpipe-core/src/pipes) |
 | MCP server | [screenpipe-mcp/src/index.ts](https://github.com/screenpipe/screenpipe/blob/main/packages/screenpipe-mcp/src/index.ts) |
 | desktop app | [screenpipe-app-tauri/](https://github.com/screenpipe/screenpipe/tree/main/apps/screenpipe-app-tauri) |

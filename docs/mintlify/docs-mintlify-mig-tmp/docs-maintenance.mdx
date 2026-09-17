@@ -20,7 +20,7 @@ for every release PR or feature PR, check:
 | new setting or UI flow | relevant guide plus screenshot if it changes the user path |
 | new API route or parameter | OpenAPI plus [API recipes](/api-recipes) if user-facing |
 | new connection | [connections](/connections) and [connection reference](/connection-reference) |
-| new pipe behavior | [pipes](/pipes), [pipe debugging](/pipe-debugging), or [pipe permissions](/pipe-permissions) |
+| new scheduled task behavior | [scheduled tasks](/scheduled-tasks), [scheduled task debugging](/task-troubleshooting), or [scheduled task permissions](/task-permissions) |
 | meeting feature | [meeting intelligence](/meeting-intelligence) |
 | privacy/security behavior | [privacy data flow](/privacy-data-flow) and [privacy filter](/privacy-filter) |
 | platform reliability fix | [troubleshooting](/troubleshooting) |
@@ -75,7 +75,7 @@ then reference them as:
 | get started | first value, permissions, desktop vs CLI |
 | MCP | client setup, auth, restart requirements, troubleshooting |
 | API | generated OpenAPI, tested recipes, auth examples |
-| pipes | lifecycle, permissions, logs, store, publishing |
+| scheduled tasks | lifecycle, permissions, logs, store, publishing |
 | connections | registry drift, OAuth, proxy paths, multi-account |
 | meetings | transcript, speakers, summaries, calendar context |
 | privacy | local/cloud data flow, PII, deletion, LAN access |
@@ -88,3 +88,9 @@ then reference them as:
 - if a connection is added to `screenpipe-connect`, docs must include it in the reference.
 - if release notes mention a feature, the durable guide should also explain how to use it.
 - if a screenshot changes materially, update the image in the same PR.
+
+## Match current product terminology
+
+Use **scheduled task** in page titles, navigation, prompts, descriptions, and UI instructions. The app uses **Scheduled tasks**, **My tasks**, **Discover**, and **NEW**; an empty task list offers examples and a creation form.
+
+Keep executable identifiers unchanged: `screenpipe pipe`, `/pipes`, `pipe.md`, configuration keys, and source filenames still use technical names. Explain that distinction in reference material. When renaming a docs route, update internal links and add a redirect so saved links continue to work. Remove or replace screenshots that display retired labels.

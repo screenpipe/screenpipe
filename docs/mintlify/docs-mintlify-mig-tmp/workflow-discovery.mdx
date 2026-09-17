@@ -44,8 +44,8 @@ flowchart TD
   <Step title="capture two or three repetitions">
     Record enough examples to see normal variation. note the approximate start and end of each run so the search windows stay bounded.
   </Step>
-  <Step title="run Automate My Work or a manual pipe">
-    Use **Automate My Work** on Home. for a reusable version, open **Pipes → My Pipes → create your own pipe** and describe the bounded discovery report below. if it reports no matching data, fix capture or widen the range; do not fill gaps with assumptions.
+  <Step title="run Automate My Work or a manual scheduled task">
+    Use **Automate My Work** on Home. for a reusable version, open **Scheduled tasks → My tasks → NEW** and describe the bounded discovery report below. if it reports no matching data, fix capture or widen the range; do not fill gaps with assumptions.
   </Step>
   <Step title="review the candidate list">
     Remove one-off tasks and anything that depends on judgment the data does not expose. rank the rest by frequency, active time, failure cost, and ease of testing.
@@ -58,12 +58,12 @@ flowchart TD
   </Step>
 </Steps>
 
-## build a reusable discovery pipe
+## build a reusable discovery scheduled task
 
-paste this into **Pipes → My Pipes → create your own pipe**:
+paste this into **Scheduled tasks → My tasks → NEW**:
 
 ```text
-Create a manual workflow-discovery pipe for one named outcome.
+Create a manual workflow-discovery scheduled task for one named outcome.
 Review a bounded time window and write a local Markdown report.
 List only workflows repeated in the supplied data.
 For each candidate include trigger, result, observed steps, repetitions,
@@ -72,7 +72,7 @@ Use /activity-summary for time totals. Do not score employee productivity,
 send messages, or change another system.
 ```
 
-after the app builds it, return to **My Pipes**, run it manually, and inspect both the report and execution log before scheduling it.
+after the app builds it, return to **My tasks**, run it manually, and inspect both the report and execution log before scheduling it.
 
 ## prompt for a discovery pass
 
