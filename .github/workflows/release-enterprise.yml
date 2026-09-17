@@ -790,13 +790,13 @@ jobs:
             apps/screenpipe-app-tauri/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
             apps/screenpipe-app-tauri/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
 
-  # ─── macOS (Apple Silicon + Intel) ────────────────────────────────────────
       - name: Report compiler cache results
         if: always() && runner.environment == 'self-hosted'
         continue-on-error: true
         shell: bash
         run: sccache --show-stats
 
+  # ─── macOS (Apple Silicon + Intel) ────────────────────────────────────────
   release-enterprise-macos:
     needs: resolve-release
     name: release-enterprise-macos (${{ matrix.target }})
