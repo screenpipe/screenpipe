@@ -2300,6 +2300,10 @@ mod tests {
 
     #[tokio::test]
     async fn completed_batch_is_not_retranscribed_or_remerged_after_save_failure() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_test_writer()
+            .try_init();
         use crate::transcription::deepgram::DeepgramTranscriptionConfig;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
