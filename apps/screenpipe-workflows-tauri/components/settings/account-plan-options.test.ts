@@ -100,9 +100,9 @@ describe("account plan options", () => {
       expect(accountPlanForEntitlement("basic", true)).toBe("standard");
     });
 
-    it("puts Lifetime on Basic, not Business", () => {
-      // Lifetime maps to the Basic hosted AI tier.
-      expect(accountPlanForEntitlement("lifetime", true)).toBe("standard");
+    it("does not mark a monthly subscription current for Lifetime", () => {
+      expect(accountPlanForEntitlement("lifetime", true)).toBeNull();
+      expect(accountPlanForEntitlement("LIFETIME", true)).toBeNull();
     });
 
     it("marks the capacity level the account actually pays for", () => {

@@ -173,6 +173,7 @@ export function AccountSection() {
     (selection: BusinessUpgradeSelection) => Promise<void>
   >(async () => {});
   const subscriptionPlan = settings.user?.subscription_plan ?? null;
+  const isLifetimePlan = subscriptionPlan?.toLowerCase() === "lifetime";
   const hasNamedPlan = !!subscriptionPlan && subscriptionPlan !== "none";
   const appUser = settings.user as AppUser | null;
   const hasExpiringProfilePlan = getUserPlanExpiration(appUser) !== null;
@@ -1014,11 +1015,17 @@ export function AccountSection() {
                 </span>
               </div>
               <p className="text-sm text-muted-foreground mt-2">
-                local capture, search &amp; timeline. add cloud sync, cloud AI &amp; 50+
-                integrations with Business below.
+                {isLifetimePlan
+                  ? "one-time purchase. local capture, search & timeline are included."
+                  : "local capture, search & timeline. add cloud sync, cloud AI & 50+ integrations with Business below."}
               </p>
 
               <div className="mt-4">
+                {isLifetimePlan && (
+                  <p className="text-sm text-muted-foreground mb-3">
+                    optional subscriptions
+                  </p>
+                )}
                 <AccountPlanOptions
                   current={accountPlanForEntitlement(subscriptionPlan, true)}
                   entitlementPlan={subscriptionPlan}
