@@ -4510,7 +4510,10 @@ mod tests {
             .expect("seeded package.json readable");
         let parsed: serde_json::Value =
             serde_json::from_str(&contents).expect("seeded package.json parses");
-        assert_eq!(parsed["dependencies"]["tinfoil"], json!(TINFOIL_SDK_VERSION));
+        assert_eq!(
+            parsed["dependencies"]["tinfoil"],
+            json!(TINFOIL_SDK_VERSION)
+        );
         let dependencies = parsed["dependencies"]
             .as_object()
             .expect("managed dependencies object");
