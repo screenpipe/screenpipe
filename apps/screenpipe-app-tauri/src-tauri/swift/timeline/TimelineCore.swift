@@ -1134,6 +1134,10 @@ struct TimelineSelection: Equatable {
     var start: Date
     var end: Date
     var indices: [Int]
+    // Keep the server's precision for destructive requests: Date/ISO formatters
+    // cannot round-trip every fractional digit in a captured timestamp.
+    var startTimestamp: String
+    var endTimestamp: String
 
     /// The playhead drifting this far outside the range clears the selection.
     static let driftTolerance: TimeInterval = 30
@@ -1158,7 +1162,11 @@ struct TimelineSelection: Equatable {
         // Newest-first: the higher index is the older end of the range.
         guard let startDate = TimelineFrames.date(of: frames[upper]),
               let endDate = TimelineFrames.date(of: frames[lower]) else { return nil }
-        return TimelineSelection(start: startDate, end: endDate, indices: indices)
+        return TimelineSelection(
+            start: startDate, end: endDate, indices: indices,
+            startTimestamp: frames[upper].timestamp,
+            endTimestamp: frames[lower].timestamp
+        )
     }
 
     /// "1h 12m" / "3m" for the tag toolbar header.

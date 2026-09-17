@@ -870,9 +870,15 @@ private func testSelection() {
     expect(TimelineSelection.make(anchor: 0, hovered: 99, frames: frames) == nil,
            "an out-of-range selection is rejected")
 
-    let hour = TimelineSelection(start: base, end: base.addingTimeInterval(4320), indices: [0, 1])
+    let hour = TimelineSelection.make(anchor: 0, hovered: 1, frames: [
+        makeFrame(secondsAgo: -4320, app: "A", base: base),
+        makeFrame(secondsAgo: 0, app: "A", base: base),
+    ])!
     expectEqual(hour.durationLabel, "1h 12m", "duration label over an hour")
-    let short = TimelineSelection(start: base, end: base.addingTimeInterval(180), indices: [0, 1])
+    let short = TimelineSelection.make(anchor: 0, hovered: 1, frames: [
+        makeFrame(secondsAgo: -180, app: "A", base: base),
+        makeFrame(secondsAgo: 0, app: "A", base: base),
+    ])!
     expectEqual(short.durationLabel, "3m", "duration label under an hour")
 }
 
