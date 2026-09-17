@@ -48,6 +48,7 @@ pub mod cli_reminder;
 pub mod cloud_search;
 pub mod compaction_encoder;
 pub mod connections_api;
+pub mod cloud_connections;
 pub mod core;
 pub mod crash_log;
 pub mod disk_pressure;

@@ -3462,6 +3462,10 @@ where
         browser_pairing: BrowserPairingState::default(),
         api_auth_key,
     };
+    provider_routes().merge(crate::cloud_connections::routes()).with_state(state)
+}
+
+pub(crate) fn provider_routes() -> Router<ConnectionsState> {
     Router::new()
         .route("/", get(list_connections))
         // Browser registry — canonical multi-instance API.
@@ -3541,7 +3545,6 @@ where
                 .delete(disconnect_integration),
         )
         .route("/:id/test", post(test_connection))
-        .with_state(state)
 }
 
 // ---------------------------------------------------------------------------

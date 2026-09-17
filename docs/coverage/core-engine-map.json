@@ -456,6 +456,7 @@
         "src/cli/team_pipes.rs",
         "src/cli/team_skills.rs",
         "src/cli/view.rs",
+        "src/cloud_connections.rs",
         "src/cloud_search.rs",
         "src/connections_api.rs",
         "src/drm_detector.rs",

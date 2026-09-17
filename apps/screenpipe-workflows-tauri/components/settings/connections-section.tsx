@@ -47,6 +47,7 @@ import { join, homeDir, tempDir, dirname } from "@tauri-apps/api/path";
 import { AppleCalendarCard } from "./apple-calendar-card";
 import { GoogleCalendarCard } from "./google-calendar-card";
 import { ImapCard } from "./imap-card";
+import { CloudConnectionAccess } from "./cloud-connection-access";
 import { ComposioCard, COMPOSIO_TOOLKITS, type ComposioStatusMap } from "./composio-card";
 import { GoogleDocsCard } from "./google-docs-card";
 import { IcsCalendarCard } from "./ics-calendar-card";
@@ -4438,6 +4439,7 @@ export function ConnectionsSection({
 
   return (
     <div className="space-y-5">
+      <CloudConnectionAccess />
       {/* Header: title + inline search */}
       <div className="flex items-center gap-3">
         <p className="flex-1 text-sm text-muted-foreground">Connect your apps</p>
