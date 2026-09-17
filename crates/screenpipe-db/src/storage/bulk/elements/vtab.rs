@@ -323,9 +323,6 @@ impl Elements {
                     return Err(constraint("required element column is NULL"));
                 }
             }
-            if new.bytes() > self.storage.descriptor.budget.record_bytes {
-                return Err(constraint("element record budget exceeded"));
-            }
             let Value::Integer(frame) = new.values[0] else {
                 return Err(constraint("invalid element frame"));
             };

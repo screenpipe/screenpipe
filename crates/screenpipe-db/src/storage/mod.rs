@@ -75,10 +75,13 @@ pub struct StorageBudget {
     pub row_group_rows: usize,
     pub file_rows: usize,
     pub file_bytes: usize,
+    /// Maximum record the archiver processes; larger captures remain in SQLite.
     pub record_bytes: usize,
     pub decode_bytes: usize,
     pub response_bytes: usize,
     pub concurrent_decodes: usize,
+    /// Background reclamation headroom and legacy staging allowance. It must
+    /// never limit durable recording; memory is bounded by processing batches.
     pub staging_bytes: u64,
     pub disk_reserve_bytes: u64,
     pub operation_timeout_secs: u64,
@@ -106,7 +109,7 @@ impl Default for StorageBudget {
 }
 
 impl StorageBudget {
-    /// Oversized legacy frames are resident history, not work for the sealer.
+    /// Oversized frames are resident history, not work for the sealer.
     pub(super) fn staged_frame_bytes(&self, bytes: usize) -> usize {
         if bytes <= self.record_bytes {
             bytes

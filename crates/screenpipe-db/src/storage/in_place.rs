@@ -141,9 +141,8 @@ async fn run(
                 tx.commit().await?;
             }
             if schema::converted_step(&mut conn,"conversion-complete").await? { return Ok(()); }
-            // A paused migration records resident payloads like the original
-            // SQLite store. Its disabled sealer must not impose a staging cap
-            // that eventually stops recording. Explicit completion restores it.
+            // Compatibility with pre-v6 triggers during interrupted conversion.
+            // The v6 startup upgrade removes capture admission limits entirely.
             sqlx::query("UPDATE storage_metadata SET staging_limit=?")
                 .bind(if archive { storage.descriptor.budget.staging_bytes as i64 } else { i64::MAX })
                 .execute(&mut *conn).await?;
@@ -258,8 +257,8 @@ async fn run(
             let original: Vec<String> = sqlx::query_scalar("SELECT sql FROM _storage_conversion_triggers WHERE restore=1").fetch_all(&mut *tx).await?;
             for sql in original { sqlx::raw_sql(sqlx::AssertSqlSafe(sql)).execute(&mut *tx).await?; }
             if archive {
-                // Existing resident history occupies disk, not the capture work
-                // queue. Preserve a full configured staging allowance above it.
+                // Preserve the legacy allowance for older schema readers. The
+                // current recording triggers do not enforce this as a cap.
                 sqlx::query("UPDATE storage_metadata SET staging_limit=staging_bytes+?")
                     .bind(storage.descriptor.budget.staging_bytes as i64)
                     .execute(&mut *tx).await?;

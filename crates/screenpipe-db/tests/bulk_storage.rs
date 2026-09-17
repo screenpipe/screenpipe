@@ -451,15 +451,14 @@ async fn deferred_elements_complete_under_staging_pressure() {
     }
     tx.commit().await.unwrap();
     assert_eq!(db.get_frame_elements(1, None).await.unwrap().len(), 3);
-    assert!(db
-        .execute_raw_sql_write(
-            "INSERT INTO frames(id,timestamp,full_text) VALUES(2,'2026-09-11T12:01:00Z','next');"
-        )
-        .await
-        .is_err());
-    while db.seal_payloads().await.unwrap() != 0 {}
     db.execute_raw_sql_write(
         "INSERT INTO frames(id,timestamp,full_text) VALUES(2,'2026-09-11T12:01:00Z','next');",
+    )
+    .await
+    .unwrap();
+    while db.seal_payloads().await.unwrap() != 0 {}
+    db.execute_raw_sql_write(
+        "INSERT INTO frames(id,timestamp,full_text) VALUES(3,'2026-09-11T12:02:00Z','after archival');",
     )
     .await
     .unwrap();

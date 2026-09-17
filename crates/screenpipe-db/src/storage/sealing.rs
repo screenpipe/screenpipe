@@ -121,7 +121,7 @@ impl DatabaseManager {
             return Err(storage_error("replacement requires hybrid storage"));
         };
         let mut tx = self.begin_immediate_with_retry().await?;
-        let row = sqlx::query("SELECT p.generation,p.state,p.file_id,p.bytes,m.policy,m.staging_bytes,m.staging_limit FROM frame_payloads p CROSS JOIN storage_metadata m WHERE p.frame_id=?")
+        let row = sqlx::query("SELECT p.generation,p.state,p.file_id,p.bytes,m.policy,m.staging_bytes FROM frame_payloads p CROSS JOIN storage_metadata m WHERE p.frame_id=?")
             .bind(payload.id).fetch_optional(&mut **tx.conn()).await?;
         let Some(row) = row else {
             tx.rollback().await?;
@@ -132,13 +132,6 @@ impl DatabaseManager {
         {
             tx.rollback().await?;
             return Ok(false);
-        }
-        // Retained legacy frames can still be redacted or have detail removed.
-        // New oversized payloads remain subject to normal capture admission.
-        if payload.bytes() > storage.descriptor.budget.record_bytes
-            && payload.bytes() > row.get::<i64, _>("bytes") as usize
-        {
-            return Err(storage_error("record budget exceeded"));
         }
         let prior_bytes = if row.get::<&str, _>("state") == "staged" {
             storage
@@ -153,13 +146,6 @@ impl DatabaseManager {
                 .descriptor
                 .budget
                 .staged_frame_bytes(payload.bytes()) as i64;
-        // Deferred writes can leave staging above its admission limit. Existing
-        // payloads must still be redacted/shrunk so they can be sealed.
-        if next_bytes > row.get::<i64, _>("staging_limit")
-            && next_bytes > row.get::<i64, _>("staging_bytes")
-        {
-            return Err(storage_error("staging budget reached"));
-        }
         let old_file: Option<String> = row.try_get("file_id")?;
         sqlx::query(
             "UPDATE storage_metadata SET maintenance=1,revision=revision+1,staging_bytes=?",

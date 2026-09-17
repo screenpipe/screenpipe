@@ -522,7 +522,7 @@ impl DatabaseManager {
                 crate::storage::schema::verify(&mut conn, &storage.descriptor).await?;
                 crate::storage::schema::upgrade_resident_frames(&mut conn).await?;
                 let upgraded =
-                    crate::storage::schema::upgrade_staging_drain(&mut conn, storage.has_bulk())
+                    crate::storage::schema::upgrade_recording(&mut conn, storage.has_bulk())
                         .await?;
                 crate::storage::read_schema::upgrade(&mut conn, storage).await?;
                 storage.verify_catalog(&db_manager.pool).await?;
