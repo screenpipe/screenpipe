@@ -3462,7 +3462,9 @@ where
         browser_pairing: BrowserPairingState::default(),
         api_auth_key,
     };
-    provider_routes().merge(crate::cloud_connections::routes()).with_state(state)
+    provider_routes()
+        .merge(crate::cloud_connections::routes())
+        .with_state(state)
 }
 
 pub(crate) fn provider_routes() -> Router<ConnectionsState> {
