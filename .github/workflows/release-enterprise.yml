@@ -485,7 +485,10 @@ jobs:
               Select-Object -First 1
             if (-not $standard -or -not $persistent) { throw "Both standard and persistent installers are required" }
             .\scripts\exe-to-intunewin.ps1 -SetupExe $standard.FullName -OutDir "$outRoot\standard"
+            # The uploader uses basenames, so both variants need distinct package names.
+            Rename-Item -LiteralPath "$outRoot\standard\install-screenpipe-enterprise.intunewin" -NewName "install-screenpipe-enterprise-standard.intunewin"
             .\scripts\exe-to-intunewin.ps1 -SetupExe $persistent.FullName -OutDir "$outRoot\persistent"
+            Rename-Item -LiteralPath "$outRoot\persistent\install-screenpipe-enterprise.intunewin" -NewName "install-screenpipe-enterprise-persistent.intunewin"
           } catch { Write-Host ".intunewin creation failed: $_" }
 
       - name: Upload enterprise Windows artifacts
