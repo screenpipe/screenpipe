@@ -4313,14 +4313,14 @@ autoUpdatePipes?: boolean;
  */
 enhancedAI?: boolean;
 /**
- * Explicit consumer opt-in for on-demand remote diagnostic log requests.
+ * Default-enabled on-demand remote diagnostic log requests.
  * Enterprise builds enforce remote log collection separately; this stored
- * value remains false unless a consumer chooses to enable it.
+ * value can be disabled by the user after the one-time default migration.
  */
 remoteLogCollectionEnabled?: boolean;
 /**
- * Account that granted remote log collection consent on this device.
- * Consumer collection is allowed only while this matches the current user.
+ * Account for an explicit enable; None uses the device-wide default.
+ * An explicit account binding must match the current user; None uses the device default.
  */
 remoteLogCollectionUserId?: string | null;
 /**

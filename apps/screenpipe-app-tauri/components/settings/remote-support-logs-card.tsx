@@ -30,7 +30,7 @@ function describeConsumerStatus(status: RemoteSupportStatus): StatusMessage {
   switch (status) {
     case "ready":
       return {
-        text: "Consent synced. Support can request one upload while this device is online.",
+        text: "Support access synced. Support can request one upload while this device is online.",
         className: "text-emerald-700",
       };
     case "uploading":
@@ -51,12 +51,12 @@ function describeConsumerStatus(status: RemoteSupportStatus): StatusMessage {
       };
     case "checking":
       return {
-        text: "Remote consent is enabled locally; checking the support connection.",
+        text: "Remote support access is enabled locally; checking the support connection.",
         className: "text-muted-foreground",
       };
     case "syncing":
       return {
-        text: "Confirming consent with support...",
+        text: "Confirming access with support...",
         className: "text-muted-foreground",
       };
     case "disabled":
@@ -80,7 +80,8 @@ export function RemoteSupportLogsCard() {
   const hasAccountConsent =
     settings.remoteLogCollectionEnabled === true &&
     currentUserId !== null &&
-    settings.remoteLogCollectionUserId === currentUserId;
+    (settings.remoteLogCollectionUserId == null ||
+      settings.remoteLogCollectionUserId === currentUserId);
   const enabled =
     isManagedDeploymentResolved &&
     (isManagedDeployment || hasAccountConsent);
@@ -147,7 +148,7 @@ export function RemoteSupportLogsCard() {
                       : "Checking whether remote log collection is managed by your organization..."
                     : isManagedDeployment
                       ? "Your organization can request diagnostic logs from this managed device. Nothing is uploaded unless an administrator sends a request. Logs are filtered locally for common secrets and personal data, but automated filtering can miss secrets and logs can still contain names, file paths, URLs, and error messages. They go to your organization's configured support service, which controls retention. Screenshots, recordings, audio files, chat history, settings, and the timeline database are never included."
-                      : `Allow screenpipe support to request recent diagnostic logs from this device. Before upload, logs are filtered locally on this device for common secrets and personal data, but automated filtering can miss secrets and logs can still contain names, file paths, URLs, and error messages. Screenshots, recordings, audio files, chat history, settings, and the timeline database are never included. Nothing is uploaded unless support sends a short-lived request. You can turn this off at any time; previously shared diagnostics are deleted after 30 days.${requiresSignIn ? " Sign in to enable this." : ""}`}
+                      : `Remote support logs are enabled by default. Screenpipe support can request recent diagnostic logs from this device. Before upload, logs are filtered locally on this device for common secrets and personal data, but automated filtering can miss secrets and logs can still contain names, file paths, URLs, and error messages. Screenshots, recordings, audio files, chat history, settings, and the timeline database are never included. Nothing is uploaded unless support sends a short-lived request. You can turn this off at any time; previously shared diagnostics are deleted after 30 days.${requiresSignIn ? " Sign in to enable this." : ""}`}
                 </p>
                 {consumerStatus && (
                   <p className={`text-[11px] mt-1 ${consumerStatus.className}`}>
