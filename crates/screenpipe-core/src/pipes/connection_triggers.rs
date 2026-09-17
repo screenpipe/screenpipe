@@ -1524,7 +1524,9 @@ pub async fn poll_once(
         // sharing a source with a subscriber that is still draining old rows.
         let voice_baseline = if app == "audio"
             && !min_since.is_empty()
-            && subs.iter().any(|(_, _, k)| !state.committed.contains_key(k))
+            && subs
+                .iter()
+                .any(|(_, _, k)| !state.committed.contains_key(k))
         {
             voice::fetch(ctx, &subs[0].1, "").await
         } else {
