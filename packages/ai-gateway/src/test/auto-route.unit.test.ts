@@ -55,22 +55,39 @@ describe('Auto routing identity', () => {
     expect(autoRouteScope(request, 'user-1')).toEqual(scope);
   });
 
-  it('isolates accounts, sessions, and repeated user turns while preserving tool continuations', async () => {
-    const key = await autoRouteKey(scope, hard.messages);
-    expect(await autoRouteKey(scope, toolLoop(hard).messages)).toBe(key);
-    const image: RequestBody['messages'][number] = { role: 'user', content: [
-      { type: 'text', text: 'Attached image(s) from tool result:' },
-      { type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } },
-    ] };
-    expect(await autoRouteKey(scope, [...toolLoop(hard).messages, image])).toBe(key);
-    expect(await autoRouteKey({ ...scope, account: 'user-2' }, hard.messages)).not.toBe(key);
-    expect(await autoRouteKey({ ...scope, session: 'session-2' }, hard.messages)).not.toBe(key);
-    expect(await autoRouteKey(scope, [...toolLoop(hard).messages, ...hard.messages])).not.toBe(key);
+  it('isolates account/session storage independently of compacted context', async () => {
+    const key = await autoRouteKey(scope);
+    expect(await autoRouteKey({ ...scope, account: 'user-2' })).not.toBe(key);
+    expect(await autoRouteKey({ ...scope, session: 'session-2' })).not.toBe(key);
     expect(key).not.toContain('user-1');
   });
 });
 
 describe('Auto routing across tool calls and isolates', () => {
+  it('retains the model after compaction removes old and current user messages', async () => {
+    const h = harness();
+    const body = { ...hard, messages: [{ role: 'user' as const, content: 'old question' }, ...hard.messages] };
+    const initial = await pinAutoRoute(h.env, scope, body, AUTO_WATERFALL, true);
+    expect(initial.chain[0]).toBe('gpt-5.6-sol');
+    const compacted = toolLoop(hard);
+    expect((await pinAutoRoute(h.env, scope, compacted, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-sol');
+    compacted.messages = compacted.messages.filter((m) => m.role !== 'user');
+    expect((await pinAutoRoute(h.env, scope, compacted, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-sol');
+  });
+
+  it('reclassifies a repeated new user turn and rejects stale fallback writes', async () => {
+    const h = harness();
+    const initial = await pinAutoRoute(h.env, scope, hard, AUTO_WATERFALL, true);
+    const next = { ...hard, messages: [...toolLoop(hard).messages, ...hard.messages] };
+    h.env.ROUTER_MODE = 'off';
+    expect((await pinAutoRoute(h.env, scope, next, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-luna');
+    await expect(initial.beforeAttempt('claude-sonnet-5')).rejects.toThrow('Auto routing state unavailable');
+    expect((await pinAutoRoute(h.env, scope, toolLoop(next), AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-luna');
+    // A later turn can repeat the first fingerprint after history compaction.
+    h.env.ROUTER_MODE = 'heuristic';
+    expect((await pinAutoRoute(h.env, scope, hard, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-sol');
+    await expect(initial.beforeAttempt('claude-sonnet-5')).rejects.toThrow('Auto routing state unavailable');
+  });
   it('retains the first decision across a tool loop and eviction, reclassifying a new user turn', async () => {
     const h = harness();
     expect((await pinAutoRoute(h.env, scope, hard, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-sol');

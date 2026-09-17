@@ -7,10 +7,11 @@ import { lastUserText, routeTier, routingUserText, TIER_HEAD, type Tier } from '
 import { getSessionAffinity, hasHistoryCacheSessionAffinity, isSyntheticToolImageUserMessage } from './free-chat-limit';
 
 export const AUTO_ROUTE_PATH = '/_internal/auto-route';
+// Keep the storage key so alarms can still retire older per-turn objects.
 const STORAGE_KEY = 'auto-route:v1';
 export const AUTO_ROUTE_TTL_MS = 24 * 60 * 60 * 1000;
 
-type Route = { tier: Tier; chain: string[]; index: number; expiresAt: number };
+type Route = { turn: string; fingerprint: string; tier: Tier; chain: string[]; index: number; expiresAt: number };
 export type AutoRouteScope = { account: string; session: string };
 
 /** Only the authenticated entrypoint creates this scope; body fields are ignored. */
@@ -19,13 +20,13 @@ export function autoRouteScope(request: Request, account?: string): AutoRouteSco
   return { account, session: getSessionAffinity(request)! };
 }
 
-export async function autoRouteKey(scope: AutoRouteScope, messages: RequestBody['messages']): Promise<string> {
-  const users = messages.filter((m) => m?.role === 'user' && !isSyntheticToolImageUserMessage(m));
-  // Like free-chat turn accounting, retries/tool results retain the same user
-  // count and payload. Strip replay/attachment envelopes only for classification.
-  const input = JSON.stringify([scope.account, scope.session, users.length, users.at(-1)?.content]);
+async function digest(input: string): Promise<string> {
   const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
-  return `auto-route:v1:${Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, '0')).join('')}`;
+  return Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+export async function autoRouteKey(scope: AutoRouteScope): Promise<string> {
+  return `auto-route:v2:${await digest(JSON.stringify([scope.account, scope.session]))}`;
 }
 
 export type PinnedAutoRoute = { tier: Tier; chain: string[]; beforeAttempt: (model: string) => Promise<boolean> };
@@ -33,7 +34,7 @@ export type PinnedAutoRoute = { tier: Tier; chain: string[]; beforeAttempt: (mod
 export async function pinAutoRoute(
   env: Env, scope: AutoRouteScope, body: RequestBody, chain: string[], classify: boolean,
 ): Promise<PinnedAutoRoute> {
-  const id = env.RATE_LIMITER.idFromName(await autoRouteKey(scope, body.messages));
+  const id = env.RATE_LIMITER.idFromName(await autoRouteKey(scope));
   const stub = env.RATE_LIMITER.get(id);
   const call = async (payload: unknown): Promise<Route> => {
     const response = await stub.fetch(new Request(`https://auto-route.internal${AUTO_ROUTE_PATH}`, {
@@ -42,24 +43,26 @@ export async function pinAutoRoute(
     if (!response.ok) throw new Error('Auto routing state unavailable');
     return response.json() as Promise<Route>;
   };
+  const users = body.messages.filter((m) => m?.role === 'user' && !isSyntheticToolImageUserMessage(m));
   const route = await call({
+    fingerprint: await digest(JSON.stringify([users.length, users.at(-1)?.content])),
     chain, classify, text: routingUserText(lastUserText(body.messages)),
     hasTools: Boolean(body.tools?.length),
-    // If a task predates this deployment or outlives retention, never guess a
-    // fresh frontier escalation from an in-progress tool loop.
+    // Continuations retain the active turn even when compaction changes or
+    // removes its original user message. Only a new user send can reclassify.
     continuation: body.messages.at(-1)?.role !== 'user' || isSyntheticToolImageUserMessage(body.messages.at(-1)!),
   });
   return {
     tier: route.tier,
     chain: route.chain.slice(route.index),
     beforeAttempt: async (model) => {
-      const current = await call({ model });
+      const current = await call({ model, turn: route.turn });
       return current.chain[current.index] === model;
     },
   };
 }
 
-/** Runs in a dedicated, hashed turn object on the existing RATE_LIMITER binding. */
+/** One active turn per authenticated session; no prompt text is persisted. */
 export class AutoRouteState {
   private queue: Promise<void> = Promise.resolve();
   constructor(private storage: DurableObjectStorage, private env: Env) {}
@@ -74,23 +77,24 @@ export class AutoRouteState {
     if (request.method !== 'POST') return Promise.resolve(new Response(null, { status: 405 }));
     return this.serialize(async () => {
       const input = await request.json() as {
-        model?: string; chain: string[]; classify: boolean; text: string; hasTools: boolean; continuation: boolean;
+        model?: string; turn?: string; fingerprint: string; chain: string[]; classify: boolean; text: string; hasTools: boolean; continuation: boolean;
       };
       let route = await this.storage.get<Route>(STORAGE_KEY);
       if (input.model !== undefined) {
-        if (!route) return new Response(null, { status: 409 });
+        // A newer user turn supersedes outstanding attempts from the old one.
+        if (!route || input.turn !== route.turn) return new Response(null, { status: 409 });
         const index = route.chain.indexOf(input.model);
         if (index < 0) return new Response(null, { status: 400 });
         // Commit BEFORE spending on a fallback. An old concurrent request can
         // never move the next request back to an earlier (potentially frontier) model.
         route.index = Math.max(route.index, index);
-      } else if (!route) {
+      } else if (!route || (!input.continuation && input.fingerprint !== route.fingerprint)) {
         const tier = input.classify && !input.continuation
           ? await routeTier([{ role: 'user', content: input.text }], this.env, { hasTools: input.hasTools })
           : 'normal';
         const chain = tier === 'hard'
           ? [TIER_HEAD.hard, ...input.chain.filter((m) => m !== TIER_HEAD.hard)] : input.chain;
-        route = { tier, chain, index: 0, expiresAt: 0 };
+        route = { turn: crypto.randomUUID(), fingerprint: input.fingerprint, tier, chain, index: 0, expiresAt: 0 };
       }
       route.expiresAt = Date.now() + AUTO_ROUTE_TTL_MS;
       await this.storage.put(STORAGE_KEY, route);

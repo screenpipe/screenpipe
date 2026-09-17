@@ -28,13 +28,13 @@ describe('local AI gateway harness', () => {
 				method: 'POST', body: JSON.stringify(body),
 			});
 			expect(response.status).toBe(200);
-			return response.json() as Promise<{ chain: string[]; index: number }>;
+			return response.json() as Promise<{ turn: string; chain: string[]; index: number }>;
 		};
-		const initial = { chain: AUTO_WATERFALL, classify: true, text: 'debug this stack trace and explain the root cause', hasTools: true, continuation: false };
+		const initial = { fingerprint: 'synthetic-turn', chain: AUTO_WATERFALL, classify: true, text: 'debug this stack trace and explain the root cause', hasTools: true, continuation: false };
 		const first = await Promise.all([call(initial), call(initial)]);
 		expect(first.map((route) => route.chain[route.index])).toEqual(['gpt-5.6-sol', 'gpt-5.6-sol']);
-		await call({ model: 'gpt-5.6-luna' });
-		const stale = await call({ model: 'gpt-5.6-sol' });
+		await call({ model: 'gpt-5.6-luna', turn: first[0].turn });
+		const stale = await call({ model: 'gpt-5.6-sol', turn: first[0].turn });
 		expect(stale.chain[stale.index]).toBe('gpt-5.6-luna');
 		const continuation = await call({ ...initial, continuation: true });
 		expect(continuation.chain[continuation.index]).toBe('gpt-5.6-luna');
