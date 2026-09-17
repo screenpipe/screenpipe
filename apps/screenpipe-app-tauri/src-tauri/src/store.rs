@@ -1448,13 +1448,13 @@ pub struct SettingsStore {
     /// Better quality but sends activity context to the cloud (zero data retention).
     #[serde(rename = "enhancedAI", default)]
     pub enhanced_ai: bool,
-    /// Explicit consumer opt-in for on-demand remote diagnostic log requests.
+    /// Default-enabled on-demand remote diagnostic log requests.
     /// Enterprise builds enforce remote log collection separately; this stored
-    /// value remains false unless a consumer chooses to enable it.
-    #[serde(rename = "remoteLogCollectionEnabled", default)]
+    /// value can be disabled by the user after the one-time default migration.
+    #[serde(rename = "remoteLogCollectionEnabled", default = "default_true")]
     pub remote_log_collection_enabled: bool,
-    /// Account that granted remote log collection consent on this device.
-    /// Consumer collection is allowed only while this matches the current user.
+    /// Account for an explicit enable; None uses the device-wide default.
+    /// An explicit account binding must match the current user; None uses the device default.
     #[serde(rename = "remoteLogCollectionUserId", default)]
     pub remote_log_collection_user_id: Option<String>,
     /// Timeline overlay mode: "fullscreen" (floating panel above everything) or
@@ -2050,7 +2050,7 @@ Rules:
             update_channel: default_update_channel(),
             auto_update_pipes: true,
             enhanced_ai: false,
-            remote_log_collection_enabled: false,
+            remote_log_collection_enabled: true,
             remote_log_collection_user_id: None,
             #[cfg(target_os = "macos")]
             overlay_mode: "fullscreen".to_string(),
@@ -2662,6 +2662,18 @@ fn migrate_windows_timeline_to_window_mode(settings: &mut SettingsStore) -> bool
     true
 }
 
+/// Enable diagnostics once for existing installs. Later opt-outs stay off.
+fn migrate_remote_logs_default_enabled(settings: &mut SettingsStore) -> bool {
+    const MARKER: &str = "remoteLogsDefaultEnabledV1";
+    if settings.extra.get(MARKER).and_then(Value::as_bool) == Some(true) {
+        return false;
+    }
+    settings.remote_log_collection_enabled = true;
+    settings.remote_log_collection_user_id = None;
+    settings.extra.insert(MARKER.to_string(), Value::Bool(true));
+    true
+}
+
 fn backfill_default_ai_preset(settings: &mut SettingsStore) -> bool {
     if !settings.ai_presets.is_empty() {
         return false;
@@ -2871,6 +2883,13 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
         tracing::info!(
             "settings migration: selected window mode for the Windows timeline overlay"
         );
+        should_save = true;
+    }
+
+    if !cfg!(feature = "enterprise-build")
+        && can_run_settings_migrations
+        && migrate_remote_logs_default_enabled(&mut store)
+    {
         should_save = true;
     }
 
@@ -3474,22 +3493,38 @@ mod tests {
     }
 
     #[test]
-    fn remote_log_collection_defaults_to_disabled() {
-        assert!(!SettingsStore::default().remote_log_collection_enabled);
+    fn remote_log_collection_defaults_to_enabled() {
+        assert!(SettingsStore::default().remote_log_collection_enabled);
         assert!(SettingsStore::default()
             .remote_log_collection_user_id
             .is_none());
     }
 
     #[test]
-    fn missing_remote_log_collection_deserializes_disabled() {
+    fn missing_remote_log_collection_deserializes_enabled() {
         let settings: SettingsStore = serde_json::from_value(json!({
             "aiPresets": []
         }))
         .unwrap();
 
-        assert!(!settings.remote_log_collection_enabled);
+        assert!(settings.remote_log_collection_enabled);
         assert!(settings.remote_log_collection_user_id.is_none());
+    }
+
+    #[test]
+    fn remote_log_collection_migration_runs_once_and_preserves_later_opt_out() {
+        let mut settings = SettingsStore::default();
+        settings.remote_log_collection_enabled = false;
+        settings.remote_log_collection_user_id = Some("old-account".to_string());
+        assert!(migrate_remote_logs_default_enabled(&mut settings));
+        assert!(settings.remote_log_collection_enabled);
+        assert!(settings.remote_log_collection_user_id.is_none());
+        settings.remote_log_collection_enabled = false;
+        // Exercise persistence: the migration marker must survive reload.
+        let mut reloaded: SettingsStore =
+            serde_json::from_value(serde_json::to_value(settings).unwrap()).unwrap();
+        assert!(!migrate_remote_logs_default_enabled(&mut reloaded));
+        assert!(!reloaded.remote_log_collection_enabled);
     }
 
     #[test]

@@ -2414,7 +2414,7 @@ async fn main() {
             // Enterprise accounts out while allowing Screenpipe's own org.
             data_sync::spawn(&app_handle);
 
-            // Standard builds: account-bound, explicit opt-in support logs.
+            // Standard builds: authenticated, default-enabled support logs.
             // Enterprise builds compile this as a no-op because their managed
             // license-authenticated collector above is mandatory.
             remote_support_logs::spawn(&app_handle);
