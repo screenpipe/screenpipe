@@ -111,9 +111,16 @@ struct RowSql {
 static ROW_SQL: LazyLock<RowSql> = LazyLock::new(|| {
     let columns = names();
     let projection = format!("id,_archive_generation,{columns},_archive_deleted");
+    // Preserve the tombstone's generation when an ID is deleted and reused.
+    // An encoder holding the old generation must never accept the new row.
+    let updates = format!("_archive_deleted,_archive_file,{columns}")
+        .split(',')
+        .map(|column| format!("{column}=excluded.{column}"))
+        .collect::<Vec<_>>()
+        .join(",");
     RowSql {
         lookup: format!("SELECT {projection} FROM _bulk_element_rows WHERE id=?"),
-        upsert: format!("INSERT OR REPLACE INTO _bulk_element_rows(id,_archive_generation,_archive_deleted,_archive_file,{columns}) VALUES({})", vec!["?";TABLE.columns.len()+4].join(",")),
+        upsert: format!("INSERT INTO _bulk_element_rows(id,_archive_generation,_archive_deleted,_archive_file,{columns}) VALUES({}) ON CONFLICT(id) DO UPDATE SET _archive_generation=max(_bulk_element_rows._archive_generation+1,excluded._archive_generation),{updates}", vec!["?";TABLE.columns.len()+4].join(",")),
         resident: format!("SELECT COALESCE((SELECT {} FROM _bulk_element_rows WHERE id=?),0)", TABLE.all_bytes("")),
         projection,
     }

@@ -209,6 +209,8 @@ pub(crate) struct Runtime {
     element_frames: Mutex<Option<(String, Arc<std::collections::HashMap<i64, Vec<usize>>>)>>,
     #[cfg(test)]
     decode_hook: Mutex<Option<Arc<dyn Fn(&str) + Send + Sync>>>,
+    #[cfg(test)]
+    element_publish_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 #[derive(Clone)]

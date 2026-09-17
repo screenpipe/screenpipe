@@ -198,7 +198,8 @@ pub(crate) struct HybridStorage {
     pub gate: Arc<Mutex<()>>,
     pub leases: Arc<RwLock<()>>,
     pub decoder: Arc<Semaphore>,
-    pub file_job: Mutex<()>,
+    /// Serializes file jobs; the value is the next table's archival turn.
+    pub file_job: Mutex<usize>,
     pub read_lanes: std::sync::OnceLock<Arc<Semaphore>>,
     pub closing: tokio_util::sync::CancellationToken,
     pub privacy_ready: std::sync::atomic::AtomicBool,
@@ -474,7 +475,7 @@ impl HybridStorage {
             descriptor,
             gate: Arc::new(Mutex::new(())),
             leases: Arc::new(RwLock::new(())),
-            file_job: Mutex::new(()),
+            file_job: Mutex::new(0),
             read_lanes: std::sync::OnceLock::new(),
             closing: tokio_util::sync::CancellationToken::new(),
             privacy_ready: std::sync::atomic::AtomicBool::new(false),

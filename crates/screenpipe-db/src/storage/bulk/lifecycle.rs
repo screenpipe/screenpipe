@@ -11,23 +11,18 @@ use sqlx::{Row, SqlitePool, ValueRef};
 use std::{path::Path, sync::Arc};
 
 impl HybridStorage {
-    pub(crate) async fn seal_bulk(
+    pub(in crate::storage) async fn seal_bulk_table(
         self: &Arc<Self>,
         pool: &SqlitePool,
         writer: &SqliteWritePool,
+        table: &'static Table,
     ) -> Result<usize, sqlx::Error> {
-        if !self.has_bulk() {
-            return Ok(0);
+        if table.name == "elements" {
+            return super::elements::seal(self, pool, writer).await;
         }
-        let elements = super::elements::seal(self, pool, writer).await?;
-        if elements != 0 {
-            return Ok(elements);
-        }
-        for table in TABLES.iter().filter(|t| t.name != "elements") {
-            let rows = self.select_bulk(pool, table, None).await?;
-            if !rows.is_empty() {
-                return self.publish_bulk(pool, writer, table, rows, None).await;
-            }
+        let rows = self.select_bulk(pool, table, None).await?;
+        if !rows.is_empty() {
+            return self.publish_bulk(pool, writer, table, rows, None).await;
         }
         Ok(0)
     }

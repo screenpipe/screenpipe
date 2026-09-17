@@ -9,7 +9,11 @@ use screenpipe_sqlite_coordinator::SqliteWritePool;
 use sqlx::{Row, SqlitePool};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+const IDLE_POLL: Duration = Duration::from_secs(5);
+const MIN_COOLDOWN: Duration = Duration::from_millis(50);
+const MAX_COOLDOWN: Duration = Duration::from_secs(60);
 
 impl DatabaseManager {
     pub(crate) async fn strip_archived_frame_details(
@@ -189,26 +193,64 @@ impl HybridStorage {
     ) {
         let storage = Arc::clone(self);
         tokio::spawn(async move {
+            let governor = screenpipe_resource::ResourceGovernor::global();
+            tokio::select! {
+                _ = shutdown.cancelled() => return,
+                _ = tokio::time::sleep(IDLE_POLL) => {}
+            }
             loop {
-                tokio::select! {
+                // Capture never takes this background lane. Keep archival
+                // bounded and share the CPU budget with redaction/indexing.
+                let waiting = Instant::now();
+                let cpu_permit = tokio::select! {
                     _ = shutdown.cancelled() => break,
-                    _ = tokio::time::sleep(Duration::from_secs(5)) => {}
-                }
+                    permit = governor.acquire_background_cpu() => permit,
+                };
+                let cpu_wait = waiting.elapsed();
+                let started = Instant::now();
+                let mut archived = 0;
                 // An in-flight file job retains ownership until it either
                 // publishes or leaves its durable reservation for restart.
                 if storage
                     .privacy_ready
                     .load(std::sync::atomic::Ordering::Acquire)
                 {
-                    if let Err(error) = storage.seal_once(&pool, &writer).await {
-                        tracing::warn!(%error,"frame storage sealing deferred");
+                    match storage.seal_once(&pool, &writer).await {
+                        Ok(rows) => archived = rows,
+                        Err(error) => tracing::warn!(%error,"frame storage sealing deferred"),
                     }
                 }
                 if shutdown.is_cancelled() {
                     break;
                 }
-                if let Err(error) = storage.reclaim_once(&pool, &writer).await {
-                    tracing::warn!(%error,"frame storage reclamation deferred");
+                let reclaimed = match storage.reclaim_once(&pool, &writer).await {
+                    Ok(files) => files,
+                    Err(error) => {
+                        tracing::warn!(%error,"frame storage reclamation deferred");
+                        0
+                    }
+                };
+                let worked = started.elapsed();
+                let sample = cpu_permit.finish(worked, MIN_COOLDOWN, MAX_COOLDOWN);
+                let busy = archived != 0 || reclaimed != 0;
+                let delay = if busy { sample.cooldown } else { IDLE_POLL };
+                tracing::debug!(
+                    archived_rows = archived,
+                    reclaimed_files = reclaimed,
+                    cpu_wait_ms = cpu_wait.as_millis(),
+                    worked_ms = worked.as_millis(),
+                    cooldown_ms = delay.as_millis(),
+                    active_cpu_percent = sample.active_cpu_percent,
+                    "storage maintenance batch"
+                );
+                // Successful work continues after its measured CPU cooldown;
+                // only an idle/failed pass gets the full polling backoff.
+                // Hold the shared CPU permit through a busy cooldown, just as
+                // the redactor does, but release it before idle polling.
+                let _cooling = busy.then_some(cpu_permit);
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    _ = tokio::time::sleep(delay) => {}
                 }
             }
         });
@@ -220,7 +262,43 @@ impl HybridStorage {
         writer: &SqliteWritePool,
     ) -> Result<usize, sqlx::Error> {
         super::diagnostics::stage("waiting_for_frame_sealer");
-        let _job = self.file_job.lock().await;
+        let mut next = self.file_job.lock().await;
+        let tables = 1 + if self.has_bulk() {
+            super::bulk::TABLES.len()
+        } else {
+            0
+        };
+        // One bounded job per call, rotating even after an error. Empty or
+        // privacy-blocked tables cannot hide ready work later in the cycle.
+        for _ in 0..tables {
+            let turn = *next;
+            *next = (turn + 1) % tables;
+            let started = Instant::now();
+            let (table, result) = if turn == 0 {
+                ("frames", self.seal_frames(pool, writer).await)
+            } else {
+                let table = &super::bulk::TABLES[turn - 1];
+                (table.name, self.seal_bulk_table(pool, writer, table).await)
+            };
+            tracing::debug!(
+                table,
+                rows = result.as_ref().ok().copied(),
+                failed = result.is_err(),
+                elapsed_ms = started.elapsed().as_millis(),
+                "storage archival turn"
+            );
+            if !matches!(result, Ok(0)) {
+                return result;
+            }
+        }
+        Ok(0)
+    }
+
+    async fn seal_frames(
+        self: &Arc<Self>,
+        pool: &SqlitePool,
+        writer: &SqliteWritePool,
+    ) -> Result<usize, sqlx::Error> {
         // Existing oversized frames remain readable through the staged SQLite
         // path. Filter before LIMIT so they cannot starve later sealable frames.
         super::diagnostics::batch("frames", None, None, None, None);
@@ -239,7 +317,7 @@ impl HybridStorage {
             bytes += size;
         }
         if ids.is_empty() {
-            return self.seal_bulk(pool, writer).await;
+            return Ok(0);
         }
         super::diagnostics::batch(
             "frames",
@@ -249,11 +327,13 @@ impl HybridStorage {
             Some(bytes as u64),
         );
         super::diagnostics::stage("reading_frame_payloads");
-        let payloads: Vec<_> = self
-            .read(pool, &ids, Projection::All)
-            .await?
-            .into_values()
-            .collect();
+        // Ordinary captures must not invalidate a read of older frames.
+        // Reuse request snapshots, retaining deletion/privacy revocation.
+        let payloads: Vec<_> =
+            super::snapshot::run(self, pool, self.read(pool, &ids, Projection::All))
+                .await??
+                .into_values()
+                .collect();
         self.publish(pool, writer, payloads, None).await
     }
 
@@ -423,9 +503,8 @@ impl HybridStorage {
             .fetch_all(pool)
             .await?;
             if !ids.is_empty() {
-                let rows = self
-                    .read(pool, &ids, Projection::All)
-                    .await?
+                let rows = super::snapshot::run(self, pool, self.read(pool, &ids, Projection::All))
+                    .await??
                     .into_values()
                     .collect();
                 self.publish(pool, writer, rows, Some(&id)).await?;

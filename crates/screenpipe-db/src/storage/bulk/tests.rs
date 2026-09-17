@@ -32,6 +32,57 @@ impl Drop for Pause {
     }
 }
 
+#[tokio::test]
+async fn element_publication_ignores_new_captures_but_rejects_changed_range_members() {
+    for archived in [false, true] {
+        for mutation in [
+            "INSERT INTO elements(id,frame_id,source,role,text,redacted_at) VALUES(30,1,'accessibility','AXText','new capture',1)",
+            "UPDATE elements SET text='edited while encoding' WHERE id=10",
+            "DELETE FROM elements WHERE id=10",
+            "INSERT INTO elements(id,frame_id,source,role,text,redacted_at) VALUES(15,1,'accessibility','AXText','inserted gap',1)",
+            "INSERT INTO elements(id,frame_id,source,role,text,redacted_at) VALUES(15,1,'accessibility','AXText','private gap',NULL)",
+            "UPDATE elements SET redacted_at=NULL WHERE id=10",
+            "DELETE FROM elements WHERE id=10; INSERT INTO elements(id,frame_id,source,role,text,redacted_at) VALUES(10,1,'accessibility','AXText','reused ID',1)",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let db = Arc::new(DatabaseManager::new_hybrid(root.path(), Default::default(),
+                crate::storage::MigrationOptions {
+                    privacy: crate::storage::PrivacyPolicy { identity: "private".into(), required_surfaces: 1 },
+                    ..Default::default()
+                }).await.unwrap());
+            db.execute_raw_sql_write("INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-09-17','pending frame'); INSERT INTO elements(id,frame_id,source,role,text,redacted_at) VALUES(10,1,'accessibility','AXText','ten',1),(20,1,'accessibility','AXText','twenty',1)").await.unwrap();
+            if archived {
+                assert_eq!(db.seal_payloads().await.unwrap(), 2);
+                db.execute_raw_sql_write("UPDATE elements SET text='restaged ten' WHERE id=10").await.unwrap();
+            }
+            let storage = db.storage.as_ref().unwrap();
+            let encoded = Arc::new(tokio::sync::Notify::new());
+            let announced = encoded.clone();
+            let pause = Pause::new();
+            let held = Pause(pause.0.clone());
+            *storage.bulk.element_publish_hook.lock().unwrap() = Some(Arc::new(move || {
+                announced.notify_one();
+                held.wait();
+            }));
+            let sealing = db.clone();
+            let task = tokio::spawn(async move { sealing.seal_payloads().await });
+            tokio::time::timeout(Duration::from_secs(10), encoded.notified()).await.unwrap();
+            // The archive is fully encoded while the writer remains available.
+            db.execute_raw_sql_write(mutation).await.unwrap();
+            let expected = db.query_raw_sql("SELECT id,text,redacted_at FROM elements ORDER BY id").await.unwrap();
+            pause.release();
+            let count = task.await.unwrap().unwrap();
+            assert_eq!(count, if mutation.contains("VALUES(30,") || (!archived && mutation.contains("private gap")) { 2 } else { 0 }, "archived={archived}; {mutation}");
+            *storage.bulk.element_publish_hook.lock().unwrap() = None;
+            assert_eq!(db.query_raw_sql("SELECT id,text,redacted_at FROM elements ORDER BY id").await.unwrap(), expected);
+            while db.seal_payloads().await.unwrap() != 0 {}
+            db.verify_storage().await.unwrap();
+            assert_eq!(db.query_raw_sql("SELECT id,text,redacted_at FROM elements ORDER BY id").await.unwrap(), expected);
+            db.close().await;
+        }
+    }
+}
+
 async fn fixture_mode(hybrid: bool) -> (tempfile::TempDir, Arc<DatabaseManager>) {
     let root = tempfile::tempdir().unwrap();
     let db = Arc::new(

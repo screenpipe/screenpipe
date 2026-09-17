@@ -142,11 +142,10 @@ impl Drop for RequestSnapshot {
 }
 
 pub(super) async fn run<T>(
-    db: &crate::DatabaseManager,
+    storage: &Arc<super::HybridStorage>,
+    pool: &SqlitePool,
     read: impl std::future::Future<Output = T>,
 ) -> Result<T, sqlx::Error> {
-    let storage = db.storage.as_ref().expect("hybrid read");
-    let pool = &db.pool;
     let lanes = storage.read_lanes.get_or_init(|| {
         Arc::new(tokio::sync::Semaphore::new(
             pool.options()
@@ -185,7 +184,7 @@ pub(super) async fn run<T>(
     };
     let (token, result) = SNAPSHOT
         .scope(Arc::clone(&owner.context), async {
-            let token = db.storage_read_token().await?;
+            let token = storage.read_token(pool).await?;
             Ok::<_, sqlx::Error>((token, read.await))
         })
         .await?;
@@ -221,7 +220,7 @@ impl crate::DatabaseManager {
         }
         tokio::time::timeout(
             Duration::from_secs(storage.descriptor.budget.operation_timeout_secs),
-            run(self, read),
+            run(storage, &self.pool, read),
         )
         .await
         .map_err(|_| super::storage_error("payload read deadline exceeded"))?

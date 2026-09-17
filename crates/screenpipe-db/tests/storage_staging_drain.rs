@@ -49,6 +49,119 @@ async fn reopen(root: &std::path::Path) -> DatabaseManager {
         .unwrap()
 }
 
+async fn record_all_tables(db: &DatabaseManager, id: i64) {
+    let frame = record(db, &format!("capture {id} {}", "x".repeat(256))).await;
+    db.execute_raw_sql_write(&format!("INSERT OR IGNORE INTO audio_chunks(id,file_path) VALUES(1,'test.wav');
+        INSERT OR IGNORE INTO meetings(id,meeting_start,meeting_app) VALUES(1,'2026-09-17','test');
+        INSERT INTO elements(id,frame_id,source,role,text,redacted_at) VALUES({id},{frame},'accessibility','AXText','element {id}',1);
+        INSERT INTO audio_transcriptions(id,audio_chunk_id,offset_index,timestamp,transcription,redacted_at) VALUES({id},1,{id},'2026-09-17','transcript {id}',1);
+        INSERT INTO ui_events(id,timestamp,event_type,text_content,redacted_at) VALUES({id},'2026-09-17','text','typed {id}',1);
+        INSERT INTO semantic_items(id,entity_fingerprint,version_fingerprint,kind,item_key,identity_quality,title,body,metadata_json) VALUES({id},CAST(printf('%032d',{id}) AS BLOB),CAST(printf('%032d',{id}) AS BLOB),'document','document-{id}','stable','title','body {id}','{{}}');
+        INSERT INTO pipe_executions(id,pipe_name,status,finished_at,stdout) VALUES({id},'test','completed','2026-09-17','output {id}');
+        INSERT INTO meeting_transcript_segments(id,meeting_id,provider,item_id,transcript,captured_at) VALUES({id},1,'test','{id}','meeting {id}','2026-09-17');
+        INSERT INTO outputs(id,source,title,output_path,preview) VALUES({id},'test','output','test-{id}.md','preview {id}');")).await.unwrap();
+}
+
+async fn pending_by_table(db: &DatabaseManager) -> Vec<i64> {
+    let mut counts = vec![
+        number(
+            db,
+            "SELECT count(*) FROM frame_payloads WHERE state='staged'",
+        )
+        .await,
+        number(
+            db,
+            "SELECT count(*) FROM _bulk_element_rows WHERE _archive_deleted=0",
+        )
+        .await,
+    ];
+    for table in [
+        "audio_transcriptions",
+        "ui_events",
+        "semantic_items",
+        "pipe_executions",
+        "meeting_transcript_segments",
+        "outputs",
+    ] {
+        counts.push(
+            number(
+                db,
+                &format!("SELECT count(*) FROM main.{table} WHERE _archive_mask!=0"),
+            )
+            .await,
+        );
+    }
+    counts
+}
+
+#[tokio::test]
+async fn every_table_archives_while_all_tables_keep_receiving_records() {
+    let root = tempfile::tempdir().unwrap();
+    let db = DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+        .await
+        .unwrap();
+    // Keep every queue nonempty before every turn, including frames. Each
+    // table must still receive service within a complete rotation.
+    let tables = pending_by_table(&db).await.len();
+    for id in 1..=tables * 3 {
+        record_all_tables(&db, id as i64).await;
+        assert!(db.seal_payloads().await.unwrap() > 0);
+        if id % tables == 0 {
+            let pending = pending_by_table(&db).await;
+            assert!(
+                pending.iter().all(|&count| count < tables as i64),
+                "turn={id}, pending={pending:?}"
+            );
+        }
+    }
+    let pending = pending_by_table(&db).await;
+    db.verify_storage().await.unwrap();
+    db.close().await;
+    let db = reopen(root.path()).await;
+    assert_eq!(pending_by_table(&db).await, pending);
+    while db.seal_payloads().await.unwrap() != 0 {}
+    assert!(pending_by_table(&db).await.iter().all(|&count| count == 0));
+    assert_eq!(
+        number(&db, "SELECT count(*) FROM frames").await,
+        (tables * 3) as i64
+    );
+    assert_eq!(
+        number(&db, "SELECT count(*) FROM elements").await,
+        (tables * 3) as i64
+    );
+    db.verify_storage().await.unwrap();
+    db.close().await;
+}
+
+#[tokio::test]
+async fn failed_frame_archival_does_not_starve_other_tables() {
+    let root = tempfile::tempdir().unwrap();
+    let db = DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+        .await
+        .unwrap();
+    record_all_tables(&db, 1).await;
+    // Break only this disposable database's frame archive directory.
+    let blocked = root
+        .path()
+        .join(&db.storage_descriptor().unwrap().payloads)
+        .join("1");
+    std::fs::write(&blocked, "owned frame archive failure fixture").unwrap();
+    assert!(db.seal_payloads().await.is_err());
+    let tables = pending_by_table(&db).await.len();
+    for _ in 1..tables {
+        record(&db, "recording continues during a frame archive failure").await;
+        assert_eq!(db.seal_payloads().await.unwrap(), 1);
+    }
+    let pending = pending_by_table(&db).await;
+    assert_eq!(pending[0], tables as i64);
+    assert!(pending[1..].iter().all(|&count| count == 0));
+    std::fs::remove_file(blocked).unwrap();
+    assert_eq!(db.seal_payloads().await.unwrap(), tables);
+    db.reclaim_frame_payloads().await.unwrap();
+    db.verify_storage().await.unwrap();
+    db.close().await;
+}
+
 #[tokio::test]
 async fn blocked_old_element_range_does_not_starve_later_private_work() {
     let root = tempfile::tempdir().unwrap();
@@ -404,4 +517,87 @@ async fn acknowledged_backlog_survives_process_exit() {
     assert_eq!(record(&db, "recording after process recovery").await, 17);
     db.verify_storage().await.unwrap();
     db.close().await;
+}
+
+// Exercise the production maintenance task while frames arrive once per second.
+// Keep the workload fixed so before/after backlog timings remain comparable.
+mod background_benchmark {
+    use screenpipe_db::DatabaseManager;
+    use std::time::{Duration, Instant};
+
+    async fn capture(db: &DatabaseManager) {
+        db.insert_snapshot_frame(
+            "display",
+            chrono::Utc::now(),
+            "",
+            Some("Probe"),
+            None,
+            None,
+            true,
+            Some("probe"),
+            Some(&"x".repeat(16 * 1024)),
+            Some("accessibility"),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn report(db: &DatabaseManager, label: &str, start: Instant) {
+        let counts: (i64, i64, i64, i64, i64) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM frame_payloads WHERE state='staged'),
+             (SELECT count(*) FROM frame_payloads WHERE state='sealed'),
+             (SELECT count(*) FROM _bulk_element_rows),
+             (SELECT count(*) FROM main.audio_transcriptions WHERE _archive_mask!=0),
+             (SELECT staging_bytes FROM storage_metadata)",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        eprintln!("PROFILE_COUNTS {label} elapsed={:.3} staged_frames={} sealed_frames={} staged_elements={} staged_audio={} staging_bytes={}", start.elapsed().as_secs_f64(), counts.0, counts.1, counts.2, counts.3, counts.4);
+    }
+
+    #[tokio::test]
+    #[ignore = "manual background archival benchmark with real polling and CPU cooldown"]
+    async fn measure_actual_background_scheduler() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter("screenpipe_db::storage::sealing=debug")
+            .with_ansi(false)
+            .try_init();
+        let root = tempfile::tempdir().unwrap();
+        let db = DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap();
+        db.set_frame_privacy_policy(&Default::default())
+            .await
+            .unwrap();
+        capture(&db).await;
+        db.execute_raw_sql_write("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1000) INSERT INTO elements(id,frame_id,source,role,text,redacted_at) SELECT x,1,'accessibility','AXText',printf('%0512d',x),1 FROM n;
+            INSERT INTO audio_chunks(id,file_path) VALUES(1,'probe.wav');
+            WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<8) INSERT INTO audio_transcriptions(id,audio_chunk_id,offset_index,timestamp,transcription,redacted_at) SELECT x,1,x,'2026-09-17',printf('%01024d',x),1 FROM n;").await.unwrap();
+        let start = Instant::now();
+        report(&db, "initial", start).await;
+        for second in 1..=31 {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            capture(&db).await;
+            if second % 5 == 1 {
+                report(&db, "recording", start).await;
+            }
+        }
+        report(&db, "producer_stopped", start).await;
+        let remaining: (i64, i64) = sqlx::query_as("SELECT (SELECT count(*) FROM _bulk_element_rows),(SELECT count(*) FROM main.audio_transcriptions WHERE _archive_mask!=0)").fetch_one(&db.pool).await.unwrap();
+        assert_eq!(
+            remaining,
+            (0, 0),
+            "ready bulk records must drain while frame capture continues"
+        );
+        for _ in 0..3 {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            report(&db, "quiet", start).await;
+        }
+        db.verify_storage().await.unwrap();
+        db.close().await;
+    }
 }
