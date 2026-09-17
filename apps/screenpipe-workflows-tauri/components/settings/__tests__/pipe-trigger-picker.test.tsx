@@ -75,6 +75,10 @@ describe("PipeTriggerPicker app trigger catalog", () => {
     expect(add).toBeDisabled();
     fireEvent.change(screen.getByLabelText("words or phrases, one per line"), { target: { value: "!!!" } });
     expect(add).toBeDisabled();
+    for (const value of ["x".repeat(257), Array(33).fill("start job").join("\n")]) {
+      fireEvent.change(screen.getByLabelText("words or phrases, one per line"), { target: { value } });
+      expect(add).toBeDisabled();
+    }
     fireEvent.change(screen.getByLabelText("words or phrases, one per line"), { target: { value: "  start job  \nstop job\n" } });
     expect(screen.getByLabelText("listen to")).toHaveValue("input");
     clickDetailAdd();

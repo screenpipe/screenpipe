@@ -9,7 +9,8 @@
 //! `connection_trigger` event addressed to the matched pipe. The watcher only
 //! *detects + emits*; the scheduler only *matches + runs*. They meet at the bus.
 //!
-//! Three ingestion classes, one cursor model:
+//! Ingestion classes sharing one cursor and event-delivery model:
+//! - **local audio**: one bounded read shared across all phrase subscriptions.
 //! - **file** (Obsidian): scan a vault folder for new/changed `.md` files.
 //! - **api poll** (Slack, Notion, email, Calendar, GitHub, Linear, Todoist): page the local connection proxy
 //!   (`/connections/<id>/...`, which injects auth server-side) and diff the
@@ -70,7 +71,6 @@ const RETRY_CAP: u32 = 5;
 const INFLIGHT_TIMEOUT: Duration = Duration::from_secs(600);
 
 const CURSOR_FILE: &str = ".connection-triggers.json";
-const TRIGGER_CONTEXT_FILE: &str = ".trigger-context.json";
 
 mod voice;
 
@@ -108,6 +108,9 @@ pub struct CursorState {
 /// In-memory record of a fire awaiting its pipe run to complete.
 #[derive(Debug, Clone)]
 pub struct Pending {
+    pub delivery_id: String,
+    /// Immutable payload: retries must not absorb newly recorded items.
+    pub context: Value,
     pub pipe: String,
     /// Watermark this fire would commit on success.
     pub token: String,
@@ -165,6 +168,9 @@ pub struct DetectedItem {
     pub preview: String,
     /// Source timestamp token for this item (used to advance the cursor).
     pub ts: String,
+    /// Audio source metadata; omitted for connected-app items.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_input: Option<bool>,
 }
 
 /// Everything the API-poll sources need to reach the local connection proxy.
@@ -931,6 +937,7 @@ pub fn scan_new_files(root: &Path, since_ms: u64) -> (Vec<DetectedItem>, u64) {
             }
             if mtime_ms > since_ms {
                 out.push(DetectedItem {
+                    is_input: None,
                     id: entry.path().to_string_lossy().to_string(),
                     title: name,
                     preview: String::new(),
@@ -957,6 +964,7 @@ pub fn parse_slack_messages(value: &Value) -> Vec<(f64, DetectedItem)> {
                     Some((
                         ts_num,
                         DetectedItem {
+                            is_input: None,
                             id: ts_str.to_string(),
                             title: first_line(text, 80),
                             preview: text.to_string(),
@@ -985,6 +993,7 @@ pub fn parse_notion_results(value: &Value) -> Vec<(String, DetectedItem)> {
                     Some((
                         edited.to_string(),
                         DetectedItem {
+                            is_input: None,
                             id: id.to_string(),
                             title: extract_notion_title(obj),
                             preview: url.to_string(),
@@ -1028,6 +1037,7 @@ pub fn parse_imap_messages(value: &Value) -> Vec<DetectedItem> {
                 .or_else(|| message.get("from").and_then(Value::as_str))
                 .unwrap_or("");
             Some(DetectedItem {
+                is_input: None,
                 id: uid.clone(),
                 title: first_line(subject, 120),
                 preview: peer.to_string(),
@@ -1065,6 +1075,7 @@ pub fn parse_google_calendar_events(value: &Value) -> Vec<DetectedItem> {
                 .or_else(|| event.get("hangoutLink").and_then(Value::as_str))
                 .unwrap_or("");
             Some(DetectedItem {
+                is_input: None,
                 id: id.to_string(),
                 title: first_line(title, 120),
                 preview: preview.to_string(),
@@ -1094,6 +1105,7 @@ pub fn parse_outlook_messages(value: &Value, timestamp_field: &str) -> Vec<Detec
                 .and_then(Value::as_str)
                 .unwrap_or("");
             Some(DetectedItem {
+                is_input: None,
                 id: id.to_string(),
                 title: first_line(title, 120),
                 preview: preview.to_string(),
@@ -1127,6 +1139,7 @@ pub fn parse_github_issues(value: &Value, kind: &str) -> Vec<DetectedItem> {
                 });
             let preview = issue.get("html_url").and_then(Value::as_str).unwrap_or("");
             Some(DetectedItem {
+                is_input: None,
                 id,
                 title: first_line(title, 120),
                 preview: preview.to_string(),
@@ -1167,6 +1180,7 @@ pub fn parse_todoist_tasks(value: &Value) -> Vec<DetectedItem> {
                 .and_then(Value::as_str)
                 .unwrap_or("");
             Some(DetectedItem {
+                is_input: None,
                 id,
                 title: first_line(content, 120),
                 preview: preview.to_string(),
@@ -1218,6 +1232,7 @@ pub fn parse_linear_issues(value: &Value, kind: &str) -> Vec<DetectedItem> {
                 continue;
             };
             out.push(DetectedItem {
+                is_input: None,
                 id: issue_id.to_string(),
                 title,
                 preview: url.to_string(),
@@ -1264,6 +1279,7 @@ pub fn parse_linear_issues(value: &Value, kind: &str) -> Vec<DetectedItem> {
                     format!("assigned to {assignee} · {url}")
                 };
                 out.push(DetectedItem {
+                    is_input: None,
                     id: history_id.to_string(),
                     title: title.clone(),
                     preview,
@@ -1297,6 +1313,7 @@ pub fn parse_linear_issues(value: &Value, kind: &str) -> Vec<DetectedItem> {
                 format!("{from_state} → {to_state} · {url}")
             };
             out.push(DetectedItem {
+                is_input: None,
                 id: history_id.to_string(),
                 title: title.clone(),
                 preview,
@@ -1400,13 +1417,18 @@ fn decide(
     }
 }
 
-/// Apply a pipe-run completion to any pending fires for that pipe. Returns true
+/// Acknowledge only the source delivery that actually started this execution. Returns true
 /// if a committed cursor changed (needs persisting). Pure → unit-tested.
-fn apply_completion(state: &mut WatcherState, pipe: &str, success: bool) -> bool {
+fn apply_completion(
+    state: &mut WatcherState,
+    pipe: &str,
+    success: bool,
+    delivery_id: Option<&str>,
+) -> bool {
     let keys: Vec<String> = state
         .pending
         .iter()
-        .filter(|(_, p)| p.pipe == pipe)
+        .filter(|(_, p)| p.pipe == pipe && delivery_id == Some(p.delivery_id.as_str()))
         .map(|(k, _)| k.clone())
         .collect();
     let mut dirty = false;
@@ -1443,12 +1465,34 @@ fn commit(state: &mut WatcherState, key: &str, token: &str) {
 }
 
 /// Retry pending fires that have been in flight too long with no completion seen.
-fn expire_timeouts(state: &mut WatcherState) {
-    for p in state.pending.values_mut() {
-        if !p.failed && p.since.elapsed() >= INFLIGHT_TIMEOUT {
+fn expire_timeouts(state: &mut WatcherState, pipes: &[(String, PipeConfig)]) {
+    let mut abandoned = Vec::new();
+    for (key, p) in &mut state.pending {
+        let run_timeout = pipes
+            .iter()
+            .find(|(name, _)| name == &p.pipe)
+            .map(|(_, config)| config.timeout.unwrap_or(super::DEFAULT_TIMEOUT_SECS))
+            .unwrap_or(super::DEFAULT_TIMEOUT_SECS);
+        let timeout = INFLIGHT_TIMEOUT.max(Duration::from_secs(
+            run_timeout.saturating_add(2 * POLL_INTERVAL_SECS),
+        ));
+        if !p.failed && p.since.elapsed() >= timeout {
             p.attempts += 1;
-            p.failed = true;
+            if p.attempts >= RETRY_CAP {
+                abandoned.push((key.clone(), p.token.clone()));
+            } else {
+                p.failed = true;
+            }
         }
+    }
+    for (key, token) in abandoned {
+        warn!(
+            "connection trigger: abandoning timed-out delivery after {} attempts",
+            RETRY_CAP
+        );
+        commit(state, &key, &token);
+        state.pending.remove(&key);
+        state.dirty = true;
     }
 }
 
@@ -1457,21 +1501,21 @@ fn expire_timeouts(state: &mut WatcherState) {
 // ---------------------------------------------------------------------------
 
 /// One poll across every enabled pipe's sources. `completions` are
-/// `(pipe_name, success)` drained from `pipe_completed:*` since the last tick.
+/// `(pipe_name, success, delivery_id)` drained from `pipe_completed:*` since the last tick.
 pub async fn poll_once(
     pipes_dir: &Path,
     pipes: &[(String, PipeConfig)],
     state: &mut WatcherState,
     ctx: &SourceCtx<'_>,
-    completions: &[(String, bool)],
+    completions: &[(String, bool, Option<String>)],
 ) {
     // 1. confirm/retire in-flight fires, then time out stuck ones.
-    for (pipe, success) in completions {
-        if apply_completion(state, pipe, *success) {
+    for (pipe, success, delivery_id) in completions {
+        if apply_completion(state, pipe, *success, delivery_id.as_deref()) {
             state.dirty = true;
         }
     }
-    expire_timeouts(state);
+    expire_timeouts(state, pipes);
 
     // 2. gather subscriptions, grouped by source identity (dedup the fetch).
     let mut active: HashSet<String> = HashSet::new();
@@ -1490,8 +1534,20 @@ pub async fn poll_once(
             }
             let key = subscription_key(pipe, src);
             active.insert(key.clone());
+            // An uncompleted delivery needs no more reads. New records remain
+            // behind its committed cursor until this batch finishes.
+            if src.app == "audio" && !voice::valid_source(src) {
+                continue;
+            }
+            if retry_or_wait(state, pipe, src, &key) {
+                continue;
+            }
             groups
-                .entry(source_identity(src))
+                .entry(if src.app == "audio" {
+                    "audio".into()
+                } else {
+                    source_identity(src)
+                })
                 .or_default()
                 .push((pipe.clone(), src.clone(), key));
         }
@@ -1535,11 +1591,11 @@ pub async fn poll_once(
         for (pipe, src, key) in subs {
             if app == "audio" && !min_since.is_empty() && !state.committed.contains_key(key) {
                 if let Some(baseline) = voice_baseline.as_ref() {
-                    process_subscriber(pipes_dir, state, pipe, src, key, baseline);
+                    process_subscriber(state, pipe, src, key, baseline);
                 }
                 continue;
             }
-            process_subscriber(pipes_dir, state, pipe, src, key, &raw);
+            process_subscriber(state, pipe, src, key, &raw);
         }
     }
 
@@ -1553,14 +1609,41 @@ pub async fn poll_once(
     state.save(pipes_dir);
 }
 
+/// Pending deliveries own their snapshot and never need another source read.
+fn retry_or_wait(state: &mut WatcherState, pipe: &str, src: &SourceTrigger, key: &str) -> bool {
+    let Some(pending) = state.pending.get_mut(key) else {
+        return false;
+    };
+    if pending.failed {
+        let count = pending
+            .context
+            .get("count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
+        emit_event(
+            pipe,
+            src,
+            count,
+            key,
+            &pending.delivery_id,
+            pending.context.clone(),
+        );
+        pending.failed = false;
+        pending.since = Instant::now();
+    }
+    true
+}
+
 fn process_subscriber(
-    pipes_dir: &Path,
     state: &mut WatcherState,
     pipe: &str,
     src: &SourceTrigger,
     key: &str,
     raw: &[DetectedItem],
 ) {
+    if retry_or_wait(state, pipe, src, key) {
+        return;
+    }
     let app = src.app.as_str();
     let committed = state.committed.get(key).cloned();
     let pending = state.pending.get(key).cloned();
@@ -1601,11 +1684,17 @@ fn process_subscriber(
                 return;
             }
             let count = items.len();
-            write_trigger_context(&pipes_dir.join(pipe), src, &items);
-            emit_event(pipe, src, count);
+            let delivery_id = pending
+                .as_ref()
+                .map(|p| p.delivery_id.clone())
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let context = trigger_context(src, &items);
+            emit_event(pipe, src, count, key, &delivery_id, context.clone());
             state.pending.insert(
                 key.to_string(),
                 Pending {
+                    delivery_id,
+                    context,
                     pipe: pipe.to_string(),
                     token,
                     attempts,
@@ -1624,26 +1713,23 @@ fn process_subscriber(
     }
 }
 
-fn write_trigger_context(pipe_dir: &Path, src: &SourceTrigger, items: &[DetectedItem]) {
-    if !pipe_dir.is_dir() {
-        return;
-    }
-    let ctx = serde_json::json!({
-        "app": src.app,
-        "kind": effective_kind(src),
-        "instance": src.instance,
-        "path": src.path,
-        "filter": src.filter,
+fn trigger_context(src: &SourceTrigger, items: &[DetectedItem]) -> Value {
+    serde_json::json!({
+        "app": src.app, "kind": effective_kind(src), "instance": src.instance,
+        "path": src.path, "filter": src.filter,
         "detected_at": chrono::Utc::now().to_rfc3339(),
-        "count": items.len(),
-        "items": items,
-    });
-    if let Ok(s) = serde_json::to_string_pretty(&ctx) {
-        let _ = super::atomic_write(&pipe_dir.join(TRIGGER_CONTEXT_FILE), &s);
-    }
+        "count": items.len(), "items": items,
+    })
 }
 
-fn emit_event(pipe: &str, src: &SourceTrigger, count: usize) {
+fn emit_event(
+    pipe: &str,
+    src: &SourceTrigger,
+    count: usize,
+    key: &str,
+    delivery_id: &str,
+    context: Value,
+) {
     let event = screenpipe_events::ConnectionTriggerEvent {
         pipe: pipe.to_string(),
         app: src.app.clone(),
@@ -1651,6 +1737,9 @@ fn emit_event(pipe: &str, src: &SourceTrigger, count: usize) {
         path: src.path.clone(),
         count,
         timestamp: chrono::Utc::now(),
+        delivery_id: Some(delivery_id.to_string()),
+        subscription_key: Some(key.to_string()),
+        context: Some(context),
     };
     if let Err(e) = screenpipe_events::send_event("connection_trigger", event) {
         warn!(
@@ -1667,6 +1756,7 @@ mod tests {
 
     fn item(ts: &str) -> DetectedItem {
         DetectedItem {
+            is_input: None,
             id: ts.into(),
             title: "t".into(),
             preview: String::new(),
@@ -1681,6 +1771,8 @@ mod tests {
     }
     fn pending(pipe: &str, token: &str, attempts: u32, failed: bool) -> Pending {
         Pending {
+            delivery_id: "test-delivery".into(),
+            context: serde_json::json!({"count": 1}),
             pipe: pipe.into(),
             token: token.into(),
             attempts,
@@ -1697,6 +1789,27 @@ mod tests {
             path: None,
             filter: Default::default(),
         }
+    }
+
+    #[test]
+    fn timeouts_respect_run_budget_and_eventually_retire_unacknowledged_delivery() {
+        let mut state = WatcherState::default();
+        let mut p = pending("jobs", "12", 0, false);
+        p.since = Instant::now() - Duration::from_secs(700);
+        state.pending.insert("key".into(), p);
+        let config: PipeConfig =
+            serde_json::from_value(serde_json::json!({"schedule": "manual", "timeout": 1200}))
+                .unwrap();
+        let pipes = vec![("jobs".into(), config)];
+        expire_timeouts(&mut state, &pipes);
+        assert!(!state.pending["key"].failed);
+        let p = state.pending.get_mut("key").unwrap();
+        p.since = Instant::now() - Duration::from_secs(1261);
+        p.attempts = RETRY_CAP - 1;
+        expire_timeouts(&mut state, &pipes);
+        assert!(state.pending.is_empty());
+        assert_eq!(state.committed["key"].token, "12");
+        assert!(state.dirty);
     }
 
     #[test]
@@ -1793,7 +1906,7 @@ mod tests {
         let mut s = WatcherState::default();
         s.committed.insert("k".into(), committed("0"));
         s.pending.insert("k".into(), pending("p", "100", 0, false));
-        assert!(apply_completion(&mut s, "p", true));
+        assert!(apply_completion(&mut s, "p", true, Some("test-delivery")));
         assert_eq!(s.committed["k"].token, "100");
         assert!(!s.pending.contains_key("k"));
     }
@@ -1805,12 +1918,12 @@ mod tests {
         s.pending.insert("k".into(), pending("p", "100", 0, false));
         // fail a few times — stays pending (failed), cursor not advanced
         for _ in 0..(RETRY_CAP - 1) {
-            apply_completion(&mut s, "p", false);
+            apply_completion(&mut s, "p", false, Some("test-delivery"));
             assert!(s.pending.contains_key("k"));
             assert_eq!(s.committed["k"].token, "0");
         }
         // final failure crosses the cap → give up, commit, drop pending
-        assert!(apply_completion(&mut s, "p", false));
+        assert!(apply_completion(&mut s, "p", false, Some("test-delivery")));
         assert!(!s.pending.contains_key("k"));
         assert_eq!(s.committed["k"].token, "100");
     }

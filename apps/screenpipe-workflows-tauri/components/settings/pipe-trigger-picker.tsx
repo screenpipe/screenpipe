@@ -449,7 +449,8 @@ function VoicePhraseDetail({ onAdd }: { onAdd: (s: TriggerSource) => void }) {
   const [phrases, setPhrases] = useState("");
   const [device, setDevice] = useState("input");
   const cleaned = phrases.split("\n").map((p) => p.trim()).filter(Boolean);
-  const valid = cleaned.length > 0 && cleaned.every((p) => /[\p{L}\p{N}]/u.test(p));
+  const valid = cleaned.length > 0 && cleaned.length <= 32
+    && cleaned.every((p) => [...p].length <= 256 && /[\p{L}\p{N}]/u.test(p));
   return (
     <div>
       <p className="text-xs text-muted-foreground mb-3">
@@ -458,7 +459,8 @@ function VoicePhraseDetail({ onAdd }: { onAdd: (s: TriggerSource) => void }) {
       </p>
       <label htmlFor="voice-trigger-phrases" className={LABEL}>words or phrases, one per line</label>
       <textarea id="voice-trigger-phrases" value={phrases} onChange={(e) => setPhrases(e.target.value)}
-        placeholder={"start job\nstop job"} className={`${INPUT.replace("h-9", "h-20")} py-2 mt-1`} />
+        maxLength={32768} placeholder={"start job\nstop job"} className={`${INPUT.replace("h-9", "h-20")} py-2 mt-1`} />
+      <p className="text-[11px] text-muted-foreground mt-1">Up to 32 phrases, 256 characters each. Each phrase must fit in one transcript segment.</p>
       <label htmlFor="voice-trigger-device" className={`${LABEL} block mt-3`}>listen to</label>
       <select id="voice-trigger-device" value={device} onChange={(e) => setDevice(e.target.value)} className={`${INPUT} mt-1`}>
         <option value="input">microphone</option>

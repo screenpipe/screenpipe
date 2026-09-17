@@ -7,6 +7,41 @@
 
 use super::{DetectedItem, SourceCtx, SourceTrigger};
 
+pub(super) const MAX_PHRASES: usize = 32;
+pub(super) const MAX_PHRASE_CHARS: usize = 256;
+/// SQL bounds returned text as well as rows. No scan/match on the capture thread.
+const MAX_TRANSCRIPT_CHARS: usize = 16_384;
+/// Bound event-bus payloads too; remaining rows stay behind the cursor.
+const MAX_BATCH_BYTES: usize = 64 * 1024;
+
+pub(super) fn valid_source(src: &SourceTrigger) -> bool {
+    if src.kind != "phrase" && !src.kind.is_empty() {
+        return false;
+    }
+    if !matches!(
+        src.filter.get("device").map(String::as_str),
+        None | Some("input" | "all")
+    ) {
+        return false;
+    }
+    let Some(value) = src.filter.get("phrases") else {
+        return false;
+    };
+    if value.len() > MAX_PHRASES * MAX_PHRASE_CHARS * 4 {
+        return false;
+    }
+    let lines: Vec<_> = value
+        .lines()
+        .filter(|p| !p.trim().is_empty())
+        .take(MAX_PHRASES + 1)
+        .collect();
+    !lines.is_empty()
+        && lines.len() <= MAX_PHRASES
+        && lines
+            .iter()
+            .all(|p| p.chars().count() <= MAX_PHRASE_CHARS && p.chars().any(char::is_alphanumeric))
+}
+
 fn words(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_alphanumeric())
         .filter(|word| !word.is_empty())
@@ -14,27 +49,52 @@ fn words(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn phrases(src: &SourceTrigger) -> Vec<Vec<String>> {
+fn phrases(src: &SourceTrigger) -> Vec<String> {
     src.filter
         .get("phrases")
         .into_iter()
         .flat_map(|value| value.lines())
         .map(words)
         .filter(|phrase| !phrase.is_empty())
+        .map(|phrase| format!(" {} ", phrase.join(" ")))
         .collect()
 }
 
 pub(super) fn matching_items(src: &SourceTrigger, items: Vec<DetectedItem>) -> Vec<DetectedItem> {
+    if !valid_source(src) {
+        return Vec::new();
+    }
     let phrases = phrases(src);
+    let all_audio = src.filter.get("device").map(String::as_str) == Some("all");
     items
         .into_iter()
         .filter(|item| {
-            let text = words(&item.preview);
-            phrases
-                .iter()
-                .any(|phrase| text.windows(phrase.len()).any(|window| window == phrase))
+            if !all_audio && item.is_input != Some(true) {
+                return false;
+            }
+            // Boundary padding preserves whole-word matching. str::contains
+            // uses Rust's substring search instead of quadratic token windows
+            // on repeated-word transcripts and long overlapping phrases.
+            let text = format!(" {} ", words(&item.preview).join(" "));
+            phrases.iter().any(|phrase| text.contains(phrase.as_str()))
         })
         .collect()
+}
+
+/// Never turn a truncated final word (e.g. "jobber") into a matching "job".
+fn bounded_preview(text: &str) -> String {
+    let mut chars = text.chars();
+    let mut preview: String = chars.by_ref().take(MAX_TRANSCRIPT_CHARS).collect();
+    if chars.next().is_some_and(char::is_alphanumeric)
+        && preview
+            .chars()
+            .next_back()
+            .is_some_and(char::is_alphanumeric)
+    {
+        let end = preview.rfind(|c: char| !c.is_alphanumeric()).unwrap_or(0);
+        preview.truncate(end);
+    }
+    preview
 }
 
 pub(super) async fn fetch(
@@ -42,7 +102,7 @@ pub(super) async fn fetch(
     src: &SourceTrigger,
     since: &str,
 ) -> Option<Vec<DetectedItem>> {
-    if phrases(src).is_empty() {
+    if !valid_source(src) {
         return None;
     }
     // Only fixed SQL and parsed integers are interpolated. User phrases are
@@ -53,34 +113,42 @@ pub(super) async fn fetch(
         let after = since.parse::<i64>().ok()?.max(0);
         // Scan both devices by insertion id so system-only activity still
         // advances a microphone subscription rather than rescanning forever.
-        format!("SELECT id, timestamp, transcription, is_input_device FROM audio_transcriptions WHERE id > {after} ORDER BY id ASC LIMIT 50")
+        let read_chars = MAX_TRANSCRIPT_CHARS + 1;
+        format!("SELECT id, timestamp, substr(transcription, 1, {read_chars}) AS transcription, is_input_device FROM audio_transcriptions WHERE id > {after} ORDER BY id ASC LIMIT 50")
     };
-    let response = ctx
-        .post_json(
+    // Bound the source's latency independently of remote connection proxies.
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        ctx.post_json(
             &format!("{}/raw_sql", ctx.api_base),
             serde_json::json!({"query": query}),
-        )
-        .await?;
+        ),
+    )
+    .await
+    .ok()??;
     let rows = response.as_array()?;
     let mut items = Vec::with_capacity(rows.len());
+    let mut bytes = 0;
     for row in rows {
         let id = row.get("id")?.as_i64()?.to_string();
         let timestamp = row.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
         let is_input = row
             .get("is_input_device")
             .is_some_and(|v| v.as_bool() == Some(true) || v.as_i64() == Some(1));
-        let include_audio = is_input || src.filter.get("device").map(String::as_str) == Some("all");
+        let preview = bounded_preview(
+            row.get("transcription")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+        );
+        if bytes + preview.len() > MAX_BATCH_BYTES && !items.is_empty() {
+            break;
+        }
+        bytes += preview.len();
         items.push(DetectedItem {
             id: id.clone(),
             title: timestamp.to_string(),
-            preview: if include_audio {
-                row.get("transcription")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string()
-            } else {
-                String::new()
-            },
+            is_input: Some(is_input),
+            preview,
             ts: id,
         });
     }
@@ -100,6 +168,7 @@ mod tests {
     }
     fn item(id: i64, text: &str) -> DetectedItem {
         DetectedItem {
+            is_input: Some(true),
             id: id.to_string(),
             ts: id.to_string(),
             title: "2026-09-17T00:15:00Z".into(),
@@ -208,7 +277,8 @@ mod tests {
         let rows = fetch(&ctx, &src, "100").await.unwrap();
         assert_eq!(rows[0].preview, "start job four, client Acme");
         assert_eq!(rows[0].id, "102");
-        assert!(rows[1].preview.is_empty());
+        assert_eq!(rows[1].is_input, Some(false));
+        assert!(matching_items(&source("stop job"), rows.clone()).is_empty());
         assert_eq!(rows[1].ts, "103");
         src.filter.insert("device".into(), "all".into());
         assert_eq!(
@@ -230,7 +300,7 @@ mod tests {
                     .to_string()
             })
             .collect();
-        assert_eq!(queries[0], "SELECT id, timestamp, transcription, is_input_device FROM audio_transcriptions WHERE id > 100 ORDER BY id ASC LIMIT 50");
+        assert_eq!(queries[0], "SELECT id, timestamp, substr(transcription, 1, 16385) AS transcription, is_input_device FROM audio_transcriptions WHERE id > 100 ORDER BY id ASC LIMIT 50");
         assert_eq!(queries[0], queries[1]);
         assert_eq!(
             queries[2],
@@ -247,17 +317,9 @@ mod tests {
         let src = source("start job\nstop job");
         let key = subscription_key(pipe, &src);
         let mut state = WatcherState::default();
-        process_subscriber(
-            dir.path(),
-            &mut state,
-            pipe,
-            &src,
-            &key,
-            &[item(90, "start job old")],
-        );
+        process_subscriber(&mut state, pipe, &src, &key, &[item(90, "start job old")]);
         assert!(state.pending.is_empty());
         process_subscriber(
-            dir.path(),
             &mut state,
             pipe,
             &src,
@@ -270,26 +332,305 @@ mod tests {
             item(92, "start job four, client Acme"),
             item(93, "nothing to run"),
         ];
-        process_subscriber(dir.path(), &mut state, pipe, &src, &key, &raw);
+        process_subscriber(&mut state, pipe, &src, &key, &raw);
         assert_eq!(state.pending[&key].token, "93");
         assert_eq!(state.committed[&key].token, "91");
-        let context: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(dir.path().join(pipe).join(".trigger-context.json")).unwrap(),
-        )
-        .unwrap();
+        let context = super::super::trigger_context(&src, &matching_items(&src, raw.clone()));
+        let delivery_id = state.pending[&key].delivery_id.clone();
+        assert!(!apply_completion(&mut state, pipe, true, None));
+        assert!(!apply_completion(
+            &mut state,
+            pipe,
+            true,
+            Some("unrelated-run")
+        ));
         assert_eq!(context["items"].as_array().unwrap().len(), 1);
         assert_eq!(
             context["items"][0]["preview"],
             "start job four, client Acme"
         );
-        assert!(!apply_completion(&mut state, pipe, false));
-        process_subscriber(dir.path(), &mut state, pipe, &src, &key, &raw);
+        assert!(!apply_completion(
+            &mut state,
+            pipe,
+            false,
+            Some(&delivery_id)
+        ));
+        process_subscriber(&mut state, pipe, &src, &key, &raw);
         assert_eq!(state.pending[&key].attempts, 1);
-        assert!(apply_completion(&mut state, pipe, true));
+        assert!(apply_completion(&mut state, pipe, true, Some(&delivery_id)));
         state.save(dir.path());
         let mut reloaded = WatcherState::load(dir.path());
-        process_subscriber(dir.path(), &mut reloaded, pipe, &src, &key, &raw);
+        process_subscriber(&mut reloaded, pipe, &src, &key, &raw);
         assert!(reloaded.pending.is_empty());
         assert_eq!(reloaded.committed[&key].token, "93");
+    }
+    #[test]
+    fn voice_truncation_cannot_create_a_false_word_match() {
+        let prefix = " ".repeat(MAX_TRANSCRIPT_CHARS - "start job".len());
+        assert!(matching_items(
+            &source("start job"),
+            vec![item(1, &bounded_preview(&format!("{prefix}start jobber")))]
+        )
+        .is_empty());
+        assert_eq!(
+            matching_items(
+                &source("start job"),
+                vec![item(
+                    1,
+                    &bounded_preview(&format!("{prefix}start job, more"))
+                )]
+            )
+            .len(),
+            1
+        );
+        assert_eq!(bounded_preview("start job"), "start job");
+    }
+
+    #[test]
+    fn voice_rejects_invalid_or_unbounded_configuration() {
+        for value in ["x".repeat(257), vec!["start"; 33].join("\n")] {
+            assert!(!valid_source(&source(&value)));
+        }
+        let mut src = source("start job");
+        src.filter.insert("device".into(), "output-typo".into());
+        assert!(!valid_source(&src));
+        assert!(valid_source(&source(&vec!["é".repeat(256); 32].join("\n"))));
+        // A phrase cannot cross segment boundaries or match part of a word.
+        assert!(matching_items(
+            &source("start job"),
+            vec![item(1, "start"), item(2, "job"), item(3, "restart job")]
+        )
+        .is_empty());
+    }
+
+    #[tokio::test]
+    async fn voice_poll_shares_reads_and_retries_an_immutable_snapshot() {
+        use super::super::{poll_once, subscription_key, WatcherState};
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/raw_sql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": 11, "transcription": "start job Acme", "is_input_device": 1},
+                {"id": 12, "transcription": "stop job Acme", "is_input_device": 0}
+            ])))
+            .mount(&server)
+            .await;
+        let mic = source("start job");
+        let mut all = source("stop job");
+        all.filter.insert("device".into(), "all".into());
+        let pipes = vec![(
+            "jobs".into(),
+            serde_json::from_value(serde_json::json!({
+                "schedule": "manual", "enabled": true, "trigger": {"sources": [mic, all]}
+            }))
+            .unwrap(),
+        )];
+        let mut state = WatcherState::default();
+        let mic_key = subscription_key("jobs", &mic);
+        let all_key = subscription_key("jobs", &all);
+        for key in [&mic_key, &all_key] {
+            state.committed.insert(
+                key.clone(),
+                CursorState {
+                    token: "10".into(),
+                    initialized: true,
+                },
+            );
+        }
+        let client = reqwest::Client::new();
+        let api_base = server.uri();
+        let ctx = SourceCtx {
+            http: &client,
+            api_base: &api_base,
+            api_key: None,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        poll_once(dir.path(), &pipes, &mut state, &ctx, &[]).await;
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        assert_eq!(state.pending.len(), 2);
+        assert_eq!(state.pending[&mic_key].context["items"][0]["id"], "11");
+        assert_eq!(state.pending[&all_key].context["items"][0]["id"], "12");
+        let original = state.pending[&mic_key].clone();
+        poll_once(dir.path(), &pipes, &mut state, &ctx, &[]).await;
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            1,
+            "no reads while pending"
+        );
+        poll_once(
+            dir.path(),
+            &pipes,
+            &mut state,
+            &ctx,
+            &[("jobs".into(), false, Some(original.delivery_id.clone()))],
+        )
+        .await;
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            1,
+            "retries reuse their snapshot"
+        );
+        assert_eq!(state.pending[&mic_key].context, original.context);
+        assert_eq!(state.pending[&mic_key].delivery_id, original.delivery_id);
+        assert_eq!(state.pending[&mic_key].attempts, 1);
+        assert_eq!(state.pending[&all_key].attempts, 0);
+        assert!(super::super::apply_completion(
+            &mut state,
+            "jobs",
+            true,
+            Some(&original.delivery_id)
+        ));
+        assert!(
+            state.pending.contains_key(&all_key),
+            "one completion cannot acknowledge another source"
+        );
+        assert_eq!(state.committed[&all_key].token, "10");
+    }
+
+    #[tokio::test]
+    async fn voice_batch_budget_leaves_excess_rows_for_next_poll() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let rows: Vec<_> = (1..=6).map(|id| serde_json::json!({"id": id, "transcription": "x".repeat(MAX_TRANSCRIPT_CHARS), "is_input_device": 1})).collect();
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(rows))
+            .mount(&server)
+            .await;
+        let client = reqwest::Client::new();
+        let api_base = server.uri();
+        let ctx = SourceCtx {
+            http: &client,
+            api_base: &api_base,
+            api_key: None,
+        };
+        let batch = fetch(&ctx, &source("start job"), "0").await.unwrap();
+        assert_eq!(batch.len(), 4);
+        assert_eq!(batch.last().unwrap().ts, "4");
+        assert_eq!(
+            batch.iter().map(|item| item.preview.len()).sum::<usize>(),
+            MAX_BATCH_BYTES
+        );
+    }
+
+    #[tokio::test]
+    async fn voice_invalid_disabled_and_timed_out_sources_do_not_advance() {
+        use super::super::{poll_once, subscription_key, WatcherState};
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(std::time::Duration::from_secs(3))
+                    .set_body_json(serde_json::json!([{"id": 99}])),
+            )
+            .mount(&server)
+            .await;
+        let client = reqwest::Client::new();
+        let api_base = server.uri();
+        let ctx = SourceCtx {
+            http: &client,
+            api_base: &api_base,
+            api_key: None,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = WatcherState::default();
+        let config = |enabled, src: &SourceTrigger| {
+            serde_json::from_value(serde_json::json!({"schedule": "manual", "enabled": enabled, "trigger": {"sources": [src]}})).unwrap()
+        };
+        let src = source("start job");
+        poll_once(
+            dir.path(),
+            &[
+                ("jobs".into(), config(false, &src)),
+                ("invalid".into(), config(true, &source("!!!"))),
+            ],
+            &mut state,
+            &ctx,
+            &[],
+        )
+        .await;
+        assert!(server.received_requests().await.unwrap().is_empty());
+        let key = subscription_key("jobs", &src);
+        state.committed.insert(
+            key.clone(),
+            CursorState {
+                token: "10".into(),
+                initialized: true,
+            },
+        );
+        poll_once(
+            dir.path(),
+            &[("jobs".into(), config(true, &src))],
+            &mut state,
+            &ctx,
+            &[],
+        )
+        .await;
+        assert_eq!(state.committed[&key].token, "10");
+        assert!(state.pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn voice_new_subscription_baselines_and_read_failure_preserves_cursor() {
+        use super::super::{poll_once, subscription_key, WatcherState};
+        use wiremock::matchers::{body_json, method};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!([{"id": 11, "transcription": "start job", "is_input_device": 1}]),
+            ))
+            .with_priority(2)
+            .mount(&server)
+            .await;
+        Mock::given(body_json(serde_json::json!({"query": "SELECT COALESCE(MAX(id), 0) AS id FROM audio_transcriptions"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{"id": 1000}]))).with_priority(1).mount(&server).await;
+        let old = source("ordinary phrase");
+        let new = source("start job");
+        let pipes = vec![(
+            "jobs".into(),
+            serde_json::from_value(serde_json::json!({
+                "schedule": "manual", "trigger": {"sources": [old, new]}
+            }))
+            .unwrap(),
+        )];
+        let mut state = WatcherState::default();
+        let old_key = subscription_key("jobs", &old);
+        let new_key = subscription_key("jobs", &new);
+        state.committed.insert(
+            old_key.clone(),
+            CursorState {
+                token: "10".into(),
+                initialized: true,
+            },
+        );
+        let client = reqwest::Client::new();
+        let api_base = server.uri();
+        let ctx = SourceCtx {
+            http: &client,
+            api_base: &api_base,
+            api_key: None,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        poll_once(dir.path(), &pipes, &mut state, &ctx, &[]).await;
+        assert_eq!(
+            state.committed[&new_key].token, "1000",
+            "new source must not replay the old subscriber's backlog"
+        );
+        assert_eq!(state.committed[&old_key].token, "11");
+        assert!(state.pending.is_empty());
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        server.reset().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        poll_once(dir.path(), &pipes, &mut state, &ctx, &[]).await;
+        assert_eq!(state.committed[&old_key].token, "11");
+        assert_eq!(state.committed[&new_key].token, "1000");
     }
 }

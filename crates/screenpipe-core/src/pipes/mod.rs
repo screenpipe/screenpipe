@@ -278,11 +278,15 @@ fn is_empty_str_map(m: &std::collections::HashMap<String, String>) -> bool {
 /// `device: input` (default) watches microphones; `all` includes system audio.
 /// No model runs until a phrase matches. Transcription must already be enabled.
 /// Voice items use the transcription row id for `id` and the cursor `ts`, the
-/// capture timestamp for `title`, and the full matching transcript for `preview`.
+/// capture timestamp for `title`, and up to 16,384 transcript characters for `preview`.
+/// Matching is limited to this prefix of each segment, without partial words.
+/// Batches carry at most 64 KiB of transcript text; excess rows wait for the next poll.
+/// At most 32 phrases of 256 characters each are accepted per source.
 /// Keep related phrases in one source so one run receives all matching items.
 ///
-/// The watcher writes the new items to `<pipe-dir>/.trigger-context.json` before
-/// firing, so the pipe prompt can read exactly what changed (cwd is the pipe dir).
+/// The watcher carries matching items in the existing ConnectionTriggerEvent.
+/// The scheduler writes `<pipe-dir>/.trigger-context.json` only when the pipe
+/// is idle and selected to run, then echoes the delivery id on completion.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceTrigger {
     /// Connected app id, e.g. "obsidian". Apps the watcher can't poll yet are
@@ -6172,33 +6176,17 @@ impl PipeManager {
                         }
                     }
 
-                    // connection_trigger events are addressed to a specific pipe
-                    // (the watcher already matched the source and wrote
-                    // .trigger-context.json), so fire that pipe directly — no
-                    // trigger.events string matching needed.
+                    // Source deliveries use the same matching/defer path as
+                    // meeting events. Context travels with the event instead of
+                    // being written by a producer while a prior run is active.
                     while let Some(e) = connection_trigger_rx.next().now_or_never().flatten() {
-                        if let Some(target) = e.data.get("pipe").and_then(|v| v.as_str()) {
-                            for (name, config, _body) in &pipe_snapshot {
-                                if name == target && config.enabled {
-                                    info!("scheduler: connection trigger fired pipe '{}'", name);
-                                    last_run.remove(name);
-                                    // No key: connection triggers already have their
-                                    // own committed-cursor dedupe in
-                                    // connection_triggers.rs, so they must not be
-                                    // suppressed a second time here.
-                                    event_triggered.insert(
-                                        name.clone(),
-                                        EventTrigger {
-                                            name: e.name.clone(),
-                                            key: None,
-                                            dedupe_key: None,
-                                            target_pipe: None,
-                                            data: e.data.clone(),
-                                        },
-                                    );
-                                    connection_triggered.insert(name.clone());
-                                }
-                            }
+                        if let Some(target) = e
+                            .data
+                            .get("pipe")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned)
+                        {
+                            pending_events.push(PendingEvent::targeted(e.name, e.data, &target));
                         }
                     }
 
@@ -6216,7 +6204,7 @@ impl PipeManager {
                                 continue;
                             }
                             if let Some(ref trigger) = config.trigger {
-                                if !trigger.events.iter().any(|e| e == event_name) {
+                                if !pending_matches_trigger(pending, name, trigger) {
                                     continue;
                                 }
 
@@ -6244,8 +6232,21 @@ impl PipeManager {
 
                                 let incoming_trigger = EventTrigger {
                                     name: event_name.clone(),
-                                    key: event_identity_key(data),
-                                    dedupe_key: event_dedupe_key(event_name, data),
+                                    key: if event_name == "connection_trigger" {
+                                        data.get("delivery_id")
+                                            .and_then(|v| v.as_str())
+                                            .map(str::to_owned)
+                                    } else {
+                                        event_identity_key(data)
+                                    },
+                                    // Source cursors own their acknowledgment/retry
+                                    // protocol; a scheduler DB claim would prevent
+                                    // redelivery after a lost completion event.
+                                    dedupe_key: if event_name == "connection_trigger" {
+                                        None
+                                    } else {
+                                        event_dedupe_key(event_name, data)
+                                    },
                                     target_pipe: pending.target_pipe.clone(),
                                     data: data.clone(),
                                 };
@@ -6307,6 +6308,13 @@ impl PipeManager {
                     }
                 }
 
+                connection_triggered.extend(
+                    event_triggered
+                        .iter()
+                        .filter(|(_, event)| event.name == "connection_trigger")
+                        .map(|(name, _)| name.clone()),
+                );
+
                 for (name, config, body) in &pipe_snapshot {
                     if !config.enabled {
                         continue;
@@ -6367,18 +6375,12 @@ impl PipeManager {
                         if qr.contains(name) {
                             // Hold an event trigger back rather than dropping it —
                             // the run in flight may be for a different event.
-                            // Connection triggers are excluded: they are addressed
-                            // to a pipe by name, so replaying them through event
-                            // matching wouldn't fire anything, and their watcher
-                            // already retries uncommitted fires.
-                            if !connection_triggered.contains(name) {
-                                if let Some(t) = event_triggered.get(name) {
-                                    deferred.push(PendingEvent {
-                                        name: t.name.clone(),
-                                        data: t.data.clone(),
-                                        target_pipe: t.target_pipe.clone(),
-                                    });
-                                }
+                            if let Some(t) = event_triggered.get(name) {
+                                deferred.push(PendingEvent {
+                                    name: t.name.clone(),
+                                    data: t.data.clone(),
+                                    target_pipe: t.target_pipe.clone(),
+                                });
                             }
                             continue;
                         }
@@ -6782,17 +6784,31 @@ impl PipeManager {
                     let queued_ref = queued_or_running.clone();
                     let mcp_server_allowlist = selected_mcp_server_ids(config);
 
-                    // Tell the pipe which event fired it, so it acts on that
-                    // meeting instead of guessing at the most recent one.
-                    //
-                    // Skipped for connection triggers: their watcher already wrote
-                    // the same file with the items it detected, and overwriting it
-                    // would take that payload away from the pipe.
-                    if !connection_triggered.contains(name) {
-                        if let Some(t) = event_triggered.get(name) {
-                            write_event_trigger_context(&pipe_dir, t);
+                    // This pipe has passed the busy/queue guards. Only its
+                    // selected delivery can now replace the context file.
+                    if let Some(t) = event_triggered.get(name) {
+                        if !write_event_trigger_context(&pipe_dir, t)
+                            && t.name == "connection_trigger"
+                        {
+                            warn!(
+                                "scheduler: cannot persist source context for '{}'; deferring",
+                                name
+                            );
+                            queued_or_running.lock().await.remove(name);
+                            deferred.push(PendingEvent {
+                                name: t.name.clone(),
+                                data: t.data.clone(),
+                                target_pipe: t.target_pipe.clone(),
+                            });
+                            continue;
                         }
                     }
+                    let source_delivery_id = event_triggered
+                        .get(name)
+                        .filter(|t| t.name == "connection_trigger")
+                        .and_then(|t| t.data.get("delivery_id"))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned);
 
                     let claim_for_release = event_claim.clone();
                     // Execution metadata and the pipe-facing context keep the
@@ -7280,7 +7296,12 @@ impl PipeManager {
                         }
 
                         // Emit pipe_completed event so other pipes can chain
-                        emit_pipe_completed(&name_for_cb, success, duration_secs);
+                        emit_pipe_completed_with_delivery(
+                            &name_for_cb,
+                            success,
+                            duration_secs,
+                            source_delivery_id,
+                        );
 
                         // Fire run-complete callback (analytics, etc.)
                         if let Some(ref cb) = on_complete {
@@ -7437,7 +7458,7 @@ impl PipeManager {
                         .collect()
                 };
                 // Drain pipe_completed:* events since the last tick.
-                let mut completions: Vec<(String, bool)> = Vec::new();
+                let mut completions: Vec<(String, bool, Option<String>)> = Vec::new();
                 while let Some(e) = completed_rx.next().now_or_never().flatten() {
                     if e.name.starts_with("pipe_completed:") {
                         let pipe = e
@@ -7451,7 +7472,14 @@ impl PipeManager {
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
                         if let Some(pipe) = pipe {
-                            completions.push((pipe, success));
+                            completions.push((
+                                pipe,
+                                success,
+                                e.data
+                                    .get("source_delivery_id")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::to_owned),
+                            ));
                         }
                     }
                 }
@@ -7858,19 +7886,27 @@ const EVENT_TRIGGER_CONTEXT_FILE: &str = ".trigger-context.json";
 ///
 /// Without this a `meeting_ended` pipe has to guess which meeting it was woken
 /// for, which goes wrong exactly when two meetings end close together.
-fn write_event_trigger_context(pipe_dir: &Path, trigger: &EventTrigger) {
+fn write_event_trigger_context(pipe_dir: &Path, trigger: &EventTrigger) -> bool {
     if !pipe_dir.is_dir() {
-        return;
+        return false;
     }
-    let ctx = serde_json::json!({
-        "event": trigger.name,
-        "key": trigger.key,
-        "data": trigger.data,
-        "triggered_at": Utc::now().to_rfc3339(),
-    });
-    if let Ok(s) = serde_json::to_string_pretty(&ctx) {
-        let _ = atomic_write(&pipe_dir.join(EVENT_TRIGGER_CONTEXT_FILE), &s);
-    }
+    let ctx = if trigger.name == "connection_trigger" {
+        // Preserve the existing source context shape for installed Pipe prompts.
+        match trigger.data.get("context") {
+            Some(context) if context.is_object() => context.clone(),
+            _ => return trigger.data.get("delivery_id").is_none(), // legacy producers wrote their own context
+        }
+    } else {
+        serde_json::json!({
+            "event": trigger.name,
+            "key": trigger.key,
+            "data": trigger.data,
+            "triggered_at": Utc::now().to_rfc3339(),
+        })
+    };
+    serde_json::to_string_pretty(&ctx)
+        .ok()
+        .is_some_and(|s| atomic_write(&pipe_dir.join(EVENT_TRIGGER_CONTEXT_FILE), &s).is_ok())
 }
 
 /// One event delivery that matched a pipe's `trigger.events`.
@@ -7942,6 +7978,9 @@ fn resolve_same_tick_event(
         return SameTickEventResolution::DeferIncoming;
     }
 
+    if existing.name == "connection_trigger" && existing.key == incoming.key {
+        return SameTickEventResolution::KeepExisting;
+    }
     if existing.dedupe_key.is_some() && existing.dedupe_key == incoming.dedupe_key {
         return SameTickEventResolution::KeepExisting;
     }
@@ -7987,6 +8026,28 @@ impl PendingEvent {
         self.target_pipe
             .as_deref()
             .is_none_or(|target| target == pipe_name)
+    }
+}
+
+/// Addressed source deliveries share the scheduler's ordinary event queue,
+/// but their subscription must still exist when the delayed event is consumed.
+fn pending_matches_trigger(pending: &PendingEvent, pipe: &str, trigger: &TriggerConfig) -> bool {
+    if pending.name != "connection_trigger" {
+        return trigger.events.iter().any(|event| event == &pending.name);
+    }
+    if pending.target_pipe.as_deref() != Some(pipe) {
+        return false;
+    }
+    match pending
+        .data
+        .get("subscription_key")
+        .and_then(|v| v.as_str())
+    {
+        Some(key) => trigger
+            .sources
+            .iter()
+            .any(|source| connection_triggers::subscription_key(pipe, source) == key),
+        None => !trigger.sources.is_empty(), // legacy source producer
     }
 }
 
@@ -8037,6 +8098,13 @@ fn event_identity_key(data: &serde_json::Value) -> Option<String> {
 /// new transcript generation that needs its own summary. Legacy emitters that
 /// do not include `meeting_end` retain the old meeting-id-only behavior.
 fn event_dedupe_key(event_name: &str, data: &serde_json::Value) -> Option<String> {
+    if event_name == "connection_trigger" {
+        return data
+            .get("delivery_id")
+            .and_then(|v| v.as_str())
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned);
+    }
     let identity = event_identity_key(data)?;
     if event_name != "meeting_ended" {
         return Some(identity);
@@ -8055,13 +8123,23 @@ fn event_dedupe_key(event_name: &str, data: &serde_json::Value) -> Option<String
 }
 
 fn emit_pipe_completed(pipe_name: &str, success: bool, duration_secs: f64) {
+    emit_pipe_completed_with_delivery(pipe_name, success, duration_secs, None);
+}
+
+fn emit_pipe_completed_with_delivery(
+    pipe_name: &str,
+    success: bool,
+    duration_secs: f64,
+    source_delivery_id: Option<String>,
+) {
     let _ = screenpipe_events::send_event(
-        &format!("{PIPE_COMPLETED_EVENT_PREFIX}{pipe_name}"),
+        format!("{PIPE_COMPLETED_EVENT_PREFIX}{pipe_name}"),
         screenpipe_events::PipeCompletedEvent {
             pipe_name: pipe_name.to_string(),
             success,
             duration_secs,
             timestamp: Utc::now(),
+            source_delivery_id,
         },
     );
 }
@@ -9131,6 +9209,184 @@ mod tests {
         fn name(&self) -> &str {
             "sequenced-test"
         }
+    }
+
+    struct SourceContextExecutor {
+        contexts: std::sync::Mutex<Vec<serde_json::Value>>,
+        release: tokio::sync::Semaphore,
+    }
+
+    #[async_trait::async_trait]
+    impl AgentExecutor for SourceContextExecutor {
+        async fn run(
+            &self,
+            _prompt: &str,
+            _model: &str,
+            working_dir: &Path,
+            _provider: Option<&str>,
+            _provider_url: Option<&str>,
+            _provider_api_key: Option<&str>,
+            _shared_pid: Option<SharedPid>,
+            _continue_session: bool,
+        ) -> Result<AgentOutput> {
+            let path = working_dir.join(EVENT_TRIGGER_CONTEXT_FILE);
+            let before = std::fs::read_to_string(&path)?;
+            self.contexts
+                .lock()
+                .unwrap()
+                .push(serde_json::from_str(&before)?);
+            self.release.acquire().await?.forget();
+            assert_eq!(
+                std::fs::read_to_string(&path)?,
+                before,
+                "queued source overwrote active context"
+            );
+            Ok(AgentOutput {
+                stdout: "saved".into(),
+                stderr: String::new(),
+                success: true,
+                pid: None,
+            })
+        }
+        fn kill(&self, _handle: &ExecutionHandle) -> Result<()> {
+            Ok(())
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        async fn ensure_installed(&self) -> Result<()> {
+            Ok(())
+        }
+        fn name(&self) -> &str {
+            "source-context-test"
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn source_events_serialize_context_and_acknowledge_their_own_delivery() {
+        let temp = tempfile::tempdir().unwrap();
+        let pipes_dir = temp.path().join("pipes");
+        let name = "source-context-serialization";
+        let dir = pipes_dir.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pipe.md"), "---\nschedule: manual\nagent: mock\nmodel: test\ntrigger:\n  sources:\n    - app: audio\n      kind: phrase\n      filter:\n        phrases: start job\n---\nSave the matched transcript.\n").unwrap();
+        let src: SourceTrigger = serde_json::from_value(serde_json::json!({"app": "audio", "kind": "phrase", "filter": {"phrases": "start job"}})).unwrap();
+        let key = connection_triggers::subscription_key(name, &src);
+        let executor = Arc::new(SourceContextExecutor {
+            contexts: std::sync::Mutex::new(Vec::new()),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        let mut executors: HashMap<String, Arc<dyn AgentExecutor>> = HashMap::new();
+        executors.insert("mock".into(), executor.clone());
+        let mut manager = PipeManager::new(pipes_dir, executors, None, 0);
+        manager.load_pipes().await.unwrap();
+        let mut completed = screenpipe_events::subscribe_to_event::<serde_json::Value>(&format!(
+            "pipe_completed:{name}"
+        ));
+        manager.start_scheduler().await.unwrap();
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        let send = |id: &str| {
+            screenpipe_events::send_event(
+                "connection_trigger",
+                screenpipe_events::ConnectionTriggerEvent {
+                    pipe: name.into(),
+                    app: "audio".into(),
+                    kind: "phrase".into(),
+                    path: None,
+                    count: 1,
+                    timestamp: Utc::now(),
+                    delivery_id: Some(id.into()),
+                    subscription_key: Some(key.clone()),
+                    context: Some(serde_json::json!({"app": "audio", "items": [{"preview": id}]})),
+                },
+            )
+            .unwrap();
+        };
+        send("first");
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        for _ in 0..100 {
+            if executor.contexts.lock().unwrap().len() == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(executor.contexts.lock().unwrap().len(), 1);
+        send("second");
+        send("second"); // repeated bus delivery must remain one queued run
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(executor.contexts.lock().unwrap().len(), 1);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &std::fs::read_to_string(dir.join(EVENT_TRIGGER_CONTEXT_FILE)).unwrap()
+            )
+            .unwrap()["items"][0]["preview"],
+            "first"
+        );
+        executor.release.add_permits(1);
+        let first = tokio::time::timeout(std::time::Duration::from_secs(5), completed.next())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.data["source_delivery_id"], "first");
+        assert_eq!(first.data["success"], true);
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        for _ in 0..100 {
+            if executor.contexts.lock().unwrap().len() == 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(executor.contexts.lock().unwrap().len(), 2);
+        executor.release.add_permits(1);
+        let second = tokio::time::timeout(std::time::Duration::from_secs(5), completed.next())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.data["source_delivery_id"], "second");
+        tokio::time::advance(std::time::Duration::from_secs(61)).await;
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        manager.stop_scheduler().await;
+        assert_eq!(executor.contexts.lock().unwrap().len(), 2);
+        assert_eq!(
+            executor.contexts.lock().unwrap()[1]["items"][0]["preview"],
+            "second"
+        );
+    }
+
+    #[test]
+    fn source_events_validate_subscription_and_fail_closed_without_context() {
+        let src: SourceTrigger = serde_json::from_value(
+            serde_json::json!({"app": "audio", "filter": {"phrases": "start"}}),
+        )
+        .unwrap();
+        let trigger: TriggerConfig =
+            serde_json::from_value(serde_json::json!({"sources": [src]})).unwrap();
+        let data = serde_json::json!({"subscription_key": connection_triggers::subscription_key("jobs", &src), "delivery_id": "one"});
+        let pending = PendingEvent::targeted("connection_trigger".into(), data.clone(), "jobs");
+        assert!(pending_matches_trigger(&pending, "jobs", &trigger));
+        assert!(!pending_matches_trigger(&pending, "another-task", &trigger));
+        assert!(!pending_matches_trigger(
+            &pending,
+            "jobs",
+            &serde_json::from_value(serde_json::json!({})).unwrap()
+        ));
+        let event = EventTrigger {
+            name: "connection_trigger".into(),
+            key: Some("one".into()),
+            dedupe_key: None,
+            target_pipe: Some("jobs".into()),
+            data,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!write_event_trigger_context(dir.path(), &event));
+        assert!(!dir.path().join(EVENT_TRIGGER_CONTEXT_FILE).exists());
     }
 
     #[tokio::test(start_paused = true)]
