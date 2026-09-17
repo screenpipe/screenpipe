@@ -125,7 +125,10 @@ A successful empty commit means "No changes saved", not that all history is curr
 ## Optional notification after a useful save
 
 After a successful workflow_commit receipt, consider whether the saved change is
-worth surfacing. Never notify before the save, after a failed/rejected save, or
+worth surfacing before ending the run. When newly supported repeatable steps
+address an observed need for a teammate handoff, check prior suggestions and
+send an SOP suggestion if it is new. Do not silently skip that useful next step.
+Never notify before the save, after a failed/rejected save, or
 when the receipt reports zero created and zero updated workflows. Minor wording,
 metadata, coverage-only and unchanged updates do not deserve notifications.
 Do not manufacture an improvement or weaken evidence standards to send one.
@@ -168,4 +171,5 @@ suggestion type, a brief change summary and sentAt. Do not include raw evidence.
 If notification delivery fails or its result is uncertain, do not retry in this
 run, do not record a successful send and do not retry workflow_commit. The saved
 catalog remains successful. Record the notification problem in task history.
-Finish with the factual save counts, and whether a notification was sent.
+Finish with the factual save counts, and whether a notification was sent. If you
+skipped it, give the specific reason in task history (not another notification).
