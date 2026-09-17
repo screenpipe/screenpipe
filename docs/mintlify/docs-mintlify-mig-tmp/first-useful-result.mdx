@@ -1,0 +1,104 @@
+---
+title: "Get your first useful result"
+sidebarTitle: "First useful result"
+description: "Choose one real task, check its recording, and produce a useful report with a copyable prompt and a clear success check."
+icon: "flag-checkered"
+---
+
+Start with a piece of work you just finished. Use Screenpipe to recover something you would otherwise have to reconstruct: a client service entry, a decision from a call, or the next step on a project.
+
+You need a working installation, a short recorded work session, and an AI connection. Complete the [quickstart](/quickstart) first if those are not ready.
+
+## Choose one result
+
+| Your immediate need | First output | Continue with |
+| --- | --- | --- |
+| Bill for a support session | One job entry with evidence and time to review | [Remote-support jobs](/remote-support-job-reports) |
+| Remember a call | Decisions, open questions, and next actions | [Meeting follow-up](/meeting-follow-up) |
+| Resume work tomorrow | A short brief in your existing notes folder | [Daily project brief](/daily-project-brief) |
+| Explain a repeated process | Steps, inputs, exceptions, and evidence | [Detailed workflow handoff](/workflow-handoff) |
+| Give another AI your recent context | One answer backed by captured activity | [Local agent memory](/agent-memory-workflow) |
+
+Choose a result you will actually use today. You can evaluate it before setting up a recurring automation.
+
+## Check the source before asking AI
+
+1. Note the date, start time, end time, timezone, and app used for your task.
+2. Open the timeline for that period. Find a recognizable screen or phrase.
+3. For a call, check that the relevant transcript is available. A meeting entry alone does not prove transcription is complete.
+4. If evidence is missing, inspect recording permissions, selected devices, and exclusions. Use [troubleshooting](/troubleshooting) before making the prompt more elaborate.
+
+Screenpipe can only retrieve available evidence. An email seen on screen is partial mailbox context; a browser page opened during a task does not prove the task was completed.
+
+## Paste one prompt into chat
+
+Use Screenpipe chat, or your connected AI assistant after verifying its [MCP connection](/mcp-server). Replace the bracketed fields.
+
+<CodeGroup>
+```text Client service entry
+Review my recorded work for [client and ticket] on [date], from [start] to
+[end] in [timezone]. Draft one service entry: request, actions, observed
+outcome, and remaining work. Cite source timestamps for material claims.
+Use activity-summary for active-time totals. Keep elapsed time, active time,
+and billable time separate. Mark uncertain attribution and missing evidence.
+Return a draft here. Do not send it or approve time for billing.
+```
+
+```text Call follow-up
+Review the available transcript of [meeting] on [date and time, timezone].
+List accepted decisions, proposed ideas, unresolved questions, and next
+actions with owners only where explicit. Cite transcript timestamps.
+State which portions of the call are missing or still transcribing.
+Draft a short follow-up here for my review. Do not send it.
+```
+
+```text Resume a project
+Review [project] between [start] and [end] in [timezone]. Tell me what
+changed, the last verified state, the next concrete step, and any blockers.
+Include source apps and timestamps. Distinguish completed work from plans,
+drafts, and pages I merely viewed. Keep it under 300 words.
+If the evidence is insufficient, identify the missing interval or source.
+```
+</CodeGroup>
+
+## Recognize a useful answer
+
+This fictional project brief shows the level of specificity to look for:
+
+```text
+Project: Example onboarding checklist
+Source window: September 1, 14:00–14:30, America/New_York
+
+Changed: Added an account-access section to the checklist.
+Evidence: Document editor, 14:08–14:17.
+Last verified state: Draft open for review at 14:24.
+Next step: Confirm the reviewer before sharing.
+Unknown: No evidence that the draft was sent or approved.
+```
+
+Check three things: the output names the right task, its evidence supports the claims, and it saves a real reconstruction step. Correct names and missing context before asking for a longer report.
+
+## Save the result where you work
+
+For a file-capable assistant, follow up with:
+
+```text
+Save the reviewed result as Markdown in [existing private folder] using
+[filename]. Check for an existing file first and preserve my edits.
+Verify the saved content and return the full path. If you cannot write
+files in this environment, return copyable Markdown and say it was not saved.
+```
+
+For a connected notes app, confirm the destination and read back the saved page. A successful chat response is not evidence that another app was updated.
+
+## Turn the useful result into a routine
+
+After a few accurate manual results, use [reliable scheduled reports](/reliable-reports) to save the prompt as a pipe. Review [AI usage and controls](/ai-usage-and-controls) before choosing its frequency.
+
+| If you get stuck | Next step |
+| --- | --- |
+| No matching history | Check the timeline and time range. Missing data is not zero work. |
+| Generic summary | Name one task, one outcome, and the exact work interval. |
+| Wrong project or person | Supply the correction and require evidence for ambiguous matches. |
+| AI access or allowance error | Check the selected provider and [usage guidance](/ai-usage-and-controls). |
+| Useful answer, no saved output | Specify the destination and require a read-back check. |

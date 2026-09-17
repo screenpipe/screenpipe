@@ -1,0 +1,111 @@
+---
+title: "Turn a work session into a detailed workflow handoff"
+sidebarTitle: "Workflow handoff"
+description: "Build a source-backed SOP and automation handoff with concrete inputs, decision rules, screenshots when available, exceptions, and acceptance checks."
+icon: "list-ol"
+---
+
+A label such as “processed requests in the browser” is not enough to teach a colleague or build an automation. A useful handoff explains what started the work, which inputs mattered, what happened at each step, and how someone can tell it succeeded.
+
+Use [workflow discovery](/workflow-discovery) to choose a repeated task. Then capture one clean example and, if available, a second example with an exception.
+
+## Set up the example
+
+Choose a narrow outcome, such as turning an approved support request into a completed checklist. Record the start and end times, timezone, apps, and expected result. For team work, agree on recording and sharing boundaries with the participants first.
+
+Verify the relevant history on the device that captured it. For a team or remote view, check that the same period is available there. Local capture, uploaded data, and a generated dashboard are different stages; missing detail in one view does not prove the source was never recorded.
+
+## Generate the first handoff
+
+Paste this into Screenpipe chat or an agent connected through [MCP](/mcp-server):
+
+```text
+Review the recorded workflow [name] on [date], from [start] to [end] in
+[timezone]. Produce a detailed draft SOP based on the observed work.
+
+Include trigger, owner role, required access, inputs, steps, decision rules,
+exceptions, and the accepted result. For every step give:
+- app or surface and the input used
+- observed action and resulting state
+- evidence timestamp and a source link or frame reference if available
+- confidence and anything that must be confirmed by the operator
+
+Describe fields by their purpose. Replace real customer values with clearly
+fictional examples; omit credentials and unrelated information.
+Do not infer hidden clicks, field values, selectors, or successful submission
+from a page merely being visible. Request another demonstration for gaps.
+Keep observed steps separate from suggested improvements.
+Return a local draft for review. Do not execute the process.
+```
+
+## What a detailed step looks like
+
+This fictional example illustrates the format. Its evidence labels are placeholders, not real links.
+
+| Field | Example |
+| --- | --- |
+| Trigger | An approved request enters the support queue. |
+| Input | Demo request DEMO-104, category “account access.” |
+| Surface | Support portal, request detail view. |
+| Action | Operator checks approval status before opening the account form. |
+| Decision | Continue only when approval is present; otherwise leave the request pending. |
+| Observed result | The account form opens with the request reference. |
+| Evidence | Placeholder: source timestamp and frame for the approval check. |
+| Unknown | The recording does not show how an expired approval is handled. |
+| Acceptance check | A reviewer can locate the approval and match it to the request. |
+
+Avoid deriving a rule from a single example without confirmation. The operator may have used knowledge that was never visible on screen.
+
+## Add visual evidence where it exists
+
+```text
+For the reviewed SOP, identify source moments that clarify each important
+decision or state change. Use available screenshots or frame references.
+Do not invent image URLs or imply every step has a screenshot.
+
+Prepare an internal evidence appendix. Before creating a shareable copy,
+list sensitive regions and use reviewed crops or redactions. If no suitable
+image exists, keep the timestamp and explain what must be demonstrated.
+Verify that every included reference opens the intended source.
+```
+
+This is a request to assemble an evidence appendix from accessible sources. It does not enable screenshots in every team dashboard or recover unavailable media. Confirm what the reviewer can actually open.
+
+## Correct labels before automating
+
+Review client names, employee roles, app names, and inferred workflow boundaries. Keep a small correction log:
+
+```text
+Step: 3
+Draft label: "Customer approved request"
+Correction: "Internal reviewer approved request"
+Reason: Operator confirmed the approval role.
+Evidence: [source reference or explicit operator confirmation]
+Status: Reviewed
+```
+
+An operator-confirmed correction is useful evidence of a rule, but label it separately from what the recording directly showed.
+
+## Turn the reviewed SOP into an automation brief
+
+```text
+Use the reviewed SOP to propose one small automation. Define:
+1. Trigger and required inputs.
+2. Preconditions and required access.
+3. Deterministic steps and decisions that still need a person.
+4. Expected output and a check proving it is correct.
+5. Stop conditions, retry limits, and duplicate prevention.
+6. A normal example, a missing-input example, and an exception example.
+
+Use fictional data. Keep selectors or API fields unverified until checked
+against the actual system. Start with a preview or reversible step.
+Do not submit forms, change customer records, or send messages.
+```
+
+For the example above, a good first experiment is checking that a request has an approval and drafting the next checklist. Automatic account changes require additional verified rules and authorization.
+
+## Check that another person can use it
+
+Ask a colleague to walk through the draft using a demonstration or test record. Capture where they hesitate, then fill those gaps. The handoff is ready when they can identify the inputs, follow the normal path, recognize an exception, and verify the result without guessing.
+
+Continue with [SOP capture](/team-sop-capture) for the operating guide and [reliable reports](/reliable-reports) if you want recurring drafts from new work sessions.

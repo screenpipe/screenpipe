@@ -1,0 +1,115 @@
+---
+title: "Build a daily project brief in your existing notes"
+sidebarTitle: "Daily project brief"
+description: "Use recorded work to maintain a small Markdown or Obsidian brief with decisions, open loops, source references, and explicit coverage gaps."
+icon: "book-open"
+---
+
+Keep one short project brief where you already work, such as a private Markdown folder or Obsidian vault. Screenpipe supplies recorded context; your chosen AI turns that evidence into a brief that you and other assistants can read tomorrow.
+
+This recipe works best for a defined project. Start with one source and one file before adding email, Slack, or a task database.
+
+## Decide which tool does what
+
+| Tool | Role in this recipe |
+| --- | --- |
+| Screenpipe | Captures and retrieves available screen and audio history. |
+| Screenpipe chat or your connected AI | Searches a bounded period, extracts changes, and prepares the brief. |
+| Your existing notes folder | Stores the reviewed project state. |
+| A pipe, when you add one | Repeats the update on your chosen schedule. |
+
+You can keep using Claude, Codex, or another assistant for your main work. Connect it through [MCP](/mcp-server) to retrieve history, or generate the brief in Screenpipe and open it in your existing workflow. The brief does not restore a model's hidden conversation state.
+
+## Create one manual brief
+
+Replace the placeholders and paste this into an assistant that can access Screenpipe history. A file-capable assistant can save the result; otherwise copy the returned Markdown into your notes.
+
+```text
+Prepare a project brief for [project] from recorded work between [start]
+and [end] in [timezone]. Use [private folder]/[project]-brief.md as the
+destination. Read the existing brief first if it exists.
+
+Keep current objective, verified changes, accepted decisions, open loops,
+blockers, and the next concrete step. Cite source apps and timestamps.
+Distinguish accepted decisions from suggestions and sent messages from
+drafts. Do not infer that a task is complete from viewing its page.
+
+Preserve still-valid facts and my corrections. Merge duplicate open loops
+using stable IDs. Mark superseded facts with their replacement and source.
+Keep the brief under 500 words; put detailed evidence in a separate appendix
+only if needed. Exclude secrets and unrelated personal or client details.
+
+State the source window and coverage gaps. Save and read back the file,
+then return its path. If you cannot write files, return copyable Markdown
+and explicitly say it was not saved. Do not modify any external system.
+```
+
+## Example brief
+
+This is fictional data showing the expected structure:
+
+```markdown
+# Example onboarding project
+
+Last reviewed: 2026-09-01 17:00 America/New_York
+Source window: 2026-09-01 09:00–17:00 America/New_York
+
+## Objective
+Prepare the internal onboarding checklist for review.
+
+## Verified changes
+- Added account-access steps. Source: document editor, 14:08–14:17.
+
+## Decisions
+- Keep the first version internal. Source: call transcript, 11:23.
+
+## Open loops
+- EX-01: Confirm the reviewer. Owner unknown. Source: call, 11:28.
+- EX-02: Test the checklist with a demo account. Status: proposed.
+
+## Next step
+Confirm the reviewer, then prepare the review copy.
+
+## Coverage gaps
+- No evidence that the document was sent.
+- No recorded context after 16:10.
+```
+
+## Add email or Slack only when needed
+
+Recorded messages show what was visible at particular moments. They do not establish complete mailbox or channel history. For current communication status, use an available [connection](/connections) and check the original conversation.
+
+```text
+For open loop [ID], check the latest relevant conversation in [connected
+account and thread/channel]. Report who last replied, what was promised,
+and whether the action is still open. Verify sent status from the original
+service. If access is unavailable, preserve the item as unverified.
+Update the local brief with the evidence. Do not send a follow-up.
+```
+
+Verify the integration before adding it to a recurring task. A failed connector should produce a visible gap, not an invented “no reply” conclusion.
+
+## Make the next update incremental
+
+After reviewing a manual brief, test a second update over a later interval:
+
+```text
+Update [brief path] using evidence since its last successful source
+checkpoint. Confirm the timezone and query end time. If the history is
+too large, process bounded intervals and record which ones succeeded.
+
+Preserve corrections and stable open-loop IDs. Advance the checkpoint only
+after the file is saved and read back. Record missing intervals separately
+so they can be retried. If there is no new evidence, keep the existing
+content and record that the check found no new evidence.
+```
+
+Reopen the brief and check that the same decision or task was not appended twice. For hourly updates, process the new hour; for a morning brief, choose the prior workday or another explicit source window. Do not assume the time a report runs is the period it should summarize.
+
+## Schedule after it works
+
+Use [reliable reports](/reliable-reports) to create the recurring pipe, select its timezone, verify its first scheduled output, and add a completion receipt. Review [AI usage](/ai-usage-and-controls) before increasing frequency.
+
+For [Obsidian](/obsidian), choose a folder inside the existing vault and verify that the file appears there. Check whether that vault or folder syncs elsewhere before treating a saved note as local-only. Keep internal evidence separate from anything you share with a client.
+
+For a longer-lived knowledge base used by several agents, continue with [local agent memory](/agent-memory-workflow).

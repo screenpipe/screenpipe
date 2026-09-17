@@ -23,11 +23,11 @@
         "groups": [
           {
             "group": "get started",
-            "pages": ["home", "quickstart", "getting-started", "use-cases", "architecture"]
+            "pages": ["home", "quickstart", "first-useful-result", "getting-started", "use-cases", "architecture"]
           },
           {
             "group": "pipes",
-            "pages": ["pipe-store", "pipes", "pipe-debugging", "pipe-permissions"]
+            "pages": ["pipe-store", "pipes", "reliable-reports", "ai-usage-and-controls", "pipe-debugging", "pipe-permissions"]
           },
           {
             "group": "connect",
@@ -35,7 +35,7 @@
           },
           {
             "group": "use cases",
-            "pages": ["consultant-time-tracking", "client-weekly-report", "workflow-discovery", "daily-work-review", "research-brief", "relationship-follow-up", "meeting-follow-up", "meeting-to-crm", "incident-reconstruction", "focused-monitoring", "agent-memory-workflow", "team-sop-capture", "search-screen-history", "meeting-intelligence", "meeting-transcription", "ai-memory", "second-brain", "for-developers"]
+            "pages": ["consultant-time-tracking", "remote-support-job-reports", "client-weekly-report", "workflow-discovery", "workflow-handoff", "daily-work-review", "daily-project-brief", "research-brief", "relationship-follow-up", "meeting-follow-up", "meeting-to-crm", "incident-reconstruction", "focused-monitoring", "agent-memory-workflow", "team-sop-capture", "search-screen-history", "meeting-intelligence", "meeting-transcription", "ai-memory", "second-brain", "for-developers"]
           },
           {
             "group": "integrations",
