@@ -164,7 +164,11 @@ pub async fn has_pending_input(path: &Path) -> anyhow::Result<bool> {
         .ok_or_else(|| anyhow::anyhow!("Workflow input status unavailable"))
 }
 
-pub async fn check_admission(api_url: &str, token: Option<&str>, model: &str) -> anyhow::Result<()> {
+pub async fn check_admission(
+    api_url: &str,
+    token: Option<&str>,
+    model: &str,
+) -> anyhow::Result<()> {
     require_rollout(rollout_enabled())?;
     let token = token.filter(|s| !s.is_empty()).ok_or_else(|| {
         anyhow::anyhow!("workflow_sign_in_required: Sign in to enable workflow updates.")
@@ -261,12 +265,15 @@ mod tests {
     }
     #[test]
     fn private_model_ignores_paid_allowance_but_requires_business() {
-        let mut usage = json!({"hosted_ai":{"plan":"business"},"remaining":0,"cost_limit_reached":true});
+        let mut usage =
+            json!({"hosted_ai":{"plan":"business"},"remaining":0,"cost_limit_reached":true});
         assert!(admission_for_model(&usage, super::super::model_choice::PRIVATE_MODEL).is_ok());
         assert!(admission(&usage).is_err());
         usage["hosted_ai"]["plan"] = json!("free");
         assert!(admission_for_model(&usage, super::super::model_choice::PRIVATE_MODEL).is_err());
-        assert!(admission_for_model(&Value::Null, super::super::model_choice::PRIVATE_MODEL).is_err());
+        assert!(
+            admission_for_model(&Value::Null, super::super::model_choice::PRIVATE_MODEL).is_err()
+        );
     }
     #[test]
     fn privileged_gateway_plan_retains_all_admission_checks() {

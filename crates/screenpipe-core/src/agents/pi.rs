@@ -2154,7 +2154,11 @@ impl AgentExecutor for PiExecutor {
             provider
         };
         let provider_url = if workflow_task { None } else { provider_url };
-        let provider_api_key = if workflow_task { None } else { provider_api_key };
+        let provider_api_key = if workflow_task {
+            None
+        } else {
+            provider_api_key
+        };
         if workflow_task {
             crate::workflows::pipeline::check_admission(
                 &self.api_url,
@@ -2302,7 +2306,11 @@ impl AgentExecutor for PiExecutor {
             provider
         };
         let provider_url = if workflow_task { None } else { provider_url };
-        let provider_api_key = if workflow_task { None } else { provider_api_key };
+        let provider_api_key = if workflow_task {
+            None
+        } else {
+            provider_api_key
+        };
         if workflow_task {
             crate::workflows::pipeline::check_admission(
                 &self.api_url,

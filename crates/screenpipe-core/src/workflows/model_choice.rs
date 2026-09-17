@@ -18,7 +18,9 @@ fn read_model(path: &Path) -> Result<&'static str> {
     match serde_json::from_str::<serde_json::Value>(&text)?["mode"].as_str() {
         Some("intelligent") => Ok("auto"),
         Some("private") => Ok(PRIVATE_MODEL),
-        _ => bail!("The saved Workflows AI choice is invalid. Select Intelligent or Private again."),
+        _ => {
+            bail!("The saved Workflows AI choice is invalid. Select Intelligent or Private again.")
+        }
     }
 }
 
