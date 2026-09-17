@@ -7793,30 +7793,34 @@ fn render_prompt_with_port(
     let timezone = now.format("%Z").to_string();
     let tz_offset = now.format("%:z").to_string();
 
-    // Compute lookback from schedule interval (capped at 8h)
-    let lookback_duration = parse_duration_str(&config.schedule)
-        .unwrap_or(std::time::Duration::from_secs(3600))
-        .min(std::time::Duration::from_secs(8 * 3600));
-    let start_time = (now
-        - chrono::Duration::from_std(lookback_duration).unwrap_or(chrono::Duration::hours(1)))
-    .to_utc()
-    .format("%Y-%m-%dT%H:%M:%SZ")
-    .to_string();
-    let end_time = now.to_utc().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-
-    let mut prompt = String::new();
-
-    let header = format!(
-        r#"Default run lookback: {start_time} to {end_time}
+    // Workflow batches resume their durable coverage cursor. A schedule-derived
+    // lookback can skip unread history, so only their pipeline supplies a range.
+    let mut prompt = if crate::workflows::pipeline::stage(&config.name).is_some() {
+        "Workflow run: call workflow_context for the authoritative pipeline.window.\n".to_string()
+    } else {
+        let lookback_duration = parse_duration_str(&config.schedule)
+            .unwrap_or(std::time::Duration::from_secs(3600))
+            .min(std::time::Duration::from_secs(8 * 3600));
+        let start_time = (now
+            - chrono::Duration::from_std(lookback_duration).unwrap_or(chrono::Duration::hours(1)))
+        .to_utc()
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+        let end_time = now.to_utc().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        format!(
+            r#"Default run lookback: {start_time} to {end_time}
 Structured output targets may declare an authoritative time range that overrides this default for that target.
-Run date: {date}
+"#
+        )
+    };
+
+    prompt.push_str(&format!(
+        r#"Run date: {date}
 Timezone: {timezone} (UTC{tz_offset})
 Pipe name: {}
 "#,
         config.name
-    );
-
-    prompt.push_str(&header);
+    ));
 
     if let Some(ctx) = extra_context {
         prompt.push_str(ctx);
@@ -12667,6 +12671,24 @@ Run the scheduled task.
         assert!(sys.contains("http://localhost:3031"));
         assert!(!sys.contains("http://localhost:3030"));
         assert!(sys.contains("body text"));
+
+        // Every workflow stage must resume its pipeline window, including
+        // manual retries after more than the default eight-hour lookback.
+        for task in crate::workflows::pipeline::TASKS {
+            for schedule in ["every 24h", "manual"] {
+                let config = PipeConfig {
+                    name: task.to_string(),
+                    schedule: schedule.to_string(),
+                    ..config.clone()
+                };
+                let prompt = render_prompt_with_port(&config, "body text", 3031, None, None);
+                assert!(prompt.contains("workflow_context"));
+                assert!(prompt.contains("pipeline.window"));
+                assert!(!prompt.contains("Default run lookback:"));
+                assert!(prompt.contains(&format!("Pipe name: {task}")));
+                assert!(prompt.contains("Timezone:"));
+            }
+        }
     }
 
     #[test]
