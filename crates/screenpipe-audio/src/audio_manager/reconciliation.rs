@@ -2308,7 +2308,18 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let tmp = tempfile::tempdir().unwrap();
-        let db = temp_db(tmp.path()).await;
+        // This fixture changes SQLite triggers between sweeps. Keep its DDL
+        // and writes on one connection so pooled schema-cache refreshes cannot
+        // replace the deliberately injected error with "no such table".
+        let db = DatabaseManager::new(
+            &tmp.path().join("db.sqlite").to_string_lossy(),
+            screenpipe_config::DbConfig {
+                write_pool_max: 1,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         let timestamp = Utc::now() - chrono::Duration::minutes(20);
         let mut ids = Vec::new();
         let mut paths = Vec::new();
