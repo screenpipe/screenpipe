@@ -705,15 +705,46 @@ fn meeting_summary_evidence_steps() -> Option<&'static str> {
     )
 }
 
+/// Upgrade only recognized shipped staged-workflow instruction bodies.
+/// Keep frontmatter byte-for-byte for enrichment stages. Final review uses
+/// its existing permission migration below. Preserve disabled state and schedules.
+/// Customized instructions are never overwritten. Hashes cover
+/// the shipped pipeline prompts from #7020, #7045, #7071 and the handoff repairs.
+fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> {
+    let shipped_hashes: &[&str] = match name {
+        "workflow-activity" => &["f5adb347d838aff7", "f4afd94ec5e0270a", "5c54891aced4f9d2"],
+        "workflow-patterns" => &["a31c48cdb79f4b6d", "f9b67dd914738d05", "09e892b7e53bc79b"],
+        "workflow-procedures" => &["5d59624801ae318f", "e0337eafa55e446a", "20950f99d0200c6a"],
+        "workflow-timing" => &["5d4517bb8ae2d8bb", "06c5c09cfe623e48", "8e07b86d6863e354"],
+        _ => return None,
+    };
+    let parts: Vec<_> = original.splitn(3, "---").collect();
+    if parts.len() != 3 || !parts[0].trim().is_empty() {
+        return None;
+    }
+    let body = parts[2].trim();
+    let replacement = bundled_prompt(name)?.splitn(3, "---").nth(2)?.trim();
+    if body == replacement || !shipped_hashes.contains(&simple_hash(body).as_str()) {
+        return None;
+    }
+    Some(format!(
+        "{}---{}---\n\n{}\n",
+        parts[0], parts[1], replacement
+    ))
+}
+
 /// Apply every known repair for `name` to an installed prompt.
 ///
 /// Returns the rewritten content only when something actually changed, so the
 /// caller can skip the disk write. Idempotent: running it on already-fixed
 /// content is a no-op.
 pub(super) fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<String> {
+    if let Some(updated) = migrate_staged_workflow_prompt(name, original) {
+        return Some(updated);
+    }
     if name == "workflow-discovery" {
-        // Both shipped versions predate the staged pipeline. Match the complete
-        // known body, allowing only the scheduler's trailing-newline rewrite.
+        // Recognize the original discovery body and the shipped staged revisions,
+        // allowing the scheduler's trailing-newline rewrite.
         let legacy = include_str!("../../assets/pipes/workflow-discovery/legacy-v1.md");
         let body = legacy.splitn(3, "---").nth(2)?.trim();
         let timing_start = body.find("Investigate time per workflow run")?;
@@ -723,10 +754,17 @@ pub(super) fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<St
         parts.next()?;
         let frontmatter = parts.next()?;
         let original_body = parts.next()?.trim();
-        // Upgrade the unmodified staged prompt shipped before local suggestions.
+        // Upgrade recognized staged prompts as well as pre-pipeline discovery.
         // Custom bodies opt out; all replacement instructions come from the asset.
-        let before_notifications = simple_hash(original_body) == "120adaeac3926f64";
-        if original_body != body && original_body != without_timing.trim() && !before_notifications
+        let replacement = bundled_prompt(name)?.splitn(3, "---").nth(2)?.trim();
+        if original_body == replacement {
+            return None;
+        }
+        let shipped_staged_prompt = matches!(
+            simple_hash(original_body).as_str(),
+            "57b754f5d27ad27d" | "120adaeac3926f64" | "bfbd40f62e019ac4" | "8928a07fbb8eaaff"
+        );
+        if original_body != body && original_body != without_timing.trim() && !shipped_staged_prompt
         {
             return None;
         }
@@ -757,7 +795,6 @@ pub(super) fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<St
         if !events.as_sequence()?.contains(&event) {
             events.as_sequence_mut()?.push(event);
         }
-        let replacement = bundled_prompt(name)?.splitn(3, "---").nth(2)?.trim();
         return Some(format!(
             "---\n{}---\n\n{}\n",
             serde_yaml::to_string(&config).ok()?,
@@ -819,6 +856,69 @@ fn replace_prompt_body_when_hash_matches(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn all_staged_workflow_prompts_upgrade_without_changing_user_configuration() {
+        let fixtures = [
+            (
+                "workflow-activity",
+                include_str!("../../assets/pipes/legacy-workflow-prompts/workflow-activity.md"),
+            ),
+            (
+                "workflow-patterns",
+                include_str!("../../assets/pipes/legacy-workflow-prompts/workflow-patterns.md"),
+            ),
+            (
+                "workflow-procedures",
+                include_str!("../../assets/pipes/legacy-workflow-prompts/workflow-procedures.md"),
+            ),
+            (
+                "workflow-timing",
+                include_str!("../../assets/pipes/legacy-workflow-prompts/workflow-timing.md"),
+            ),
+            (
+                "workflow-discovery",
+                include_str!("../../assets/pipes/legacy-workflow-prompts/workflow-discovery.md"),
+            ),
+        ];
+        for (name, old) in fixtures {
+            for enabled in ["true", "false"] {
+                let original = old
+                    .replace("enabled: false", &format!("enabled: {enabled}"))
+                    .replace("every 24h", "every 48h");
+                let updated = super::migrate_builtin_pipe_text(name, &original).unwrap();
+                let original_config: serde_yaml::Value =
+                    serde_yaml::from_str(original.splitn(3, "---").nth(1).unwrap()).unwrap();
+                let updated_config: serde_yaml::Value =
+                    serde_yaml::from_str(updated.splitn(3, "---").nth(1).unwrap()).unwrap();
+                for key in ["enabled", "schedule", "model", "timeout", "trigger"] {
+                    assert_eq!(original_config[key], updated_config[key], "{name} {key}");
+                }
+                assert_eq!(
+                    updated.splitn(3, "---").nth(2).unwrap().trim(),
+                    super::bundled_prompt(name)
+                        .unwrap()
+                        .splitn(3, "---")
+                        .nth(2)
+                        .unwrap()
+                        .trim(),
+                    "{name} prompt"
+                );
+                assert!(
+                    super::migrate_builtin_pipe_text(name, &updated).is_none(),
+                    "{name} idempotency"
+                );
+                assert!(
+                    super::migrate_builtin_pipe_text(
+                        name,
+                        &format!("{original}\nCustom user instruction")
+                    )
+                    .is_none(),
+                    "{name} customization"
+                );
+            }
+        }
+    }
+
     #[test]
     fn workflow_migration_preserves_consent_and_customization() {
         let legacy = include_str!("../../assets/pipes/workflow-discovery/legacy-v1.md");
