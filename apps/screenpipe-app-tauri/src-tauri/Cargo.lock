@@ -10387,6 +10387,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
+name = "release-router-contract"
+version = "0.1.0"
+dependencies = [
+ "axum 0.7.9",
+ "screenpipe-audio",
+ "screenpipe-db",
+ "screenpipe-engine",
+ "tempfile",
+ "tokio",
+ "tower 0.4.13",
+]
+
+[[package]]
 name = "reqwest"
 version = "0.12.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

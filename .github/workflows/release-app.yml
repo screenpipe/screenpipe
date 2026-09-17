@@ -241,6 +241,12 @@ jobs:
             .github/actions/setup-persistent-macos-cache
             .github/scripts
 
+      - name: Recover runaway macOS builder services
+        if: runner.environment == 'self-hosted' && matrix.os_type == 'macos'
+        continue-on-error: true
+        shell: bash
+        run: sudo python3 .release-workflow/.github/scripts/check-macos-builder-load.py
+
       - name: Attach persistent EC2 Mac cache
         if: runner.environment == 'self-hosted' && matrix.os_type == 'macos'
         uses: ./.release-workflow/.github/actions/setup-persistent-macos-cache
@@ -947,10 +953,18 @@ jobs:
 
           # Keep #5490's full-router runtime gate before any artifact upload.
           # Use the app lockfile, target directory, profile and linker settings
-          # so its already-built engine/dependencies can be reused. The engine's
-          # default qwen3-asr/parakeet/redact-onnx-cpu features match Linux release.
-          ( cd src-tauri && cargo test --locked --release -p screenpipe-engine \
-              --test router_contract_test --target ${{ matrix.target }} )
+          # so its already-built engine/dependencies can be reused. Select the
+          # app as well to enable its release features on the dependency graph;
+          # only the shared router contract runs in its test-only app member.
+          if [[ -f src-tauri/release-router-contract/Cargo.toml ]]; then
+            ( cd src-tauri && cargo test --locked --release -p screenpipe-app -p release-router-contract \
+                --features screenpipe-app/official-build,screenpipe-app/redact-onnx-cpu \
+                --test router_contract_test --target ${{ matrix.target }} )
+          else
+            # Recovery of a source revision predating the test-only member.
+            ( cd ../.. && RUSTFLAGS="-C link-arg=-Wl,--allow-multiple-definition" \
+                cargo test --release -p screenpipe-engine --test router_contract_test --target ${{ matrix.target }} )
+          fi
 
           # Fix ABI mismatch: the AppImage bundles libs from Ubuntu 24.04 but
           # on distros like Fedora 43 with newer system libs, symbols are missing

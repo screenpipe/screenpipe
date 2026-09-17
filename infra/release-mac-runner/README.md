@@ -54,16 +54,18 @@ and installs it as a headless launchd service.
 
 ## Headless host maintenance
 
-Registration installs `configure-headless-host.sh` after verifying the runner
-identity. It disables the unused Bluetooth, wireless-radio manager and audio
-mixer services that can spin on the EC2 Mac's absent radio hardware. SIP, EC2
-networking, CoreAudio, SSM and signing remain enabled. On an existing host, apply
-that script through SSM and reboot during an idle maintenance window; launchd
-cannot unload these protected services while SIP is enabled.
+The release workflows run `check-macos-builder-load.py` before each self-hosted
+Mac build. It measures CPU time for the Bluetooth, audio mixer and wireless-radio
+manager daemons, and restarts only those daemons when their combined load exceeds
+the threshold defined in the script. It verifies process identities before
+signalling them, leaves SIP, networking and signing services intact, and reports
+unresolved load without preventing an otherwise valid release.
 
-Temporarily remove only the `screenpipe-release-macos` runner label to drain the
-current job. Restore it after SSM, the runner service, CPU usage and disabled
-service state are verified. Never stop or reboot a runner with an active worker.
+Do not rely on `launchctl disable` to stop these protected services: the tested
+Tahoe host still starts them at boot. For maintenance that requires a reboot,
+temporarily remove only the `screenpipe-release-macos` runner label to drain the
+current job. Restore it after fresh SSM and runner health checks. Never reboot
+with an active worker.
 
 The shared `setup-release-sccache.sh` starts each job's daemon with the persistent
 cache environment already exported and a bounded capacity, importing the old

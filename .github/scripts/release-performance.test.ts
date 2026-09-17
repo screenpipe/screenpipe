@@ -32,6 +32,25 @@ function fixture() {
   return { root, env, write, stub, run, calls: () => readFileSync(env.CALLS, "utf8") };
 }
 
+test("Mac health recovery measures CPU time and never signals a replaced PID or unrelated service", () => {
+  const result = spawnSync("python3", ["-c", `
+import importlib.util, signal, sys
+spec = importlib.util.spec_from_file_location('health', sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+assert m.cpu_seconds('24008:00.50') == 1440480.5
+assert m.cpu_seconds('1-02:03:04') == 93784
+a = '/usr/libexec/audiomxd'; b = '/usr/sbin/bluetoothd'
+assert m.cpu_percent({1:(100,a)}, {1:(105,a)}, 5) == 100
+assert m.cpu_percent({1:(100,a)}, {1:(100.1,a),2:(0.1,b)}, 5) < m.MAX_CPU_PERCENT
+calls = []
+m.os.kill = lambda pid,sig: calls.append((pid,sig))
+m.snapshot = lambda: {1:(106,a),2:(2,'/usr/bin/codesign'),3:(9,'/usr/libexec/configd')}
+m.signal_snapshot({1:(105,a),2:(1,b),3:(8,'/usr/libexec/configd')}, signal.SIGTERM)
+assert calls == [(1,signal.SIGTERM)]
+`, join(scripts, "check-macos-builder-load.py")], { encoding: "utf8" });
+  expect(result.status).toBe(0);
+});
+
 test("Sentry inputs include current app and sidecars but exclude accumulated executables and archives", () => {
   const f = fixture();
   const binary = f.write("release/screenpipe-app");
@@ -94,8 +113,11 @@ test("release workflows retain the router gate and use helpers from the workflow
   const steps = app.jobs["publish-tauri"].steps;
   const buildIndex = steps.findIndex((s: any) => s.name === "Build (Linux)");
   const build = steps[buildIndex];
-  expect(build.run).toContain("cd src-tauri && cargo test --locked --release -p screenpipe-engine");
+  expect(build.run).toContain("cd src-tauri && cargo test --locked --release -p screenpipe-app -p release-router-contract");
   expect(build.run).toContain("--test router_contract_test");
+  const linux = app.jobs["publish-tauri"].strategy.matrix.include.find((m: any) => m.os_type === "linux");
+  const features = linux["tauri-args"].split("--features ")[1].split(" ")[0].split(",");
+  expect(build.run).toContain(`--features ${features.map((f: string) => `screenpipe-app/${f}`).join(",")}`);
   expect(build.env.RUSTFLAGS).toBeUndefined();
   expect(buildIndex).toBeLessThan(steps.findIndex((s: any) => s.name === "Upload to Cloudflare R2 (Linux)"));
 });

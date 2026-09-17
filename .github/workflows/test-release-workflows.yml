@@ -16,6 +16,8 @@ on:
       - .github/actions/setup-persistent-macos-cache/**
       - .github/actions/setup-persistent-linux-cache/**
       - .github/scripts/release-performance.test.ts
+      - .github/scripts/check-macos-builder-load.py
+      - apps/screenpipe-app-tauri/src-tauri/release-router-contract/**
       - .github/scripts/release-symbols.cjs
       - .github/scripts/setup-release-sccache.sh
       - .github/scripts/prepare-mlx-cache.sh
@@ -32,6 +34,8 @@ on:
       - .github/actions/setup-persistent-macos-cache/**
       - .github/actions/setup-persistent-linux-cache/**
       - .github/scripts/release-performance.test.ts
+      - .github/scripts/check-macos-builder-load.py
+      - apps/screenpipe-app-tauri/src-tauri/release-router-contract/**
       - .github/scripts/release-symbols.cjs
       - .github/scripts/setup-release-sccache.sh
       - .github/scripts/prepare-mlx-cache.sh

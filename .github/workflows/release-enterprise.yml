@@ -828,6 +828,12 @@ jobs:
             .github/actions/setup-persistent-macos-cache
             .github/scripts
 
+      - name: Recover runaway macOS builder services
+        if: runner.environment == 'self-hosted'
+        continue-on-error: true
+        shell: bash
+        run: sudo python3 .release-workflow/.github/scripts/check-macos-builder-load.py
+
       - name: Attach persistent EC2 Mac cache
         if: runner.environment == 'self-hosted'
         uses: ./.release-workflow/.github/actions/setup-persistent-macos-cache
