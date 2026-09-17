@@ -32,7 +32,7 @@ type PendingPair = {
 const POLL_INTERVAL_MS = 1_500;
 
 function labelBrowser(browser: string): string {
-  if (!browser) return "your browser";
+  if (!browser) return "Your browser";
   return browser.charAt(0).toUpperCase() + browser.slice(1);
 }
 
@@ -98,7 +98,7 @@ export function BrowserPairingDialog() {
       setPending(null);
     } catch (e) {
       toast({
-        title: "browser pairing failed",
+        title: "Browser pairing failed",
         description: e instanceof Error ? e.message : String(e),
         variant: "destructive",
       });
@@ -115,7 +115,7 @@ export function BrowserPairingDialog() {
         overlayClassName="bg-black/50 backdrop-blur-sm"
       >
         <DialogHeader>
-          <DialogTitle>connect browser</DialogTitle>
+          <DialogTitle>Connect browser</DialogTitle>
           <DialogDescription>
             {pending
               ? `${labelBrowser(pending.browser)} wants to connect to Screenpipe. This lets agents use your open tabs when browser context is needed.`
@@ -125,15 +125,15 @@ export function BrowserPairingDialog() {
 
         {pending && (
           <details className="border border-border p-3 text-xs text-muted-foreground">
-            <summary className="cursor-pointer font-mono">verify request</summary>
+            <summary className="cursor-pointer font-mono">Verify request</summary>
             <div className="mt-2 font-mono">
-              <div>match this code with the browser extension</div>
+              <div>Match this code with the browser extension</div>
               <div className="mt-1 text-lg tracking-[0.2em] text-foreground">
                 {pending.code}
               </div>
               {pending.extension_id && (
                 <div className="mt-2 break-all">
-                  extension id: {pending.extension_id}
+                  Extension ID: {pending.extension_id}
                 </div>
               )}
             </div>

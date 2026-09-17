@@ -225,7 +225,7 @@ export function UpgradeQuotaBanner({
                 }
               }}
               className="ml-0.5 shrink-0 text-muted-foreground/50 transition-colors hover:text-foreground"
-              aria-label="dismiss AI usage notice"
+              aria-label="Dismiss AI usage notice"
             >
               <X className="h-3.5 w-3.5" />
             </button>

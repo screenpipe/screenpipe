@@ -141,7 +141,7 @@ describe("HomeCardAgentActions", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("opened"),
+      expect(screen.getByRole("status")).toHaveTextContent("Opened"),
     );
     const prompt = buildHomeCardAgentPrompt(DAY_RECAP, "claude");
     expect(mocks.copyTextToClipboard).toHaveBeenCalledWith(prompt);
@@ -187,7 +187,7 @@ describe("HomeCardAgentActions", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("opened"),
+      expect(screen.getByRole("status")).toHaveTextContent("Opened"),
     );
     expect(mocks.capture).toHaveBeenCalledWith(
       "home_card_agent_handoff_clicked",
@@ -219,7 +219,7 @@ describe("HomeCardAgentActions", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("copied"),
+      expect(screen.getByRole("status")).toHaveTextContent("Copied"),
     );
     expect(mocks.capture).toHaveBeenCalledWith(
       "home_card_agent_handoff_completed",
@@ -247,7 +247,7 @@ describe("HomeCardAgentActions", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("unavailable"),
+      expect(screen.getByRole("status")).toHaveTextContent("Unavailable"),
     );
     const prompt = buildHomeCardAgentPrompt(DAY_RECAP, "cursor");
     expect(mocks.openUrl).toHaveBeenCalledWith(

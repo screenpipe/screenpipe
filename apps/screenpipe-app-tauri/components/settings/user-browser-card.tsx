@@ -68,25 +68,25 @@ export function UserBrowserCard() {
         return (
           <span className="px-2 py-0.5 text-xs font-medium bg-muted text-muted-foreground rounded-full inline-flex items-center gap-1">
             <Loader2 className="h-3 w-3 animate-spin" />
-            checking
+            Checking
           </span>
         );
       case "connected":
         return (
           <span className="px-2 py-0.5 text-xs font-medium bg-green-500/10 text-green-600 dark:text-green-400 rounded-full">
-            connected
+            Connected
           </span>
         );
       case "disconnected":
         return (
           <span className="px-2 py-0.5 text-xs font-medium bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 rounded-full">
-            extension not installed or not running
+            Extension not installed or not running
           </span>
         );
       case "error":
         return (
           <span className="px-2 py-0.5 text-xs font-medium bg-red-500/10 text-red-600 dark:text-red-400 rounded-full">
-            unreachable
+            Unreachable
           </span>
         );
     }
@@ -138,8 +138,8 @@ export function UserBrowserCard() {
                   } catch {
                     try { await commands.copyTextToClipboard(CHROME_WEBSTORE_URL); } catch { /* clipboard may be denied */ }
                     toast({
-                      title: "couldn't open your browser",
-                      description: `link copied — paste in Chrome: ${CHROME_WEBSTORE_URL}`,
+                      title: "Couldn't open your browser",
+                      description: `Link copied — paste in Chrome: ${CHROME_WEBSTORE_URL}`,
                     });
                   }
                 }}

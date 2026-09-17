@@ -35,11 +35,11 @@ export function ContextUsagePanel({
   if (!snapshot || percent === null) {
     return (
       <section data-testid="context-usage-panel">
-        <div className="text-xs font-medium lowercase text-foreground">
-          context
+        <div className="text-xs font-medium normal-case text-foreground">
+          Context
         </div>
         <p className="mt-1.5 text-xs text-muted-foreground">
-          usage appears after this agent reports its context window.
+          Usage appears after this agent reports its context window.
         </p>
       </section>
     );
@@ -59,7 +59,7 @@ export function ContextUsagePanel({
     <section className="space-y-2.5" data-testid="context-usage-panel">
       <div>
         <div className="flex items-baseline justify-between gap-3 text-xs">
-          <span className="font-medium lowercase text-foreground">context</span>
+          <span className="font-medium normal-case text-foreground">Context</span>
           <span className="font-mono text-muted-foreground">
             {roundedPercent}% · ~
             {compactContextTokenCount(snapshot.totalUsedTokens)} /{" "}
@@ -104,7 +104,7 @@ export function ContextUsagePanel({
       {detailed && (
         <details className="group border-t border-border/70 pt-2">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-xs text-muted-foreground hover:text-foreground">
-            <span>breakdown</span>
+            <span>Breakdown</span>
             <ChevronDown
               className="h-3.5 w-3.5 transition-transform group-open:rotate-180"
               aria-hidden

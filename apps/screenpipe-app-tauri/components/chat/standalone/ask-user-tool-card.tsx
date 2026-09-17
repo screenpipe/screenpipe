@@ -256,7 +256,7 @@ export function AskUserToolCard({
         {submitted ? (
           <span className="inline-flex h-6 items-center gap-1 rounded-md border border-border bg-background px-2 text-[11px] text-muted-foreground">
             <Check className="h-3 w-3" />
-            sent
+            Sent
           </span>
         ) : null}
       </div>
@@ -291,7 +291,7 @@ export function AskUserToolCard({
             {activeQuestion.prompt}
           </div>
           {activeQuestion.required ? (
-            <div className="mt-1 text-[11px] text-muted-foreground">required by Pi</div>
+            <div className="mt-1 text-[11px] text-muted-foreground">Required by Pi</div>
           ) : null}
         </div>
 

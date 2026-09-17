@@ -113,7 +113,7 @@ export function RecentChatSwitcher({
                     >
                       <span className="min-w-0 truncate text-[14px] font-normal leading-5">
                         {(isInjectedTitle(session.title) ? undefined : session.title) ||
-                          "untitled"}
+                          "Untitled"}
                       </span>
                       <span className="shrink-0 text-[11px] font-normal tabular-nums text-muted-foreground/65">
                         {age ?? ""}

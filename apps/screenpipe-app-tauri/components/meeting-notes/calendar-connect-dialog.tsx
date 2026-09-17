@@ -288,7 +288,7 @@ function NativeCalendarConnect({
           ) : (
             <CalendarDays className="mr-2 h-3.5 w-3.5" />
           )}
-          connect
+          Connect
         </Button>
       </div>
       {statusText && (
@@ -345,7 +345,7 @@ function GoogleCalendarConnect({
             className="mr-2 h-3.5 w-3.5"
           />
         )}
-        connect google calendar
+        Connect google calendar
       </Button>
       {statusText && (
         <p className="text-xs text-muted-foreground">{statusText}</p>
@@ -424,7 +424,7 @@ function IcsCalendarConnect({
         <Input
           value={name}
           onChange={(event) => setName(event.target.value)}
-          placeholder="name, optional"
+          placeholder="Name, optional"
           className="rounded-md"
         />
       </div>
@@ -438,7 +438,7 @@ function IcsCalendarConnect({
         ) : (
           <Plus className="mr-2 h-3.5 w-3.5" />
         )}
-        add feed
+        Add feed
       </Button>
       {statusText && (
         <p className="text-xs text-muted-foreground">{statusText}</p>

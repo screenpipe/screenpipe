@@ -44,7 +44,7 @@ export function ModelDownloadTracker() {
           // Update toast using its reference
           if (toastRefs[model]) {
             toastRefs[model].update({
-              title: "downloading model",
+              title: "Downloading model",
               description: (
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center gap-2">
@@ -115,7 +115,7 @@ export function ModelDownloadTracker() {
         console.log("Detected ffmpeg installation starting");
 
         const toastRef = toast({
-          title: "installing ffmpeg",
+          title: "Installing ffmpeg",
           description: (
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-2">
@@ -142,8 +142,8 @@ export function ModelDownloadTracker() {
 
         // Show completion toast
         toast({
-          title: "ffmpeg installed",
-          description: "ffmpeg is ready to use",
+          title: "Ffmpeg installed",
+          description: "Ffmpeg is ready to use",
           duration: 3000,
         });
 
@@ -158,7 +158,7 @@ export function ModelDownloadTracker() {
 
         // Show toast for download start with initial progress
         const toastRef = toast({
-          title: "downloading model",
+          title: "Downloading model",
           description: (
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-2">
@@ -188,8 +188,8 @@ export function ModelDownloadTracker() {
 
         // Show completion toast
         toast({
-          title: "model downloaded",
-          description: `model is ready to use`,
+          title: "Model downloaded",
+          description: `Model is ready to use`,
           duration: 3000,
         });
 

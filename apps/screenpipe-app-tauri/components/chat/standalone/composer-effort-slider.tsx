@@ -80,7 +80,7 @@ export function ComposerEffortSlider({
       <div className="flex items-baseline justify-between gap-2">
         <span
           id={labelId}
-          className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+          className="text-[10px] font-medium normal-case tracking-wide text-muted-foreground"
         >
           {label}
         </span>

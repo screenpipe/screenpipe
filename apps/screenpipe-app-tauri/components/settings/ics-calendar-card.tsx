@@ -156,11 +156,11 @@ export function IcsCalendarCard() {
               </h3>
               <span className="px-2 py-0.5 text-xs font-medium bg-muted text-muted-foreground rounded-full inline-flex items-center gap-1">
                 <Link2 className="h-2.5 w-2.5" />
-                subscription
+                Subscription
               </span>
               {entries.length > 0 && (
                 <span className="px-2 py-0.5 text-xs font-medium bg-foreground text-background rounded-full">
-                  connected
+                  Connected
                 </span>
               )}
             </div>
@@ -248,7 +248,7 @@ export function IcsCalendarCard() {
           <div className="px-4 pb-3 pt-1 border-t border-border">
             <div className="flex items-center justify-between mt-2 mb-2">
               <span className="text-xs font-medium text-muted-foreground">
-                upcoming events (next 8h)
+                Upcoming events (next 8h)
               </span>
               <Button
                 variant="ghost"
@@ -266,10 +266,10 @@ export function IcsCalendarCard() {
             </div>
 
             {isLoadingEvents && upcomingEvents.length === 0 ? (
-              <p className="text-xs text-muted-foreground">loading...</p>
+              <p className="text-xs text-muted-foreground">Loading...</p>
             ) : upcomingEvents.length === 0 ? (
               <p className="text-xs text-muted-foreground">
-                no upcoming events in the next 8 hours
+                No upcoming events in the next 8 hours
               </p>
             ) : (
               <div className="space-y-1.5">

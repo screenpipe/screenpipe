@@ -56,7 +56,7 @@ export function InlineChatHistory({
           >
             <div className="p-3 border-b border-border/50 space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Chat History</span>
+                <span className="text-xs font-medium text-muted-foreground normal-case tracking-wider">Chat History</span>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -88,7 +88,7 @@ export function InlineChatHistory({
               ) : (
                 groupedConversations.map((group) => (
                   <div key={group.label} className="space-y-1">
-                    <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider px-2 py-1">
+                    <p className="text-[10px] font-medium text-muted-foreground normal-case tracking-wider px-2 py-1">
                       {group.label}
                     </p>
                     {group.conversations.map((conv) => (
@@ -102,7 +102,7 @@ export function InlineChatHistory({
                       >
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-medium truncate">
-                            {(isInjectedTitle(conv.title) ? undefined : conv.title) || "untitled"}
+                            {(isInjectedTitle(conv.title) ? undefined : conv.title) || "Untitled"}
                           </p>
                           <p className="text-[10px] text-muted-foreground">
                             {conv.messageCount} messages

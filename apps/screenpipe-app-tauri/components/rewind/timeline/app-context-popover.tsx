@@ -24,19 +24,19 @@ function formatUiEvent(ev: UiEventSummary): { icon: string; label: string } | nu
 	const truncate = (s: string, max = 40) => s.length > max ? s.slice(0, max) + "\u2026" : s;
 	switch (ev.event_type) {
 		case "text":
-			return { icon: "\u2328", label: ev.text_content ? `typed "${truncate(ev.text_content)}"` : "typed" };
+			return { icon: "\u2328", label: ev.text_content ? `Typed "${truncate(ev.text_content)}"` : "Typed" };
 		case "clipboard":
-			return { icon: "\ud83d\udccb", label: ev.text_content ? `copied "${truncate(ev.text_content)}"` : "copied" };
+			return { icon: "\ud83d\udccb", label: ev.text_content ? `Copied "${truncate(ev.text_content)}"` : "Copied" };
 		case "click":
-			return { icon: "\ud83d\uddb1", label: `clicked "${truncate(ev.text_content || "element")}"` };
+			return { icon: "\ud83d\uddb1", label: `Clicked "${truncate(ev.text_content || "element")}"` };
 		case "app_switch":
-			return { icon: "\u21d4", label: `switched to ${ev.app_name || "app"}` };
+			return { icon: "\u21d4", label: `Switched to ${ev.app_name || "app"}` };
 		case "key":
-			return { icon: "\u2303", label: ev.text_content ? `pressed ${truncate(ev.text_content)}` : "key press" };
+			return { icon: "\u2303", label: ev.text_content ? `Pressed ${truncate(ev.text_content)}` : "Key press" };
 		case "scroll":
-			return { icon: "\u21f3", label: `scrolled${ev.window_title ? ` in ${truncate(ev.window_title)}` : ""}` };
+			return { icon: "\u21f3", label: `Scrolled${ev.window_title ? ` in ${truncate(ev.window_title)}` : ""}` };
 		case "window_focus":
-			return { icon: "\ud83d\udd32", label: `focused ${ev.window_title ? truncate(ev.window_title) : ev.app_name || "window"}` };
+			return { icon: "\ud83d\udd32", label: `Focused ${ev.window_title ? truncate(ev.window_title) : ev.app_name || "window"}` };
 		default:
 			return null;
 	}
@@ -299,7 +299,7 @@ export function AppContextPopover({
 					<div className="space-y-1">
 						<div className="flex items-center gap-1.5 text-muted-foreground">
 							<Globe className="w-3 h-3 flex-shrink-0" />
-							<span>top sites</span>
+							<span>Top sites</span>
 						</div>
 						<div className="pl-4 space-y-0.5">
 							{data.topUrls.map((u, i) => {
@@ -388,7 +388,7 @@ export function AppContextPopover({
 					className="flex items-center gap-1 px-2 py-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
 				>
 					<Copy className="w-3 h-3" />
-					<span>{copied ? "copied" : "copy"}</span>
+					<span>{copied ? "Copied" : "Copy"}</span>
 				</button>
 				{onSearch && (
 					<button
@@ -396,7 +396,7 @@ export function AppContextPopover({
 						className="flex items-center gap-1 px-2 py-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
 					>
 						<Search className="w-3 h-3" />
-						<span>search</span>
+						<span>Search</span>
 					</button>
 				)}
 			</div>

@@ -632,7 +632,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			if (Number.isNaN(parsed) || parsed < 1) {
 				setPendingNavigation(null);
 				toast({
-					title: "invalid frame ID",
+					title: "Invalid frame ID",
 					description: `"${raw}" is not a valid frame ID. expected a positive integer.`,
 					variant: "destructive",
 				});
@@ -645,21 +645,21 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				if (data?.timestamp) {
 					setPendingNavigation(null);
 					await navigateToTimestamp(data.timestamp);
-					toast({ title: "jumped to frame", description: `opened frame ${frameId}` });
+					toast({ title: "Jumped to frame", description: `Opened frame ${frameId}` });
 					return;
 				}
 				setPendingNavigation(null);
 				toast({
-					title: "frame not found",
-					description: `could not navigate to frame ${frameId} — it may not exist or server is not ready`,
+					title: "Frame not found",
+					description: `Could not navigate to frame ${frameId} — it may not exist or server is not ready`,
 					variant: "destructive",
 				});
 			} catch (error) {
 				console.error("Failed to navigate to frame:", error);
 				setPendingNavigation(null);
 				toast({
-					title: "navigation failed",
-					description: error instanceof Error ? error.message : "could not resolve frame to timestamp",
+					title: "Navigation failed",
+					description: error instanceof Error ? error.message : "Could not resolve frame to timestamp",
 					variant: "destructive",
 				});
 			}
@@ -914,7 +914,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		});
 
 		if (pipe) {
-			toast({ title: `${pipe.icon} ${pipe.title}`, description: "running scheduled task with selection context" });
+			toast({ title: `${pipe.icon} ${pipe.title}`, description: "Running scheduled task with selection context" });
 		}
 	}, [selectionRange, frames]);
 
@@ -1169,7 +1169,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 					<div className="mx-auto mb-6 w-16 h-16 rounded-full bg-muted/50 border border-border flex items-center justify-center">
 						<MonitorOff className="w-8 h-8 text-muted-foreground" />
 					</div>
-					<h3 className="text-lg font-mono font-semibold uppercase tracking-wide mb-2">
+					<h3 className="text-lg font-mono font-semibold normal-case tracking-wide mb-2">
 						Timeline Disabled
 					</h3>
 					<p className="text-sm font-mono text-muted-foreground leading-relaxed">
@@ -1719,7 +1719,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 											<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
 											<span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
 										</span>
-										Recording... timeline will appear soon
+										Recording... Timeline will appear soon
 									</div>
 								)}
 							</div>

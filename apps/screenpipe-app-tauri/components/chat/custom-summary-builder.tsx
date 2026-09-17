@@ -109,7 +109,7 @@ export function CustomSummaryBuilder({
 
   const quickTemplatesBlock = (
     <div>
-      <label className="text-[10px] font-mono font-medium text-muted-foreground/60 uppercase tracking-wider mb-1.5 block">
+      <label className="text-[10px] font-mono font-medium text-muted-foreground/60 normal-case tracking-wider mb-1.5 block">
         Quick Templates
       </label>
       <div className="flex flex-wrap gap-1">
@@ -212,20 +212,20 @@ export function CustomSummaryBuilder({
             {editingTemplate ? (
               editingTemplate.title
             ) : (
-              "custom summary"
+              "Custom summary"
             )}
           </DialogTitle>
           <DialogDescription>
             {editingTemplate
-              ? "edit the time range or instructions, then run or save your changes"
-              : "pick a time range and tell us what to focus on"}
+              ? "Edit the time range or instructions, then run or save your changes"
+              : "Pick a time range and tell us what to focus on"}
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mt-2">
           {/* Left: Time Range */}
           <div>
-            <label className="text-[11px] font-mono font-medium text-muted-foreground uppercase tracking-wider mb-2 block">
+            <label className="text-[11px] font-mono font-medium text-muted-foreground normal-case tracking-wider mb-2 block">
               Time Period
             </label>
             <div className="flex flex-wrap gap-1">
@@ -303,7 +303,7 @@ export function CustomSummaryBuilder({
 
           {/* Right: Instructions */}
           <div className="flex flex-col">
-            <label className="text-[11px] font-mono font-medium text-muted-foreground uppercase tracking-wider mb-2 block">
+            <label className="text-[11px] font-mono font-medium text-muted-foreground normal-case tracking-wider mb-2 block">
               What should the summary focus on?
             </label>
             <Textarea
@@ -339,8 +339,8 @@ export function CustomSummaryBuilder({
           ) : (
             <div className="text-[11px] text-muted-foreground font-mono">
               {hasValidTime
-                ? <>summarizing <span className="font-medium text-foreground">{getTimeLabel().toLowerCase()}</span></>
-                : "select a time period"}
+                ? <>Summarizing <span className="font-medium text-foreground">{getTimeLabel().toLowerCase()}</span></>
+                : "Select a time period"}
             </div>
           )}
           <div className="flex items-center gap-2">
@@ -360,7 +360,7 @@ export function CustomSummaryBuilder({
                 <Input
                   value={templateTitle}
                   onChange={(e) => setTemplateTitle(e.target.value)}
-                  placeholder="template name..."
+                  placeholder="Template name..."
                   className="h-8 w-36 text-[11px]"
                   onKeyDown={(e) => e.key === "Enter" && handleSave()}
                   autoFocus

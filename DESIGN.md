@@ -48,11 +48,11 @@ the core identity.
 
 ### Usage Patterns
 
-- **Headings**: Space Grotesk, lowercase preferred
+- **Headings**: Space Grotesk, sentence case
 - **Body text**: Crimson Text for readability
 - **Code/technical**: IBM Plex Mono
-- **Buttons**: UPPERCASE with tracking-wide
-- **Labels**: lowercase, medium weight
+- **Buttons**: Sentence case
+- **Labels**: Sentence case, medium weight
 
 ---
 
@@ -179,7 +179,7 @@ sell elevation.
 ### Buttons
 
 ```
-- Font: UPPERCASE, tracking-wide
+- Font: Sentence case
 - Border: 1px solid
 - Corners: Compact (6px radius)
 - Transition: 150ms
@@ -215,7 +215,7 @@ sell elevation.
 - Shadow: Subtle lift allowed (elevated surface)
 - Corners: Surface (8px radius)
 - Animation: 150ms fade
-- Title: lowercase
+- Title: Sentence case
 ```
 
 ---
@@ -260,7 +260,9 @@ screenpipe's ink, bone, trace, neutral signal, and phosphor meanings intact.
 
 ### Tone
 
-- Lowercase, casual, direct
+- Sentence case, casual, direct
+- Capitalize sentence starts and preserve proper names and acronyms (Screenpipe, macOS, AI, OCR, API).
+- Write casing in the source copy. Do not force lowercase, uppercase, or title case with CSS or transform user content.
 - Minimal technical details but power users can go deep
 - No marketing fluff
 - Show source, trigger, action, destination, and user control where relevant
@@ -285,7 +287,7 @@ When creating new UI components:
 - [ ] Phosphor disappears when execution stops
 - [ ] State is understandable without color
 - [ ] 150ms transitions
-- [ ] UPPERCASE for buttons, lowercase for titles
+- [ ] Sentence case for buttons, labels, and titles
 - [ ] Hover state: color inversion
 - [ ] Focus ring: 1px solid with offset
 - [ ] Product proof is ahead of explanatory diagrams

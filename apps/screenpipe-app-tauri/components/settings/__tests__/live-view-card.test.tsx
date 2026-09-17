@@ -192,7 +192,7 @@ describe("LiveViewCard range and freshness", () => {
     expect(screen.getByText("List · requested: Last 7 days")).toBeTruthy();
     expect(
       screen.getByTestId("overview-card-updated-process-steps"),
-    ).toHaveTextContent(/^updated .* · artifact #42 · v1$/);
+    ).toHaveTextContent(/^Updated .* · artifact #42 · v1$/);
   });
 
   it("marks an unconfigured block as unable to refresh", () => {

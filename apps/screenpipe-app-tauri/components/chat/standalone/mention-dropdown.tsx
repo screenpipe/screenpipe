@@ -33,24 +33,24 @@ export function MentionDropdown({
           if (items.length === 0) return null;
           return (
             <div key={category}>
-              <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50">
+              <div className="px-2 py-1 text-[10px] font-medium normal-case tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50">
                 {category === "command"
-                  ? "commands"
+                  ? "Commands"
                   : category === "chat"
-                  ? "recent chats"
+                  ? "Recent chats"
                   : category === "skill"
-                    ? "installed skills"
+                    ? "Installed skills"
                     : category === "range"
-                      ? "time ranges"
+                      ? "Time ranges"
                   : category === "time"
-                  ? "time"
+                  ? "Time"
                   : category === "content"
-                    ? "content type"
+                    ? "Content type"
                     : category === "speaker"
-                      ? "speakers"
+                      ? "Speakers"
                       : category === "tag"
-                        ? "tags"
-                        : "apps"}
+                        ? "Tags"
+                        : "Apps"}
               </div>
               {items.map((suggestion) => {
                 const globalIndex = mentions.suggestions.indexOf(suggestion);
@@ -92,7 +92,7 @@ export function MentionDropdown({
         )}
         </div>
         <div className="px-3 py-1.5 text-[10px] text-muted-foreground border-t border-border/50 bg-muted/20">
-          type to filter · ↓/enter to select · esc to clear
+          Type to filter · ↓/enter to select · esc to clear
         </div>
       </motion.div>
     </AnimatePresence>

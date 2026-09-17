@@ -160,7 +160,7 @@ export function AcpSetupProgress({
             })}
           </div>
           <p className="text-right text-[10px] tabular-nums text-muted-foreground">
-            step {currentStep} of {stages.length}
+            Step {currentStep} of {stages.length}
           </p>
         </div>
       )}

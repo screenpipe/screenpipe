@@ -197,7 +197,7 @@ export function AttendeesPill({ value, count, onChange }: AttendeesPillProps) {
         >
           <Users className="h-3.5 w-3.5" />
           {count === 0
-            ? "add attendees"
+            ? "Add attendees"
             : `${count} ${count === 1 ? "attendee" : "attendees"}`}
         </button>
       </PopoverTrigger>
@@ -211,7 +211,7 @@ export function AttendeesPill({ value, count, onChange }: AttendeesPillProps) {
           <input
             ref={inputRef}
             value={searchTerm}
-            placeholder="search or add attendee…"
+            placeholder="Search or add attendee…"
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
@@ -282,7 +282,7 @@ export function AttendeesPill({ value, count, onChange }: AttendeesPillProps) {
         {/* Current attendees — scrollable chip cloud, bounded height */}
         {attendees.length > 0 ? (
           <>
-            <div className="px-2.5 pt-2 text-[11px] lowercase text-muted-foreground">
+            <div className="px-2.5 pt-2 text-[11px] normal-case text-muted-foreground">
               {attendees.length}{" "}
               {attendees.length === 1 ? "attendee" : "attendees"}
             </div>
@@ -310,7 +310,7 @@ export function AttendeesPill({ value, count, onChange }: AttendeesPillProps) {
         ) : (
           !searchTerm.trim() && (
             <div className="px-2.5 py-3 text-xs text-muted-foreground">
-              no attendees yet — type a name to add
+              No attendees yet — type a name to add
             </div>
           )
         )}

@@ -131,7 +131,7 @@ describe("AcpPermissionSelector", () => {
 
     fireEvent.click(trigger);
     expect(
-      screen.getByText("how should codex actions be approved?"),
+      screen.getByText("How should codex actions be approved?"),
     ).toBeInTheDocument();
     expect(screen.getByText("Ask for approval")).toBeInTheDocument();
     expect(screen.getByText("Approve for me")).toBeInTheDocument();
@@ -371,7 +371,7 @@ describe("AcpPermissionSelector", () => {
 
     fireEvent.click(trigger);
     expect(
-      screen.getByText("how should claude code actions be approved?"),
+      screen.getByText("How should claude code actions be approved?"),
     ).toBeInTheDocument();
     expect(screen.getByText("Approve edits")).toBeInTheDocument();
     expect(screen.getByText("Plan only")).toBeInTheDocument();

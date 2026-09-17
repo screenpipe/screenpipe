@@ -34,7 +34,7 @@ describe("app-wide migration modal", () => {
     mock.getActivity.mockResolvedValue({ ...running, recovering: true, message: "restoring saved screen records" });
     const openSettings = vi.fn();
     render(<><StorageMigrationGate /><button onClick={openSettings}>settings</button></>);
-    const recovery = await screen.findByRole("complementary", { name: "storage recovery" });
+    const recovery = await screen.findByRole("complementary", { name: "Storage recovery" });
     expect(recovery).toHaveTextContent("restoring saved screen records");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("button", { name: "restart to update" })).toBeEnabled();
@@ -43,7 +43,7 @@ describe("app-wide migration modal", () => {
     expect(screen.queryByRole("button", { name: /try again|do later/i })).toBeNull();
     notify({ ...running, recovering: true, message: "starting recording on recovered storage" });
     expect(recovery).toHaveTextContent("starting recording on recovered storage");
-    fireEvent.click(screen.getByRole("button", { name: "hide" }));
+    fireEvent.click(screen.getByRole("button", { name: "Hide" }));
     expect(screen.queryByRole("complementary")).toBeNull();
     notify(idle);
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -53,7 +53,7 @@ describe("app-wide migration modal", () => {
     render(<StorageMigrationGate />);
     await waitFor(() => expect(mock.getActivity).toHaveBeenCalled());
     notify({ ...running, completed_records: 250, total_records: 1000, elapsed_seconds: 125, bytes_saved: 3 * 1024 ** 3, available_bytes: 4 * 1024 ** 3 });
-    expect(screen.getByRole("progressbar")).toHaveAttribute("value", "250");
+    expect(screen.getByRole("progressbar")).toHaveAttribute("Value", "250");
     expect(screen.getByText("25%")).toBeTruthy();
     expect(screen.getByText("Elapsed: 2m 5s")).toBeTruthy();
     expect(screen.getByText("Space saved: 3.0 GB")).toBeTruthy();
@@ -68,7 +68,7 @@ describe("app-wide migration modal", () => {
   it("blocks an already-running migration and stays mounted across page changes", async () => {
     mock.getActivity.mockResolvedValue(running);
     const app = render(<><StorageMigrationGate /><main>settings</main></>);
-    expect(await screen.findByRole("dialog", { name: "preparing storage" })).toBeTruthy();
+    expect(await screen.findByRole("dialog", { name: "Preparing storage" })).toBeTruthy();
     app.rerender(<><StorageMigrationGate /><main>chat</main></>);
     expect(screen.getByRole("dialog")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /close|cancel|dismiss/i })).toBeNull();

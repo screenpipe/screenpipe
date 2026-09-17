@@ -95,7 +95,7 @@ describe("availability precedence", () => {
   it("case 11: blocks only when there is no evidence at all", () => {
     const a = resolveMeetingChatAvailability(base({ transcriptTurnCount: 0 }));
     expect(a.reason).toBe("no-transcript");
-    expect(a.placeholder).toBe("nothing recorded yet");
+    expect(a.placeholder).toBe("Nothing recorded yet");
   });
 
   it("case 11: a written note is enough to ask about", () => {

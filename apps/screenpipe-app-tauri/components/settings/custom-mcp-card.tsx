@@ -306,11 +306,11 @@ export function CustomMcpCard() {
                 <DialogClose asChild>
                   <button
                     type="button"
-                    aria-label="close"
+                    aria-label="Close"
                     className="ml-auto text-muted-foreground transition-colors hover:text-foreground"
                   >
                     <X className="h-4 w-4" />
-                    <span className="sr-only">close</span>
+                    <span className="sr-only">Close</span>
                   </button>
                 </DialogClose>
               </DialogHeader>
@@ -424,7 +424,7 @@ function ServerRow({
             ? `${toolCount} tool${toolCount === 1 ? "" : "s"}`
             : server.enabled
             ? "—"
-            : "disabled"}
+            : "Disabled"}
         </span>
       </button>
       <Button
@@ -994,7 +994,7 @@ function ServerEditor({
                     id="mcp-bearer-token"
                     value={bearerToken}
                     onChange={(e) => setBearerToken(e.target.value)}
-                    placeholder="lin_api_... or Bearer ..."
+                    placeholder="Lin_api_... Or Bearer ..."
                     className="h-7 text-xs font-mono"
                     type={bearerToken === PLACEHOLDER_VALUE ? "password" : "text"}
                     autoComplete="off"
@@ -1015,7 +1015,7 @@ function ServerEditor({
                       onChange={(e) =>
                         updateHeader(i, { value: e.target.value })
                       }
-                      placeholder="value"
+                      placeholder="Value"
                       className="h-7 text-xs font-mono flex-1"
                       type={
                         h.value === PLACEHOLDER_VALUE ? "password" : "text"

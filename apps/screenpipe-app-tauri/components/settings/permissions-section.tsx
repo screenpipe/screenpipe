@@ -259,7 +259,7 @@ function RequiredPermissions() {
 
   return (
     <div className="space-y-2" data-testid="permissions-required">
-      <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+      <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">
         Required
       </h2>
       {rows.map((row) => {
@@ -421,7 +421,7 @@ export function PermissionsSection() {
       <RequiredPermissions />
 
       <div className="space-y-2" data-testid="permissions-optional">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+        <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">
           Optional
         </h2>
         <InputMonitoringPermissionRow />

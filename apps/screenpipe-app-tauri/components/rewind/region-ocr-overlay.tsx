@@ -91,8 +91,8 @@ export const RegionOcrOverlay: FC<RegionOcrOverlayProps> = ({
 
       if (!userToken) {
         toast({
-          title: "login required",
-          description: "login required for region OCR",
+          title: "Login required",
+          description: "Login required for region OCR",
           variant: "destructive",
         });
         setSelectionRect(null);
@@ -100,7 +100,7 @@ export const RegionOcrOverlay: FC<RegionOcrOverlayProps> = ({
       }
 
       setIsProcessing(true);
-      toast({ title: "reading text...", description: "analyzing selected region" });
+      toast({ title: "Reading text...", description: "Analyzing selected region" });
 
       try {
         // Map container coords to natural image coords
@@ -187,8 +187,8 @@ export const RegionOcrOverlay: FC<RegionOcrOverlayProps> = ({
 
         if (!extractedText) {
           toast({
-            title: "no text found",
-            description: "no text was detected in the selected region",
+            title: "No text found",
+            description: "No text was detected in the selected region",
           });
         } else {
           // Use native Tauri clipboard — navigator.clipboard.writeText() fails
@@ -199,7 +199,7 @@ export const RegionOcrOverlay: FC<RegionOcrOverlayProps> = ({
               ? extractedText.slice(0, 120) + "..."
               : extractedText;
           toast({
-            title: "text copied to clipboard",
+            title: "Text copied to clipboard",
             description: preview,
           });
         }
@@ -215,7 +215,7 @@ export const RegionOcrOverlay: FC<RegionOcrOverlayProps> = ({
           description:
             quota.kind !== "none"
               ? quota.message
-              : "could not extract text from this region. try again.",
+              : "Could not extract text from this region. try again.",
           variant: "destructive",
         });
       } finally {

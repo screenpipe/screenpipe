@@ -31,7 +31,7 @@ export function VoiceMemosCard() {
                 Voice Memos
               </h3>
               <span className="px-2 py-0.5 text-xs font-medium bg-muted text-muted-foreground rounded-full">
-                macOS
+                MacOS
               </span>
             </div>
 

@@ -135,12 +135,12 @@ const TAG_SUGGESTION_LIMIT = 10;
 const STREAM_RENDER_THROTTLE_MS = 80;
 
 const STATIC_MENTION_SUGGESTIONS: MentionSuggestion[] = [
-  { tag: "@today", description: "today's activity", category: "time" },
-  { tag: "@yesterday", description: "yesterday", category: "time" },
-  { tag: "@last-week", description: "past 7 days", category: "time" },
-  { tag: "@last-hour", description: "past hour", category: "time" },
-  { tag: "@audio", description: "audio/meetings only", category: "content" },
-  { tag: "@screen", description: "screen text only", category: "content" },
+  { tag: "@today", description: "Today's activity", category: "time" },
+  { tag: "@yesterday", description: "Yesterday", category: "time" },
+  { tag: "@last-week", description: "Past 7 days", category: "time" },
+  { tag: "@last-hour", description: "Past hour", category: "time" },
+  { tag: "@audio", description: "Audio/meetings only", category: "content" },
+  { tag: "@screen", description: "Screen text only", category: "content" },
   { tag: "@input", description: "UI events (clicks, keys)", category: "content" },
 ];
 
@@ -420,9 +420,9 @@ export function StandaloneChat({
     };
 
     return [
-      { label: "memory tags", suggestions: pick("memory_count") },
-      { label: "audio tags", suggestions: pick("audio_count") },
-      { label: "screen tags", suggestions: pick("frame_count") },
+      { label: "Memory tags", suggestions: pick("memory_count") },
+      { label: "Audio tags", suggestions: pick("audio_count") },
+      { label: "Screen tags", suggestions: pick("frame_count") },
     ].filter((section) => section.suggestions.length > 0);
   }, [tagItems]);
 
@@ -654,7 +654,7 @@ export function StandaloneChat({
     }
 
     toast({
-      title: "sign in required",
+      title: "Sign in required",
       description: buildInvalidatedAuthTokenMessage(),
       variant: "destructive",
     });
@@ -1611,7 +1611,7 @@ export function StandaloneChat({
       // glitch — some agents (Cursor) authenticate instantly with no browser.
       if (inner.type === "acp_authenticated") {
         setAcpSignInError(null);
-        toast({ title: `signed in to ${acpAdapterInfo(activePresetRef.current?.acpAgent?.id).name}` });
+        toast({ title: `Signed in to ${acpAdapterInfo(activePresetRef.current?.acpAgent?.id).name}` });
       }
       return false;
     }
@@ -2148,8 +2148,8 @@ export function StandaloneChat({
   const askSelectedTextInSideChat = useCallback(async (text: string) => {
     if (activePresetRef.current?.provider === "acp") {
       toast({
-        title: "temporary side chat is not available with coding agents",
-        description: "coding-agent sessions cannot guarantee ephemeral history",
+        title: "Temporary side chat is not available with coding agents",
+        description: "Coding-agent sessions cannot guarantee ephemeral history",
       });
       return;
     }

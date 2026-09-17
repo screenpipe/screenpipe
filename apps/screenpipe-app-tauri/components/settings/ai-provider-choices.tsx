@@ -126,7 +126,7 @@ export function AIProviderChoices({
         {showScreenpipeCloud && (
           <AIProviderCard
             type="screenpipe-cloud"
-            title="screenpipe"
+            title="Screenpipe"
             description="Use screenpipe's AI. Included with your plan."
             imageSrc="/images/screenpipe.png"
             selected={selectedProvider === "screenpipe-cloud"}
@@ -156,7 +156,7 @@ export function AIProviderChoices({
 
       <button
         type="button"
-        aria-label="advanced"
+        aria-label="Advanced"
         className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
         onClick={() => setShowAdvanced((current) => !current)}
         aria-expanded={showAdvanced}
@@ -166,13 +166,13 @@ export function AIProviderChoices({
         ) : (
           <ChevronRight className="size-4" />
         )}
-        <span>advanced</span>
+        <span>Advanced</span>
       </button>
 
       {showAdvanced && (
         <div className="space-y-3">
           <div className="space-y-2">
-            <p className="text-sm font-medium">use a model directly</p>
+            <p className="text-sm font-medium">Use a model directly</p>
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
               <AIProviderCard
                 type="openai-chatgpt"
@@ -214,7 +214,7 @@ export function AIProviderChoices({
 
           {acpEnabled && customAcpAdapter && (
             <div className="space-y-2">
-              <p className="text-sm font-medium">connect another agent</p>
+              <p className="text-sm font-medium">Connect another agent</p>
               <AIProviderCard
                 type="acp"
                 title="Use a command"

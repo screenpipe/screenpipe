@@ -77,7 +77,7 @@ export function ChatSplitPane({
         {working ? (
           <Loader2
             className="h-3.5 w-3.5 animate-spin text-primary"
-            aria-label="working"
+            aria-label="Working"
           />
         ) : (
           <span

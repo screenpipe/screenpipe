@@ -105,7 +105,7 @@ export function InteractiveLiveViewListItem({
         <p className="min-w-0 flex-1 truncate text-xs line-through decoration-border">
           {title}
         </p>
-        <span className="hidden text-[10px] uppercase tracking-wide sm:inline">
+        <span className="hidden text-[10px] normal-case tracking-wide sm:inline">
           {stateLabel}
         </span>
         <Button
@@ -113,7 +113,7 @@ export function InteractiveLiveViewListItem({
           variant="ghost"
           size="sm"
           data-testid={`live-view-item-${itemId}-reopen`}
-          aria-label={`reopen ${title}`}
+          aria-label={`Reopen ${title}`}
           className="h-7 rounded-md px-2 text-[11px]"
           disabled={!onAction || saving !== null}
           onClick={() => void act({ action: "reopen" })}
@@ -164,7 +164,7 @@ export function InteractiveLiveViewListItem({
             }
           />
           {typeof item.status === "string" && (
-            <span className="mt-0.5 hidden shrink-0 border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground sm:inline">
+            <span className="mt-0.5 hidden shrink-0 border border-border px-1.5 py-0.5 text-[10px] normal-case tracking-wide text-muted-foreground sm:inline">
               {item.status}
             </span>
           )}
@@ -173,14 +173,14 @@ export function InteractiveLiveViewListItem({
           typeof item.source === "string") && (
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[10px] text-muted-foreground">
             {typeof item.dueAt === "string" && (
-              <span>due {readableDate(item.dueAt)}</span>
+              <span>Due {readableDate(item.dueAt)}</span>
             )}
-            {typeof item.source === "string" && <span>from {item.source}</span>}
+            {typeof item.source === "string" && <span>From {item.source}</span>}
           </div>
         )}
         {state?.correction && (
           <p className="mt-1.5 border-l-2 border-foreground pl-2 text-[10px] text-muted-foreground">
-            corrected: {state.correction}
+            Corrected: {state.correction}
           </p>
         )}
         <LiveViewItemControls

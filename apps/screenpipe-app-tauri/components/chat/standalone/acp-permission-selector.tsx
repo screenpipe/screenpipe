@@ -342,7 +342,7 @@ export function AcpPermissionSelector({
       }
       setOpen(false);
     } catch (error) {
-      toast.error(`could not change ${agentName.toLowerCase()} permissions`, {
+      toast.error(`Could not change ${agentName.toLowerCase()} permissions`, {
         description: String(error),
       });
     } finally {
@@ -387,7 +387,7 @@ export function AcpPermissionSelector({
         }}
       >
         <p className="px-2 pb-1 pt-0.5 text-xs text-muted-foreground">
-          how should {agentName.toLowerCase()} actions be approved?
+          How should {agentName.toLowerCase()} actions be approved?
         </p>
         {control.values.map((mode) => {
           const presentation = permissionPresentation(mode);
@@ -437,12 +437,12 @@ export function AcpPermissionSelector({
               {isPending ? (
                 <Loader2
                   className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground"
-                  aria-label="changing permissions"
+                  aria-label="Changing permissions"
                 />
               ) : isSelected ? (
                 <Check
                   className="mt-0.5 h-4 w-4 shrink-0"
-                  aria-label="selected"
+                  aria-label="Selected"
                 />
               ) : null}
             </button>

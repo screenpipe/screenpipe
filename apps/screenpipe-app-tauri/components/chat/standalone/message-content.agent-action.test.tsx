@@ -38,19 +38,19 @@ describe("InlineAgentActionCard", () => {
     await waitFor(() => expect(onRespond).toHaveBeenCalledWith("allow-once"));
     // On a successful answer the card enters the pending state and stays until
     // the parent strips it on the ACP terminal event; it does not self-remove.
-    expect(await screen.findByText("waiting for the agent…")).toBeInTheDocument();
+    expect(await screen.findByText("Waiting for the agent…")).toBeInTheDocument();
   });
 
   it("returns a cancellation when the user chooses not now", async () => {
     const onRespond = vi.fn().mockResolvedValue(true);
     render(<InlineAgentActionCard block={actionBlock()} onRespond={onRespond} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "not now" }));
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
 
     await waitFor(() => expect(onRespond).toHaveBeenCalledWith(undefined));
     // Same as above: an accepted cancel enters the pending state; the parent
     // removes the card when the ACP turn actually ends.
-    expect(await screen.findByText("waiting for the agent…")).toBeInTheDocument();
+    expect(await screen.findByText("Waiting for the agent…")).toBeInTheDocument();
   });
 
   it("shows auth requests without protocol terminology and permits retry", async () => {
@@ -65,11 +65,11 @@ describe("InlineAgentActionCard", () => {
       onRespond={onRespond}
     />);
 
-    expect(screen.getByText("choose how you want to connect this agent.")).toBeInTheDocument();
+    expect(screen.getByText("Choose how you want to connect this agent.")).toBeInTheDocument();
     expect(screen.queryByText(/ACP/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Sign in in browser" }));
 
-    expect(await screen.findByText("that did not work. please try again.")).toBeInTheDocument();
+    expect(await screen.findByText("That did not work. Please try again.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sign in in browser" })).toBeEnabled();
   });
 });

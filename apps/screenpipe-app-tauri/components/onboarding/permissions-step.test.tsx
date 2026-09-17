@@ -231,7 +231,7 @@ describe("onboarding permission wheel", () => {
     // screen recording is last on the wheel — focused once the rest granted
     await waitFor(() => expect(screenRow()).toBeEnabled());
     const restartWarning = screen.getByText(
-      "restart after granting this permission."
+      "Restart after granting this permission."
     );
     expect(restartWarning.tagName).toBe("STRONG");
     expect(restartWarning).toHaveClass("font-bold");
@@ -257,9 +257,9 @@ describe("onboarding permission wheel", () => {
     const prompt = await screen.findByTestId(
       "screen-recording-restart-prompt"
     );
-    expect(prompt).toHaveTextContent("restart required");
+    expect(prompt).toHaveTextContent("Restart required");
     expect(prompt).toHaveTextContent(
-      "screenpipe won't work until you restart."
+      "Screenpipe won't work until you restart."
     );
     expect(handleNextSlide).not.toHaveBeenCalled();
 
@@ -329,7 +329,7 @@ describe("onboarding permission wheel", () => {
 
     const details = await screen.findByTestId("onboarding-trust-details");
     await waitFor(() =>
-      expect(details).toHaveTextContent("couldn't open the folder")
+      expect(details).toHaveTextContent("Couldn't open the folder")
     );
   });
 

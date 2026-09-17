@@ -58,7 +58,7 @@ function CategorySection({
     <div className="mt-4">
       <div className="flex items-center gap-2 mb-2">
         {icon}
-        <span className="font-mono text-[10px] uppercase tracking-[0.15em] font-semibold text-muted-foreground">
+        <span className="font-mono text-[10px] normal-case tracking-[0.15em] font-semibold text-muted-foreground">
           {label}
         </span>
       </div>
@@ -116,25 +116,25 @@ export const ChangelogDialog: React.FC = () => {
     <Dialog open={showChangelogDialog} onOpenChange={onClose}>
       <DialogContent className="w-11/12 max-w-3xl p-0 h-[80vh] overflow-hidden flex flex-col">
         <div className="px-6 pt-6 pb-4 border-b border-border flex items-center justify-between">
-          <h1 className="text-xl font-semibold">changelog</h1>
+          <h1 className="text-xl font-semibold">Changelog</h1>
           <a
             href={screenpipeWebUrl("/changelog", "https://screenpipe.com")}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
-            view all <ExternalLink className="w-3 h-3" />
+            View all <ExternalLink className="w-3 h-3" />
           </a>
         </div>
         <div className="flex-1 overflow-y-auto px-6 py-4">
           {loading ? (
-            <div className="text-sm text-muted-foreground font-mono">loading…</div>
+            <div className="text-sm text-muted-foreground font-mono">Loading…</div>
           ) : entries && entries.length > 0 ? (
             <div className="space-y-8">
               {entries.map((entry) => (
                 <div key={entry.version} className="pb-6 border-b border-border/40 last:border-b-0">
                   <div className="flex items-baseline gap-3 mb-2">
-                    <span className="font-mono text-sm font-semibold">v{entry.version}</span>
+                    <span className="font-mono text-sm font-semibold">V{entry.version}</span>
                     <span className="text-xs text-muted-foreground">{formatDate(entry.date)}</span>
                   </div>
                   {entry.summary && (
@@ -142,17 +142,17 @@ export const ChangelogDialog: React.FC = () => {
                   )}
                   <CategorySection
                     icon={<Sparkles className="w-3 h-3 text-foreground/60" />}
-                    label="new"
+                    label="New"
                     items={entry.features ?? []}
                   />
                   <CategorySection
                     icon={<Wrench className="w-3 h-3 text-foreground/60" />}
-                    label="improved"
+                    label="Improved"
                     items={entry.improvements ?? []}
                   />
                   <CategorySection
                     icon={<Bug className="w-3 h-3 text-foreground/60" />}
-                    label="fixed"
+                    label="Fixed"
                     items={entry.fixes ?? []}
                   />
                 </div>
@@ -199,14 +199,14 @@ export const ChangelogDialog: React.FC = () => {
             </div>
           ) : (
             <div className="text-sm text-muted-foreground font-mono">
-              couldn&apos;t reach the changelog. try again later or visit{" "}
+              Couldn&apos;t reach the changelog. Try again later or visit{" "}
               <a
                 href={screenpipeWebUrl("/changelog", "https://screenpipe.com")}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="underline hover:text-foreground"
               >
-                screenpipe.com/changelog
+                Screenpipe.com/changelog
               </a>
             </div>
           )}

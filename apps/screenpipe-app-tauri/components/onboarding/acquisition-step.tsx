@@ -26,19 +26,19 @@ interface AcquisitionStepProps {
  * users who made it through.
  */
 export const ACQUISITION_SOURCES = [
-  { value: "search", label: "search engine" },
-  { value: "friend", label: "friend or colleague" },
-  { value: "x", label: "x / twitter" },
-  { value: "linkedin", label: "linkedin" },
-  { value: "reddit", label: "reddit" },
-  { value: "hacker_news", label: "hacker news" },
-  { value: "youtube", label: "youtube or video" },
-  { value: "github", label: "github" },
-  { value: "newsletter", label: "newsletter" },
-  { value: "podcast", label: "podcast" },
-  { value: "ai_assistant", label: "an ai assistant" },
-  { value: "ai_directory", label: "ai tool directory" },
-  { value: "other", label: "something else" },
+  { value: "search", label: "Search engine" },
+  { value: "friend", label: "Friend or colleague" },
+  { value: "x", label: "X / twitter" },
+  { value: "linkedin", label: "Linkedin" },
+  { value: "reddit", label: "Reddit" },
+  { value: "hacker_news", label: "Hacker news" },
+  { value: "youtube", label: "Youtube or video" },
+  { value: "github", label: "GitHub" },
+  { value: "newsletter", label: "Newsletter" },
+  { value: "podcast", label: "Podcast" },
+  { value: "ai_assistant", label: "An AI assistant" },
+  { value: "ai_directory", label: "AI tool directory" },
+  { value: "other", label: "Something else" },
 ] as const;
 
 export type AcquisitionSource = (typeof ACQUISITION_SOURCES)[number]["value"];
@@ -128,11 +128,11 @@ const AcquisitionStep: React.FC<AcquisitionStepProps> = ({
         animate={{ opacity: 1 }}
         transition={{ delay: 0.1 }}
       >
-        <h2 className="font-mono text-base font-bold lowercase">
-          how did you find screenpipe?
+        <h2 className="font-mono text-base font-bold normal-case">
+          How did you find screenpipe?
         </h2>
         <p className="font-mono text-[10px] text-muted-foreground/60 mt-1 max-w-[320px]">
-          one tap. it helps us know where to show up.
+          One tap. It helps us know where to show up.
         </p>
       </motion.div>
 
@@ -153,7 +153,7 @@ const AcquisitionStep: React.FC<AcquisitionStepProps> = ({
               setSelected(source.value);
               void submit(source.value);
             }}
-            className={`border p-2.5 text-left font-mono text-[10px] lowercase transition-colors disabled:opacity-50 ${
+            className={`border p-2.5 text-left font-mono text-[10px] normal-case transition-colors disabled:opacity-50 ${
               selected === source.value
                 ? "border-foreground bg-foreground/[0.06]"
                 : "border-border/60 hover:border-foreground/40"
@@ -174,7 +174,7 @@ const AcquisitionStep: React.FC<AcquisitionStepProps> = ({
         animate={{ opacity: 1 }}
         transition={{ delay: 0.3 }}
       >
-        skip →
+        Skip →
       </motion.button>
     </motion.div>
   );

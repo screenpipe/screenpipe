@@ -77,7 +77,7 @@ describe("HostedUsageLimits", () => {
     render(<HostedUsageLimits query={query as never} />);
 
     expect(screen.getByTestId("hosted-usage-limits")).toBeTruthy();
-    expect(screen.getByText("usage unavailable")).toBeTruthy();
+    expect(screen.getByText("Usage unavailable")).toBeTruthy();
     expect(document.body.textContent).not.toContain("$");
   });
 });

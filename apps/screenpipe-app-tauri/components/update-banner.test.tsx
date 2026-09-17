@@ -23,18 +23,18 @@ it("flushes settings before the native update handoff, including the recovery ba
   let finishSave!: () => void;
   mock.flush.mockReturnValue(new Promise<void>((resolve) => { finishSave = resolve; }));
   render(<UpdateBanner compact />);
-  fireEvent.click(screen.getByRole("button", { name: "restart to update" }));
+  fireEvent.click(screen.getByRole("button", { name: "Restart to update" }));
   expect(mock.restart).not.toHaveBeenCalled();
   await act(async () => finishSave());
   await waitFor(() => expect(mock.restart).toHaveBeenCalledWith(60));
-  expect(screen.getByRole("button", { name: "restarting..." })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Restarting..." })).toBeDisabled();
 });
 
 it("makes a failed native install retryable and shows its error", async () => {
   mock.restart.mockResolvedValueOnce({ status: "error", error: "installer could not start" });
   render(<UpdateBanner compact />);
-  fireEvent.click(screen.getByRole("button", { name: "restart to update" }));
+  fireEvent.click(screen.getByRole("button", { name: "Restart to update" }));
   await waitFor(() => expect(mock.toast).toHaveBeenCalledWith(expect.objectContaining({ description: "installer could not start" })));
-  fireEvent.click(screen.getByRole("button", { name: "restart to update" }));
+  fireEvent.click(screen.getByRole("button", { name: "Restart to update" }));
   await waitFor(() => expect(mock.restart).toHaveBeenCalledTimes(2));
 });

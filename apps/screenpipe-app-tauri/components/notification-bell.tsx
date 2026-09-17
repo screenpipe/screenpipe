@@ -270,7 +270,7 @@ export function NotificationInboxPanel({
     const d = new Date(ts);
     const now = new Date();
     const diff = now.getTime() - d.getTime();
-    if (diff < 60000) return "just now";
+    if (diff < 60000) return "Just now";
     if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
     if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
     return d.toLocaleDateString();
@@ -287,7 +287,7 @@ export function NotificationInboxPanel({
       {/* Header */}
       <div className="border-b border-border px-3 pt-2.5 pb-2">
         <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-foreground">inbox</span>
+          <span className="text-xs font-medium text-foreground">Inbox</span>
           {/* Clears both tabs, so it stays reachable from either one — being
               sent to All just to empty the inbox was busywork. */}
           {history.length > 0 && (
@@ -296,14 +296,14 @@ export function NotificationInboxPanel({
               onClick={clearAll}
               className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
             >
-              clear all
+              Clear all
             </button>
           )}
         </div>
         <div
           className="mt-2 grid grid-cols-2 rounded-md bg-muted/45 p-0.5"
           role="tablist"
-          aria-label="notification view"
+          aria-label="Notification view"
         >
           {(["priority", "all"] as const).map((view) => {
             const count = view === "priority" ? highPriority.length : history.length;
@@ -330,7 +330,7 @@ export function NotificationInboxPanel({
                     : "text-muted-foreground hover:text-foreground",
                 )}
               >
-                {view === "priority" ? "priority" : "all"}
+                {view === "priority" ? "Priority" : "All"}
                 <span className="ml-1 text-[9px] tabular-nums opacity-60">{count}</span>
               </button>
             );
@@ -346,7 +346,7 @@ export function NotificationInboxPanel({
             className="px-3 py-6 text-center text-xs text-muted-foreground"
           >
             <div className="font-medium text-foreground/80">
-              {history.length === 0 ? "no notifications yet" : "you’re caught up"}
+              {history.length === 0 ? "No notifications yet" : "You’re caught up"}
             </div>
             {history.length > 0 && (
               <button
@@ -366,13 +366,13 @@ export function NotificationInboxPanel({
               <Fragment key={entry.id}>
                 {idx === 0 && highPriority.length > 0 && (
                   <SectionLabel>
-                    {inboxView === "priority" ? "needs your attention" : "high priority"}
+                    {inboxView === "priority" ? "Needs your attention" : "High priority"}
                   </SectionLabel>
                 )}
                 {inboxView === "all" &&
                   idx === highPriority.length &&
                   otherUpdates.length > 0 && (
-                    <SectionLabel>other updates</SectionLabel>
+                    <SectionLabel>Other updates</SectionLabel>
                   )}
                 <div
                   data-notification-id={entry.id}
@@ -428,7 +428,7 @@ export function NotificationInboxPanel({
                         </span>
                         {isHighPriority && (
                           <span className="rounded-full border border-border px-1.5 py-px text-[8px] leading-none text-foreground/70 shrink-0">
-                            high
+                            High
                           </span>
                         )}
                       </div>
@@ -474,7 +474,7 @@ export function NotificationInboxPanel({
                           dismissOne(entry.id);
                         }}
                         className="p-0.5 rounded hover:bg-muted/60 opacity-0 group-hover/notif:opacity-100 group-focus/notif:opacity-100 group-focus-within/notif:opacity-100 focus:opacity-100 transition-opacity"
-                        title="dismiss"
+                        title="Dismiss"
                       >
                         <X className="w-3 h-3 text-muted-foreground/50 hover:text-foreground" />
                       </button>
@@ -575,7 +575,7 @@ export function NotificationInboxPanel({
                           className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
                         >
                           <ExternalLink className="w-3 h-3" />
-                          source
+                          Source
                         </button>
                       )}
                       <button
@@ -598,7 +598,7 @@ export function NotificationInboxPanel({
                         className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
                       >
                         <MessageSquare className="w-3 h-3" />
-                        ask ai
+                        Ask AI
                       </button>
                     </div>
                     <NotificationFeedback notification={entry} variant="inbox" />
@@ -670,7 +670,7 @@ export function NotificationBell() {
     >
       <PopoverTrigger asChild>
         <button
-          aria-label={unreadCount > 0 ? `notifications, ${unreadCount} high priority unread` : "notifications"}
+          aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} high priority unread` : "Notifications"}
           data-testid="notification-bell-trigger"
           className="relative p-1.5 rounded-md hover:bg-muted/60 transition-colors"
         >

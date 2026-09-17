@@ -93,9 +93,9 @@ describe("ProviderSkillCatalog", () => {
 
     await screen.findByRole("heading", { name: "PDF" });
     expect(screen.queryByRole("button", { name: /open/i })).toBeNull();
-    expect(screen.getByText("added")).toBeInTheDocument();
+    expect(screen.getByText("Added")).toBeInTheDocument();
 
-    fireEvent.click(screen.getAllByRole("button", { name: "install" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Install" })[0]);
 
     await waitFor(() => {
       expect(mocks.installRegistrySkill).toHaveBeenCalledWith(
@@ -105,7 +105,7 @@ describe("ProviderSkillCatalog", () => {
         "PDF",
       );
       expect(onInstalled).toHaveBeenCalledTimes(1);
-      expect(screen.getAllByText("added")).toHaveLength(2);
+      expect(screen.getAllByText("Added")).toHaveLength(2);
     });
   });
 
@@ -117,9 +117,9 @@ describe("ProviderSkillCatalog", () => {
     render(<ProviderSkillCatalog />);
 
     await screen.findByRole("heading", { name: "PDF" });
-    fireEvent.click(screen.getAllByRole("button", { name: "install" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Install" })[0]);
 
     expect(await screen.findByText("download failed")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "retry" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 });

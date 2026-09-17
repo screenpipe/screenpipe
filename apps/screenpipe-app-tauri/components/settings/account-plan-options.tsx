@@ -220,23 +220,23 @@ export function AccountPlanOptions({
             }`}
           >
             <div className="flex items-start justify-between gap-2">
-              <span className="text-sm font-semibold lowercase">
+              <span className="text-sm font-semibold normal-case">
                 {plan.name}
               </span>
               {isCurrent ? (
                 <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                  current
+                  Current
                 </span>
               ) : isFallback ? (
                 <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
-                  next
+                  Next
                 </span>
               ) : isRecommended ? (
                 <span
                   className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground"
                   data-testid="account-plan-next-step"
                 >
-                  next step
+                  Next step
                 </span>
               ) : null}
             </div>
@@ -275,7 +275,7 @@ export function AccountPlanOptions({
                 onClick={() => onSelect(purchase)}
                 data-testid={`account-plan-choose-${plan.id}`}
               >
-                {busy ? "checking…" : plan.cta}
+                {busy ? "Checking…" : plan.cta}
                 {leavesApp && !busy ? (
                   <ExternalLinkIcon className="ml-1.5 h-3 w-3" />
                 ) : null}
@@ -283,9 +283,9 @@ export function AccountPlanOptions({
             ) : (
               <p className="mt-3 rounded-md bg-muted px-2 py-1.5 text-center text-[10px] text-muted-foreground">
                 {isCurrent
-                  ? "your plan"
+                  ? "Your plan"
                   : isFallback
-                    ? "after it ends"
+                    ? "After it ends"
                     : (disabledReason ?? plan.cta)}
               </p>
             )}

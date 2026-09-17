@@ -130,7 +130,7 @@ export function ThinkingLevelSelector({
 
   const effortSlider = (
     <ComposerEffortSlider
-      label="effort"
+      label="Effort"
       testId="thinking-level-slider"
       value={currentLevel}
       disabled={isRpcLoading || piThinkingUnsupported}

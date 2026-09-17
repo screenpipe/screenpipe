@@ -318,7 +318,7 @@ export function usePiSteeringTransport(
         pendingSteerBatchRef.current = [...batch, ...pendingSteerBatchRef.current];
         setIsLoading(false);
         setIsStreaming(false);
-        toast({ title: "failed to send steered message", description: result.error, variant: "destructive" });
+        toast({ title: "Failed to send steered message", description: result.error, variant: "destructive" });
       } else {
         // This redirect is internal steering, not a user stop. ACP adapters
         // inject into the open assistant stream and do not echo a second user
@@ -349,7 +349,7 @@ export function usePiSteeringTransport(
       setIsLoading(false);
       setIsStreaming(false);
       const description = e instanceof Error ? e.message : String(e);
-      toast({ title: "failed to send steered message", description, variant: "destructive" });
+      toast({ title: "Failed to send steered message", description, variant: "destructive" });
     } finally {
       pendingSteerFlushInFlightRef.current = false;
     }
@@ -556,7 +556,7 @@ export function usePiSteeringTransport(
         );
         restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
         setAssistantInterruptedState(interruptedAssistantBeforeSteer, false);
-        toast({ title: "failed to steer queued message", description: result.error, variant: "destructive" });
+        toast({ title: "Failed to steer queued message", description: result.error, variant: "destructive" });
         return;
       }
       if (!result.data) {
@@ -576,7 +576,7 @@ export function usePiSteeringTransport(
         restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
         setAssistantInterruptedState(interruptedAssistantBeforeSteer, false);
         toast({
-          title: "message already started",
+          title: "Message already started",
           description: "That follow-up has moved out of the queue.",
         });
         return;
@@ -601,7 +601,7 @@ export function usePiSteeringTransport(
       restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
       setAssistantInterruptedState(interruptedAssistantBeforeSteer, false);
       toast({
-        title: "failed to steer queued message",
+        title: "Failed to steer queued message",
         description: e instanceof Error ? e.message : String(e),
         variant: "destructive",
       });

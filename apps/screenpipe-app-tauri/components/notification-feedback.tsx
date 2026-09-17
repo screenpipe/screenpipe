@@ -120,13 +120,13 @@ export function NotificationFeedback({
                 color: "hsl(var(--muted-foreground))",
               }}
             >
-              feedback sent
+              Feedback sent
             </div>
           ) : (
             <>
               <div
                 role="group"
-                aria-label="notification feedback options"
+                aria-label="Notification feedback options"
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -137,9 +137,9 @@ export function NotificationFeedback({
                   type="button"
                   onClick={selectUp}
                   disabled={saveState === "saving"}
-                  aria-label="useful notification"
+                  aria-label="Useful notification"
                   aria-pressed={rating === "up"}
-                  title="useful"
+                  title="Useful"
                   style={iconButtonStyle(rating === "up")}
                 >
                   <ThumbsUp size={9} strokeWidth={1.8} />
@@ -148,9 +148,9 @@ export function NotificationFeedback({
                   type="button"
                   onClick={selectDown}
                   disabled={saveState === "saving"}
-                  aria-label="not useful notification"
+                  aria-label="Not useful notification"
                   aria-pressed={rating === "down"}
-                  title="not useful"
+                  title="Not useful"
                   style={iconButtonStyle(rating === "down")}
                 >
                   <ThumbsDown size={9} strokeWidth={1.8} />
@@ -169,8 +169,8 @@ export function NotificationFeedback({
                       if (saveState !== "idle") setSaveState("idle");
                     }}
                     maxLength={500}
-                    placeholder="what should improve?"
-                    aria-label="what should improve"
+                    placeholder="What should improve?"
+                    aria-label="What should improve"
                     style={{
                       minWidth: 0,
                       flex: 1,
@@ -188,8 +188,8 @@ export function NotificationFeedback({
                   <button
                     type="submit"
                     disabled={!correction.trim() || saveState === "saving"}
-                    aria-label="send feedback"
-                    title="send feedback"
+                    aria-label="Send feedback"
+                    title="Send feedback"
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
@@ -221,7 +221,7 @@ export function NotificationFeedback({
                     color: "hsl(var(--muted-foreground))",
                   }}
                 >
-                  could not save — try again
+                  Could not save — try again
                 </div>
               )}
             </>

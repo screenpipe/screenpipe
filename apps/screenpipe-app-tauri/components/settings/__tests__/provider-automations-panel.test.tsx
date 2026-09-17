@@ -77,23 +77,23 @@ describe("ProviderAutomationsPanel", () => {
     expect(screen.getByText("Daily review")).toBeInTheDocument();
     expect(screen.queryByText("Say hi")).not.toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "open Codex schedules" }),
+      screen.getByRole("button", { name: "Open Codex schedules" }),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: /Claude Code 1/i }));
 
     expect(screen.getByText("Say hi")).toBeInTheDocument();
     expect(screen.getByText("Every hour at :07")).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "active" })).toBeInTheDocument();
-    expect(screen.queryByText("active")).not.toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Active" })).toBeInTheDocument();
+    expect(screen.queryByText("Active")).not.toBeInTheDocument();
     expect(screen.queryByText("session only")).not.toBeInTheDocument();
     expect(screen.queryByText(/view only here/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/managed in Claude/i)).not.toBeInTheDocument();
     expect(screen.queryByText("read only")).not.toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "open Claude schedules" }),
+      screen.getByRole("button", { name: "Open Claude schedules" }),
     ).toBeInTheDocument();
-    expect(screen.queryByText("open Claude schedules")).not.toBeInTheDocument();
+    expect(screen.queryByText("Open Claude schedules")).not.toBeInTheDocument();
   });
 
   it("uses the scheduled-task search for native provider rows", async () => {
@@ -115,7 +115,7 @@ describe("ProviderAutomationsPanel", () => {
 
     expect(await screen.findByText("Daily review")).toBeInTheDocument();
     fireEvent.click(
-      screen.getByRole("button", { name: "open Codex schedules" }),
+      screen.getByRole("button", { name: "Open Codex schedules" }),
     );
 
     expect(onOpenProvider).toHaveBeenCalledWith("codex://automations");
@@ -123,7 +123,7 @@ describe("ProviderAutomationsPanel", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: /Claude Code 1/i }));
     fireEvent.click(
-      screen.getByRole("button", { name: "open Claude schedules" }),
+      screen.getByRole("button", { name: "Open Claude schedules" }),
     );
     expect(onOpenProvider).toHaveBeenCalledWith("https://claude.ai");
   });
@@ -140,7 +140,7 @@ describe("ProviderAutomationsPanel", () => {
     expect(await screen.findByText("Daily review")).toBeInTheDocument();
     expect(screen.getByTestId("provider-heading")).toHaveTextContent("Codex1");
     expect(
-      screen.queryByRole("button", { name: "open Claude schedules" }),
+      screen.queryByRole("button", { name: "Open Claude schedules" }),
     ).not.toBeInTheDocument();
   });
 
@@ -153,7 +153,7 @@ describe("ProviderAutomationsPanel", () => {
     render(<ProviderAutomationsPanel />);
 
     expect(
-      await screen.findByRole("button", { name: "open Claude schedules" }),
+      await screen.findByRole("button", { name: "Open Claude schedules" }),
     ).toBeInTheDocument();
     expect(screen.queryByText("agent schedules")).not.toBeInTheDocument();
   });
@@ -182,17 +182,17 @@ describe("ProviderAutomationsPanel", () => {
 
     expect(await screen.findByText("Daily review")).toBeInTheDocument();
     fireEvent.pointerDown(
-      screen.getByRole("button", { name: "actions for Daily review" }),
+      screen.getByRole("button", { name: "Actions for Daily review" }),
       { button: 0, ctrlKey: false, pointerType: "mouse" },
     );
     fireEvent.click(
-      await screen.findByRole("menuitem", { name: "delete schedule" }),
+      await screen.findByRole("menuitem", { name: "Delete schedule" }),
     );
 
     expect(
-      screen.getByRole("heading", { name: "delete Daily review?" }),
+      screen.getByRole("heading", { name: "Delete Daily review?" }),
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "delete schedule" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete schedule" }));
 
     await waitFor(() =>
       expect(onManageTask).toHaveBeenCalledWith("codex:daily-review", "delete"),
@@ -225,7 +225,7 @@ describe("ProviderAutomationsPanel", () => {
     expect(screen.queryByText("Task 5")).not.toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "show 1 more" }),
+      screen.getByRole("button", { name: "Show 1 more" }),
     );
     expect(screen.getByText("Task 5")).toBeInTheDocument();
   });
@@ -250,7 +250,7 @@ describe("ProviderAutomationsPanel", () => {
 
     expect(await screen.findByText("Daily review")).toBeInTheDocument();
     fireEvent.click(
-      screen.getByRole("button", { name: "open Codex schedules" }),
+      screen.getByRole("button", { name: "Open Codex schedules" }),
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -259,7 +259,7 @@ describe("ProviderAutomationsPanel", () => {
   });
 
   it("formats common Codex recurrence rules", () => {
-    expect(providerScheduleLabel(TASKS[0])).toBe("daily at 17:00");
+    expect(providerScheduleLabel(TASKS[0])).toBe("Daily at 17:00");
     expect(
       providerScheduleLabel({
         ...TASKS[0],
@@ -272,7 +272,7 @@ describe("ProviderAutomationsPanel", () => {
         scheduleLabel: null,
         schedule: "0 9 * * 1-5",
       }),
-    ).toBe("weekdays at 09:00");
+    ).toBe("Weekdays at 09:00");
     expect(
       providerScheduleLabel({
         ...TASKS[0],

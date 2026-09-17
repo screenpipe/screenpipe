@@ -84,8 +84,8 @@ export default function GeneralSettings() {
     } catch (error) {
       console.error("failed to save user goal:", error);
       toast({
-        title: "couldn't save your goal",
-        description: "please try again",
+        title: "Couldn't save your goal",
+        description: "Please try again",
         variant: "destructive",
       });
     }
@@ -100,9 +100,9 @@ export default function GeneralSettings() {
     } catch (error) {
       console.error("failed to reset onboarding:", error);
       toast({
-        title: "couldn't reset onboarding",
+        title: "Couldn't reset onboarding",
         description:
-          error instanceof Error ? error.message : "please try again",
+          error instanceof Error ? error.message : "Please try again",
         variant: "destructive",
       });
     } finally {
@@ -118,7 +118,7 @@ export default function GeneralSettings() {
         const pending = pendingRes.data;
         if (pending.auth_required) {
           toast({
-            title: "update available",
+            title: "Update available",
             description: `v${pending.version} is available — sign in to download it`,
           });
           return;
@@ -126,14 +126,14 @@ export default function GeneralSettings() {
 
         if (pending.downloaded) {
           toast({
-            title: "update ready",
+            title: "Update ready",
             description: `v${pending.version} is ready — restart to update`,
           });
           return;
         }
 
         toast({
-          title: "update found",
+          title: "Update found",
           description: `v${pending.version} is still downloading in the background`,
         });
         return;
@@ -143,15 +143,15 @@ export default function GeneralSettings() {
       if (res.status === "error") throw new Error(res.error);
       const updateFound = res.data;
       toast({
-        title: updateFound ? "update found" : "you're up to date",
+        title: updateFound ? "Update found" : "You're up to date",
         description: updateFound
-          ? "downloading in the background — banner will appear when ready"
-          : `running latest version${currentVersion ? ` (v${currentVersion})` : ""}`,
+          ? "Downloading in the background — banner will appear when ready"
+          : `Running latest version${currentVersion ? ` (v${currentVersion})` : ""}`,
       });
     } catch (e: any) {
       toast({
-        title: "update check failed",
-        description: e?.toString() || "please try again later",
+        title: "Update check failed",
+        description: e?.toString() || "Please try again later",
         variant: "destructive",
       });
     } finally {
@@ -174,16 +174,16 @@ export default function GeneralSettings() {
     try {
       await commands.setAutostart(checked);
       toast({
-        title: checked ? "auto-start enabled" : "auto-start disabled",
+        title: checked ? "Auto-start enabled" : "Auto-start disabled",
         description: checked
-          ? "screenpipe will start in the background when you log in"
-          : "screenpipe won't launch at startup",
+          ? "Screenpipe will start in the background when you log in"
+          : "Screenpipe won't launch at startup",
       });
     } catch (e: any) {
       handleSettingsChange({ autoStartEnabled: !checked });
       toast({
-        title: "failed to update auto-start",
-        description: e?.toString() || "check system permissions and try again",
+        title: "Failed to update auto-start",
+        description: e?.toString() || "Check system permissions and try again",
         variant: "destructive",
       });
     }
@@ -221,8 +221,8 @@ export default function GeneralSettings() {
     } catch (e: any) {
       window.open(url, "_blank");
       toast({
-        title: "opened in browser",
-        description: e?.toString() || "check your browser for version downloads",
+        title: "Opened in browser",
+        description: e?.toString() || "Check your browser for version downloads",
         variant: "destructive",
       });
     }
@@ -343,7 +343,7 @@ export default function GeneralSettings() {
                   disabled={isCheckingForUpdate}
                   className="ml-4 h-8"
                 >
-                  {isCheckingForUpdate ? "checking..." : "check now"}
+                  {isCheckingForUpdate ? "Checking..." : "Check now"}
                 </Button>
               </div>
             </CardContent>
@@ -422,7 +422,7 @@ export default function GeneralSettings() {
                 onClick={handleOpenVersions}
                 className="ml-4 h-7 text-xs gap-1.5"
               >
-                open
+                Open
                 <ExternalLink className="h-3 w-3" />
               </Button>
             </div>
@@ -484,7 +484,7 @@ export default function GeneralSettings() {
               disabled={isResettingOnboarding}
               onClick={() => void handleResetOnboarding()}
             >
-              {isResettingOnboarding ? "resetting..." : "reset"}
+              {isResettingOnboarding ? "Resetting..." : "Reset"}
             </Button>
           </div>
         </CardContent>

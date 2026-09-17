@@ -227,7 +227,7 @@ describe("hosted onboarding checkout", () => {
     });
 
     expect(
-      screen.getByText("account confirmation is taking longer than expected"),
+      screen.getByText("Account confirmation is taking longer than expected"),
     ).toBeInTheDocument();
     expect(next).not.toHaveBeenCalled();
     expect(mocks.capture).toHaveBeenCalledWith(
@@ -236,7 +236,7 @@ describe("hosted onboarding checkout", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "retry confirmation" }),
+      screen.getByRole("button", { name: "Retry confirmation" }),
     );
     await act(async () => {
       await Promise.resolve();
@@ -250,10 +250,10 @@ describe("hosted onboarding checkout", () => {
     window.history.replaceState({}, "", "/onboarding?checkout=cancelled");
     render(<PlanSelectionStep handleNextSlide={vi.fn()} />);
 
-    expect(screen.getByText("checkout was not completed")).toBeInTheDocument();
+    expect(screen.getByText("Checkout was not completed")).toBeInTheDocument();
     expect(submitSpy).not.toHaveBeenCalled();
     fireEvent.click(
-      screen.getByRole("button", { name: "retry secure checkout" }),
+      screen.getByRole("button", { name: "Retry secure checkout" }),
     );
 
     expect(submitSpy).toHaveBeenCalledOnce();

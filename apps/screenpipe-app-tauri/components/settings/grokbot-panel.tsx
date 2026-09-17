@@ -42,7 +42,7 @@ export function GrokBotPanel({ onChanged }: { onChanged?: (connected: boolean) =
           {busy && <Loader2 className="h-3 w-3 animate-spin" />}
           {status?.connected ? "repair connection" : "connect Grok Bot"}
         </Button>
-        {(status?.connected || error) && <Button disabled={busy} variant="outline" size="sm" onClick={() => update("disconnect")} className="h-7 text-xs normal-case font-sans tracking-normal">disconnect</Button>}
+        {(status?.connected || error) && <Button disabled={busy} variant="outline" size="sm" onClick={() => update("disconnect")} className="h-7 text-xs normal-case font-sans tracking-normal">Disconnect</Button>}
       </div>
       {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
     </div>

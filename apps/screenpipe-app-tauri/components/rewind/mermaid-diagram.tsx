@@ -1,3 +1,5 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
 "use client";
 
 import { useEffect, useRef, useState } from "react";
@@ -179,7 +181,7 @@ export function MermaidDiagram({ chart, className }: MermaidDiagramProps) {
   if (error) {
     return (
       <div className="border border-destructive/50 bg-destructive/10 p-4 my-2 font-mono text-sm">
-        <p className="text-destructive mb-2">diagram error:</p>
+        <p className="text-destructive mb-2">Diagram error:</p>
         <pre className="text-xs overflow-auto">{chart}</pre>
       </div>
     );

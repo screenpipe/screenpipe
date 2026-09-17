@@ -159,7 +159,7 @@ export function PipeInstallDialog() {
       if (pipeConnections.length > 0) setSection("pipes");
     } catch (err: any) {
       toast({
-        title: "failed to install scheduled task",
+        title: "Failed to install scheduled task",
         description: (
           <span>
             {err.message}{" "}
@@ -168,7 +168,7 @@ export function PipeInstallDialog() {
               className="underline underline-offset-2 text-inherit opacity-80 hover:opacity-100"
               onClick={() => openFeedback(`Scheduled task install failed: ${err.message}`)}
             >
-              report issue
+              Report issue
             </button>
           </span>
         ),
@@ -203,13 +203,13 @@ export function PipeInstallDialog() {
       <AlertDialog open={!!request} onOpenChange={(open) => !open && handleCancel()}>
         <AlertDialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-sm">review scheduled task access</AlertDialogTitle>
+            <AlertDialogTitle className="text-sm">Review scheduled task access</AlertDialogTitle>
             <AlertDialogDescription className="text-xs">
               {isRegistry
                 ? registryRisk === "high"
                   ? "Unverified publisher. Can access all your screen data."
                   : "Review the requested access before installing."
-                : "an external link wants to install a scheduled task. these are AI agents that run on your screen data — review the prompt below before installing."}
+                : "An external link wants to install a scheduled task. These are AI agents that run on your screen data — review the prompt below before installing."}
             </AlertDialogDescription>
           </AlertDialogHeader>
 
@@ -220,7 +220,7 @@ export function PipeInstallDialog() {
           {loading ? (
             <div className="flex items-center gap-2 py-4 text-xs text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" />
-              {isRegistry ? "loading scheduled task details..." : "loading scheduled task content..."}
+              {isRegistry ? "Loading scheduled task details..." : "Loading scheduled task content..."}
             </div>
           ) : isRegistry && registryDetail ? (
             <InstallRiskSummary
@@ -231,8 +231,8 @@ export function PipeInstallDialog() {
             />
           ) : preview ? (
             <div className="border rounded overflow-hidden">
-              <div className="px-3 py-1.5 bg-muted text-[10px] uppercase tracking-wider text-muted-foreground border-b">
-                pipe.md preview
+              <div className="px-3 py-1.5 bg-muted text-[10px] normal-case tracking-wider text-muted-foreground border-b">
+                Pipe.md preview
               </div>
               <pre className="p-3 text-[11px] leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto">
                 {previewLines}
@@ -245,12 +245,12 @@ export function PipeInstallDialog() {
             </div>
           ) : (
             <p className="text-xs text-muted-foreground py-2">
-              could not preview scheduled task content. you can still install it.
+              Could not preview scheduled task content. You can still install it.
             </p>
           )}
 
           <AlertDialogFooter>
-            <AlertDialogCancel className="text-xs">not now</AlertDialogCancel>
+            <AlertDialogCancel className="text-xs">Not now</AlertDialogCancel>
             <Button
               type="button"
               className="text-xs"
@@ -260,10 +260,10 @@ export function PipeInstallDialog() {
               {installing ? (
                 <>
                   <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                  installing...
+                  Installing...
                 </>
               ) : (
-                "install scheduled task"
+                "Install scheduled task"
               )}
             </Button>
           </AlertDialogFooter>

@@ -28,9 +28,9 @@ import { NotificationPipeControls } from "./notification-pipe-controls";
 import { NotificationPauseControl } from "./notification-pause-control";
 
 const PRESETS: { kind: CategoryPreset; label: string }[] = [
-  { kind: "recommended", label: "recommended" },
-  { kind: "all", label: "everything" },
-  { kind: "none", label: "nothing" },
+  { kind: "recommended", label: "Recommended" },
+  { kind: "all", label: "Everything" },
+  { kind: "none", label: "Nothing" },
 ];
 
 /**
@@ -168,7 +168,7 @@ export function NotificationsSettings() {
 
       {/* Quick presets + reset, then the in-section filter */}
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[11px] text-muted-foreground">quick set:</span>
+        <span className="text-[11px] text-muted-foreground">Quick set:</span>
         {PRESETS.map((p) => (
           <button
             key={p.kind}
@@ -186,7 +186,7 @@ export function NotificationsSettings() {
           onClick={resetToDefaults}
           className="ml-auto text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
         >
-          reset to defaults
+          Reset to defaults
         </button>
       </div>
 
@@ -196,8 +196,8 @@ export function NotificationsSettings() {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="search notifications"
-          aria-label="search notifications"
+          placeholder="Search notifications"
+          aria-label="Search notifications"
           data-testid="notification-search"
           className="w-full border border-border bg-transparent py-2 pl-8 pr-3 text-sm outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-foreground/30"
         />
@@ -211,14 +211,14 @@ export function NotificationsSettings() {
           return (
           <div key={group.id} className="space-y-1">
             <div className="mb-1 flex items-center justify-between gap-3">
-              <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              <p className="text-[11px] font-medium normal-case tracking-wider text-muted-foreground">
                 {group.label}
               </p>
               {/* Bulk toggle only makes sense for the full (unfiltered) group */}
               {!q && (
                 <Switch
                   data-testid={`notification-group-${group.id}`}
-                  aria-label={`toggle all ${group.label}`}
+                  aria-label={`Toggle all ${group.label}`}
                   checked={gstate === "all"}
                   onCheckedChange={(v) =>
                     writeCategoryPatch(
@@ -263,7 +263,7 @@ export function NotificationsSettings() {
                           pipesExpanded && "rotate-90"
                         )}
                       />
-                      customize per task
+                      Customize per task
                       {mutedPipes.length > 0 && (
                         <span className="ml-1 text-muted-foreground/70">
                           ({mutedPipes.length} muted)
@@ -293,7 +293,7 @@ export function NotificationsSettings() {
 
         {visibleGroups.length === 0 && (
           <p className="py-6 text-center text-xs text-muted-foreground">
-            no notifications match &quot;{query}&quot;
+            No notifications match &quot;{query}&quot;
           </p>
         )}
       </div>
@@ -328,7 +328,7 @@ function CategoryRow({
             {category.label}
             {category.experimental && (
               <span className="ml-1.5 text-[10px] font-normal text-muted-foreground/70">
-                experimental
+                Experimental
               </span>
             )}
           </p>

@@ -326,7 +326,7 @@ function CommandPalette({ open, commands, close }: { open: boolean; commands: Pa
         <div className={styles.commandSearch}>
           <CommandIcon size={17} />
           <input ref={inputRef} value={query} onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); }} onKeyDown={onKeyDown} placeholder="Search commands and workflows" aria-label="Search commands and workflows" />
-          <kbd>esc</kbd>
+          <kbd>Esc</kbd>
         </div>
         <div className={styles.commandResults} role="listbox" aria-label="Available commands">
           {filtered.length ? groups.map((group) => (
@@ -629,14 +629,14 @@ function OverviewView({
       <section className={styles.hero}>
         <div>
           <Pill><Workflow size={12} />{knownWorkflowCount ? `${knownWorkflowCount} known workflows` : "Ready to map your work"}</Pill>
-          <h1>See how your work<br /><em>actually flows.</em></h1>
+          <h1>See how your work<br /><em>Actually flows.</em></h1>
           <p>Every step, handoff, wait, and bottleneck across your day.</p>
           <button className={styles.analyzeButton} onClick={analyze} disabled={analyzing || runtime?.processingAvailable === false}>{analyzing ? <><span className={styles.spinnerSmall} />Refreshing catalog…</> : <><RefreshCw size={14} />{knownWorkflowCount ? "Refresh workflow catalog" : `Analyze the last ${WORKFLOW_CATALOG_DAYS} days`}</>}</button>
         </div>
         <div className={styles.heroProof}>
           <span>{analysis ? `Catalog scan · last ${analysis.days} days` : `${WORKFLOW_CATALOG_DAYS}-day catalog`}</span>
           <strong>{formatMinutes(analysis?.observedActiveMinutes ?? 0)}</strong>
-          <small>captured active time reviewed</small>
+          <small>Captured active time reviewed</small>
           <div><i style={{ width: `${Math.min(100, workflows.length * 18)}%` }} /></div>
           {analysis && <p>{analysis.bundleCount} days with usable history · {formatAnalyzedAt(analysis.analyzedAt)}</p>}
         </div>
@@ -658,8 +658,8 @@ function OverviewView({
       ) : (
         <>
           <section className={styles.statGrid} aria-label="Work map summary">
-            <div><span>Measured durations</span><strong>{measuredWorkflowCount}</strong><small>from exact meeting windows</small></div>
-            <div><span>Timing not inferred</span><strong>{unmeasuredWorkflowCount}</strong><small>needs continuous evidence</small></div>
+            <div><span>Measured durations</span><strong>{measuredWorkflowCount}</strong><small>From exact meeting windows</small></div>
+            <div><span>Timing not inferred</span><strong>{unmeasuredWorkflowCount}</strong><small>Needs continuous evidence</small></div>
             <div><span>Friction you can affect</span><strong>{actionableCount}</strong><small>{constraintCount} other constraint{constraintCount === 1 ? "" : "s"}</small></div>
             <div><span>Workflows shown</span><strong>{workflows.length}</strong><small>{activityPeriodLabel(activityPeriod).toLocaleLowerCase()}</small></div>
           </section>
@@ -698,7 +698,7 @@ function WorkflowsView({ workflows, knownWorkflowCount, activityPeriod, filters,
       {error && <p role="alert" className={styles.depthNotice}>{error}</p>}
       {!knownWorkflowCount ? <EmptyWorkMap analyzing={analyzing} analyze={analyze} /> : !workflows.length ? <section className={styles.emptyState}><Clock3 size={23} /><h2>No known workflows were active in this period</h2><p>Your {knownWorkflowCount} known workflows are still in the catalog. Choose “All known” to see them.</p></section> : <>
         <section className={styles.filterBar} aria-label="Workflow filters">
-          <div><strong>{visible.length} of {workflows.length} shown</strong><span>{filters.query ? `matching “${filters.query}”` : activityPeriodLabel(activityPeriod)}</span></div>
+          <div><strong>{visible.length} of {workflows.length} shown</strong><span>{filters.query ? `Matching “${filters.query}”` : activityPeriodLabel(activityPeriod)}</span></div>
           {(filterCount > 0 || filters.query) && <button className={styles.clearButton} onClick={() => setFilters(defaultWorkflowFilters)}><X size={12} />Clear</button>}
           <button className={filtersOpen || filterCount ? styles.filterButtonActive : styles.filterButton} onClick={() => setFiltersOpen((open) => !open)}><SlidersHorizontal size={14} />Filters{filterCount ? ` (${filterCount})` : ""}<ChevronDown size={13} /></button>
         </section>

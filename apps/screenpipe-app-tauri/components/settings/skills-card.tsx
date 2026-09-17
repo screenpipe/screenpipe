@@ -201,7 +201,7 @@ export function SkillsCard({ onChanged }: { onChanged?: () => void }) {
                     )}
                   </div>
                   <span className="shrink-0 border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                    release v{skill.release_version} · policy r{skill.version}
+                    Release v{skill.release_version} · policy r{skill.version}
                   </span>
                 </div>
                 <div className="mt-1 text-[10px] text-muted-foreground">
@@ -209,7 +209,7 @@ export function SkillsCard({ onChanged }: { onChanged?: () => void }) {
                 </div>
                 {skill.digest && (
                   <div className="mt-1 truncate font-mono text-[9px] text-muted-foreground/70" title={skill.digest}>
-                    sha256 {skill.digest}
+                    Sha256 {skill.digest}
                   </div>
                 )}
                 <div className="mt-2 flex flex-wrap gap-1">
@@ -284,7 +284,7 @@ export function SkillsCard({ onChanged }: { onChanged?: () => void }) {
           </div>
         ) : (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" /> loading…
+            <Loader2 className="h-3 w-3 animate-spin" /> Loading…
           </div>
         )}
       </div>
@@ -334,7 +334,7 @@ export function SkillsCard({ onChanged }: { onChanged?: () => void }) {
             <FolderPlus className="h-4 w-4 text-muted-foreground" />
             <span className="text-xs font-medium">Add from folder…</span>
             <span className="text-[10px] text-muted-foreground">
-              any folder with a SKILL.md
+              Any folder with a SKILL.md
             </span>
           </button>
         </div>

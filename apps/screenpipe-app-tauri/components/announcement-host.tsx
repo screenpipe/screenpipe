@@ -131,7 +131,7 @@ function AnnouncementModal({
               data-testid="announcement-dismiss"
               onClick={onDismiss}
             >
-              {cta ? "later" : "got it"}
+              {cta ? "Later" : "Got it"}
             </Button>
           )}
         </DialogFooter>
@@ -177,7 +177,7 @@ export function SurveyForm({
             <legend className="text-sm font-medium text-foreground">
               {question.prompt}
               {!question.required && (
-                <span className="ml-1 text-muted-foreground">optional</span>
+                <span className="ml-1 text-muted-foreground">Optional</span>
               )}
             </legend>
             {question.description && (
@@ -221,7 +221,7 @@ export function SurveyForm({
             </div>
             {attempted && question.required && selected.length === 0 && (
               <p role="alert" className="text-xs text-destructive">
-                choose an answer
+                Choose an answer
               </p>
             )}
           </fieldset>
@@ -275,7 +275,7 @@ export function AnnouncementSidebarPrompt({
         type="button"
         onClick={onOpen}
         className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left text-xs hover:bg-muted/40"
-        aria-label={`open survey: ${announcement.title}`}
+        aria-label={`Open survey: ${announcement.title}`}
       >
         <span
           className="h-2 w-2 shrink-0 rounded-full bg-foreground"
@@ -287,7 +287,7 @@ export function AnnouncementSidebarPrompt({
         type="button"
         onClick={onDismiss}
         className="p-2 text-muted-foreground hover:text-foreground"
-        aria-label="dismiss survey"
+        aria-label="Dismiss survey"
       >
         <X className="h-3.5 w-3.5" />
       </button>
@@ -325,7 +325,7 @@ function AnnouncementBanner({
     >
       <div className="flex min-w-0 items-center gap-2">
         <Icon className="h-4 w-4 shrink-0 text-foreground" />
-        <span className="hidden shrink-0 font-mono text-[10px] uppercase tracking-wide text-muted-foreground sm:inline">
+        <span className="hidden shrink-0 font-mono text-[10px] normal-case tracking-wide text-muted-foreground sm:inline">
           {label}
         </span>
         <span className="truncate">
@@ -349,7 +349,7 @@ function AnnouncementBanner({
         {showClose && (
           <button
             type="button"
-            aria-label="dismiss"
+            aria-label="Dismiss"
             data-testid="announcement-dismiss"
             onClick={onDismiss}
             className="rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground"
@@ -405,7 +405,7 @@ function AnnouncementCard({
         {showClose && (
           <button
             type="button"
-            aria-label="dismiss"
+            aria-label="Dismiss"
             data-testid="announcement-dismiss"
             onClick={onDismiss}
             className="-mr-1 -mt-1 rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground"
@@ -414,7 +414,7 @@ function AnnouncementCard({
           </button>
         )}
       </div>
-      <div className="mb-1 font-mono text-sm font-medium lowercase">
+      <div className="mb-1 font-mono text-sm font-medium normal-case">
         {announcement.title}
       </div>
       <AnnouncementBody body={announcement.body} className="text-[13px]" />

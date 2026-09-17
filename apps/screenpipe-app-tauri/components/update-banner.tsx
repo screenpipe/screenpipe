@@ -94,8 +94,8 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
       // Native code owns the download/install handoff on Windows and the
       // staged restart elsewhere, including startup exclusion and bounded stop.
       toast({
-        title: "installing update...",
-        description: "screenpipe will restart automatically",
+        title: "Installing update...",
+        description: "Screenpipe will restart automatically",
         duration: 10000,
       });
       const res = await commands.restartForUpdate(60);
@@ -103,10 +103,10 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
       if (outcome !== "proceed") {
         setIsInstalling(false);
         toast({
-          title: "update could not restart",
+          title: "Update could not restart",
           description: res.status === "error"
             ? res.error
-            : "audio is still initializing — try updating again shortly",
+            : "Audio is still initializing — try updating again shortly",
           variant: "destructive",
         });
       }
@@ -114,8 +114,8 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
       console.error("failed to update:", error);
       setIsInstalling(false);
       toast({
-        title: "update failed",
-        description: "please try again or download manually",
+        title: "Update failed",
+        description: "Please try again or download manually",
         variant: "destructive",
       });
     }
@@ -127,14 +127,14 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
       return (
         <div className={cn("flex items-center gap-2 text-xs text-muted-foreground", className)}>
           <Sparkles className="h-3 w-3 text-primary" />
-          <span>v{authRequired.version} available</span>
+          <span>V{authRequired.version} available</span>
           <Button
             variant="ghost"
             size="sm"
             className="h-5 px-2 text-xs"
             onClick={() => window.location.href = "/home"}
           >
-            sign in to update
+            Sign in to update
           </Button>
         </div>
       );
@@ -147,7 +147,7 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
         <div className="flex items-center gap-2 flex-1">
           <Sparkles className="h-4 w-4 text-primary" />
           <span>
-            screenpipe <span className="font-medium">v{authRequired.version}</span> is available — sign in to download
+            Screenpipe <span className="font-medium">V{authRequired.version}</span> is available — sign in to download
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -157,7 +157,7 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
             className="h-7 px-3 text-xs"
             onClick={() => window.location.href = "/home"}
           >
-            sign in
+            Sign in
           </Button>
           <Button
             variant="ghost"
@@ -191,7 +191,7 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
           <div className="text-xs font-medium text-foreground truncate">
             {isInstalling ? "Restarting…" : "Restart to update"}
           </div>
-          <div className="text-[10px] text-muted-foreground truncate">v{updateInfo.version}</div>
+          <div className="text-[10px] text-muted-foreground truncate">V{updateInfo.version}</div>
         </div>
       </button>
     );
@@ -204,7 +204,7 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
         className
       )}>
         <Sparkles className="h-3 w-3 text-primary" />
-        <span>v{updateInfo.version} ready</span>
+        <span>V{updateInfo.version} ready</span>
         <Button
           variant="ghost"
           size="sm"
@@ -212,7 +212,7 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
           onClick={handleUpdate}
           disabled={isInstalling}
         >
-          {isInstalling ? "restarting..." : "restart to update"}
+          {isInstalling ? "Restarting..." : "Restart to update"}
         </Button>
       </div>
     );
@@ -226,7 +226,7 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
       <div className="flex items-center gap-2 flex-1">
         <Sparkles className="h-4 w-4 text-primary" />
         <span>
-          screenpipe <span className="font-medium">v{updateInfo.version}</span> is ready
+          Screenpipe <span className="font-medium">V{updateInfo.version}</span> is ready
         </span>
       </div>
       <div className="flex items-center gap-2">
@@ -237,7 +237,7 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
           onClick={handleUpdate}
           disabled={isInstalling}
         >
-          {isInstalling ? "restarting..." : "restart to update"}
+          {isInstalling ? "Restarting..." : "Restart to update"}
         </Button>
         <Button
           variant="ghost"

@@ -92,7 +92,7 @@ export function LiveViewOnboardingGuide({
         targetSelector='[data-onboarding-guide-target="dashboard"]'
         eyebrow="your first Live View"
         step="1 of 3"
-        title="this dashboard was made for your goal"
+        title="This dashboard was made for your goal"
         description="Screenpipe created this Live View for the goal you chose. It fills with your real activity."
         primaryLabel="show me how it fills"
         onPrimary={() => moveTo("waiting")}
@@ -114,7 +114,7 @@ export function LiveViewOnboardingGuide({
         eyebrow="how it updates"
         step="2 of 3"
         title={
-          needsRetry ? "finish the interrupted setup" : "wait for real work"
+          needsRetry ? "Finish the interrupted setup" : "Wait for real work"
         }
         description={description}
         primaryLabel={
@@ -138,7 +138,7 @@ export function LiveViewOnboardingGuide({
       targetSelector='[data-testid="live-view-canvas"]'
       eyebrow="your first result"
       step="3 of 3"
-      title="check it and help it improve"
+      title="Check it and help it improve"
       description="Open the result, check it against your work, and use thumbs up or down. Your feedback helps future updates improve."
       primaryLabel="I found my first result"
       onPrimary={onComplete}

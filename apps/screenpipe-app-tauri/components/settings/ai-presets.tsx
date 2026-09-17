@@ -1306,7 +1306,7 @@ const AISection = ({
           variant={"link"}
           onClick={() => setDialog(false)}
         >
-          <ArrowLeft className="w-4 h-4" /> back
+          <ArrowLeft className="w-4 h-4" /> Back
         </Button>
         <h1 className="text-xl font-semibold">
           {preset ? "Update preset" : "Create preset"}
@@ -1601,7 +1601,7 @@ const AISection = ({
                               <div className="flex flex-col gap-0.5 w-full">
                                 <div className="flex items-center justify-between">
                                   <span className="font-medium">{model.name}</span>
-                                  <Badge variant="outline" className="ml-2 text-[10px] bg-green-500/10 text-green-600 border-green-500/30">free</Badge>
+                                  <Badge variant="outline" className="ml-2 text-[10px] bg-green-500/10 text-green-600 border-green-500/30">Free</Badge>
                                 </div>
                                 {model.description && (
                                   <span className="text-xs text-muted-foreground">{model.description}{model.context_window ? ` · ${Math.round(model.context_window / 1000)}K ctx` : ""}</span>
@@ -1650,7 +1650,7 @@ const AISection = ({
                                     </Badge>
                                   )}
                                   {!locked && costLabel && <Badge variant="outline" className="text-[10px]">{costLabel}</Badge>}
-                                  {!locked && model.speed === "fast" && <Badge variant="outline" className="text-[10px]">fast</Badge>}
+                                  {!locked && model.speed === "fast" && <Badge variant="outline" className="text-[10px]">Fast</Badge>}
                                   {/* Cloudflare lanes always show percentage remaining; the badge
                                       turns yellow near exhaustion. Legacy counters stay quiet until
                                       they are low. Never render either beside a locked model. */}
@@ -1660,7 +1660,7 @@ const AISection = ({
                                       className={`text-[10px] ${lowCloudflareAllowance || lowLegacyAllowance ? "bg-yellow-500/10 text-yellow-700 border-yellow-500/40 dark:text-yellow-400" : ""}`}
                                       title={cloudflareAllowance
                                         ? `${formatUsagePercent(cloudflareAllowance.used_percent)} used${cloudflareAllowance.resets_at ? ` — resets ${formatAllowanceReset(cloudflareAllowance.resets_at)}` : ""}`
-                                        : `approaching daily limit${usage?.resets_at ? ` — resets ${formatResetTime(usage.resets_at)}` : ""}`}
+                                        : `Approaching daily limit${usage?.resets_at ? ` — resets ${formatResetTime(usage.resets_at)}` : ""}`}
                                     >
                                       {cloudflareAllowance
                                         ? `${formatUsagePercent(cloudflareAllowance.remaining_percent)} left`
@@ -1703,7 +1703,7 @@ const AISection = ({
                     <p>{selectedModel.warning}</p>
                     {models?.filter((m) => m.recommended_for?.includes('pipes') && m.id !== selectedModel.id).slice(0, 2).length > 0 && (
                       <p className="text-muted-foreground">
-                        recommended for scheduled tasks:{" "}
+                        Recommended for scheduled tasks:{" "}
                         {models.filter((m) => m.recommended_for?.includes('pipes') && m.id !== selectedModel.id).slice(0, 3).map((m) => (
                           <button
                             key={m.id}
@@ -1725,15 +1725,15 @@ const AISection = ({
           {settingsPreset?.provider === "native-ollama" && (
             <div className="text-xs text-muted-foreground space-y-1">
               <p>
-                <span className="font-medium">recommended:</span>{" "}
+                <span className="font-medium">Recommended:</span>{" "}
                 <code className="bg-secondary/50 px-1 rounded">qwen3.5:9b</code>{" "}
                 <code className="bg-secondary/50 px-1 rounded">glm-4.7:9b</code>{" "}
                 <code className="bg-secondary/50 px-1 rounded">qwen3.5:4b</code>{" "}
                 (all support tool calling)
               </p>
               <p>
-                GPU strongly recommended. without a dedicated GPU, local models will be very slow and scheduled tasks may time out.
-                for best results consider screenpipe cloud or groq as custom provider.
+                GPU strongly recommended. Without a dedicated GPU, local models will be very slow and scheduled tasks may time out.
+                For best results consider screenpipe cloud or groq as custom provider.
               </p>
             </div>
           )}
@@ -2092,12 +2092,12 @@ function SortablePresetCard({
             </h3>
             {isDefault && (
               <Badge variant="default" className="text-[10px] px-1.5 py-0">
-                default
+                Default
               </Badge>
             )}
             {readOnly && (
               <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                managed
+                Managed
               </Badge>
             )}
             {!hasValidation && (
@@ -2131,10 +2131,10 @@ function SortablePresetCard({
         </div>
         <div className="flex items-center gap-0.5 pt-1.5 border-t border-border">
           <Button variant="ghost" size="sm" className="text-[11px] h-6 px-2" onClick={(e) => { e.stopPropagation(); onDuplicate(); }} disabled={isLoading || readOnly}>
-            <Copy className="w-3 h-3 mr-1" />duplicate
+            <Copy className="w-3 h-3 mr-1" />Duplicate
           </Button>
           <Button variant="ghost" size="sm" className="text-[11px] h-6 px-2" onClick={(e) => { e.stopPropagation(); onSetDefault(); }} disabled={isLoading || isDefault || defaultLocked}>
-            <Star className="w-3 h-3 mr-1" />{isDefault ? "default" : "set default"}
+            <Star className="w-3 h-3 mr-1" />{isDefault ? "Default" : "Set default"}
           </Button>
           {isTeamAdmin && onShareToTeam && !readOnly && (
             <TooltipProvider>
@@ -2144,7 +2144,7 @@ function SortablePresetCard({
                     <Share2 className="w-3 h-3" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>share to team (e2e encrypted)</TooltipContent>
+                <TooltipContent>Share to team (e2e encrypted)</TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
@@ -2193,9 +2193,9 @@ export const AIPresets = () => {
   const sharePresetToTeam = async (preset: AIPreset) => {
     try {
       await team.pushConfig("ai_provider", preset.id, preset);
-      toast({ title: "shared to team", description: `"${formatPresetName(preset.id)}" is now available to all team members (e2e encrypted)` });
+      toast({ title: "Shared to team", description: `"${formatPresetName(preset.id)}" is now available to all team members (e2e encrypted)` });
     } catch (err: any) {
-      toast({ title: "failed to share to team", description: err.message, variant: "destructive" });
+      toast({ title: "Failed to share to team", description: err.message, variant: "destructive" });
     }
   };
 

@@ -55,28 +55,28 @@ export interface NotificationCategory {
 export const NOTIFICATION_GROUPS: NotificationGroup[] = [
   {
     id: "recording",
-    label: "recording health",
-    description: "know the moment capture stops working",
+    label: "Recording health",
+    description: "Know the moment capture stops working",
   },
   {
     id: "meetings",
-    label: "meetings",
-    description: "live notes and audio/transcript health during calls",
+    label: "Meetings",
+    description: "Live notes and audio/transcript health during calls",
   },
   {
     id: "system",
-    label: "system",
-    description: "monitors, docking, and power changes",
+    label: "System",
+    description: "Monitors, docking, and power changes",
   },
   {
     id: "automation",
-    label: "scheduled tasks & automation",
-    description: "ideas and alerts from your automations",
+    label: "Scheduled tasks & automation",
+    description: "Ideas and alerts from your automations",
   },
   {
     id: "app",
-    label: "app",
-    description: "updates to screenpipe itself",
+    label: "App",
+    description: "Updates to screenpipe itself",
   },
 ];
 
@@ -204,7 +204,7 @@ export const SNOOZE_PRESETS: SnoozePreset[] = [
   { label: "30 min", kind: "minutes", minutes: 30 },
   { label: "1 hour", kind: "minutes", minutes: 60 },
   { label: "2 hours", kind: "minutes", minutes: 120 },
-  { label: "until tomorrow", kind: "untilTomorrow" },
+  { label: "Until tomorrow", kind: "untilTomorrow" },
 ];
 
 /** Resolve a snooze preset to an absolute epoch-ms expiry (local clock). */
@@ -248,9 +248,9 @@ export function formatSnoozeUntil(untilMs: number, now = new Date()): string {
   const until = new Date(untilMs);
   const sameDay = until.toDateString() === now.toDateString();
   const time = until.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  if (sameDay) return `until ${time}`;
+  if (sameDay) return `Until ${time}`;
   const day = until.toLocaleDateString([], { weekday: "short" });
-  return `until ${day} ${time}`;
+  return `Until ${day} ${time}`;
 }
 
 // ── presets (bulk set) ───────────────────────────────────────────────

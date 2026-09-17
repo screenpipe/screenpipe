@@ -839,7 +839,7 @@ export default function OnboardingPage() {
         >
           <div className="h-6 w-6 animate-spin rounded-full border border-foreground border-t-transparent" />
           <p className="font-mono text-[11px] text-muted-foreground">
-            preparing your setup
+            Preparing your setup
           </p>
         </div>
       </div>
@@ -874,10 +874,10 @@ export default function OnboardingPage() {
               authenticationState === "license_key" ? (
                 <div className="mx-auto w-full max-w-sm">
                   <h2 className="mb-1 text-lg font-semibold">
-                    activate this device
+                    Activate this device
                   </h2>
                   <p className="mb-4 text-sm text-muted-foreground">
-                    enter the enterprise key provided by your administrator
+                    Enter the enterprise key provided by your administrator
                   </p>
                   <EnterpriseLicensePrompt
                     embedded
@@ -903,7 +903,7 @@ export default function OnboardingPage() {
                       onClick={() => selectAuthenticationMethod("license_key")}
                       className="mt-3 font-mono text-xs text-muted-foreground/70 underline underline-offset-4 decoration-muted-foreground/40 transition-colors hover:text-foreground hover:decoration-foreground"
                     >
-                      use enterprise key
+                      Use enterprise key
                     </button>
                   )}
                 </div>

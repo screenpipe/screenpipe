@@ -34,7 +34,7 @@ describe("getArtifactCardDisplay", () => {
     expect(display.title).toBe("Weekly Report");
     expect(display.summary).toBe("Revenue and meetings summary.");
     expect(display.properties).toEqual(
-      expect.arrayContaining([{ label: "file", value: "report.md" }]),
+      expect.arrayContaining([{ label: "File", value: "report.md" }]),
     );
   });
 

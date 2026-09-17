@@ -404,7 +404,7 @@ const FrameThumbnail = ({
             className="h-4 w-4 animate-spin text-muted-foreground"
             aria-hidden="true"
           />
-          <span className="sr-only">loading frame</span>
+          <span className="sr-only">Loading frame</span>
         </div>
       )}
       {hasError ? (
@@ -413,7 +413,7 @@ const FrameThumbnail = ({
           role="img"
           aria-label={`${alt} unavailable`}
         >
-          <span className="text-xs text-muted-foreground">unavailable</span>
+          <span className="text-xs text-muted-foreground">Unavailable</span>
         </div>
       ) : (
         // eslint-disable-next-line @next/next/no-img-element
@@ -459,7 +459,7 @@ function formatRelativeTime(timestamp: string): string {
   const date = new Date(timestamp);
   const time = format(date, "h:mm a");
   if (isToday(date)) return time;
-  if (isYesterday(date)) return `yesterday ${time}`;
+  if (isYesterday(date)) return `Yesterday ${time}`;
   return format(date, "MMM d") + " " + time;
 }
 
@@ -2380,16 +2380,16 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       // At roughly 25% of the control height they stay softened, not pill-shaped.
       <div className="flex items-center gap-0.5 shrink-0 rounded-lg bg-muted/60 p-0.5">
         {([
-          { key: "all" as ContentFilter, label: "all", icon: null },
-          { key: "screen" as ContentFilter, label: "screen", icon: Monitor },
-          { key: "input" as ContentFilter, label: "keys", icon: Keyboard },
-          { key: "chats" as ContentFilter, label: "chats", icon: MessageSquare },
+          { key: "all" as ContentFilter, label: "All", icon: null },
+          { key: "screen" as ContentFilter, label: "Screen", icon: Monitor },
+          { key: "input" as ContentFilter, label: "Keys", icon: Keyboard },
+          { key: "chats" as ContentFilter, label: "Chats", icon: MessageSquare },
         ] as const).map(({ key, label, icon: Icon }) => {
           const isActive = contentFilter === key;
           return (
             <button
               key={key}
-              title={key === "input" ? "keyboard & clipboard" : label}
+              title={key === "input" ? "Keyboard & clipboard" : label}
               aria-pressed={isActive}
               onClick={() => { setContentFilter(key); setNavIndex(0); }}
               className={cn(
@@ -2416,7 +2416,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
         <>
           <span>↑↓ navigate</span>
           <span>⏎ go to timeline</span>
-          <span>esc back</span>
+          <span>Esc back</span>
         </>
       );
     }
@@ -2424,11 +2424,11 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
       return (
         <>
           <span>↑↓ navigate</span>
-          <span>esc back</span>
+          <span>Esc back</span>
         </>
       );
     }
-    if (!activeNavItem) return <span>type to search</span>;
+    if (!activeNavItem) return <span>Type to search</span>;
     return (
       <>
         <span>{activeNavItem.kind === "frame" ? "←→↑↓ navigate" : "↑↓ navigate"}</span>
@@ -2470,7 +2470,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
           {!isLoadingTranscriptions && speakerTranscriptions.length === 0 && (
             <div className="py-12 text-center text-sm text-muted-foreground">
-              no transcriptions found for {selectedSpeaker.name}
+              No transcriptions found for {selectedSpeaker.name}
             </div>
           )}
 
@@ -2486,7 +2486,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                     : "border-border text-muted-foreground hover:border-foreground/40"
                 )}
               >
-                all ({speakerTranscriptions.length})
+                All ({speakerTranscriptions.length})
               </button>
               {speakerAppCounts.map(([app, count]) => (
                 <button
@@ -2525,7 +2525,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                 )}
               >
                 <Clock className="w-3 h-3" />
-                all dates
+                All dates
               </button>
               {speakerTimeRanges.map((range) => (
                 <button
@@ -2602,7 +2602,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
                         <span className="flex items-center gap-1 font-mono">
                           <Clock className="w-3 h-3" />
-                          {t.timestamp ? formatRelativeTime(t.timestamp) : "unknown"}
+                          {t.timestamp ? formatRelativeTime(t.timestamp) : "Unknown"}
                         </span>
                         <span className="flex items-center gap-0.5">
                           {t.is_input ? <Mic className="w-2.5 h-2.5" /> : <Volume2 className="w-2.5 h-2.5" />}
@@ -2621,7 +2621,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               {isLoadingMoreTranscriptions ? (
                 <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
               ) : (
-                <span className="text-xs text-muted-foreground">scroll for more</span>
+                <span className="text-xs text-muted-foreground">Scroll for more</span>
               )}
             </div>
           )}
@@ -2667,7 +2667,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               land. Five rows everywhere: a different count per scope was the
               other half of the height jump. */}
           {showSkeleton && (
-            <div className="space-y-2 py-1" aria-busy="true" aria-label="searching">
+            <div className="space-y-2 py-1" aria-busy="true" aria-label="Searching">
               {Array.from({ length: 5 }).map((_, i) => (
                 <div
                   key={i}
@@ -2716,7 +2716,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {/* Tag autocomplete pills */}
           {isTagSearch && allTags.length > 0 && (
             <div className="mb-4">
-              <SectionLabel>tags</SectionLabel>
+              <SectionLabel>Tags</SectionLabel>
               <div className="flex flex-wrap gap-1.5 mb-3">
                 {allTags.map((t) => {
                   const tagQuery = query.slice(1).trim().toLowerCase();
@@ -2818,8 +2818,8 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {isTagSearch && !isSearchingTags && tagResults.length === 0 && allTags.length === 0 && (
             <div className="py-12 text-center text-sm text-muted-foreground">
               {query.slice(1).trim()
-                ? <>no tags matching &quot;{query.slice(1).trim()}&quot;</>
-                : "no tags found"}
+                ? <>No tags matching &quot;{query.slice(1).trim()}&quot;</>
+                : "No tags found"}
             </div>
           )}
 
@@ -2829,7 +2829,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               a browse whereas a person row needs their name to be known. */}
           {isEntitySearch && appSuggestions.length > 0 && (
             <div className="mb-4">
-              <SectionLabel>apps</SectionLabel>
+              <SectionLabel>Apps</SectionLabel>
               <div className="space-y-1">
                 {appSuggestions.map((app) => (
                   <button
@@ -2868,8 +2868,8 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
             && speakerResults.length === 0 && appSuggestions.length === 0 && (
             <div className="py-12 text-center text-sm text-muted-foreground">
               {entityFilter
-                ? <>no apps or people matching &quot;{entityFilter}&quot;</>
-                : "no apps or people found"}
+                ? <>No apps or people matching &quot;{entityFilter}&quot;</>
+                : "No apps or people found"}
             </div>
           )}
 
@@ -2910,7 +2910,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {/* People section */}
           {speakerResults.length > 0 && (
             <div className="mb-4">
-              <SectionLabel>people</SectionLabel>
+              <SectionLabel>People</SectionLabel>
               <div className="flex gap-2 flex-wrap">
                 {speakerResults.map((speaker) => (
                   <button
@@ -2938,7 +2938,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {/* Inline chat section in "All" view — appears instantly (in-memory filter) while screen results load */}
           {contentFilter === "all" && debouncedQuery.trim().length >= MIN_QUERY_CHARS && chatsFreshForQuery && filteredChats.length > 0 && !isTagSearch && !isEntitySearch && (
             <div className="mb-4">
-              <SectionLabel>chats</SectionLabel>
+              <SectionLabel>Chats</SectionLabel>
               <div className="flex flex-col">
                 {filteredChats.slice(0, 5).map((chat) => {
                   const ts = new Date(chat.lastUserMessageAt ?? chat.updatedAt).toISOString();
@@ -3032,7 +3032,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {/* Screen results skeleton — keyword search still in flight but UI events already loaded */}
           {contentFilter !== "chats" && isSearching && searchResults.length === 0 && contentFilter !== "input" && uiEventResults.length > 0 && (
             <div className="mb-4">
-              <SectionLabel>screen</SectionLabel>
+              <SectionLabel>Screen</SectionLabel>
               <div
                 className="grid gap-2.5"
                 style={{
@@ -3056,7 +3056,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           {uiEventResults.length > 0 && contentFilter !== "screen" && contentFilter !== "chats" && (
             <div className={cn(contentFilter === "all" && "mb-4")}>
               {contentFilter === "all" && (
-                <SectionLabel>keyboard &amp; clipboard</SectionLabel>
+                <SectionLabel>Keyboard &amp; clipboard</SectionLabel>
               )}
               {/* In its own scope these group by day like the chats list does;
                   in "All" the five-row preview stays flat so the section reads
@@ -3123,7 +3123,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                   only this section, so the heading is what scopes them — it
                   used to appear only when speaker or keyboard results happened
                   to exist, leaving the chips looking like global filters. */}
-              {contentFilter === "all" && <SectionLabel>screen</SectionLabel>}
+              {contentFilter === "all" && <SectionLabel>Screen</SectionLabel>}
 
               {/* Facets on one scrollable row. Apps, sites and dates each had
                   their own full-width row before, so up to three rows of chips
@@ -3358,7 +3358,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                       onClick={loadMoreOcr}
                       className="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-foreground/50 hover:text-foreground"
                     >
-                      load more
+                      Load more
                     </button>
                   )}
                 </div>
@@ -3379,7 +3379,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                   onClick={loadMoreOcr}
                   className="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-foreground/50 hover:text-foreground"
                 >
-                  search more frames
+                  Search more frames
                 </button>
               </div>
             )}
@@ -3393,7 +3393,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                 <div>
                   {/* No icon here — the chip in the search bar already names
                       this list as chats, and each row carries its own icon. */}
-                  <SectionLabel>recent</SectionLabel>
+                  <SectionLabel>Recent</SectionLabel>
                   <div className="flex flex-col">
                     {visibleRecentChats.map((chat) => {
                       const ts = new Date(chat.lastUserMessageAt ?? chat.updatedAt).toISOString();
@@ -3424,7 +3424,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
               {/* Suggestion chips from recent screen activity */}
               {suggestions.length > 0 && (
                 <div>
-                  <SectionLabel>from your recent activity</SectionLabel>
+                  <SectionLabel>From your recent activity</SectionLabel>
                   <div className="flex flex-wrap gap-2">
                     {suggestions.map((suggestion) => (
                       <button
@@ -3496,7 +3496,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
                 setHasMoreTranscriptions(true);
               }
             }}
-            placeholder="search memory & chats... (# tags, @ apps & people)"
+            placeholder="Search memory & chats... (# tags, @ apps & people)"
             className={cn(
               "min-w-[120px] flex-1 bg-transparent text-foreground placeholder:text-muted-foreground/60 outline-none",
               standalone ? "text-base" : "text-sm",
@@ -3553,7 +3553,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           <div className="flex items-center gap-4">
             {renderFooterHints()}
           </div>
-          <span>esc close</span>
+          <span>Esc close</span>
         </div>
       </div>
     );
@@ -3645,7 +3645,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
           <div className="flex items-center gap-4">
             {renderFooterHints()}
           </div>
-          <span>esc {selectedSpeaker || selectedApp ? "back" : "close"}</span>
+          <span>Esc {selectedSpeaker || selectedApp ? "back" : "close"}</span>
         </div>
       </div>
     </div>

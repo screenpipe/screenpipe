@@ -38,7 +38,7 @@ function conversationToMeta(
   if (!conversation || (conversation.kind ?? "chat") !== "chat") return null;
   return {
     id: conversation.id,
-    title: conversation.title || "untitled chat",
+    title: conversation.title || "Untitled chat",
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt,
     messageCount: conversation.messages.length,
@@ -176,7 +176,7 @@ export function PipeChatDestinationPicker({
         ) : (
           <MessageSquare className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         )}
-        <span className="min-w-0 flex-1 truncate">{chat.title || "untitled chat"}</span>
+        <span className="min-w-0 flex-1 truncate">{chat.title || "Untitled chat"}</span>
         <span className="shrink-0 text-xs text-muted-foreground">
           {chatDate(chat.updatedAt)}
         </span>
@@ -201,16 +201,16 @@ export function PipeChatDestinationPicker({
             "h-8 min-w-0 max-w-full justify-between gap-2 rounded-md px-3 text-xs font-normal sm:w-64",
             unavailable && "text-destructive",
           )}
-          aria-label="choose an existing chat"
+          aria-label="Choose an existing chat"
           data-testid="pipe-chat-destination-trigger"
         >
           <span className="truncate">
             {selected?.title ||
               (selectedLoading
-                ? "loading chat…"
+                ? "Loading chat…"
                 : unavailable
-                  ? "chat unavailable"
-                  : "choose chat")}
+                  ? "Chat unavailable"
+                  : "Choose chat")}
           </span>
           <Search className="h-3.5 w-3.5 shrink-0 opacity-60" />
         </Button>
@@ -239,29 +239,29 @@ export function PipeChatDestinationPicker({
                 event.preventDefault();
                 first.focus();
               }}
-              placeholder="search chats"
-              aria-label="search chats"
+              placeholder="Search chats"
+              aria-label="Search chats"
               className="h-8 rounded-md pl-8 text-xs"
             />
           </div>
         </div>
 
-        <div className="max-h-80 overflow-y-auto p-1.5" role="listbox" aria-label="chats">
+        <div className="max-h-80 overflow-y-auto p-1.5" role="listbox" aria-label="Chats">
           {loading && results.length === 0 ? (
             <div className="flex items-center justify-center gap-2 px-3 py-8 text-xs text-muted-foreground" role="status">
               <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" />
-              loading chats
+              Loading chats
             </div>
           ) : loadError ? (
             <div className="space-y-2 px-3 py-6 text-center text-xs text-muted-foreground" role="alert">
-              <p>couldn&apos;t load chats</p>
+              <p>Couldn&apos;t load chats</p>
               <Button type="button" size="sm" variant="outline" className="h-7 text-xs" onClick={() => void loadChats(query)}>
-                retry
+                Retry
               </Button>
             </div>
           ) : results.length === 0 ? (
             <div className="px-4 py-8 text-center text-xs text-muted-foreground">
-              {query ? "no matching chats" : "no chats yet — start a chat, then return here"}
+              {query ? "No matching chats" : "No chats yet — start a chat, then return here"}
             </div>
           ) : (
             query ? (
@@ -270,14 +270,14 @@ export function PipeChatDestinationPicker({
               <>
                 {pinned.length > 0 && (
                   <div>
-                    <p className="px-2.5 pb-1 pt-1 text-[11px] font-medium text-muted-foreground">pinned</p>
+                    <p className="px-2.5 pb-1 pt-1 text-[11px] font-medium text-muted-foreground">Pinned</p>
                     {renderRows(pinned)}
                   </div>
                 )}
                 {recent.length > 0 && (
                   <div>
                     <p className="px-2.5 pb-1 pt-2 text-[11px] font-medium text-muted-foreground">
-                      recent
+                      Recent
                     </p>
                     {renderRows(recent)}
                   </div>
@@ -288,7 +288,7 @@ export function PipeChatDestinationPicker({
         </div>
 
         <p className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
-          the task queues behind any reply already running in this chat
+          The task queues behind any reply already running in this chat
         </p>
       </PopoverContent>
     </Popover>

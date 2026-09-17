@@ -263,8 +263,8 @@ export function SlashCommandMenu({ editor }: { editor: Editor | null }) {
       // this, a menu click reaches the editor shell's focus("end") handler.
       onClick={(event) => event.stopPropagation()}
     >
-      <div className="select-none border-b border-border px-2.5 py-1.5 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-        blocks
+      <div className="select-none border-b border-border px-2.5 py-1.5 text-[10px] normal-case tracking-[0.18em] text-muted-foreground">
+        Blocks
       </div>
       <div className="max-h-64 overflow-y-auto p-1">
         {items.map((item, index) => (
@@ -340,56 +340,56 @@ const TOOLBAR_ACTIONS: ToolbarAction[] = [
   {
     id: "bold",
     icon: Bold,
-    title: "bold",
+    title: "Bold",
     group: "mark",
     run: (e) => e.chain().focus().toggleBold().run(),
   },
   {
     id: "italic",
     icon: Italic,
-    title: "italic",
+    title: "Italic",
     group: "mark",
     run: (e) => e.chain().focus().toggleItalic().run(),
   },
   {
     id: "strike",
     icon: Strikethrough,
-    title: "strikethrough",
+    title: "Strikethrough",
     group: "mark",
     run: (e) => e.chain().focus().toggleStrike().run(),
   },
   {
     id: "code",
     icon: Code,
-    title: "inline code",
+    title: "Inline code",
     group: "mark",
     run: (e) => e.chain().focus().toggleCode().run(),
   },
   {
     id: "h1",
     icon: Heading1,
-    title: "heading 1",
+    title: "Heading 1",
     group: "block",
     run: (e) => e.chain().focus().toggleHeading({ level: 1 }).run(),
   },
   {
     id: "h2",
     icon: Heading2,
-    title: "heading 2",
+    title: "Heading 2",
     group: "block",
     run: (e) => e.chain().focus().toggleHeading({ level: 2 }).run(),
   },
   {
     id: "bullet",
     icon: List,
-    title: "bullet list",
+    title: "Bullet list",
     group: "block",
     run: (e) => e.chain().focus().toggleBulletList().run(),
   },
   {
     id: "quote",
     icon: TextQuote,
-    title: "quote",
+    title: "Quote",
     group: "block",
     run: (e) => e.chain().focus().toggleBlockquote().run(),
   },

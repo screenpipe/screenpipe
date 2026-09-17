@@ -202,13 +202,13 @@ export function DisplaySection() {
                       await new Promise((r) => setTimeout(r, 500));
                       await commands.spawnScreenpipe(null);
                       toast({
-                        title: disabled ? "timeline disabled" : "timeline enabled",
-                        description: "screenpipe restarted to apply the change.",
+                        title: disabled ? "Timeline disabled" : "Timeline enabled",
+                        description: "Screenpipe restarted to apply the change.",
                       });
                     } catch (e) {
                       toast({
-                        title: "failed to restart screenpipe",
-                        description: "restart screenpipe manually to apply the change.",
+                        title: "Failed to restart screenpipe",
+                        description: "Restart screenpipe manually to apply the change.",
                         variant: "destructive",
                       });
                     }
@@ -249,8 +249,8 @@ export function DisplaySection() {
                           await commands.resetMainWindow();
                         } catch (_) {}
                         toast({
-                          title: "overlay mode updated",
-                          description: `press the shortcut to open timeline in ${option.label.toLowerCase()} mode.`,
+                          title: "Overlay mode updated",
+                          description: `Press the shortcut to open timeline in ${option.label.toLowerCase()} mode.`,
                         });
                       }}
                       type="button"
@@ -347,13 +347,13 @@ export function DisplaySection() {
                     }
                     await commands.resetMainWindow().catch(() => {});
                     toast({
-                      title: hidden ? "overlay hidden from screen recordings" : "overlay visible in screen recordings",
-                      description: "press the shortcut to open the overlay with the new setting.",
+                      title: hidden ? "Overlay hidden from screen recordings" : "Overlay visible in screen recordings",
+                      description: "Press the shortcut to open the overlay with the new setting.",
                     });
                   } catch (error) {
                     await updateSettings({ hideOverlayInScreenRecording: !hidden });
                     toast({
-                      title: "could not update overlay capture visibility",
+                      title: "Could not update overlay capture visibility",
                       description: error instanceof Error ? error.message : String(error),
                       variant: "destructive",
                     });
@@ -416,7 +416,7 @@ export function DisplaySection() {
                       handleSettingsChange({
                         sidebarNavLayout: { ...DEFAULT_SIDEBAR_NAV_LAYOUT },
                       });
-                      toast({ title: "sidebar layout reset" });
+                      toast({ title: "Sidebar layout reset" });
                     }}
                   >
                     Reset sidebar layout
@@ -445,7 +445,7 @@ export function DisplaySection() {
                   onCheckedChange={(checked) => {
                     handleSettingsChange({ translucentSidebar: checked });
                     toast({
-                      title: checked ? "translucent sidebar enabled" : "translucent sidebar disabled",
+                      title: checked ? "Translucent sidebar enabled" : "Translucent sidebar disabled",
                     });
                   }}
                 />
@@ -487,10 +487,10 @@ export function DisplaySection() {
                     commands.resetMainWindow().catch(() => {});
                     toast({
                       title: checked
-                        ? "dock icon hidden — menu bar only"
-                        : "dock icon visible",
+                        ? "Dock icon hidden — menu bar only"
+                        : "Dock icon visible",
                       description: checked
-                        ? "open screenpipe from the menu bar icon."
+                        ? "Open screenpipe from the menu bar icon."
                         : undefined,
                     });
                   }}

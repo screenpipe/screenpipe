@@ -69,19 +69,19 @@ async function messagesForExport(session: SessionRecord): Promise<Message[]> {
 }
 
 function visibleTabTitle(session: SessionRecord): string {
-  if (isEphemeralSideConversation(session)) return "temporary side chat";
+  if (isEphemeralSideConversation(session)) return "Temporary side chat";
   if (session.streamingTitle?.trim()) return session.streamingTitle.trim();
   const title = session.title.trim();
-  if (!title || isInjectedTitle(title)) return "new chat";
+  if (!title || isInjectedTitle(title)) return "New chat";
   return title;
 }
 
 type TabGlyph =
-  | { kind: "error"; label: "error" }
-  | { kind: "working"; label: "working" }
-  | { kind: "unread"; label: "unread" }
+  | { kind: "error"; label: "Error" }
+  | { kind: "working"; label: "Working" }
+  | { kind: "unread"; label: "Unread" }
   | { kind: "worktree"; label: string }
-  | { kind: "split"; label: "split pane" };
+  | { kind: "split"; label: "Split pane" };
 
 /** One left-slot mark. Status wins over worktree/split so the dot stays
  *  readable instead of stacking a branch icon on top of a 6px circle. */
@@ -90,18 +90,18 @@ function tabGlyph(
   active: boolean,
   split: boolean,
 ): TabGlyph | null {
-  if (session.status === "error") return { kind: "error", label: "error" };
+  if (session.status === "error") return { kind: "error", label: "Error" };
   if (["streaming", "thinking", "tool"].includes(session.status)) {
-    return { kind: "working", label: "working" };
+    return { kind: "working", label: "Working" };
   }
-  if (session.unread && !active) return { kind: "unread", label: "unread" };
+  if (session.unread && !active) return { kind: "unread", label: "Unread" };
   if (session.codingWorkspace) {
     return {
       kind: "worktree",
-      label: `worktree · ${session.codingWorkspace.repoName}`,
+      label: `Worktree · ${session.codingWorkspace.repoName}`,
     };
   }
-  if (split) return { kind: "split", label: "split pane" };
+  if (split) return { kind: "split", label: "Split pane" };
   return null;
 }
 
@@ -491,7 +491,7 @@ export function ChatTabStrip({
                             void (async () => {
                               const messages = await messagesForExport(session);
                               if (messages.length === 0) {
-                                toast({ title: "no messages to copy" });
+                                toast({ title: "No messages to copy" });
                                 return;
                               }
                               await copyText(

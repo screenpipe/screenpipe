@@ -88,10 +88,10 @@ export function StorageMigrationGate({ offerMigration = false }: { offerMigratio
   if (activity.recovering) {
     if (recoveryDismissed) return null;
     return (
-      <aside aria-label="storage recovery" className="fixed bottom-4 right-4 z-50 w-[calc(100%-2rem)] max-w-sm space-y-3 rounded-lg border border-border bg-background p-4 text-foreground shadow-lg">
+      <aside aria-label="Storage recovery" className="fixed bottom-4 right-4 z-50 w-[calc(100%-2rem)] max-w-sm space-y-3 rounded-lg border border-border bg-background p-4 text-foreground shadow-lg">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold">restoring recording</h2>
-          <button type="button" onClick={() => setRecoveryDismissed(true)} className="text-xs underline">hide</button>
+          <h2 className="text-sm font-semibold">Restoring recording</h2>
+          <button type="button" onClick={() => setRecoveryDismissed(true)} className="text-xs underline">Hide</button>
         </div>
         <p className="text-xs text-muted-foreground">Recording and history are unavailable while recovery runs. You can use settings and install updates.</p>
         <p role="status" className="text-xs">{unavailable ? "Waiting for recovery status…" : activity.message} · {migrationElapsed(elapsed)}</p>
@@ -119,7 +119,7 @@ export function StorageMigrationGate({ offerMigration = false }: { offerMigratio
     >
       <div className="space-y-5">
         <div className="space-y-2">
-          <h2 id="storage-migration-title" className="text-lg font-semibold">preparing storage</h2>
+          <h2 id="storage-migration-title" className="text-lg font-semibold">Preparing storage</h2>
           <p id="storage-migration-description" className="text-sm text-muted-foreground">
             Recording and history access are paused while Screenpipe prepares and verifies your history. Your recording preference will be restored when finished. Keep Screenpipe open; your computer will stay awake.
           </p>
@@ -130,9 +130,9 @@ export function StorageMigrationGate({ offerMigration = false }: { offerMigratio
         </div>
         {percentage !== null && <div className="space-y-2">
           <div className="flex justify-between gap-4 text-sm tabular-nums">
-            <span>records converted</span><span>{percentage}%</span>
+            <span>Records converted</span><span>{percentage}%</span>
           </div>
-          <progress aria-label="records converted" value={converted} max={total} className="h-2 w-full appearance-none [&::-webkit-progress-bar]:bg-muted [&::-webkit-progress-value]:bg-primary [&::-moz-progress-bar]:bg-primary" />
+          <progress aria-label="Records converted" value={converted} max={total} className="h-2 w-full appearance-none [&::-webkit-progress-bar]:bg-muted [&::-webkit-progress-value]:bg-primary [&::-moz-progress-bar]:bg-primary" />
           <p className="text-xs text-muted-foreground tabular-nums">{converted.toLocaleString()} of {total.toLocaleString()} records. Verification follows conversion.</p>
         </div>}
         <p className="text-sm tabular-nums">Elapsed: {migrationElapsed(elapsed)}</p>

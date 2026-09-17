@@ -1229,7 +1229,7 @@ describe("activity history helpers", () => {
     const preview = await screen.findByTestId("activity-artifact-preview");
     fireEvent.error(preview.querySelector("img")!);
     expect(
-      within(preview).getAllByText("preview unavailable")[0],
+      within(preview).getAllByText("Preview unavailable")[0],
     ).toBeVisible();
   });
 

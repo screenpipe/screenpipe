@@ -94,11 +94,11 @@ function AgentLogo({ id }: { id: HomeCardAgentId }) {
 }
 
 function statusLabel(state: LaunchState | null): string {
-  if (state === "opening") return "opening";
-  if (state === "opened") return "opened";
-  if (state === "copied") return "copied";
-  if (state === "unavailable") return "unavailable";
-  return "run in";
+  if (state === "opening") return "Opening";
+  if (state === "opened") return "Opened";
+  if (state === "copied") return "Copied";
+  if (state === "unavailable") return "Unavailable";
+  return "Run in";
 }
 
 function resultDescription(state: LaunchState, label: string): string {
@@ -171,10 +171,10 @@ export function HomeCardAgentActions({
     toast({
       title:
         nextState === "opened"
-          ? `opened in ${label}`
+          ? `Opened in ${label}`
           : nextState === "copied"
-            ? "prompt copied"
-            : "agent handoff unavailable",
+            ? "Prompt copied"
+            : "Agent handoff unavailable",
       description: resultDescription(nextState, label),
       ...(nextState === "unavailable" ? { variant: "destructive" as const } : {}),
     });

@@ -97,17 +97,17 @@ export function ReferralCard() {
       <Card className="p-5">
         <div className="mb-3 flex items-center gap-2">
           <Gift className="h-5 w-5 text-muted-foreground" />
-          <h3 className="text-lg font-semibold">refer a friend</h3>
+          <h3 className="text-lg font-semibold">Refer a friend</h3>
         </div>
         <p className="mb-4 text-sm text-muted-foreground">
-          sign in to view your referral eligibility and invite link
+          Sign in to view your referral eligibility and invite link
         </p>
         <Button
           variant="outline"
           size="sm"
           onClick={() => commands.openLoginWindow(null, null)}
         >
-          sign in
+          Sign in
         </Button>
       </Card>
     );
@@ -118,11 +118,11 @@ export function ReferralCard() {
     try {
       await commands.copyTextToClipboard(referral.link);
       setCopied(true);
-      toast({ title: "referral link copied" });
+      toast({ title: "Referral link copied" });
       setTimeout(() => setCopied(false), 2000);
     } catch {
       toast({
-        title: "failed to copy",
+        title: "Failed to copy",
         variant: "destructive",
       });
     }
@@ -154,11 +154,11 @@ export function ReferralCard() {
       }
 
       setEmail("");
-      toast({ title: "invite sent" });
+      toast({ title: "Invite sent" });
     } catch (error) {
       toast({
         title:
-          error instanceof Error ? error.message : "failed to send invite",
+          error instanceof Error ? error.message : "Failed to send invite",
         variant: "destructive",
       });
     } finally {
@@ -171,10 +171,10 @@ export function ReferralCard() {
       <Card className="p-5">
         <div className="mb-2 flex items-center gap-2">
           <Gift className="h-5 w-5 text-muted-foreground" />
-          <h3 className="text-lg font-semibold">refer a friend</h3>
+          <h3 className="text-lg font-semibold">Refer a friend</h3>
         </div>
         <p className="text-sm text-muted-foreground">
-          your signed-in account has no email address
+          Your signed-in account has no email address
         </p>
       </Card>
     );
@@ -185,9 +185,9 @@ export function ReferralCard() {
       <Card className="p-5">
         <div className="flex items-center gap-2 mb-2">
           <Gift className="h-5 w-5 text-muted-foreground" />
-          <h3 className="text-lg font-semibold">refer a friend</h3>
+          <h3 className="text-lg font-semibold">Refer a friend</h3>
         </div>
-        <p className="text-sm text-muted-foreground">loading referral info...</p>
+        <p className="text-sm text-muted-foreground">Loading referral info...</p>
       </Card>
     );
   }
@@ -197,7 +197,7 @@ export function ReferralCard() {
       <Card className="p-5">
         <div className="mb-2 flex items-center gap-2">
           <Gift className="h-5 w-5 text-muted-foreground" />
-          <h3 className="text-lg font-semibold">refer a friend</h3>
+          <h3 className="text-lg font-semibold">Refer a friend</h3>
         </div>
         <p className="mb-4 text-sm text-muted-foreground">
           {loadError}
@@ -207,7 +207,7 @@ export function ReferralCard() {
           size="sm"
           onClick={() => setReloadCount((count) => count + 1)}
         >
-          try again
+          Try again
         </Button>
       </Card>
     );
@@ -218,10 +218,10 @@ export function ReferralCard() {
       <Card className="p-5">
         <div className="flex items-center gap-2 mb-2">
           <Gift className="h-5 w-5 text-muted-foreground" />
-          <h3 className="text-lg font-semibold">refer a friend</h3>
+          <h3 className="text-lg font-semibold">Refer a friend</h3>
         </div>
         <p className="text-sm text-muted-foreground">
-          referral links unlock after your first paid plan starts. the free
+          Referral links unlock after your first paid plan starts. The free
           Business trial does not create a referral code.
         </p>
       </Card>
@@ -235,7 +235,7 @@ export function ReferralCard() {
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <Gift className="h-5 w-5 text-primary" />
-          <h3 className="text-lg font-semibold">refer a friend</h3>
+          <h3 className="text-lg font-semibold">Refer a friend</h3>
         </div>
         <Badge variant="secondary" className="rounded-none font-mono text-xs">
           {referral.redemptions} / {referral.maxRedemptions} used
@@ -250,7 +250,7 @@ export function ReferralCard() {
           className="font-mono text-sm"
         />
         <Button variant="outline" size="icon" onClick={handleCopy}>
-          <span className="sr-only">copy referral link</span>
+          <span className="sr-only">Copy referral link</span>
           {copied ? (
             <Check className="h-4 w-4 text-foreground" />
           ) : (
@@ -261,7 +261,7 @@ export function ReferralCard() {
 
       {/* How it works */}
       <div className="space-y-1.5 text-sm text-muted-foreground mb-4">
-        <p className="font-medium text-foreground text-xs uppercase tracking-wide">how it works</p>
+        <p className="font-medium text-foreground text-xs normal-case tracking-wide">How it works</p>
         <div className="flex items-center gap-2">
           <span className="flex h-5 w-5 shrink-0 items-center justify-center border border-border bg-muted font-mono text-xs">1</span>
           share your invite link
@@ -297,7 +297,7 @@ export function ReferralCard() {
           ) : (
             <Send className="h-4 w-4 mr-1.5" />
           )}
-          {sending ? "sending..." : "invite"}
+          {sending ? "Sending..." : "Invite"}
         </Button>
       </div>
     </Card>

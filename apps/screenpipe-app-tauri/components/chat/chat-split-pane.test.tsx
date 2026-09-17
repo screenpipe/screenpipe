@@ -41,7 +41,7 @@ describe("ChatSplitPane", () => {
 
     expect(screen.getByText("question")).toBeInTheDocument();
     expect(screen.getByText("live answer")).toBeInTheDocument();
-    expect(screen.getByLabelText("working")).toBeInTheDocument();
+    expect(screen.getByLabelText("Working")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Work in live secondary" }));
     expect(onPromote).toHaveBeenCalledWith("split-chat");
   });

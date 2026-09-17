@@ -116,8 +116,8 @@ describe("connection credential forms", () => {
     );
 
     await waitFor(() => expect(screen.getByDisplayValue("default-specific")).toBeTruthy());
-    await waitFor(() => expect(screen.getByText("connect")).toBeTruthy());
-    expect(screen.queryByText("disconnect")).toBeNull();
+    await waitFor(() => expect(screen.getByText("Connect")).toBeTruthy());
+    expect(screen.queryByText("Disconnect")).toBeNull();
   });
 
   it("uses connected while default-denying AgentCard credential fields", async () => {
@@ -152,11 +152,11 @@ describe("connection credential forms", () => {
       />
     );
 
-    await waitFor(() => expect(screen.getByText("disconnect")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Disconnect")).toBeTruthy());
     expect(
       (screen.getByDisplayValue("http://localhost:9999") as HTMLInputElement).value
     ).toBe("http://localhost:9999");
-    expect((screen.getByPlaceholderText("stored securely") as HTMLInputElement).value).toBe("");
+    expect((screen.getByPlaceholderText("Stored securely") as HTMLInputElement).value).toBe("");
     expect(screen.queryByDisplayValue("secret-sentinel")).toBeNull();
     expect(screen.queryByDisplayValue("unknown-sentinel")).toBeNull();
   });

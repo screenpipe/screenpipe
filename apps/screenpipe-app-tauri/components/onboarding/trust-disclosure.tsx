@@ -107,7 +107,7 @@ export default function TrustDisclosure({
         data-testid="onboarding-trust-summary"
         className="w-full flex items-center justify-center gap-1.5 font-mono text-[10px] text-muted-foreground hover:text-foreground transition-colors"
       >
-        <span>stored on this computer · pause anytime</span>
+        <span>Stored on this computer · pause anytime</span>
         {open ? (
           <ChevronUp className="w-2.5 h-2.5" aria-hidden="true" />
         ) : (
@@ -133,16 +133,16 @@ export default function TrustDisclosure({
                 type="button"
                 onClick={reveal}
                 data-testid="onboarding-data-dir-open"
-                aria-label={`open ${dataDir}`}
+                aria-label={`Open ${dataDir}`}
                 className="shrink-0 border border-border px-2 py-0.5 font-mono text-[10px] text-muted-foreground hover:border-foreground hover:text-foreground transition-colors"
               >
-                open
+                Open
               </button>
             </div>
           )}
           {revealFailed && (
             <p className="font-mono text-[10px] text-muted-foreground text-left">
-              couldn&apos;t open the folder. the path is above.
+              Couldn&apos;t open the folder. The path is above.
             </p>
           )}
           <p

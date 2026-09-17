@@ -75,7 +75,7 @@ export function InputMonitoringPanel({
       </div>
 
       <p className="text-xs text-muted-foreground">
-        If the prompt doesn&apos;t appear, toggle <strong>screenpipe</strong> on
+        If the prompt doesn&apos;t appear, toggle <strong>Screenpipe</strong> on
         in System Settings → Privacy &amp; Security → Input Monitoring. Relaunch
         screenpipe after enabling — macOS only applies TCC changes on next
         process start.
@@ -85,7 +85,7 @@ export function InputMonitoringPanel({
         <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2">
           <p className="text-xs text-red-700 dark:text-red-400">
             Permission could not be activated after requesting it. Toggle
-            <strong> screenpipe </strong> on in System Settings → Privacy &amp;
+            <strong> Screenpipe </strong> on in System Settings → Privacy &amp;
             Security → Input Monitoring. If the toggle is already on but
             capture still fails, click <strong>Reset &amp; try again</strong> to
             clear a stale TCC record and re-request.

@@ -369,12 +369,6 @@ function SettingsContent() {
   // (main)/layout.tsx so the sidebar width survives navigation to /home.
   return (
     <>
-      <style>{`
-        body * {
-          text-transform: none !important;
-        }
-      `}</style>
-
       {/* Left sidebar */}
       <AppSidebar className="pl-4">
         {/* Back to app */}
@@ -457,7 +451,7 @@ function SettingsContent() {
                 <div key={group.label}>
                   <div className="px-2 pb-1">
                     <span className={cn(
-                      "text-[10px] font-medium uppercase tracking-wider",
+                      "text-[10px] font-medium normal-case tracking-wider",
                       isTranslucent ? "vibrant-sidebar-fg-muted" : "text-muted-foreground/60",
                     )}>
                       {group.label}

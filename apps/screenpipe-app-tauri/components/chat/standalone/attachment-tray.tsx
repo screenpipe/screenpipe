@@ -54,7 +54,7 @@ export function AttachmentTray({
               </div>
               <div className="min-w-0 flex-1">
                 <div className="truncate text-xs font-medium text-foreground">{doc.name}</div>
-                <div className="truncate text-[10px] text-muted-foreground">extracting…</div>
+                <div className="truncate text-[10px] text-muted-foreground">Extracting…</div>
               </div>
             </div>
           );

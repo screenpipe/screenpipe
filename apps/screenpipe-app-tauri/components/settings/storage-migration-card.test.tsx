@@ -49,38 +49,38 @@ describe("storage migration", () => {
     mount();
     expect(await screen.findByText("Space saved: 4.0 GB")).toBeTruthy();
     expect(screen.getByText(/existing database is now the smaller index/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "delete original database" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete original database" })).toBeNull();
     expect(screen.queryByText("The original database has been deleted.")).toBeNull();
   });
   it("starts conversion only after confirmation and never deletes the original automatically", async () => {
     mount();
-    fireEvent.click(await screen.findByRole("button", { name: "migrate storage" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Migrate storage" }));
     expect(commands.startStorageMigration).not.toHaveBeenCalled();
     expect(screen.getByText(/space is recovered as each batch is verified/i)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "start now" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start now" }));
     await waitFor(() => expect(commands.startStorageMigration).toHaveBeenCalledWith("/fixture"));
     await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(true));
     expect(commands.deleteOriginalStorageDatabase).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "delete original database" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete original database" })).toBeNull();
   });
 
   it("keeps deletion disabled until the app is running on the migrated database", async () => {
     migrated({ using_new_storage: false, can_migrate: true, can_delete_source: false });
     mount();
-    expect(await screen.findByRole("button", { name: "delete original database" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "finish switching" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Delete original database" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Finish switching" })).toBeEnabled();
     expect(commands.deleteOriginalStorageDatabase).not.toHaveBeenCalled();
   });
 
   it("requires a second explicit destructive confirmation bound to the running generation", async () => {
     migrated();
     mount();
-    fireEvent.click(await screen.findByRole("button", { name: "delete original database" }));
-    expect(screen.getByRole("button", { name: "delete permanently" })).toBeDisabled();
-    expect(screen.getByRole("heading", { name: /no going back/ })).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Delete original database" }));
+    expect(screen.getByRole("button", { name: "Delete permanently" })).toBeDisabled();
+    expect(screen.getByRole("heading", { name: /No going back/ })).toBeTruthy();
     expect(commands.deleteOriginalStorageDatabase).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("checkbox", { name: /deleting the original database is permanent/ }));
-    fireEvent.click(screen.getByRole("button", { name: "delete permanently" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
     await waitFor(() => expect(commands.deleteOriginalStorageDatabase).toHaveBeenCalledWith("/fixture", "verified-generation", true));
     expect(await screen.findByText("The original database has been deleted.")).toBeTruthy();
   });
@@ -90,10 +90,10 @@ describe("storage migration", () => {
     mount();
     expect(await screen.findByText("Your recordings use the new compressed storage.")).toBeTruthy();
     expect(screen.getByText("The original database is kept for safety. Your migrated history remains available.")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "delete original database" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete original database" })).toBeDisabled();
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.queryByRole("button", { name: "finish switching" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "migrate storage" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Finish switching" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Migrate storage" })).toBeNull();
     expect(onBusyChange).toHaveBeenLastCalledWith(false);
     expect(commands.startStorageMigration).not.toHaveBeenCalled();
     expect(commands.deleteOriginalStorageDatabase).not.toHaveBeenCalled();
@@ -102,9 +102,9 @@ describe("storage migration", () => {
   it("shows interrupted migration and offers resume and cancellation without deletion", async () => {
     Object.assign(status, { pending: true, can_cancel: true, error: "Verification failed; original kept." });
     mount();
-    expect(await screen.findByRole("button", { name: "resume migration" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "cancel migration and use original" })).toBeEnabled();
-    expect(screen.queryByRole("button", { name: "delete original database" })).toBeNull();
+    expect(await screen.findByRole("button", { name: "Resume migration" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel migration and use original" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Delete original database" })).toBeNull();
     expect(screen.getByRole("alert")).toHaveTextContent("Verification failed");
   });
 
@@ -119,9 +119,9 @@ describe("storage migration", () => {
     migrated();
     commands.deleteOriginalStorageDatabase.mockResolvedValue({ status: "error", error: "The original database changed and has been kept." });
     mount();
-    fireEvent.click(await screen.findByRole("button", { name: "delete original database" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete original database" }));
     fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: "delete permanently" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("has been kept"));
     expect(screen.queryByText("The original database has been deleted.")).toBeNull();
   });

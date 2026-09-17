@@ -240,7 +240,7 @@ export function AcpConfigSelector({
     try {
       await action();
     } catch (error) {
-      toast.error(`could not change ${label.toLowerCase()}`, {
+      toast.error(`Could not change ${label.toLowerCase()}`, {
         description: String(error),
       });
     } finally {
@@ -293,7 +293,7 @@ export function AcpConfigSelector({
     >
       {modes && (
         <ComposerSettingsSelect
-          label="mode"
+          label="Mode"
           value={selectedModeId ?? modes.currentModeId}
           disabled={pendingId === "__mode"}
           options={modes.availableModes}

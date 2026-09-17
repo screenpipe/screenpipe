@@ -166,13 +166,13 @@ export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
       <Card>
         <CardContent className="flex items-center justify-between gap-4 pt-6">
           <div>
-            <h2 className="text-sm font-medium lowercase">usage unavailable</h2>
+            <h2 className="text-sm font-medium normal-case">Usage unavailable</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              no balance was assumed. try refreshing.
+              No balance was assumed. Try refreshing.
             </p>
           </div>
           <Button type="button" variant="outline" size="sm" onClick={query.refresh}>
-            refresh
+            Refresh
           </Button>
         </CardContent>
       </Card>
@@ -188,16 +188,16 @@ export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
       <Card data-testid="hosted-usage-limits">
         <CardContent className="flex items-center justify-between gap-4 pt-6">
           <div>
-            <h2 className="text-sm font-medium lowercase">usage unavailable</h2>
+            <h2 className="text-sm font-medium normal-case">Usage unavailable</h2>
             <p className="mt-1 text-xs text-muted-foreground">
               {hosted.plan === "unknown"
-                ? "sign in to view your usage limits."
-                : "no balance was assumed. try refreshing."}
+                ? "Sign in to view your usage limits."
+                : "No balance was assumed. Try refreshing."}
             </p>
           </div>
           {hosted.plan !== "unknown" && (
             <Button type="button" variant="outline" size="sm" onClick={query.refresh}>
-              refresh
+              Refresh
             </Button>
           )}
         </CardContent>
@@ -218,9 +218,9 @@ export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
       <CardContent className="space-y-5 pt-6">
         <div className="flex items-baseline justify-between gap-4 border-b border-border pb-4">
           <div>
-            <h2 className="text-base font-medium lowercase">your usage limits</h2>
+            <h2 className="text-base font-medium normal-case">Your usage limits</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              each listed allowance applies independently.
+              Each listed allowance applies independently.
             </p>
           </div>
           {plan && (
@@ -241,7 +241,7 @@ export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
 
         <div className="flex items-center justify-between border-t border-border pt-4 text-[11px] text-muted-foreground">
           <span className="font-mono">
-            {updatedAt ? `last updated ${updatedAt}` : "last updated unavailable"}
+            {updatedAt ? `Last updated ${updatedAt}` : "Last updated unavailable"}
           </span>
           <Button
             type="button"
@@ -255,7 +255,7 @@ export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
               className={`h-3.5 w-3.5 ${query.isRefreshing ? "animate-spin" : ""}`}
               aria-hidden
             />
-            refresh
+            Refresh
           </Button>
         </div>
 
@@ -266,7 +266,7 @@ export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
             rel="noopener noreferrer"
             className="inline-block text-xs underline underline-offset-4 hover:text-foreground"
           >
-            upgrade to {quotaPlanLabel(hosted.upgrade.requiredPlan) ?? "a higher plan"}
+            Upgrade to {quotaPlanLabel(hosted.upgrade.requiredPlan) ?? "a higher plan"}
           </a>
         )}
       </CardContent>
@@ -440,7 +440,7 @@ export function UsageSection() {
     const d = new Date(ts);
     const now = new Date();
     const diff = now.getTime() - d.getTime();
-    if (diff < 60000) return "just now";
+    if (diff < 60000) return "Just now";
     if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
     if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
     if (diff < 604800000) return `${Math.floor(diff / 86400000)}d ago`;
@@ -479,7 +479,7 @@ export function UsageSection() {
     { value: "day", label: "24h" },
     { value: "week", label: "7d" },
     { value: "month", label: "30d" },
-    { value: "all", label: "all" },
+    { value: "all", label: "All" },
   ];
 
   if (loading) {
@@ -525,9 +525,9 @@ export function UsageSection() {
       <HostedUsageLimits query={hostedUsageQuery} />
 
       <div className="border-t border-border pt-6">
-        <h2 className="text-base font-medium lowercase">activity</h2>
+        <h2 className="text-base font-medium normal-case">Activity</h2>
         <p className="mt-1 text-xs text-muted-foreground">
-          local conversations and scheduled runs. these do not determine your allowance.
+          Local conversations and scheduled runs. These do not determine your allowance.
         </p>
       </div>
 

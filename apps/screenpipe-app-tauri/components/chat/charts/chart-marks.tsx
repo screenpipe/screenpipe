@@ -80,7 +80,7 @@ export function StatChart({ spec, palette }: MarkProps<StatChartSpec>) {
             key={`${item.label}-${index}`}
             className="min-w-0 border-l border-border pl-3"
           >
-            <dt className="truncate text-xs lowercase text-muted-foreground">
+            <dt className="truncate text-xs normal-case text-muted-foreground">
               {item.label}
             </dt>
             <dd className="mt-0.5 truncate whitespace-nowrap text-lg leading-tight text-foreground">
@@ -950,19 +950,19 @@ export function CalendarChart({ spec, palette }: MarkProps<CalendarChartSpec>) {
         </div>
         <dl className="grid min-w-[11rem] flex-1 grid-cols-3 divide-x divide-border text-right">
           <div className="pr-3">
-            <dt className="text-[10px] text-muted-foreground">average</dt>
+            <dt className="text-[10px] text-muted-foreground">Average</dt>
             <dd className="mt-0.5 text-xs tabular-nums text-foreground">
               {formatChartValue(geometry.average, spec.unit)}
             </dd>
           </div>
           <div className="px-3">
-            <dt className="text-[10px] text-muted-foreground">peak</dt>
+            <dt className="text-[10px] text-muted-foreground">Peak</dt>
             <dd className="mt-0.5 text-xs tabular-nums text-foreground">
               {formatChartValue(geometry.maximum, spec.unit)}
             </dd>
           </div>
           <div className="pl-3">
-            <dt className="text-[10px] text-muted-foreground">total</dt>
+            <dt className="text-[10px] text-muted-foreground">Total</dt>
             <dd className="mt-0.5 text-xs tabular-nums text-foreground">
               {formatChartValue(geometry.total, spec.unit)}
             </dd>
@@ -1040,7 +1040,7 @@ export function FunnelChart({ spec, palette }: MarkProps<FunnelChartSpec>) {
                     </span>
                     <span className="w-14 text-[10px] text-muted-foreground">
                       {index === 0
-                        ? "start"
+                        ? "Start"
                         : `${Math.round(priorPercent)}% prior`}
                     </span>
                   </span>
@@ -1109,7 +1109,7 @@ export function WaterfallChart({
         };
       }),
       {
-        label: "total",
+        label: "Total",
         delta: running,
         from: 0,
         to: running,

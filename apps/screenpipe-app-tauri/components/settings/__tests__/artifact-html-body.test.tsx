@@ -87,11 +87,11 @@ describe("ArtifactHtmlBody (Brain html artifact)", () => {
 
     expect(container.querySelector("iframe")).not.toBeNull();
     expect(screen.getByTestId("brain-html-render-toggle").textContent).toContain(
-      "view source",
+      "View source",
     );
   });
 
-  it("expanded: 'view source' toggles to escaped source (still no leak)", () => {
+  it("expanded: 'View source' toggles to escaped source (still no leak)", () => {
     render(
       <ArtifactHtmlBody
         title="t"

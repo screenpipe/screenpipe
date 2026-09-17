@@ -437,7 +437,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       const message = error instanceof Error ? error.message : String(error);
       if (!isAcpAuthenticationCancelledError(message) && !isAcpExternalAuthError(message)) {
         toast({
-          title: "could not switch AI assistant",
+          title: "Could not switch AI assistant",
           description: message,
           variant: "destructive",
         });
@@ -546,7 +546,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
                 if (preset.id !== activeP?.id) {
                   console.log(`[Pi] Fell back to preset "${preset.id}" for this session (not persisted)`);
                   toast({
-                    title: `using "${preset.id}" preset for this session`,
+                    title: `Using "${preset.id}" preset for this session`,
                     description: `"${activeP?.id ?? "active"}" preset failed to start — using fallback for this session only`,
                   });
                 }
@@ -570,7 +570,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
                     !isAcpExternalAuthError(lastError)
                   ) {
                     toast({
-                      title: `failed to start AI assistant (${preset.id})`,
+                      title: `Failed to start AI assistant (${preset.id})`,
                       description: lastError,
                       variant: "destructive",
                     });
@@ -594,7 +594,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
                     !isAcpExternalAuthError(lastError)
                   ) {
                     toast({
-                      title: `failed to start AI assistant (${preset.id})`,
+                      title: `Failed to start AI assistant (${preset.id})`,
                       description: lastError,
                       variant: "destructive",
                     });
@@ -610,9 +610,9 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
           if (!started) {
             const providerLabel = activeP?.provider || "AI";
             toast({
-              title: `failed to start AI assistant (${providerLabel})`,
+              title: `Failed to start AI assistant (${providerLabel})`,
               description: presetsToTry.length > 1
-                ? `all ${presetsToTry.length} presets failed — ${lastError}`
+                ? `All ${presetsToTry.length} presets failed — ${lastError}`
                 : lastError,
               variant: "destructive",
             });
@@ -755,7 +755,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     if (!storeState.sessions[turnSessionId]) {
       storeState.actions.upsert({
         id: turnSessionId,
-        title: "untitled",
+        title: "Untitled",
         preview: "",
         status: "streaming",
         messageCount: 0,
@@ -1062,7 +1062,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     if (!workspacePreparation.proceed) {
       if (workspacePreparation.error) {
         toast({
-          title: "could not prepare coding workspace",
+          title: "Could not prepare coding workspace",
           description: workspacePreparation.error,
           variant: "destructive",
         });
@@ -1134,13 +1134,13 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       if (prepared.externalized) {
         stagePendingAttachments(attachmentMetadata);
         toast({
-          title: "large context saved as file",
+          title: "Large context saved as file",
           description: "Pi will use local chunk files instead of sending the full text inline.",
         });
       }
     } catch (e) {
       toast({
-        title: "failed to save large context",
+        title: "Failed to save large context",
         description: "The message was not sent because the pasted input is too large to send inline.",
         variant: "destructive",
       });

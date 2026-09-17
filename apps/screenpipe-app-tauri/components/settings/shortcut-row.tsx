@@ -1,3 +1,5 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
 import React, { useEffect, useState } from "react";
 import { Settings, Shortcut, useSettings } from "@/lib/hooks/use-settings";
 import { parseKeyboardShortcut } from "@/lib/utils";
@@ -166,15 +168,15 @@ const ShortcutRow = ({
       );
       if (conflict) {
         toast({
-          title: "shortcut conflict",
-          description: `this shortcut is already used by "${conflict[0].replace(/([A-Z])/g, " $1").trim().toLowerCase()}". choose a different combination.`,
+          title: "Shortcut conflict",
+          description: `This shortcut is already used by "${conflict[0].replace(/([A-Z])/g, " $1").trim().toLowerCase()}". choose a different combination.`,
           variant: "destructive",
         });
         return;
       }
 
       toast({
-        title: "shortcut enabled",
+        title: "Shortcut enabled",
         description: `${shortcut.replace(/_/g, " ")} enabled`,
       });
 
@@ -224,9 +226,9 @@ const ShortcutRow = ({
     } catch (error) {
       console.error("error updating shortcut", error);
       toast({
-        title: "error updating shortcut",
+        title: "Error updating shortcut",
         description:
-          "failed to register shortcut. please try a different combination.",
+          "Failed to register shortcut. Please try a different combination.",
         variant: "destructive",
       });
     }
@@ -234,7 +236,7 @@ const ShortcutRow = ({
 
   const handleDisableShortcut = async () => {
     toast({
-      title: "shortcut disabled",
+      title: "Shortcut disabled",
       description: `${shortcut.replace(/_/g, " ")} disabled`,
     });
     await updateSettings({
@@ -309,12 +311,12 @@ const ShortcutRow = ({
         >
           {isRecording ? (
             <span className="flex items-center justify-between gap-2 w-full">
-              <span className="animate-pulse">press keys...</span>
+              <span className="animate-pulse">Press keys...</span>
               <span
                 role="button"
                 onClick={(e) => { e.stopPropagation(); setIsRecording(false); }}
                 className="text-muted-foreground hover:text-foreground transition-colors"
-                title="cancel"
+                title="Cancel"
               >
                 <X className="h-3 w-3" />
               </span>

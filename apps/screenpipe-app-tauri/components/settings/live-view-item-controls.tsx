@@ -69,7 +69,7 @@ export function LiveViewItemControls({
   return (
     <div
       className="mt-2 flex flex-wrap items-center gap-1"
-      aria-label={`actions for ${title}`}
+      aria-label={`Actions for ${title}`}
     >
       {actions.has("snooze") && (
         <Popover open={snoozeOpen} onOpenChange={setSnoozeOpen}>
@@ -79,7 +79,7 @@ export function LiveViewItemControls({
               variant="outline"
               size="sm"
               data-testid={`live-view-item-${itemId}-snooze`}
-              aria-label={`snooze ${title}`}
+              aria-label={`Snooze ${title}`}
               className="h-7 rounded-md px-2 text-[11px]"
               disabled={itemActionDisabled}
             >
@@ -88,7 +88,7 @@ export function LiveViewItemControls({
             </Button>
           </PopoverTrigger>
           <PopoverContent align="start" className="w-44 rounded-lg p-1">
-            <p className="px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+            <p className="px-2 py-1 text-[10px] normal-case tracking-wide text-muted-foreground">
               Remind me
             </p>
             {snoozeOptions().map((option) => (
@@ -119,7 +119,7 @@ export function LiveViewItemControls({
             size="sm"
             data-testid={`live-view-item-${itemId}-not-right`}
             data-state={notRightOpen ? "open" : "closed"}
-            aria-label={`not right ${title}`}
+            aria-label={`Not right ${title}`}
             aria-expanded={notRightOpen}
             aria-controls={`live-view-item-${itemId}-not-right-panel`}
             className="h-7 rounded-md px-2 text-[11px] data-[state=open]:bg-foreground data-[state=open]:text-background"
@@ -139,7 +139,7 @@ export function LiveViewItemControls({
               id={`live-view-item-${itemId}-not-right-panel`}
               data-testid={`live-view-item-${itemId}-not-right-panel`}
               role="group"
-              aria-label={`what is not right about ${title}`}
+              aria-label={`What is not right about ${title}`}
               className="order-last mt-1 w-full flex-none border border-border bg-background p-3 sm:max-w-2xl"
               onKeyDown={(event) => {
                 if (event.key !== "Escape") return;
@@ -175,7 +175,7 @@ export function LiveViewItemControls({
                     data-testid={`live-view-item-${itemId}-correction-input`}
                     value={correction}
                     onChange={(event) => setCorrection(event.target.value)}
-                    placeholder="e.g. Sam owns this, due Friday"
+                    placeholder="E.g. Sam owns this, due Friday"
                     className="h-8 rounded-md text-xs"
                     maxLength={500}
                   />
@@ -272,7 +272,7 @@ export function LiveViewItemControls({
           variant="ghost"
           size="sm"
           data-testid={`live-view-item-${itemId}-handoff`}
-          aria-label={`send ${title} to another app`}
+          aria-label={`Send ${title} to another app`}
           className="h-7 rounded-md px-2 text-[11px]"
           disabled={busy}
           onClick={() => onHandoff(item)}

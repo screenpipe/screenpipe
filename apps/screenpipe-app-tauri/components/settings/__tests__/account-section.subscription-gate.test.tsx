@@ -177,7 +177,7 @@ describe("AccountSection subscription/login gating", () => {
     expect(loginStatus()).toContain("logged in as pro@screenpipe.test");
     const card = screen.getByTestId(ACTIVE_CARD);
     expect(card).toBeInTheDocument();
-    expect(within(card).getByText("active")).toBeInTheDocument();
+    expect(within(card).getByText("Active")).toBeInTheDocument();
     // Scoped to the entitled-features list: the plan grid rendered below it
     // repeats some of these lines on the Business option.
     const features = within(card).getByTestId("account-active-plan-features");
@@ -232,7 +232,7 @@ describe("AccountSection subscription/login gating", () => {
 
     expect(loginStatus()).toContain("enterprise access verification required");
     expect(screen.getByTestId("account-enterprise-managed-card")).toHaveTextContent(
-      "verification required",
+      "Verification required",
     );
     expect(screen.queryByText("Screenpipe Free")).not.toBeInTheDocument();
   });
@@ -288,7 +288,7 @@ describe("AccountSection subscription/login gating", () => {
     const max = screen.getByTestId("account-plan-pro_max");
     expect(max).toHaveAttribute("data-current", "true");
     expect(within(max).getByText("$100")).toBeInTheDocument();
-    expect(within(max).getByText("your plan")).toBeInTheDocument();
+    expect(within(max).getByText("Your plan")).toBeInTheDocument();
     expect(
       screen.getByTestId("account-plan-pro"),
     ).not.toHaveAttribute("data-current");
@@ -451,11 +451,11 @@ describe("AccountSection subscription/login gating", () => {
     expect(loginStatus()).toContain("logged in as basic@screenpipe.test");
     expect(screen.queryByTestId(ACTIVE_CARD)).not.toBeInTheDocument();
     // Branch-3 named-plan badge still renders for the paying Basic user.
-    expect(screen.getByText("active")).toBeInTheDocument();
+    expect(screen.getByText("Active")).toBeInTheDocument();
     expect(screen.getByTestId("account-plan-standard")).toHaveAttribute(
       "data-current", "true",
     );
-    expect(screen.queryByText(/one-time purchase/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/One-time purchase/)).not.toBeInTheDocument();
   });
 
   it("sends existing Basic subscribers to billing even with a stale cloud flag", () => {
@@ -519,12 +519,12 @@ describe("AccountSection subscription/login gating", () => {
 
     expect(screen.queryByTestId(ACTIVE_CARD)).not.toBeInTheDocument();
     expect(screen.getByText("Screenpipe Lifetime")).toBeInTheDocument();
-    expect(screen.getByText("active")).toBeInTheDocument();
-    expect(screen.getByText(/one-time purchase/)).toBeInTheDocument();
-    expect(screen.getByText("optional subscriptions")).toBeInTheDocument();
+    expect(screen.getByText("Active")).toBeInTheDocument();
+    expect(screen.getByText(/One-time purchase/)).toBeInTheDocument();
+    expect(screen.getByText("Optional subscriptions")).toBeInTheDocument();
     const plans = screen.getByTestId("account-plan-options");
-    expect(within(plans).queryByText("current")).not.toBeInTheDocument();
-    expect(within(plans).queryByText("your plan")).not.toBeInTheDocument();
+    expect(within(plans).queryByText("Current")).not.toBeInTheDocument();
+    expect(within(plans).queryByText("Your plan")).not.toBeInTheDocument();
     expect(plans.querySelector('[data-current="true"]')).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /upgrade to business/i }));
 

@@ -81,40 +81,40 @@ describe("compact notification panel", () => {
     expect(screen.getByRole("button", { name: "Review" })).toBeInTheDocument();
     fireEvent.mouseEnter(screen.getByText("Ready for review"));
     expect(
-      screen.queryByRole("button", { name: "copy notification" }),
+      screen.queryByRole("button", { name: "Copy notification" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "useful notification" }),
+      screen.queryByRole("button", { name: "Useful notification" }),
     ).not.toBeInTheDocument();
     fireEvent.click(
-      screen.getByRole("button", { name: "notification options" }),
+      screen.getByRole("button", { name: "Notification options" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "copy notification" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy notification" }));
     await waitFor(() =>
       expect(bridge.copy).toHaveBeenCalledWith(
         "Ready for review\n\nA proposal is ready.",
       ),
     );
     expect(bridge.hide).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "feedback" }));
+    fireEvent.click(screen.getByRole("button", { name: "Feedback" }));
     fireEvent.click(
-      screen.getByRole("button", { name: "not useful notification" }),
+      screen.getByRole("button", { name: "Not useful notification" }),
     );
     fireEvent.change(
-      screen.getByRole("textbox", { name: "what should improve" }),
+      screen.getByRole("textbox", { name: "What should improve" }),
       { target: { value: "Include the source" } },
     );
     fireEvent.mouseLeave(screen.getByText("Ready for review"));
     expect(
-      screen.getByRole("textbox", { name: "what should improve" }),
+      screen.getByRole("textbox", { name: "What should improve" }),
     ).toHaveValue("Include the source");
     await deliver({ ...payload, id: "next" });
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "notification options" }),
+      screen.getByRole("button", { name: "Notification options" }),
     ).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(
-      screen.getByRole("button", { name: "dismiss notification" }),
+      screen.getByRole("button", { name: "Dismiss notification" }),
     );
     expect(bridge.hide).toHaveBeenCalledTimes(1);
   });
@@ -124,12 +124,12 @@ describe("compact notification panel", () => {
     render(<NotificationPanelPage />);
     await deliver({ ...payload, autoDismissMs: 1000 });
     fireEvent.click(
-      screen.getByRole("button", { name: "notification options" }),
+      screen.getByRole("button", { name: "Notification options" }),
     );
     act(() => vi.advanceTimersByTime(2000));
     expect(bridge.hide).not.toHaveBeenCalled();
     fireEvent.click(
-      screen.getByRole("button", { name: "notification options" }),
+      screen.getByRole("button", { name: "Notification options" }),
     );
     act(() => vi.advanceTimersByTime(1200));
     expect(bridge.hide).toHaveBeenCalledTimes(1);

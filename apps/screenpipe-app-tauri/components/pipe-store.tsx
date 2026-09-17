@@ -293,7 +293,7 @@ function normalizePipe(raw: any): any {
 
   return {
     ...raw,
-    title: raw.title || raw.slug || "untitled scheduled task",
+    title: raw.title || raw.slug || "Untitled scheduled task",
     author: publisher.name,
     author_id: raw.author_id || null,
     author_verified: publisher.verified,
@@ -379,7 +379,7 @@ export function PipeStoreView() {
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         {activeTab === "discover"
-          ? "browse, install, and review community automations"
+          ? "Browse, install, and review community automations"
           : "Run tasks on a schedule, after meetings, or when events happen."}
       </p>
 
@@ -617,7 +617,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     } catch (err) {
       console.error("failed to fetch pipe detail:", err);
       toast({
-        title: "failed to load scheduled task details",
+        title: "Failed to load scheduled task details",
         variant: "destructive",
       });
       setShowDetail(false);
@@ -678,7 +678,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       toast({ title: `"${pipeName}" updated` });
     } catch (err: any) {
       toast({
-        title: "failed to update scheduled task",
+        title: "Failed to update scheduled task",
         description: err.message,
         variant: "destructive",
       });
@@ -743,7 +743,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
 
       toast({
         title: `"${pipeName}" installed`,
-        description: "open My tasks to configure and run it",
+        description: "Open My tasks to configure and run it",
       });
       // Invalidate cache and update installed names
       apiCache.invalidate("pipes/installed");
@@ -758,7 +758,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       onInstalled?.();
     } catch (err: any) {
       toast({
-        title: "failed to install scheduled task",
+        title: "Failed to install scheduled task",
         description: (
           <span>
             {err.message}{" "}
@@ -767,7 +767,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
               className="underline underline-offset-2 text-inherit opacity-80 hover:opacity-100"
               onClick={() => openFeedback(`Scheduled task install failed (${slug}): ${err.message}`)}
             >
-              report issue
+              Report issue
             </button>
           </span>
         ),
@@ -797,12 +797,12 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || `HTTP ${res.status}`);
       }
-      toast({ title: "review submitted" });
+      toast({ title: "Review submitted" });
       openDetail(selectedPipe.slug);
       setReviewExpanded(false);
     } catch (err: any) {
       toast({
-        title: "failed to submit review",
+        title: "Failed to submit review",
         description: err.message,
         variant: "destructive",
       });
@@ -831,7 +831,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       fetchPipes();
     } catch (err: any) {
       toast({
-        title: "failed to unpublish scheduled task",
+        title: "Failed to unpublish scheduled task",
         description: err.message,
         variant: "destructive",
       });
@@ -852,7 +852,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
   const installGateDialog = (
     <Dialog open={!!pendingInstall} onOpenChange={(open) => !open && closeInstallGate()}>
       <DialogContent className="max-w-lg pt-8">
-        <DialogTitle className="sr-only">review scheduled task access</DialogTitle>
+        <DialogTitle className="sr-only">Review scheduled task access</DialogTitle>
 
         {pendingInstall ? (
           <InstallRiskSummary
@@ -866,7 +866,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
 
         <DialogFooter className="gap-2 sm:gap-0">
           <Button variant="ghost" onClick={closeInstallGate}>
-            not now
+            Not now
           </Button>
           <Button
             data-testid="pipe-risk-install-confirm"
@@ -879,10 +879,10 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
               {pendingInstall && installing === pendingInstall.slug ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
-                  installing...
+                  Installing...
                 </>
               ) : (
-                "install scheduled task"
+                "Install scheduled task"
               )}
             </Button>
           </DialogFooter>
@@ -902,7 +902,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
           className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
-          back to discover
+          Back to discover
         </button>
 
         {detailLoading ? (
@@ -938,15 +938,15 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
           <button
             onClick={dismissWelcome}
             className="absolute top-2 right-2 text-muted-foreground hover:text-foreground text-sm px-1.5"
-            aria-label="dismiss"
+            aria-label="Dismiss"
           >
             ✕
           </button>
           <p className="text-sm font-medium text-foreground">
-            scheduled tasks are AI automations that run on your screen data
+            Scheduled tasks are AI automations that run on your screen data
           </p>
           <p className="text-sm text-muted-foreground mt-1">
-            they can summarize your day, track your time, build a digital memory, sync notes to obsidian, auto-update your CRM, and more. install one below to get started — click GET, then enable it in My tasks.
+            They can summarize your day, track your time, build a digital memory, sync notes to obsidian, auto-update your CRM, and more. Install one below to get started — click GET, then enable it in My tasks.
           </p>
         </div>
       )}
@@ -957,7 +957,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="search community tasks..."
+              placeholder="Search community tasks..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-9 h-9"
@@ -1028,8 +1028,8 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
             <AlertTriangle className="mx-auto mb-3 h-5 w-5" />
-            <p className="text-sm text-foreground">couldn&apos;t load scheduled tasks</p>
-            <p className="mt-1.5 text-xs">the task catalog is temporarily unavailable</p>
+            <p className="text-sm text-foreground">Couldn&apos;t load scheduled tasks</p>
+            <p className="mt-1.5 text-xs">The task catalog is temporarily unavailable</p>
             <Button
               variant="outline"
               size="sm"
@@ -1048,7 +1048,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
           <CardContent className="py-12 text-center text-muted-foreground">
             <p className="text-sm">No scheduled tasks found</p>
             {debouncedQuery && (
-              <p className="text-xs mt-1.5">try a different search term</p>
+              <p className="text-xs mt-1.5">Try a different search term</p>
             )}
           </CardContent>
         </Card>
@@ -1080,26 +1080,26 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       <Dialog open={!!updateConfirm} onOpenChange={(open) => !open && setUpdateConfirm(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>update {updateConfirm?.pipeName}?</DialogTitle>
+            <DialogTitle>Update {updateConfirm?.pipeName}?</DialogTitle>
             <DialogDescription>
               <span className="inline-flex items-center gap-2 mt-2">
-                <Badge variant="outline">v{updateConfirm?.installedVersion}</Badge>
+                <Badge variant="outline">V{updateConfirm?.installedVersion}</Badge>
                 <span>→</span>
-                <Badge variant="outline">v{updateConfirm?.latestVersion}</Badge>
+                <Badge variant="outline">V{updateConfirm?.latestVersion}</Badge>
               </span>
             </DialogDescription>
           </DialogHeader>
           <div className="flex items-start gap-2 p-3 rounded-lg bg-muted border border-border">
             <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
             <p className="text-sm text-muted-foreground">
-              you have local edits to this scheduled task. updating overwrites your prompt changes.
-              a backup is saved as <code className="text-xs">pipe.md.bak</code>, and your
+              You have local edits to this scheduled task. Updating overwrites your prompt changes.
+              A backup is saved as <code className="text-xs">pipe.md.bak</code>, and your
               schedule, model, and enabled state are preserved.
             </p>
           </div>
           <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="ghost" onClick={() => setUpdateConfirm(null)}>
-              skip
+              Skip
             </Button>
             <Button
               onClick={() => {
@@ -1109,7 +1109,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
                 }
               }}
             >
-              update &amp; discard my edits
+              Update &amp; discard my edits
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1162,7 +1162,7 @@ function PipeCard({
           data-testid="pipe-install-btn"
           variant={isInstalled && !hasUpdate ? "outline" : "default"}
           className={cn(
-            "h-7 px-3 text-xs font-semibold rounded-md uppercase tracking-wide flex-shrink-0",
+            "h-7 px-3 text-xs font-semibold rounded-md normal-case tracking-wide flex-shrink-0",
             isInstalled && !hasUpdate && "pointer-events-none"
           )}
           disabled={installing || (isInstalled && !hasUpdate)}
@@ -1220,8 +1220,8 @@ function PublisherIdentity({
   return (
     <div
       data-testid="pipe-publisher-identity"
-      aria-label={publisher.isScreenpipeTeam ? "official Screenpipe publisher" : undefined}
-      title={compact && publisher.isScreenpipeTeam ? "built by screenpipe team" : undefined}
+      aria-label={publisher.isScreenpipeTeam ? "Official Screenpipe publisher" : undefined}
+      title={compact && publisher.isScreenpipeTeam ? "Built by screenpipe team" : undefined}
       className={cn(
         "flex min-w-0 items-center",
         compact ? "gap-1.5" : "gap-2",
@@ -1239,7 +1239,7 @@ function PublisherIdentity({
           aria-hidden="true"
           className={cn(
             avatarClass,
-            "flex flex-shrink-0 items-center justify-center border border-border bg-muted font-semibold uppercase text-muted-foreground",
+            "flex flex-shrink-0 items-center justify-center border border-border bg-muted font-semibold normal-case text-muted-foreground",
             compact ? "text-[8px]" : "text-[9px]",
           )}
         >
@@ -1256,14 +1256,14 @@ function PublisherIdentity({
           <span className="font-medium">{publisher.name}</span>
         ) : (
           <>
-            {publisher.isScreenpipeTeam ? "built by " : "by "}
+            {publisher.isScreenpipeTeam ? "Built by " : "By "}
             <span className="font-medium text-foreground">{publisher.name}</span>
           </>
         )}
       </span>
       {publisher.verified && !publisher.isScreenpipeTeam && (
         <BadgeCheck
-          aria-label="verified publisher"
+          aria-label="Verified publisher"
           className={cn(
             "flex-shrink-0 text-foreground",
             compact ? "h-3 w-3" : "h-3.5 w-3.5",
@@ -1329,13 +1329,13 @@ function PipeDetailPanel({
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-xl font-semibold tracking-tight">{pipe.title || pipe.slug || "untitled scheduled task"}</h2>
+              <h2 className="text-xl font-semibold tracking-tight">{pipe.title || pipe.slug || "Untitled scheduled task"}</h2>
               <div className="flex items-center gap-2 mt-1 flex-wrap">
                 <PublisherIdentity publisher={publisher} />
                 {pipe.version ? (
                   <>
                     <span className="text-xs text-muted-foreground/50">·</span>
-                    <span className="text-xs text-muted-foreground">v{pipe.version}</span>
+                    <span className="text-xs text-muted-foreground">V{pipe.version}</span>
                   </>
                 ) : null}
                 {pipe.category ? (
@@ -1353,7 +1353,7 @@ function PipeDetailPanel({
                   {formatCount(pipe.install_count ?? 0)} installs
                 </span>
                 <span className="text-xs">
-                  updated {relativeDate(pipe.updated_at)}
+                  Updated {relativeDate(pipe.updated_at)}
                 </span>
               </div>
             </div>
@@ -1363,7 +1363,7 @@ function PipeDetailPanel({
               <Button
                 size="sm"
                 variant="outline"
-                className="h-9 px-4 text-sm font-semibold rounded-md uppercase tracking-wide"
+                className="h-9 px-4 text-sm font-semibold rounded-md normal-case tracking-wide"
                 onClick={() => {
                   const pipeSource = pipe.source || "";
                   navigateHomeAndPrefill({
@@ -1393,7 +1393,7 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-9 px-4 text-sm font-semibold rounded-md uppercase tracking-wide"
+                  className="h-9 px-4 text-sm font-semibold rounded-md normal-case tracking-wide"
                   onClick={() => void openUrl(updateContactHref)}
                 >
                   <ExternalLink className="h-4 w-4 mr-1.5" />
@@ -1404,7 +1404,7 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
                 <Button
                   size="sm"
                   variant="destructive"
-                  className="h-9 px-4 text-sm font-semibold rounded-md uppercase tracking-wide"
+                  className="h-9 px-4 text-sm font-semibold rounded-md normal-case tracking-wide"
                   disabled={unpublishing}
                   onClick={() => onUnpublish(pipe.slug)}
                 >
@@ -1422,7 +1422,7 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
                 size="sm"
                 variant={isInstalled && !hasUpdate ? "outline" : "default"}
                 className={cn(
-                  "h-9 px-5 text-sm font-semibold rounded-md uppercase tracking-wide flex-shrink-0",
+                  "h-9 px-5 text-sm font-semibold rounded-md normal-case tracking-wide flex-shrink-0",
                   isInstalled && !hasUpdate && "pointer-events-none"
                 )}
                 disabled={
@@ -1456,7 +1456,7 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
 
       {/* README section */}
       <div className="space-y-3">
-        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-widest">
+        <h4 className="text-xs font-medium text-muted-foreground normal-case tracking-widest">
           README
         </h4>
         <div className="border border-border rounded-lg p-6">
@@ -1480,14 +1480,14 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
               {readmeContent}
             </MemoizedReactMarkdown>
           ) : (
-            <p className="text-sm text-muted-foreground">no description available</p>
+            <p className="text-sm text-muted-foreground">No description available</p>
           )}
         </div>
       </div>
 
       {/* Permissions */}
       <div className="space-y-3">
-        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-widest">
+        <h4 className="text-xs font-medium text-muted-foreground normal-case tracking-widest">
           Permissions
         </h4>
         <div className="border border-border rounded-lg p-5 space-y-3">
@@ -1517,14 +1517,14 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
           {pipe.permissions?.time_range && (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground pt-2 border-t border-border">
               <Clock className="h-3.5 w-3.5" />
-              time range: {pipe.permissions?.time_range}
+              Time range: {pipe.permissions?.time_range}
             </div>
           )}
           {pipe.permissions?.day_restrictions &&
             pipe.permissions.day_restrictions.length > 0 && (
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Clock className="h-3.5 w-3.5" />
-                days: {pipe.permissions?.day_restrictions?.join(", ")}
+                Days: {pipe.permissions?.day_restrictions?.join(", ")}
               </div>
             )}
         </div>
@@ -1534,15 +1534,15 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
           <div className="border border-foreground bg-muted/50 rounded-lg p-4 space-y-2">
             <div className="flex items-center gap-2 text-sm font-medium text-foreground">
               <AlertTriangle className="h-4 w-4" />
-              unrestricted data access
+              Unrestricted data access
             </div>
             <p className="text-xs text-muted-foreground leading-relaxed">
-              this scheduled task has no data access restrictions. it can access all your
+              This scheduled task has no data access restrictions. It can access all your
               screen text, audio, keyboard input, and raw database queries.
             </p>
             {!pipe.author_verified && (
               <p className="text-xs text-muted-foreground leading-relaxed">
-                this publisher is not verified. use the source section below if you want to inspect the scheduled task before installing.
+                This publisher is not verified. Use the source section below if you want to inspect the scheduled task before installing.
               </p>
             )}
           </div>
@@ -1553,7 +1553,7 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
       <div className="space-y-3">
         <button
           onClick={onToggleSource}
-          className="flex items-center gap-2 text-xs font-medium text-muted-foreground uppercase tracking-widest hover:text-foreground transition-colors"
+          className="flex items-center gap-2 text-xs font-medium text-muted-foreground normal-case tracking-widest hover:text-foreground transition-colors"
         >
           {sourceExpanded ? (
             <ChevronDown className="h-3.5 w-3.5" />
@@ -1590,7 +1590,7 @@ export function PermissionsReview({
       <div className="border border-border rounded-lg p-4 space-y-2">
         <div className="flex items-center gap-1.5 text-sm font-medium">
           <Shield className="h-4 w-4" />
-          data access
+          Data access
         </div>
         <div className="grid grid-cols-2 gap-1.5">
           {PERMISSION_LABELS.map((perm) => {
@@ -1621,7 +1621,7 @@ export function PermissionsReview({
         <div className="border border-foreground bg-muted/50 rounded-lg p-4">
           <div className="flex items-center gap-2 text-xs font-medium text-foreground">
             <AlertTriangle className="h-3.5 w-3.5" />
-            unrestricted data access — this scheduled task can read all your data
+            Unrestricted data access — this scheduled task can read all your data
           </div>
         </div>
       )}
@@ -1663,7 +1663,7 @@ export function InstallRiskSummary({
           </div>
           <p className="text-xs text-muted-foreground leading-relaxed">
             {unrestricted
-              ? "screen text, audio, keyboard input, screenshots, and raw queries."
+              ? "Screen text, audio, keyboard input, screenshots, and raw queries."
               : getPipeAccessSummary(permissions)}{" "}
             {onReviewSource ? (
               <button
@@ -1671,7 +1671,7 @@ export function InstallRiskSummary({
                 onClick={onReviewSource}
                 className="underline underline-offset-2 hover:text-foreground transition-colors"
               >
-                review source
+                Review source
               </button>
             ) : null}
           </p>
@@ -1680,7 +1680,7 @@ export function InstallRiskSummary({
         {accessLabels.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {accessLabels.map((label) => (
-              <Badge key={label} variant="secondary" className="rounded-sm text-[10px] lowercase">
+              <Badge key={label} variant="secondary" className="rounded-sm text-[10px] normal-case">
                 {label}
               </Badge>
             ))}

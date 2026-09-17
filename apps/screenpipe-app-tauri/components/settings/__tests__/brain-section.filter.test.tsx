@@ -278,7 +278,7 @@ describe("BrainSection type filter", () => {
     await waitFor(() => {
       expect(screen.getByTestId("brain-view-switcher")).toHaveAttribute(
         "aria-label",
-        "switch Brain view, current: Memories",
+        "Switch Brain view, current: Memories",
       );
     });
 
@@ -294,7 +294,7 @@ describe("BrainSection type filter", () => {
     expect(artifactRows().length).toBe(0);
     expect(screen.getByTestId("brain-view-switcher")).toHaveAttribute(
       "aria-label",
-      "switch Brain view, current: Memories",
+      "Switch Brain view, current: Memories",
     );
     expect(analyticsMocks.capture).toHaveBeenCalledWith("brain_viewed", {
       tab: "memories",
@@ -309,14 +309,14 @@ describe("BrainSection type filter", () => {
     await waitFor(() => expect(artifactRows().length).toBe(5));
     expect(screen.getByTestId("brain-view-switcher")).toHaveAttribute(
       "aria-label",
-      "switch Brain view, current: Artifacts",
+      "Switch Brain view, current: Artifacts",
     );
 
     selectBrainView("overview");
     await waitFor(() =>
       expect(screen.getByTestId("brain-view-switcher")).toHaveAttribute(
         "aria-label",
-        "switch Brain view, current: Live Views",
+        "Switch Brain view, current: Live Views",
       ),
     );
     const dashboardRow = screen.getByTestId("overview-dashboard-row");
@@ -330,7 +330,7 @@ describe("BrainSection type filter", () => {
     await waitFor(() => expect(memoryRows().length).toBe(8));
     expect(screen.getByTestId("brain-view-switcher")).toHaveAttribute(
       "aria-label",
-      "switch Brain view, current: Memories",
+      "Switch Brain view, current: Memories",
     );
   });
 
@@ -465,7 +465,7 @@ describe("BrainSection type filter", () => {
     await waitFor(() => {
       expect(screen.getByTestId("brain-artifacts-error")).toBeTruthy();
     });
-    expect(screen.getByText("failed to load artifacts")).toBeTruthy();
+    expect(screen.getByText("Failed to load artifacts")).toBeTruthy();
     expect(screen.getByText("HTTP 500")).toBeTruthy();
     expect(
       screen.queryByText("no artifacts yet. create a chat note or run a pipe."),
@@ -552,13 +552,13 @@ describe("BrainSection type filter", () => {
         "locating",
       );
     });
-    expect(screen.getByText("opening result")).toBeTruthy();
+    expect(screen.getByText("Opening result")).toBeTruthy();
 
     act(() => releaseRequest());
     await waitFor(() => expect(screen.getByTestId("brain-detail-panel")).toBeTruthy());
     expect(screen.getByTestId("brain-view-switcher")).toHaveAttribute(
       "title",
-      "switch Brain view, current: Artifacts",
+      "Switch Brain view, current: Artifacts",
     );
     expect(artifactRows().length).toBe(5);
     expect(analyticsMocks.capture).toHaveBeenCalledWith(
@@ -590,7 +590,7 @@ describe("BrainSection type filter", () => {
         "missing",
       );
     });
-    expect(screen.getByText("result unavailable")).toBeTruthy();
+    expect(screen.getByText("Result unavailable")).toBeTruthy();
     expect(screen.queryByTestId("brain-artifact-request-viewer")).toBeNull();
     expect(localFetch).toHaveBeenCalledWith(
       "/artifacts?limit=1&offset=0&id=999999",
@@ -613,7 +613,7 @@ describe("BrainSection type filter", () => {
         "error",
       );
     });
-    expect(screen.getByText("couldn't load result")).toBeTruthy();
+    expect(screen.getByText("Couldn't load result")).toBeTruthy();
     expect(screen.getByTestId("brain-artifact-request-viewer")).toBeTruthy();
 
     artifactFetchError = false;
@@ -652,7 +652,7 @@ describe("BrainSection type filter", () => {
     fireEvent.click(screen.getByTestId("brain-item-artifact-100"));
 
     openDetailMenu();
-    fireEvent.click(await screen.findByText("go to chat"));
+    fireEvent.click(await screen.findByText("Go to chat"));
 
     expect(emit).toHaveBeenCalledWith("chat-load-conversation", {
       conversationId: "chat-b",
@@ -826,7 +826,7 @@ describe("BrainSection type filter", () => {
     ) as HTMLTextAreaElement;
     expect(textarea.value).toBe(MEMORIES[0].content);
 
-    const tagInput = screen.getByPlaceholderText("add tag...");
+    const tagInput = screen.getByPlaceholderText("Add tag...");
     fireEvent.change(tagInput, { target: { value: "new-tag" } });
     fireEvent.keyDown(tagInput, { key: "Enter" });
 

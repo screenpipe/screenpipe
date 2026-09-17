@@ -74,7 +74,7 @@ function MermaidDiagramBlock({ chart }: { chart: string }) {
     <React.Suspense
       fallback={
         <div className="my-4 text-xs text-muted-foreground">
-          rendering diagram...
+          Rendering diagram...
         </div>
       }
     >
@@ -139,8 +139,8 @@ function bashToolDetailsPresentation(toolCall: ToolCall): BashToolDetailsPresent
   if (!localUrl) {
     const target = firstExternalWebTarget(command, "fetch");
     if (!target || !classified) return null;
-    fields.push({ label: "domain", value: target.domain });
-    fields.push({ label: "method", value: method });
+    fields.push({ label: "Domain", value: target.domain });
+    fields.push({ label: "Method", value: method });
     return {
       title: classified.label,
       eyebrow: "Web request",
@@ -152,8 +152,8 @@ function bashToolDetailsPresentation(toolCall: ToolCall): BashToolDetailsPresent
   }
 
   const path = localUrl.pathname.replace(/\/$/, "") || "/";
-  fields.push({ label: "endpoint", value: path });
-  fields.push({ label: "method", value: method });
+  fields.push({ label: "Endpoint", value: path });
+  fields.push({ label: "Method", value: method });
 
   const sp = localUrl.searchParams;
   const addParam = (label: string, key: string) => {
@@ -170,12 +170,12 @@ function bashToolDetailsPresentation(toolCall: ToolCall): BashToolDetailsPresent
   const body = curlBodyJson(command);
   if (path === "/raw_sql" && body && typeof body.query === "string") {
     const tables = sqlTables(body.query);
-    if (tables.length > 0) fields.push({ label: "tables", value: tables.join(", ") });
+    if (tables.length > 0) fields.push({ label: "Tables", value: tables.join(", ") });
   }
 
   if (path.startsWith("/connections/")) {
     const connection = path.split("/")[2];
-    if (connection) fields.push({ label: "connection", value: connection });
+    if (connection) fields.push({ label: "Connection", value: connection });
   }
 
   return {
@@ -204,7 +204,7 @@ function BashToolDetails({ toolCall }: { toolCall: ToolCall }) {
     <div className="py-1.5 space-y-2">
       <div className="rounded-md border border-border/50 bg-muted/20 px-2.5 py-2">
         <div className="mb-1 flex min-w-0 items-center gap-1.5">
-          <span className="shrink-0 rounded border border-border/50 px-1.5 py-0.5 text-[10px] font-mono uppercase leading-none text-muted-foreground">
+          <span className="shrink-0 rounded border border-border/50 px-1.5 py-0.5 text-[10px] font-mono normal-case leading-none text-muted-foreground">
             {details.eyebrow}
           </span>
           {details.resultSummary && (
@@ -230,12 +230,12 @@ function BashToolDetails({ toolCall }: { toolCall: ToolCall }) {
       </div>
 
       <details className="group rounded-md border border-border/30 bg-background/40 px-2 py-1.5">
-        <summary className="cursor-pointer select-none text-[10px] font-mono uppercase tracking-wide text-muted-foreground/70 transition-colors hover:text-foreground/70">
-          technical details
+        <summary className="cursor-pointer select-none text-[10px] font-mono normal-case tracking-wide text-muted-foreground/70 transition-colors hover:text-foreground/70">
+          Technical details
         </summary>
         <div className="mt-2 space-y-2">
-          <ToolCodeBlock label="command" code={sanitizeCommand(details.rawCommand)} language="shell" />
-          {formattedResult && <ToolCodeBlock label="response" code={formattedResult} language="json" />}
+          <ToolCodeBlock label="Command" code={sanitizeCommand(details.rawCommand)} language="shell" />
+          {formattedResult && <ToolCodeBlock label="Response" code={formattedResult} language="json" />}
         </div>
       </details>
     </div>
@@ -253,7 +253,7 @@ function ToolCodeBlock({
 }) {
   return (
     <div className="min-w-0">
-      {label && <div className="mb-1 text-[10px] font-mono uppercase text-muted-foreground/50">{label}</div>}
+      {label && <div className="mb-1 text-[10px] font-mono normal-case text-muted-foreground/50">{label}</div>}
       <pre className="max-h-[220px] max-w-full overflow-auto rounded border border-border/30 bg-muted/20 p-2 text-xs leading-relaxed">
         <code className="font-mono">
           {language === "json" ? <HighlightedJson code={code} /> : <HighlightedShell code={code} />}
@@ -574,10 +574,10 @@ function ToolCallRailItem({
               {label}
             </span>
             {showError && (
-              <span className="shrink-0 border border-destructive/40 px-1 font-mono text-[9px] uppercase tracking-wide text-destructive">
+              <span className="shrink-0 border border-destructive/40 px-1 font-mono text-[9px] normal-case tracking-wide text-destructive">
                 {compactedCalls
                   ? `${compactedCalls.filter((call) => call.isError).length} failed`
-                  : "failed"}
+                  : "Failed"}
               </span>
             )}
             {compactedCalls && !expanded ? (
@@ -823,7 +823,7 @@ function WebTargetIcon({
 export function ConnectionToolIcon({ name }: { name: string }) {
   const key = normalizeAppKey(name);
   if (key === "connections") {
-    return <Plug className="w-3.5 h-3.5 text-foreground/70" aria-label="connections" />;
+    return <Plug className="w-3.5 h-3.5 text-foreground/70" aria-label="Connections" />;
   }
   if (key === "windows-calendar") {
     return <Calendar className="w-3.5 h-3.5 text-muted-foreground" aria-label="Windows Calendar" />;
@@ -1068,27 +1068,27 @@ function InlineConnectionActionCard({
             {connectLabel}
           </div>
           <div className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
-            {statusMessage ?? block.extensionReason ?? "token stays in the local secret store and is never shown to the model."}
+            {statusMessage ?? block.extensionReason ?? "Token stays in the local secret store and is never shown to the model."}
           </div>
           {effectiveConnected && isPiGate ? (
-            <div className="mt-3 text-xs uppercase tracking-wide text-muted-foreground">
-              continuing...
+            <div className="mt-3 text-xs normal-case tracking-wide text-muted-foreground">
+              Continuing...
             </div>
           ) : effectiveConnected ? (
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => onContinue?.(continuePrompt, continueLabel)}
-                className="border border-foreground bg-foreground px-2.5 py-1.5 text-xs uppercase tracking-wide text-background transition-colors duration-150"
+                className="border border-foreground bg-foreground px-2.5 py-1.5 text-xs normal-case tracking-wide text-background transition-colors duration-150"
               >
                 {continueLabel}
               </button>
               <button
                 type="button"
                 onClick={onDismiss}
-                className="border border-border px-2.5 py-1.5 text-xs uppercase tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background"
+                className="border border-border px-2.5 py-1.5 text-xs normal-case tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background"
               >
-                dismiss
+                Dismiss
               </button>
             </div>
           ) : (
@@ -1097,16 +1097,16 @@ function InlineConnectionActionCard({
                 type="button"
                 onClick={handleConnect}
                 disabled={connectState === "waiting"}
-                className="border border-foreground bg-foreground px-2.5 py-1.5 text-xs uppercase tracking-wide text-background transition-opacity duration-150 disabled:opacity-60"
+                className="border border-foreground bg-foreground px-2.5 py-1.5 text-xs normal-case tracking-wide text-background transition-opacity duration-150 disabled:opacity-60"
               >
-                {connectState === "waiting" ? "waiting" : connectState === "error" ? "retry" : "connect"}
+                {connectState === "waiting" ? "Waiting" : connectState === "error" ? "Retry" : "Connect"}
               </button>
               <button
                 type="button"
                 onClick={onDismiss}
-                className="border border-border px-2.5 py-1.5 text-xs uppercase tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background"
+                className="border border-border px-2.5 py-1.5 text-xs normal-case tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background"
               >
-                not now
+                Not now
               </button>
             </div>
           )}
@@ -1121,13 +1121,13 @@ function InlineConnectionActionCard({
 function permissionOptionLabel(kind: string | undefined): string | null {
   switch (kind) {
     case "allow_once":
-      return "allow once";
+      return "Allow once";
     case "allow_always":
-      return "always allow";
+      return "Always allow";
     case "reject_once":
       return "reject";
     case "reject_always":
-      return "never allow";
+      return "Never allow";
     default:
       return null;
   }
@@ -1173,7 +1173,7 @@ export function InlineAgentActionCard({
         <div className="flex items-center gap-3">
           <Loader2 className="h-4 w-4 shrink-0 animate-spin text-foreground" aria-hidden />
           <div className="text-sm leading-5 text-foreground">
-            {isAuth ? "signing you in…" : "waiting for the agent…"}
+            {isAuth ? "Signing you in…" : "Waiting for the agent…"}
           </div>
         </div>
       </div>
@@ -1203,10 +1203,10 @@ export function InlineAgentActionCard({
           </div>
           <div className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
             {responseState === "error"
-              ? "that did not work. please try again."
+              ? "That did not work. Please try again."
               : block.message ?? (isAuth
-                ? "choose how you want to connect this agent."
-                : "the agent needs your approval before it can continue.")}
+                ? "Choose how you want to connect this agent."
+                : "The agent needs your approval before it can continue.")}
           </div>
           {block.detail && (
             <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all border border-border bg-muted/40 px-2 py-1.5 text-xs leading-5 text-foreground/80">
@@ -1237,7 +1237,7 @@ export function InlineAgentActionCard({
                   onClick={() => void respond(option.optionId)}
                   title={option.name}
                   className={cn(
-                    "border px-2.5 py-1.5 text-xs uppercase tracking-wide transition-opacity duration-150 disabled:opacity-60",
+                    "border px-2.5 py-1.5 text-xs normal-case tracking-wide transition-opacity duration-150 disabled:opacity-60",
                     isPrimary
                       ? "border-foreground bg-foreground text-background"
                       : "border-border text-foreground hover:bg-muted/50",
@@ -1250,9 +1250,9 @@ export function InlineAgentActionCard({
             <button
               type="button"
               onClick={() => void respond()}
-              className="border border-border px-2.5 py-1.5 text-xs uppercase tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background disabled:opacity-60"
+              className="border border-border px-2.5 py-1.5 text-xs normal-case tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background disabled:opacity-60"
             >
-              not now
+              Not now
             </button>
           </div>
         </div>
@@ -1291,7 +1291,7 @@ function completedWorkSummaryFromRunning(runningSummary: string): string {
   const separator = " · ";
   const separatorIndex = runningSummary.lastIndexOf(separator);
   if (separatorIndex >= 0) {
-    return `done in ${runningSummary.slice(separatorIndex + separator.length)}`;
+    return `Done in ${runningSummary.slice(separatorIndex + separator.length)}`;
   }
   return "done";
 }
@@ -1300,7 +1300,7 @@ function friendlyCompletedSummary(summary?: string): string | undefined {
   if (!summary) return undefined;
   if (summary === "Worked") return "done";
   if (summary.startsWith("Worked for ")) {
-    return `done in ${summary.slice("Worked for ".length)}`;
+    return `Done in ${summary.slice("Worked for ".length)}`;
   }
   return summary;
 }
@@ -1694,24 +1694,24 @@ export function MessageContent({
         <RefreshCw className="h-3 w-3" />
         Try again
       </button>
-      <span className="text-xs text-muted-foreground">or edit your message above</span>
+      <span className="text-xs text-muted-foreground">Or edit your message above</span>
       <button
         type="button"
         onClick={() => openFeedback(`AI error in chat: ${message.content.slice(0, 300)}`)}
         className="ml-auto flex items-center gap-1 text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors"
       >
-        report issue
+        Report issue
       </button>
     </div>
   ) : isErrorMessage ? (
     <div className="mt-2 flex items-center gap-1.5">
-      <span className="text-xs text-destructive/60">still happening?</span>
+      <span className="text-xs text-destructive/60">Still happening?</span>
       <button
         type="button"
         onClick={() => openFeedback(`AI error in chat: ${message.content.slice(0, 300)}`)}
         className="text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
       >
-        report issue
+        Report issue
       </button>
     </div>
   ) : null;

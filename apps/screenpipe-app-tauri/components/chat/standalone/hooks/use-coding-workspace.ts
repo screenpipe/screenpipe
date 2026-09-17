@@ -150,9 +150,9 @@ export function useCodingWorkspace({
         publishWorkspaceIdentity(requestConversationId, result.data);
         setResolvedConversationId(requestConversationId);
         toast({
-          title: "coding workspace ready",
+          title: "Coding workspace ready",
           description: result.data.sourceDirty
-            ? "created from HEAD; your uncommitted source changes were left untouched"
+            ? "Created from HEAD; your uncommitted source changes were left untouched"
             : result.data.branch,
         });
         return result.data;
@@ -165,7 +165,7 @@ export function useCodingWorkspace({
           setEnabled(false);
           setError(message);
           toast({
-            title: "could not create coding workspace",
+            title: "Could not create coding workspace",
             description: message,
             variant: "destructive",
           });
@@ -263,7 +263,7 @@ export function useCodingWorkspace({
             setEnabled(false);
             setError(message);
             toast({
-              title: "could not resolve a coding repository",
+              title: "Could not resolve a coding repository",
               description: message,
               variant: "destructive",
             });
@@ -279,9 +279,9 @@ export function useCodingWorkspace({
           setEnabled(true);
           setResolvedConversationId(requestConversationId);
           toast({
-            title: "coding workspace ready",
+            title: "Coding workspace ready",
             description: preparedWorkspace.sourceDirty
-              ? "created from HEAD; your uncommitted source changes were left untouched"
+              ? "Created from HEAD; your uncommitted source changes were left untouched"
               : preparedWorkspace.branch,
           });
         }
@@ -299,7 +299,7 @@ export function useCodingWorkspace({
           setEnabled(false);
           setError(message);
           toast({
-            title: "could not create coding workspace",
+            title: "Could not create coding workspace",
             description: message,
             variant: "destructive",
           });

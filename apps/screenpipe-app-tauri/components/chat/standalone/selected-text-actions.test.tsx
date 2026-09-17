@@ -75,7 +75,7 @@ describe("SelectedTextActions", () => {
     const target = screen.getByText("selected evidence");
     const selection = selectText(target);
     fireEvent.click(
-      await screen.findByRole("button", { name: "add to chat" }),
+      await screen.findByRole("button", { name: "Add to chat" }),
     );
 
     expect(onAddToChat).toHaveBeenCalledWith("selected evidence");
@@ -97,7 +97,7 @@ describe("SelectedTextActions", () => {
 
     selectText(screen.getByText("selected evidence"));
     fireEvent.click(
-      await screen.findByRole("button", { name: "ask in side chat" }),
+      await screen.findByRole("button", { name: "Ask in side chat" }),
     );
 
     expect(onAskInSideChat).toHaveBeenCalledWith("selected evidence");
@@ -113,10 +113,10 @@ describe("SelectedTextActions", () => {
 
     selectText(screen.getByText("side answer"));
     expect(
-      await screen.findByRole("button", { name: "add to chat" }),
+      await screen.findByRole("button", { name: "Add to chat" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "ask in side chat" }),
+      screen.queryByRole("button", { name: "Ask in side chat" }),
     ).not.toBeInTheDocument();
   });
 
@@ -169,7 +169,7 @@ describe("SelectedTextActions", () => {
 
     selectText(screen.getByText("selected evidence"));
     const toolbar = await screen.findByRole("toolbar");
-    const addToChat = screen.getByRole("button", { name: "add to chat" });
+    const addToChat = screen.getByRole("button", { name: "Add to chat" });
 
     const pointerDown = createEvent.pointerDown(toolbar);
     fireEvent(toolbar, pointerDown);

@@ -114,13 +114,13 @@ function LoadingSkeleton() {
 function ErrorState({ message, path }: { message: string; path: string }) {
   return (
     <div className="font-mono text-[12px] text-foreground/70 max-w-prose">
-      <div className="uppercase tracking-wider text-[10px] mb-2 text-foreground/40">
-        couldn&apos;t open file
+      <div className="normal-case tracking-wider text-[10px] mb-2 text-foreground/40">
+        Couldn&apos;t open file
       </div>
       <pre className="whitespace-pre-wrap break-words mb-4">{message}</pre>
       {path && (
         <div className="text-foreground/40 break-all" title={path}>
-          <span className="opacity-60">looked in: </span>
+          <span className="opacity-60">Looked in: </span>
           {viewerPathBreadcrumb(path)}
         </div>
       )}
@@ -155,7 +155,7 @@ function ImageView({ src, name }: { src: string; name: string }) {
         />
       </div>
       {dims && (
-        <div className="font-mono text-[10px] tracking-wider uppercase text-foreground/40">
+        <div className="font-mono text-[10px] tracking-wider normal-case text-foreground/40">
           {dims.w} × {dims.h} · click to {fit === "fit" ? "zoom" : "fit"}
         </div>
       )}
@@ -302,33 +302,33 @@ export function ViewerFileContent({
 
       {content?.kind === "binary" && (
         <div className="font-mono text-[12px] text-foreground/70 max-w-prose">
-          <div className="uppercase tracking-wider text-[10px] mb-2 text-foreground/40">
-            binary file · {formatViewerBytes(content.total_bytes)}
+          <div className="normal-case tracking-wider text-[10px] mb-2 text-foreground/40">
+            Binary file · {formatViewerBytes(content.total_bytes)}
           </div>
           <p className="mb-4 text-foreground/60">
-            this file isn&apos;t safe to render as text. open it in your
+            This file isn&apos;t safe to render as text. Open it in your
             system&apos;s default app to view it properly.
           </p>
           <button
             onClick={() => void commands.openNotePath(path)}
-            className="px-3 py-1 text-[10px] tracking-wider uppercase font-mono border border-border bg-foreground/[0.06] hover:bg-foreground hover:text-background transition-colors"
+            className="px-3 py-1 text-[10px] tracking-wider normal-case font-mono border border-border bg-foreground/[0.06] hover:bg-foreground hover:text-background transition-colors"
           >
-            open in default app
+            Open in default app
           </button>
         </div>
       )}
 
       {content?.kind === "text" && content.truncated && (
-        <div className="font-mono text-[10px] tracking-wide uppercase text-foreground/50 mb-3 px-3 py-1 border border-border bg-foreground/[0.04] flex items-center justify-between gap-3">
+        <div className="font-mono text-[10px] tracking-wide normal-case text-foreground/50 mb-3 px-3 py-1 border border-border bg-foreground/[0.04] flex items-center justify-between gap-3">
           <span>
-            showing first {formatViewerBytes(MAX_VIEWER_PREVIEW_BYTES)} · file is{" "}
+            Showing first {formatViewerBytes(MAX_VIEWER_PREVIEW_BYTES)} · file is{" "}
             {formatViewerBytes(content.total_bytes)}
           </span>
           <button
             onClick={() => void commands.openNotePath(path)}
             className="underline opacity-80 hover:opacity-100"
           >
-            open full file ↗
+            Open full file ↗
           </button>
         </div>
       )}
@@ -388,16 +388,16 @@ export function ViewerFileContent({
             htmlFillsViewer && "flex min-h-0 flex-1 flex-col",
           )}
         >
-          <div className="shrink-0 font-mono text-[10px] tracking-wide uppercase text-foreground/50 px-3 py-1 border border-border bg-foreground/[0.04] flex items-center justify-between gap-3">
+          <div className="shrink-0 font-mono text-[10px] tracking-wide normal-case text-foreground/50 px-3 py-1 border border-border bg-foreground/[0.04] flex items-center justify-between gap-3">
             <span>
-              html document · sandboxed{showRendered ? " · rendered" : " · source"}
+              Html document · sandboxed{showRendered ? " · rendered" : " · source"}
             </span>
             <button
               data-testid="html-render-toggle"
               onClick={() => setShowRendered((v) => !v)}
               className="underline opacity-80 hover:opacity-100"
             >
-              {showRendered ? "view source" : "preview rendered ↗"}
+              {showRendered ? "View source" : "Preview rendered ↗"}
             </button>
           </div>
           {showRendered ? (

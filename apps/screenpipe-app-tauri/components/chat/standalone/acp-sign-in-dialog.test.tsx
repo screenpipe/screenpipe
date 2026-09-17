@@ -40,7 +40,7 @@ describe("AcpSignInDialog CLI login", () => {
     const onCliSignIn = renderCursorLogin();
 
     expect(screen.queryByText("cursor-agent login")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "sign in with Cursor" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in with Cursor" }));
 
     expect(onCliSignIn).toHaveBeenCalledTimes(1);
   });
@@ -82,11 +82,11 @@ describe("AcpSignInDialog method login", () => {
     fireEvent.click(screen.getByRole("button", { name: /claude subscription/i }));
 
     expect(
-      await screen.findByText("that didn't work. please try again."),
+      await screen.findByText("That didn't work. Please try again."),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /claude subscription/i }),
     ).toBeEnabled();
-    expect(screen.queryByText("signing in…")).not.toBeInTheDocument();
+    expect(screen.queryByText("Signing in…")).not.toBeInTheDocument();
   });
 });

@@ -161,7 +161,7 @@ export function LiveViewAiComposer({
     intent === "edit-dashboard"
       ? `agent will edit “${currentViewTitle}”`
       : "agent will create a new dashboard";
-  const actionLabel = busy ? "stop update" : "update Live View";
+  const actionLabel = busy ? "Stop update" : "Update Live View";
 
   const submit = async () => {
     if (!canSubmit || !selectedPreset) return;
@@ -246,7 +246,7 @@ export function LiveViewAiComposer({
                 void openBusinessUpgradeSurface("live-view-ai-composer")
               }
             >
-              upgrade
+              Upgrade
             </Button>
           ) : (
             <Button
@@ -331,7 +331,7 @@ export function LiveViewAiComposer({
                 void openBusinessUpgradeSurface("live-view-ai-composer")
               }
             >
-              upgrade
+              Upgrade
             </Button>
           ) : (
             <Button
@@ -345,11 +345,11 @@ export function LiveViewAiComposer({
               {busy ? (
                 <>
                   <X className="mr-1.5 h-3.5 w-3.5" />
-                  <span>stop</span>
+                  <span>Stop</span>
                 </>
               ) : (
                 <>
-                  <span className="mr-1.5">update Live View</span>
+                  <span className="mr-1.5">Update Live View</span>
                   <ArrowUp className="h-3.5 w-3.5" />
                 </>
               )}

@@ -48,7 +48,7 @@ export function PipeContextBanner({
         className,
       )}
       role="status"
-      aria-label={done ? `task run: ${pipeName}` : `watching scheduled task: ${pipeName}`}
+      aria-label={done ? `Task run: ${pipeName}` : `Watching scheduled task: ${pipeName}`}
     >
       <span
         className={cn(

@@ -334,7 +334,7 @@ function AnnouncementBubbleVisible({
           <AnnouncementKindChip kind={announcement.kind} />
           <button
             type="button"
-            aria-label="dismiss"
+            aria-label="Dismiss"
             data-testid="announcement-dismiss"
             onClick={onDismiss}
             className="-mr-1 -mt-1 p-1 text-muted-foreground transition-colors hover:text-foreground"
@@ -342,7 +342,7 @@ function AnnouncementBubbleVisible({
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="mb-1 text-sm font-semibold lowercase">
+        <div className="mb-1 text-sm font-semibold normal-case">
           {announcement.title}
         </div>
         <AnnouncementBody body={announcement.body} className="text-[13px]" />

@@ -670,10 +670,10 @@ export function ConnectedShareDialog({
       const team = linearTeams.find((item) => item.id === linearTeamId);
       return team ? `create issue in ${team.key}` : "choose a Linear team";
     }
-    if (value === "chat-linear") return "prepare Linear in Chat";
-    if (value === "chat-notion") return "prepare Notion in Chat";
-    if (value === "chat-obsidian") return "prepare Obsidian in Chat";
-    return "copy snapshot";
+    if (value === "chat-linear") return "Prepare Linear in Chat";
+    if (value === "chat-notion") return "Prepare Notion in Chat";
+    if (value === "chat-obsidian") return "Prepare Obsidian in Chat";
+    return "Copy snapshot";
   };
 
   /**
@@ -734,7 +734,7 @@ export function ConnectedShareDialog({
       instance: slackInstance,
     });
     setReceipt({
-      title: "sent to Slack",
+      title: "Sent to Slack",
       detail: `${result.team || "Slack"} · ${channel ? `#${channel.name}` : "your messages"} · ${result.ts || "delivered"}`,
     });
   };
@@ -748,7 +748,7 @@ export function ConnectedShareDialog({
       description: message,
     });
     setReceipt({
-      title: `created ${issue.identifier || "Linear issue"}`,
+      title: `Created ${issue.identifier || "Linear issue"}`,
       detail: `${team.name} · ${issue.title || linearTitle}`,
       url: issue.url,
     });
@@ -815,7 +815,7 @@ export function ConnectedShareDialog({
         });
         toast({
           title:
-            destination === "slack" ? "sent to Slack" : "Linear issue created",
+            destination === "slack" ? "Sent to Slack" : "Linear issue created",
         });
       }
     } catch (error) {
@@ -828,7 +828,7 @@ export function ConnectedShareDialog({
         error instanceof Error ? error.message : "The action did not complete.";
       setActionError(message);
       toast({
-        title: "couldn't complete sharing",
+        title: "Couldn't complete sharing",
         description: message,
         variant: "destructive",
       });
@@ -1005,7 +1005,7 @@ export function ConnectedShareDialog({
         data-testid="connected-share-dialog"
       >
         <DialogHeader>
-          <DialogTitle>send snapshot</DialogTitle>
+          <DialogTitle>Send snapshot</DialogTitle>
           <DialogDescription>
             A frozen copy of “{artifact.title}”.
           </DialogDescription>
@@ -1016,7 +1016,7 @@ export function ConnectedShareDialog({
             className="flex items-center gap-1.5 text-xs text-muted-foreground"
             role="status"
           >
-            <Loader2 className="h-3.5 w-3.5 animate-spin" /> checking connected
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking connected
             apps
           </p>
         )}
@@ -1031,7 +1031,7 @@ export function ConnectedShareDialog({
               <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
               <div>
                 <p className="font-medium">
-                  connected apps could not be checked
+                  Connected apps could not be checked
                 </p>
                 <p className="mt-0.5 text-muted-foreground">
                   {connectionsError} Retry, or use copy on the rule above.
@@ -1045,7 +1045,7 @@ export function ConnectedShareDialog({
               className="h-7 rounded-md px-2"
               onClick={() => setConnectionsRefresh((value) => value + 1)}
             >
-              <RefreshCw className="mr-1 h-3 w-3" /> retry
+              <RefreshCw className="mr-1 h-3 w-3" /> Retry
             </Button>
           </div>
         )}
@@ -1061,7 +1061,7 @@ export function ConnectedShareDialog({
               <div
                 className="grid grid-cols-2 border border-border"
                 data-testid="connected-share-mode"
-                aria-label="how to send"
+                aria-label="How to send"
               >
                 <button
                   type="button"
@@ -1075,7 +1075,7 @@ export function ConnectedShareDialog({
                   }`}
                 >
                   <span className="block text-xs font-medium">
-                    send unchanged
+                    Send unchanged
                   </span>
                   <span
                     className={`mt-0.5 block text-[10px] leading-snug ${
@@ -1084,7 +1084,7 @@ export function ConnectedShareDialog({
                         : "text-muted-foreground"
                     }`}
                   >
-                    exact frozen copy · no new AI processing
+                    Exact frozen copy · no new AI processing
                   </span>
                 </button>
                 <button
@@ -1099,7 +1099,7 @@ export function ConnectedShareDialog({
                   }`}
                 >
                   <span className="flex items-center gap-1 text-xs font-medium">
-                    <Sparkles className="h-3 w-3" /> review in Chat
+                    <Sparkles className="h-3 w-3" /> Review in Chat
                   </span>
                   <span
                     className={`mt-0.5 block text-[10px] leading-snug ${
@@ -1123,7 +1123,7 @@ export function ConnectedShareDialog({
                   <span className="flex min-w-0 items-center gap-2">
                     {currentOption?.icon}
                     <span className="shrink-0 text-sm">
-                      {currentOption?.name ?? "no destination"}
+                      {currentOption?.name ?? "No destination"}
                     </span>
                     <span className="shrink-0 text-muted-foreground">·</span>
                     <span className="truncate text-xs text-muted-foreground">
@@ -1131,7 +1131,7 @@ export function ConnectedShareDialog({
                     </span>
                   </span>
                   <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
-                    change
+                    Change
                     <ChevronDown className="h-3 w-3" />
                   </span>
                 </button>
@@ -1139,8 +1139,8 @@ export function ConnectedShareDialog({
               <DropdownMenuContent align="start" className="w-72">
                 {shareMode !== "chat" && directOptions.length > 0 && (
                   <>
-                    <DropdownMenuLabel className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                      send unchanged
+                    <DropdownMenuLabel className="font-mono text-[10px] normal-case tracking-[0.12em] text-muted-foreground">
+                      Send unchanged
                     </DropdownMenuLabel>
                     {directOptions.map((option) => (
                       <DropdownMenuItem
@@ -1160,8 +1160,8 @@ export function ConnectedShareDialog({
                 )}
                 {shareMode === "chat" && chatOptions.length > 0 && (
                   <>
-                    <DropdownMenuLabel className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                      review in Chat
+                    <DropdownMenuLabel className="font-mono text-[10px] normal-case tracking-[0.12em] text-muted-foreground">
+                      Review in Chat
                     </DropdownMenuLabel>
                     {chatOptions.map((option) => (
                       <DropdownMenuItem
@@ -1194,7 +1194,7 @@ export function ConnectedShareDialog({
                         className="gap-2 text-xs text-muted-foreground"
                       >
                         <Plus className="h-3.5 w-3.5" />
-                        connect {CONNECTION_NAME[id]}
+                        Connect {CONNECTION_NAME[id]}
                       </DropdownMenuItem>
                     ))}
                   </>
@@ -1236,7 +1236,7 @@ export function ConnectedShareDialog({
             {slackInstances.length > 1 && (
               <div className="space-y-1.5">
                 <label className="text-xs text-muted-foreground">
-                  workspace
+                  Workspace
                 </label>
                 <Select
                   value={slackInstance}
@@ -1263,7 +1263,7 @@ export function ConnectedShareDialog({
               </div>
             )}
             <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">channel</label>
+              <label className="text-xs text-muted-foreground">Channel</label>
               <Select
                 value={slackTarget}
                 onValueChange={(value) => {
@@ -1277,11 +1277,11 @@ export function ConnectedShareDialog({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={SELF_SLACK_TARGET}>
-                    my Slack messages
+                    My Slack messages
                   </SelectItem>
                   {slackChannels.map((channel) => (
                     <SelectItem key={channel.id} value={channel.id}>
-                      {channel.is_private ? "private · " : "#"}
+                      {channel.is_private ? "Private · " : "#"}
                       {channel.name}
                     </SelectItem>
                   ))}
@@ -1289,7 +1289,7 @@ export function ConnectedShareDialog({
               </Select>
               {slackChannelsLoading && (
                 <p className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                  <Loader2 className="h-3 w-3 animate-spin" /> loading channels
+                  <Loader2 className="h-3 w-3 animate-spin" /> Loading channels
                 </p>
               )}
               {slackChannelsError && (
@@ -1304,7 +1304,7 @@ export function ConnectedShareDialog({
                     className="underline underline-offset-2"
                     onClick={() => setSlackRefresh((value) => value + 1)}
                   >
-                    retry
+                    Retry
                   </button>
                 </p>
               )}
@@ -1315,7 +1315,7 @@ export function ConnectedShareDialog({
         {destination === "linear" && (
           <div className="grid gap-3 sm:grid-cols-[12rem_1fr]">
             <div className="space-y-1.5">
-              <label className="text-xs text-muted-foreground">team</label>
+              <label className="text-xs text-muted-foreground">Team</label>
               <Select
                 value={linearTeamId}
                 onValueChange={(value) => {
@@ -1327,7 +1327,7 @@ export function ConnectedShareDialog({
                 <SelectTrigger className="h-9 rounded-md text-xs">
                   <SelectValue
                     placeholder={
-                      linearTeamsLoading ? "loading teams" : "choose team"
+                      linearTeamsLoading ? "Loading teams" : "Choose team"
                     }
                   />
                 </SelectTrigger>
@@ -1351,14 +1351,14 @@ export function ConnectedShareDialog({
                     className="shrink-0 underline"
                     onClick={() => setLinearRefresh((value) => value + 1)}
                   >
-                    retry
+                    Retry
                   </button>
                 </div>
               )}
             </div>
             <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">
-                issue title
+                Issue title
               </label>
               <Input
                 value={linearTitle}
@@ -1381,7 +1381,7 @@ export function ConnectedShareDialog({
         <div className="border-y border-border/60">
           {artifact.sections.length > 1 && (
             <SummaryRow
-              label="contents"
+              label="Contents"
               value={contentsSummary}
               action="edit"
               open={contentsOpen}
@@ -1408,7 +1408,7 @@ export function ConnectedShareDialog({
           )}
 
           <SummaryRow
-            label="message"
+            label="Message"
             value={
               currentIsChat
                 ? "what Chat will review"
@@ -1428,8 +1428,8 @@ export function ConnectedShareDialog({
                   className="text-[11px] text-muted-foreground"
                 >
                   {destination === "slack"
-                    ? "edits here apply only to Slack"
-                    : "edit before sending"}
+                    ? "Edits here apply only to Slack"
+                    : "Edit before sending"}
                 </label>
                 <span
                   className={`text-[10px] tabular-nums ${outgoingMessage.length > 39_000 ? "text-destructive" : "text-muted-foreground"}`}
@@ -1497,7 +1497,7 @@ export function ConnectedShareDialog({
           >
             <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
             <div>
-              <p className="font-medium">the action did not complete</p>
+              <p className="font-medium">The action did not complete</p>
               <p className="mt-0.5 text-muted-foreground">{actionError}</p>
               <p className="mt-1 text-muted-foreground">
                 No success was recorded. Review the destination and try again.
@@ -1526,7 +1526,7 @@ export function ConnectedShareDialog({
                 className="h-7 rounded-md px-2"
                 onClick={() => void openExternal(receipt.url as string)}
               >
-                open <ExternalLink className="ml-1 h-3 w-3" />
+                Open <ExternalLink className="ml-1 h-3 w-3" />
               </Button>
             )}
           </div>
@@ -1539,7 +1539,7 @@ export function ConnectedShareDialog({
             className="rounded-md"
             onClick={() => onOpenChange(false)}
           >
-            close
+            Close
           </Button>
           <Button
             type="button"

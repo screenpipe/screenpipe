@@ -187,8 +187,8 @@ function StatusLabel({
     <span
       className={
         ready
-          ? "inline-flex items-center gap-1 font-mono text-[9px] uppercase tracking-[0.14em] text-signal"
-          : "font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground"
+          ? "inline-flex items-center gap-1 font-mono text-[9px] normal-case tracking-[0.14em] text-signal"
+          : "font-mono text-[9px] normal-case tracking-[0.14em] text-muted-foreground"
       }
     >
       {ready && <Check className="h-3 w-3" aria-hidden="true" />}
@@ -217,7 +217,7 @@ function SetupOutcomeRow({
       </span>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <h3 className="font-mono text-xs font-semibold lowercase text-foreground">
+          <h3 className="font-mono text-xs font-semibold normal-case text-foreground">
             {title}
           </h3>
           <StatusLabel ready={complete}>{status}</StatusLabel>
@@ -293,18 +293,18 @@ export function FirstRunNextStepsPanel({
       </p>
       <div className="flex flex-col gap-2 border-t border-border px-4 pb-3 pt-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="font-mono text-[9px] uppercase tracking-[0.2em] text-muted-foreground">
-            optional next steps
+          <p className="font-mono text-[9px] normal-case tracking-[0.2em] text-muted-foreground">
+            Optional next steps
           </p>
           <h2
             id="first-run-next-steps-heading"
-            className="mt-1 font-mono text-sm font-semibold lowercase text-foreground"
+            className="mt-1 font-mono text-sm font-semibold normal-case text-foreground"
           >
-            set up Screenpipe
+            Set up Screenpipe
           </h2>
         </div>
         <p className="max-w-sm text-[10px] leading-relaxed text-muted-foreground sm:text-right">
-          turn everything on here. connect Gmail and Google Calendar only if
+          Turn everything on here. Connect Gmail and Google Calendar only if
           needed.
         </p>
       </div>
@@ -318,8 +318,8 @@ export function FirstRunNextStepsPanel({
             <Check className="h-4 w-4" aria-hidden="true" />
           </span>
           <div>
-            <p className="font-mono text-xs font-semibold lowercase text-foreground">
-              all set
+            <p className="font-mono text-xs font-semibold normal-case text-foreground">
+              All set
             </p>
             <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
               Screenpipe remembers your work, emails your daily recap, helps
@@ -331,8 +331,8 @@ export function FirstRunNextStepsPanel({
         <div className="mx-4 mb-4 overflow-hidden border border-border bg-muted/10">
           <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="max-w-md">
-              <p className="font-mono text-xs font-semibold lowercase text-foreground">
-                one click sets up all of this
+              <p className="font-mono text-xs font-semibold normal-case text-foreground">
+                One click sets up all of this
               </p>
               <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
                 Screenpipe will turn these on, then help you connect Gmail and
@@ -350,14 +350,14 @@ export function FirstRunNextStepsPanel({
             >
               <span>
                 {checking
-                  ? "checking"
+                  ? "Checking"
                   : setupBusyLabel
                     ? setupBusyLabel
                     : hasUnknown
-                      ? "check again"
+                      ? "Check again"
                       : actionError
-                        ? "keep going"
-                        : "set up all"}
+                        ? "Keep going"
+                        : "Set up all"}
               </span>
               {checking || setupBusy ? (
                 <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
@@ -369,8 +369,8 @@ export function FirstRunNextStepsPanel({
 
           <SetupOutcomeRow
             icon={<BrainCircuit className="h-4 w-4" aria-hidden="true" />}
-            title="remember my work"
-            description="remember my work, meetings, and the people I work with."
+            title="Remember my work"
+            description="Remember my work, meetings, and the people I work with."
             status={
               checking
                 ? "checking"
@@ -387,8 +387,8 @@ export function FirstRunNextStepsPanel({
 
           <SetupOutcomeRow
             icon={<AudioLines className="h-4 w-4" aria-hidden="true" />}
-            title="name people in meetings"
-            description="after each meeting, suggest who was speaking. you review every name before anything changes."
+            title="Name people in meetings"
+            description="After each meeting, suggest who was speaking. You review every name before anything changes."
             status={
               checking
                 ? "checking"
@@ -412,8 +412,8 @@ export function FirstRunNextStepsPanel({
                 data-testid="gmail-service-icon"
               />
             }
-            title="send my daily recap"
-            description="email me a short recap of my day each evening."
+            title="Send my daily recap"
+            description="Email me a short recap of my day each evening."
             status={
               checking
                 ? "checking"
@@ -437,8 +437,8 @@ export function FirstRunNextStepsPanel({
                 data-testid="google-calendar-service-icon"
               />
             }
-            title="understand my meetings"
-            description="use Google Calendar to understand what my meetings are about. Screenpipe never changes my calendar."
+            title="Understand my meetings"
+            description="Use Google Calendar to understand what my meetings are about. Screenpipe never changes my calendar."
             status={
               checking
                 ? "checking"
@@ -460,7 +460,7 @@ export function FirstRunNextStepsPanel({
         >
           <p className="text-[10px] leading-relaxed text-muted-foreground">
             {actionError ??
-              "Screenpipe couldn't check everything. nothing changed."}
+              "Screenpipe couldn't check everything. Nothing changed."}
           </p>
           <Button
             type="button"
@@ -470,7 +470,7 @@ export function FirstRunNextStepsPanel({
             onClick={onRetry}
           >
             <RefreshCw className="h-3 w-3" aria-hidden="true" />
-            retry
+            Retry
           </Button>
         </div>
       )}

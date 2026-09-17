@@ -60,14 +60,14 @@ export function showChatArchiveUndoToast({
     } catch (error) {
       console.warn("[chat] archive undo failed:", error);
       toast({
-        title: "couldn't undo archive",
+        title: "Couldn't undo archive",
         variant: "destructive",
       });
     }
   };
 
   const toastHandle = toast({
-    title: count === 1 ? "chat archived" : `${count} chats archived`,
+    title: count === 1 ? "Chat archived" : `${count} chats archived`,
     duration: ARCHIVE_UNDO_WINDOW_MS,
     className:
       "w-auto min-w-0 max-w-[calc(100vw-2rem)] gap-3 space-x-0 border-border/70 bg-background/95 p-2.5 pr-8 shadow-sm",
@@ -75,10 +75,10 @@ export function showChatArchiveUndoToast({
       <ToastAction
         altText="undo archived chat"
         aria-keyshortcuts="Meta+Z Control+Z"
-        className="h-6 gap-1.5 rounded-sm px-2 text-[11px] uppercase tracking-wide"
+        className="h-6 gap-1.5 rounded-sm px-2 text-[11px] normal-case tracking-wide"
         onClick={() => void undo()}
       >
-        <span>undo</span>
+        <span>Undo</span>
         <kbd className="font-mono text-[10px] text-muted-foreground">
           {shortcutLabel()}
         </kbd>

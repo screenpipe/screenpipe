@@ -482,7 +482,7 @@ export function AudioTranscript({
 	const handleSendToChat = useCallback(async () => {
 		const data = activeMeeting ? meetingConversationData : conversationData;
 		if (!data.items.length) {
-			toast({ title: "no transcript data to send", variant: "destructive" });
+			toast({ title: "No transcript data to send", variant: "destructive" });
 			return;
 		}
 
@@ -498,8 +498,8 @@ export function AudioTranscript({
 			: "";
 
 		const label = activeMeeting
-			? `meeting transcript (${timeRange})`
-			: `nearby audio (${timeRange})`;
+			? `Meeting transcript (${timeRange})`
+			: `Nearby audio (${timeRange})`;
 
 		const context = `here is my ${label}:\n\n${lines.join("\n")}`;
 
@@ -553,7 +553,7 @@ export function AudioTranscript({
 			.map((p) => p.name || `speaker-${p.id}`)
 			.join(", ");
 
-		const label = hasMeeting ? "meeting" : "audio";
+		const label = hasMeeting ? "Meeting" : "Audio";
 		const ongoingNote = isOngoing ? " (still in progress)" : "";
 
 		const context = [
@@ -664,8 +664,8 @@ export function AudioTranscript({
 						<GripHorizontal className="w-4 h-4 shrink-0" />
 						<span className="truncate">
 							{activeMeeting
-								? `meeting · ${activeMeeting.audioEntries.length} seg`
-								: "audio"}
+								? `Meeting · ${activeMeeting.audioEntries.length} seg`
+								: "Audio"}
 						</span>
 					</div>
 
@@ -691,7 +691,7 @@ export function AudioTranscript({
 									<BotMessageSquare className="h-3 w-3" />
 								</Button>
 							</TooltipTrigger>
-							<TooltipContent side="bottom"><p>ask ai</p></TooltipContent>
+							<TooltipContent side="bottom"><p>Ask AI</p></TooltipContent>
 						</Tooltip>
 						<Tooltip>
 							<TooltipTrigger asChild>
@@ -699,7 +699,7 @@ export function AudioTranscript({
 									{copied ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
 								</Button>
 							</TooltipTrigger>
-							<TooltipContent side="bottom"><p>{copied ? "copied!" : "copy"}</p></TooltipContent>
+							<TooltipContent side="bottom"><p>{copied ? "Copied!" : "Copy"}</p></TooltipContent>
 						</Tooltip>
 						<DropdownMenu>
 							<Tooltip>
@@ -710,7 +710,7 @@ export function AudioTranscript({
 										</Button>
 									</DropdownMenuTrigger>
 								</TooltipTrigger>
-								<TooltipContent side="bottom"><p>more</p></TooltipContent>
+								<TooltipContent side="bottom"><p>More</p></TooltipContent>
 							</Tooltip>
 							<DropdownMenuContent align="end" className="w-44">
 								<DropdownMenuItem
@@ -718,7 +718,7 @@ export function AudioTranscript({
 									className="text-xs gap-2"
 								>
 									<RefreshCw className="h-3 w-3" />
-									retranscribe
+									Retranscribe
 								</DropdownMenuItem>
 								<DropdownMenuItem
 									onClick={() => setSelectionMode(true)}
@@ -726,7 +726,7 @@ export function AudioTranscript({
 									className="text-xs gap-2"
 								>
 									<UserCheck className="h-3 w-3" />
-									select &amp; reassign
+									Select &amp; reassign
 								</DropdownMenuItem>
 							</DropdownMenuContent>
 						</DropdownMenu>
@@ -736,7 +736,7 @@ export function AudioTranscript({
 									<X className="h-3 w-3" />
 								</Button>
 							</TooltipTrigger>
-							<TooltipContent side="bottom"><p>close</p></TooltipContent>
+							<TooltipContent side="bottom"><p>Close</p></TooltipContent>
 						</Tooltip>
 					</div>
 					</TooltipProvider>
@@ -945,14 +945,14 @@ export function AudioTranscript({
 										}
 									>
 										<span className="px-2 py-1 border border-border hover:bg-accent cursor-pointer transition-colors duration-150">
-											assign to...
+											Assign to...
 										</span>
 									</SpeakerAssignPopover>
 								);
 							})()}
 						</>
 					) : (
-						<span className="text-muted-foreground">click bubbles to select</span>
+						<span className="text-muted-foreground">Click bubbles to select</span>
 					)}
 					<Button
 						variant="ghost"
@@ -960,7 +960,7 @@ export function AudioTranscript({
 						className="h-6 px-2 text-xs shrink-0"
 						onClick={exitSelectionMode}
 					>
-						cancel
+						Cancel
 					</Button>
 				</div>
 			)}

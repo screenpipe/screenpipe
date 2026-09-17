@@ -55,12 +55,12 @@ describe("ChatChart actions", () => {
     const { rerender } = render(<ChatChart spec={spec} />);
 
     expect(
-      screen.queryByRole("button", { name: "chart actions" }),
+      screen.queryByRole("button", { name: "Chart actions" }),
     ).toBeNull();
 
     rerender(<ChatChart spec={spec} onSendPrompt={vi.fn()} />);
     expect(
-      screen.getByRole("button", { name: "chart actions" }),
+      screen.getByRole("button", { name: "Chart actions" }),
     ).toBeInTheDocument();
   });
 
@@ -90,7 +90,7 @@ describe("ChatChart actions", () => {
     });
     render(<ChatChart spec={spec} onSendPrompt={onSendPrompt} />);
 
-    fireEvent.keyDown(screen.getByRole("button", { name: "chart actions" }), {
+    fireEvent.keyDown(screen.getByRole("button", { name: "Chart actions" }), {
       key: "ArrowDown",
     });
     fireEvent.click(screen.getByRole("menuitem", { name: /add to live view/i }));
@@ -159,7 +159,7 @@ describe("ChatChart — bar", () => {
         })}
       />,
     );
-    expect(screen.getByText(/showing first 20 of 25 points/)).toBeInTheDocument();
+    expect(screen.getByText(/Showing first 20 of 25 points/)).toBeInTheDocument();
   });
 
   it("uses one shared diverging scale for signed values", () => {
@@ -526,9 +526,9 @@ describe("ChatChart — new mark types", () => {
     );
     expect(screen.getByText("2026-08-01 – 2026-08-02")).toBeInTheDocument();
     expect(screen.getByText("2 recorded days")).toBeInTheDocument();
-    expect(screen.getByText("average")).toBeInTheDocument();
-    expect(screen.getByText("peak")).toBeInTheDocument();
-    expect(screen.getByText("total")).toBeInTheDocument();
+    expect(screen.getByText("Average")).toBeInTheDocument();
+    expect(screen.getByText("Peak")).toBeInTheDocument();
+    expect(screen.getByText("Total")).toBeInTheDocument();
     expect(screen.getAllByText("4 h").length).toBeGreaterThan(0);
   });
 

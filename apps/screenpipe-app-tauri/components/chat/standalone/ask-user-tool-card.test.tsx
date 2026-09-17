@@ -87,7 +87,7 @@ describe("AskUserToolCard", () => {
       "Here are my answers to your ask_user questions:\n- Where should I start?: UI polish",
     );
     expect(onSubmit.mock.calls[0][1]).toBe("Answered Ask user: UI polish");
-    expect(await screen.findByText("sent")).toBeInTheDocument();
+    expect(await screen.findByText("Sent")).toBeInTheDocument();
   });
 
   it("supports multi-select plus free-form nuance", async () => {

@@ -93,7 +93,7 @@ export function ImportChatsDialog({
       const result = await importExternalChatHistory(selectedCandidates);
       const completed = result.imported + result.updated;
       toast({
-        title: completed > 0 ? "chat import complete" : "no chats imported",
+        title: completed > 0 ? "Chat import complete" : "No chats imported",
         description: [
           result.imported > 0 ? `${result.imported} new` : "",
           result.updated > 0 ? `${result.updated} updated` : "",
@@ -106,7 +106,7 @@ export function ImportChatsDialog({
       onOpenChange(false);
     } catch (error) {
       toast({
-        title: "chat import failed",
+        title: "Chat import failed",
         description: error instanceof Error ? error.message : String(error),
         variant: "destructive",
       });
@@ -119,7 +119,7 @@ export function ImportChatsDialog({
     <Dialog open={open} onOpenChange={(next) => !importing && onOpenChange(next)}>
       <DialogContent className="rounded-lg border border-border sm:max-w-[480px]">
         <DialogHeader>
-          <DialogTitle className="lowercase">import chats</DialogTitle>
+          <DialogTitle className="normal-case">Import chats</DialogTitle>
           <DialogDescription>
             Copy local conversations from the past {EXTERNAL_CHAT_LOOKBACK_DAYS} days into screenpipe. Source files stay unchanged and nothing is uploaded.
           </DialogDescription>
@@ -129,7 +129,7 @@ export function ImportChatsDialog({
           {loading ? (
             <div className="flex items-center gap-2 px-3 py-5 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
-              checking the past {EXTERNAL_CHAT_LOOKBACK_DAYS} days
+              Checking the past {EXTERNAL_CHAT_LOOKBACK_DAYS} days
             </div>
           ) : scanError ? (
             <div className="px-3 py-4 text-sm text-destructive">
@@ -174,15 +174,15 @@ export function ImportChatsDialog({
           <Button
             type="button"
             variant="outline"
-            className="rounded-md uppercase tracking-wide"
+            className="rounded-md normal-case tracking-wide"
             disabled={importing}
             onClick={() => onOpenChange(false)}
           >
-            cancel
+            Cancel
           </Button>
           <Button
             type="button"
-            className="rounded-md gap-2 uppercase tracking-wide"
+            className="rounded-md gap-2 normal-case tracking-wide"
             disabled={loading || importing || selectedCandidates.length === 0}
             onClick={() => void runImport()}
           >
@@ -191,7 +191,7 @@ export function ImportChatsDialog({
             ) : (
               <Download className="h-4 w-4" />
             )}
-            import {selectedCandidates.length || ""}
+            Import {selectedCandidates.length || ""}
           </Button>
         </DialogFooter>
       </DialogContent>

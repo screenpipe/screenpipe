@@ -73,7 +73,7 @@ describe("ImportChatsDialog", () => {
     expect(screen.getByText("Codex")).toBeInTheDocument();
     expect(screen.getByText("showing the 2 most recent from the past 7 days")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "import 3" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import 3" }));
 
     await waitFor(() => expect(mocks.importExternalChatHistory).toHaveBeenCalledTimes(1));
     expect(mocks.importExternalChatHistory.mock.calls[0][0]).toHaveLength(3);
@@ -85,7 +85,7 @@ describe("ImportChatsDialog", () => {
     });
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(mocks.toast).toHaveBeenCalledWith(expect.objectContaining({
-      title: "chat import complete",
+      title: "Chat import complete",
       description: "2 new · 1 updated",
     }));
   });

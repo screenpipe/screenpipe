@@ -73,6 +73,6 @@ describe("MessageContent — repeated Claude tools", () => {
 
     expect(screen.getAllByTestId("tool-activity-item")).toHaveLength(2);
     expect(screen.getByText("3 queries")).toBeTruthy();
-    expect(screen.getAllByText("failed")).toHaveLength(1);
+    expect(screen.getAllByText("Failed")).toHaveLength(1);
   });
 });

@@ -38,7 +38,7 @@ export function useVoiceTraining(opts: {
   const handleStartTraining = useCallback(() => {
     const name = (settings.userName || "").trim();
     if (!name) {
-      toast({ title: "enter your name first", variant: "destructive" });
+      toast({ title: "Enter your name first", variant: "destructive" });
       return;
     }
     setVoiceTraining({ active: true, secondsLeft: 30, dialogOpen: true });
@@ -66,9 +66,9 @@ export function useVoiceTraining(opts: {
 
     try {
       await commands.trainVoice(name, startTime.toISOString(), now.toISOString());
-      toast({ title: "voice training started", description: "screenpipe will match your voice in the background — this may take a few minutes" });
+      toast({ title: "Voice training started", description: "Screenpipe will match your voice in the background — this may take a few minutes" });
     } catch (e) {
-      toast({ title: "failed to start voice training", description: String(e), variant: "destructive" });
+      toast({ title: "Failed to start voice training", description: String(e), variant: "destructive" });
     }
   }, [settings.userName, toast]);
 

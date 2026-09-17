@@ -133,11 +133,11 @@ const TOOL_OPTIONS: Array<{
   label: string;
   icon: React.ComponentType<{ className?: string }>;
 }> = [
-  { value: "select", label: "select", icon: MousePointer2 },
-  { value: "pan", label: "pan", icon: Hand },
-  { value: "note", label: "note", icon: StickyNote },
-  { value: "arrow", label: "connect", icon: ArrowRight },
-  { value: "draw", label: "draw", icon: Pencil },
+  { value: "select", label: "Select", icon: MousePointer2 },
+  { value: "pan", label: "Pan", icon: Hand },
+  { value: "note", label: "Note", icon: StickyNote },
+  { value: "arrow", label: "Connect", icon: ArrowRight },
+  { value: "draw", label: "Draw", icon: Pencil },
 ];
 
 const RESIZE_HANDLE_STYLE: React.CSSProperties = {
@@ -202,14 +202,14 @@ function CanvasConnectionHandles({ tool }: { tool: CanvasTool }) {
         position={Position.Left}
         isConnectable={visible}
         style={style}
-        aria-label="connect incoming step"
+        aria-label="Connect incoming step"
       />
       <Handle
         type="source"
         position={Position.Right}
         isConnectable={visible}
         style={style}
-        aria-label="connect outgoing step"
+        aria-label="Connect outgoing step"
       />
     </>
   );
@@ -278,10 +278,10 @@ function LiveViewBlockNode({ id, data }: NodeProps<LiveViewFlowNode>) {
           data-testid={`canvas-move-${slot.id}`}
           aria-label={
             data.tool === "arrow"
-              ? `connect ${slot.title}`
-              : `move ${slot.title}`
+              ? `Connect ${slot.title}`
+              : `Move ${slot.title}`
           }
-          className="canvas-node-drag-handle flex h-6 min-w-0 flex-1 cursor-move items-center gap-1.5 px-1 text-left text-[10px] uppercase tracking-wide focus-visible:outline focus-visible:outline-1"
+          className="canvas-node-drag-handle flex h-6 min-w-0 flex-1 cursor-move items-center gap-1.5 px-1 text-left text-[10px] normal-case tracking-wide focus-visible:outline focus-visible:outline-1"
           onFocus={() => data.onSelect(id)}
           onPointerDown={(event) => {
             if (data.tool !== "arrow") return;
@@ -301,7 +301,7 @@ function LiveViewBlockNode({ id, data }: NodeProps<LiveViewFlowNode>) {
             data-testid={`canvas-proposal-controls-${slot.id}`}
             className="nodrag nopan ml-1 flex shrink-0 items-center gap-1"
           >
-            <span className="px-1 font-mono text-[9px] uppercase text-muted-foreground">
+            <span className="px-1 font-mono text-[9px] normal-case text-muted-foreground">
               {data.proposal.kind}
             </span>
             <Button
@@ -312,7 +312,7 @@ function LiveViewBlockNode({ id, data }: NodeProps<LiveViewFlowNode>) {
                 data.proposal.status === "accepted" ? "default" : "ghost"
               }
               className="h-6 w-6 rounded-md"
-              aria-label={`accept change to ${slot.title}`}
+              aria-label={`Accept change to ${slot.title}`}
               onClick={(event) => {
                 event.stopPropagation();
                 data.onProposalDecision("accepted");
@@ -328,7 +328,7 @@ function LiveViewBlockNode({ id, data }: NodeProps<LiveViewFlowNode>) {
                 data.proposal.status === "rejected" ? "destructive" : "ghost"
               }
               className="h-6 w-6 rounded-md"
-              aria-label={`reject change to ${slot.title}`}
+              aria-label={`Reject change to ${slot.title}`}
               onClick={(event) => {
                 event.stopPropagation();
                 data.onProposalDecision("rejected");
@@ -387,8 +387,8 @@ function CanvasNoteNode({ id, data }: NodeProps<NoteFlowNode>) {
       <CanvasConnectionHandles tool={data.tool} />
       <button
         type="button"
-        aria-label={data.tool === "arrow" ? "connect note" : "move note"}
-        className="canvas-node-drag-handle flex h-8 w-full cursor-move items-center gap-1.5 border-b border-border bg-muted/30 px-2 text-[10px] uppercase tracking-wide"
+        aria-label={data.tool === "arrow" ? "Connect note" : "Move note"}
+        className="canvas-node-drag-handle flex h-8 w-full cursor-move items-center gap-1.5 border-b border-border bg-muted/30 px-2 text-[10px] normal-case tracking-wide"
         onFocus={() => data.onSelect(id)}
         onPointerDown={(event) => {
           if (data.tool !== "arrow") return;
@@ -401,14 +401,14 @@ function CanvasNoteNode({ id, data }: NodeProps<NoteFlowNode>) {
         ) : (
           <Move className="h-3 w-3" />
         )}
-        note
+        Note
       </button>
       <textarea
         data-testid={`canvas-note-text-${note.id}`}
         aria-label="Canvas note"
         value={note.text}
         maxLength={4_000}
-        placeholder="write a note"
+        placeholder="Write a note"
         className="nodrag nowheel nopan h-[calc(100%-2rem)] w-full resize-none bg-transparent p-3 font-serif text-sm outline-none"
         onChange={(event) =>
           data.onTextChange(note.id, event.target.value, false)
@@ -1594,8 +1594,8 @@ export function LiveViewCanvas({
               variant="ghost"
               size="icon"
               data-testid="canvas-tools-close"
-              aria-label="close canvas tools"
-              title="close canvas tools"
+              aria-label="Close canvas tools"
+              title="Close canvas tools"
               className="h-8 w-8 shrink-0 rounded-md"
               onClick={() => {
                 setToolsOpen(false);
@@ -1645,8 +1645,8 @@ export function LiveViewCanvas({
               type="button"
               variant="ghost"
               size="icon"
-              aria-label="zoom out"
-              title="zoom out (-)"
+              aria-label="Zoom out"
+              title="Zoom out (-)"
               className="h-8 w-8 shrink-0 rounded-md"
               onClick={() => zoomCanvas(1 / 1.2)}
             >
@@ -1655,8 +1655,8 @@ export function LiveViewCanvas({
             <button
               type="button"
               data-testid="canvas-zoom-reset"
-              aria-label="reset zoom to 100%"
-              title="reset zoom to 100%"
+              aria-label="Reset zoom to 100%"
+              title="Reset zoom to 100%"
               className="h-8 w-11 shrink-0 text-center font-mono text-[10px] tabular-nums text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline focus-visible:outline-1 focus-visible:outline-foreground"
               onClick={() =>
                 zoomCanvas(1 / latestDocumentRef.current.viewport.zoom)
@@ -1668,8 +1668,8 @@ export function LiveViewCanvas({
               type="button"
               variant="ghost"
               size="icon"
-              aria-label="zoom in"
-              title="zoom in (+)"
+              aria-label="Zoom in"
+              title="Zoom in (+)"
               className="h-8 w-8 shrink-0 rounded-md"
               onClick={() => zoomCanvas(1.2)}
             >
@@ -1680,8 +1680,8 @@ export function LiveViewCanvas({
               data-testid="canvas-fit"
               variant="ghost"
               size="icon"
-              aria-label="fit canvas"
-              title="fit canvas"
+              aria-label="Fit canvas"
+              title="Fit canvas"
               className="h-8 w-8 shrink-0 rounded-md"
               onClick={fitCanvas}
             >
@@ -1692,21 +1692,21 @@ export function LiveViewCanvas({
               data-testid="canvas-arrange"
               variant="ghost"
               size="icon"
-              aria-label="arrange canvas"
-              title="arrange canvas"
+              aria-label="Arrange canvas"
+              title="Arrange canvas"
               className="h-8 w-8 shrink-0 rounded-md"
               onClick={arrangeCanvas}
             >
               <LayoutGrid className="h-3.5 w-3.5" aria-hidden="true" />
-              <span className="sr-only">arrange canvas</span>
+              <span className="sr-only">Arrange canvas</span>
             </Button>
             <Button
               type="button"
               data-testid="canvas-delete-selection"
               variant="ghost"
               size="icon"
-              aria-label="delete selected canvas item"
-              title="delete selected canvas item"
+              aria-label="Delete selected canvas item"
+              title="Delete selected canvas item"
               className="h-8 w-8 shrink-0 rounded-md"
               disabled={!selectedCanDelete}
               onClick={removeSelection}
@@ -1718,9 +1718,9 @@ export function LiveViewCanvas({
           <button
             type="button"
             data-testid="canvas-tools-toggle"
-            aria-label={`open canvas tools. ${activeTool.label} tool active`}
+            aria-label={`Open canvas tools. ${activeTool.label} tool active`}
             aria-expanded="false"
-            title={`open canvas tools · ${activeTool.label} active`}
+            title={`Open canvas tools · ${activeTool.label} active`}
             className="flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-foreground hover:text-background focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-foreground"
             onClick={() => setToolsOpen(true)}
           >
@@ -1731,7 +1731,7 @@ export function LiveViewCanvas({
 
       {tool === "arrow" && arrowSource && (
         <div className="absolute bottom-14 left-3 z-30 border border-foreground bg-background px-3 py-2 text-xs">
-          choose another Block or note to connect
+          Choose another Block or note to connect
         </div>
       )}
       {!toolsOpen && (
@@ -1739,7 +1739,7 @@ export function LiveViewCanvas({
           data-testid="canvas-interaction-hint"
           className="pointer-events-none absolute right-3 top-3 z-20 max-w-[calc(100%-11rem)] border border-border bg-background/95 px-2 py-1 text-right font-mono text-[9px] leading-tight text-muted-foreground"
         >
-          drag nodes · pan tool or middle-drag · pinch or ctrl/⌘ + wheel to
+          Drag nodes · pan tool or middle-drag · pinch or ctrl/⌘ + wheel to
           zoom
         </div>
       )}

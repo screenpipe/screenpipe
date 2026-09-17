@@ -110,7 +110,7 @@ describe("modelAllowanceNotice", () => {
   it("uses softer copy for the mid tier", () => {
     const notice = modelAllowanceNotice("screenpipe-cloud", "claude-sonnet-5");
     expect(notice?.tier).toBe("higher");
-    expect(notice?.label).toBe("uses allowance faster");
+    expect(notice?.label).toBe("Uses allowance faster");
   });
 
   it("stays silent on the efficient hosted lane", () => {

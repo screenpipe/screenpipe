@@ -195,7 +195,7 @@ export const MarkdownCodeBlock = React.memo(function MarkdownCodeBlock({
         onClick={handleCopy}
         className={cn(
           "absolute right-1.5 top-1.5 z-10 inline-flex items-center gap-1 rounded-md",
-          "border border-border bg-background/90 px-2 py-1 text-[10px] font-mono uppercase tracking-wide",
+          "border border-border bg-background/90 px-2 py-1 text-[10px] font-mono normal-case tracking-wide",
           "text-muted-foreground shadow-sm transition-opacity",
           "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100",
           "group-focus-within:pointer-events-auto group-focus-within:opacity-100",
