@@ -51,17 +51,41 @@ pub(crate) async fn seal(
 ) -> Result<usize, sqlx::Error> {
     crate::storage::diagnostics::batch("elements", None, None, None, None);
     crate::storage::diagnostics::stage("selecting_staged_elements");
-    let id: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "SELECT id FROM _bulk_element_rows WHERE _archive_deleted=0 AND ({}) ORDER BY id LIMIT 1",
+    // A dirty archive must be rewritten as a whole. If privacy processing
+    // blocks that range, continue after it instead of starving newer work.
+    let mut after = None;
+    loop {
+        let lower = after.map_or_else(|| "1".to_owned(), |id| format!("id>{id}"));
+        let id: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT id FROM _bulk_element_rows WHERE _archive_deleted=0 AND {lower} AND ({}) ORDER BY id LIMIT 1",
+            TABLE.sealable()
+        )))
+        .fetch_optional(pool)
+        .await?;
+        let Some(id) = id else { return Ok(0) };
+        let range: Option<(i64, i64, i64)> = sqlx::query_as("SELECT first_id,last_id,file_id FROM _bulk_element_ranges WHERE first_id=(SELECT max(first_id) FROM _bulk_element_ranges WHERE first_id<=?1) AND last_id>=?1")
+            .bind(id).fetch_optional(pool).await?;
+        if let Some((first, last, _)) = range {
+            if range_blocked(pool, first, last).await? {
+                after = Some(last);
+                continue;
+            }
+        }
+        // A concurrent edit invalidating publication is retried next tick,
+        // rather than spinning over a stream of newly arriving records.
+        return rewrite(storage, pool, writer, id, range).await;
+    }
+}
+
+async fn range_blocked(pool: &SqlitePool, first: i64, last: i64) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT EXISTS(SELECT 1 FROM elements WHERE id BETWEEN ? AND ? AND NOT ({}))",
         TABLE.sealable()
     )))
-    .fetch_optional(pool)
-    .await?;
-    let Some(id) = id else {
-        return Ok(0);
-    };
-    let range:Option<(i64,i64,i64)>=sqlx::query_as("SELECT first_id,last_id,file_id FROM _bulk_element_ranges WHERE first_id=(SELECT max(first_id) FROM _bulk_element_ranges WHERE first_id<=?1) AND last_id>=?1").bind(id).fetch_optional(pool).await?;
-    rewrite(storage, pool, writer, id, range).await
+    .bind(first)
+    .bind(last)
+    .fetch_one(pool)
+    .await
 }
 
 async fn encode(
@@ -179,15 +203,7 @@ async fn rewrite(
             .fetch_one(pool)
             .await?;
     let (first, last) = if let Some((first, last, _)) = range {
-        let blocked: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT EXISTS(SELECT 1 FROM elements WHERE id BETWEEN ? AND ? AND NOT ({}))",
-            TABLE.sealable()
-        )))
-        .bind(first)
-        .bind(last)
-        .fetch_one(pool)
-        .await?;
-        if blocked {
+        if range_blocked(pool, first, last).await? {
             return Ok(0);
         }
         (first, last)

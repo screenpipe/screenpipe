@@ -153,7 +153,11 @@ impl DatabaseManager {
                 .descriptor
                 .budget
                 .staged_frame_bytes(payload.bytes()) as i64;
-        if next_bytes > row.get::<i64, _>("staging_limit") {
+        // Deferred writes can leave staging above its admission limit. Existing
+        // payloads must still be redacted/shrunk so they can be sealed.
+        if next_bytes > row.get::<i64, _>("staging_limit")
+            && next_bytes > row.get::<i64, _>("staging_bytes")
+        {
             return Err(storage_error("staging budget reached"));
         }
         let old_file: Option<String> = row.try_get("file_id")?;

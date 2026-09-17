@@ -686,6 +686,7 @@
         "tests/outputs_saf_test.rs",
         "tests/range_export_frame_sources_test.rs",
         "tests/semantic_storage_test.rs",
+        "tests/storage_staging_drain.rs",
         "tests/suggestions_frames_table_test.rs",
         "tests/timeline_frameless_audio_test.rs",
         "tests/timeline_performance_test.rs"

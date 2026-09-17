@@ -365,6 +365,56 @@ pub(crate) async fn upgrade_resident_frames(
     Ok(())
 }
 
+/// Permit non-growing maintenance while capture admission is paused. Keep the
+/// original schema checksums intact and install this change atomically once.
+pub(crate) async fn upgrade_staging_drain(
+    conn: &mut SqliteConnection,
+    has_bulk: bool,
+) -> Result<bool, sqlx::Error> {
+    let checksum = format!("{:x}", Sha256::digest("staging-drain-v1"));
+    let installed: Option<String> =
+        sqlx::query_scalar("SELECT checksum FROM _hybrid_migrations WHERE version=5")
+            .fetch_optional(&mut *conn)
+            .await?;
+    if let Some(installed) = installed {
+        return if installed == checksum {
+            Ok(false)
+        } else {
+            Err(storage_error("staging drain schema checksum mismatch"))
+        };
+    }
+    let mut tx = conn.begin().await?;
+    let sql: String =
+        sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE name='hybrid_frame_update'")
+            .fetch_one(&mut *tx)
+            .await?;
+    let charge = |bytes: &str| {
+        format!("CASE WHEN ({bytes}) <= (SELECT record_limit FROM storage_metadata) THEN ({bytes}) ELSE 0 END")
+    };
+    let next = charge(BYTES);
+    let prior = charge(&BYTES.replace("NEW.", "OLD."));
+    let guard = "SELECT CASE WHEN (SELECT staging_bytes>staging_limit FROM storage_metadata)";
+    if !sql.contains(guard) {
+        return Err(storage_error("unrecognized frame staging guard"));
+    }
+    let sql = sql.replace(guard, &format!("SELECT CASE WHEN ({next})>({prior}) AND (SELECT staging_bytes>staging_limit FROM storage_metadata)"));
+    sqlx::raw_sql("DROP TRIGGER hybrid_frame_update")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+        .execute(&mut *tx)
+        .await?;
+    if has_bulk {
+        super::bulk::upgrade_staging_drain(&mut tx).await?;
+    }
+    sqlx::query("INSERT INTO _hybrid_migrations VALUES(5,?)")
+        .bind(checksum)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
 pub(crate) async fn bootstrap(
     conn: &mut SqliteConnection,
     descriptor: &StorageDescriptor,

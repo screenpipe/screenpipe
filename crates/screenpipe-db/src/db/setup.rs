@@ -521,8 +521,25 @@ impl DatabaseManager {
                 }
                 crate::storage::schema::verify(&mut conn, &storage.descriptor).await?;
                 crate::storage::schema::upgrade_resident_frames(&mut conn).await?;
+                let upgraded =
+                    crate::storage::schema::upgrade_staging_drain(&mut conn, storage.has_bulk())
+                        .await?;
                 crate::storage::read_schema::upgrade(&mut conn, storage).await?;
                 storage.verify_catalog(&db_manager.pool).await?;
+                drop(conn);
+                if upgraded {
+                    // Connections opened before the trigger migration need a
+                    // schema read before their first DML preparation. Refresh
+                    // every existing writer while startup still owns admission.
+                    let mut writers = Vec::new();
+                    for _ in 0..db_manager.write_pool.size() {
+                        let mut conn = db_manager.write_pool.acquire().await?;
+                        sqlx::query("SELECT name FROM main.sqlite_schema LIMIT 1")
+                            .fetch_optional(&mut *conn)
+                            .await?;
+                        writers.push(conn);
+                    }
+                }
             }
             Ok::<(), sqlx::Error>(())
         }
