@@ -130,7 +130,7 @@ pub fn routes() -> Router<ConnectionsState> {
         .route("/cloud/share", post(share))
         .route("/cloud/execute", post(execute))
 }
-async fn inventory(State(state): State<ConnectionsState>) -> Json<Value> {
+async fn inventory(State(state): State<ConnectionsState>, headers: HeaderMap) -> Json<Value> {
     let manifest = sync::build_local_manifest(
         &state.screenpipe_dir,
         "cloud-export",
@@ -160,7 +160,9 @@ async fn inventory(State(state): State<ConnectionsState>) -> Json<Value> {
             connections.push(json!({"key": format!("mcp:{}", cfg.id), "name": cfg.name, "cloud_available": cfg.transport == McpTransport::Http, "kind": "mcp", "rotating_credentials": cfg.auth_mode == screenpipe_connect::mcp_servers::McpAuthMode::OAuth}));
         }
     }
-    Json(json!({"connections": connections, "snapshot_schema": 1}))
+    Json(
+        json!({"connections": connections, "snapshot_schema": 1, "runtime_available": runtime_authorized(&state, &headers)}),
+    )
 }
 #[derive(Deserialize)]
 struct ShareBody {
@@ -377,12 +379,7 @@ async fn execute(
     Json(body): Json<ExecuteBody>,
 ) -> Reply {
     // This credential-bearing response exists only on an authenticated organization runner.
-    let key = state.api_auth_key.as_deref().filter(|key| !key.is_empty());
-    if std::env::var("SCREENPIPE_CLOUD_RUNNER").ok().as_deref() != Some("1")
-        || key.is_none()
-        || headers.get("authorization").and_then(|v| v.to_str().ok())
-            != key.map(|key| format!("Bearer {}", key)).as_deref()
-    {
+    if !runtime_authorized(&state, &headers) {
         return failure(StatusCode::FORBIDDEN, "Cloud runner required.");
     }
     if validate(&body.connection).is_err() {
@@ -395,6 +392,15 @@ async fn execute(
             "Connection execution could not be confirmed. Reconnect before retrying.",
         ),
     }
+}
+fn runtime_authorized(state: &ConnectionsState, headers: &HeaderMap) -> bool {
+    let key = state.api_auth_key.as_deref().filter(|key| !key.is_empty());
+    std::env::var("SCREENPIPE_CLOUD_RUNNER").ok().as_deref() == Some("1")
+        && key.is_some()
+        && headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            == key.map(|key| format!("Bearer {}", key)).as_deref()
 }
 async fn execute_inner(mut state: ConnectionsState, body: ExecuteBody) -> anyhow::Result<Value> {
     let dir = tempfile::tempdir()?;
