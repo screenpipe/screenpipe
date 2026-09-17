@@ -231,9 +231,19 @@ jobs:
         shell: pwsh
         run: git clean -ffdx -e apps/screenpipe-app-tauri/node_modules/
 
+      - name: Checkout macOS release helpers
+        if: matrix.os_type == 'macos'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-workflow
+          sparse-checkout: |
+            .github/actions/setup-persistent-macos-cache
+            .github/scripts
+
       - name: Attach persistent EC2 Mac cache
         if: runner.environment == 'self-hosted' && matrix.os_type == 'macos'
-        uses: ./.github/actions/setup-persistent-macos-cache
+        uses: ./.release-workflow/.github/actions/setup-persistent-macos-cache
         with:
           target: ${{ matrix.target }}
 
@@ -246,6 +256,7 @@ jobs:
           sparse-checkout: |
             .github/actions/setup-persistent-windows-cache
             .github/actions/install-windows-frontend-dependencies
+            .github/scripts
 
       - name: Attach persistent Azure Windows cache
         if: runner.environment == 'self-hosted' && matrix.os_type == 'windows'
@@ -260,7 +271,9 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-workflow
-          sparse-checkout: .github/actions/setup-persistent-linux-cache
+          sparse-checkout: |
+            .github/actions/setup-persistent-linux-cache
+            .github/scripts
 
       - name: Attach persistent Azure Linux cache
         if: runner.environment == 'self-hosted' && matrix.os_type == 'linux'
@@ -694,16 +707,6 @@ jobs:
         env:
           SCREENPIPE_RELEASE_TARGET: ${{ matrix.target }}
 
-      # This constructs the exact mixed oasgen + Axum router that ships in the
-      # desktop app. A schema/handler mismatch must fail the Release App run,
-      # otherwise signed artifacts can be green while the local API panics on
-      # every customer machine (v2.5.143).
-      - name: Validate complete local API router before packaging
-        if: matrix.os_type == 'linux'
-        env:
-          RUSTFLAGS: "-C link-arg=-Wl,--allow-multiple-definition"
-        run: cargo test --release -p screenpipe-engine --test router_contract_test --target ${{ matrix.target }}
-
       - name: Use production config for release
         shell: bash
         run: cp -p apps/screenpipe-app-tauri/src-tauri/tauri.prod.conf.json apps/screenpipe-app-tauri/src-tauri/tauri.conf.json
@@ -941,6 +944,13 @@ jobs:
           rm -rf "${BUNDLE_DIR}" 2>/dev/null || true
 
           bunx tauri build --verbose ${{ matrix.tauri-args }}
+
+          # Keep #5490's full-router runtime gate before any artifact upload.
+          # Use the app lockfile, target directory, profile and linker settings
+          # so its already-built engine/dependencies can be reused. The engine's
+          # default qwen3-asr/parakeet/redact-onnx-cpu features match Linux release.
+          ( cd src-tauri && cargo test --locked --release -p screenpipe-engine \
+              --test router_contract_test --target ${{ matrix.target }} )
 
           # Fix ABI mismatch: the AppImage bundles libs from Ubuntu 24.04 but
           # on distros like Fedora 43 with newer system libs, symbols are missing
@@ -1350,6 +1360,7 @@ jobs:
           LINUXDEPLOY_OUTPUT_VERSION: ${{ matrix.os_type == 'linux' && '1' || '' }}
           APPIMAGE_EXTRACT_AND_RUN: ${{ matrix.os_type == 'linux' && '1' || '' }}
         run: |
+          set -euo pipefail
           TAURI_ARGS="${{ steps.tauri-args.outputs.args || matrix.tauri-args }}"
           MAX_ATTEMPTS=3
           TARGET="${{ matrix.target }}"
@@ -1359,11 +1370,6 @@ jobs:
           # files from accumulating and being uploaded alongside the current version
           echo "Cleaning stale bundle artifacts..."
           rm -rf "${BUNDLE_DIR}" 2>/dev/null || true
-
-          # Clean cached mlx-sys build - deployment target is baked into CMake cache
-          # and won't update if only the env var changes
-          echo "Cleaning mlx-sys build cache..."
-          find "apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/build" -maxdepth 1 -name "mlx-sys-*" -exec rm -rf {} + 2>/dev/null || true
 
           # Force macOS 14.0 for MLX Metal kernels and C++ compilation.
           # The cc crate injects --target=arm64-apple-macosx -mmacosx-version-min=10.13
@@ -1388,6 +1394,10 @@ jobs:
             done
             export PATH="$WRAPPER_DIR:$PATH"
             echo "Compiler wrappers installed: cc=$(which cc) c++=$(which c++) xcrun=$(which xcrun)"
+          fi
+
+          if [[ "$TARGET" == aarch64-apple-darwin ]]; then
+            bash .release-workflow/.github/scripts/prepare-mlx-cache.sh "${BUNDLE_DIR%/bundle}"
           fi
 
           for attempt in $(seq 1 $MAX_ATTEMPTS); do
@@ -1415,6 +1425,9 @@ jobs:
             if bunx tauri build -v $TAURI_ARGS "${BUNDLE_ARGS[@]}" 2>&1 | tee /tmp/tauri-build-$attempt.log; then
               echo "✅ Build succeeded on attempt $attempt"
               cd ../..
+              if [[ "$TARGET" == aarch64-apple-darwin ]]; then
+                bash .release-workflow/.github/scripts/prepare-mlx-cache.sh "${BUNDLE_DIR%/bundle}" commit
+              fi
               break
             fi
             cd ../..
@@ -1585,7 +1598,7 @@ jobs:
             fi
           done
 
-      - name: Staple .app and rebuild updater tarball (macOS)
+      - name: Validate app ticket and finalize updater tarball (macOS)
         if: matrix.os_type == 'macos'
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
@@ -1594,122 +1607,9 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          set -euo pipefail
-          TARGET="${{ matrix.target }}"
-          BUNDLE_DIR="${GITHUB_WORKSPACE}/apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
-          MACOS_DIR="${BUNDLE_DIR}/macos"
-          notary_auth=(
-            --apple-id "$APPLE_ID"
-            --password "$APPLE_PASSWORD"
-            --team-id "$APPLE_TEAM_ID"
-          )
-
-          submit_for_notarization() {
-            local artifact="$1"
-            local artifact_name
-            artifact_name="$(basename "$artifact")"
-            local attempt submit_output submission_id wait_seconds
-
-            for attempt in 1 2 3; do
-              echo "Submitting ${artifact_name} for notarization (attempt ${attempt}/3)" >&2
-              if submit_output="$(xcrun notarytool submit "$artifact" "${notary_auth[@]}" 2>&1)"; then
-                printf '%s\n' "$submit_output" >&2
-                submission_id="$(printf '%s\n' "$submit_output" | awk '/^[[:space:]]*id:/ { print $2; exit }')"
-                if [ -z "$submission_id" ]; then
-                  echo "notarytool submit succeeded but did not print a submission id" >&2
-                  return 1
-                fi
-                printf '%s\n' "$submission_id"
-                return 0
-              fi
-
-              printf '%s\n' "$submit_output" >&2
-              submission_id="$(printf '%s\n' "$submit_output" | awk '/^[[:space:]]*id:/ { print $2; exit }')"
-              if [ -n "$submission_id" ]; then
-                echo "notarytool submit exited non-zero after upload; waiting on existing submission ${submission_id}" >&2
-                printf '%s\n' "$submission_id"
-                return 0
-              fi
-
-              if [ "$attempt" -eq 3 ]; then
-                echo "notarytool submit failed after ${attempt} attempts" >&2
-                return 1
-              fi
-
-              wait_seconds=$((attempt * 30))
-              echo "notarytool submit failed before a submission id; retrying in ${wait_seconds}s" >&2
-              sleep "$wait_seconds"
-            done
-          }
-
-          wait_for_notarization() {
-            local submission_id="$1"
-            local attempt wait_seconds
-
-            for attempt in 1 2 3 4; do
-              echo "Waiting for notarization ${submission_id} (attempt ${attempt}/4)"
-              if xcrun notarytool wait "$submission_id" "${notary_auth[@]}" --timeout 15m; then
-                return 0
-              fi
-
-              if [ "$attempt" -eq 4 ]; then
-                echo "notarytool wait failed after ${attempt} attempts for ${submission_id}" >&2
-                return 1
-              fi
-
-              wait_seconds=$((attempt * 30))
-              echo "notarytool wait failed; retrying same submission in ${wait_seconds}s" >&2
-              sleep "$wait_seconds"
-            done
-          }
-
-          # Gatekeeper context:
-          # The DMG is notarized + stapled above, so fresh installs are fine.
-          # Tauri auto-updates ship the .app inside .app.tar.gz - and until now
-          # that .app was never stapled. Gatekeeper then fell back to an online
-          # notarization check on first launch, which intermittently fails and
-          # produces the "app is damaged" dialog after every update.
-          #
-          # Fix: submit the .app to notarytool directly (ticket is keyed to the
-          # code-signature hash, so this is idempotent with the DMG submission),
-          # staple the .app, then rebuild the updater tarball with the stapled
-          # bundle and re-sign it with the Tauri updater ed25519 key (the
-          # existing .sig is for the pre-staple tarball and becomes invalid).
-          shopt -s nullglob
-          apps=( "${MACOS_DIR}"/*.app )
-          if [ ${#apps[@]} -eq 0 ]; then
-            echo "no .app bundle in ${MACOS_DIR}, nothing to staple"
-            exit 0
-          fi
-
-          for app in "${apps[@]}"; do
-            [ -d "$app" ] || continue
-            APP_NAME="$(basename "$app")"
-            echo "=== Notarizing + stapling ${APP_NAME} ==="
-
-            # notarytool only accepts flat archives; zip the .app for submission.
-            APP_ZIP="${MACOS_DIR}/${APP_NAME}.notarize.zip"
-            /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$app" "$APP_ZIP"
-            submission_id="$(submit_for_notarization "$APP_ZIP")"
-            wait_for_notarization "$submission_id"
-            rm -f "$APP_ZIP"
-
-            xcrun stapler staple "$app"
-            xcrun stapler validate "$app"
-            spctl --assess --type execute --verbose "$app"
-
-            # Rebuild updater tarball so Tauri updater ships the stapled .app.
-            TARBALL="${MACOS_DIR}/${APP_NAME}.tar.gz"
-            echo "Rebuilding ${APP_NAME}.tar.gz with stapled bundle"
-            ( cd "${MACOS_DIR}" && tar czf "${APP_NAME}.tar.gz" "${APP_NAME}" )
-
-            # Re-sign the tarball - old .sig is for the pre-staple bytes.
-            rm -f "${TARBALL}.sig"
-            echo "Re-signing ${APP_NAME}.tar.gz with Tauri updater key"
-            ( cd "${GITHUB_WORKSPACE}/apps/screenpipe-app-tauri" && bunx tauri signer sign "${TARBALL}" )
-
-            echo "✅ ${APP_NAME} stapled, tarball rebuilt and re-signed"
-          done
+          bash .release-workflow/.github/scripts/finalize-macos-updater.sh \
+            "$GITHUB_WORKSPACE/apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/macos" \
+            "$GITHUB_WORKSPACE/apps/screenpipe-app-tauri"
 
       - name: Upload macOS dry-run artifacts
         if: matrix.os_type == 'macos' && github.event.inputs.dry_run == 'true'
@@ -1792,7 +1692,8 @@ jobs:
         run: |
           Invoke-WebRequest -Uri "https://release-registry.services.sentry.io/apps/sentry-cli/latest?response=download&arch=$env:SENTRY_ARCH&platform=Windows&package=sentry-cli" -OutFile sentry-cli.exe
           Write-Host "Uploading debug symbols to Sentry..."
-          .\sentry-cli.exe debug-files upload --org $env:SENTRY_ORG --project screenpipe-app apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/
+          $env:SENTRY_CLI = (Resolve-Path sentry-cli.exe).Path
+          node .release-workflow/.github/scripts/release-symbols.cjs apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/
 
       - name: Upload debug symbols to Sentry (macOS)
         if: matrix.os_type == 'macos' && github.event.inputs.dry_run != 'true'
@@ -1806,7 +1707,7 @@ jobs:
             curl -sL https://sentry.io/get-cli/ | bash
           fi
           echo "Uploading debug symbols to Sentry..."
-          sentry-cli debug-files upload --org $SENTRY_ORG --project screenpipe-app apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/
+          node .release-workflow/.github/scripts/release-symbols.cjs apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/
 
       - name: Clean up build keychain (macOS)
         if: matrix.os_type == 'macos' && always()
@@ -1815,6 +1716,12 @@ jobs:
           BUILD_KC="$HOME/Library/Keychains/build.keychain-db"
           security delete-keychain "$BUILD_KC" 2>/dev/null || true
           security list-keychain -d user -s ~/Library/Keychains/login.keychain-db 2>/dev/null || true
+
+      - name: Report compiler cache results
+        if: always() && runner.environment == 'self-hosted' && matrix.os_type != 'windows'
+        continue-on-error: true
+        shell: bash
+        run: sccache --show-stats
 
   dispatch-enterprise:
     name: Start enterprise after consumer

@@ -114,6 +114,7 @@ jobs:
           sparse-checkout: |
             .github/actions/setup-persistent-windows-cache
             .github/actions/install-windows-frontend-dependencies
+            .github/scripts
 
       - name: Attach persistent Azure Windows cache
         if: runner.environment == 'self-hosted'
@@ -527,7 +528,9 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-workflow
-          sparse-checkout: .github/actions/setup-persistent-linux-cache
+          sparse-checkout: |
+            .github/actions/setup-persistent-linux-cache
+            .github/scripts
 
       - name: Attach persistent Azure Linux cache
         if: runner.environment == 'self-hosted'
@@ -788,6 +791,12 @@ jobs:
             apps/screenpipe-app-tauri/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
 
   # ─── macOS (Apple Silicon + Intel) ────────────────────────────────────────
+      - name: Report compiler cache results
+        if: always() && runner.environment == 'self-hosted'
+        continue-on-error: true
+        shell: bash
+        run: sccache --show-stats
+
   release-enterprise-macos:
     needs: resolve-release
     name: release-enterprise-macos (${{ matrix.target }})
@@ -810,9 +819,18 @@ jobs:
         with:
           ref: ${{ needs.resolve-release.outputs.release_sha }}
 
+      - name: Checkout macOS release helpers
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-workflow
+          sparse-checkout: |
+            .github/actions/setup-persistent-macos-cache
+            .github/scripts
+
       - name: Attach persistent EC2 Mac cache
         if: runner.environment == 'self-hosted'
-        uses: ./.github/actions/setup-persistent-macos-cache
+        uses: ./.release-workflow/.github/actions/setup-persistent-macos-cache
         with:
           target: ${{ matrix.target }}
 
@@ -997,6 +1015,7 @@ jobs:
           CARGO_PROFILE_RELEASE_PANIC: unwind
           CARGO_PROFILE_RELEASE_INCREMENTAL: "true"
         run: |
+          set -euo pipefail
           TARGET="${{ matrix.target }}"
           BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
 
@@ -1022,10 +1041,11 @@ jobs:
           # Clean stale bundle artifacts
           rm -rf "${BUNDLE_DIR}" 2>/dev/null || true
 
-          # Clean cached mlx-sys build
-          find "apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/build" -maxdepth 1 -name "mlx-sys-*" -exec rm -rf {} + 2>/dev/null || true
-
           MAX_ATTEMPTS=3
+          if [[ "$TARGET" == aarch64-apple-darwin ]]; then
+            bash .release-workflow/.github/scripts/prepare-mlx-cache.sh "${BUNDLE_DIR%/bundle}"
+          fi
+
           for attempt in $(seq 1 $MAX_ATTEMPTS); do
             echo "=== Build attempt $attempt/$MAX_ATTEMPTS ==="
 
@@ -1047,6 +1067,9 @@ jobs:
             if bunx tauri build -v --target "$TARGET" --features "${{ matrix.features }}" "${BUNDLE_ARGS[@]}" 2>&1 | tee /tmp/tauri-build-$attempt.log; then
               echo "Build succeeded on attempt $attempt"
               cd ../..
+              if [[ "$TARGET" == aarch64-apple-darwin ]]; then
+                bash .release-workflow/.github/scripts/prepare-mlx-cache.sh "${BUNDLE_DIR%/bundle}" commit
+              fi
               break
             fi
             cd ../..
@@ -1147,7 +1170,7 @@ jobs:
             fi
           done
 
-      - name: Staple .app and rebuild updater tarball
+      - name: Validate app ticket and finalize updater tarball
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
@@ -1156,122 +1179,9 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          set -euo pipefail
-          TARGET="${{ matrix.target }}"
-          BUNDLE_DIR="${GITHUB_WORKSPACE}/apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
-          MACOS_DIR="${BUNDLE_DIR}/macos"
-          notary_auth=(
-            --apple-id "$APPLE_ID"
-            --password "$APPLE_PASSWORD"
-            --team-id "$APPLE_TEAM_ID"
-          )
-
-          submit_for_notarization() {
-            local artifact="$1"
-            local artifact_name
-            artifact_name="$(basename "$artifact")"
-            local attempt submit_output submission_id wait_seconds
-
-            for attempt in 1 2 3; do
-              echo "Submitting ${artifact_name} for notarization (attempt ${attempt}/3)" >&2
-              if submit_output="$(xcrun notarytool submit "$artifact" "${notary_auth[@]}" 2>&1)"; then
-                printf '%s\n' "$submit_output" >&2
-                submission_id="$(printf '%s\n' "$submit_output" | awk '/^[[:space:]]*id:/ { print $2; exit }')"
-                if [ -z "$submission_id" ]; then
-                  echo "notarytool submit succeeded but did not print a submission id" >&2
-                  return 1
-                fi
-                printf '%s\n' "$submission_id"
-                return 0
-              fi
-
-              printf '%s\n' "$submit_output" >&2
-              submission_id="$(printf '%s\n' "$submit_output" | awk '/^[[:space:]]*id:/ { print $2; exit }')"
-              if [ -n "$submission_id" ]; then
-                echo "notarytool submit exited non-zero after upload; waiting on existing submission ${submission_id}" >&2
-                printf '%s\n' "$submission_id"
-                return 0
-              fi
-
-              if [ "$attempt" -eq 3 ]; then
-                echo "notarytool submit failed after ${attempt} attempts" >&2
-                return 1
-              fi
-
-              wait_seconds=$((attempt * 30))
-              echo "notarytool submit failed before a submission id; retrying in ${wait_seconds}s" >&2
-              sleep "$wait_seconds"
-            done
-          }
-
-          wait_for_notarization() {
-            local submission_id="$1"
-            local attempt wait_seconds
-
-            for attempt in 1 2 3 4; do
-              echo "Waiting for notarization ${submission_id} (attempt ${attempt}/4)"
-              if xcrun notarytool wait "$submission_id" "${notary_auth[@]}" --timeout 15m; then
-                return 0
-              fi
-
-              if [ "$attempt" -eq 4 ]; then
-                echo "notarytool wait failed after ${attempt} attempts for ${submission_id}" >&2
-                return 1
-              fi
-
-              wait_seconds=$((attempt * 30))
-              echo "notarytool wait failed; retrying same submission in ${wait_seconds}s" >&2
-              sleep "$wait_seconds"
-            done
-          }
-
-          shopt -s nullglob
-          apps=( "${MACOS_DIR}"/*.app )
-          if [ ${#apps[@]} -eq 0 ]; then
-            echo "::error::no .app bundle in ${MACOS_DIR} — refusing to upload an unverified updater"
-            exit 1
-          fi
-
-          for app in "${apps[@]}"; do
-            [ -d "$app" ] || continue
-            APP_NAME="$(basename "$app")"
-            APP_ZIP="${MACOS_DIR}/${APP_NAME}.notarize.zip"
-            TARBALL="${MACOS_DIR}/${APP_NAME}.tar.gz"
-
-            echo "Notarizing and stapling ${APP_NAME}"
-            /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$app" "$APP_ZIP"
-            submission_id="$(submit_for_notarization "$APP_ZIP")"
-            wait_for_notarization "$submission_id"
-            rm -f "$APP_ZIP"
-
-            xcrun stapler staple "$app"
-            xcrun stapler validate "$app"
-            codesign --verify --deep --strict --verbose=2 "$app"
-            spctl --assess --type execute --verbose "$app"
-
-            # Tauri generated the original updater archive before the final
-            # notarized app existed. Rebuild it from the stapled app and renew
-            # its updater signature so upgrades receive the same valid bundle
-            # as fresh DMG/PKG installs.
-            echo "Rebuilding ${APP_NAME}.tar.gz from the finalized app"
-            ( cd "$MACOS_DIR" && tar czf "${APP_NAME}.tar.gz" "$APP_NAME" )
-            rm -f "${TARBALL}.sig"
-            ( cd "${GITHUB_WORKSPACE}/apps/screenpipe-app-tauri" && bunx tauri signer sign "$TARBALL" )
-            test -s "${TARBALL}.sig"
-
-            # Validate the exact bytes that the updater will download. This is
-            # the gate that would have rejected enterprise v2.5.145 because its
-            # archive contained an unsigned mlx.metallib.
-            VERIFY_DIR="$(mktemp -d)"
-            tar xzf "$TARBALL" -C "$VERIFY_DIR"
-            EXTRACTED_APP="${VERIFY_DIR}/${APP_NAME}"
-            codesign --verify --deep --strict --verbose=2 "$EXTRACTED_APP"
-            xcrun stapler validate "$EXTRACTED_APP"
-            spctl --assess --type execute --verbose "$EXTRACTED_APP"
-            rm -rf "$VERIFY_DIR"
-
-            echo "${APP_NAME}.tar.gz passes updater archive verification"
-          done
+          bash .release-workflow/.github/scripts/finalize-macos-updater.sh \
+            "$GITHUB_WORKSPACE/apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/macos" \
+            "$GITHUB_WORKSPACE/apps/screenpipe-app-tauri"
 
       - name: Build standard and persistent enterprise .pkg installers
         shell: bash
@@ -1459,6 +1369,12 @@ jobs:
           BUILD_KC="$HOME/Library/Keychains/build.keychain-db"
           security delete-keychain "$BUILD_KC" 2>/dev/null || true
           security list-keychain -d user -s ~/Library/Keychains/login.keychain-db 2>/dev/null || true
+
+      - name: Report compiler cache results
+        if: always() && runner.environment == 'self-hosted'
+        continue-on-error: true
+        shell: bash
+        run: sccache --show-stats
 
   enterprise-complete:
     name: Enterprise artifacts complete

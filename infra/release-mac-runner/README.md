@@ -51,3 +51,20 @@ The registration script discovers an existing release Mac by its `Name` tag.
 
 The registration script adds `screenpipe-release-mac` directly to the repository
 and installs it as a headless launchd service.
+
+## Headless host maintenance
+
+Registration installs `configure-headless-host.sh` after verifying the runner
+identity. It disables the unused Bluetooth, wireless-radio manager and audio
+mixer services that can spin on the EC2 Mac's absent radio hardware. SIP, EC2
+networking, CoreAudio, SSM and signing remain enabled. On an existing host, apply
+that script through SSM and reboot during an idle maintenance window; launchd
+cannot unload these protected services while SIP is enabled.
+
+Temporarily remove only the `screenpipe-release-macos` runner label to drain the
+current job. Restore it after SSM, the runner service, CPU usage and disabled
+service state are verified. Never stop or reboot a runner with an active worker.
+
+The shared `setup-release-sccache.sh` starts each job's daemon with the persistent
+cache environment already exported and a bounded capacity, importing the old
+default macOS cache once. End-of-job statistics expose hits, misses and capacity.
