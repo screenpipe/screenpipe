@@ -1433,11 +1433,19 @@ impl SCServer {
         }
 
         let connection_state = crate::connections_api::ConnectionsState {
-            cm, wa, screenpipe_dir:self.screenpipe_dir.clone(), secret_store:self.secret_store.clone(),
-            browser_bridge:app_state.browser_bridge.clone(), browser_registry:app_state.browser_registry.clone(),
-            browser_pairing:Default::default(), api_auth_key:self.api_auth_key.clone(),
+            cm,
+            wa,
+            screenpipe_dir: self.screenpipe_dir.clone(),
+            secret_store: self.secret_store.clone(),
+            browser_bridge: app_state.browser_bridge.clone(),
+            browser_registry: app_state.browser_registry.clone(),
+            browser_pairing: Default::default(),
+            api_auth_key: self.api_auth_key.clone(),
         };
-        let router = router.nest("/connections", crate::connections_api::router_with_state(connection_state.clone()));
+        let router = router.nest(
+            "/connections",
+            crate::connections_api::router_with_state(connection_state.clone()),
+        );
 
         // User-supplied MCP servers (issue #3282).
         // Mounted at the top level so /mcp-servers/:id doesn't shadow
@@ -1449,7 +1457,11 @@ impl SCServer {
             ));
         let router = router.nest(
             "/mcp-servers",
-            crate::mcp_servers_api::router_with_cloud(mcp_store, self.mcp_session_access.clone(), Some(connection_state)),
+            crate::mcp_servers_api::router_with_cloud(
+                mcp_store,
+                self.mcp_session_access.clone(),
+                Some(connection_state),
+            ),
         );
 
         // Power management routes (if power manager is available)
