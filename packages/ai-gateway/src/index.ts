@@ -26,6 +26,7 @@ import { handleVoiceTranscription, handleVoiceQuery, handleTextToSpeech, handleV
 import { handleVertexProxy, handleVertexModels } from './handlers/vertex-proxy';
 import { handleWebSearch } from './handlers/web-search';
 import { handleTinfoilAttestation, handleTinfoilProxy, parseTinfoilUsageMetrics } from './handlers/tinfoil-proxy';
+import { handleGlmEncryptedProxy } from './handlers/glm-encrypted-proxy';
 import {
 	getDailyUserCost,
 	getNonStreamSettlementCost,
@@ -868,6 +869,12 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 		// providers/tinfoil.ts — these routes preserve end-to-end body
 		// encryption (HPKE/EHBP). The gateway never sees plaintext.
 		// Spec: https://docs.tinfoil.sh/guides/proxy-server
+		if (path === '/v1/tinfoil/glm/chat/completions' && request.method === 'POST') {
+			// Own-GPU GLM is a zero-provider-cost model. The global per-user
+			// rate limiter ran above; the relay enforces its Business entitlement.
+			// Do not parse bodies or send them through the plaintext AI gateway.
+			return await handleGlmEncryptedProxy(request, env, authResult);
+		}
 		if (path === '/v1/tinfoil/attestation' && request.method === 'GET') {
 			// Public-ish (still tier-gated above so we know who's calling) —
 			// just forwards the attestation bundle which is itself public.

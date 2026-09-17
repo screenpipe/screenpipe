@@ -1,0 +1,212 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+
+import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { SecureClient, Verifier } from "tinfoil";
+import { CipherSuite } from "hpke";
+import { KEM_DHKEM_X25519_HKDF_SHA256, KDF_HKDF_SHA256, AEAD_AES_256_GCM } from "@panva/hpke-noble";
+import { bytesToHex, hexToBytes, deriveResponseKeys, encryptChunk, HPKE_REQUEST_INFO, EXPORT_LABEL, EXPORT_LENGTH } from "ehbp";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { createGlmEncryptedFetch, GLM_CONFIG_REPO, GLM_ENCLAVE } from "../../../../crates/screenpipe-core/assets/extensions/lib/tinfoil-transport";
+
+const endpoint = "https://gateway.test/v1/tinfoil/glm/chat/completions";
+const model = "glm-5.3-flash-reap50-iq3m";
+const init = (extra = {}) => ({
+  method: "POST", headers: { Authorization: "Bearer user-token", "Content-Type": "application/json" },
+  body: JSON.stringify({ model, messages: [{ role: "user", content: "PRIVATE_PROMPT_CANARY" }], stream: true, ...extra }),
+});
+const originalFetch = globalThis.fetch;
+afterEach(() => { mock.restore(); globalThis.fetch = originalFetch; });
+
+describe("GLM verified client transport", () => {
+  it("runs the installed Pi provider through real encrypted SSE and a second-turn tool replay", async () => {
+    const suite = new CipherSuite(KEM_DHKEM_X25519_HKDF_SHA256, KDF_HKDF_SHA256, AEAD_AES_256_GCM);
+    const pair = await suite.GenerateKeyPair(true);
+    const hpkePublicKey = bytesToHex(await suite.SerializePublicKey(pair.publicKey));
+    spyOn(Verifier.prototype, "verifyBundle").mockResolvedValue({ hpkePublicKey, tlsPublicKeyFingerprint: "fixture" } as any);
+    let calls = 0;
+    globalThis.fetch = mock(async (input, requestInit) => {
+      const request = new Request(input, requestInit);
+      if (request.url.endsWith("/attestation")) {
+        return Response.json({ domain: new URL(GLM_ENCLAVE).host, enclaveAttestationReport: { format: "fixture", body: "fixture" } });
+      }
+      expect(request.url).toBe(endpoint);
+      const encrypted = new Uint8Array(await request.arrayBuffer());
+      expect(new TextDecoder().decode(encrypted)).not.toContain("PRIVATE_PROMPT_CANARY");
+      const enc = hexToBytes(request.headers.get("Ehbp-Encapsulated-Key")!);
+      const recipient = await suite.SetupRecipient(pair.privateKey, enc, { info: new TextEncoder().encode(HPKE_REQUEST_INFO) });
+      const plain = JSON.parse(new TextDecoder().decode(await recipient.Open(encrypted.slice(4))));
+      expect(plain.model).toBe(model);
+      calls++;
+      if (calls === 2) {
+        expect(plain.messages.some((m: any) => m.role === "tool" && m.content === "tool evidence")).toBe(true);
+      }
+      const content = calls === 1 ? '<tool_call>read<arg_key>path</arg_key><arg_value>file.txt</arg_value></tool_call>' : "VERIFIED_FINAL";
+      const sse = `data: ${JSON.stringify({ id: "fixture", choices: [{ index: 0, delta: { content } }] })}\n\ndata: [DONE]\n\n`;
+      const nonce = crypto.getRandomValues(new Uint8Array(32));
+      const secret = await recipient.Export(new TextEncoder().encode(EXPORT_LABEL), EXPORT_LENGTH);
+      const keys = await deriveResponseKeys(secret, enc, nonce);
+      const chunk = await encryptChunk(keys, 0, new TextEncoder().encode(sse));
+      const frame = new Uint8Array(4 + chunk.length);
+      new DataView(frame.buffer).setUint32(0, chunk.length);
+      frame.set(chunk, 4);
+      expect(new TextDecoder().decode(frame)).not.toContain("VERIFIED_FINAL");
+      return new Response(frame, { headers: { 'Ehbp-Response-Nonce': bytesToHex(nonce), 'Content-Type': 'text/event-stream' } });
+    }) as typeof fetch;
+
+    // Mirror Rust's installed extension layout, including its dependency anchor.
+    const dir = mkdtempSync(join(tmpdir(), "screenpipe-tinfoil-test-"));
+    try {
+      const source = resolve(import.meta.dir, "../../../../crates/screenpipe-core/assets/extensions");
+      mkdirSync(join(dir, "lib"));
+      for (const file of ["glm-protocol.ts", "tinfoil-transport.ts"]) {
+        writeFileSync(join(dir, "lib", file), readFileSync(join(source, "lib", file)));
+      }
+      writeFileSync(join(dir, "tinfoil.ts"), readFileSync(join(source, "tinfoil.ts"), "utf8")
+        .replace("__SCREENPIPE_PI_PACKAGE_JSON__", JSON.stringify(resolve(import.meta.dir, "../../package.json"))));
+      const extension = (await import(pathToFileURL(join(dir, "tinfoil.ts")).href)).default;
+      let provider: any;
+      await extension({ registerProvider: (name: string, config: any) => {
+        expect(name).toBe("screenpipe");
+        expect(config.api).toBe("screenpipe-tinfoil");
+        expect(config.models).toBeUndefined();
+        provider = config;
+      } });
+      const selected: any = { id: model, name: "GLM", provider: "screenpipe", api: "screenpipe-tinfoil", baseUrl: "https://gateway.test/v1", contextWindow: 32768, maxTokens: 8192, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+      const context: any = { messages: [{ role: "user", content: "PRIVATE_PROMPT_CANARY", timestamp: 1 }], tools: [{ name: "read", description: "Read a file", parameters: { type: "object", properties: { path: { type: "string" } } } }] };
+      const first = await provider.streamSimple(selected, context, { apiKey: "user-token" }).result();
+      expect(first.stopReason).toBe("toolUse");
+      const call = first.content.find((block: any) => block.type === "toolCall");
+      expect(call.name).toBe("read");
+      context.messages.push(first, { role: "toolResult", toolCallId: call.id, toolName: call.name, content: [{ type: "text", text: "tool evidence" }], isError: false, timestamp: 2 });
+      const second = await provider.streamSimple(selected, context, { apiKey: "user-token" }).result();
+      expect(second.content).toContainEqual({ type: "text", text: "VERIFIED_FINAL" });
+      expect(calls).toBe(2);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+  it("pins the custom enclave and source repo, waits for verification, and preserves cancellation/auth", async () => {
+    const order: string[] = [];
+    const controller = new AbortController();
+    const fetch = mock(async (_url, request) => {
+      order.push("fetch");
+      expect(new Headers(request.headers).get("Authorization")).toBe("Bearer user-token");
+      expect(request.signal.aborted).toBe(false);
+      expect(request.redirect).toBe("error");
+      expect(JSON.parse(request.body).chat_template_kwargs.enable_thinking).toBe(false);
+      return new Response("data: [DONE]\n\n");
+    });
+    const factory = mock(() => ({ ready: async () => { order.push("verify"); }, fetch }));
+    const secureFetch = createGlmEncryptedFetch("https://gateway.test/v1", factory as any);
+    await secureFetch(endpoint, { ...init(), signal: controller.signal });
+    expect(factory).toHaveBeenCalledWith({ enclaveURL: GLM_ENCLAVE, configRepo: GLM_CONFIG_REPO, baseURL: endpoint, transport: "ehbp", userCacheSecret: expect.any(String) });
+    expect(order).toEqual(["verify", "fetch"]);
+  });
+
+  it("isolates prompt caches across credentials even while verification is pending", async () => {
+    const configs: any[] = [];
+    const sent: string[] = [];
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const transport = createGlmEncryptedFetch("https://gateway.test/v1", config => {
+      const index = configs.push(config) - 1;
+      return {
+        ready: () => pending,
+        fetch: async (_url: unknown, request?: RequestInit) => {
+          sent.push(`${index}:${new Headers(request?.headers).get("Authorization")}`);
+          return new Response("ok");
+        },
+      } as any;
+    });
+    const first = transport(endpoint, init());
+    const second = transport(endpoint, { ...init(), headers: { Authorization: "Bearer second-user" } });
+    // Both requests have yielded to parse their bodies before verification.
+    await Bun.sleep(0);
+    expect(configs).toHaveLength(2);
+    expect(configs[0].userCacheSecret).not.toBe(configs[1].userCacheSecret);
+    release();
+    await Promise.all([first, second]);
+    expect(sent).toEqual(["0:Bearer user-token", "1:Bearer second-user"]);
+  });
+
+  it("never sends a prompt after failed verification or cancellation", async () => {
+    const fetch = mock();
+    const failed = createGlmEncryptedFetch("https://gateway.test/v1", () => ({
+      ready: async () => { throw new Error("measurement mismatch"); }, fetch,
+    }) as any);
+    await expect(failed(endpoint, init())).rejects.toThrow("measurement mismatch");
+    expect(fetch).not.toHaveBeenCalled();
+    const controller = new AbortController();
+    const cancelled = createGlmEncryptedFetch("https://gateway.test/v1", () => ({
+      ready: async () => controller.abort(), fetch,
+    }) as any);
+    await expect(cancelled(endpoint, { ...init(), signal: controller.signal })).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects plaintext destinations and model substitution before constructing the SDK", async () => {
+    const factory = mock();
+    expect(() => createGlmEncryptedFetch("http://gateway.test/v1", factory)).toThrow("HTTPS");
+    const fetch = createGlmEncryptedFetch("https://gateway.test/v1", factory);
+    await expect(fetch("https://gateway.test/v1/chat/completions", init())).rejects.toThrow("destination");
+    await expect(fetch(endpoint, init({ model: "auto" }))).rejects.toThrow("different model");
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it("prepares GLM tools before encryption and converts decrypted native tool calls for Pi", async () => {
+    const tools = [
+      { type: "function", function: { name: "read", parameters: { properties: { path: { type: "string" } } } } },
+      { type: "function", function: { name: "subagent" } },
+    ];
+    const fetch = mock(async (_url, request) => {
+      const body = JSON.parse(request.body);
+      expect(body.tools).toHaveLength(1);
+      expect(body.max_tokens).toBeGreaterThanOrEqual(4096);
+      expect(body.chat_template_kwargs.enable_thinking).toBe(true);
+      return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: '<tool_call>read<arg_key>path</arg_key><arg_value>file.txt</arg_value></tool_call>' } }] })}\n\ndata: [DONE]\n\n`);
+    });
+    const clientFetch = createGlmEncryptedFetch("https://gateway.test/v1", () => ({ ready: async () => {}, fetch }) as any);
+    const response = await clientFetch(endpoint, init({ tools, max_tokens: 1, reasoning_effort: "high" }));
+    const text = await response.text();
+    expect(text).toContain('"tool_calls"');
+    expect(text).toContain('"name":"read"');
+    expect(text).toContain('file.txt');
+    expect(text).toContain('[DONE]');
+  });
+
+  it("uses real SDK encryption and rejects an unencrypted successful response", async () => {
+    // Only hardware verification is stubbed. EHBP/HPKE and response validation
+    // are the real pinned SDK; the generated key belongs to this test alone.
+    const pair = await crypto.subtle.generateKey("X25519", true, ["deriveBits"]) as CryptoKeyPair;
+    const hpkePublicKey = Buffer.from(await crypto.subtle.exportKey("raw", pair.publicKey)).toString("hex");
+    spyOn(Verifier.prototype, "verifyBundle").mockResolvedValue({ hpkePublicKey, tlsPublicKeyFingerprint: "fixture" } as any);
+    const network = mock(async (input: any, requestInit?: RequestInit) => {
+      const request = new Request(input, requestInit);
+      if (request.url.endsWith("/attestation")) {
+        expect(request.headers.get("Authorization")).toBeNull();
+        expect(await request.json()).toEqual({ enclaveUrl: GLM_ENCLAVE, repo: GLM_CONFIG_REPO });
+        return Response.json({ domain: new URL(GLM_ENCLAVE).host, enclaveAttestationReport: { format: "fixture", body: "fixture" } });
+      }
+      expect(request.url).toBe(endpoint);
+      expect(request.headers.get("X-Tinfoil-Enclave-Url")).toBe(GLM_ENCLAVE);
+      expect(request.headers.get("Ehbp-Encapsulated-Key")).toMatch(/^[a-f0-9]{64}$/);
+      expect(await request.text()).not.toContain("PRIVATE_PROMPT_CANARY");
+      return new Response("PLAINTEXT_RESPONSE_CANARY");
+    });
+    globalThis.fetch = network as typeof fetch;
+    const clientFetch = createGlmEncryptedFetch("https://gateway.test/v1", config => new SecureClient({ ...config, userCacheSecret: "test-cache-scope" }));
+    await expect(clientFetch(endpoint, init())).rejects.toThrow();
+    expect(network).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reach the relay when the real SDK verifier rejects the bundle", async () => {
+    spyOn(Verifier.prototype, "verifyBundle").mockRejectedValue(new Error("invalid hardware signature"));
+    const network = mock(async () => Response.json({ domain: new URL(GLM_ENCLAVE).host, enclaveAttestationReport: { format: "fixture", body: "fixture" } }));
+    globalThis.fetch = network as typeof fetch;
+    const clientFetch = createGlmEncryptedFetch("https://gateway.test/v1", config => new SecureClient({ ...config, userCacheSecret: "test-cache-scope" }));
+    await expect(clientFetch(endpoint, init())).rejects.toThrow("invalid hardware signature");
+    expect(network).toHaveBeenCalledTimes(1);
+  });
+});

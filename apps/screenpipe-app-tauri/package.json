@@ -162,6 +162,7 @@
     "zustand": "^5.0.11"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "0.84.1",
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@next/eslint-plugin-next": "14.2.4",
     "@tailwindcss/typography": "^0.5.19",
@@ -193,6 +194,7 @@
     "postcss": "^8.5.8",
     "postcss-load-config": "^6.0.1",
     "tailwindcss": "^3.4.19",
+    "tinfoil": "1.2.1",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",

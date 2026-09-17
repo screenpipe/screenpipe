@@ -61,6 +61,7 @@ fn user_skill_fingerprint(root: &Path) -> std::io::Result<String> {
 
 pub const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.84.1";
 pub const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.84.1";
+pub const TINFOIL_SDK_VERSION: &str = "1.2.1";
 pub const PI_NAMESPACE_DIR: &str = "@earendil-works";
 pub const SCREENPIPE_API_URL: &str = "https://api.screenpipe.com/v1";
 const PI_INSTALL_ARGS: [&str; 3] = ["install", "--force", "--ignore-scripts"];
@@ -510,7 +511,9 @@ fn gateway_models_to_pi_models(data: &[serde_json::Value]) -> Vec<serde_json::Va
                 "id": id,
                 "name": name,
                 "reasoning": reasoning,
-                "input": ["text", "image"],
+                // A distinct API fails closed when its secure extension is absent.
+                "api": if id == "glm-5.3-flash-reap50-iq3m" { "screenpipe-tinfoil" } else { "openai-completions" },
+                "input": if id == "glm-5.3-flash-reap50-iq3m" { json!(["text"]) } else { json!(["text", "image"]) },
                 "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
                 "contextWindow": ctx,
                 "maxTokens": max_tokens,
@@ -1196,6 +1199,28 @@ impl PiExecutor {
         Ok(())
     }
 
+    pub fn ensure_tinfoil_extension(project_dir: &Path) -> Result<()> {
+        let ext_dir = project_dir.join(".pi").join("extensions");
+        std::fs::create_dir_all(ext_dir.join("lib"))?;
+        let package_json = crate::paths::default_screenpipe_data_dir()
+            .join("pi-agent")
+            .join("package.json");
+        let source = include_str!("../../assets/extensions/tinfoil.ts").replace(
+            "__SCREENPIPE_PI_PACKAGE_JSON__",
+            &serde_json::to_string(&package_json.to_string_lossy())?,
+        );
+        std::fs::write(ext_dir.join("tinfoil.ts"), source)?;
+        std::fs::write(
+            ext_dir.join("lib").join("tinfoil-transport.ts"),
+            include_str!("../../assets/extensions/lib/tinfoil-transport.ts"),
+        )?;
+        std::fs::write(
+            ext_dir.join("lib").join("glm-protocol.ts"),
+            include_str!("../../assets/extensions/lib/glm-protocol.ts"),
+        )?;
+        Ok(())
+    }
+
     pub fn ensure_context_pruning_extension(project_dir: &Path) -> Result<()> {
         let ext_dir = project_dir.join(".pi").join("extensions");
         std::fs::create_dir_all(&ext_dir)?;
@@ -1666,6 +1691,11 @@ impl PiExecutor {
     /// `Ok(model)`  → the requested model is allowed (or we can't validate).
     /// `Err(model)` → requested not allowed; the returned value is the fallback.
     fn pick_allowed_model(requested: &str, allowed: &[String]) -> Result<String, String> {
+        // Confidential selection is a transport promise. An unavailable model
+        // must fail rather than downgrade to a plaintext hosted provider.
+        if requested == "glm-5.3-flash-reap50-iq3m" {
+            return Ok(requested.to_string());
+        }
         // No catalog, or only the gateway fallback sentinel → we
         // couldn't actually validate, so don't second-guess the requested
         // model. Without the sentinel check the `["auto"]` list returned by
@@ -2157,6 +2187,7 @@ impl AgentExecutor for PiExecutor {
             &self.api_url,
         )?;
         Self::ensure_context_pruning_extension(working_dir)?;
+        Self::ensure_tinfoil_extension(working_dir)?;
         Self::ensure_orphan_guard_extension(working_dir)?;
         Self::ensure_self_improvement_extension(working_dir)?;
         Self::ensure_mcp_bridge_extension(working_dir)?;
@@ -2294,6 +2325,7 @@ impl AgentExecutor for PiExecutor {
             &self.api_url,
         )?;
         Self::ensure_context_pruning_extension(working_dir)?;
+        Self::ensure_tinfoil_extension(working_dir)?;
         Self::ensure_orphan_guard_extension(working_dir)?;
         Self::ensure_self_improvement_extension(working_dir)?;
         Self::ensure_mcp_bridge_extension(working_dir)?;
@@ -3260,6 +3292,7 @@ fn seed_pi_package_json(install_dir: &Path) -> Result<()> {
     let expected_pi_version = json!(PI_PACKAGE.rsplit('@').next().unwrap_or(""));
     let expected_pi_ai_version = json!(PI_AI_PACKAGE.rsplit('@').next().unwrap_or(""));
     let expected_sdk = json!("^0.91.1");
+    let expected_tinfoil = json!(TINFOIL_SDK_VERSION);
     let expected_overrides = json!({
         "hosted-git-info": {
             "lru-cache": "^10.0.0"
@@ -3318,6 +3351,7 @@ fn seed_pi_package_json(install_dir: &Path) -> Result<()> {
                     ("@earendil-works/pi-coding-agent", &expected_pi_version),
                     ("@earendil-works/pi-ai", &expected_pi_ai_version),
                     ("@anthropic-ai/sdk", &expected_sdk),
+                    ("tinfoil", &expected_tinfoil),
                 ] {
                     if deps_obj.get(name) != Some(version) {
                         deps_obj.insert(name.to_string(), version.clone());
@@ -3347,6 +3381,7 @@ fn seed_pi_package_json(install_dir: &Path) -> Result<()> {
             "@earendil-works/pi-coding-agent": expected_pi_version,
             "@earendil-works/pi-ai": expected_pi_ai_version,
             "@anthropic-ai/sdk": expected_sdk,
+            "tinfoil": expected_tinfoil,
         },
         "overrides": {
             "hosted-git-info": {
@@ -4475,6 +4510,7 @@ mod tests {
             .expect("seeded package.json readable");
         let parsed: serde_json::Value =
             serde_json::from_str(&contents).expect("seeded package.json parses");
+        assert_eq!(parsed["dependencies"]["tinfoil"], json!(TINFOIL_SDK_VERSION));
         let dependencies = parsed["dependencies"]
             .as_object()
             .expect("managed dependencies object");
@@ -5375,6 +5411,13 @@ mod tests {
 
     #[test]
     fn test_pick_allowed_model() {
+        assert_eq!(
+            PiExecutor::pick_allowed_model(
+                "glm-5.3-flash-reap50-iq3m",
+                &["auto".into(), "gpt-5.6-luna".into()],
+            ),
+            Ok("glm-5.3-flash-reap50-iq3m".into())
+        );
         let allowed: Vec<String> = ["auto", "claude-haiku-4-5", "gemini-3.5-flash"]
             .iter()
             .map(|s| s.to_string())
@@ -5436,6 +5479,12 @@ mod tests {
 
     #[test]
     fn gateway_catalog_omits_locked_models_from_pi() {
+        let confidential = gateway_models_to_pi_models(&[json!({
+            "id": "glm-5.3-flash-reap50-iq3m", "context_window": 32768,
+            "max_output_tokens": 8192
+        })]);
+        assert_eq!(confidential[0]["api"], json!("screenpipe-tinfoil"));
+        assert_eq!(confidential[0]["input"], json!(["text"]));
         let models = gateway_models_to_pi_models(&[
             json!({
                 "id": "auto",

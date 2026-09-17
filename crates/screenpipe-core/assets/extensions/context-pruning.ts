@@ -41,10 +41,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
  * 5. `agent_settled` (proactive compaction) — Compact after a successful turn
  *    reaches 70% of the configured context window. This protects answer
  *    quality before pi's near-limit threshold or provider overflow fallback.
- *
- * Hosted GLM also bounds aggregate tool-result text before each model call.
- * A single tool loop can fill its 32K window before the agent settles, even
- * when every result is below the generic single-message limit.
  */
 
 // A single tool result above this threshold triggers the "too large" feedback.
@@ -86,67 +82,6 @@ const HISTORY_OPEN = "<conversation_history>";
 const HISTORY_CLOSE = "</conversation_history>";
 const CONTEXT_SIZE_EXCEEDED = /context size has been exceeded/i;
 const PROACTIVE_COMPACTION_PERCENT = 70;
-const HOSTED_GLM_MODEL = "glm-5.3-flash-reap50-iq3m";
-const GLM_TOOL_HISTORY_CHARS = 24_000;
-const GLM_TOOL_RESULT_CHARS = 8_000;
-const GLM_TRIM_MARKER = "\n[tool result trimmed for GLM; reread a narrower range if needed]\n";
-
-/** Reserve small previews, then give the remaining space to newest results. */
-function recentTextBudgets(lengths: number[], budget: number, perResult: number): number[] {
-  if (lengths.length === 0) return [];
-  const preview = Math.min(128, Math.floor(budget / lengths.length));
-  const budgets = lengths.map((length) => Math.min(length, preview));
-  let remaining = budget - budgets.reduce((sum, length) => sum + length, 0);
-  for (let i = lengths.length - 1; i >= 0 && remaining > 0; i--) {
-    const extra = Math.min(remaining, Math.min(lengths[i], perResult) - budgets[i]);
-    budgets[i] += extra;
-    remaining -= extra;
-  }
-  return budgets;
-}
-
-/**
- * Bound text across the entire tool history, including the current turn.
- * 24K characters (~6K tokens for prose) leaves space for the hosted prompt,
- * tool schemas and output in GLM's 32K window. This is a text budget, not a
- * tokenizer or a guarantee about total request size; Pi still owns compaction.
- * Only mutate the context hook's cloned text, never the saved tool results,
- * call IDs, tool arguments, user messages, or non-text content.
- */
-export function boundGlmToolHistory(messages: any[]): boolean {
-  const results = messages
-    .filter((message) => message?.role === "toolResult" && Array.isArray(message.content))
-    .map((message) => message.content.filter(
-      (block: any) => block?.type === "text" && typeof block.text === "string",
-    ))
-    .filter((blocks) => blocks.length > 0);
-  const lengths = results.map((blocks) => blocks.reduce(
-    (sum: number, block: any) => sum + block.text.length, 0,
-  ));
-  if (lengths.every((length) => length <= GLM_TOOL_RESULT_CHARS)
-    && lengths.reduce((sum, length) => sum + length, 0) <= GLM_TOOL_HISTORY_CHARS) {
-    return false;
-  }
-
-  const budgets = recentTextBudgets(lengths, GLM_TOOL_HISTORY_CHARS, GLM_TOOL_RESULT_CHARS);
-  let modified = false;
-  results.forEach((blocks, index) => {
-    const blockBudgets = recentTextBudgets(
-      blocks.map((block: any) => block.text.length), budgets[index], budgets[index],
-    );
-    blocks.forEach((block: any, blockIndex: number) => {
-      const budget = blockBudgets[blockIndex];
-      if (block.text.length <= budget) return;
-      const available = budget - GLM_TRIM_MARKER.length;
-      block.text = available <= 0
-        ? safeHead(GLM_TRIM_MARKER, budget)
-        : safeHead(block.text, Math.ceil(available / 2)) + GLM_TRIM_MARKER
-          + safeTail(block.text, block.text.length - Math.floor(available / 2));
-      modified = true;
-    });
-  });
-  return modified;
-}
 
 /** Whether the reported context usage has reached the quality guardrail. */
 export function shouldProactivelyCompact(usage: any): boolean {
@@ -417,10 +352,6 @@ export default function (pi: ExtensionAPI) {
     //    built-in compaction (which can't split one message) can recover.
     const windowTokens = resolveContextWindowTokens(ctx);
     if (boundOversizedMessages(event.messages, windowTokens)) modified = true;
-
-    if (ctx?.model?.provider === "screenpipe" && ctx.model.id === HOSTED_GLM_MODEL) {
-      if (boundGlmToolHistory(event.messages)) modified = true;
-    }
 
     if (modified) {
       return { messages: event.messages };

@@ -26,7 +26,6 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import extension, {
-  boundGlmToolHistory,
   boundOversizedMessages,
   clampMessageText,
   maxMessageChars,
@@ -56,100 +55,6 @@ function registerExtension() {
 
 const WINDOW = 200_000; // tokens
 const ctx200k = { model: { contextWindow: WINDOW } };
-
-describe("hosted GLM tool-loop budget", () => {
-  const glmContext = {
-    model: { provider: "screenpipe", id: "glm-5.3-flash-reap50-iq3m", contextWindow: 32_768 },
-  };
-  const toolResult = (id: number, chars: number) => ({
-    role: "toolResult", toolCallId: `call_${id}`, toolName: "read", isError: false,
-    content: [{ type: "text", text: `START${id}` + "x".repeat(chars - 12) + `END${id}` }],
-  });
-  const textLength = (messages: any[]) => messages
-    .filter((message) => message?.role === "toolResult")
-    .flatMap((message) => message.content)
-    .reduce((sum, block) => sum + (block.type === "text" ? block.text.length : 0), 0);
-
-  it("bounds an eleven-tool turn before synthesis, while preserving call pairing and recent evidence", async () => {
-    const source: any[] = [{ role: "user", content: "Summarize today's work." }];
-    for (let i = 0; i < 11; i++) {
-      source.push({ role: "assistant", content: [
-        { type: "toolCall", id: `call_${i}`, name: "read", arguments: { path: `evidence-${i}` } },
-      ] });
-      source.push(toolResult(i, i === 0 ? 34_786 : 8_000));
-    }
-    const saved = structuredClone(source);
-    const messages = structuredClone(source);
-    const result = await registerExtension().context({ messages }, glmContext);
-
-    expect(result.messages).toBe(messages);
-    expect(textLength(messages)).toBeLessThanOrEqual(24_000);
-    // The old 30-message retention rule left this whole 23-message turn intact.
-    expect(textLength(source)).toBeGreaterThan(110_000);
-    expect(source).toEqual(saved);
-    expect(messages.map(({ role, toolCallId, toolName, isError }) => ({ role, toolCallId, toolName, isError })))
-      .toEqual(source.map(({ role, toolCallId, toolName, isError }) => ({ role, toolCallId, toolName, isError })));
-    expect(messages.filter((message) => message.role !== "toolResult"))
-      .toEqual(source.filter((message) => message.role !== "toolResult"));
-    expect(messages.at(-1)).toEqual(source.at(-1));
-    expect(messages[2].content[0].text).toContain("reread a narrower range");
-    expect(messages[2].content[0].text).toContain("START0");
-    expect(messages[2].content[0].text).toContain("END0");
-  });
-
-  it("caps a skill read across multiple text blocks and preserves non-text blocks and metadata", () => {
-    const image = { type: "image", data: "unchanged", mimeType: "image/png" };
-    const messages: any[] = [toolResult(1, 6_000)];
-    messages[0].content.push(image, { type: "text", text: "y".repeat(6_000), metadata: "keep" });
-    expect(boundGlmToolHistory(messages)).toBe(true);
-    expect(textLength(messages)).toBeLessThanOrEqual(8_000);
-    expect(messages[0].content[1]).toBe(image);
-    expect(messages[0].content[2].metadata).toBe("keep");
-    expect(messages[0].content[0].text).toContain("trimmed for GLM");
-    expect(messages[0].content[2].text).toBe("y".repeat(6_000));
-  });
-
-  it("is a no-op for tool history within both budgets", async () => {
-    const messages = [toolResult(0, 5_000), toolResult(1, 7_000)];
-    const before = structuredClone(messages);
-    expect(await registerExtension().context({ messages }, glmContext)).toBeUndefined();
-    expect(messages).toEqual(before);
-    expect(boundGlmToolHistory([])).toBe(false);
-    expect(boundGlmToolHistory([null, { role: "toolResult", content: [] }])).toBe(false);
-  });
-
-  it.each([
-    { provider: "screenpipe", id: "auto" },
-    { provider: "screenpipe", id: "gpt-5.6-luna" },
-    { provider: "custom", id: "glm-5.3-flash-reap50-iq3m" },
-  ])("leaves other providers and models unchanged: %j", async (model) => {
-    const messages = Array.from({ length: 10 }, (_, i) => toolResult(i, 8_000));
-    const before = structuredClone(messages);
-    expect(await registerExtension().context({ messages }, { model: { ...model, contextWindow: 32_768 } }))
-      .toBeUndefined();
-    expect(messages).toEqual(before);
-  });
-
-  it("bounds markers too, even for unusually many results, without breaking Unicode", () => {
-    for (const count of [1, 30, 500]) {
-      const messages = Array.from({ length: count }, (_, i) => ({
-        ...toolResult(i, 1_000), content: [{ type: "text", text: "😀".repeat(5_000) }],
-      }));
-      expect(boundGlmToolHistory(messages)).toBe(true);
-      expect(textLength(messages)).toBeLessThanOrEqual(24_000);
-      for (const message of messages) {
-        expect(message.content[0].text.length).toBeLessThanOrEqual(8_000);
-        expect([...message.content[0].text].some((char) => {
-          const code = char.codePointAt(0)!;
-          return code >= 0xD800 && code <= 0xDFFF;
-        })).toBe(false);
-      }
-      const once = structuredClone(messages);
-      expect(boundGlmToolHistory(messages)).toBe(false);
-      expect(messages).toEqual(once);
-    }
-  });
-});
 
 describe("provider overflow normalization", () => {
   it("routes the observed HTTP 500 wording into pi's overflow compaction path", async () => {
