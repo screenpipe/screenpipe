@@ -7125,6 +7125,7 @@ dependencies = [
  "regex",
  "rusqlite",
  "screenpipe-config",
+ "screenpipe-resource",
  "screenpipe-semantic",
  "screenpipe-sqlite-coordinator",
  "serde",
@@ -7176,6 +7177,15 @@ dependencies = [
  "serde",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "screenpipe-resource"
+version = "0.4.50"
+dependencies = [
+ "serde",
+ "sysinfo",
+ "tokio",
 ]
 
 [[package]]

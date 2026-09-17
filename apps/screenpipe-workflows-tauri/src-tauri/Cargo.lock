@@ -11534,6 +11534,7 @@ dependencies = [
  "regex",
  "rusqlite",
  "screenpipe-config",
+ "screenpipe-resource",
  "screenpipe-semantic",
  "screenpipe-sqlite-coordinator",
  "serde",
