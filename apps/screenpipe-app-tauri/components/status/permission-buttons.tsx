@@ -89,17 +89,17 @@ export const PermissionButtons: React.FC<PermissionButtonsProps> = ({
         await localforage.setItem("screenPermissionRestartPending", true);
 
         toast({
-          title: "restart required",
+          title: "Restart required",
           description:
-            "please restart the app to apply screen recording permission",
+            "Please restart the app to apply screen recording permission",
           duration: 5000,
         });
       }
     } catch (error) {
       console.error(`Failed to request ${type} permission:`, error);
       toast({
-        title: "error",
-        description: `failed to request ${type} permission`,
+        title: "Error",
+        description: `Failed to request ${type} permission`,
         variant: "destructive",
         duration: 3000,
       });
@@ -126,8 +126,8 @@ export const PermissionButtons: React.FC<PermissionButtonsProps> = ({
     } catch (error) {
       console.error(`failed to open ${type} permission settings:`, error);
       toast({
-        title: "error",
-        description: `failed to open ${type} permission settings`,
+        title: "Error",
+        description: `Failed to open ${type} permission settings`,
         variant: "destructive",
         duration: 3000,
       });
@@ -171,8 +171,8 @@ export const PermissionButtons: React.FC<PermissionButtonsProps> = ({
         disabled={isDisabled}
       >
         {type === "screen" && permissionStatus === "restartRequired"
-          ? "restart screenpipe"
-          : `allow ${type === "screen" ? "screen" : "audio"} access`}
+          ? "Restart screenpipe"
+          : `Allow ${type === "screen" ? "screen" : "audio"} access`}
       </Button>
       <Button
         variant="ghost"

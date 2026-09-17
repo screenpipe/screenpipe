@@ -94,9 +94,9 @@ function CodebaseField({
           if (event.key === "Enter") event.currentTarget.blur();
         }}
         placeholder={definition.codebasePlaceholder}
-        aria-label="codebase"
+        aria-label="Codebase"
         data-testid="cloud-agent-codebase-select"
-        className="h-9 min-w-0 rounded-none text-xs"
+        className="h-9 min-w-0 rounded-md text-xs"
       />
       <datalist id={`cloud-agent-codebases-${provider}`}>
         {options.map((option) => (
@@ -109,9 +109,9 @@ function CodebaseField({
         type="button"
         variant="ghost"
         size="icon"
-        className="h-9 w-9 shrink-0 rounded-none"
+        className="h-9 w-9 shrink-0 rounded-md"
         onClick={() => void openUrl(definition.manageUrl)}
-        aria-label={`manage ${definition.label} codebases`}
+        aria-label={`Manage ${definition.label} codebases`}
       >
         {loading ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -307,9 +307,9 @@ export function CloudAgentRunner({
       >
         <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_15rem] sm:items-center">
           <div>
-            <Label className="text-xs font-medium">runs with</Label>
+            <Label className="text-xs font-medium">Runs with</Label>
             <p className="mt-0.5 text-[11px] text-muted-foreground">
-              choose who handles each run.
+              Choose who handles each run.
             </p>
           </div>
           <Select
@@ -318,13 +318,13 @@ export function CloudAgentRunner({
             disabled={saving}
           >
             <SelectTrigger
-              className="h-9 rounded-none text-xs"
+              className="h-9 rounded-md text-xs"
               data-testid="cloud-agent-provider-select"
             >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="local">screenpipe on this device</SelectItem>
+              <SelectItem value="local">Screenpipe on this device</SelectItem>
               <SelectItem value="codex">Codex in the cloud</SelectItem>
               <SelectItem value="claude">Claude in the cloud</SelectItem>
               <SelectItem value="cursor">Cursor in the cloud</SelectItem>
@@ -345,14 +345,14 @@ export function CloudAgentRunner({
                   </p>
                   {status?.configured && !needsCodebase && (
                     <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                      <Check className="h-3 w-3" /> connected
+                      <Check className="h-3 w-3" /> Connected
                     </span>
                   )}
                 </div>
                 <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
                   {needsCodebase && status?.configured
-                    ? `choose your ${definition.label} codebase once`
-                    : (status?.detail ?? "checking connection...")}
+                    ? `Choose your ${definition.label} codebase once`
+                    : (status?.detail ?? "Checking connection...")}
                 </p>
               </div>
               <div className="flex items-center gap-1">
@@ -360,7 +360,7 @@ export function CloudAgentRunner({
                   <Button
                     type="button"
                     size="sm"
-                    className="h-8 rounded-none text-xs"
+                    className="h-8 rounded-md text-xs"
                     onClick={() =>
                       needsCodebase
                         ? codebaseInputRef.current?.focus()
@@ -372,13 +372,13 @@ export function CloudAgentRunner({
                     {connecting ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : needsCodebase ? (
-                      "choose codebase"
+                      "Choose codebase"
                     ) : draft.provider === "claude" &&
                       status &&
                       !status.available ? (
-                      "update"
+                      "Update"
                     ) : (
-                      "connect"
+                      "Connect"
                     )}
                   </Button>
                 )}
@@ -386,7 +386,7 @@ export function CloudAgentRunner({
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8 rounded-none"
+                  className="h-8 w-8 rounded-md"
                   onClick={() => setSettingsOpen(true)}
                   aria-label={`${definition.label} settings`}
                 >
@@ -398,7 +398,7 @@ export function CloudAgentRunner({
             {!usesExistingConversation && (
               <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_15rem] sm:items-center">
                 <div>
-                  <Label className="text-xs font-medium">codebase</Label>
+                  <Label className="text-xs font-medium">Codebase</Label>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
                     {definition.codebaseHelp}
                   </p>
@@ -430,9 +430,9 @@ export function CloudAgentRunner({
             {draft.provider === "cursor" && status?.configured && (
               <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_15rem] sm:items-center">
                 <div>
-                  <Label className="text-xs font-medium">use</Label>
+                  <Label className="text-xs font-medium">Use</Label>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
-                    start fresh or continue an existing Cursor agent.
+                    Start fresh or continue an existing Cursor agent.
                   </p>
                 </div>
                 <Select
@@ -444,13 +444,13 @@ export function CloudAgentRunner({
                   }
                 >
                   <SelectTrigger
-                    className="h-9 rounded-none text-xs"
+                    className="h-9 rounded-md text-xs"
                     data-testid="cursor-existing-agent-select"
                   >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="new">a new agent each run</SelectItem>
+                    <SelectItem value="new">A new agent each run</SelectItem>
                     {cursorAgents.map((candidate) => (
                       <SelectItem key={candidate.id} value={candidate.id}>
                         {candidate.name} · {candidate.status.toLowerCase()}
@@ -466,10 +466,10 @@ export function CloudAgentRunner({
                 <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
                 <div>
                   <Label className="text-xs font-medium">
-                    screenpipe context
+                    Screenpipe context
                   </Label>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
-                    choose whether this agent can use your recent activity.
+                    Choose whether this agent can use your recent activity.
                   </p>
                 </div>
               </div>
@@ -483,15 +483,15 @@ export function CloudAgentRunner({
                   }
                 >
                   <SelectTrigger
-                    className="h-9 min-w-0 flex-1 rounded-none text-xs"
+                    className="h-9 min-w-0 flex-1 rounded-md text-xs"
                     data-testid="cloud-agent-memory-select"
                   >
                     <SelectValue>{contextLabel}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">don&apos;t share</SelectItem>
+                    <SelectItem value="none">Don&apos;t share</SelectItem>
                     <SelectItem value="relevant">
-                      share relevant context
+                      Share relevant context
                     </SelectItem>
                   </SelectContent>
                 </Select>
@@ -499,9 +499,9 @@ export function CloudAgentRunner({
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="h-9 w-9 rounded-none"
+                  className="h-9 w-9 rounded-md"
                   onClick={() => setMemoryOpen(true)}
-                  aria-label="review shared context"
+                  aria-label="Review shared context"
                 >
                   <ShieldCheck className="h-3.5 w-3.5" />
                 </Button>
@@ -516,7 +516,7 @@ export function CloudAgentRunner({
             role={error ? "alert" : "status"}
           >
             {saving ? (
-              "saving..."
+              "Saving..."
             ) : (
               <span className="text-destructive">{error}</span>
             )}
@@ -540,17 +540,17 @@ export function CloudAgentRunner({
               <div className="flex items-center justify-between gap-3 border border-border bg-muted/20 p-3">
                 <div className="min-w-0">
                   <p className="text-xs font-medium">
-                    {status?.configured ? "connected" : "connection required"}
+                    {status?.configured ? "Connected" : "Connection required"}
                   </p>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
-                    {status?.detail ?? "checking connection..."}
+                    {status?.detail ?? "Checking connection..."}
                   </p>
                 </div>
                 {!status?.configured && draft.provider !== "cursor" && (
                   <Button
                     type="button"
                     size="sm"
-                    className="h-8 rounded-none text-xs"
+                    className="h-8 rounded-md text-xs"
                     onClick={() => void connectProvider()}
                     disabled={connecting}
                   >
@@ -559,9 +559,9 @@ export function CloudAgentRunner({
                     ) : draft.provider === "claude" &&
                       status &&
                       !status.available ? (
-                      "update"
+                      "Update"
                     ) : (
-                      "connect"
+                      "Connect"
                     )}
                   </Button>
                 )}
@@ -578,8 +578,8 @@ export function CloudAgentRunner({
                       patchDraft({ session_id: event.target.value }, false)
                     }
                     onBlur={() => void persist("cloud-agent", draft)}
-                    placeholder="leave blank to start a new conversation"
-                    className="h-9 rounded-none text-xs"
+                    placeholder="Leave blank to start a new conversation"
+                    className="h-9 rounded-md text-xs"
                   />
                   <p className="text-[11px] text-muted-foreground">
                     To continue one, paste its session ID here.
@@ -596,7 +596,7 @@ export function CloudAgentRunner({
                       className="flex items-center gap-1 text-[11px] text-muted-foreground underline-offset-4 hover:underline"
                       onClick={() => void openUrl(CURSOR_KEYS_URL)}
                     >
-                      create key <ExternalLink className="h-3 w-3" />
+                      Create key <ExternalLink className="h-3 w-3" />
                     </button>
                   </div>
                   <div className="flex gap-2">
@@ -611,10 +611,10 @@ export function CloudAgentRunner({
                         }}
                         placeholder={
                           status?.configured
-                            ? "saved in encrypted storage"
-                            : "paste API key"
+                            ? "Saved in encrypted storage"
+                            : "Paste API key"
                         }
-                        className="h-9 rounded-none pl-8 text-xs"
+                        className="h-9 rounded-md pl-8 text-xs"
                         autoComplete="off"
                       />
                     </div>
@@ -622,7 +622,7 @@ export function CloudAgentRunner({
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="h-9 rounded-none"
+                      className="h-9 rounded-md"
                       disabled={!cursorKey.trim() || saving}
                       onClick={() => void saveCursorKey()}
                     >
@@ -631,7 +631,7 @@ export function CloudAgentRunner({
                       ) : keySaved ? (
                         <Check className="h-3.5 w-3.5" />
                       ) : (
-                        "save key"
+                        "Save key"
                       )}
                     </Button>
                   </div>
@@ -644,7 +644,7 @@ export function CloudAgentRunner({
 
               {codebaseValue && !usesExistingConversation && (
                 <div className="space-y-1.5">
-                  <Label className="text-xs">branch · optional</Label>
+                  <Label className="text-xs">Branch · optional</Label>
                   <Input
                     value={
                       draft.provider === "cursor"
@@ -660,8 +660,8 @@ export function CloudAgentRunner({
                       )
                     }
                     onBlur={() => void persist("cloud-agent", draft)}
-                    placeholder="main"
-                    className="h-9 rounded-none text-xs"
+                    placeholder="Main"
+                    className="h-9 rounded-md text-xs"
                   />
                 </div>
               )}
@@ -672,10 +672,10 @@ export function CloudAgentRunner({
               <Button
                 type="button"
                 variant="outline"
-                className="rounded-none"
+                className="rounded-md"
                 onClick={() => setSettingsOpen(false)}
               >
-                done
+                Done
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -686,7 +686,7 @@ export function CloudAgentRunner({
         <Dialog open={memoryOpen} onOpenChange={setMemoryOpen}>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
-              <DialogTitle className="text-base">shared context</DialogTitle>
+              <DialogTitle className="text-base">Shared context</DialogTitle>
               <DialogDescription className="text-xs">
                 Control what screenpipe may send to {definition.label} for this
                 task.
@@ -695,7 +695,7 @@ export function CloudAgentRunner({
 
             <div className="space-y-4">
               <div className="border border-border bg-muted/20 p-3">
-                <p className="text-xs font-medium">what gets shared</p>
+                <p className="text-xs font-medium">What gets shared</p>
                 <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
                   A short, relevant summary of app activity, screen text,
                   transcript excerpts, and saved memories. Screenshots, audio
@@ -704,26 +704,26 @@ export function CloudAgentRunner({
                 </p>
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">look back</Label>
+                <Label className="text-xs">Look back</Label>
                 <Select
                   value={String(draft.context_lookback_hours ?? 24)}
                   onValueChange={(value) =>
                     patchDraft({ context_lookback_hours: Number(value) })
                   }
                 >
-                  <SelectTrigger className="h-9 rounded-none text-xs">
+                  <SelectTrigger className="h-9 rounded-md text-xs">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="1">last hour</SelectItem>
-                    <SelectItem value="8">last 8 hours</SelectItem>
-                    <SelectItem value="24">last 24 hours</SelectItem>
-                    <SelectItem value="168">last 7 days</SelectItem>
+                    <SelectItem value="1">Last hour</SelectItem>
+                    <SelectItem value="8">Last 8 hours</SelectItem>
+                    <SelectItem value="24">Last 24 hours</SelectItem>
+                    <SelectItem value="168">Last 7 days</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <p className="text-[11px] text-muted-foreground">
-                screenpipe rebuilds this summary for every run. Your full
+                Screenpipe rebuilds this summary for every run. Your full
                 history is never copied into the provider.
               </p>
             </div>
@@ -732,10 +732,10 @@ export function CloudAgentRunner({
               <Button
                 type="button"
                 variant="outline"
-                className="rounded-none"
+                className="rounded-md"
                 onClick={() => setMemoryOpen(false)}
               >
-                done
+                Done
               </Button>
             </DialogFooter>
           </DialogContent>

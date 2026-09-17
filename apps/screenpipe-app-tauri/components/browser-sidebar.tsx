@@ -1369,7 +1369,7 @@ export function BrowserSidebar({
     const tab: LiveBrowserTab = {
       id: tabId,
       url,
-      title: "new tab",
+      title: "New tab",
       loading: true,
       owner,
       navigationId: null,
@@ -1433,7 +1433,7 @@ export function BrowserSidebar({
 
   const panelTabs = useMemo<RightPanelTab[]>(() => {
     const tabs: RightPanelTab[] = browserTabs.map((tab) => {
-      let label = tab.title?.trim() || "browser";
+      let label = tab.title?.trim() || "Browser";
       if (!tab.title) {
         try {
           label = new URL(tab.url).hostname || tab.url;
@@ -1697,7 +1697,7 @@ export function BrowserSidebar({
                         <div className="min-w-0">
                           <div className="text-sm font-medium text-foreground">
                             {sessionAccessRequest.alreadyGranted
-                              ? "macOS may ask for access"
+                              ? "MacOS may ask for access"
                               : "Use your browser login?"}
                           </div>
                           <div className="mt-1 break-all text-xs text-muted-foreground">
@@ -1707,7 +1707,7 @@ export function BrowserSidebar({
                       </div>
                       <p className="text-xs leading-5 text-muted-foreground">
                         {sessionAccessRequest.alreadyGranted
-                          ? "Screenpipe is about to copy browser session cookies. macOS may ask for browser Safe Storage access next."
+                          ? "Screenpipe is about to copy browser session cookies. MacOS may ask for browser Safe Storage access next."
                           : "Screenpipe can use your browser sessions so the agent opens sites already signed in. This applies to all sites. It does not read saved passwords."}
                       </p>
                       {isMac && !sessionAccessRequest.alreadyGranted && (

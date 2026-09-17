@@ -52,7 +52,7 @@ function TranscriptionText({ transcription }: { transcription: string }) {
 					onClick={() => setExpanded(!expanded)}
 					className="ml-1 text-xs text-muted-foreground hover:text-foreground transition-colors duration-150 cursor-pointer"
 				>
-					{expanded ? "show less" : "show more"}
+					{expanded ? "Show less" : "Show more"}
 				</button>
 			)}
 		</p>
@@ -159,12 +159,12 @@ export function ConversationBubble({
 							{isInput ? (
 								<>
 									<Mic className="h-2.5 w-2.5" />
-									mic
+									Mic
 								</>
 							) : (
 								<>
 									<Speaker className="h-2.5 w-2.5" />
-									output
+									Output
 								</>
 							)}
 						</span>
@@ -182,7 +182,7 @@ export function ConversationBubble({
 							onAssigned={onSpeakerAssigned}
 						>
 							<span className="text-[10px] text-muted-foreground hover:text-foreground cursor-pointer transition-colors duration-150">
-								{speakerName || `speaker #${speakerId ?? "?"}`}
+								{speakerName || `Speaker #${speakerId ?? "?"}`}
 							</span>
 						</SpeakerAssignPopover>
 					</div>
@@ -329,7 +329,7 @@ export function ParticipantsSummary({
 							onClick={() => setExpanded(false)}
 							className="text-[10px] text-muted-foreground hover:text-foreground transition-colors duration-150 cursor-pointer"
 						>
-							show less
+							Show less
 						</button>
 					)}
 				</div>

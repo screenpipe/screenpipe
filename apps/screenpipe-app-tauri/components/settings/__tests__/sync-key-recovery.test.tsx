@@ -72,7 +72,7 @@ describe("SyncKeyRecovery", () => {
       }),
     ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(mocks.syncFetchOrThrow).not.toHaveBeenCalled();
 
     fireEvent.click(
@@ -116,7 +116,7 @@ describe("SyncKeyRecovery", () => {
     await waitFor(() => {
       expect(mocks.toast).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "could not restart sync",
+          title: "Could not restart sync",
           variant: "destructive",
         }),
       );

@@ -122,16 +122,16 @@ const Row = React.memo(function Row({
           e.stopPropagation();
           onToggle(value);
         }}
-        title={added ? `${label} is ignored — click to re-enable` : `ignore ${label}`}
+        title={added ? `${label} is ignored — click to re-enable` : `Ignore ${label}`}
         data-testid={`meeting-apps-picker-toggle-${value.toLowerCase()}`}
       >
         {added ? (
           <>
-            <Check className="h-3 w-3 mr-1" /> ignored
+            <Check className="h-3 w-3 mr-1" /> Ignored
           </>
         ) : (
           <>
-            <Plus className="h-3 w-3 mr-1" /> ignore
+            <Plus className="h-3 w-3 mr-1" /> Ignore
           </>
         )}
       </Button>
@@ -236,7 +236,7 @@ export function MeetingAppsPicker({
                 {s}
                 <button
                   type="button"
-                  aria-label={`stop ignoring ${s}`}
+                  aria-label={`Stop ignoring ${s}`}
                   className="inline-flex rounded-sm focus:outline-none focus:ring-1 focus:ring-ring"
                   onClick={() => onToggle(s)}
                 >
@@ -270,13 +270,13 @@ export function MeetingAppsPicker({
             >
               <Plus className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               <span className="text-sm">
-                ignore <span className="font-mono">{search.trim()}</span>
+                Ignore <span className="font-mono">{search.trim()}</span>
               </span>
             </button>
           )}
 
           {meetingRows.length > 0 && (
-            <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30">
+            <div className="px-2 py-1 text-[10px] font-medium normal-case tracking-wider text-muted-foreground bg-muted/30">
               Meeting apps
             </div>
           )}
@@ -291,19 +291,19 @@ export function MeetingAppsPicker({
             />
           ))}
 
-          <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30">
+          <div className="px-2 py-1 text-[10px] font-medium normal-case tracking-wider text-muted-foreground bg-muted/30">
             Your apps · last 7 days
           </div>
           {isLoading && (
             <div className="p-4 text-xs text-muted-foreground text-center">
-              loading your apps...
+              Loading your apps...
             </div>
           )}
           {!isLoading && userRows.length === 0 && (
             <div className="p-3 text-xs text-muted-foreground text-center italic">
               {q
-                ? `no recent app matches "${search.trim()}" — use the add option above for a custom service.`
-                : "no other recent apps to show."}
+                ? `No recent app matches "${search.trim()}" — use the add option above for a custom service.`
+                : "No other recent apps to show."}
             </div>
           )}
           {userRows.map((n) => (
@@ -321,7 +321,7 @@ export function MeetingAppsPicker({
 
         <div className="text-[10px] text-muted-foreground">
           {selected.length === 0
-            ? "nothing ignored — all known meeting apps are detected."
+            ? "Nothing ignored — all known meeting apps are detected."
             : `${selected.length} app${selected.length === 1 ? "" : "s"} ignored.`}
         </div>
       </DialogContent>

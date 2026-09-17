@@ -5,12 +5,10 @@
 
 import React, { useEffect, useState, useRef, Suspense, useCallback } from "react";
 import {
-  Settings as SettingsIcon,
   TimerReset,
   Plus,
   Brain,
   MonitorPlay,
-  HelpCircle,
   PanelLeftClose,
   PanelLeftOpen,
   Search,
@@ -131,6 +129,14 @@ import {
 } from "@/components/first-run/learning-banner";
 import { blocksTrialActivationApp } from "@/lib/first-run/trial-activation";
 
+import { ProductSwitcher, type ProductMode } from "@/components/workflows/product-switcher";
+import { SidebarFooter } from "@/components/sidebar-footer";
+import { WorkflowsHelpDialog } from "@/components/workflows/workflows-help-dialog";
+import { navigationProductMode } from "@/lib/workflows/navigation";
+import { IntegratedWorkflows } from "@/components/workflows/integrated-workflows";
+import { useWorkflowsRolloutEnabled } from "@/lib/workflows/rollout";
+import { readProductMode, saveProductMode } from "@/lib/workflows/entry-preference";
+
 type MainSection = "home" | "timeline" | "activity" | "brain" | "pipes" | "connections" | "meetings" | "help";
 const TRIAL_ACTIVATION_ALLOWED_SECTIONS = new Set<MainSection>([
   "home",
@@ -161,6 +167,27 @@ const isSettingsRoute = (value: string) => resolveSettingsSection(value) !== nul
 
 function HomeContent() {
   const router = useRouter();
+  const workflowsRolloutEnabled = useWorkflowsRolloutEnabled();
+  const [requestedMode, setRequestedMode] = useQueryState("mode", { defaultValue: "screenpipe", history: "push" });
+  const [workflowsVisited, setWorkflowsVisited] = useState(false);
+  const modeInteraction = useRef(false);
+  const changeMode = useCallback((next: ProductMode) => {
+    if (next === "workflows" && !workflowsRolloutEnabled) return;
+    modeInteraction.current = true;
+    void setRequestedMode(next);
+    void saveProductMode(next).catch(() => {});
+  }, [setRequestedMode, workflowsRolloutEnabled]);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const destinationMode = navigationProductMode(params);
+    if (destinationMode) {
+      void setRequestedMode(destinationMode);
+      return;
+    }
+    void readProductMode().then(saved => {
+      if (!modeInteraction.current && saved === "workflows") void setRequestedMode(saved);
+    }).catch(() => {});
+  }, [setRequestedMode]);
   const {
     learning: firstRunLearning,
     openTrialActivationPaywall,
@@ -302,7 +329,10 @@ function HomeContent() {
     void updateSettings({ firstRunGuideDone: true });
   }, [updateSettings]);
 
-  const { isSectionHidden, isSettingLocked } = useManagedPolicy();
+  const { isSectionHidden, isSettingLocked, isManagedDeployment, isManagedDeploymentResolved } = useManagedPolicy();
+  const workflowsAvailable = workflowsRolloutEnabled && isManagedDeploymentResolved && !isManagedDeployment && !trialActivationLocked;
+  const workflowsActive = workflowsAvailable && requestedMode === "workflows";
+  useEffect(() => { if (workflowsActive) setWorkflowsVisited(true); }, [workflowsActive]);
   const runningPipes = useRunningPipes();
   const runningPipeCount = runningPipes.length;
   const selectChatConversation = useCallback((id: string) => {
@@ -327,7 +357,7 @@ function HomeContent() {
     if (isNew) {
       store.actions.upsert({
         id,
-        title: "untitled",
+        title: "Untitled",
         preview: "",
         status: "idle",
         messageCount: 0,
@@ -549,17 +579,19 @@ function HomeContent() {
   // Cmd+B / Ctrl+B to toggle sidebar
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (workflowsActive) return;
       if (!matchesInAppShortcut(e, "toggle_sidebar", isMac)) return;
       e.preventDefault();
       toggleSidebar();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isMac, toggleSidebar]);
+  }, [isMac, toggleSidebar, workflowsActive]);
 
   // Cmd+N / Ctrl+N to start a new chat (matches the "New chat" sidebar button)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (workflowsActive) return;
       if (!matchesInAppShortcut(e, "new_chat", isMac)) return;
       e.preventDefault();
       setActiveSection("home");
@@ -571,13 +603,14 @@ function HomeContent() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [isMac, setActiveSection, startNewChat]);
+  }, [isMac, setActiveSection, startNewChat, workflowsActive]);
 
   // Own portal-only shortcut surfaces in the hydrated Home shell. Static
   // WKWebView exports can otherwise defer a closed dialog subtree long enough
   // for its first keyboard event to be missed.
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      if (workflowsActive) return;
       if (matchesInAppShortcut(event, "command_menu", isMac)) {
         event.preventDefault();
         if (!commandPaletteOpen) commandPaletteAnalytics.opened("keyboard");
@@ -594,7 +627,7 @@ function HomeContent() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [commandPaletteOpen, experimentalFeaturesEnabled, isMac]);
+  }, [commandPaletteOpen, experimentalFeaturesEnabled, isMac, workflowsActive]);
   // Fetch actual recording devices. Audio comes from /audio/device/status so
   // user-paused devices stay visible and can be resumed from the same control.
   interface AudioDeviceStatus {
@@ -1025,8 +1058,8 @@ function HomeContent() {
     if (isSectionHidden(activeSection) && activeSection !== "help") {
       return (
         <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-          <img src="/128x128.png" alt="screenpipe" className="w-16 h-16 opacity-30 mb-4" />
-          <p className="text-sm font-mono">screenpipe</p>
+          <img src="/128x128.png" alt="Screenpipe" className="w-16 h-16 opacity-30 mb-4" />
+          <p className="text-sm font-mono">Screenpipe</p>
         </div>
       );
     }
@@ -1106,8 +1139,8 @@ function HomeContent() {
       default:
         return (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-            <img src="/128x128.png" alt="screenpipe" className="w-16 h-16 opacity-30 mb-4" />
-            <p className="text-sm font-mono">screenpipe</p>
+            <img src="/128x128.png" alt="Screenpipe" className="w-16 h-16 opacity-30 mb-4" />
+            <p className="text-sm font-mono">Screenpipe</p>
           </div>
         );
     }
@@ -1145,6 +1178,18 @@ function HomeContent() {
   const meetingsInSidebar = visibleSidebarIds.includes("meetings");
   const meetingsInToolbar = false;
 
+  // Chat and Workflows share the same recorder state, events and controls.
+  const recordingStatusProps = {
+    devices: recordingDevices,
+    onDevicesChange: setRecordingDevices,
+    meetingActive: meetingState.active ?? false,
+    onPauseRecording: pauseRecording,
+    onResumeRecording: resumeRecording,
+    isGloballyPaused: isCapturePaused,
+    allCaptureDisabled: !!(settings.disableAudio && settings.disableVision),
+    onOpenRecordingSettings: () => openSettings("recording"),
+  };
+
   const persistSidebarLayout = (next: ReturnType<typeof normalizeSidebarNavLayout>) => {
     void updateSettings({ sidebarNavLayout: next });
   };
@@ -1161,8 +1206,8 @@ function HomeContent() {
       title: `${label} hidden`,
       description:
         id === "meetings"
-          ? "still one click away from the icon in the top bar."
-          : "use sidebar options in the top bar to bring it back.",
+          ? "Still one click away from the icon in the top bar."
+          : "Use sidebar options in the top bar to bring it back.",
       action: (
         <ToastAction
           altText={`Show ${label} in the sidebar again`}
@@ -1198,7 +1243,7 @@ function HomeContent() {
             aria-hidden="true"
             className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-red-500"
           />
-          <span className="sr-only">meeting recording active</span>
+          <span className="sr-only">Meeting recording active</span>
         </>
       ) : undefined,
   }));
@@ -1207,6 +1252,12 @@ function HomeContent() {
   useTauriEvent<{ url: string }>("navigate", (event) => {
     const url = new URL(event.payload.url, window.location.origin);
     const section = url.searchParams.get("section");
+    // Shared destinations never change the saved workspace preference.
+    const destinationMode = navigationProductMode(url.searchParams);
+    if (destinationMode) {
+      modeInteraction.current = true;
+      void setRequestedMode(destinationMode);
+    }
     if (!section) return;
     const settingsSection = resolveSettingsSection(section);
     if (settingsSection) {
@@ -1354,6 +1405,7 @@ function HomeContent() {
               // matching the vertical center of the macOS traffic lights
               // (which sit at y≈14).
               "fixed top-1 z-[46] flex items-center gap-1.5",
+              workflowsActive && "hidden",
               reserveTrafficLights ? "left-[78px]" : "left-2"
             )}
           >
@@ -1361,7 +1413,7 @@ function HomeContent() {
               <TooltipTrigger asChild>
                 <button
                   onClick={toggleSidebar}
-                  aria-label={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
+                  aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
                   data-announcement-anchor="top-sidebar-toggle"
                   className={cn(
                     "p-1 rounded-md transition-colors",
@@ -1377,7 +1429,7 @@ function HomeContent() {
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-xs">
                 <span className="flex items-center gap-2">
-                  {sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
+                  {sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
                   <ShortcutKeycap>
                     {inAppShortcutLabel("toggle_sidebar", isMac)}
                   </ShortcutKeycap>
@@ -1392,7 +1444,7 @@ function HomeContent() {
                     onClick={() => {
                       void commands.showWindow({ Search: { query: null } });
                     }}
-                    aria-label="search"
+                    aria-label="Search"
                     data-announcement-anchor="top-search"
                     className={cn(
                       "p-1 rounded-md transition-colors",
@@ -1404,7 +1456,7 @@ function HomeContent() {
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-xs">
                   <span className="flex items-center gap-2">
-                    search
+                    Search
                     {!settings.disabledShortcuts.includes("searchShortcut") &&
                     settings.searchShortcut ? (
                     <ShortcutKeycap>
@@ -1443,7 +1495,7 @@ function HomeContent() {
                 <TooltipTrigger asChild>
                   <button
                     onClick={() => setActiveSection("meetings")}
-                    aria-label={meetingState.active ? "meetings — recording" : "meetings"}
+                    aria-label={meetingState.active ? "Meetings — recording" : "Meetings"}
                     aria-current={activeSection === "meetings" ? "page" : undefined}
                     disabled={trialActivationLocked}
                     data-testid="nav-meetings"
@@ -1467,36 +1519,26 @@ function HomeContent() {
                           aria-hidden="true"
                           className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-red-500 ring-2 ring-background"
                         />
-                        <span className="sr-only">meeting recording active</span>
+                        <span className="sr-only">Meeting recording active</span>
                       </>
                     )}
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-xs">
-                  {meetingState.active ? "meetings — recording" : "meetings"}
+                  {meetingState.active ? "Meetings — recording" : "Meetings"}
                 </TooltipContent>
               </Tooltip>
             )}
 
             {!sidebarCollapsed && (
-              <RecordingStatus
-                devices={recordingDevices}
-                onDevicesChange={setRecordingDevices}
-                meetingActive={meetingState.active ?? false}
-                onPauseRecording={pauseRecording}
-                onResumeRecording={resumeRecording}
-                isGloballyPaused={isCapturePaused}
-                isTranslucent={isTranslucent}
-                allCaptureDisabled={!!(settings.disableAudio && settings.disableVision)}
-                onOpenRecordingSettings={() => openSettings("recording")}
-              />
+              <RecordingStatus {...recordingStatusProps} isTranslucent={isTranslucent} />
             )}
           </div>
 
           {/* Collapsed = hidden. No icon-rail fallback — the floating
               sidebar toggle above is the entire collapsed chrome,
               Claude-style. */}
-          {!sidebarCollapsed && (
+          {!workflowsActive && !sidebarCollapsed && (
           <AppSidebar className="pl-1">
             {/* Navigation.
                 Outer flex column has no overflow — the chat-list section
@@ -1504,6 +1546,7 @@ function HomeContent() {
                 bottom items would be pushed below the fold by long
                 conversation lists. */}
             <div className="pt-2 pr-2 pb-2 flex-1 flex flex-col min-h-0">
+              {workflowsAvailable && <div className="mb-3 px-1"><ProductSwitcher mode="screenpipe" onChange={changeMode} /></div>}
               {/* Main sections. Order and visibility are the user's — drag a
                   row or right-click it; enterprise policy still decides
                   eligibility. */}
@@ -1589,70 +1632,13 @@ function HomeContent() {
                 <div id="announcement-sidebar-slot" />
               </div>
 
-              {/* Bottom items */}
-              <div className={cn("flex items-center gap-1 border-t pt-2", isTranslucent ? "vibrant-sidebar-border" : "border-border")}>
-                {/* Settings — always visible; individual sections are enterprise-filtered inside /settings */}
-                <button
-                  data-testid="nav-settings"
-                  data-announcement-anchor="sidebar-settings"
-                  onClick={() => openSettings()}
-                  className={cn(
-                    "flex min-w-0 flex-1 items-center space-x-2.5 rounded-lg px-2.5 py-1.5 text-left transition-all duration-150 group",
-                    isTranslucent
-                      ? "vibrant-nav-item vibrant-nav-hover"
-                      : "text-muted-foreground hover:bg-card/50 hover:text-foreground",
-                  )}
-                >
-                  <div className={cn(
-                    "flex-shrink-0 transition-colors",
-                    isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground"
-                  )}>
-                    <SettingsIcon className="h-3.5 w-3.5" />
-                  </div>
-                  <span className="truncate text-xs font-medium">Settings</span>
-                </button>
-
-                {/* Help stays discoverable without taking a second row. */}
-                {!isSectionHidden("help") && (() => {
-                  const isActive = activeSection === "help";
-                  return (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          data-testid="nav-help"
-                          data-announcement-anchor="sidebar-help"
-                          aria-label="Help"
-                          disabled={trialActivationLocked}
-                          onClick={() => {
-                            setActiveSection("help");
-                          }}
-                          className={cn(
-                            "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-all duration-150",
-                            trialActivationLocked && "cursor-not-allowed",
-                            isActive
-                              ? isTranslucent
-                                ? "vibrant-nav-active"
-                                : "border border-border bg-card text-primary shadow-sm"
-                              : isTranslucent
-                                ? "vibrant-nav-item vibrant-nav-hover"
-                                : "text-muted-foreground hover:bg-card/50 hover:text-foreground",
-                          )}
-                        >
-                          <HelpCircle className="h-4 w-4" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-xs">
-                        Help
-                      </TooltipContent>
-                    </Tooltip>
-                  );
-                })()}
-              </div>
+              <SidebarFooter onSettings={() => openSettings()} onHelp={() => { void setActiveSection("help"); }}
+                isTranslucent={isTranslucent} hideHelp={isSectionHidden("help")} helpActive={activeSection === "help"} trialActivationLocked={trialActivationLocked} />
             </div>
           </AppSidebar>
           )}
           </TooltipProvider>
+          {!workflowsActive && sidebarCollapsed && workflowsAvailable && <div className="fixed left-3 top-10 z-40"><ProductSwitcher mode="screenpipe" compact onChange={changeMode} /></div>}
 
           {/* Content.
               min-w-0 matters: without it this flex item refuses to shrink
@@ -1660,7 +1646,7 @@ function HomeContent() {
               nowrap, so that's the FULL untruncated text width), and in a
               narrow window with the sidebar open the whole pane gets
               clipped at the right window edge instead of truncating. */}
-          <div className={cn("flex-1 min-w-0 flex flex-col h-full bg-background min-h-0 relative", isTranslucent ? "rounded-none" : "rounded-tr-lg")} data-testid="home-page">
+          <div className={cn("flex-1 min-w-0 flex flex-col h-full bg-background min-h-0 relative", workflowsActive && "hidden", isTranslucent ? "rounded-none" : "rounded-tr-lg")} data-testid="home-page">
             {/* ALWAYS-MOUNTED chat layer.
                 Hidden via CSS (display:none) when the user is on a non-chat
                 section, so the StandaloneChat component never unmounts. This
@@ -1685,7 +1671,7 @@ function HomeContent() {
                 <StandaloneChat
                   className="h-full"
                   hideInlineHistory
-                  chatShortcutsEnabled={activeSection === "home"}
+                  chatShortcutsEnabled={!workflowsActive && activeSection === "home"}
                   sidebarCollapsed={sidebarCollapsed}
                   firstRunLearningEnabled
                 />
@@ -1717,8 +1703,8 @@ function HomeContent() {
                 <button
                   type="button"
                   onClick={returnToActivity}
-                  aria-label="back to activity"
-                  title="back to activity"
+                  aria-label="Back to activity"
+                  title="Back to activity"
                   className="absolute left-4 top-11 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-border/80 bg-background/90 text-foreground shadow-lg shadow-black/10 backdrop-blur-sm transition-colors hover:border-foreground hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-2"
                 >
                   <ArrowLeft className="h-4 w-4" />
@@ -1727,7 +1713,13 @@ function HomeContent() {
 
           </div>
 
-          {showFirstRunGuide && (
+          {workflowsAvailable && (workflowsActive || workflowsVisited) && <div className={cn("flex-1 min-w-0 h-full", !workflowsActive && "hidden")}><IntegratedWorkflows active={workflowsActive} fullscreen={isFullscreen} onModeChange={changeMode} recordingStatus={<RecordingStatus {...recordingStatusProps} />}
+            navigationFooter={({ openKeyboardShortcuts }) => <SidebarFooter onSettings={() => openSettings()}
+              onHelp={() => { void setActiveSection("help"); }} onKeyboardShortcuts={openKeyboardShortcuts}
+              hideHelp={isSectionHidden("help")} trialActivationLocked={trialActivationLocked} />} /></div>}
+          <WorkflowsHelpDialog open={workflowsActive && (activeSection === "help" || activeSection === "feedback") && !isSectionHidden("help")}
+            onOpenChange={open => { if (!open) void setActiveSection("home"); }} />
+          {!workflowsActive && showFirstRunGuide && (
             <FirstRunGuide
               onDone={markFirstRunGuideDone}
               onGoToAutomations={() => setActiveSection("pipes")}

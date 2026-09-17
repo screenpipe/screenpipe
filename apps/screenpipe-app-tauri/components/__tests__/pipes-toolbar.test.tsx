@@ -15,7 +15,7 @@ describe("scheduled tasks toolbar", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "refresh scheduled tasks" }),
+      screen.getByRole("button", { name: "Refresh scheduled tasks" }),
     );
     expect(onRefresh).toHaveBeenCalledOnce();
 
@@ -23,7 +23,7 @@ describe("scheduled tasks toolbar", () => {
       <ScheduledTasksRefreshButton refreshing onRefresh={onRefresh} />,
     );
     const loadingButton = screen.getByRole("button", {
-      name: "refreshing scheduled tasks",
+      name: "Refreshing scheduled tasks",
     });
 
     expect(loadingButton).toBeDisabled();

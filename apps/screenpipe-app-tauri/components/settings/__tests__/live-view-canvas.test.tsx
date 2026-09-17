@@ -471,8 +471,8 @@ describe("LiveViewCanvas", () => {
 
     const toggle = screen.getByTestId("canvas-tools-toggle");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(toggle.getAttribute("aria-label")).toContain("select tool active");
-    expect(toggle.getAttribute("title")).toContain("select active");
+    expect(toggle.getAttribute("aria-label")).toContain("Select tool active");
+    expect(toggle.getAttribute("title")).toContain("Select active");
     expect(toggle.textContent).toBe("");
     expect(toggle.className).toContain("w-8");
     expect(screen.queryByTestId("canvas-tools-panel")).toBeNull();
@@ -487,7 +487,7 @@ describe("LiveViewCanvas", () => {
     expect(screen.queryByTestId("canvas-tools-panel")).toBeNull();
     expect(
       screen.getByTestId("canvas-tools-toggle").getAttribute("aria-label"),
-    ).toContain("pan tool active");
+    ).toContain("Pan tool active");
     expect(screen.getByTestId("canvas-interaction-hint")).toBeTruthy();
 
     openCanvasTools();
@@ -722,7 +722,7 @@ describe("LiveViewCanvas", () => {
 
     openCanvasTools();
     for (let index = 0; index < 20; index += 1) {
-      fireEvent.click(screen.getByLabelText("zoom out"));
+      fireEvent.click(screen.getByLabelText("Zoom out"));
     }
     expect(screen.getByText("25%")).toBeTruthy();
   });
@@ -920,7 +920,7 @@ describe("LiveViewCanvas", () => {
     fireEvent.pointerEnter(surface, { clientX: 500, clientY: 350 });
     openCanvasTools();
     for (let index = 0; index < 20; index += 1) {
-      fireEvent.click(screen.getByLabelText("zoom out"));
+      fireEvent.click(screen.getByLabelText("Zoom out"));
     }
     expect(screen.getByText("25%")).toBeTruthy();
     onPersist.mockClear();

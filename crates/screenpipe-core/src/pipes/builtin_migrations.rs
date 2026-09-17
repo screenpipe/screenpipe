@@ -711,6 +711,49 @@ fn meeting_summary_evidence_steps() -> Option<&'static str> {
 /// caller can skip the disk write. Idempotent: running it on already-fixed
 /// content is a no-op.
 pub(super) fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<String> {
+    if name == "workflow-discovery" {
+        // Both shipped versions predate the staged pipeline. Match the complete
+        // known body, allowing only the scheduler's trailing-newline rewrite.
+        let legacy = include_str!("../../assets/pipes/workflow-discovery/legacy-v1.md");
+        let body = legacy.splitn(3, "---").nth(2)?.trim();
+        let timing_start = body.find("Investigate time per workflow run")?;
+        let timing_end = body.find("When a source supplies a frame ID")?;
+        let without_timing = format!("{}{}", &body[..timing_start], &body[timing_end..]);
+        let mut parts = original.splitn(3, "---");
+        parts.next()?;
+        let frontmatter = parts.next()?;
+        let original_body = parts.next()?.trim();
+        if original_body != body && original_body != without_timing.trim() {
+            return None;
+        }
+        let mut config: serde_yaml::Value = serde_yaml::from_str(frontmatter).ok()?;
+        let allow = config
+            .get_mut("permissions")?
+            .get_mut("allow")?
+            .as_sequence_mut()?;
+        let rule = serde_yaml::Value::String("Api(GET /workflows/pipeline)".into());
+        if !allow.contains(&rule) {
+            allow.push(rule);
+        }
+        let map = config.as_mapping_mut()?;
+        let trigger = map
+            .entry(serde_yaml::Value::String("trigger".into()))
+            .or_insert_with(|| serde_yaml::Value::Mapping(Default::default()));
+        let events = trigger
+            .as_mapping_mut()?
+            .entry(serde_yaml::Value::String("events".into()))
+            .or_insert_with(|| serde_yaml::Value::Sequence(vec![]));
+        let event = serde_yaml::Value::String("pipe_completed:workflow-timing".into());
+        if !events.as_sequence()?.contains(&event) {
+            events.as_sequence_mut()?.push(event);
+        }
+        let replacement = bundled_prompt(name)?.splitn(3, "---").nth(2)?.trim();
+        return Some(format!(
+            "---\n{}---\n\n{}\n",
+            serde_yaml::to_string(&config).ok()?,
+            replacement
+        ));
+    }
     if name == "automate-my-work" {
         let replacement = bundled_prompt(name)?;
         return replace_prompt_body_when_hash_matches(
@@ -766,6 +809,24 @@ fn replace_prompt_body_when_hash_matches(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn workflow_migration_preserves_consent_and_customization() {
+        let legacy = include_str!("../../assets/pipes/workflow-discovery/legacy-v1.md");
+        let enabled = legacy
+            .replace("enabled: false", "enabled: true")
+            .replace("every 24h", "every 48h");
+        let migrated = super::migrate_builtin_pipe_text("workflow-discovery", &enabled).unwrap();
+        assert!(migrated.contains("enabled: true"));
+        assert!(migrated.contains("every 48h"));
+        assert!(migrated.contains("pipe_completed:workflow-timing"));
+        assert!(migrated.contains("Api(GET /workflows/pipeline)"));
+        assert!(super::migrate_builtin_pipe_text("workflow-discovery", &migrated).is_none());
+        assert!(super::migrate_builtin_pipe_text(
+            "workflow-discovery",
+            &format!("{legacy}\nMy custom instruction")
+        )
+        .is_none());
+    }
     use super::*;
     use crate::pipes::{parse_frontmatter, PipeManager};
     use std::collections::HashMap;

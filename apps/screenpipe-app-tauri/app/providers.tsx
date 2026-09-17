@@ -6,6 +6,7 @@
 import { MotionConfig } from "framer-motion";
 import { getVersion } from "@tauri-apps/api/app";
 import posthog from "posthog-js";
+import { WorkflowsRolloutSync } from "@/components/workflows/rollout-sync";
 import { PostHogProvider } from "posthog-js/react";
 import { useEffect, useState, Suspense } from "react";
 import { ChangelogDialogProvider } from "@/lib/hooks/use-changelog-dialog";
@@ -188,6 +189,7 @@ export const Providers = forwardRef<
                               <DesktopRemoteControl enabled={posthogReady} />
                               {!isOverlay && <LiveViewOnboardingFollowUp />}
                               {!isOverlay && <BackgroundPipeAllowanceNotifier />}
+                              {!isOverlay && <WorkflowsRolloutSync />}
                               {children}
                             </PermissionMonitorProvider>
                           </AppEntitlementGate>

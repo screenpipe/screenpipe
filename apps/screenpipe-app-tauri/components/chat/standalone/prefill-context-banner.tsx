@@ -28,7 +28,7 @@ export function prefillContextPresentation(
         typeof value.title === "string"
       ) {
         return {
-          label: "frozen Screenpipe snapshot",
+          label: "Frozen Screenpipe snapshot",
           preview: `${value.title} · ${value.source === "live-view" ? "Live View" : "meeting notes"} · reviewed copy`,
         };
       }
@@ -39,10 +39,10 @@ export function prefillContextPresentation(
 
   return {
     label: source?.startsWith("activity-history-")
-      ? "activity episode"
+      ? "Activity episode"
       : source === "timeline"
-        ? "timeline selection"
-        : "search",
+        ? "Timeline selection"
+        : "Search",
     preview: `${context.slice(0, 150)}${context.length > 150 ? "..." : ""}`,
   };
 }
@@ -83,8 +83,8 @@ export function PrefillContextBanner({
         )}
         {prefill.context && (
           <div className="flex-1 min-w-0">
-            <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
-              context from {contextPresentation?.label}
+            <div className="text-[10px] font-medium text-muted-foreground normal-case tracking-wider mb-1">
+              Context from {contextPresentation?.label}
             </div>
             <p className="text-xs text-foreground font-mono line-clamp-2">
               {contextPresentation?.preview}

@@ -132,8 +132,8 @@ export function useChatAttachments({
     const ext = extFromName(name);
     if (!isSupportedDocExt(ext)) {
       toast({
-        title: "unsupported file",
-        description: `can't read .${ext || "?"} files`,
+        title: "Unsupported file",
+        description: `Can't read .${ext || "?"} files`,
         variant: "destructive",
       });
       return;
@@ -153,7 +153,7 @@ export function useChatAttachments({
       const doc = await extractDocument(name, bytes);
       if (!doc.text.trim()) {
         toast({
-          title: "no text found",
+          title: "No text found",
           description: `${name} looks empty or has no extractable text`,
           variant: "destructive",
         });
@@ -165,7 +165,7 @@ export function useChatAttachments({
     } catch (err) {
       console.error("failed to extract attached doc:", err);
       toast({
-        title: "couldn't read file",
+        title: "Couldn't read file",
         description: err instanceof Error ? err.message : String(err),
         variant: "destructive",
       });

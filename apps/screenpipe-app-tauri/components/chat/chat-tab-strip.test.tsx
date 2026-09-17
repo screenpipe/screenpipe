@@ -133,7 +133,7 @@ describe("ChatTabStrip", () => {
     fireEvent.click(await screen.findByText("Open in split"));
     expect(useChatStore.getState().splitChatId).toBe("chat-b");
     expect(useChatStore.getState().splitChatPosition).toBe("right");
-    expect(screen.getByLabelText("split pane")).toBeInTheDocument();
+    expect(screen.getByLabelText("Split pane")).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.queryByText("Open in split")).not.toBeInTheDocument(),
     );
@@ -183,12 +183,12 @@ describe("ChatTabStrip", () => {
       />,
     );
 
-    const tab = screen.getByRole("tab", { name: "temporary side chat" });
+    const tab = screen.getByRole("tab", { name: "Temporary side chat" });
     expect(tab).toHaveAttribute(
       "title",
-      "temporary side chat · not saved to history",
+      "Temporary side chat · not saved to history",
     );
-    fireEvent.click(screen.getByLabelText("Close temporary side chat"));
+    fireEvent.click(screen.getByLabelText("Close Temporary side chat"));
     expect(onClose).toHaveBeenCalledWith("temporary-side");
   });
 
@@ -471,12 +471,12 @@ describe("ChatTabStrip", () => {
 
     expect(useChatStore.getState().sessions["chat-a"].unread).toBe(true);
     expect(useChatStore.getState().sessions["chat-b"].unread).toBe(true);
-    expect(screen.queryByLabelText("unread")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Unread")).toBeInTheDocument();
     expect(
-      screen.getByRole("tab", { name: "front" }).querySelector("[aria-label='unread']"),
+      screen.getByRole("tab", { name: "front" }).querySelector("[aria-label='Unread']"),
     ).toBeNull();
     expect(
-      screen.getByRole("tab", { name: "background" }).querySelector("[aria-label='unread']"),
+      screen.getByRole("tab", { name: "background" }).querySelector("[aria-label='Unread']"),
     ).not.toBeNull();
   });
 
@@ -504,7 +504,7 @@ describe("ChatTabStrip", () => {
       />,
     );
 
-    expect(screen.getByLabelText("working")).toBeInTheDocument();
+    expect(screen.getByLabelText("Working")).toBeInTheDocument();
     expect(screen.queryByTestId("chat-tab-worktree-chat-a")).not.toBeInTheDocument();
   });
 
@@ -524,8 +524,8 @@ describe("ChatTabStrip", () => {
       />,
     );
 
-    expect(screen.getByLabelText("working")).toBeInTheDocument();
-    expect(screen.queryByLabelText("split pane")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Working")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Split pane")).not.toBeInTheDocument();
   });
 
   it("owns pin, rename, copy, and archive on the tab instead of a header menu", async () => {
@@ -681,7 +681,7 @@ describe("ChatTabStrip", () => {
     );
 
     fireEvent.contextMenu(
-      screen.getByRole("tab", { name: "temporary side chat" }),
+      screen.getByRole("tab", { name: "Temporary side chat" }),
     );
     expect(await screen.findByText("Close tab")).toBeVisible();
     expect(screen.queryByText("Pin")).not.toBeInTheDocument();

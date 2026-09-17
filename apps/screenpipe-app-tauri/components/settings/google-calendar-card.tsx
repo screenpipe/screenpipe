@@ -163,7 +163,7 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
       } else if (res.status === "error") {
         const msg = String(res.error ?? "");
         toast({
-          title: "google calendar connect failed",
+          title: "Google calendar connect failed",
           description: msg || "Unknown error",
           variant: "destructive",
         });
@@ -171,7 +171,7 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
     } catch (e) {
       console.error("google calendar oauth failed:", e);
       toast({
-        title: "google calendar connect failed",
+        title: "Google calendar connect failed",
         description: String(e),
         variant: "destructive",
       });
@@ -224,7 +224,7 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
               </h3>
               {connected && (
                 <span className="px-2 py-0.5 text-xs font-medium bg-foreground text-background rounded-full">
-                  connected
+                  Connected
                 </span>
               )}
             </div>
@@ -273,7 +273,7 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
                       return (
                         <div key={key} className="flex items-center justify-between gap-2 text-xs">
                           <span className="text-muted-foreground truncate">
-                            {account.displayName || account.instance || "default account"}
+                            {account.displayName || account.instance || "Default account"}
                           </span>
                           <Button
                             variant="ghost"
@@ -318,7 +318,7 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
           <div className="px-4 pb-3 pt-1 border-t border-border">
             <div className="flex items-center justify-between mt-2 mb-2">
               <span className="text-xs font-medium text-muted-foreground">
-                upcoming events (next 8h)
+                Upcoming events (next 8h)
               </span>
               <Button
                 variant="ghost"
@@ -336,10 +336,10 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
             </div>
 
             {isLoadingEvents && upcomingEvents.length === 0 ? (
-              <p className="text-xs text-muted-foreground">loading...</p>
+              <p className="text-xs text-muted-foreground">Loading...</p>
             ) : upcomingEvents.length === 0 ? (
               <p className="text-xs text-muted-foreground">
-                no upcoming events in the next 8 hours
+                No upcoming events in the next 8 hours
               </p>
             ) : (
               <div className="space-y-1.5">
@@ -406,8 +406,8 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
                 ? accounts.length > 1
                   ? `${accounts.length} accounts synced`
                   : accountLabel
-                  ? `synced as ${accountLabel}`
-                  : "calendar synced"
+                  ? `Synced as ${accountLabel}`
+                  : "Calendar synced"
                 : "Enriches meeting detection with Google Calendar context"}
             </span>
             <span className="ml-auto">

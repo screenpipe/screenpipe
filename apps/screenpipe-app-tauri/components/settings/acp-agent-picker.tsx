@@ -122,7 +122,7 @@ export function AcpAgentPicker({
       {showAgentChoices && (
         <>
           {compact ? (
-            <Label className="text-xs">agent</Label>
+            <Label className="text-xs">Agent</Label>
           ) : (
             <div className="space-y-1">
               <Label htmlFor="acpAgent">Agent</Label>
@@ -139,7 +139,7 @@ export function AcpAgentPicker({
           <div
             {...(compact ? {} : { id: "acpAgent" })}
             role="listbox"
-            aria-label={compact ? "agent" : "Agent"}
+            aria-label={compact ? "Agent" : "Agent"}
             className={cn("grid", compact ? "grid-cols-2 gap-1.5" : "grid-cols-2 gap-2 sm:grid-cols-3")}
           >
             {adapters.map((adapter) => {
@@ -192,7 +192,7 @@ export function AcpAgentPicker({
       {info.supportsCloudRouting && (
         <div className="space-y-1">
           <Label className={compact ? "text-xs" : undefined}>
-            {compact ? "model billing" : "Model calls"}
+            {compact ? "Model billing" : "Model calls"}
           </Label>
           <div
             role="radiogroup"
@@ -200,8 +200,8 @@ export function AcpAgentPicker({
             className="grid grid-cols-2 gap-1.5"
           >
             {[
-              { cloud: true, label: "Screenpipe Cloud", hint: "included in your plan" },
-              { cloud: false, label: `Your ${info.name} account`, hint: "billed by them" },
+              { cloud: true, label: "Screenpipe Cloud", hint: "Included in your plan" },
+              { cloud: false, label: `Your ${info.name} account`, hint: "Billed by them" },
             ].map((choice) => {
               const selected = useCloud === choice.cloud;
               return (
@@ -275,20 +275,20 @@ export function AcpAgentPicker({
         (compact ? (
           <div className="space-y-1">
             <Label htmlFor="acpCommandQuick" className="text-xs">
-              agent command
+              Agent command
             </Label>
             <Input
               id="acpCommandQuick"
               value={agent?.command || ""}
               onChange={(e) => merge({ command: e.target.value })}
-              placeholder="path or command that starts an ACP agent"
+              placeholder="Path or command that starts an ACP agent"
               className="h-8 font-mono text-xs"
               spellCheck={false}
               autoCorrect="off"
               autoCapitalize="off"
             />
             <Label htmlFor="acpArgsQuick" className="text-xs">
-              startup options
+              Startup options
             </Label>
             <Input
               id="acpArgsQuick"
@@ -301,7 +301,7 @@ export function AcpAgentPicker({
               autoCapitalize="off"
             />
             <p className="text-[10px] text-muted-foreground">
-              environment variables and per-line options live in settings → ai presets
+              Environment variables and per-line options live in settings → AI presets
             </p>
           </div>
         ) : (

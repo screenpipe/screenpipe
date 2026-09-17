@@ -91,9 +91,9 @@ export function RecordingStatus({
 
   const summary =
     visibleDevices.length === 0
-      ? "not recording"
+      ? "Not recording"
       : pausedCount === 0
-        ? "recording"
+        ? "Recording"
         : `${pausedCount} device${pausedCount > 1 ? "s" : ""} paused`;
   const label = meetingActive ? `${summary} · meeting notes` : summary;
 
@@ -239,7 +239,7 @@ export function RecordingStatus({
               onClick={() => void toggleAllRecording()}
               disabled={pauseLoading || (allPaused ? (isGloballyPaused && !onResumeRecording) : !onPauseRecording)}
               data-testid="recording-status-pause-all"
-              title={allPaused ? "resume all recording" : "pause all screen and audio recording — resume anytime"}
+              title={allPaused ? "Resume all recording" : "Pause all screen and audio recording — resume anytime"}
               className="flex w-full items-center justify-center gap-1.5 rounded-md bg-foreground px-2 py-1.5 text-[11px] font-medium text-background transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {allPaused
@@ -258,7 +258,7 @@ export function RecordingStatus({
             <div className="px-3 py-2 text-[11px] text-muted-foreground">
               {allCaptureDisabled ? (
                 <>
-                  no devices enabled{" "}
+                  No devices enabled{" "}
                   <button
                     type="button"
                     onClick={() => {
@@ -267,11 +267,11 @@ export function RecordingStatus({
                     }}
                     className="underline text-foreground hover:opacity-70 transition-opacity"
                   >
-                    open settings
+                    Open settings
                   </button>
                 </>
               ) : (
-                "no capture devices reported"
+                "No capture devices reported"
               )}
             </div>
           )}
@@ -312,15 +312,15 @@ export function RecordingStatus({
                     title={
                       device.kind === "monitor"
                         ? device.active
-                          ? "pause screen recording for this display"
-                          : "resume screen recording for this display"
+                          ? "Pause screen recording for this display"
+                          : "Resume screen recording for this display"
                         : device.active
-                          ? "pause recording for this device"
-                          : "resume recording for this device"
+                          ? "Pause recording for this device"
+                          : "Resume recording for this device"
                     }
                     className="rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors shrink-0"
                   >
-                    {device.active ? "pause" : "resume"}
+                    {device.active ? "Pause" : "Resume"}
                   </button>
                 )}
               </div>

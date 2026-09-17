@@ -255,13 +255,15 @@ static REQUIRED_PI_PACKAGE_INSTALL_LOCK: std::sync::OnceLock<Mutex<()>> =
 static PI_EXTENSION_SAFE_MODE_PROJECTS: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
     std::sync::OnceLock::new();
 
-const MANAGED_PI_EXTENSION_FILES: [&str; 6] = [
+const MANAGED_PI_EXTENSION_FILES: [&str; 8] = [
     "web-search.ts",
     "mcp-bridge.ts",
     "save-artifact.ts",
     "live-views.ts",
     "connection-gate.ts",
     "context-pruning.ts",
+    "work-context.ts",
+    "workflow-feedback.ts",
 ];
 
 fn extension_safe_mode_projects() -> &'static std::sync::Mutex<HashSet<String>> {
@@ -1838,6 +1840,22 @@ const SHARED_PI_EXTENSION_FILES: &[&str] = &[
     "connection-gate.ts",
 ];
 
+fn ensure_workflow_feedback_extension(project_dir: &str) -> Result<(), String> {
+    let ext_dir = std::path::Path::new(project_dir).join(".pi").join("extensions");
+    std::fs::create_dir_all(&ext_dir).map_err(|e| e.to_string())?;
+    std::fs::write(ext_dir.join("workflow-feedback.ts"),
+        include_str!("../../../../packages/workflows-ui/src/feedback-tool.ts"))
+        .map_err(|e| format!("Failed to install feedback tool: {}", e))
+}
+
+fn ensure_work_context_extension(project_dir: &str) -> Result<(), String> {
+    let ext_dir = std::path::Path::new(project_dir).join(".pi").join("extensions");
+    std::fs::create_dir_all(&ext_dir).map_err(|e| e.to_string())?;
+    std::fs::write(ext_dir.join("work-context.ts"),
+        include_str!("../../../../packages/workflows-ui/src/context-tool.ts"))
+        .map_err(|e| format!("Failed to install context tool: {}", e))
+}
+
 /// Stage the Enterprise-only team skill outside Pi's auto-discovery tree.
 /// Consumer builds return `None` without touching this path; the Enterprise
 /// app passes the returned file explicitly with `--skill` for this process.
@@ -2842,6 +2860,13 @@ pub async fn pi_start_inner(
     coding_workspace: Option<crate::coding_workspace::CodingWorkspaceLaunch>,
 ) -> Result<PiInfo, String> {
     info!("pi_start stage=requested session='{}'", session_id);
+    let assistant_context = if session_id.starts_with("__title:workflow-assistant-") {
+        Some(crate::workflows_runtime::assistant_agent_context(&app).await?)
+    } else { None };
+    let user_token = assistant_context.as_ref().map(|(_, token)| token.clone()).or(user_token);
+    let workflow_api = if session_id.starts_with("__title:workflows-") {
+        Some(crate::workflows_runtime::workflow_recorder_context(&app).await?)
+    } else { None };
     let project_dir = project_dir.trim().to_string();
     if project_dir.is_empty() {
         return Err("Project directory is required".to_string());
@@ -2928,6 +2953,15 @@ pub async fn pi_start_inner(
             == Some("pi-acp");
 
     if !use_acp || is_pi_acp {
+        if provider_config.as_ref().and_then(|config| config.allowed_tools.as_ref())
+            .is_some_and(|tools| tools.iter().any(|tool| tool == "refine_workflow")) {
+            ensure_workflow_feedback_extension(&project_dir)?;
+        }
+        // The form tool has a receiver only in explicitly scoped Context runs.
+        if provider_config.as_ref().and_then(|config| config.allowed_tools.as_ref())
+            .is_some_and(|tools| tools.iter().any(|tool| tool == "fill_work_context")) {
+            ensure_work_context_extension(&project_dir)?;
+        }
         screenpipe_core::agents::pi::PiExecutor::ensure_context_pruning_extension(
             std::path::Path::new(&project_dir),
         )
@@ -3547,7 +3581,8 @@ pub async fn pi_start_inner(
     // Pass local API config so the Pi agent can authenticate to the runtime local API.
     {
         use crate::recording::local_api_context_from_app;
-        let api = local_api_context_from_app(&app);
+        let api = assistant_context.as_ref().map(|(api, _)| api.clone()).or(workflow_api)
+            .unwrap_or_else(|| local_api_context_from_app(&app));
         apply_local_api_context(&mut cmd, &api);
     }
 
@@ -7816,6 +7851,7 @@ error: InstallFailed extracting tarball"#;
         let temp = tempfile::tempdir().unwrap();
         let extension_dir = temp.path().join(".pi").join("extensions");
         std::fs::create_dir_all(&extension_dir).unwrap();
+        super::ensure_workflow_feedback_extension(temp.path().to_str().unwrap()).unwrap();
         let header = "// screenpipe — AI that knows everything you've seen, said, or heard\n";
         std::fs::write(extension_dir.join("mcp-bridge.ts"), header).unwrap();
         std::fs::write(extension_dir.join("live-views.ts"), header).unwrap();
@@ -7830,10 +7866,11 @@ error: InstallFailed extracting tarball"#;
             .collect::<Vec<_>>();
 
         assert_eq!(args[0], "--no-extensions");
-        assert_eq!(args.iter().filter(|arg| *arg == "--extension").count(), 3);
+        assert_eq!(args.iter().filter(|arg| *arg == "--extension").count(), 4);
         assert!(args.iter().any(|arg| arg.ends_with("mcp-bridge.ts")));
         assert!(args.iter().any(|arg| arg.ends_with("live-views.ts")));
         assert!(args.iter().any(|arg| arg.ends_with("context-pruning.ts")));
+        assert!(args.iter().any(|arg| arg.ends_with("workflow-feedback.ts")));
         assert!(!args.iter().any(|arg| arg.ends_with("third-party.ts")));
     }
 
@@ -8295,9 +8332,11 @@ error: InstallFailed extracting tarball"#;
         let project = tempfile::tempdir().expect("project dir");
         let project_dir = project.path().to_str().expect("utf8 path");
 
-        super::ensure_shared_pi_extensions(project_dir).expect("seed shared extensions");
-
         let ext_dir = project.path().join(".pi").join("extensions");
+        std::fs::create_dir_all(&ext_dir).unwrap();
+        std::fs::write(ext_dir.join("workflow-memory.ts"), "legacy override").unwrap();
+        super::ensure_shared_pi_extensions(project_dir).expect("seed shared extensions");
+        assert!(!ext_dir.join("workflow-memory.ts").exists());
         for file in super::SHARED_PI_EXTENSION_FILES {
             assert!(
                 ext_dir.join(file).is_file(),

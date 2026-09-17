@@ -389,7 +389,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 
 			e.preventDefault();
 			commands.copyTextToClipboard(text).catch(() => {});
-			toast({ title: "copied text", description: "all frame text copied to clipboard" });
+			toast({ title: "Copied text", description: "All frame text copied to clipboard" });
 		};
 
 		el.addEventListener("keydown", handleKeyDown);
@@ -447,7 +447,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 								</div>
 							</div>
 							<div className="text-center space-y-3">
-								<h3 className="text-xl font-mono font-semibold text-foreground uppercase tracking-wide">
+								<h3 className="text-xl font-mono font-semibold text-foreground normal-case tracking-wide">
 									No Frame Selected
 								</h3>
 								<p className="text-sm font-mono text-muted-foreground leading-relaxed">
@@ -457,11 +457,11 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 							{onNavigate && (
 								<div className="mt-8 flex gap-2">
 									<button onClick={() => onNavigate("prev")} disabled={!canNavigatePrev}
-										className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-background hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed border border-border text-foreground text-sm font-mono uppercase transition-colors">
+										className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-background hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed border border-border text-foreground text-sm font-mono normal-case transition-colors">
 										<ChevronLeft className="w-4 h-4" /> Previous
 									</button>
 									<button onClick={() => onNavigate("next")} disabled={!canNavigateNext}
-										className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-background hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed border border-border text-foreground text-sm font-mono uppercase transition-colors">
+										className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-background hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed border border-border text-foreground text-sm font-mono normal-case transition-colors">
 										Next <ChevronRight className="w-4 h-4" />
 									</button>
 								</div>
@@ -485,7 +485,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 								<ImageOff className="h-6 w-6 text-white/75" />
 							</div>
 							<div className="min-w-0 space-y-2">
-								<div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] font-mono uppercase tracking-wide text-white/45">
+								<div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] font-mono normal-case tracking-wide text-white/45">
 									{frameTimeLabel && <span>{frameTimeLabel}</span>}
 									{appName && (
 										<>
@@ -494,11 +494,11 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 										</>
 									)}
 								</div>
-								<h3 className="text-lg font-mono font-semibold uppercase tracking-wide">
+								<h3 className="text-lg font-mono font-semibold normal-case tracking-wide">
 									Screenshot paused
 								</h3>
 								<p className="text-sm font-mono leading-relaxed text-white/65">
-									screenpipe saved activity for this moment, but no image was saved.
+									Screenpipe saved activity for this moment, but no image was saved.
 									This usually happens during low-battery or privacy pause modes.
 								</p>
 							</div>
@@ -509,9 +509,9 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 									type="button"
 									onClick={() => {
 										commands.copyTextToClipboard(frameText).catch(() => {});
-										toast({ title: "copied text", description: "frame text copied to clipboard" });
+										toast({ title: "Copied text", description: "Frame text copied to clipboard" });
 									}}
-									className="flex items-center justify-center gap-2 border border-white/20 bg-white/10 px-3 py-2 text-xs font-mono uppercase tracking-wide text-white/80 transition-colors hover:bg-white/20"
+									className="flex items-center justify-center gap-2 border border-white/20 bg-white/10 px-3 py-2 text-xs font-mono normal-case tracking-wide text-white/80 transition-colors hover:bg-white/20"
 								>
 									<Copy className="h-3.5 w-3.5" />
 									Copy text
@@ -523,7 +523,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 										type="button"
 										onClick={() => onNavigate("prev")}
 										disabled={!canNavigatePrev}
-										className="flex items-center justify-center gap-2 border border-white/20 bg-white/10 px-3 py-2 text-xs font-mono uppercase tracking-wide text-white/80 transition-colors hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-30"
+										className="flex items-center justify-center gap-2 border border-white/20 bg-white/10 px-3 py-2 text-xs font-mono normal-case tracking-wide text-white/80 transition-colors hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-30"
 									>
 										<ChevronLeft className="h-3.5 w-3.5" />
 										Previous
@@ -532,7 +532,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 										type="button"
 										onClick={() => onNavigate("next")}
 										disabled={!canNavigateNext}
-										className="flex items-center justify-center gap-2 border border-white/20 bg-white/10 px-3 py-2 text-xs font-mono uppercase tracking-wide text-white/80 transition-colors hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-30"
+										className="flex items-center justify-center gap-2 border border-white/20 bg-white/10 px-3 py-2 text-xs font-mono normal-case tracking-wide text-white/80 transition-colors hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-30"
 									>
 										Next
 										<ChevronRight className="h-3.5 w-3.5" />
@@ -575,13 +575,13 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 									const text = getSelectableLayerText()?.trim();
 									if (text) {
 										commands.copyTextToClipboard(text).catch(() => {});
-										toast({ title: "copied selection", description: "selected text copied to clipboard" });
+										toast({ title: "Copied selection", description: "Selected text copied to clipboard" });
 									}
 									setContextMenuOpen(false);
 								}}
 							>
 								<Type className="w-4 h-4 shrink-0" />
-								<span className="flex-1 min-w-0 truncate">copy selected text</span>
+								<span className="flex-1 min-w-0 truncate">Copy selected text</span>
 							</button>
 						);
 					})()}
@@ -595,7 +595,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 						title="Copy frame image to clipboard"
 					>
 						<ImageIcon className="w-4 h-4 shrink-0" />
-						<span className="flex-1 min-w-0 truncate">copy image</span>
+						<span className="flex-1 min-w-0 truncate">Copy image</span>
 						<span className="text-xs text-muted-foreground group-hover:text-background shrink-0 ml-auto">
 							{formatShortcutDisplay(isMac ? "Super+Shift+C" : "Control+Shift+C", isMac)}
 						</span>
@@ -609,7 +609,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 						}}
 					>
 						<Copy className="w-4 h-4 shrink-0" />
-						copy text
+						Copy text
 					</button>
 					<button
 						type="button"
@@ -621,7 +621,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 						title="Copy screenpipe://frame/N link"
 					>
 						<Link2 className="w-4 h-4 shrink-0" />
-						copy deeplink
+						Copy deeplink
 					</button>
 					<button
 						type="button"
@@ -632,13 +632,13 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 						}}
 					>
 						<MessageCircle className="w-4 h-4 shrink-0" />
-						ask about this frame
+						Ask about this frame
 					</button>
 					{templatePipes.length > 0 && (
 						<>
 							<div className="h-px bg-border/30 my-0.5" />
-							<div className="px-3 py-1 text-[10px] text-muted-foreground uppercase tracking-wider">
-								run scheduled task
+							<div className="px-3 py-1 text-[10px] text-muted-foreground normal-case tracking-wider">
+								Run scheduled task
 							</div>
 							{templatePipes.map((pipe) => (
 								<button

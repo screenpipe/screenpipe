@@ -53,13 +53,13 @@ function showSignedOutToast() {
   lastToastTime = now;
 
   toast({
-    title: "session expired",
-    description: "sign in again before recording can continue.",
+    title: "Session expired",
+    description: "Sign in again before recording can continue.",
     variant: "destructive",
     duration: 30000,
     action: (
       <ToastAction altText="Sign in to screenpipe" onClick={openLogin}>
-        sign in
+        Sign in
       </ToastAction>
     ),
   });

@@ -66,6 +66,15 @@ signed `.app` path used only when persistent macOS TCC identity is required.
 
 ## Hot paths
 
+Recording is the critical path. Never sacrifice an authorized recording to
+archival, compression, indexing, redaction backlog, sync, or other background
+work. Persist captures durably through the existing writer; processing budgets
+bound background work, never capture admission. When processing cannot keep up,
+retain the recording and defer that work. Preserve privacy, user pause controls,
+and genuine disk/data-integrity protections. Tests must prove continued durable
+recording and recovery under processing failure, backlog, and restart; replace
+expectations that require recordings to be rejected or dropped for those reasons.
+
 Capture and encode per frame (`screenpipe-screen`, `-capture`, `-a11y`), audio
 device callbacks (`screenpipe-audio`), and SQLite writes (`screenpipe-db` via
 `-sqlite-coordinator`) run continuously on every user's machine. No per-frame

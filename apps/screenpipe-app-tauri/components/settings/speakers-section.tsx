@@ -85,7 +85,7 @@ function formatTimeAgo(timestamp: number): string {
   if (!timestamp) return "";
   const now = Date.now() / 1000;
   const diff = now - timestamp;
-  if (diff < 60) return "just now";
+  if (diff < 60) return "Just now";
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
@@ -175,10 +175,10 @@ function AudioClip({
     } else {
       if (!audioSrc) {
         toast({
-          title: "couldn't play sample",
+          title: "Couldn't play sample",
           description: audioChunkId
-            ? "this voice sample is not ready yet"
-            : "this voice sample is missing its audio chunk id",
+            ? "This voice sample is not ready yet"
+            : "This voice sample is missing its audio chunk id",
           variant: "destructive",
         });
         return;
@@ -200,8 +200,8 @@ function AudioClip({
           });
           setPlaying(false);
           toast({
-            title: "couldn't play sample",
-            description: "screenpipe couldn't load this voice clip",
+            title: "Couldn't play sample",
+            description: "Screenpipe couldn't load this voice clip",
             variant: "destructive",
           });
         });
@@ -234,8 +234,8 @@ function AudioClip({
           });
           stop();
           toast({
-            title: "couldn't play sample",
-            description: "screenpipe couldn't load this voice clip",
+            title: "Couldn't play sample",
+            description: "Screenpipe couldn't load this voice clip",
             variant: "destructive",
           });
         }}
@@ -299,7 +299,7 @@ function QuickNameInput({
       <Input
         value={name}
         onChange={(e) => setName(e.target.value)}
-        placeholder={placeholder || "who is this?"}
+        placeholder={placeholder || "Who is this?"}
         className="h-7 text-xs flex-1 min-w-0"
         onKeyDown={(e) => {
           if (e.key === "Enter") save();
@@ -322,7 +322,7 @@ function QuickNameInput({
         variant="ghost"
         size="icon"
         className="h-7 w-7 shrink-0 text-muted-foreground"
-        title="not a real speaker (noise)"
+        title="Not a real speaker (noise)"
         onClick={() => onHallucination(speakerIds)}
       >
         <UserX className="h-3 w-3" />
@@ -395,8 +395,8 @@ function ClusterCard({
             </div>
           </div>
           {isMulti && (
-            <span className="text-[10px] font-medium uppercase tracking-wider text-amber-600 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/50 px-1.5 py-0.5 rounded">
-              cluster
+            <span className="text-[10px] font-medium normal-case tracking-wider text-amber-600 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/50 px-1.5 py-0.5 rounded">
+              Cluster
             </span>
           )}
         </div>
@@ -437,7 +437,7 @@ function ClusterCard({
           onName={onNameCluster}
           onHallucination={onHallucination}
           placeholder={
-            isMulti ? `name all ${members.length} as...` : "who is this?"
+            isMulti ? `Name all ${members.length} as...` : "Who is this?"
           }
         />
       </div>
@@ -509,7 +509,7 @@ function IdentifiedSpeakerCard({
             <Input
               value={editName}
               onChange={(e) => setEditName(e.target.value)}
-              placeholder="enter name..."
+              placeholder="Enter name..."
               className="h-7 text-sm"
               autoFocus
               onKeyDown={(e) => {
@@ -579,7 +579,7 @@ function IdentifiedSpeakerCard({
                 variant="ghost"
                 size="icon"
                 className="h-7 w-7"
-                title="rename"
+                title="Rename"
                 onClick={() => {
                   setEditing(true);
                   setEditName(speaker.name || "");
@@ -591,7 +591,7 @@ function IdentifiedSpeakerCard({
                 variant="ghost"
                 size="icon"
                 className="h-7 w-7 text-destructive"
-                title="delete"
+                title="Delete"
                 disabled={deleting}
                 onClick={async () => {
                   setDeleting(true);
@@ -663,12 +663,12 @@ function SpeakerDetail({
     <div className="px-3 py-3 space-y-4 border-t border-border/50 bg-muted/20">
       {/* Audio samples */}
       <div className="space-y-1.5">
-        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-          voice samples ({samples.length})
+        <h4 className="text-xs font-medium text-muted-foreground normal-case tracking-wide">
+          Voice samples ({samples.length})
         </h4>
         {samples.length === 0 && (
           <p className="text-xs text-muted-foreground">
-            no audio samples stored
+            No audio samples stored
           </p>
         )}
         {samples.map((s, i) => (
@@ -695,15 +695,15 @@ function SpeakerDetail({
 
       {/* Similar speakers */}
       <div className="space-y-1.5">
-        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-          sounds similar — same person?
+        <h4 className="text-xs font-medium text-muted-foreground normal-case tracking-wide">
+          Sounds similar — same person?
         </h4>
         {loadingSimilar && (
-          <p className="text-xs text-muted-foreground">searching...</p>
+          <p className="text-xs text-muted-foreground">Searching...</p>
         )}
         {!loadingSimilar && similar.length === 0 && (
           <p className="text-xs text-muted-foreground">
-            no similar speakers found
+            No similar speakers found
           </p>
         )}
         {similar.map((s) => {
@@ -732,7 +732,7 @@ function SpeakerDetail({
                 variant="outline"
                 size="icon"
                 className="h-6 w-6 border-green-300 text-green-600 hover:bg-green-100 hover:text-green-700"
-                title={`yes, merge into ${speaker.name || "this speaker"}`}
+                title={`Yes, merge into ${speaker.name || "this speaker"}`}
                 onClick={() => onMerge(speaker.id, s.id)}
               >
                 <ThumbsUp className="h-3 w-3" />
@@ -741,7 +741,7 @@ function SpeakerDetail({
                 variant="outline"
                 size="icon"
                 className="h-6 w-6 border-red-300 text-red-500 hover:bg-red-100 hover:text-red-600"
-                title="no, different person"
+                title="No, different person"
               >
                 <ThumbsDown className="h-3 w-3" />
               </Button>
@@ -796,7 +796,7 @@ function MergeBanner({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-sm font-medium">
           <GitMerge className="h-4 w-4 text-primary" />
-          same person? ({current + 1}/{suggestions.length})
+          Same person? ({current + 1}/{suggestions.length})
         </div>
         <div className="flex gap-1">
           <Button
@@ -806,7 +806,7 @@ function MergeBanner({
             disabled={current === 0}
             onClick={() => setCurrent(current - 1)}
           >
-            prev
+            Prev
           </Button>
           <Button
             variant="ghost"
@@ -815,7 +815,7 @@ function MergeBanner({
             disabled={current >= suggestions.length - 1}
             onClick={() => setCurrent(current + 1)}
           >
-            next
+            Next
           </Button>
         </div>
       </div>
@@ -893,7 +893,7 @@ function MergeBanner({
           ) : (
             <ThumbsUp className="h-3.5 w-3.5" />
           )}
-          yes, merge
+          Yes, merge
         </Button>
         <Button
           variant="outline"
@@ -902,7 +902,7 @@ function MergeBanner({
           onClick={handleDismiss}
         >
           <ThumbsDown className="h-3.5 w-3.5" />
-          different people
+          Different people
         </Button>
       </div>
     </div>
@@ -1077,7 +1077,7 @@ export function SpeakersSection() {
       body: JSON.stringify({ id, name }),
     });
     if (!res.ok) throw new Error("failed");
-    toast({ title: `speaker renamed to "${name}"` });
+    toast({ title: `Speaker renamed to "${name}"` });
     fetchSpeakers();
   };
 
@@ -1088,7 +1088,7 @@ export function SpeakersSection() {
       body: JSON.stringify({ id }),
     });
     if (!res.ok) throw new Error("failed");
-    toast({ title: "speaker deleted" });
+    toast({ title: "Speaker deleted" });
     if (expandedId === id) setExpandedId(null);
     fetchSpeakers();
   };
@@ -1100,7 +1100,7 @@ export function SpeakersSection() {
       body: JSON.stringify({ speaker_id: id }),
     });
     if (!res.ok) throw new Error("failed");
-    toast({ title: "marked as false detection" });
+    toast({ title: "Marked as false detection" });
     fetchSpeakers();
   };
 
@@ -1116,7 +1116,7 @@ export function SpeakersSection() {
       }),
     });
     if (!res.ok) throw new Error("failed");
-    toast({ title: "speakers merged" });
+    toast({ title: "Speakers merged" });
     fetchSpeakers();
   };
 
@@ -1214,8 +1214,8 @@ export function SpeakersSection() {
             )}
           </div>
           <p className="text-xs text-amber-600/80 dark:text-amber-500/80 mt-1 ml-6">
-            unidentified speakers show as &ldquo;Speaker #N&rdquo; in meeting
-            notes and scheduled tasks. name them below to fix downstream output.
+            Unidentified speakers show as &ldquo;Speaker #N&rdquo; in meeting
+            notes and scheduled tasks. Name them below to fix downstream output.
           </p>
         </div>
       )}
@@ -1231,7 +1231,7 @@ export function SpeakersSection() {
         <div className="relative flex-1">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="search speakers..."
+            placeholder="Search speakers..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-9 h-9"
@@ -1269,16 +1269,16 @@ export function SpeakersSection() {
           }}
         >
           <Sparkles className="h-3 w-3" />
-          organize with ai
+          Organize with AI
         </Button>
       </div>
 
       {/* === UNIDENTIFIED CLUSTERS (top priority) === */}
       {filteredClusters.length > 0 && (
         <div className="space-y-2">
-          <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+          <h3 className="text-xs font-medium text-muted-foreground normal-case tracking-wide flex items-center gap-1.5">
             <Users className="h-3 w-3" />
-            pending identification ({unnamed.length} speaker
+            Pending identification ({unnamed.length} speaker
             {unnamed.length !== 1 ? "s" : ""} in {filteredClusters.length} group
             {filteredClusters.length !== 1 ? "s" : ""})
           </h3>
@@ -1310,9 +1310,9 @@ export function SpeakersSection() {
       {/* === IDENTIFIED SPEAKERS === */}
       {filteredSpeakers.length > 0 && (
         <div className="space-y-1.5">
-          <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+          <h3 className="text-xs font-medium text-muted-foreground normal-case tracking-wide flex items-center gap-1.5">
             <Volume2 className="h-3 w-3" />
-            identified ({filteredSpeakers.length})
+            Identified ({filteredSpeakers.length})
           </h3>
           {filteredSpeakers.map((s) => (
             <IdentifiedSpeakerCard
@@ -1332,8 +1332,8 @@ export function SpeakersSection() {
       {filteredSpeakers.length === 0 && filteredClusters.length === 0 && (
         <p className="text-sm text-muted-foreground py-8 text-center">
           {searchQuery
-            ? "no speakers match your search"
-            : "no speakers detected yet"}
+            ? "No speakers match your search"
+            : "No speakers detected yet"}
         </p>
       )}
     </div>

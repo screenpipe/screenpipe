@@ -12,7 +12,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useChatStore } from "@/lib/stores/chat-store";
 import posthog from "posthog-js";
 
-// One-time guided first run, shown on the Home window right after onboarding.
+// One-time guided first run, shown on the home window right after onboarding.
 // It does NOT replace the chat — it guides the REAL chat:
 //   1. ASK       — drops a pipe-creation prompt into the real composer
 //                  (chat-prefill event) and points the user at it: "hit send".
@@ -34,7 +34,7 @@ const PROMPT = "create a scheduled task that tracks what i do every hour";
 const LEGACY_PROMPT = "create a pipe that tracks what i do every hour";
 const GUIDE_PROMPTS = new Set([PROMPT, LEGACY_PROMPT]);
 const SKIP_BUTTON_CLASS =
-  "mt-3 w-full border border-foreground/40 py-2 font-mono text-[11px] uppercase tracking-widest text-foreground transition-colors hover:bg-foreground hover:text-background focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2";
+  "mt-3 w-full border border-foreground/40 py-2 font-mono text-[11px] normal-case tracking-widest text-foreground transition-colors hover:bg-foreground hover:text-background focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2";
 
 type Phase =
   | "invite"
@@ -472,30 +472,30 @@ export default function FirstRunGuide({
           >
             <div className="flex items-center gap-2 mb-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-foreground" />
-              <span className="font-mono text-[10px] tracking-wider lowercase text-muted-foreground/70">
-                you&apos;re all set
+              <span className="font-mono text-[10px] tracking-wider normal-case text-muted-foreground/70">
+                You&apos;re all set
               </span>
             </div>
             <p className="font-sans text-sm text-foreground/90 leading-snug">
-              want to see how screenpipe works? one prompt, one automation,
+              Want to see how screenpipe works? One prompt, one automation,
               about 30 seconds.
             </p>
             <button
               onClick={acceptInvite}
               data-testid="firstrun-accept"
-              className="mt-4 w-full flex items-center justify-center gap-1.5 border border-foreground bg-foreground py-2.5 font-mono text-xs uppercase tracking-widest text-background hover:bg-background hover:text-foreground transition-colors"
+              className="mt-4 w-full flex items-center justify-center gap-1.5 border border-foreground bg-foreground py-2.5 font-mono text-xs normal-case tracking-widest text-background hover:bg-background hover:text-foreground transition-colors"
             >
-              show me · 30 sec
+              Show me · 30 sec
             </button>
             <button
               onClick={() => dismiss("declined")}
               data-testid="firstrun-decline"
               className={SKIP_BUTTON_CLASS}
             >
-              i&apos;ll explore
+              I&apos;ll explore
             </button>
-            <p className="mt-2 text-center font-mono text-[9px] lowercase tracking-wider text-muted-foreground/60">
-              rerun anytime from help
+            <p className="mt-2 text-center font-mono text-[9px] normal-case tracking-wider text-muted-foreground/60">
+              Rerun anytime from help
             </p>
           </motion.div>
         </div>
@@ -508,15 +508,15 @@ export default function FirstRunGuide({
           data-firstrun-ui
           className="fixed top-4 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 border border-foreground/30 bg-background px-3 py-1.5 shadow-lg"
         >
-          <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+          <span className="font-mono text-[10px] normal-case tracking-widest text-muted-foreground">
             2 of 3 · building your automation
           </span>
           <button
             onClick={skip}
-            aria-label="skip intro"
-            className="font-mono text-[10px] uppercase tracking-widest text-foreground transition-opacity hover:opacity-60"
+            aria-label="Skip intro"
+            className="font-mono text-[10px] normal-case tracking-widest text-foreground transition-opacity hover:opacity-60"
           >
-            skip ✕
+            Skip ✕
           </button>
         </div>
       )}
@@ -537,32 +537,32 @@ export default function FirstRunGuide({
               <div className="w-full border border-foreground/15 bg-background shadow-lg p-4">
                 <div className="flex items-center gap-2 mb-1.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-foreground" />
-                  <span className="font-mono text-[10px] tracking-wider lowercase text-muted-foreground/70">
-                    let&apos;s try one thing
+                  <span className="font-mono text-[10px] tracking-wider normal-case text-muted-foreground/70">
+                    Let&apos;s try one thing
                   </span>
                   <span className="ml-auto font-mono text-[10px] tracking-wider text-muted-foreground/70">
                     1 of 3
                   </span>
                 </div>
                 <p className="font-sans text-sm text-foreground/90 leading-snug">
-                  i filled the prompt below. send it to create your first
+                  I filled the prompt below. Send it to create your first
                   automation.
                 </p>
                 <button
                   type="button"
                   onClick={submitPrefilledPrompt}
-                  className="mt-4 flex w-full items-center justify-center border border-foreground bg-foreground py-2.5 font-mono text-xs uppercase tracking-widest text-background transition-colors hover:bg-background hover:text-foreground"
+                  className="mt-4 flex w-full items-center justify-center border border-foreground bg-foreground py-2.5 font-mono text-xs normal-case tracking-widest text-background transition-colors hover:bg-background hover:text-foreground"
                 >
-                  send prompt ↵
+                  Send prompt ↵
                 </button>
                 <button
                   onClick={skip}
                   className={SKIP_BUTTON_CLASS}
                 >
-                  skip intro
+                  Skip intro
                 </button>
-                <p className="mt-2 text-center font-mono text-[9px] lowercase tracking-wider text-muted-foreground/60">
-                  esc to exit anytime
+                <p className="mt-2 text-center font-mono text-[9px] normal-case tracking-wider text-muted-foreground/60">
+                  Esc to exit anytime
                 </p>
               </div>
               {/* Speech-bubble tail pointing down at the composer */}
@@ -594,11 +594,11 @@ export default function FirstRunGuide({
               <div className="flex items-start gap-2.5 mb-3">
                 <Zap className="w-4 h-4 text-foreground mt-0.5 shrink-0" strokeWidth={2} />
                 <div>
-                  <p className="font-mono text-xs font-semibold lowercase text-foreground">
-                    your automation is being set up
+                  <p className="font-mono text-xs font-semibold normal-case text-foreground">
+                    Your automation is being set up
                   </p>
                   <p className="font-mono text-[11px] text-muted-foreground mt-0.5 leading-snug">
-                    head over to scheduled to see it running and explore more automations
+                    Head over to scheduled to see it running and explore more automations
                   </p>
                 </div>
                 <span className="ml-auto shrink-0 font-mono text-[10px] tracking-wider text-muted-foreground/70">
@@ -607,18 +607,18 @@ export default function FirstRunGuide({
               </div>
               <button
                 onClick={goToPipes}
-                className="w-full flex items-center justify-center gap-1.5 border border-foreground bg-foreground py-2.5 font-mono text-xs uppercase tracking-widest text-background hover:bg-background hover:text-foreground transition-colors"
+                className="w-full flex items-center justify-center gap-1.5 border border-foreground bg-foreground py-2.5 font-mono text-xs normal-case tracking-widest text-background hover:bg-background hover:text-foreground transition-colors"
               >
-                go to scheduled <ArrowRight className="w-3 h-3" strokeWidth={2} />
+                Go to scheduled <ArrowRight className="w-3 h-3" strokeWidth={2} />
               </button>
               <button
                 onClick={skip}
                 className={SKIP_BUTTON_CLASS}
               >
-                skip intro
+                Skip intro
               </button>
-              <p className="mt-2 text-center font-mono text-[9px] lowercase tracking-wider text-muted-foreground/60">
-                esc to exit anytime
+              <p className="mt-2 text-center font-mono text-[9px] normal-case tracking-wider text-muted-foreground/60">
+                Esc to exit anytime
               </p>
             </motion.div>
           )}
@@ -680,11 +680,11 @@ export default function FirstRunGuide({
           )}
           <div className="flex items-start gap-2.5 mb-3">
             <div>
-              <p className="font-mono text-xs font-semibold lowercase text-foreground">
-                one last thing — run your scheduled task
+              <p className="font-mono text-xs font-semibold normal-case text-foreground">
+                One last thing — run your scheduled task
               </p>
               <p className="font-mono text-[11px] text-muted-foreground mt-0.5 leading-snug">
-                hit the{" "}
+                Hit the{" "}
                 <Play className="inline w-3 h-3 -mt-0.5" strokeWidth={2} />{" "}
                 button on your scheduled task to start it
               </p>
@@ -695,18 +695,18 @@ export default function FirstRunGuide({
           </div>
           <button
             onClick={finishGuide}
-            className="w-full flex items-center justify-center gap-1.5 border border-foreground bg-foreground py-2.5 font-mono text-xs uppercase tracking-widest text-background hover:bg-background hover:text-foreground transition-colors"
+            className="w-full flex items-center justify-center gap-1.5 border border-foreground bg-foreground py-2.5 font-mono text-xs normal-case tracking-widest text-background hover:bg-background hover:text-foreground transition-colors"
           >
-            got it <ArrowRight className="w-3 h-3" strokeWidth={2} />
+            Got it <ArrowRight className="w-3 h-3" strokeWidth={2} />
           </button>
           <button
             onClick={skip}
             className={SKIP_BUTTON_CLASS}
           >
-            skip intro
+            Skip intro
           </button>
-          <p className="mt-2 text-center font-mono text-[9px] lowercase tracking-wider text-muted-foreground/60">
-            esc to exit anytime
+          <p className="mt-2 text-center font-mono text-[9px] normal-case tracking-wider text-muted-foreground/60">
+            Esc to exit anytime
           </p>
         </motion.div>
         );

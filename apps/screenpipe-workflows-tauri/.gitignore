@@ -1,0 +1,69 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+.yarn/install-state.gz
+
+pnpm-lock.yaml
+
+# testing
+/coverage
+.e2e-data/
+.e2e/
+e2e/videos/
+e2e/screenshots/
+e2e/results/
+e2e/COVERAGE.runtime.md
+e2e/dist/
+
+# next.js
+/.next/
+/out/
+
+# build-frontend.js atomic-swap staging dirs
+/.out.tmp-*
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files
+.env*.local
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+
+ffmpeg*
+ffprobe*
+*src-tauri/screenpipe*
+*src-tauri/tesseract*
+*src-tauri/tessdata*
+*src-tauri/deno*
+*src-tauri/ollama*
+*src-tauri/bun*
+*src-tauri/ollama*
+/src-tauri/mlx.metallib
+/src-tauri/mlx.metallib-*
+/src-tauri/libonnxruntime.dylib
+/src-tauri/openblas/
+/src-tauri/onnxruntime-win-arm64-*/
+/src-tauri/onnxruntime-win-x64-*/
+
+
+# E2E: local hosted-AI gateway request mirror (see e2e/wdio.conf.ts)
+.e2e-gateway-requests.json

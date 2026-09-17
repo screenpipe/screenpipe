@@ -65,7 +65,7 @@ describe("PipeChatDestinationPicker", () => {
     );
     const options = screen.getAllByRole("option");
     expect(options[0]).toHaveTextContent("pinned strategy");
-    fireEvent.keyDown(screen.getByRole("textbox", { name: "search chats" }), {
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Search chats" }), {
       key: "ArrowDown",
     });
     expect(options[0]).toHaveFocus();
@@ -86,7 +86,7 @@ describe("PipeChatDestinationPicker", () => {
       />,
     );
 
-    fireEvent.change(screen.getByRole("textbox", { name: "search chats" }), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Search chats" }), {
       target: { value: "customer" },
     });
     await waitFor(() => expect(searchConversations).toHaveBeenCalledWith(
@@ -106,7 +106,7 @@ describe("PipeChatDestinationPicker", () => {
       />,
     );
 
-    expect(await screen.findByText("chat unavailable")).toBeInTheDocument();
+    expect(await screen.findByText("Chat unavailable")).toBeInTheDocument();
     expect(listConversations).not.toHaveBeenCalled();
   });
 
@@ -144,8 +144,8 @@ describe("PipeChatDestinationPicker", () => {
       />,
     );
 
-    expect(await screen.findByText("couldn't load chats")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "retry" }));
+    expect(await screen.findByText("Couldn't load chats")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("recovered chat")).toBeInTheDocument();
   });
 });

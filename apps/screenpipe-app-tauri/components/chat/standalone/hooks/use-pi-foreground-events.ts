@@ -322,8 +322,8 @@ export function usePiForegroundEvents({
           // to look like nothing was happening.
           useAcpBootState.getState().begin(agentId, "installing");
           toast({
-            title: `installing ${name}`,
-            description: "downloading the agent. this can take a moment.",
+            title: `Installing ${name}`,
+            description: "Downloading the agent. This can take a moment.",
           });
         } else if (stringValue(data.phase) === "ready") {
           useAcpBootState.getState().finish(agentId);
@@ -332,7 +332,7 @@ export function usePiForegroundEvents({
           if (installingAgents.delete(agentId)) {
             toast({
               title: `${name} ready`,
-              description: "the agent is connected. you can start chatting.",
+              description: "The agent is connected. You can start chatting.",
             });
           }
         }

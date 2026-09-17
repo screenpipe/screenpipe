@@ -209,17 +209,17 @@ export function RegistryBrowser({
               Browse MCP registry
             </DialogTitle>
             <p className="text-[11px] text-muted-foreground truncate">
-              official registry · registry.modelcontextprotocol.io
+              Official registry · registry.modelcontextprotocol.io
             </p>
           </div>
           <DialogClose asChild>
             <button
               type="button"
-              aria-label="close"
+              aria-label="Close"
               className="ml-auto text-muted-foreground transition-colors hover:text-foreground"
             >
               <X className="h-4 w-4" />
-              <span className="sr-only">close</span>
+              <span className="sr-only">Close</span>
             </button>
           </DialogClose>
         </DialogHeader>
@@ -230,7 +230,7 @@ export function RegistryBrowser({
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="search servers — notion, github, postgres…"
+              placeholder="Search servers — notion, GitHub, postgres…"
               className="h-8 text-sm pl-8"
               autoFocus
             />
@@ -241,7 +241,7 @@ export function RegistryBrowser({
           {loading ? (
             <div className="flex items-center justify-center gap-2 py-10 text-xs text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              searching registry…
+              Searching registry…
             </div>
           ) : error ? (
             <div className="flex items-start gap-1.5 text-xs rounded-md border border-destructive/40 bg-destructive/5 text-destructive p-3">
@@ -250,17 +250,17 @@ export function RegistryBrowser({
             </div>
           ) : !debounced ? (
             <div className="space-y-1.5">
-              <p className="px-0.5 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              <p className="px-0.5 pb-1 text-[10px] font-medium normal-case tracking-wide text-muted-foreground">
                 Recommended
               </p>
               {RECOMMENDED_SERVERS.map(renderRow)}
               <p className="pt-1 text-[11px] text-muted-foreground text-center">
-                search above to browse the full registry.
+                Search above to browse the full registry.
               </p>
             </div>
           ) : servers.length === 0 ? (
             <div className="text-xs text-muted-foreground bg-muted/30 rounded-md px-3 py-6 text-center">
-              no servers match “{debounced}”.
+              No servers match “{debounced}”.
             </div>
           ) : (
             <div className="space-y-1.5">
@@ -286,7 +286,7 @@ export function RegistryBrowser({
         </div>
 
         <div className="px-4 py-2 bg-muted/50 border-t border-border text-[11px] text-muted-foreground">
-          adding a server opens the editor — review its tools and auth before
+          Adding a server opens the editor — review its tools and auth before
           enabling.
         </div>
       </DialogContent>
@@ -315,7 +315,7 @@ function RegistryRow({
             {displayName(server)}
           </span>
           <span className="px-1.5 py-0.5 rounded-full text-[9px] font-medium border border-border text-muted-foreground">
-            {kind === "http" ? "remote" : kind === "stdio" ? "local" : "catalog"}
+            {kind === "http" ? "Remote" : kind === "stdio" ? "Local" : "Catalog"}
           </span>
         </div>
         {ns && (
@@ -335,7 +335,7 @@ function RegistryRow({
             className="mt-1 inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
           >
             <ExternalLink className="h-2.5 w-2.5" />
-            repository
+            Repository
           </button>
         )}
       </div>
@@ -343,7 +343,7 @@ function RegistryRow({
         {installed ? (
           <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground px-2 py-1">
             <Check className="h-3 w-3" />
-            added
+            Added
           </span>
         ) : (
           <Button
@@ -354,7 +354,7 @@ function RegistryRow({
             disabled={kind === "none"}
             title={
               kind === "none"
-                ? "no installable remote or package listed"
+                ? "No installable remote or package listed"
                 : undefined
             }
           >

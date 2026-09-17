@@ -11,7 +11,9 @@ export const searchIndex: SettingsField[] = [
   { label: "Disk usage", keywords: ["disk", "space", "gb"] },
   { label: "Retention", keywords: ["cleanup", "delete old"] },
   { label: "Clear Cache" },
+  { label: "Database storage", keywords: ["migrate", "migration", "compression", "original database"] },
 ];
+import { StorageMigrationCard } from "./storage-migration-card";
 import { DiskUsageSection } from "./disk-usage-section";
 import { ApplyRestartBar } from "./apply-restart-bar";
 import { LockedSetting } from "@/components/enterprise-locked-setting";
@@ -45,6 +47,7 @@ function formatBytes(bytes: number): string {
 export function StorageSection() {
   const { settings, updateSettings, getDataDir } = useSettings();
   const { toast } = useToast();
+  const [storageOperationBusy, setStorageOperationBusy] = useState(false);
   const [cacheFiles, setCacheFiles] = useState<CacheFile[]>([]);
   const [showCacheDialog, setShowCacheDialog] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
@@ -66,7 +69,7 @@ export function StorageSection() {
       const result = await commands.validateDataDir(selected);
       if (result.status === "error") {
         toast({
-          title: "invalid directory",
+          title: "Invalid directory",
           description: String(result.error),
           variant: "destructive",
           duration: 5000,
@@ -78,8 +81,8 @@ export function StorageSection() {
     } catch (error) {
       console.error("failed to change data directory:", error);
       toast({
-        title: "error",
-        description: "failed to change data directory",
+        title: "Error",
+        description: "Failed to change data directory",
         variant: "destructive",
         duration: 5000,
       });
@@ -102,14 +105,14 @@ export function StorageSection() {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       setDataDirChanged(false);
       toast({
-        title: "restarted",
-        description: "screenpipe restarted with the new data directory",
+        title: "Restarted",
+        description: "Screenpipe restarted with the new data directory",
       });
     } catch (error) {
       console.error("failed to restart screenpipe:", error);
       toast({
-        title: "restart failed",
-        description: "please restart screenpipe manually for the change to apply",
+        title: "Restart failed",
+        description: "Please restart screenpipe manually for the change to apply",
         variant: "destructive",
         duration: 5000,
       });
@@ -123,6 +126,8 @@ export function StorageSection() {
       <p className="text-muted-foreground text-sm mb-4">
         Local disk usage and storage controls
       </p>
+
+      <StorageMigrationCard dataDirectory={settings.dataDir} onBusyChange={setStorageOperationBusy} />
 
       {/* Data Directory */}
       <LockedSetting settingKey="data_directory">
@@ -141,7 +146,7 @@ export function StorageSection() {
                       : settings.dataDir}
                   </p>
                   <p className="text-[10px] text-muted-foreground/70 mt-0.5">
-                    changing directory starts fresh recordings
+                    Changing directory starts fresh recordings
                   </p>
                 </div>
               </div>
@@ -152,6 +157,7 @@ export function StorageSection() {
                     <Button
                       variant="ghost"
                       size="sm"
+                      disabled={storageOperationBusy}
                       onClick={handleDataDirReset}
                       className="h-7 text-xs shrink-0"
                     >
@@ -161,6 +167,7 @@ export function StorageSection() {
                 <Button
                   variant="outline"
                   size="sm"
+                  disabled={storageOperationBusy}
                   onClick={handleDataDirChange}
                   className="h-7 text-xs shrink-0"
                 >
@@ -197,20 +204,20 @@ export function StorageSection() {
                   if (result.data.length === 0) {
                     if (await hasCachedData()) {
                       await clearTimelineCache();
-                      toast({ title: "cache cleared" });
+                      toast({ title: "Cache cleared" });
                     } else {
-                      toast({ title: "nothing to clean up" });
+                      toast({ title: "Nothing to clean up" });
                     }
                     return;
                   }
                   setCacheFiles(result.data);
                   setShowCacheDialog(true);
                 } catch (e: any) {
-                  toast({ title: "failed to clear cache", description: e?.toString(), variant: "destructive" });
+                  toast({ title: "Failed to clear cache", description: e?.toString(), variant: "destructive" });
                 }
               }}
             >
-              {isClearing ? "clearing..." : "clear"}
+              {isClearing ? "Clearing..." : "Clear"}
             </Button>
           </div>
         </CardContent>
@@ -219,10 +226,10 @@ export function StorageSection() {
       <AlertDialog open={showCacheDialog} onOpenChange={setShowCacheDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>clear cache?</AlertDialogTitle>
+            <AlertDialogTitle>Clear cache?</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2">
-                <p>the following files will be deleted ({formatBytes(cacheFiles.reduce((s, f) => s + Number(f.size_bytes), 0))} total):</p>
+                <p>The following files will be deleted ({formatBytes(cacheFiles.reduce((s, f) => s + Number(f.size_bytes), 0))} total):</p>
                 <ul className="text-xs space-y-1 max-h-48 overflow-y-auto">
                   {cacheFiles.map((f) => (
                     <li key={f.path} className="flex justify-between gap-2">
@@ -238,7 +245,7 @@ export function StorageSection() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>cancel</AlertDialogCancel>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={async () => {
                 setIsClearing(true);
@@ -249,18 +256,18 @@ export function StorageSection() {
                   if (result.status === "error") throw new Error(result.error);
                   await clearTimelineCache();
                   toast({
-                    title: "cache cleared",
-                    description: `freed ${formatBytes(Number(result.data))}`,
+                    title: "Cache cleared",
+                    description: `Freed ${formatBytes(Number(result.data))}`,
                   });
                 } catch (e: any) {
-                  toast({ title: "failed to clear cache", description: e?.toString(), variant: "destructive" });
+                  toast({ title: "Failed to clear cache", description: e?.toString(), variant: "destructive" });
                 } finally {
                   setIsClearing(false);
                   setCacheFiles([]);
                 }
               }}
             >
-              delete all
+              Delete all
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

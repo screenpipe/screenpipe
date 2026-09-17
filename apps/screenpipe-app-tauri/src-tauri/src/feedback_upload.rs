@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 const COMPLETED_EVENT: &str = "feedback-upload-completed";
 const MAX_LOG_FILES: usize = 5;
-const MAX_LOG_BYTES: u64 = 100 * 1024;
+const MAX_LOG_BYTES: u64 = 1024 * 1024;
 const MAX_ATTACHMENT_BYTES: usize = 50 * 1024 * 1024;
 const API_TIMEOUT: Duration = Duration::from_secs(30);
 const LOG_READ_TIMEOUT: Duration = Duration::from_secs(60);
@@ -296,6 +296,27 @@ async fn probe_recording_endpoint(client: &Client, url: String) -> Value {
         }),
         Ok(Err(error)) => json!({ "ok": false, "error": error.to_string() }),
         Err(_) => json!({ "ok": false, "error": "timeout" }),
+    }
+}
+
+async fn collect_migration_diagnostics(app: &AppHandle) -> String {
+    let root = crate::store::SettingsStore::get(app)
+        .ok()
+        .flatten()
+        .and_then(|settings| crate::config::selected_recording_data_dir(&settings.data_dir).ok());
+    let Some(root) = root else {
+        return "[Storage directory unavailable]".into();
+    };
+    match timeout(
+        DIAGNOSTIC_PROBE_TIMEOUT,
+        tokio::task::spawn_blocking(move || screenpipe_db::storage::diagnostics::recent(&root)),
+    )
+    .await
+    {
+        Ok(Ok(Ok(snapshots))) => serde_json::to_string_pretty(&snapshots).unwrap_or_default(),
+        Ok(Ok(Err(error))) => format!("[Could not read migration diagnostics: {error}]"),
+        Ok(Err(error)) => format!("[Migration diagnostic reader failed: {error}]"),
+        Err(_) => "[Migration diagnostic read timed out]".into(),
     }
 }
 
@@ -601,10 +622,13 @@ async fn run_feedback_upload(
     let screenshot = prepare_screenshot(request.screenshot_data_url.as_deref())?;
     let video = prepare_video(request)?;
     let logs = collect_log_text(app).await;
-    let recording_diagnostics = collect_recording_diagnostics(app).await;
+    let (recording_diagnostics, migration_diagnostics) = tokio::join!(
+        collect_recording_diagnostics(app),
+        collect_migration_diagnostics(app),
+    );
     let raw_bundle = format!(
-        "{}{}\n\n=== Browser Console Logs ===\n{}\n\n=== Recording Diagnostics ===\n{}",
-        request.chat_history, logs, request.console_log, recording_diagnostics
+        "{}{}\n\n=== Browser Console Logs ===\n{}\n\n=== Recording Diagnostics ===\n{}\n\n=== Storage Migration Diagnostics ===\n{}",
+        request.chat_history, logs, request.console_log, recording_diagnostics, migration_diagnostics
     );
     let redacted_logs =
         crate::feedback_redact::redact_pii_for_feedback(raw_bundle, request.settings_json.clone())

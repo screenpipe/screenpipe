@@ -140,18 +140,18 @@ export function recommendedCapacityCard(
   return upgrade ? CARD_FOR_TARGET[upgrade.targetPlan] : null;
 }
 
-/** Which card to mark "current" for an entitlement plan (users.plan). */
+/** Which subscription card to mark current; Lifetime has its own active card. */
 export function accountPlanForEntitlement(
   plan: string | null | undefined,
   hasPaidAccess: boolean,
-): AccountPlanId {
+): AccountPlanId | null {
   switch ((plan || "").toLowerCase()) {
     case "standard":
     case "basic":
-    // Lifetime is the permanent app entitlement and maps to the Basic hosted
-    // AI tier, so it is not Business.
-    case "lifetime":
       return "standard";
+    // A one-time entitlement must not label a monthly subscription as current.
+    case "lifetime":
+      return null;
     // Each capacity level owns a card now, so the badge lands on the tier the
     // account actually pays for. Before this a Business Max account read
     // "$50 / seat / month" under a "your plan" badge while paying $100.
@@ -181,7 +181,7 @@ export function AccountPlanOptions({
   disabledReason,
   onSelect,
 }: {
-  current: AccountPlanId;
+  current: AccountPlanId | null;
   /** Raw entitlement (users.plan), used to point at the next capacity step. */
   entitlementPlan?: string | null;
   /** Plan the account drops to when a trial or grant ends. */
@@ -220,23 +220,23 @@ export function AccountPlanOptions({
             }`}
           >
             <div className="flex items-start justify-between gap-2">
-              <span className="text-sm font-semibold lowercase">
+              <span className="text-sm font-semibold normal-case">
                 {plan.name}
               </span>
               {isCurrent ? (
                 <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                  current
+                  Current
                 </span>
               ) : isFallback ? (
                 <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
-                  next
+                  Next
                 </span>
               ) : isRecommended ? (
                 <span
                   className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground"
                   data-testid="account-plan-next-step"
                 >
-                  next step
+                  Next step
                 </span>
               ) : null}
             </div>
@@ -275,7 +275,7 @@ export function AccountPlanOptions({
                 onClick={() => onSelect(purchase)}
                 data-testid={`account-plan-choose-${plan.id}`}
               >
-                {busy ? "checking…" : plan.cta}
+                {busy ? "Checking…" : plan.cta}
                 {leavesApp && !busy ? (
                   <ExternalLinkIcon className="ml-1.5 h-3 w-3" />
                 ) : null}
@@ -283,9 +283,9 @@ export function AccountPlanOptions({
             ) : (
               <p className="mt-3 rounded-md bg-muted px-2 py-1.5 text-center text-[10px] text-muted-foreground">
                 {isCurrent
-                  ? "your plan"
+                  ? "Your plan"
                   : isFallback
-                    ? "after it ends"
+                    ? "After it ends"
                     : (disabledReason ?? plan.cta)}
               </p>
             )}

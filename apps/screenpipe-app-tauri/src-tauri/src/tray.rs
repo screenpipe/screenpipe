@@ -31,6 +31,7 @@ use tauri::{
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_store::StoreExt;
 
 use tracing::{debug, error, info, warn};
 
@@ -42,6 +43,7 @@ pub use crate::process_exit::QUIT_REQUESTED;
 /// the lightweight menu-item construction runs on the main thread.
 #[derive(Clone)]
 struct TrayMenuData {
+    workflows_mode: bool,
     onboarding_completed: bool,
     trial_activation_locked: bool,
     show_shortcut: String,
@@ -60,10 +62,7 @@ struct TrayMenuData {
 /// Gather all data needed by `create_dynamic_menu` on the current (non-main)
 /// thread so the main-thread closure does zero I/O.
 fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
-    let onboarding = OnboardingStore::get(app)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+    let onboarding = OnboardingStore::get(app).ok().flatten().unwrap_or_default();
     let onboarding_completed = onboarding.is_completed;
     let trial_activation_locked =
         !crate::should_skip_onboarding() && onboarding.blocks_trial_activation_app();
@@ -138,7 +137,15 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
         false
     };
 
+    let workflows_mode = screenpipe_core::workflows::pipeline::rollout_enabled()
+        && app
+            .store("workflows-entry.bin")
+            .ok()
+            .and_then(|store| store.get("mode"))
+            .is_some_and(|mode| mode.as_str() == Some("workflows"));
+
     TrayMenuData {
+        workflows_mode,
         onboarding_completed,
         trial_activation_locked,
         show_shortcut,
@@ -845,6 +852,7 @@ fn snapshot_menu_state(data: &TrayMenuData, effective_status: RecordingStatus) -
     let recording_info = get_recording_info();
     let hd = get_high_fps_status();
     MenuState {
+        workflows_mode: data.workflows_mode,
         shortcuts: {
             let mut m = HashMap::new();
             m.insert("show".to_string(), data.show_shortcut.clone());
@@ -996,6 +1004,7 @@ mod menu_refresh_observer {
 
 #[derive(Default, PartialEq, Clone)]
 struct MenuState {
+    workflows_mode: bool,
     shortcuts: HashMap<String, String>,
     recording_status: Option<RecordingStatus>,
     audio_capture_status: Option<AudioCaptureStatus>,
@@ -1247,10 +1256,14 @@ fn create_dynamic_menu(
                 .item(&MenuItemBuilder::with_id("settings", "Settings...").build(app)?)
                 .item(&PredefinedMenuItem::separator(app)?);
         }
-        menu_builder = menu_builder
-            .item(&MenuItemBuilder::with_id("quit", "Quit screenpipe").build(app)?);
+        menu_builder =
+            menu_builder.item(&MenuItemBuilder::with_id("quit", "Quit screenpipe").build(app)?);
 
         return menu_builder.build().map_err(Into::into);
+    }
+
+    if data.workflows_mode && !data.app_ui_hidden {
+        return create_workflows_menu(app, data);
     }
 
     let show_shortcut = &data.show_shortcut;
@@ -1532,6 +1545,65 @@ fn create_dynamic_menu(
     );
 
     menu_builder.build().map_err(Into::into)
+}
+
+/// Workflows keeps the tray focused on opening the app and controlling capture.
+/// Reuse the normal recording action IDs, timers, settings and Help handlers.
+fn create_workflows_menu(app: &AppHandle, data: &TrayMenuData) -> Result<tauri::menu::Menu<Wry>> {
+    let mut menu = MenuBuilder::new(app)
+        .item(&MenuItemBuilder::with_id("open_app", "Open Screenpipe").build(app)?)
+        .item(&PredefinedMenuItem::separator(app)?);
+    if !is_tray_item_hidden("tray_recording_controls") {
+        let status = get_effective_recording_status();
+        let recording = status == RecordingStatus::Recording && !data.all_capture_disabled;
+        let mut controls = SubmenuBuilder::new(
+            app,
+            recording_status_text(
+                status,
+                data.all_capture_disabled,
+                get_recording_info().audio_capture_status,
+            ),
+        );
+        if recording {
+            controls = controls
+                .item(&MenuItemBuilder::with_id("pause_15", "Pause for 15 minutes").build(app)?)
+                .item(&MenuItemBuilder::with_id("pause_60", "Pause for 1 hour").build(app)?);
+        }
+        let label = if recording {
+            "Pause until resumed"
+        } else if status == RecordingStatus::Starting {
+            "Starting…"
+        } else {
+            "Resume recording"
+        };
+        controls = controls.item(
+            &MenuItemBuilder::with_id("toggle_recording", label)
+                .enabled(!data.all_capture_disabled && status != RecordingStatus::Starting)
+                .build(app)?,
+        );
+        if status == RecordingStatus::Error && data.has_permission_issue {
+            controls = controls
+                .item(&MenuItemBuilder::with_id("fix_permissions", "Fix permissions…").build(app)?);
+        }
+        menu = menu
+            .item(&controls.build()?)
+            .item(&PredefinedMenuItem::separator(app)?);
+    }
+    if !is_tray_item_hidden("tray_settings") {
+        menu = menu.item(
+            &MenuItemBuilder::with_id("settings", "Settings…")
+                .accelerator("CmdOrCtrl+,")
+                .build(app)?,
+        );
+    }
+    menu = menu
+        .item(&MenuItemBuilder::with_id("feedback", "Help").build(app)?)
+        .item(
+            &MenuItemBuilder::with_id("quit", "Quit Screenpipe")
+                .accelerator("CmdOrCtrl+Q")
+                .build(app)?,
+        );
+    menu.build().map_err(Into::into)
 }
 
 fn setup_tray_click_handlers(main_tray: &TrayIcon) -> Result<()> {
@@ -2448,6 +2520,21 @@ mod tests {
         assert_eq!(tray_telemetry_item("monitor_Private display name"), None);
         assert_eq!(tray_telemetry_item("pause_user_supplied_value"), None);
         assert_eq!(tray_telemetry_item("future_action"), None);
+    }
+
+    #[test]
+    fn product_mode_change_refreshes_tray_without_recording_change() {
+        let mut current = MenuState::default();
+        let workflows = MenuState {
+            workflows_mode: true,
+            ..current.clone()
+        };
+        assert!(replace_menu_state_if_changed(
+            &mut current,
+            workflows.clone()
+        ));
+        assert!(!menu_state_needs_update(&current, &workflows));
+        assert!(menu_state_needs_update(&current, &MenuState::default()));
     }
 
     #[test]

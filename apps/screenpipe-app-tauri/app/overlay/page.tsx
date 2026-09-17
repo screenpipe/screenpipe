@@ -53,18 +53,18 @@ function TimelineErrorFallback({
   return (
     <div className="flex items-center justify-center h-screen bg-background">
       <div className="text-center space-y-4 max-w-md">
-        <p className="text-lg font-medium">timeline crashed</p>
+        <p className="text-lg font-medium">Timeline crashed</p>
         <p className="text-sm text-muted-foreground">{error?.message}</p>
         <div className="flex gap-2 justify-center">
           <Button onClick={onRetry} variant="outline">
             <RefreshCw className="h-4 w-4 mr-2" />
-            retry
+            Retry
           </Button>
           <Button
             variant="outline"
             onClick={() => openFeedback(`Timeline crashed: ${error?.message || "unknown error"}`)}
           >
-            report crash
+            Report crash
           </Button>
         </div>
       </div>
@@ -324,8 +324,8 @@ export default function OverlayPage() {
     setIsRestarting(true);
     try {
       toast({
-        title: "restarting server",
-        description: "stopping screenpipe server...",
+        title: "Restarting server",
+        description: "Stopping screenpipe server...",
         duration: 3000,
       });
 
@@ -336,8 +336,8 @@ export default function OverlayPage() {
       await new Promise(resolve => setTimeout(resolve, 2000));
       
       toast({
-        title: "restarting server",
-        description: "starting screenpipe server...",
+        title: "Restarting server",
+        description: "Starting screenpipe server...",
         duration: 3000,
       });
 
@@ -345,23 +345,23 @@ export default function OverlayPage() {
       await commands.spawnScreenpipe(null);
       
       toast({
-        title: "server restarted",
-        description: "screenpipe server has been restarted successfully.",
+        title: "Server restarted",
+        description: "Screenpipe server has been restarted successfully.",
         duration: 3000,
       });
     } catch (error) {
       console.error("failed to restart server:", error);
       toast({
-        title: "restart failed",
+        title: "Restart failed",
         description: (
           <span>
-            failed to restart screenpipe server.{" "}
+            Failed to restart screenpipe server.{" "}
             <button
               type="button"
               className="underline underline-offset-2 text-inherit opacity-80 hover:opacity-100"
               onClick={() => openFeedback(`Server restart failed: ${error instanceof Error ? error.message : String(error)}`)}
             >
-              report issue
+              Report issue
             </button>
           </span>
         ),
@@ -403,7 +403,7 @@ export default function OverlayPage() {
               {hasAnyData && !isConnected && isServerDown && (
                 <div className="fixed top-10 right-4 z-50 flex items-center gap-2 px-3 py-1.5 bg-muted/90 backdrop-blur-sm rounded-full text-xs text-muted-foreground border">
                   <WifiOff className="h-3 w-3" />
-                  <span>reconnecting...</span>
+                  <span>Reconnecting...</span>
                 </div>
               )}
               
@@ -412,7 +412,7 @@ export default function OverlayPage() {
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
                   <div className="flex flex-col items-center gap-3">
                     <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
-                    <p className="text-sm text-muted-foreground">connecting to screenpipe...</p>
+                    <p className="text-sm text-muted-foreground">Connecting to screenpipe...</p>
                   </div>
                 </div>
               )}
@@ -516,7 +516,7 @@ export default function OverlayPage() {
                     className="text-muted-foreground"
                   >
                     <Calendar className="h-4 w-4 mr-1.5" />
-                    schedule call
+                    Schedule call
                   </Button>
                   <Button
                     variant="outline"
@@ -525,7 +525,7 @@ export default function OverlayPage() {
                     className="text-muted-foreground"
                   >
                     <X className="h-4 w-4 mr-1.5" />
-                    close
+                    Close
                   </Button>
                 </div>
               </div>
@@ -535,7 +535,7 @@ export default function OverlayPage() {
             <div className="flex items-center justify-center h-screen">
               <div className="flex flex-col items-center gap-3">
                 <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
-                <p className="text-sm text-muted-foreground">starting up...</p>
+                <p className="text-sm text-muted-foreground">Starting up...</p>
               </div>
             </div>
           )}

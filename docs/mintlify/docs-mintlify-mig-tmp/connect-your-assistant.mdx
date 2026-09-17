@@ -1,0 +1,52 @@
+---
+title: "Give your assistant access to Screenpipe history"
+sidebarTitle: "Connect your assistant"
+description: "An assistant needs an actual connection to retrieve Screenpipe history."
+icon: "bot"
+---
+
+An assistant needs an actual connection to retrieve Screenpipe history. Pasting a prompt into a separate chat does not grant access to your computer. Connecting a model account to Screenpipe and connecting an assistant to Screenpipe’s tools are different directions.
+
+## Start here
+
+Use the [MCP setup guide](/mcp-server) for a supported local client such as Claude Desktop, Claude Code, or Codex. Keep Screenpipe running on the recording computer and verify the connection with a narrow recent search.
+
+## Copy this prompt
+
+Use this in Screenpipe chat or an assistant with the required connections. Replace the brackets with your details. If the assistant lacks access, provide a reviewed excerpt; a prompt alone does not connect it to your history.
+
+```text
+Before answering, list whether you have a working Screenpipe tool.
+If available, search my history for [harmless phrase] in [five-minute window,
+timezone] and cite the returned source. Do not use a general web search as
+proof of my activity. If no tool is connected, say so and ask for a small
+reviewed excerpt. Do not invent local access or request an API token in chat.
+```
+
+## Check the result
+
+Ask the assistant to quote one harmless test phrase and give its source time. A confident summary without a tool result is not a connection test.
+
+<AccordionGroup>
+<Accordion title="See a worked example" id="worked-example">
+
+| Situation | Next step |
+| --- | --- |
+| Local assistant has Screenpipe tools | Test a bounded query. |
+| Tool exists but returns an error | Check the local service, connection and authentication. |
+| Tool returns no matches | Check the time window and recording coverage. |
+| Separate chat has no Screenpipe tool | Paste a reviewed excerpt or configure a supported connection. |
+
+</Accordion>
+<Accordion title="Go deeper: setup choices and edge cases" id="details">
+
+A remote service cannot reach your computer’s `localhost` just because you put that address in a prompt. Do not expose the local API publicly as a shortcut. Use the documented client connection and keep authentication credentials out of prompts.
+
+For a chat that has no connection, export a short reviewed note containing the time range, relevant facts, source labels, and open questions. Say explicitly that the assistant should answer only from that excerpt. This works as a portable context handoff without claiming direct access.
+
+</Accordion>
+</AccordionGroup>
+
+## Continue
+
+[MCP server](/mcp-server) · [ChatGPT](/chatgpt) · [agent memory workflow](/agent-memory-workflow)

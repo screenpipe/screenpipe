@@ -76,7 +76,7 @@ async function openRegistryInstall() {
       payload: { url: "registry:digital-clone" },
     });
   });
-  await screen.findByText("review scheduled task access");
+  await screen.findByText("Review scheduled task access");
 }
 
 beforeEach(() => {
@@ -122,17 +122,17 @@ describe("pipe install dialog lifecycle", () => {
     await openRegistryInstall();
 
     const install = screen.getByRole("button", {
-      name: "install scheduled task",
+      name: "Install scheduled task",
     });
     fireEvent.click(install);
-    expect(await screen.findByText("installing...")).toBeInTheDocument();
-    expect(screen.getByText("review scheduled task access")).toBeInTheDocument();
+    expect(await screen.findByText("Installing...")).toBeInTheDocument();
+    expect(screen.getByText("Review scheduled task access")).toBeInTheDocument();
     expect(cancelled).not.toHaveBeenCalled();
 
     await act(async () => finishInstall?.());
     await waitFor(() =>
       expect(
-        screen.queryByText("review scheduled task access"),
+        screen.queryByText("Review scheduled task access"),
       ).not.toBeInTheDocument(),
     );
     expect(installed).toHaveBeenCalledWith(
@@ -152,10 +152,10 @@ describe("pipe install dialog lifecycle", () => {
     render(<PipeInstallDialog />);
     await openRegistryInstall();
 
-    fireEvent.click(screen.getByRole("button", { name: "not now" }));
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
     await waitFor(() =>
       expect(
-        screen.queryByText("review scheduled task access"),
+        screen.queryByText("Review scheduled task access"),
       ).not.toBeInTheDocument(),
     );
     expect(cancelled).toHaveBeenCalledWith(
@@ -177,7 +177,7 @@ describe("pipe install dialog lifecycle", () => {
 
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "install scheduled task" }),
+      screen.getByRole("button", { name: "Install scheduled task" }),
     ).toBeEnabled();
   });
 
@@ -200,7 +200,7 @@ describe("pipe install dialog lifecycle", () => {
     render(<PipeInstallDialog />);
     await openRegistryInstall();
     fireEvent.click(
-      screen.getByRole("button", { name: "install scheduled task" }),
+      screen.getByRole("button", { name: "Install scheduled task" }),
     );
 
     await waitFor(() => expect(mocks.setSection).toHaveBeenCalledWith("pipes"));

@@ -61,7 +61,7 @@ function FrameImage({ frameId }: { frameId: number }) {
     // eslint-disable-next-line @next/next/no-img-element
     <img
       src={url}
-      alt={`frame ${frameId}`}
+      alt={`Frame ${frameId}`}
       className="h-20 w-auto max-w-full rounded border border-border object-cover"
       data-testid={`saf-frame-${frameId}`}
       onError={() => setFailed(true)}
@@ -103,7 +103,7 @@ export function SafSopView({ artifact }: { artifact: SafArtifact }) {
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-sm font-medium">{artifact.title}</span>
         <span className="text-[10px] text-muted-foreground font-mono">
-          v{artifact.version}
+          V{artifact.version}
         </span>
       </div>
       {summary && (
@@ -193,7 +193,7 @@ export function SafArtifactBody({
   if (!expanded) {
     body = hideTitle ? null : <p className="text-sm font-medium">{title}</p>;
   } else if (content == null) {
-    body = <p className="text-xs text-muted-foreground">loading artifact…</p>;
+    body = <p className="text-xs text-muted-foreground">Loading artifact…</p>;
   } else {
     let raw: unknown;
     let parsedOk = false;
@@ -235,11 +235,11 @@ export function SafArtifactBody({
         >
           {expanded ? (
             <>
-              <ChevronUp className="h-2.5 w-2.5" /> show less
+              <ChevronUp className="h-2.5 w-2.5" /> Show less
             </>
           ) : (
             <>
-              <ChevronDown className="h-2.5 w-2.5" /> show more
+              <ChevronDown className="h-2.5 w-2.5" /> Show more
             </>
           )}
         </button>

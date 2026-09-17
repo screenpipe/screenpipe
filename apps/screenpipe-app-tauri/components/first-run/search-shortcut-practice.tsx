@@ -276,11 +276,11 @@ export function FirstRunSearchShortcutPractice() {
           <Check className="h-4 w-4" aria-hidden="true" />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="font-mono text-xs font-semibold lowercase text-foreground">
-            shortcut learned
+          <p className="font-mono text-xs font-semibold normal-case text-foreground">
+            Shortcut learned
           </p>
           <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
-            open search from anywhere with {shortcut}. this lesson will not show
+            Open search from anywhere with {shortcut}. this lesson will not show
             again.
           </p>
         </div>
@@ -292,7 +292,7 @@ export function FirstRunSearchShortcutPractice() {
           className="h-7 px-2 text-[9px]"
           onClick={acknowledge}
         >
-          done
+          Done
         </Button>
       </div>
     );
@@ -345,16 +345,16 @@ export function FirstRunSearchShortcutPractice() {
         <Keyboard className="h-4 w-4" aria-hidden="true" />
       </span>
       <div className="min-w-0 flex-1">
-        <p className="font-mono text-xs font-semibold lowercase text-foreground">
-          find anything from anywhere
+        <p className="font-mono text-xs font-semibold normal-case text-foreground">
+          Find anything from anywhere
         </p>
         <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
-          {phase === "waiting" ? "press" : "use"}{" "}
+          {phase === "waiting" ? "Press" : "Use"}{" "}
           <kbd className="border border-border bg-muted/30 px-1.5 py-0.5 font-mono text-[9px] text-foreground">
             {shortcut}
           </kbd>{" "}
           {phase === "waiting"
-            ? "now. screenpipe is waiting for the real shortcut."
+            ? "now. Screenpipe is waiting for the real shortcut."
             : "while screenpipe runs in the background."}
         </p>
         {issueCopy ? (
@@ -371,7 +371,7 @@ export function FirstRunSearchShortcutPractice() {
               className="shrink-0 font-mono text-[9px] underline underline-offset-2"
               onClick={() => void openSettingsWindow("shortcuts")}
             >
-              change shortcut
+              Change shortcut
             </button>
           </div>
         ) : null}
@@ -388,18 +388,18 @@ export function FirstRunSearchShortcutPractice() {
             disabled={listenerState !== "ready"}
           >
             {listenerState === "connecting"
-              ? "getting ready"
+              ? "Getting ready"
               : listenerState === "failed"
-                ? "unavailable"
-                : "try it now"}
+                ? "Unavailable"
+                : "Try it now"}
           </Button>
         ) : (
           <span
             data-testid="first-run-search-shortcut-waiting"
             role="status"
-            className="px-2 font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground"
+            className="px-2 font-mono text-[9px] normal-case tracking-[0.12em] text-muted-foreground"
           >
-            waiting
+            Waiting
           </span>
         )}
         <Button
@@ -410,7 +410,7 @@ export function FirstRunSearchShortcutPractice() {
           className="h-7 px-2 text-[9px]"
           onClick={snooze}
         >
-          not now
+          Not now
         </Button>
       </div>
     </div>

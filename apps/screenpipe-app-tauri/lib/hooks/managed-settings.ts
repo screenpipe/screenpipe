@@ -160,7 +160,6 @@ export const MANAGED_SETTING_DEFINITIONS: readonly ManagedSettingDefinition[] = 
 
   bool("disableVision", false),
   bool("disableScreenshots", false),
-  bool("enableSemanticContext", false),
   enumeration("semanticContextMode", ["memory", "computerUse", "both"], "memory"),
   bool("disableTimeline", false),
   bool("useAllMonitors", true),
@@ -405,5 +404,8 @@ export function applyManagedOverrides<T extends Record<string, unknown>>(
   if (!managedValues || typeof managedValues !== "object" || Array.isArray(managedValues)) {
     return updates;
   }
-  return { ...updates, ...(managedValues as Record<string, unknown>) } as T;
+  const overrides = { ...(managedValues as Record<string, unknown>) };
+  // The retired toggle must not undo built-in context or its emergency shutoff.
+  delete overrides.enableSemanticContext;
+  return { ...updates, ...overrides } as T;
 }

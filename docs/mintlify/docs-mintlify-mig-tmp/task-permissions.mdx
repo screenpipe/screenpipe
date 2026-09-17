@@ -1,0 +1,259 @@
+---
+title: "Scheduled task permissions: scope Screenpipe API access"
+sidebarTitle: "Task permissions"
+description: "Control which Screenpipe API endpoints your scheduled tasks can access by allowlisting endpoints, restricting writes, and scoping permissions per automation."
+icon: "shield-check"
+---
+
+<Note>
+The app calls these **Scheduled tasks**. The CLI command `screenpipe pipe`, local API paths under `/pipes`, and configuration file `pipe.md` retain their technical names. Use those exact identifiers in commands and configuration.
+</Note>
+
+## Overview
+
+Scheduled tasks can access the Screenpipe API to read screen data, manage meetings, send notifications, and more. By default, scheduled tasks have **full access** to every endpoint — no restrictions.
+
+If you want to limit what a scheduled task can do, add a `permissions` block to the YAML frontmatter in `pipe.md`. This is useful for:
+
+- **Preventing accidents** — a scheduled task that reads meetings shouldn't be able to stop one
+- **Least privilege** — scheduled tasks from the store should only access what they need
+- **Safety** — deny destructive endpoints like `/data/delete-range`
+
+## Quick start
+
+```yaml
+---
+schedule: every 30m
+permissions: reader
+---
+
+Summarize my screen activity...
+```
+
+This preset restricts supported Screenpipe API calls. It blocks meeting start/stop, deletion, and raw SQL, but also allows selected operations such as notifications, speaker-name updates, and submissions to output targets bound to the authenticated task. It does not sandbox shell commands, files, or external tools.
+
+## Presets
+
+### `reader` — restricted API defaults
+
+```yaml
+permissions: reader
+```
+
+Allowed endpoints:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/search` | Query screen/audio data |
+| GET | `/activity-summary` | App usage overview |
+| GET | `/elements` | UI element search |
+| GET | `/frames/*` | Screenshots (if `allow_frames: true`) |
+| GET | `/meetings` | List meetings |
+| GET | `/meetings/*` | Get meeting details |
+| GET | `/meetings/status` | Check if in meeting |
+| POST | `/notify` | Send notifications |
+| GET | `/speakers` | List speakers |
+| POST | `/speakers/update` | Update speaker names |
+| GET | `/pipes/info` | Scheduled task metadata |
+| GET | `/health` | Health check |
+| GET | `/workflows`, `/workflows/*` | Workflow discovery and details |
+| GET | `/feedback` | Feedback attributed to this authenticated task |
+| GET | `/outputs/targets` | Discover output targets bound to this task |
+| POST | `/outputs/targets/*/submit` | Fill an output target bound to this task |
+| GET | `/connections/*` | Connection credentials |
+
+Everything else is **denied**.
+
+### `writer` — reader + write operations
+
+```yaml
+permissions: writer
+```
+
+Includes all `reader` endpoints, plus:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/meetings/start` | Start a manual meeting |
+| POST | `/meetings/stop` | Stop a manual meeting |
+| PUT | `/meetings/*` | Update meeting details |
+| POST | `/meetings/merge` | Merge meetings |
+| POST | `/memories` | Create memories |
+| PUT | `/memories/*` | Update memories |
+| DELETE | `/memories/*` | Delete memories |
+
+### `admin` — full access (explicit)
+
+```yaml
+permissions: admin
+```
+
+Allows everything. Functionally the same as no `permissions` block, but creates a token for logging/auditing.
+
+## Custom rules
+
+For fine-grained control, use `allow` and `deny` lists with `Api(METHOD /path)` patterns:
+
+```yaml
+permissions:
+  allow:
+    - Api(GET /search)
+    - Api(GET /meetings/*)
+    - Api(POST /notify)
+  deny:
+    - Api(* /data/delete-*)
+```
+
+### Pattern syntax
+
+| Pattern | Matches |
+|---------|---------|
+| `Api(GET /search)` | Exact: GET to /search |
+| `Api(GET /meetings/*)` | Glob: GET to /meetings/42, /meetings/status, etc. |
+| `Api(* /meetings/stop)` | Any method to /meetings/stop |
+| `Api(POST /notify)` | Exact: POST to /notify |
+| `Api(* /data/*)` | Any method to any /data/ subpath |
+
+`*` in the method position matches GET, POST, PUT, DELETE, etc.
+`*` in the path position matches any sequence of characters.
+
+### Evaluation order
+
+Rules are evaluated in this order — **first match wins**:
+
+1. **Deny** — if the request matches any deny rule, it's blocked (403)
+2. **Allow** — if the request matches any allow rule, it passes
+3. **Default allowlist** — if `allow` is empty and the scheduled task uses a preset with defaults (reader/writer), the default list is checked
+4. **Reject** — if nothing matched, the request is blocked
+
+Deny always wins over allow, just like firewall rules.
+
+### Examples
+
+**Deny specific endpoints (keep full access otherwise):**
+
+```yaml
+permissions:
+  deny:
+    - Api(* /meetings/stop)
+    - Api(* /meetings/start)
+    - Api(DELETE /meetings/*)
+    - Api(* /data/delete-*)
+```
+
+**Allow only what you need (everything else denied):**
+
+```yaml
+permissions:
+  allow:
+    - Api(GET /search)
+    - Api(POST /notify)
+```
+
+**Reader defaults + custom deny:**
+
+```yaml
+permissions:
+  deny:
+    - Api(GET /frames/*)
+```
+
+This uses the reader defaults but also blocks screenshot access.
+
+## Data access rules
+
+Data filtering uses the same `allow`/`deny` lists with `App()`, `Window()`, and `Content()` rules:
+
+```yaml
+---
+schedule: every 1h
+permissions:
+  allow:
+    - Api(GET /search)
+    - App(Slack, Chrome)
+    - Window(*meeting*)
+    - Content(accessibility, audio)
+  deny:
+    - App(1Password, Signal)
+    - Window(*incognito*, *bank*)
+    - Content(input)
+  time: "09:00-17:00"
+  days: "Mon,Tue,Wed,Thu,Fri"
+---
+```
+
+| Rule type | Syntax | Description |
+|-----------|--------|-------------|
+| `App(name)` | `App(Slack)` or `App(Slack, Chrome)` | Filter by app name (case-insensitive substring match) |
+| `Window(glob)` | `Window(*meeting*)` | Filter by window title (glob pattern) |
+| `Content(type)` | `Content(accessibility, audio)` | Filter content types: `accessibility`, `ocr`, `audio`, `input` |
+| `time` | `"09:00-17:00"` | Daily time window — supports midnight wrap (`"22:00-06:00"`) |
+| `days` | `"Mon,Tue,Wed,Thu,Fri"` | Allowed days of the week |
+
+Deny rules always win over allow rules. If no rules of a given type exist, everything is allowed.
+
+## How it works
+
+When a scheduled task has any restrictions (permissions block, data filters, etc.):
+
+1. Screenpipe generates a unique token (`sp_pipe_*`) for the scheduled task session
+2. The token is registered with the server middleware
+3. Every API request from the scheduled task includes the token in `Authorization: Bearer sp_pipe_*`
+4. The middleware checks `is_endpoint_allowed(method, path)` before forwarding
+5. The Pi extension also enforces rules client-side (blocks curl commands before they run)
+6. When the scheduled task finishes, the token is cleaned up
+
+Scheduled tasks without any restrictions run without a token — full access, zero overhead.
+
+## Common recipes
+
+### Meeting-safe scheduled task
+
+Your scheduled task reads meeting data but should never interfere with active meetings:
+
+```yaml
+---
+schedule: every 1h
+permissions:
+  deny:
+    - Api(* /meetings/start)
+    - Api(* /meetings/stop)
+    - Api(POST /meetings/merge)
+    - Api(POST /meetings/bulk-delete)
+    - Api(DELETE /meetings/*)
+---
+
+Summarize my meetings from the last hour...
+```
+
+### Read-only analytics scheduled task
+
+```yaml
+---
+schedule: daily
+permissions:
+  allow:
+    - Api(GET /search)
+    - App(Chrome, Arc, Firefox)
+    - Content(accessibility)
+---
+
+Generate a daily browsing report...
+```
+
+### Work-hours-only scheduled task
+
+```yaml
+---
+schedule: every 30m
+permissions:
+  time: "09:00-17:00"
+  days: "Mon,Tue,Wed,Thu,Fri"
+---
+
+Track my work activity...
+```
+
+Full API access, but time and day restrictions limit when data is visible.
+
+Need help? [ask in our Discord](https://discord.gg/screenpipe)

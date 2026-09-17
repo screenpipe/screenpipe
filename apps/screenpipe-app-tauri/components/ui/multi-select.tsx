@@ -465,7 +465,7 @@ export const MultiSelect = React.forwardRef<
                       </div>
                       {!options.find((o) => o.value === option.value) && (
                         <Badge variant="outline" className="ml-2 shrink-0">
-                          custom
+                          Custom
                         </Badge>
                       )}
                     </CommandItem>

@@ -1,0 +1,3255 @@
+{
+  "version": 1,
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ],
+  "criticalFeatures": [
+    {
+      "id": "app-launch",
+      "label": "App launch and Home shell",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e"
+      ]
+    },
+    {
+      "id": "home-search",
+      "label": "Home to floating Search",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e"
+      ]
+    },
+    {
+      "id": "timeline",
+      "label": "Timeline navigation and frames",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e"
+      ]
+    },
+    {
+      "id": "capture-ocr",
+      "label": "Real capture, OCR, and indexing",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "capture-ocr"
+      ]
+    },
+    {
+      "id": "local-api-auth",
+      "label": "Local API auth enforcement",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api"
+      ]
+    },
+    {
+      "id": "local-api-search",
+      "label": "Local API search stability",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api"
+      ]
+    },
+    {
+      "id": "database-hard-fault-containment",
+      "label": "Database hard-fault fail-closed containment",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api",
+        "tauri-command"
+      ]
+    },
+    {
+      "id": "settings-recording",
+      "label": "Screen and audio settings UX",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "settings"
+      ]
+    },
+    {
+      "id": "screen-share-privacy",
+      "label": "Screen-share window privacy preference",
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "layers": [
+        "settings",
+        "tauri-command"
+      ]
+    },
+    {
+      "id": "settings-ai",
+      "label": "AI presets and preferences UX",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "settings"
+      ]
+    },
+    {
+      "id": "settings-privacy-api-auth",
+      "label": "Privacy API auth settings UX",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "settings"
+      ]
+    },
+    {
+      "id": "settings-permissions",
+      "label": "Permissions settings recovery UX",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "settings"
+      ]
+    },
+    {
+      "id": "notifications",
+      "label": "Notification history and viewer paths",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "notifications"
+      ]
+    },
+    {
+      "id": "audio-device-health",
+      "label": "Audio device health",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "audio-device"
+      ]
+    },
+    {
+      "id": "meetings-only-audio-lifecycle",
+      "label": "Meetings-only audio device ownership",
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "layers": [
+        "audio-device",
+        "local-api",
+        "real-ui-e2e"
+      ]
+    },
+    {
+      "id": "window-lifecycle",
+      "label": "Window lifecycle, focus, and dedupe",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "window-lifecycle"
+      ]
+    },
+    {
+      "id": "webview-renderer-recovery",
+      "label": "macOS frozen WebKit renderer recovery",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "window-lifecycle",
+        "tauri-command",
+        "real-ui-e2e",
+        "local-api"
+      ]
+    },
+    {
+      "id": "meeting-notes",
+      "label": "Meeting note creation and editing",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e"
+      ]
+    },
+    {
+      "id": "pipes",
+      "label": "Pipes discover, install, and play",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "pipes"
+      ]
+    },
+    {
+      "id": "chat",
+      "label": "Chat window, composer, and streaming state",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai"
+      ]
+    },
+    {
+      "id": "chat-coding-worktrees",
+      "label": "Conversation-owned coding worktrees",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai"
+      ]
+    },
+    {
+      "id": "tray-search",
+      "label": "Tray/search window behavior",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "window-lifecycle"
+      ]
+    },
+    {
+      "id": "tray-recording-status",
+      "label": "Native tray recording status refresh",
+      "platforms": [
+        "windows"
+      ],
+      "layers": [
+        "os-integration"
+      ]
+    },
+    {
+      "id": "tray-recording-toggle",
+      "label": "Native tray recording pause and resume",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "os-integration",
+        "capture-ocr"
+      ]
+    },
+    {
+      "id": "storage-retention",
+      "label": "Storage retention safety UX",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "storage-privacy"
+      ]
+    },
+    {
+      "id": "spotlight-exclusion",
+      "label": "Screenpipe data stays out of macOS Spotlight",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "storage-privacy",
+        "os-integration"
+      ]
+    },
+    {
+      "id": "updates",
+      "label": "Updater install and rollback safety",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "os-integration"
+      ]
+    },
+    {
+      "id": "update-surfacing",
+      "label": "Update-available banner surfacing",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e"
+      ]
+    },
+    {
+      "id": "speaker-rename-scope",
+      "label": "Speaker rename scope and reference integrity",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api"
+      ]
+    }
+  ],
+  "specs": [
+    {
+      "spec": "acp-backend.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "tauri-command",
+        "os-integration"
+      ],
+      "features": [
+        "chat",
+        "acp-backend",
+        "agent-streaming",
+        "agent-permissions",
+        "agent-cancellation",
+        "agent-terminal",
+        "agent-tool-metadata",
+        "agent-tool-compaction",
+        "mcp-registration",
+        "process-supervision"
+      ],
+      "criticality": "high",
+      "confidence": "partial",
+      "ux": "mixed",
+      "notes": "Official Rust ACP SDK runtime and inline UI E2E with a deterministic stdio agent: initialization, session close, streaming, background permissions, cancellation, localized auth/cancel, malformed stdout, exact adapter/descendant reaping, terminal lifecycle/output draining, late tool metadata/error propagation with a provider fallback, progressive compaction of repeated Claude tool calls with drill-down access, and a real authenticated local API MCP health call. Curated third-party adapters remain manual smoke coverage."
+    },
+    {
+      "spec": "acp-onboarding-ux.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "chat",
+        "acp-backend",
+        "acp-onboarding",
+        "acp-auth"
+      ],
+      "criticality": "high",
+      "confidence": "partial",
+      "ux": "real-user-flow",
+      "notes": "Selecting an ACP agent connects it with nothing sent (sign-in surfaces before the first send, not after a cold install), and the settings picker states who owns sign-in/models/API keys next to the agent list."
+    },
+    {
+      "spec": "api-key-cold-spawn.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api",
+        "tauri-command"
+      ],
+      "features": [
+        "local-api-auth",
+        "app-launch"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "command",
+      "notes": "Cold-spawn local API config regression coverage."
+    },
+    {
+      "spec": "api-search-stress.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api",
+        "performance"
+      ],
+      "features": [
+        "local-api-auth",
+        "local-api-search",
+        "health",
+        "audio-device-health",
+        "local-api-load"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "api",
+      "notes": "Broad readonly API, auth, search, and load coverage."
+    },
+    {
+      "spec": "api.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api"
+      ],
+      "features": [
+        "health",
+        "audio-device-health",
+        "connections",
+        "local-api-auth"
+      ],
+      "criticality": "high",
+      "confidence": "partial",
+      "ux": "api",
+      "notes": "Smoke coverage for local HTTP API shape and auth behavior."
+    },
+    {
+      "spec": "app-lifecycle.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "window-lifecycle"
+      ],
+      "features": [
+        "app-launch",
+        "home-navigation",
+        "webview-stability",
+        "route-churn",
+        "browser-storage"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Home webview, routing, reload, focus, resize, and storage stability."
+    },
+    {
+      "spec": "artifacts-api.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api"
+      ],
+      "features": [
+        "local-api-auth",
+        "artifacts"
+      ],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "api",
+      "notes": "CRUD coverage for artifact registration, validation, unified listing, upsert, and delete."
+    },
+    {
+      "spec": "audio-fallback.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "audio-device",
+        "settings",
+        "notifications"
+      ],
+      "features": [
+        "audio-device-health",
+        "settings-recording",
+        "notifications"
+      ],
+      "criticality": "medium",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "Opt-in macOS cloud audio fallback seed."
+    },
+    {
+      "spec": "brain-overview.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "local-api",
+        "pipes"
+      ],
+      "features": [
+        "brain",
+        "brain-overview",
+        "brain-canvas",
+        "artifacts",
+        "pipes"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Deletes the last dashboard at 800x600, scrolls to the final starter template, verifies the real local builder keeps its generated dashboard on review through save, requires four AI-proposed Blocks to be visible on an empty Canvas before acceptance, and samples the native Canvas viewport across an AI-added Block focus to prove eased intermediate movement instead of a teleport. Also renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080."
+    },
+    {
+      "spec": "brain-section.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e"
+      ],
+      "features": [
+        "brain",
+        "artifacts",
+        "memories",
+        "viewer-deeplink"
+      ],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Brain coverage for filters, search, delete flows, selection pruning, add memory, and inline artifact markdown preview."
+    },
+    {
+      "spec": "capture-frequency-floor.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "capture-ocr",
+        "settings",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "capture-ocr",
+        "settings-recording",
+        "restart-flow"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "macOS fixed screenshot cadence regression: persists the 1s setting before immediate Apply & Restart, then verifies real capture attempts and frame writes."
+    },
+    {
+      "spec": "capture-loop-liveness.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "capture-ocr",
+        "local-api",
+        "os-integration"
+      ],
+      "features": [
+        "app-launch",
+        "capture-ocr"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "api",
+      "notes": "Opt-in macOS fault injection wedges a visual-change probe; asserts the bounded probe keeps the capture loop and its /health heartbeat live (no false stale/incident)."
+    },
+    {
+      "spec": "capture-restart-device-recovery.spec.ts",
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "layers": [
+        "audio-device",
+        "local-api",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "audio-device-health"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "Opt-in real-audio continuous lane for #6089: a capture-session restart must bring back the same running device set, and the device monitor must survive to recover a device stopped afterwards."
+    },
+    {
+      "spec": "capture-stall-recovery.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "capture-ocr",
+        "local-api",
+        "os-integration",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "app-launch",
+        "capture-ocr",
+        "health",
+        "recording-health-alerts"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "mixed",
+      "notes": "Opt-in macOS full-stack lane proves all selected user-paused monitors remain an intentional disabled/normal state and resume cleanly, bounds a wedged SCK frame worker, proves the privacy-gated CoreGraphics fallback, reproduces a status-Running capture loop going silent, verifies stale and the failure pill, independent per-monitor stall detection with a VisionManager restart and resumed terminal capture progress, same-process UI recovery, and bounded id-based SCK lookup retry."
+    },
+    {
+      "spec": "capture-stall-stage-marker.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "capture-ocr",
+        "local-api",
+        "os-integration"
+      ],
+      "features": [
+        "app-launch",
+        "capture-ocr"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "api",
+      "notes": "Opt-in macOS fault injection parks the capture loop; asserts /health names the frozen CaptureLoopStage with an advancing age while frame_status is stale, and that the stage age collapses once the watchdog recovers capture."
+    },
+    {
+      "spec": "chat-ask-user-tool-card.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "tauri-command",
+        "window-lifecycle"
+      ],
+      "features": [
+        "chat",
+        "chat-tools",
+        "pi-ask-user"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "mixed",
+      "notes": "Synthetic assistant tool block renders the Pi ask_user dropdown and sends the selected answer through the normal chat reply path."
+    },
+    {
+      "spec": "chat-automation-card-duplicate.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "chat-home-card-placeholder-preview",
+        "chat-sidebar-dedupe",
+        "chat-session-activity"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "real-user-flow",
+      "notes": "The Day Recap automation card previews its user-facing prompt in the empty composer on hover, restores the default placeholder on leave, and creates exactly one persisted conversation and one sidebar row; status-only activity for an unknown session must not create an empty untitled sibling."
+    },
+    {
+      "spec": "chat-coding-worktree.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "Temporarily quarantined while the composer worktree opt-in is hidden. The retained workflow fixture covers AI repository routing, dirty-source preservation, conversation isolation and resume, worktree identity, Pi cwd ownership, hostile extension isolation, and stop recovery when the control is restored; it does not currently contribute critical worktree coverage."
+    },
+    {
+      "spec": "chat-composer-isolation.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "chat-drafts"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "mixed",
+      "notes": "Composer draft isolation across conversations."
+    },
+    {
+      "spec": "chat-connections-context-duplicate.spec.ts",
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "layers": [
+        "chat-ai"
+      ],
+      "features": [
+        "chat",
+        "chat-sidebar-dedupe"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "synthetic",
+      "notes": "QUARANTINED (#4689): connections-context wrapper stripping regression. The synthetic background-router event path never persists deterministically on Linux/macOS CI; re-enable once it drives a deterministic persisted session."
+    },
+    {
+      "spec": "chat-context-usage-providers.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "chat",
+        "context-usage",
+        "acp-backend",
+        "agent-streaming"
+      ],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "The composer's context reading, once per harness class that can report one. Native Pi answers a real OpenAI-compatible turn whose stream carries usage, and the project-local context-usage extension publishes a per-category breakdown that must sum to the model's own total and must keep non-empty rules/skills buckets, which is what guards the classifier's coupling to pi's prompt section markers. A deterministic stdio ACP adapter reports only the protocol usage_update pair and must render one bar plus the line saying no breakdown is available. Also covers the pre-first-turn state, where the panel says nothing rather than estimating."
+    },
+    {
+      "spec": "chat-cost-limit-upgrade.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "chat"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "A local provider returns the gateway's structured daily-limit rejection across the four self-serve upgrade targets; each request crosses the real Pi and foreground-event path, then the UI asserts the phosphor primary CTA, captures a screenshot, and opens the exact billing URL."
+    },
+    {
+      "spec": "chat-cross-window-transcript-sync.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "window-lifecycle",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "chat-streaming",
+        "window-lifecycle"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Both Home and standalone Chat show persistent pending feedback, then hydrate a completed disk transcript and clear stop state from the real cross-window save event without calling a provider."
+    },
+    {
+      "spec": "chat-empty-space.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat"
+      ],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "A real Tauri chat session keeps a short answer at the top of the message rail without exposing an interactive jump-to-latest control."
+    },
+    {
+      "spec": "chat-renderer-reload-hydration.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "window-lifecycle",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "window-lifecycle"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "A real Tauri WebView loads two saved transcripts, survives a full renderer reload, switches between them repeatedly without refetching connections, then repeats the same-id route and proves both message rows remain rendered."
+    },
+    {
+      "spec": "chat-jump-to-latest.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat"
+      ],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "A long real Tauri chat fades a quiet composer-anchored jump control at the latest message, reveals it after scrolling up, and returns to the bottom on click."
+    },
+    {
+      "spec": "chat-hosted-retry-feedback.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "chat",
+        "chat-streaming"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "A local provider returns priced_request_in_flight twice; Pi retries while the turn row exposes its bounded retry attempt, a real composer follow-up enters the Rust queue, and both turns recover without the misleading mid-response error."
+    },
+    {
+      "spec": "chat-turn-liveness.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "chat-streaming",
+        "offline-recovery"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "The real desktop chat turns off its active phosphor signal and explains that a message is saved when WebView connectivity drops, restores active state on reconnect, and exposes a silent harness after the bounded no-event deadline."
+    },
+    {
+      "spec": "chat-inline-charts.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "markdown",
+        "charts"
+      ],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Seeds an assistant message containing ```chart fences and asserts the charts render inline between the surrounding paragraphs, bar widths are proportional to the data, hover shows a tooltip and recolours the mark, a malformed fence degrades to a readable code block, every chart exposes a screen-reader table, and no chart uses a rounded corner (DESIGN.md)."
+    },
+    {
+      "spec": "chat-rich-result-cards.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "chat",
+        "chat-results",
+        "pipes",
+        "artifacts",
+        "live-views"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Seeds durable scheduled-task, artifact, chat, Live View, and link results; proves directives stay hidden, all proposed/pending/success/paused/recovery states render truthfully, non-actionable states disable Open, light/dark review screenshots remain usable, and a created-chat card switches through the real Tauri conversation handoff."
+    },
+    {
+      "spec": "chat-local-ai-gateway.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "chat",
+        "chat-streaming"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Opt-in full-stack hosted-AI path: the E2E app and real Pi route through the Rust-validated loopback URL into the production Worker bundle under Miniflare, with migrated local D1 and network-closed fake provider egress, then the streamed answer reaches the real chat UI."
+    },
+    {
+      "spec": "chat-new-chat-first-message-ux.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "chat-background-readiness",
+        "chat-first-message-ux",
+        "chat-turn-status"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "real-user-flow",
+      "notes": "Real + new chat through the first assistant token over a cold Pi start: holds the runtime-readiness gate while typing and submitting, pins that the early send waits with its message visible, that the message and cleared composer land in the send frame, that only one status element is ever mounted, and that the pane never snaps alignment. Opt-in (SCREENPIPE_E2E_LOCAL_AI_GATEWAY)."
+    },
+    {
+      "spec": "chat-new-session-stale-save.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e",
+        "storage-privacy"
+      ],
+      "features": [
+        "chat",
+        "chat-drafts"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "synthetic",
+      "notes": "Switching to a new Pi session binds its echoed user turn to the new conversation file and leaves the previous chat intact."
+    },
+    {
+      "spec": "chat-newchat-duplicate.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai"
+      ],
+      "features": [
+        "chat",
+        "chat-sidebar-dedupe"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "synthetic",
+      "notes": "Synthetic chat event regression for duplicate sidebar rows."
+    },
+    {
+      "spec": "chat-newchat-fresh.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "chat-drafts"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "real-user-flow",
+      "notes": "The real new-chat shortcut opens a fresh chat from non-empty conversations and reuses one blank chat when pressed repeatedly."
+    },
+    {
+      "spec": "chat-overlapping-switch-isolation.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e",
+        "window-lifecycle"
+      ],
+      "features": [
+        "chat",
+        "chat-context",
+        "chat-navigation",
+        "chat-session-activity"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Two native chat-load events overlap while the Home panel still renders the outgoing transcript; the newest navigation wins and reopening plus persisting the intermediate chat preserves its own title, identity, and message ids."
+    },
+    {
+      "spec": "chat-parallel-jobs-duplicate.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai"
+      ],
+      "features": [
+        "chat",
+        "chat-sidebar-dedupe"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "synthetic",
+      "notes": "Parallel auto-send prefill dedupe regression."
+    },
+    {
+      "spec": "chat-prefill-context-leak.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai"
+      ],
+      "features": [
+        "chat",
+        "chat-prefill"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "synthetic",
+      "notes": "Pending auto-send prefill must render only the clean prompt, not the internal model context, as the user message."
+    },
+    {
+      "spec": "chat-prefill-duplicate.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "chat-ai"
+      ],
+      "features": [
+        "chat",
+        "chat-prefill"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "synthetic",
+      "notes": "QUARANTINED (#4610): cross-window prefill duplicate regression. The autoSend persist precondition is racy in CI \u2014 times out with 0 conversations (not the duplicate=2 it guards) ~100% Linux + ~33% macOS. Re-enable once it seeds the persisted conversation deterministically."
+    },
+    {
+      "spec": "chat-queue-burst-pending.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "chat-ai"
+      ],
+      "features": [
+        "chat"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "synthetic",
+      "notes": "Several messages queued during an active turn must all become pending cards immediately; regression for the conversation-lease hold that serialized enqueues one per turn."
+    },
+    {
+      "spec": "chat-settings-background-stream.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "settings",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "chat-streaming",
+        "settings"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Opening the standalone Settings route mid-stream must not abort the chat: a long synthetic stream keeps running while the user round-trips to Settings, remains live in Recents, and restores the full response (early + final tokens) after the row is clicked."
+    },
+    {
+      "spec": "chat-agent-activity-sidebar.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "chat-sidebar-groups",
+        "chat-unread-state",
+        "chat-structured-output",
+        "chat-turn-status"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Recent local Codex and Claude histories sync automatically into the same Recents stream as native Screenpipe chats. Isolated real JSONL files prove that a background provider update does not invent an unread dot when the transcript has no provider attention state, that an opened provider chat shows live thinking and running tool feedback, and that tool completion plus later assistant text arrive without a page reload for both providers. A large Claude JSON response stays compact by default and expands into readable, pretty-printed output. The primary sidebar has no import action; right-clicking View all filters by only the sources present, while a hover-only organizer exposes the same filters plus source grouping and priority or latest-update sorting. Captures sparse, crowded mixed-provider, Codex-heavy, and structured-output native UI states with one harness icon per row, expanded pinned rows, and the capped recent working set."
+    },
+    {
+      "spec": "chat-sidebar-groups.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "chat-sidebar-groups"
+      ],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Pipe auto-grouping (collapse, badge, expand/collapse, localStorage persistence) and manual sidebar groups (move-to-group, section headers, remove-from-group cleanup). 8 tests."
+    },
+    {
+      "spec": "chat-sidebar-pipe-inventory.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "pipes",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "pipes",
+        "chat-sidebar-groups"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "The long chat inventory scrolls independently; a collapsed Automations section loads nothing, expanding it lists a compact execution-backed activity page, expanding an automation lazily loads its newest 10 executions, older runs paginate on demand, and a pinned automation remains archived after reload."
+    },
+    {
+      "spec": "chat-sidebar-repeated-prompt.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "chat-sidebar-dedupe"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Two distinct chats sent with the same opening prompt stay visible in the left sidebar."
+    },
+    {
+      "spec": "chat-sidebar-stub-dedup.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai"
+      ],
+      "features": [
+        "chat",
+        "chat-sidebar-dedupe"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "synthetic",
+      "notes": "Listener-order regression for metadata-only sidebar stubs gaining dedup keys."
+    },
+    {
+      "spec": "chat-right-panel-tabs.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "right-panel-tabs",
+        "file-preview"
+      ],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Multiple file previews stay open in the chat right panel, preserve selection across hide and show, and close with predictable focus fallback."
+    },
+    {
+      "spec": "chat-selected-text-side-chat.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "selected-text-actions",
+        "side-chat"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Selecting rendered assistant text exposes the current-chat and temporary side-chat actions. Add to chat keeps the active conversation; ask in side chat creates an editable unsent composer on the right while its source remains visible on the left. Sent side-chat content stays absent from Recents and disk, nested side chats are unavailable, replacement removes the old temporary session, and close restores the source without an orphan pane."
+    },
+    {
+      "spec": "chat-workspace-tabs.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "chat-tabs",
+        "chat-split-pane",
+        "owned-browser",
+        "browser-session-consent",
+        "right-panel-tabs"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Native pointer clicks reach tabs, close, and new-chat controls above the window drag region; unused mount placeholders do not create extra untitled tabs. Multiple real chats remain in a non-destructive working set, a second live transcript stays visible, and promoting it swaps primary composer ownership. Back-to-back owned-browser navigation and consent events keep the login prompt visible without a false loading animation, retain the current address, and render both browser chrome rows at 36px."
+    },
+    {
+      "spec": "owned-browser-tabs.spec.ts",
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "owned-browser",
+        "right-panel-tabs",
+        "native-child-webviews"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "command",
+      "notes": "A surviving app window drives two native child webviews after the home automation context is replaced, then verifies retained per-tab URLs and close cleanup through the E2E harness."
+    },
+    {
+      "spec": "chat-source-file-preview.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat"
+      ],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Clicking a chat file source opens it in the preview sidebar with rendered markdown + syntax-highlighted code."
+    },
+    {
+      "spec": "chat-stop-midturn.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "chat-ai"
+      ],
+      "features": [
+        "chat"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "synthetic",
+      "notes": "Stop on a live turn against a real Pi subprocess: abort mid-stream then send again (no ghost turn or hang), and two overlapping Stops followed by a clean send. Queue lifecycle regression for the request-id correlation refactor."
+    },
+    {
+      "spec": "chat-steer-continuation.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "chat",
+        "chat-streaming"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "A real composer Cmd+Enter steer against Pi immediately inserts a distinct active assistant continuation below the steering bubble and preserves it through the original turn's agent_end transition."
+    },
+    {
+      "spec": "chat-streaming-performance.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "chat-ai",
+        "performance"
+      ],
+      "features": [
+        "chat",
+        "chat-streaming"
+      ],
+      "criticality": "medium",
+      "confidence": "conditional",
+      "ux": "performance",
+      "notes": "macOS-only foreground and background streaming responsiveness plus live and final rich-Markdown fidelity when headings, links, tables, inline code, and fenced code are split across synthetic production-shaped chunks."
+    },
+    {
+      "spec": "chat-stuck-queue-guard.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai"
+      ],
+      "features": [
+        "chat"
+      ],
+      "criticality": "high",
+      "confidence": "partial",
+      "ux": "synthetic",
+      "notes": "A turn that ends while the panel does not own the session on the agent-event bus must still release the composer dispatch guards and must not duplicate the user message; regression for the stuck 'analyzing\u2026' chat whose later messages all piled into QUEUED."
+    },
+    {
+      "spec": "chat-subagent-async-completion.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "chat",
+        "chat-streaming",
+        "async-subagents"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Verifies an asynchronous subagent completion appears as a distinct second assistant turn after the original answer settles, without another user prompt."
+    },
+    {
+      "spec": "chat-switch-context-loss.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai"
+      ],
+      "features": [
+        "chat",
+        "chat-context"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "synthetic",
+      "notes": "Switching conversations during streaming must not corrupt state."
+    },
+    {
+      "spec": "chat-sidebar-navigation.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "chat-navigation",
+        "chat-sidebar"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Native Home WebView coverage for one active conversation, atomic sidebar-to-panel navigation, clean new-chat drafts, semantic unread state, removal of the duplicate tab strip, and a title-scoped Pin/Rename/Archive menu."
+    },
+    {
+      "spec": "chat-tool-activity.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "chat-answer-rendering",
+        "chat-commentary",
+        "chat-long-tool-liveness",
+        "chat-tools",
+        "mcp-startup-filtering",
+        "pi-tool-activity",
+        "progressive-disclosure"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Mixed Python, JavaScript, Screenpipe API, file, test, recovered-error, and optional live Pi tool flows stay collapsed by default, expose only friendly activity on first expansion, and keep completed tools active while the shared Pi turn is still streaming. Commentary remains visible in transcript order around live and completed tool groups; settled final answers remain distinct from progress, so unrecovered failure, user-stop, and app-interruption states stay truthful. Synthetic MCP startup events stay out of the transcript so the answer remains primary, connection diagnostics never leak into chat, and startup failures never inflate the command rail's failure count."
+    },
+    {
+      "spec": "chat-window.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "chat-ai",
+        "window-lifecycle",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "chat",
+        "window-lifecycle"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Opens Chat and focuses the composer for typing. A chat saved from the floating window syncs into Home's Recents without becoming a second Home working tab."
+    },
+    {
+      "spec": "chat-within-session-context-loss.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "chat-ai"
+      ],
+      "features": [
+        "chat",
+        "chat-context"
+      ],
+      "criticality": "medium",
+      "confidence": "conditional",
+      "ux": "synthetic",
+      "notes": "macOS-only within-chat context retention regression."
+    },
+    {
+      "spec": "db-hard-fault-fail-closed.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api",
+        "tauri-command",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "database-hard-fault-containment",
+        "app-launch"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Opt-in packaged-desktop regression: causes real SQLITE_CORRUPT in the isolated E2E database, then proves the engine API and database owners stop while the desktop stays alive and does not respawn across the watchdog window."
+    },
+    {
+      "spec": "first-run-agent-handoff.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "onboarding",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "onboarding",
+        "first-run-learning",
+        "mcp-registration"
+      ],
+      "criticality": "high",
+      "confidence": "partial",
+      "ux": "real-user-flow",
+      "tests": 4,
+      "notes": "Agent handoff beside the first-run summary: the summary stays primary and clickable whether or not an agent is offered, an offered target is never nameless or unclickable, the filesystem probe cannot break the ready banner or the summary click-through, opening the result collapses into the compact setup dock, and the paste instruction appears only after the handoff runs. Waits for the async probe before concluding absence. Does not assert WHICH agent: detectAiTools resolves the real home in the webview (SCREENPIPE_E2E_AI_TOOLS_HOME is Rust-only), so selection is host-dependent and is covered in lib/first-run/agent-handoff.test.ts and use-agent-handoff.test.ts."
+    },
+    {
+      "spec": "first-run-ai-summary.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "onboarding",
+        "chat-ai",
+        "local-api",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "onboarding",
+        "first-run-learning",
+        "chat",
+        "notifications"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "tests": 3,
+      "notes": "Opt-in hosted-AI lane for the post-setup summary: the real app starts its own Pi session through the Rust command and the production Worker under Miniflare. It proves a low-tier parsed-only fixture with one sustained app and no Timeline dependency reaches the model, accessibility evidence is used when parsed context is unavailable, and two transient activity-engine failures recover without a deterministic fallback. The seeded chat must hold the model's text and never the deterministic opener. Once ready, the real app must persist one content-free /notify entry whose primary deep link returns to the locally resolved summary and marks it opened."
+    },
+    {
+      "spec": "first-run-guide.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "onboarding",
+        "chat-ai",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "onboarding",
+        "chat",
+        "first-run-guide"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Replayed first-run guide verifies the composer remains focused and clickable above its scrim, fails open when stacking defeats the lift, and remembers decline across reloads."
+    },
+    {
+      "spec": "first-run-learning-window.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "onboarding",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "onboarding",
+        "first-run-learning",
+        "shortcuts"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "tests": 9,
+      "notes": "Post-setup summary on Home under the authenticated seed: immediate runs show a live countdown, an interrupted first attempt gets exactly one quiet recovery, exhausted empty engine results settle with their diagnostic reason preserved, silent states stay silent across reloads, late returns retry in the background, ready summaries remain actionable, a verified shown Chat-shortcut outcome completes the contextual practice lesson while a hidden outcome stays recoverable, and idle/done never render."
+    },
+    {
+      "spec": "first-run-reset-learning-window.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "onboarding",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "onboarding",
+        "first-run-learning",
+        "settings-persistence"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "tests": 2,
+      "notes": "Home is the single first-summary lifecycle owner: reset events clear the mounted Home state, while the separate Chat webview neither renders nor claims a second learning window from the shared onboarding completion."
+    },
+    {
+      "spec": "focus-server.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api",
+        "window-lifecycle",
+        "tauri-command"
+      ],
+      "features": [
+        "window-lifecycle",
+        "focus-server",
+        "deeplink"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "api",
+      "notes": "Focus server opens windows and forwards deeplink args."
+    },
+    {
+      "spec": "hd-recording-pipeline.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "capture-ocr",
+        "local-api",
+        "performance"
+      ],
+      "features": [
+        "capture-ocr",
+        "hd-recording",
+        "timeline"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "api",
+      "notes": "Opt-in macOS HD capture and OCR indexing."
+    },
+    {
+      "spec": "help-discord-link.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e"
+      ],
+      "features": [
+        "help"
+      ],
+      "criticality": "low",
+      "confidence": "smoke",
+      "ux": "real-user-flow",
+      "notes": "Help section Discord invite link."
+    },
+    {
+      "spec": "history-swipe-navigation.spec.ts",
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "window-lifecycle",
+        "tauri-command"
+      ],
+      "features": [
+        "home-navigation",
+        "window-lifecycle"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "real-user-flow",
+      "tests": 2,
+      "notes": "Reads back the real WKWebView/WebView2 history-swipe setting, verifies top-level UI sections are browser-history entries, proves Back to app consumes Settings so the next back action restores the prior Home state, and captures every destination plus the production back/forward gesture-arrow design. Physical OS trackpad input remains manual."
+    },
+    {
+      "spec": "home-window.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "window-lifecycle"
+      ],
+      "features": [
+        "app-launch",
+        "home-navigation",
+        "sidebar-collapse",
+        "timeline",
+        "settings-recording",
+        "pipes"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Clicks through Home, Pipes, Timeline, Help, and Settings; verifies collapsed sidebar chrome hides recording status and restores it on expand."
+    },
+    {
+      "spec": "html-artifact-render.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e"
+      ],
+      "features": [
+        "brain",
+        "artifacts",
+        "html-sandbox"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Registers an HTML artifact, opens it in Brain, and asserts it renders inside a sandboxed allow-scripts iframe (CSP default-src 'none') whose global <style> never leaks into the host app DOM (regression: rehype-raw repainting the whole window)."
+    },
+    {
+      "spec": "live-view-item-actions.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "local-api",
+        "pipes"
+      ],
+      "features": [
+        "brain-overview",
+        "live-view-item-actions",
+        "artifacts",
+        "pipes"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Installs the generic Commitments and Accounting Live View kits, shows Done, Later, and Not right without hover, persists snooze, correction, resolve, dismiss, and reopen decisions through the local API, verifies receipts survive reload, and captures real product screenshots."
+    },
+    {
+      "spec": "live-view-pinch-zoom.spec.ts",
+      "platforms": [
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "brain-overview",
+        "live-view-canvas-pinch-zoom",
+        "live-view-canvas-click-stability"
+      ],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Drives the Live View canvas with the same window-scoped native-magnify payload the macOS magnification gesture recognizer emits. Asserts pinch works even when WKWebView lacks DOM focus, the recognizer takes ownership so WebKit's duplicate ctrl+wheel stops zooming while plain scroll still pans, ordinary pane, Block, and double clicks do not change the viewport, and canvas zoom stays anchored, clamped at 25%, and persisted through load_brain_view_canvas."
+    },
+    {
+      "spec": "macos-ui-performance.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "performance",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "timeline",
+        "audio-device-health"
+      ],
+      "criticality": "medium",
+      "confidence": "conditional",
+      "ux": "performance",
+      "notes": "macOS-only timeline/audio UI performance guards."
+    },
+    {
+      "spec": "main-overlay-visibility.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "window-lifecycle",
+        "tauri-command"
+      ],
+      "features": [
+        "window-lifecycle",
+        "main-overlay"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "command",
+      "notes": "Main overlay show/hide without duplicate handles."
+    },
+    {
+      "spec": "main-window-close-reopen.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "window-lifecycle",
+        "tauri-command"
+      ],
+      "features": [
+        "window-lifecycle",
+        "main-window"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "command",
+      "notes": "Main close/reopen without handle leaks."
+    },
+    {
+      "spec": "main-window.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "window-lifecycle",
+        "tauri-command"
+      ],
+      "features": [
+        "window-lifecycle",
+        "main-window"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "command",
+      "notes": "Main window show/hide dedupe."
+    },
+    {
+      "spec": "meeting-apps-picker.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "settings",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "settings-recording",
+        "meeting-detector-ignored-apps"
+      ],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Per-app meeting-detection ignore picker: open, toggle, count badge, persistence across reopen (#3882 / #3847)."
+    },
+    {
+      "spec": "meeting-calendar-url-match.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "local-api",
+        "tauri-command"
+      ],
+      "features": [
+        "meeting-calendar-association"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Runs the production calendar matcher and DB write with the reported back-to-back boundary shape: an outgoing URL-less event overlaps a target event starting in 40 seconds whose normalized Meet room exactly matches the detector URL. Verifies the persisted title and attendees, then proves the visible Meetings row uses the target rather than the outgoing event."
+    },
+    {
+      "spec": "meeting-back-to-back-rooms.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "local-api",
+        "tauri-command"
+      ],
+      "features": [
+        "meeting-detection",
+        "meeting-calendar-association"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Replays a back-to-back boundary through the production room-change rule and lifecycle: a Google Meet meeting bound to calendar event A, then the same browser audio session re-acquiring the mic in a different Meet room whose URL matches event B. Proves the ordinary transition alone would have revived meeting A, that A is closed with end_reason room_changed exactly where B starts, that B carries event B's title and attendees, that the 120s merge window cannot reopen A, and that the Meetings view shows two rows."
+    },
+    {
+      "spec": "meeting-note-bottom-click.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "local-api"
+      ],
+      "features": [
+        "meeting-notes"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Seeds and opens a long meeting note, checks editor shell click focus behavior, then clicks the bottom editor line."
+    },
+    {
+      "spec": "meeting-overlay-pin.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "local-api",
+        "tauri-command",
+        "os-integration"
+      ],
+      "features": [
+        "meeting-notes",
+        "meeting-overlay-stream",
+        "shortcut-overlay"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "real-user-flow",
+      "notes": "Pins the native macOS live-transcript card against a real started meeting: it opens on hover, stays visible after the pointer leaves, and the authoritative stop edge hides it and clears the pin, asserted on the AppKit panel's observed visibility. Hover and the pin toggle are driven through the controller entry points the tracking area and pin button use, because AppKit delivers no synthetic hover to a nonactivating panel. The Windows/Linux reminder webview renders the sign-in gate under E2E seeds, so that surface is covered by component tests instead."
+    },
+    {
+      "spec": "meeting-overlay-stream.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api",
+        "tauri-command"
+      ],
+      "features": [
+        "meeting-notes",
+        "meeting-overlay-stream"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Starts a real isolated meeting, verifies bounded snapshot plus deterministic delta/final transcript frames, and proves the stream clears on the authoritative stop edge."
+    },
+    {
+      "spec": "meeting-replay-player.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "local-api"
+      ],
+      "features": [
+        "meeting-notes",
+        "meeting-replay"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Seeds four stored frames, wraps their exact timestamps in an ended meeting, reopens it from the previous-meetings list, and verifies deduped silent playback, pause stability, unobscured frame layout, and a review screenshot."
+    },
+    {
+      "spec": "meeting-restart-live-transcription.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "local-api"
+      ],
+      "features": [
+        "meeting-notes"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "command",
+      "notes": "Opens an auto-detected meeting, runs the full stop_screenpipe/spawn_screenpipe restart the health overlay's RESTART button uses, and asserts the meeting is still open afterwards so live transcription has something to reattach to."
+    },
+    {
+      "spec": "meeting-summary-recovery.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "local-api"
+      ],
+      "features": [
+        "meeting-notes",
+        "meeting-summary-recovery"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Runs an ended meeting through real Stop -> Resume -> Stop transitions in the isolated desktop, holds both mutations to prove their pending receipts, reconciles a delayed stale started event, and captures saved-finalizing, transcript, resumed-live, the anchored Notes receipt, the Summary draft surface, ready, and failed states without launching hosted AI."
+    },
+    {
+      "spec": "meeting-workspace-tabs.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "local-api"
+      ],
+      "features": [
+        "meeting-notes"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Seeds a live meeting with notes and summary, proves the saved summary is the preferred outcome view, switches persistent tabs, resizes to 640x560, checks footer separation and horizontal overflow, captures a review screenshot, then stops from the transcript and verifies the Summary tab opens."
+    },
+    {
+      "spec": "meeting-chat-panel.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "local-api"
+      ],
+      "features": [
+        "meeting-notes"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Seeds a settled meeting and walks the chat rail disclosure ladder in the real app: rest shows one line plus one chip and no send button, focus peeks open with suggestions, typing hides the chip and reveals send, Escape collapses while keeping the draft, status precedence names why the composer is disabled, and a 720x620 window produces no horizontal overflow. Captures a screenshot per state."
+    },
+    {
+      "spec": "meetings-only-audio-lifecycle.spec.ts",
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "layers": [
+        "audio-device",
+        "local-api",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "meetings-only-audio-lifecycle",
+        "audio-device-health"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "Opt-in real-audio lifecycle lane: configured devices stay closed outside meetings and open only across a manual meeting edge."
+    },
+    {
+      "spec": "notification-viewer-link.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "notifications",
+        "local-api",
+        "window-lifecycle"
+      ],
+      "features": [
+        "notifications",
+        "viewer-deeplink"
+      ],
+      "criticality": "high",
+      "confidence": "partial",
+      "ux": "mixed",
+      "notes": "Notification local file links rewrite into in-app viewer links."
+    },
+    {
+      "spec": "onboarding-background-ai-tools.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "onboarding",
+        "real-ui-e2e",
+        "storage-privacy"
+      ],
+      "features": [
+        "onboarding",
+        "settings-ai"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Isolated agent-home CI lane verifies private native config writes, the resolved local API credential, a real authenticated MCP tool call, skills setup, and migration from the removed connection slide through engine startup to optional recommended setup and completion."
+    },
+    {
+      "spec": "onboarding-first-run.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "onboarding",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "onboarding",
+        "first-run-learning",
+        "settings-persistence"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "tests": 7,
+      "notes": "Fresh-install setup walk: the acquisition slide is reachable in the shipped slide order and counted by the progress bar, offers no free-text field, one tap persists through to store.bin via the real settings command, skip records nothing, and the engine slide is the last one with no goal picker after it."
+    },
+    {
+      "spec": "onboarding-h1-follow-up.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "onboarding",
+        "notifications",
+        "pipes",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "onboarding",
+        "notifications",
+        "pipes"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "A due H1 activation runs its real Pipe, sends one visible prompt through the app-control notification server, and remains exactly-once across repeated scheduler ticks."
+    },
+    {
+      "spec": "onboarding-redirect.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "onboarding",
+        "real-ui-e2e",
+        "window-lifecycle"
+      ],
+      "features": [
+        "onboarding",
+        "app-launch"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "Opt-in no-onboarding seed verifies onboarding redirect."
+    },
+    {
+      "spec": "onboarding-trust-affordances.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "onboarding",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "onboarding",
+        "settings-privacy-api-auth",
+        "storage-retention"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "tests": 4,
+      "notes": "Pre-grant reassurance in setup: the login slide carries the storage-locality line and the pause affordance on one line (the only slide every platform sees, since permissions auto-advances on non-mac); the mac permissions slide keeps that promise collapsed to a single line below the permission wheel and on expand renders the data dir the running app actually resolved rather than a reconstructed ~/.screenpipe, with an open action pointed at that path; collapsed and expanded states are both asserted to fit inside the fixed-size onboarding window; and the timeline slide states the capture bounds (incognito skipped, per-app exclusions) where the capture decision is made. The mac assertions share one visit because the slide auto-advances 600ms after all grants land."
+    },
+    {
+      "spec": "owned-browser.spec.ts",
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "layers": [
+        "os-integration",
+        "window-lifecycle"
+      ],
+      "features": [
+        "owned-browser",
+        "window-lifecycle"
+      ],
+      "criticality": "low",
+      "confidence": "smoke",
+      "ux": "command",
+      "notes": "Embedded agent browser hides safely without an attached child."
+    },
+    {
+      "spec": "permission-recovery.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "os-integration",
+        "real-ui-e2e",
+        "window-lifecycle"
+      ],
+      "features": [
+        "permission-recovery",
+        "window-lifecycle"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "macOS-only recovery window for missing TCC permissions."
+    },
+    {
+      "spec": "pi-extensions.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "settings"
+      ],
+      "features": [
+        "ai-tools",
+        "connections",
+        "pi-extensions"
+      ],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Opens Home -> Connections, opens the first AI tools setting, verifies the common tool toggles are first and directly visible in the modal, checks plain-language built-ins and compatibility labels, filters the package search, and captures a screenshot. Read-only smoke: does not install packages."
+    },
+    {
+      "spec": "pii-redaction-coordination.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "local-api",
+        "performance"
+      ],
+      "features": [
+        "app-launch",
+        "health",
+        "local-api-load"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "api",
+      "notes": "Starts the opt-in local ONNX text reconciliation worker in the desktop app, redacts a 24-row SQLite backlog, and probes WebDriver plus health responsiveness while it runs."
+    },
+    {
+      "spec": "pipe-continuous-chat.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "pipes",
+        "chat-ai",
+        "real-ui-e2e",
+        "local-api",
+        "storage-privacy"
+      ],
+      "features": [
+        "pipes",
+        "chat"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Five native desktop journeys cover failed-save rollback and retry, stable one-chat continuity across real Pipe runs, a human follow-up carried into the next scheduled run, explicit pause/resume behavior with a read-only old chat, reset rejection during an active human reply, and a confirmed clean run without prior scheduled or human context."
+    },
+    {
+      "spec": "pipe-local-ai-gateway.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "pipes",
+        "chat-ai",
+        "local-api",
+        "tauri-command"
+      ],
+      "features": [
+        "pipes"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "command",
+      "notes": "Opt-in full-stack hosted Pipe coverage records the real Pi request entering the production Worker bundle and verifies the Pipe workload marker plus nonblank session affinity for history-off runs and stable affinity across history-on runs."
+    },
+    {
+      "spec": "pipes-mcp-connections.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "pipes",
+        "real-ui-e2e",
+        "local-api"
+      ],
+      "features": [
+        "pipes",
+        "connections"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Seeds a custom MCP server, installs a local pipe, selects the MCP server from the pipe connection picker, and verifies the mcp:<id> allowlist persists."
+    },
+    {
+      "spec": "pipes.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "pipes",
+        "real-ui-e2e",
+        "local-api"
+      ],
+      "features": [
+        "pipes"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Pipes discover, install failure, connection modal, install, list, play, and stop."
+    },
+    {
+      "spec": "privacy-api-auth-enforcement.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "settings",
+        "local-api",
+        "storage-privacy"
+      ],
+      "features": [
+        "settings-privacy-api-auth",
+        "local-api-auth",
+        "restart-flow"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "mixed",
+      "notes": "Opt-in restart smoke toggles API auth and verifies backend behavior."
+    },
+    {
+      "spec": "privacy-api-auth.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "settings",
+        "storage-privacy",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "settings-privacy-api-auth",
+        "local-api-auth"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Privacy settings reveal/copy local API key flow."
+    },
+    {
+      "spec": "privacy-first-click-settings.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "settings",
+        "storage-privacy",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "settings-optimistic-state",
+        "settings-privacy-filters"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Delayed settings persistence proves the first click remains visible for both a category switch and a native checkbox while the store write is pending."
+    },
+    {
+      "spec": "privacy-installed-apps.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "settings",
+        "storage-privacy",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "settings-privacy-filters",
+        "installed-apps"
+      ],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Privacy content filters surface installed-but-not-captured apps as typeable options with the not-captured hint (fetch-intercepted /installed-apps for determinism)."
+    },
+    {
+      "spec": "renderer-recovery.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "window-lifecycle",
+        "tauri-command",
+        "real-ui-e2e",
+        "local-api"
+      ],
+      "features": [
+        "app-launch",
+        "window-lifecycle",
+        "webview-renderer-recovery",
+        "local-api-auth"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "tests": 3,
+      "notes": "Suspends the isolated app's real com.apple.WebKit.GPU process, verifies WebContent's main thread and render queue are blocked in remote WebKit GPU IPC, holds the fault until the production watchdog destroys stale Home, then proves a new page generation repaints in the same app PID with uninterrupted local API health. Also forces three consecutive missed-heartbeat recoveries and reopens discarded Search and Chat webviews."
+    },
+    {
+      "spec": "recording-health-focus-cold.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "capture-ocr",
+        "local-api",
+        "os-integration",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "app-launch",
+        "capture-ocr",
+        "health",
+        "recording-health-alerts"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "mixed",
+      "notes": "Opt-in macOS focus-aware Cold-state reproduction proves capture attempts can remain intentionally flat while the independent loop heartbeat advances, /health stays ok, and the recording-health overlay remains normal in the original process."
+    },
+    {
+      "spec": "recording-health-return-race.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "tauri-command",
+        "os-integration",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "app-launch",
+        "recording-health-alerts"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "command",
+      "notes": "Accelerated app-level replay of the idle-to-attended stale race verifies that return input does not raise the recording-health failure overlay before capture recovery can be observed."
+    },
+    {
+      "spec": "sck-startup-recovery.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "capture-ocr",
+        "local-api",
+        "os-integration"
+      ],
+      "features": [
+        "app-launch",
+        "capture-ocr",
+        "health",
+        "local-api-search"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "api",
+      "notes": "Opt-in macOS fault injection verifies bounded SCK enumeration recovery, same-process capture, and OCR persistence."
+    },
+    {
+      "spec": "screen-recording-restart.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "onboarding",
+        "os-integration",
+        "real-ui-e2e",
+        "tauri-command"
+      ],
+      "features": [
+        "onboarding",
+        "permission-recovery"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "A deterministic post-Later TCC mismatch drives the packaged onboarding UI through the explicit restart button and into the native restart command without destroying the WebDriver session."
+    },
+    {
+      "spec": "search-request-priority.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "local-api"
+      ],
+      "features": [
+        "home-search",
+        "local-api-search"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "synthetic",
+      "notes": "Verifies keyword search request fires before secondary search, facet, and speaker requests."
+    },
+    {
+      "spec": "settings-sections.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "settings",
+        "real-ui-e2e",
+        "storage-privacy"
+      ],
+      "features": [
+        "settings-recording",
+        "screen-share-privacy",
+        "settings-ai",
+        "settings-privacy-api-auth",
+        "settings-permissions",
+        "storage-retention",
+        "low-disk-recording-guard",
+        "audio-device-health"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Separate Screen and Audio & meetings destinations, persisted screen-share privacy toggle with native-status readback, AI preset/preferences split and toggle flows, low-disk capture stop with persistent notification, storage, privacy, macOS-only permissions recovery hub (asserted absent on Windows/Linux), and rapid switching crash guard."
+    },
+    {
+      "spec": "speaker-rename-scope.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api"
+      ],
+      "features": [
+        "meeting-notes",
+        "speaker-rename-scope"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "tests": 3,
+      "notes": "Seeds one unnamed voice across three chunks through the public API, renames a single line with scope=auto, and verifies the whole voice is relabelled while a correction on a named speaker stays on its line. Also asserts the orphaned-speaker repair migration is recorded applied after a real app boot and leaves no row pointing at a deleted speaker."
+    },
+    {
+      "spec": "spotlight-exclusion.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "storage-privacy",
+        "os-integration"
+      ],
+      "features": [
+        "spotlight-exclusion"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Requires the launched app's exact E2E data directory to appear in Spotlight Search Privacy, then force-imports paired excluded/control canaries and proves only the control becomes searchable."
+    },
+    {
+      "spec": "timeline-daily-summary.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e"
+      ],
+      "features": [
+        "timeline",
+        "settings-ai"
+      ],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Opens a cached Pi-generated daily summary in Timeline, checks its bounded scrolling layout, captures a screenshot, and closes it."
+    },
+    {
+      "spec": "timeline.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "capture-ocr"
+      ],
+      "features": [
+        "timeline",
+        "capture-ocr"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "Timeline shell always runs; seeded frame assertion skips under no-recording."
+    },
+    {
+      "spec": "tray-recording-status.spec.ts",
+      "platforms": [
+        "windows"
+      ],
+      "layers": [
+        "os-integration",
+        "tauri-command"
+      ],
+      "features": [
+        "tray-recording-status"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "command",
+      "notes": "Drives Starting to Recording and reads back the status item from the successfully installed native tray menu."
+    },
+    {
+      "spec": "tray-recording-toggle.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "os-integration",
+        "tauri-command",
+        "capture-ocr"
+      ],
+      "features": [
+        "tray-recording-toggle"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "command",
+      "notes": "Runs the tray's shared native action and proves a real CaptureSession pauses and resumes without the frontend shortcut-event path."
+    },
+    {
+      "spec": "tray-search.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "window-lifecycle",
+        "tauri-command",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "tray-search",
+        "home-search",
+        "window-lifecycle"
+      ],
+      "criticality": "high",
+      "confidence": "partial",
+      "ux": "command",
+      "notes": "Invokes open_search_window and verifies focused floating Search."
+    },
+    {
+      "spec": "updater-banner.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "settings"
+      ],
+      "features": [
+        "update-surfacing",
+        "settings-persistence"
+      ],
+      "criticality": "high",
+      "confidence": "partial",
+      "ux": "mixed",
+      "notes": "Synthetic update-available event surfaces the restart-to-update banner. A real Auto-update toggle plus delayed store save verifies restart waits for preference persistence and survives settings-store re-hydration; an E2E-only handoff suppresses the destructive relaunch. Real check/download/install + rollback stay manual via e2e/mock-updates because the debug E2E build disables updater checks."
+    },
+    {
+      "spec": "viewer-deeplink.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "window-lifecycle",
+        "tauri-command"
+      ],
+      "features": [
+        "viewer-deeplink",
+        "window-lifecycle"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "command",
+      "notes": "Viewer window creation and per-path dedupe."
+    },
+    {
+      "spec": "window-activation.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "window-lifecycle",
+        "tauri-command",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "window-lifecycle",
+        "chat"
+      ],
+      "criticality": "medium",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "macOS-only show_window_activated focus coverage."
+    },
+    {
+      "spec": "window-lifecycle.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "window-lifecycle",
+        "tauri-command",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "window-lifecycle",
+        "onboarding",
+        "tray-search"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Home, Search, and onboarding window routing."
+    },
+    {
+      "spec": "windows-core-recording.spec.ts",
+      "platforms": [
+        "windows"
+      ],
+      "layers": [
+        "capture-ocr",
+        "local-api",
+        "audio-device",
+        "notifications",
+        "storage-privacy",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "capture-ocr",
+        "local-api-auth",
+        "local-api-search",
+        "audio-device-health",
+        "timeline",
+        "low-disk-recording-guard"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "mixed",
+      "notes": "Windows recording-enabled lane; low-disk coverage requires teardown of a real CaptureSession and continued API/search availability, while hosted runners can skip only frame-dependent OCR assertions."
+    },
+    {
+      "spec": "windows-system-integration.spec.ts",
+      "platforms": [
+        "windows"
+      ],
+      "layers": [
+        "os-integration",
+        "local-api",
+        "audio-device",
+        "window-lifecycle",
+        "performance"
+      ],
+      "features": [
+        "app-launch",
+        "local-api-auth",
+        "audio-device-health",
+        "window-lifecycle",
+        "os-process-health",
+        "webview-stability"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Windows display, WebView2, loopback, process, Defender, audio, focus, and crash-report checks."
+    },
+    {
+      "spec": "windows-user-journey.spec.ts",
+      "platforms": [
+        "windows"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "settings",
+        "notifications",
+        "storage-privacy",
+        "window-lifecycle"
+      ],
+      "features": [
+        "home-search",
+        "timeline",
+        "settings-recording",
+        "screen-share-privacy",
+        "meeting-notes",
+        "shortcut-reminder",
+        "notifications",
+        "storage-retention",
+        "settings-privacy-api-auth"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Windows-first real UX journey across search, timeline, separate screen/audio settings, meetings, notifications, storage, and privacy."
+    },
+    {
+      "spec": "connected-share.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "local-api"
+      ],
+      "features": [
+        "meeting-notes",
+        "brain-overview",
+        "live-views",
+        "connections"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Exercises the Send snapshot dialog from meeting notes and Live Views across disconnected setup, connected direct-send, receipt, and Chat-draft destinations, with mocked connection APIs and screenshot coverage."
+    },
+    {
+      "spec": "zz-account-basic-upgrade-billing.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "settings",
+        "billing"
+      ],
+      "features": [
+        "account-upgrade",
+        "billing-proration",
+        "checkout-duplication"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Basic paid user clicking Account upgrade opens account billing for subscription changes/proration and does not call the fresh subscription checkout endpoint."
+    },
+    {
+      "spec": "zz-account-stale-subscription.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "settings",
+        "billing"
+      ],
+      "features": [
+        "account-card",
+        "billing-gate"
+      ],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Account 'active' plan card is gated on the session token (token AND cloud_subscribed) like the header, so a tokenless-but-subscribed stale shell (post-#3943 secret-store token desync) renders 'not logged in' with the active card gone. Mocks /api/user across all windows and clears set_cloud_token to reproduce the desync deterministically."
+    },
+    {
+      "spec": "zz-app-entitlement-gate.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "settings",
+        "billing",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "app-entitlement-gate",
+        "billing-gate"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Production billing gate blocks an unentitled session behind the paywall and restores access when the forced-gate flag is cleared."
+    },
+    {
+      "spec": "zz-audio-fallback-reverify.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "auth",
+        "entitlement",
+        "audio-device",
+        "settings"
+      ],
+      "features": [
+        "cloud-entitlement-reverify",
+        "audio-engine-fallback",
+        "settings-recording"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "AuthGuard re-verifies cloud entitlement on window focus so a freshly-subscribed user gets cloud transcription without restart (#4339)."
+    },
+    {
+      "spec": "zz-enterprise-license-prompt.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "settings",
+        "billing",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "app-entitlement-gate",
+        "billing-gate"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Enterprise license prompt handles invalid keys, full-seat errors, and retry success after seats are added without staying stuck in validating state."
+    },
+    {
+      "spec": "zz-logout-resurrect.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "settings"
+      ],
+      "features": [
+        "account-logout",
+        "auth-session"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "synthetic",
+      "notes": "Logout must not be resurrected by an in-flight loadUser. Logs in via a synthetic deep-link (?api_key=) with a mocked /api/user fetch, makes the fetch slow, fires it, then clicks logout while it is pending and asserts the slow response cannot re-write the user (the 'logout needs two clicks' bug). Covers the auth-generation guard in use-settings.tsx."
+    },
+    {
+      "spec": "zz-owned-browser-background-nav.spec.ts",
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "layers": [
+        "os-integration",
+        "window-lifecycle"
+      ],
+      "features": [
+        "owned-browser",
+        "window-lifecycle"
+      ],
+      "criticality": "low",
+      "confidence": "smoke",
+      "ux": "command",
+      "notes": "Owned browser background navigation visibility."
+    },
+    {
+      "spec": "zzz-browser-state-chat-switch.spec.ts",
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "storage-privacy"
+      ],
+      "features": [
+        "chat",
+        "owned-browser"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "synthetic",
+      "notes": "Synthetic E2E (zzz- prefix, search-driven): starts from a fresh chat with no conversation file, seeds browser state before the first durable save, then verifies auto-save persists that state and it survives a switch away and back. Keeps native visibility assertions out of this spec because post-zz window state is too brittle; deeper save/merge coverage lives in focused tests."
+    },
+    {
+      "spec": "zzz-owned-browser-headless.spec.ts",
+      "platforms": [
+        "windows",
+        "macos"
+      ],
+      "layers": [
+        "os-integration",
+        "window-lifecycle",
+        "local-api"
+      ],
+      "features": [
+        "owned-browser",
+        "window-lifecycle"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Headless owned browser for background pipes (#4248): with the sidebar never opened, a background eval and navigate-and-scrape over the local API lazily create a hidden offscreen child webview, return a real JS result (6*7 -> 42; document.readyState), and stay invisible; is_ready reflects real serviceability; the same singleton is then adopted into the sidebar panel (page state survives, no second webview). Search-driven and runs last because attaching the child to home tears down home's WebDriver handle."
+    }
+  ]
+}

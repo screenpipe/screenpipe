@@ -94,7 +94,7 @@ describe("chart fence inside assistant markdown", () => {
     const onSendPrompt = vi.fn();
     renderAssistant(CHART_FENCE, { onSendPrompt });
 
-    fireEvent.keyDown(screen.getByRole("button", { name: "chart actions" }), {
+    fireEvent.keyDown(screen.getByRole("button", { name: "Chart actions" }), {
       key: "ArrowDown",
     });
     fireEvent.click(screen.getByRole("menuitem", { name: /add to live view/i }));
@@ -111,7 +111,7 @@ describe("chart fence inside assistant markdown", () => {
     });
 
     expect(
-      screen.queryByRole("button", { name: "chart actions" }),
+      screen.queryByRole("button", { name: "Chart actions" }),
     ).toBeNull();
   });
 

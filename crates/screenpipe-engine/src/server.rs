@@ -251,6 +251,8 @@ pub struct AppState {
 }
 
 pub struct SCServer {
+    /// Exact catalog directory supplied by the desktop owner; never inferred from another app.
+    pub workflow_catalog_dir: Option<PathBuf>,
     db: Arc<DatabaseManager>,
     /// Rolling history policy. Standalone/headless construction is unrestricted;
     /// the consumer desktop app explicitly supplies its live account policy.
@@ -385,6 +387,7 @@ impl SCServer {
     ) -> Self {
         let audio_metrics = audio_manager.metrics.clone();
         SCServer {
+            workflow_catalog_dir: None,
             db,
             history_access: HistoryAccessPolicy::unrestricted(),
             addr,
@@ -983,6 +986,36 @@ impl SCServer {
             )
             .get("/elements", search_elements)
             .get("/frames/:frame_id/elements", get_frame_elements)
+            .post(
+                "/workflows/rollout",
+                crate::routes::workflow_catalog::rollout,
+            )
+            .get(
+                "/workflows/catalog",
+                crate::routes::workflow_catalog::catalog,
+            )
+            .get(
+                "/workflows/pipeline",
+                crate::routes::workflow_pipeline::context,
+            )
+            .post(
+                "/workflows/pipeline",
+                crate::routes::workflow_pipeline::commit,
+            )
+            .get(
+                "/workflows/context",
+                crate::routes::workflow_catalog::context,
+            )
+            .post(
+                "/workflows/catalog",
+                crate::routes::workflow_catalog::commit,
+            )
+            .post(
+                "/workflows/corrections",
+                crate::routes::workflow_catalog::correct,
+            )
+            .get("/workflows", crate::routes::workflows::list_workflows)
+            .get("/workflows/:id", crate::routes::workflows::get_workflow)
             .get("/activity-summary", get_activity_summary)
             .get("/activity-ledger", get_activity_ledger)
             .get(
@@ -1060,6 +1093,10 @@ impl SCServer {
             // Agent self-improvement lives behind one validated local API so
             // native Pi and ACP share profile safety, prompt rendering, skill
             // provenance, optimistic concurrency, and bundled protection.
+            .route(
+                "/agent/learning/chats",
+                axum::routing::post(crate::agent_skills::learning_chats_handler),
+            )
             .route(
                 "/agent/skills/manage",
                 axum::routing::post(crate::agent_skills::manage_agent_skill_handler),
@@ -1483,7 +1520,12 @@ impl SCServer {
                     }
                 }),
             )
+            .layer(Extension(crate::routes::workflows::WorkflowCatalogSource(self.workflow_catalog_dir.clone())))
             .with_state(app_state.clone())
+            .layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                crate::routes::search::storage_snapshot_middleware,
+            ))
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 crate::pipe_permissions_middleware::pipe_backpressure_layer,

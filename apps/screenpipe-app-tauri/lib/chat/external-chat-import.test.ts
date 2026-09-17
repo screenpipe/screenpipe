@@ -638,6 +638,37 @@ describe("scanExternalChatHistory", () => {
     expect(saved.messages[1].contentBlocks[0].toolCall.result).toBe("/fixture");
   });
 
+  it.each(["fallback", "user"] as const)("repairs imported plugin metadata while preserving %s title ownership", async (titleSource) => {
+    const setup = "<recommended_plugins>plugins</recommended_plugins><environment_context>environment</environment_context>";
+    const id = "imported-codex-plugin-session";
+    const request = "fix the sidebar";
+    mocks.stat.mockResolvedValue({ size: 1024 });
+    mocks.readTextFile.mockResolvedValue([setup, request].map((text, index) => JSON.stringify({
+      type: "response_item", timestamp: index + 1,
+      payload: { type: "message", id: `u${index}`, role: "user", content: [{ type: "input_text", text }] },
+    })).join("\n"));
+    mocks.loadConversationFile.mockResolvedValue({
+      id, title: titleSource === "user" ? "My custom title" : setup, titleSource,
+      createdAt: 1, updatedAt: 2, pinned: true,
+      importedFrom: { source: "codex", sourceId: "plugin-session", importedAt: 1 },
+      messages: [
+        ...[setup, request].map((content, index) => ({
+          id: `${id}-u${index}`, role: "user", content, timestamp: index + 1, importedFrom: "codex",
+        })),
+        { id: "local-follow-up", role: "user", content: "keep going", timestamp: 3 },
+      ],
+    });
+    const candidate = { source: "codex" as const, sourceId: "plugin-session", path: "/fixture/plugin.jsonl", modifiedAt: 2, size: 1024 };
+    expect(await importExternalChatHistory([candidate], { skipUnchanged: true })).toMatchObject({ updated: 1, failed: 0 });
+    const saved = mocks.saveConversationFile.mock.calls[0][0];
+    expect(saved.title).toBe(titleSource === "user" ? "My custom title" : request);
+    expect(saved.titleSource).toBe(titleSource);
+    expect(saved.pinned).toBe(true);
+    expect(saved.messages.map((message: { content: string }) => message.content)).toEqual([request, "keep going"]);
+    mocks.loadConversationFile.mockResolvedValue(saved);
+    expect(await importExternalChatHistory([candidate], { skipUnchanged: true })).toMatchObject({ updated: 0, skipped: 1, failed: 0 });
+  });
+
   it("repairs legacy wrapper titles without losing local chat state", async () => {
     const firstAt = Date.parse("2026-08-21T12:00:00Z");
     const updatedAt = Date.parse("2026-08-21T12:01:00Z");

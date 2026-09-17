@@ -492,11 +492,11 @@ export function TimelineDailySummary({
 								</div>
 								<div>
 									<div className="flex items-center gap-2">
-										<h2 className="font-mono text-sm font-semibold uppercase tracking-wide">
+										<h2 className="font-mono text-sm font-semibold normal-case tracking-wide">
 											Daily summary
 										</h2>
 										{isGenerating && (
-											<span className="flex items-center gap-1 font-mono text-[9px] uppercase tracking-[0.18em] text-foreground">
+											<span className="flex items-center gap-1 font-mono text-[9px] normal-case tracking-[0.18em] text-foreground">
 												<span className="h-1.5 w-1.5 animate-pulse bg-foreground" />
 												live
 											</span>
@@ -558,7 +558,7 @@ export function TimelineDailySummary({
 
 							{summary && (
 								<div className="relative">
-									<MemoizedReactMarkdown className="prose prose-sm max-w-none break-words text-sm leading-relaxed dark:prose-invert prose-headings:font-mono prose-headings:text-xs prose-headings:uppercase prose-headings:tracking-wide prose-h3:mb-2 prose-h3:mt-5 prose-p:my-2 prose-li:my-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+									<MemoizedReactMarkdown className="prose prose-sm max-w-none break-words text-sm leading-relaxed dark:prose-invert prose-headings:font-mono prose-headings:text-xs prose-headings:normal-case prose-headings:tracking-wide prose-h3:mb-2 prose-h3:mt-5 prose-p:my-2 prose-li:my-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
 										{summary}
 									</MemoizedReactMarkdown>
 								</div>
@@ -566,7 +566,7 @@ export function TimelineDailySummary({
 
 							{status === "error" && (
 								<div className="border border-border bg-muted/40 p-4">
-									<p className="font-mono text-xs font-medium uppercase tracking-wide">
+									<p className="font-mono text-xs font-medium normal-case tracking-wide">
 										{error.startsWith("No recorded")
 											? "No activity found"
 											: "Couldn’t create summary"}
@@ -664,8 +664,8 @@ export function TimelineDailySummary({
 						</div>
 						<DialogTitle>
 							{userToken
-								? "turn on enhanced ai?"
-								: "sign in to use daily summaries"}
+								? "Turn on enhanced AI?"
+								: "Sign in to use daily summaries"}
 						</DialogTitle>
 						<DialogDescription>
 							{userToken

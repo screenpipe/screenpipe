@@ -26,11 +26,11 @@ export function ComposerWorktreeToggle({
         className="flex h-7 shrink-0 items-center gap-1.5 text-xs font-medium text-muted-foreground"
         data-testid="coding-workspace-row"
         role="status"
-        aria-label="preparing worktree"
+        aria-label="Preparing worktree"
         aria-live="polite"
       >
         <PipeAIIcon size={16} thinking className="text-foreground" />
-        <span className="whitespace-nowrap">preparing worktree</span>
+        <span className="whitespace-nowrap">Preparing worktree</span>
       </div>
     );
   }
@@ -63,14 +63,14 @@ export function ComposerWorktreeToggle({
             data-testid="coding-workspace-popover"
           >
             <div>
-              <p className="text-xs font-medium">isolated worktree</p>
+              <p className="text-xs font-medium">Isolated worktree</p>
               <p className="mt-1 break-all font-mono text-[10px] text-muted-foreground">
                 {workspace.branch}
               </p>
             </div>
             <div>
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                worktree
+              <p className="text-[10px] normal-case tracking-wide text-muted-foreground">
+                Worktree
               </p>
               <p className="mt-1 select-text break-all font-mono text-[10px]">
                 {workspace.worktreePath}
@@ -78,12 +78,12 @@ export function ComposerWorktreeToggle({
             </div>
             {workspace.sourceDirty && (
               <p className="text-[11px] text-amber-600 dark:text-amber-400">
-                the source repo had uncommitted changes. this worktree started
+                The source repo had uncommitted changes. This worktree started
                 from HEAD; those changes were left untouched.
               </p>
             )}
             <p className="text-[10px] text-muted-foreground">
-              kept with this conversation. screenpipe never removes it
+              Kept with this conversation. Screenpipe never removes it
               automatically.
             </p>
           </PopoverContent>
@@ -95,10 +95,10 @@ export function ComposerWorktreeToggle({
             <button
               type="button"
               className="inline-flex h-6 shrink-0 items-center gap-1 rounded-sm border border-destructive/30 px-1.5 text-[10px] font-medium text-destructive transition-colors duration-150 hover:bg-destructive/5 focus-visible:ring-1 focus-visible:ring-destructive focus-visible:ring-offset-1 motion-reduce:transition-none"
-              aria-label="worktree setup failed"
+              aria-label="Worktree setup failed"
             >
               <CircleAlert className="h-3 w-3" />
-              <span>setup failed</span>
+              <span>Setup failed</span>
             </button>
           </PopoverTrigger>
           <PopoverContent
@@ -107,12 +107,12 @@ export function ComposerWorktreeToggle({
             side="top"
             sideOffset={6}
           >
-            <p className="text-xs font-medium">worktree setup failed</p>
+            <p className="text-xs font-medium">Worktree setup failed</p>
             <p className="break-words text-[11px] text-muted-foreground">
               {error}
             </p>
             <p className="text-[10px] text-muted-foreground">
-              send again to continue without an isolated worktree.
+              Send again to continue without an isolated worktree.
             </p>
           </PopoverContent>
         </Popover>

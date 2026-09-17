@@ -15,9 +15,10 @@
 //!   * Heartbeated every 30 s by a background thread so a long recovery
 //!     (multi-GB DB) doesn't look stale.
 //!   * Released on normal Drop, on SIGINT, and on SIGTERM.
-//!   * The desktop app refuses to start while the lock is fresh
-//!     (`apps/screenpipe-app-tauri/src-tauri/src/main.rs`); env var
-//!     `SCREENPIPE_IGNORE_DB_LOCK=1` is the escape hatch.
+//!   * Desktop and CLI recording acquire the same lock through
+//!     `prepare_database_startup`, which reclaims dead owners before
+//!     reconciling interrupted recovery. A live owner blocks database startup,
+//!     while the desktop shell and its logs remain available.
 //!
 //! ## When the lock is "stale"
 //!
@@ -383,6 +384,23 @@ fn available_disk_bytes(path: &Path) -> Option<u64> {
 
 pub async fn handle_db_command(command: &DbCommand) -> Result<()> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    if data_dir.join("storage.json").exists() {
+        if matches!(command, DbCommand::Check) {
+            let db = screenpipe_db::DatabaseManager::new(
+                data_dir
+                    .join("db.sqlite")
+                    .to_str()
+                    .context("invalid database path")?,
+                Default::default(),
+            )
+            .await?;
+            let result = db.verify_storage().await;
+            db.close().await;
+            result?;
+            return Ok(());
+        }
+        bail!("hybrid storage lifecycle uses screenpipe-storage verify, restore, compact, or resume migration");
+    }
     match command {
         DbCommand::Check => integrity_check(&data_dir.join("db.sqlite")),
         DbCommand::Recover { force, resume } => recover(&data_dir, *force, *resume).await,
@@ -812,8 +830,11 @@ pub struct DatabaseStartupGuard {
 /// Unlike CLI maintenance, this guard never installs process-exit handlers.
 pub async fn prepare_database_startup(data_dir: &Path) -> Result<DatabaseStartupGuard> {
     let lock = DbLock::acquire_inner(data_dir, "database startup", false)?;
-    let live = data_dir.join("db.sqlite");
-    reconcile_interrupted_recovery(data_dir, &live).await?;
+    let legacy = data_dir.join("db.sqlite");
+    let live = screenpipe_db::storage::resolve_database_path(&legacy)?;
+    if live == legacy {
+        reconcile_interrupted_recovery(data_dir, &live).await?;
+    }
     Ok(DatabaseStartupGuard { _lock: lock })
 }
 
@@ -1002,6 +1023,10 @@ fn restore_interrupted_swap(data_dir: &Path, live: &Path) -> Result<()> {
 }
 
 async fn recover(data_dir: &Path, _force: bool, resume: bool) -> Result<()> {
+    if data_dir.join("storage.json").exists() || data_dir.join("storage-migration.json").exists() {
+        bail!("hybrid recovery preserves its descriptor and payload bundle; use storage verification or restore");
+    }
+
     // A recovery that races even one live SQLite connection cannot promise an
     // exact source generation. `--force` is retained for CLI compatibility but
     // deliberately cannot override this architectural boundary.
@@ -1124,6 +1149,10 @@ async fn resume_recovery_offline(data_dir: &Path) -> Result<()> {
 /// the server or capture. Requiring the durable marker keeps an accidental UI
 /// invocation from turning an ordinary healthy database into a recovery job.
 pub async fn recover_quarantined_database(data_dir: &Path) -> Result<()> {
+    if data_dir.join("storage.json").exists() || data_dir.join("storage-migration.json").exists() {
+        bail!("hybrid recovery preserves its descriptor and payload bundle; use storage verification or restore");
+    }
+
     let live = data_dir.join("db.sqlite");
     if !screenpipe_db::sqlite_quarantine_exists(&live) {
         bail!(
@@ -2136,6 +2165,85 @@ mod recovery_tests {
     #[test]
     fn recovery_lock_recognizes_the_current_process_on_this_platform() {
         assert!(pid_alive(std::process::id()));
+    }
+
+    #[tokio::test]
+    async fn startup_recovers_immediately_after_lock_owner_is_force_quit() {
+        const CHILD_DATA_DIR: &str = "SCREENPIPE_TEST_FORCE_QUIT_DB_LOCK_DIR";
+        if let Some(data_dir) = std::env::var_os(CHILD_DATA_DIR).map(PathBuf::from) {
+            let _guard = prepare_database_startup(&data_dir).await.unwrap();
+            let live = data_dir.join("db.sqlite");
+            let recovery = data_dir.join("db-recovery-force-quit");
+            let source = recovery.join("source-generation");
+            fs::create_dir_all(&source).unwrap();
+            atomic_write_manifest(
+                &recovery.join(RECOVERY_MANIFEST_FILE),
+                &test_manifest(&live),
+            )
+            .unwrap();
+            fs::rename(sqlite_sidecar(&live, "-wal"), source.join("db.sqlite-wal")).unwrap();
+            fs::write(data_dir.join("ready"), b"lock held; WAL move interrupted").unwrap();
+            // Bound the child lifetime even if the parent test fails.
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            panic!("parent did not force quit the lock owner");
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("db.sqlite");
+        write_generation(&live);
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "cli::db::recovery_tests::startup_recovers_immediately_after_lock_owner_is_force_quit",
+                "--nocapture",
+            ])
+            .env(CHILD_DATA_DIR, dir.path())
+            .spawn()
+            .unwrap();
+        let ready = tokio::time::timeout(Duration::from_secs(10), async {
+            while !dir.path().join("ready").exists() {
+                if child.try_wait().unwrap().is_some() {
+                    return false;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            true
+        })
+        .await;
+        if !matches!(ready, Ok(true)) {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("child did not acquire the database startup lock");
+        }
+
+        let blocked = prepare_database_startup(dir.path()).await;
+        let wal_still_archived = !sqlite_sidecar(&live, "-wal").exists();
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(blocked.is_err(), "a live owner must keep recovery excluded");
+        assert!(
+            wal_still_archived,
+            "blocked startup must not reconcile the WAL"
+        );
+        assert!(
+            dir.path().join(LOCK_FILE).exists(),
+            "force quit leaves the lock file"
+        );
+        assert!(!pid_alive(child.id()));
+
+        let _guard = prepare_database_startup(dir.path()).await.unwrap();
+        assert_eq!(fs::read(&live).unwrap(), b"database-bytes");
+        assert_eq!(
+            fs::read(sqlite_sidecar(&live, "-wal")).unwrap(),
+            b"wal-bytes"
+        );
+        assert_eq!(
+            fs::read(sqlite_sidecar(&live, "-shm")).unwrap(),
+            b"shm-bytes"
+        );
+        let replacement: LockPayload =
+            serde_json::from_slice(&fs::read(dir.path().join(LOCK_FILE)).unwrap()).unwrap();
+        assert_eq!(replacement.pid, std::process::id());
     }
 
     #[tokio::test]

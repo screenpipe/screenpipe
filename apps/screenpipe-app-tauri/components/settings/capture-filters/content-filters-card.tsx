@@ -121,7 +121,7 @@ export function ContentFiltersCard({
 				label: scoped,
 				icon: AppWindowMac,
 				iconUrl: appIconUrl(window.app_name),
-				description: `only this window of ${window.app_name}`,
+				description: `Only this window of ${window.app_name}`,
 			});
 		}
 
@@ -245,7 +245,7 @@ export function ContentFiltersCard({
 												defaultValue={advancedIgnored}
 												value={advancedIgnored}
 												onValueChange={(next) => handleAdvancedChange(next, "ignored")}
-												placeholder="e.g. Slack::#hr"
+												placeholder="E.g. Slack::#hr"
 												allowCustomValues
 											/>
 										</div>
@@ -275,7 +275,7 @@ export function ContentFiltersCard({
 											className="h-7 gap-1.5 text-[11px]"
 											onClick={() => onBrowse("ignored")}
 										>
-											<FolderTree className="h-3 w-3" /> browse to skip
+											<FolderTree className="h-3 w-3" /> Browse to skip
 										</Button>
 										<Button
 											variant="outline"
@@ -283,7 +283,7 @@ export function ContentFiltersCard({
 											className="h-7 gap-1.5 text-[11px]"
 											onClick={() => onBrowse("included")}
 										>
-											<FolderTree className="h-3 w-3" /> browse to allow
+											<FolderTree className="h-3 w-3" /> Browse to allow
 										</Button>
 									</div>
 								</div>

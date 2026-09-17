@@ -18,7 +18,7 @@ export function meetingRetranscribeSuccessCopy(options: {
       ? Math.floor(options.batchesProcessed)
       : 0;
   if (batches === 0) {
-    return "no speech was found in the saved audio";
+    return "No speech was found in the saved audio";
   }
 
   const summaryCopy =

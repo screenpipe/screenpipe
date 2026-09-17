@@ -174,7 +174,7 @@ export function GoogleDocsCard() {
                   return (
                     <div key={key} className="flex items-center justify-between gap-2 text-xs">
                       <span className="text-muted-foreground truncate">
-                        {account.displayName || account.instance || "default account"}
+                        {account.displayName || account.instance || "Default account"}
                       </span>
                       <Button
                         variant="ghost"
@@ -225,7 +225,7 @@ export function GoogleDocsCard() {
         {connected && (
           <div className="px-4 pb-3 pt-1 border-t border-border">
             <div className="flex items-center justify-between mt-2 mb-2">
-              <span className="text-xs font-medium text-muted-foreground">recently modified docs</span>
+              <span className="text-xs font-medium text-muted-foreground">Recently modified docs</span>
               <Button
                 variant="ghost"
                 size="sm"
@@ -238,9 +238,9 @@ export function GoogleDocsCard() {
             </div>
 
             {isLoadingDocs && recentDocs.length === 0 ? (
-              <p className="text-xs text-muted-foreground">loading...</p>
+              <p className="text-xs text-muted-foreground">Loading...</p>
             ) : recentDocs.length === 0 ? (
-              <p className="text-xs text-muted-foreground">no recent documents found</p>
+              <p className="text-xs text-muted-foreground">No recent documents found</p>
             ) : (
               <div className="space-y-1.5">
                 {recentDocs.map((doc) => (
@@ -275,8 +275,8 @@ export function GoogleDocsCard() {
                 ? accounts.length > 1
                   ? `${accounts.length} accounts synced`
                   : accounts[0]?.displayName
-                  ? `connected as ${accounts[0].displayName}`
-                  : "google docs connected"
+                  ? `Connected as ${accounts[0].displayName}`
+                  : "Google docs connected"
                 : "Lets AI read and search your Google Docs"}
             </span>
             <span className="ml-auto">{connected ? "● connected" : "○ not connected"}</span>

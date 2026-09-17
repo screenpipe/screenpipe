@@ -30,12 +30,12 @@ export function useFrameActions(opts: {
 		if (!debouncedFrame?.frameId) return;
 		try {
 			await commands.copyFrameToClipboard(parseInt(debouncedFrame.frameId, 10));
-			toast({ title: "copied image", description: "frame copied to clipboard" });
+			toast({ title: "Copied image", description: "Frame copied to clipboard" });
 		} catch (err) {
 			console.warn("Copy image failed:", err);
 			toast({
-				title: "copy failed",
-				description: err instanceof Error ? err.message : "could not copy image",
+				title: "Copy failed",
+				description: err instanceof Error ? err.message : "Could not copy image",
 				variant: "destructive",
 			});
 		}
@@ -50,26 +50,26 @@ export function useFrameActions(opts: {
 		}
 		if (!text?.trim()) {
 			toast({
-				title: "no text",
-				description: "no text available for this frame",
+				title: "No text",
+				description: "No text available for this frame",
 				variant: "destructive",
 			});
 			return;
 		}
 		await commands.copyTextToClipboard(text);
-		toast({ title: "copied text", description: "text copied to clipboard" });
+		toast({ title: "Copied text", description: "Text copied to clipboard" });
 	}, [debouncedFrame?.frameId, frameContext?.text, textPositions]);
 
 	const copyDeeplinkAction = useCallback(async () => {
 		if (!debouncedFrame?.frameId) return;
 		try {
 			await commands.copyDeeplinkToClipboard(parseInt(debouncedFrame.frameId, 10));
-			toast({ title: "copied deeplink", description: "frame link copied to clipboard" });
+			toast({ title: "Copied deeplink", description: "Frame link copied to clipboard" });
 		} catch (err) {
 			console.warn("Copy deeplink failed:", err);
 			toast({
-				title: "copy failed",
-				description: err instanceof Error ? err.message : "could not copy",
+				title: "Copy failed",
+				description: err instanceof Error ? err.message : "Could not copy",
 				variant: "destructive",
 			});
 		}
@@ -81,7 +81,7 @@ export function useFrameActions(opts: {
 		const textSnippet = rawText.slice(0, 300);
 		const context = `Context from timeline frame:\n${device.metadata?.app_name || "?"} - ${device.metadata?.window_name || "?"}\nTime: ${currentFrame?.timestamp || "?"}\n\nText:\n${textSnippet}${textSnippet.length >= 300 ? "…" : ""}`;
 		await showChatWithPrefill({ context, frameId: parseInt(debouncedFrame.frameId, 10) });
-		toast({ title: "ask about this frame", description: "chat opened with frame context" });
+		toast({ title: "Ask about this frame", description: "Chat opened with frame context" });
 	}, [debouncedFrame, device, frameContext?.text, textPositions, currentFrame]);
 
 	const runPipeWithContext = useCallback(async (pipe: TemplatePipe) => {
@@ -90,7 +90,7 @@ export function useFrameActions(opts: {
 		const textSnippet = rawText.slice(0, 300);
 		const context = `Context from timeline frame:\n${device.metadata?.app_name || "?"} - ${device.metadata?.window_name || "?"}\nTime: ${currentFrame?.timestamp || "?"}\n\nText:\n${textSnippet}${textSnippet.length >= 300 ? "…" : ""}`;
 		await showChatWithPrefill({ context, prompt: pipe.prompt, autoSend: true });
-		toast({ title: `${pipe.icon} ${pipe.title}`, description: "running scheduled task with frame context" });
+		toast({ title: `${pipe.icon} ${pipe.title}`, description: "Running scheduled task with frame context" });
 	}, [debouncedFrame, device, frameContext?.text, textPositions, currentFrame]);
 
 	return { copyImage, copyFrameText, copyDeeplinkAction, askAboutFrame, runPipeWithContext };

@@ -314,7 +314,7 @@ export function SummaryCards({
 
       {/* ─── Quick action chips ───────────────────────────────────────────── */}
       {/* One wrapping flow in the same 512px column as the cards: built-in
-          chips first, then the user's saved templates, then "+ custom". The
+          chips first, then the user's saved templates, then "+ Custom". The
           per-chip pin glyph is the sole user-created marker — it also cues the
           behavior split (built-ins run immediately, templates open the edit
           dialog). Labels and forced rows reviewed out in #5243. */}
@@ -416,7 +416,7 @@ export function SummaryCards({
           }}
           className="h-10 cursor-pointer rounded-md border border-dashed border-foreground/25 px-1 text-[11px] text-muted-foreground transition-colors duration-150 hover:border-foreground hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none"
         >
-          + custom
+          + Custom
         </button>
       </div>
 

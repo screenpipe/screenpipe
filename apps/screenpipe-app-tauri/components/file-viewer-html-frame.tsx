@@ -98,7 +98,7 @@ export function HtmlPreviewFrame({
     <div className={`space-y-2 ${fillHeight ? "flex h-full min-h-0 flex-col" : ""}`}>
       <iframe
         ref={ref}
-        title="rendered html preview"
+        title="Rendered html preview"
         sandbox="allow-scripts"
         // Deny every Permissions-Policy feature (camera, mic, geolocation, …)
         // on top of the sandbox. Belt-and-suspenders for an opaque origin.
@@ -110,8 +110,8 @@ export function HtmlPreviewFrame({
         }`}
         style={fillHeight ? { background: "#ffffff" } : { height, background: "#ffffff" }}
       />
-      <div className="shrink-0 font-mono text-[10px] tracking-wide uppercase text-foreground/40">
-        sandboxed · no network — external scripts, images &amp; requests are blocked
+      <div className="shrink-0 font-mono text-[10px] tracking-wide normal-case text-foreground/40">
+        Sandboxed · no network — external scripts, images &amp; requests are blocked
       </div>
     </div>
   );

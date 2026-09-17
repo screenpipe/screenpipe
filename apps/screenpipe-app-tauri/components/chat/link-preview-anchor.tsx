@@ -105,19 +105,19 @@ function PreviewBody({
       ) : null}
       {state.status === "ready" && state.preview.author ? (
         <p className="mt-2 font-mono text-[10px] text-muted-foreground">
-          by {link.provider.id === "github" ? "@" : ""}
+          By {link.provider.id === "github" ? "@" : ""}
           {state.preview.author}
         </p>
       ) : null}
       {link.remote && state.status === "loading" ? (
         <p className="mt-2 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
           <Loader2 className="size-3 animate-spin" aria-hidden="true" />
-          loading public details
+          Loading public details
         </p>
       ) : null}
       {link.remote && state.status === "unavailable" ? (
         <p className="mt-2 font-mono text-[10px] text-muted-foreground">
-          public details unavailable
+          Public details unavailable
         </p>
       ) : null}
     </div>
@@ -129,7 +129,7 @@ function StateLabel({ state }: { state: PreviewState }) {
   return (
     <span
       data-preview-state={state.preview.state}
-      className="border border-border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-muted-foreground"
+      className="border border-border px-1.5 py-0.5 font-mono text-[9px] normal-case tracking-wide text-muted-foreground"
     >
       {state.preview.state}
     </span>
@@ -164,7 +164,7 @@ function LinkPreviewCard({
       <div className="flex items-center justify-between border-t border-border px-3 py-2 font-mono text-[10px] text-muted-foreground">
         <span className="max-w-[14rem] truncate">{link.host}</span>
         <span className="flex shrink-0 items-center gap-1">
-          open link
+          Open link
           <ExternalLink className="size-3" aria-hidden="true" />
         </span>
       </div>

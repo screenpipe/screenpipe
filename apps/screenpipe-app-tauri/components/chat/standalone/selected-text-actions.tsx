@@ -216,18 +216,18 @@ export function SelectedTextActions({
     >
       <button
         type="button"
-        className="whitespace-nowrap px-3 py-2 font-medium uppercase tracking-wide text-foreground transition-colors duration-150 hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none"
+        className="whitespace-nowrap px-3 py-2 font-medium normal-case tracking-wide text-foreground transition-colors duration-150 hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none"
         onClick={() => runAction(onAddToChat)}
       >
-        add to chat
+        Add to chat
       </button>
       {onAskInSideChat ? (
         <button
           type="button"
-          className="whitespace-nowrap border-l border-border px-3 py-2 font-medium uppercase tracking-wide text-foreground transition-colors duration-150 hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none"
+          className="whitespace-nowrap border-l border-border px-3 py-2 font-medium normal-case tracking-wide text-foreground transition-colors duration-150 hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none"
           onClick={() => runAction(onAskInSideChat)}
         >
-          ask in side chat
+          Ask in side chat
         </button>
       ) : null}
     </div>,

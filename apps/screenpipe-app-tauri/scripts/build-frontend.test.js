@@ -35,3 +35,21 @@ test('native backend changes do not invalidate the frontend input hash', async (
 		await fs.rm(root, { recursive: true, force: true })
 	}
 })
+
+
+test('local package edits invalidate the frontend input hash', async () => {
+	const fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'screenpipe-local-input-'))
+	try {
+		const root = path.join(fixture, 'app')
+		const dependency = path.join(fixture, 'shared')
+		await fs.mkdir(root)
+		await fs.mkdir(dependency)
+		await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ dependencies: { shared: 'file:../shared' } }))
+		await fs.writeFile(path.join(dependency, 'index.ts'), 'export const position = "top"')
+		const initial = await computeInputHash(root)
+		await fs.writeFile(path.join(dependency, 'index.ts'), 'export const position = "bottom"')
+		expect(await computeInputHash(root)).not.toBe(initial)
+	} finally {
+		await fs.rm(fixture, { recursive: true, force: true })
+	}
+})

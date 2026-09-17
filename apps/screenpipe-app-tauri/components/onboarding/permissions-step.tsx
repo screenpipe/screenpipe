@@ -118,11 +118,11 @@ function PermissionRow({
       <div className="ml-auto shrink-0">
         {granted ? (
           <span className="font-mono text-[10px] text-muted-foreground">
-            granted
+            Granted
           </span>
         ) : interactive ? (
           <span className="font-mono text-[10px] text-muted-foreground group-hover:text-background/70">
-            grant →
+            Grant →
           </span>
         ) : null}
       </div>
@@ -187,7 +187,7 @@ export default function PermissionsStep({
           Lets Screenpipe index what&apos;s on your screen: windows, docs,
           chats, code. {" "}
           <strong className="font-bold">
-            restart after granting this permission.
+            Restart after granting this permission.
           </strong>
         </>
       ),
@@ -379,7 +379,7 @@ export default function PermissionsStep({
       {/* Branding */}
       <div className="flex flex-col items-center mb-6">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="w-12 h-12 mb-2" src="/128x128.png" alt="screenpipe" />
+        <img className="w-12 h-12 mb-2" src="/128x128.png" alt="Screenpipe" />
         <h1 className="font-mono text-base font-bold text-foreground">
           Unlock the full experience
         </h1>
@@ -393,9 +393,9 @@ export default function PermissionsStep({
           className="w-full max-w-sm border border-foreground px-5 py-5 text-center"
           data-testid="screen-recording-restart-prompt"
         >
-          <h2 className="font-mono text-sm font-semibold">restart required</h2>
+          <h2 className="font-mono text-sm font-semibold">Restart required</h2>
           <p className="mt-1 font-mono text-xs text-muted-foreground">
-            screenpipe won&apos;t work until you restart.
+            Screenpipe won&apos;t work until you restart.
           </p>
           <button
             type="button"
@@ -407,7 +407,7 @@ export default function PermissionsStep({
             <RefreshCw
               className={`h-3.5 w-3.5 ${restarting ? "animate-spin" : ""}`}
             />
-            {restarting ? "restarting..." : "restart screenpipe"}
+            {restarting ? "Restarting..." : "Restart screenpipe"}
           </button>
         </div>
       ) : (

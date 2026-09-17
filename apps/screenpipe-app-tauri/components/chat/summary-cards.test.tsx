@@ -147,7 +147,7 @@ describe("SummaryCards", () => {
       .querySelector('[aria-label="Run in Claude"]');
     expect(timeBreakdown.contains(timeBreakdownClaude)).toBe(false);
     expect(
-      screen.getByRole("button", { name: "+ custom" }),
+      screen.getByRole("button", { name: "+ Custom" }),
     ).toBeInTheDocument();
   });
 
@@ -229,7 +229,7 @@ describe("SummaryCards", () => {
     );
 
     expect(screen.getByText("Client recap")).toBeInTheDocument();
-    expect(screen.getByText("+ custom")).toBeInTheDocument();
+    expect(screen.getByText("+ Custom")).toBeInTheDocument();
   });
 
   it("dispatches every built-in home card once with its visible label", () => {

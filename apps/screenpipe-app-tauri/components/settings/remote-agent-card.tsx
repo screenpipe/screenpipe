@@ -95,7 +95,7 @@ const TARGETS: { id: TargetId; label: string; props: AgentCardProps }[] = [
             key: "token",
             label: "Gateway Token",
             secret: true,
-            placeholder: "your-openclaw-gateway-token",
+            placeholder: "Your-openclaw-gateway-token",
             helpUrl: "https://docs.openclaw.ai/gateway/authentication",
           },
         ],
@@ -247,7 +247,7 @@ that installs the screenpipe MCP server${hasSkills ? " + skill" : ""} so ${name}
               className="h-7 text-xs shrink-0"
               onClick={() => copy(setupCmd, "cmd")}
             >
-              {copied === "cmd" ? "copied" : "copy"}
+              {copied === "cmd" ? "Copied" : "Copy"}
             </Button>
           </div>
         </div>
@@ -266,13 +266,13 @@ that installs the screenpipe MCP server${hasSkills ? " + skill" : ""} so ${name}
               className="h-7 text-xs shrink-0"
               onClick={() => copy(aiPrompt, "prompt")}
             >
-              {copied === "prompt" ? "copied" : "copy"}
+              {copied === "prompt" ? "Copied" : "Copy"}
             </Button>
           </div>
         </div>
 
         <p className="text-[11px] text-muted-foreground leading-relaxed">
-          then push your screenpipe data to that box via the{" "}
+          Then push your screenpipe data to that box via the{" "}
           <span className="font-medium">Sync (remote)</span> tab below.
         </p>
       </div>

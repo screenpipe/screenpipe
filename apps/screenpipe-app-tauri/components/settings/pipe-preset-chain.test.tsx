@@ -56,7 +56,7 @@ describe("PipePresetChain", () => {
     expect(screen.getByLabelText("fallback 2 model")).toHaveValue("local");
     expect(screen.getByLabelText("fallback 3 model")).toHaveValue("last-resort");
     expect(screen.getByText("4/4 models")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "add fallback" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add fallback" })).toBeNull();
   });
 
   it("edits a fallback without dropping the rest of the chain", () => {
@@ -114,7 +114,7 @@ describe("PipePresetChain", () => {
     const onChange = vi.fn();
     render(<PipePresetChain preset="fast" onChange={onChange} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "add fallback" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add fallback" }));
     fireEvent.change(screen.getByLabelText("fallback 1 model"), {
       target: { value: "reliable" },
     });

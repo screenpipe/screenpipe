@@ -88,12 +88,12 @@ export function ComposerSuggestions({
             title="Suggested prompts"
           >
             <Sparkles className="h-2.5 w-2.5" strokeWidth={1.5} />
-            <span>suggestions</span>
+            <span>Suggestions</span>
             <ChevronDown className="h-2.5 w-2.5" strokeWidth={1.5} />
           </button>
         </PopoverTrigger>
         <PopoverContent
-          className="ph-no-capture w-64 rounded-none border-border/50 p-0.5 shadow-lg shadow-black/5"
+          className="ph-no-capture w-64 rounded-lg border-border/50 p-0.5 shadow-lg shadow-black/5"
           align="start"
           side="top"
           sideOffset={6}
@@ -199,7 +199,7 @@ function SuggestionActionButtons({
         onClick={onRefresh}
         disabled={isRefreshing}
         className="flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center text-muted-foreground/40 transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground disabled:cursor-default disabled:opacity-30"
-        title="refresh suggestions"
+        title="Refresh suggestions"
         aria-label="Refresh suggestions"
       >
         <RefreshCw

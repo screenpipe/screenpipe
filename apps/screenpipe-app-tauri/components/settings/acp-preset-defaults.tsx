@@ -298,7 +298,7 @@ export function AcpPresetDefaults({
       return (
         <p className={hintClass}>
           {compact
-            ? "enter the agent command to load its model and mode choices"
+            ? "Enter the agent command to load its model and mode choices"
             : "Enter the agent command to load its model and mode choices."}
         </p>
       );
@@ -448,9 +448,9 @@ export function AcpPresetDefaults({
       <div className={cn(hintClass, "flex items-center gap-2")}>
         <span>
           {probeError
-            ? `could not load choices: ${probeError}`
+            ? `Could not load choices: ${probeError}`
             : compact
-              ? "model and mode choices unavailable"
+              ? "Model and mode choices unavailable"
               : "Model and mode choices are unavailable for this agent."}
         </span>
         <button
@@ -522,15 +522,15 @@ export function AcpPresetDefaults({
             <option value="">
               {defaultChoiceLabel(option.currentValue === true ? "on" : "off")}
             </option>
-            <option value="true">{compact ? "on" : "On"}</option>
-            <option value="false">{compact ? "off" : "Off"}</option>
+            <option value="true">{compact ? "On" : "On"}</option>
+            <option value="false">{compact ? "Off" : "Off"}</option>
           </select>
         </div>
       ))}
       {modes && (
         <div className="space-y-1">
           <Label htmlFor="acpDefaultMode" className={labelClass}>
-            {compact ? "mode" : "Mode"}
+            {compact ? "Mode" : "Mode"}
           </Label>
           <select
             id="acpDefaultMode"
@@ -558,7 +558,7 @@ export function AcpPresetDefaults({
       )}
       <p className={hintClass}>
         {compact
-          ? "applied when the agent starts"
+          ? "Applied when the agent starts"
           : "Applied whenever this agent starts. The composer can still change them mid-conversation."}
       </p>
     </div>

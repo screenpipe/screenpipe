@@ -71,12 +71,12 @@ export function ArtifactHtmlBody({
   if (!expanded) {
     body = hideTitle ? null : <p className="text-sm font-medium">{title}</p>;
   } else if (content == null) {
-    body = <p className="text-xs text-muted-foreground">loading artifact…</p>;
+    body = <p className="text-xs text-muted-foreground">Loading artifact…</p>;
   } else {
     body = (
       <div className={`space-y-2 ${fillHeight ? "flex h-full flex-col" : ""}`}>
-        <div className="flex shrink-0 items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-          <span>html · sandboxed{showSource ? " · source" : " · rendered"}</span>
+        <div className="flex shrink-0 items-center justify-between gap-2 font-mono text-[10px] normal-case tracking-wide text-muted-foreground">
+          <span>Html · sandboxed{showSource ? " · source" : " · rendered"}</span>
           <button
             data-testid="brain-html-render-toggle"
             onClick={(e) => {
@@ -85,7 +85,7 @@ export function ArtifactHtmlBody({
             }}
             className="underline opacity-80 hover:opacity-100 hover:text-foreground transition-colors"
           >
-            {showSource ? "preview rendered" : "view source"}
+            {showSource ? "Preview rendered" : "View source"}
           </button>
         </div>
         {showSource ? (
@@ -119,11 +119,11 @@ export function ArtifactHtmlBody({
         >
           {expanded ? (
             <>
-              <ChevronUp className="h-2.5 w-2.5" /> show less
+              <ChevronUp className="h-2.5 w-2.5" /> Show less
             </>
           ) : (
             <>
-              <ChevronDown className="h-2.5 w-2.5" /> show more
+              <ChevronDown className="h-2.5 w-2.5" /> Show more
             </>
           )}
         </button>

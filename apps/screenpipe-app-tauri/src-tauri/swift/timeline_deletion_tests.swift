@@ -121,6 +121,15 @@ private struct DeletionTests {
             expect(model.selection == nil, "successful deletion retained its selection")
             expect(model.frames.isEmpty, "stale frames survived the reload")
             expect(model.nearbyAudioSegments.isEmpty, "stale audio survived the reload")
+
+            let range = TimelineDateNavigation.dayRange(for: model.currentDate)
+            expect(model.isLoading, "deletion did not start a fresh request")
+            model.frameStream(oldStream, didComplete: FrameStreamCompletion(
+                start: range.start, end: range.end, error: "stale completion"))
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            expect(model.isLoading, "old completion stopped the replacement request's loader")
+            expect(model.connectionError == nil, "old completion overwrote connection state")
+
             model.injectForTesting(frames: [])
             expect(model.frames.isEmpty, "buffered frames resurrected deleted data")
 

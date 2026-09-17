@@ -108,7 +108,7 @@ export function ImapCard({ onChanged }: { onChanged?: () => void } = {}) {
       posthog.capture("connection_saved", { integration: "imap" });
       onChanged?.();
     } catch (e: any) {
-      setError(e?.message || "unknown error");
+      setError(e?.message || "Unknown error");
       setStatus("error");
       setWatching(false);
     }
@@ -151,12 +151,12 @@ export function ImapCard({ onChanged }: { onChanged?: () => void } = {}) {
       notifyConnectionsUpdated();
       onChanged?.();
     } catch (e: any) {
-      setError(e?.message || "disconnect failed");
+      setError(e?.message || "Disconnect failed");
     }
   };
 
   if (!loaded) {
-    return <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" />loading…</div>;
+    return <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" />Loading…</div>;
   }
 
   if (savedUsername) {
@@ -172,7 +172,7 @@ export function ImapCard({ onChanged }: { onChanged?: () => void } = {}) {
         </p>
         {error && <p className="text-xs text-destructive">{error}</p>}
         <Button onClick={disconnect} variant="ghost" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal text-destructive">
-          <X className="h-3 w-3" />disconnect
+          <X className="h-3 w-3" />Disconnect
         </Button>
       </div>
     );
@@ -199,12 +199,12 @@ export function ImapCard({ onChanged }: { onChanged?: () => void } = {}) {
       {email.includes("@") && (
         <details>
           <summary className="text-[11px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
-            advanced: IMAP server settings
+            Advanced: IMAP server settings
           </summary>
           <div className="flex gap-2 pt-2">
             <div className="flex-1 space-y-1">
               <Label className="text-xs">IMAP Host</Label>
-              <Input placeholder={inferredHost || `imap.${domain || "example.com"}`} value={host} onChange={(e) => setHost(e.target.value)} className="h-8 text-xs" />
+              <Input placeholder={inferredHost || `Imap.${domain || "example.com"}`} value={host} onChange={(e) => setHost(e.target.value)} className="h-8 text-xs" />
             </div>
             <div className="w-24 space-y-1">
               <Label className="text-xs">Port</Label>
@@ -221,25 +221,25 @@ export function ImapCard({ onChanged }: { onChanged?: () => void } = {}) {
             size="sm"
             className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
           >
-            <ExternalLink className="h-3 w-3" />get app password
+            <ExternalLink className="h-3 w-3" />Get app password
           </Button>
           {watching && (
             <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
               <Loader2 className="h-3 w-3 animate-spin" />
-              create the app password on Google&apos;s page and copy it — screenpipe will connect automatically
+              Create the app password on Google&apos;s page and copy it — screenpipe will connect automatically
             </p>
           )}
           <p className="text-[11px] text-muted-foreground">
-            requires 2-Step Verification on your Google account — on Workspace accounts your admin may need to allow it
+            Requires 2-Step Verification on your Google account — on Workspace accounts your admin may need to allow it
           </p>
         </div>
       )}
       <div className="space-y-1">
-        <Label className="text-xs">{gmail ? "or paste the app password" : "Password / App Password"}</Label>
+        <Label className="text-xs">{gmail ? "Or paste the app password" : "Password / App Password"}</Label>
         <div className="relative">
           <Input
             type={showPassword ? "text" : "password"}
-            placeholder={gmail ? "abcd efgh ijkl mnop" : "app-specific password"}
+            placeholder={gmail ? "Abcd efgh ijkl mnop" : "App-specific password"}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             className="h-8 text-xs pr-8"
@@ -261,9 +261,9 @@ export function ImapCard({ onChanged }: { onChanged?: () => void } = {}) {
         size="sm"
         className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
       >
-        {status === "connecting" ? (<><Loader2 className="h-3 w-3 animate-spin" />connecting…</>)
-          : status === "error" ? (<>retry</>)
-          : (<><Check className="h-3 w-3" />connect</>)}
+        {status === "connecting" ? (<><Loader2 className="h-3 w-3 animate-spin" />Connecting…</>)
+          : status === "error" ? (<>Retry</>)
+          : (<><Check className="h-3 w-3" />Connect</>)}
       </Button>
     </div>
   );

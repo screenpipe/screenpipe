@@ -272,7 +272,7 @@ export function ChatHistoryView({
       if (!store.sessions[id] && meta) {
         store.actions.upsert({
           id,
-          title: meta.title || "untitled",
+          title: meta.title || "Untitled",
           preview: "",
           status: "idle",
           messageCount: meta.messageCount ?? 0,
@@ -431,7 +431,7 @@ export function ChatHistoryView({
               conv.hidden ? "text-muted-foreground" : "text-foreground"
             )}
           >
-            {(isInjectedTitle(conv.title) ? undefined : conv.title) || "untitled"}
+            {(isInjectedTitle(conv.title) ? undefined : conv.title) || "Untitled"}
           </p>
         </div>
 
@@ -483,11 +483,11 @@ export function ChatHistoryView({
                 align="end"
                 side="bottom"
                 sideOffset={6}
-                className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none"
+                className="w-[156px] p-1 rounded-lg border border-border bg-background shadow-none"
                 onClick={(e) => e.stopPropagation()}
               >
                 <DropdownMenuItem
-                  className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                  className="text-[11px] h-[30px] px-2 gap-2 rounded-sm focus:bg-muted/30"
                   disabled={rowPending}
                   onSelect={(e) => {
                     toggleSelected(conv.id);
@@ -498,7 +498,7 @@ export function ChatHistoryView({
                 </DropdownMenuItem>
                 <DropdownMenuSeparator className="my-1 bg-border/70" />
                 <DropdownMenuItem
-                  className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                  className="text-[11px] h-[30px] px-2 gap-2 rounded-sm focus:bg-muted/30"
                   disabled={rowPending}
                   onSelect={(e) => {
                     void (async () => {
@@ -539,11 +539,11 @@ export function ChatHistoryView({
                 </DropdownMenuItem>
                 {conv.kind !== "pipe-run" && conv.kind !== "pipe-watch" && (
                 <DropdownMenuSub>
-                  <DropdownMenuSubTrigger className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30">
+                  <DropdownMenuSubTrigger className="text-[11px] h-[30px] px-2 gap-2 rounded-sm focus:bg-muted/30">
                     <FolderOpen className="h-3 w-3 text-muted-foreground" />
                     Move to group
                   </DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent className="w-[196px] rounded-none border border-border bg-background p-0 shadow-none overflow-hidden">
+                  <DropdownMenuSubContent className="w-[196px] rounded-lg border border-border bg-background p-0 shadow-none overflow-hidden">
                     {availableMoveGroups.length > 0 && (
                       <div
                         className={cn(
@@ -554,7 +554,7 @@ export function ChatHistoryView({
                         {availableMoveGroups.map((g) => (
                           <DropdownMenuItem
                             key={g}
-                            className="min-w-0 text-[11px] h-[30px] px-2 rounded-none whitespace-nowrap focus:bg-muted/30"
+                            className="min-w-0 text-[11px] h-[30px] px-2 rounded-sm whitespace-nowrap focus:bg-muted/30"
                             onSelect={() => void handleMoveToGroup(conv.id, g)}
                           >
                             <span className="block flex-1 truncate" title={g}>
@@ -571,7 +571,7 @@ export function ChatHistoryView({
                             <DropdownMenuSeparator className="my-1 bg-border/70" />
                           )}
                           <DropdownMenuItem
-                            className="text-[11px] h-[30px] px-2 rounded-none whitespace-nowrap focus:bg-muted/30"
+                            className="text-[11px] h-[30px] px-2 rounded-sm whitespace-nowrap focus:bg-muted/30"
                             onSelect={() => void handleMoveToGroup(conv.id, undefined)}
                           >
                             Remove from group
@@ -582,7 +582,7 @@ export function ChatHistoryView({
                         <DropdownMenuSeparator className="my-1 bg-border/70" />
                       )}
                       <DropdownMenuItem
-                        className="text-[11px] h-[30px] px-2 rounded-none whitespace-nowrap focus:bg-muted/30"
+                        className="text-[11px] h-[30px] px-2 rounded-sm whitespace-nowrap focus:bg-muted/30"
                         onSelect={() => setNewGroupSessionId(conv.id)}
                       >
                         New group...
@@ -593,7 +593,7 @@ export function ChatHistoryView({
                 )}
                 {!conv.hidden ? (
                   <DropdownMenuItem
-                    className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                    className="text-[11px] h-[30px] px-2 gap-2 rounded-sm focus:bg-muted/30"
                     disabled={rowPending}
                     onSelect={(e) => {
                       void (async () => {
@@ -636,7 +636,7 @@ export function ChatHistoryView({
                   </DropdownMenuItem>
                 ) : (
                   <DropdownMenuItem
-                    className="text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30"
+                    className="text-[11px] h-[30px] px-2 gap-2 rounded-sm focus:bg-muted/30"
                     disabled={rowPending}
                     onSelect={(e) => {
                       void (async () => {
@@ -656,7 +656,7 @@ export function ChatHistoryView({
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuItem
-                  className="text-[11px] h-[30px] px-2 gap-2 rounded-none text-destructive focus:text-destructive focus:bg-destructive/10"
+                  className="text-[11px] h-[30px] px-2 gap-2 rounded-sm text-destructive focus:text-destructive focus:bg-destructive/10"
                   disabled={rowPending}
                   onSelect={(e) => {
                     setDeleteIds([conv.id]);
@@ -908,10 +908,10 @@ export function ChatHistoryView({
                   <Input
                     ref={searchInputRef}
                     placeholder={
-                      tab === "chats" ? "search chats"
-                      : tab === "pipes" ? "search scheduled tasks"
-                      : tab === "archived" ? "search archived"
-                      : "search all"
+                      tab === "chats" ? "Search chats"
+                      : tab === "pipes" ? "Search scheduled tasks"
+                      : tab === "archived" ? "Search archived"
+                      : "Search all"
                     }
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
@@ -939,7 +939,7 @@ export function ChatHistoryView({
                 </div>
                 <Button
                   variant="outline"
-                  className="h-9 px-3 gap-2 shrink-0 rounded-none"
+                  className="h-9 px-3 gap-2 shrink-0 rounded-md"
                   onClick={() => setImportDialogOpen(true)}
                   title="Import chats"
                 >
@@ -1001,12 +1001,12 @@ export function ChatHistoryView({
             {loadingMore && (
               <div className="flex items-center justify-center py-4 text-xs text-muted-foreground">
                 <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" aria-hidden />
-                <span>loading more…</span>
+                <span>Loading more…</span>
               </div>
             )}
             {!hasMore && !loadingMore && list.length >= HISTORY_PAGE_SIZE && (
-              <div className="py-6 text-center text-[11px] tracking-wide text-muted-foreground/60 lowercase">
-                end of list
+              <div className="py-6 text-center text-[11px] tracking-wide text-muted-foreground/60 normal-case">
+                End of list
               </div>
             )}
           </div>

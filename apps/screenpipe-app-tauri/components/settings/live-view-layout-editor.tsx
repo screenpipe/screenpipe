@@ -211,8 +211,8 @@ export function LiveViewLayoutEditor({
       <div className="mb-4 grid gap-4 border-b border-border pb-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="inline-flex h-6 items-center bg-foreground px-2 font-mono text-[9px] uppercase tracking-wide text-background">
-              editing
+            <span className="inline-flex h-6 items-center bg-foreground px-2 font-mono text-[9px] normal-case tracking-wide text-background">
+              Editing
             </span>
             <h2 className="truncate text-base font-semibold tracking-tight">
               Arrange your Live View
@@ -229,26 +229,26 @@ export function LiveViewLayoutEditor({
             type="button"
             variant="outline"
             size="sm"
-            className="h-9 rounded-none px-3"
+            className="h-9 rounded-md px-3"
             onClick={addSlot}
           >
-            <Plus className="mr-1.5 h-3.5 w-3.5" /> add Block
+            <Plus className="mr-1.5 h-3.5 w-3.5" /> Add Block
           </Button>
           <Button
             type="button"
             variant="ghost"
             size="sm"
-            className="h-9 rounded-none px-3"
+            className="h-9 rounded-md px-3"
             disabled={saving}
             onClick={onCancel}
           >
-            cancel
+            Cancel
           </Button>
           <Button
             data-testid="overview-save"
             type="button"
             size="sm"
-            className="col-span-2 h-9 rounded-none px-4 sm:col-span-1"
+            className="col-span-2 h-9 rounded-md px-4 sm:col-span-1"
             disabled={saving || !canSave}
             onClick={onSave}
           >
@@ -257,7 +257,7 @@ export function LiveViewLayoutEditor({
             ) : (
               <Check className="mr-1.5 h-3.5 w-3.5" />
             )}
-            done
+            Done
           </Button>
         </div>
       </div>
@@ -274,7 +274,7 @@ export function LiveViewLayoutEditor({
               : ""
           }`}
         >
-          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+          <span className="text-[10px] normal-case tracking-wide text-muted-foreground">
             Live View name
           </span>
           <Input
@@ -283,17 +283,17 @@ export function LiveViewLayoutEditor({
             onChange={(event) =>
               onChange({ ...draft, title: event.target.value })
             }
-            className="h-9 rounded-none"
+            className="h-9 rounded-md"
             maxLength={120}
           />
         </label>
         {hasSelectableTimeRange && (
           <label className="space-y-1.5 p-3">
-            <span className="block text-[10px] uppercase tracking-wide text-muted-foreground">
+            <span className="block text-[10px] normal-case tracking-wide text-muted-foreground">
               Time window
             </span>
             <select
-              aria-label="template time range"
+              aria-label="Template time range"
               value={draft.timeRange}
               className="h-9 w-full border border-border bg-background px-2 text-xs outline-none focus:border-foreground"
               onChange={(event) =>
@@ -321,7 +321,7 @@ export function LiveViewLayoutEditor({
         >
           <div className="mb-3 flex items-start justify-between gap-4">
             <div>
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              <p className="text-[10px] normal-case tracking-wide text-muted-foreground">
                 Block settings
               </p>
               <h3 className="text-sm font-medium">{selectedSlot.title}</h3>
@@ -330,8 +330,8 @@ export function LiveViewLayoutEditor({
               type="button"
               variant="ghost"
               size="icon"
-              aria-label="close Block settings"
-              className="h-8 w-8 rounded-none"
+              aria-label="Close Block settings"
+              className="h-8 w-8 rounded-md"
               onClick={() => setSelectedSlotId(null)}
             >
               <X className="h-3.5 w-3.5" />
@@ -339,14 +339,14 @@ export function LiveViewLayoutEditor({
           </div>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(12rem,1.5fr)_minmax(10rem,1fr)_minmax(10rem,1fr)_8rem]">
             <label className="space-y-1">
-              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              <span className="text-[10px] normal-case tracking-wide text-muted-foreground">
                 Block title
               </span>
               <Input
                 data-testid={`overview-block-title-${selectedSlot.id}`}
                 value={selectedSlot.title}
                 maxLength={120}
-                className="h-9 rounded-none text-xs"
+                className="h-9 rounded-md text-xs"
                 onChange={(event) =>
                   updateSlot(selectedSlot.id, (slot) => ({
                     ...slot,
@@ -356,7 +356,7 @@ export function LiveViewLayoutEditor({
               />
             </label>
             <label className="space-y-1">
-              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              <span className="text-[10px] normal-case tracking-wide text-muted-foreground">
                 Block type
               </span>
               <select
@@ -379,7 +379,7 @@ export function LiveViewLayoutEditor({
               </select>
             </label>
             <label className="space-y-1">
-              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              <span className="text-[10px] normal-case tracking-wide text-muted-foreground">
                 Connected scheduled task
               </span>
               <select
@@ -405,7 +405,7 @@ export function LiveViewLayoutEditor({
               </select>
             </label>
             <label className="space-y-1">
-              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              <span className="text-[10px] normal-case tracking-wide text-muted-foreground">
                 Width
               </span>
               <select
@@ -425,7 +425,7 @@ export function LiveViewLayoutEditor({
               </select>
             </label>
             <label className="space-y-1 md:col-span-2 xl:col-span-4">
-              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              <span className="text-[10px] normal-case tracking-wide text-muted-foreground">
                 What this Block should show
               </span>
               <textarea
@@ -563,7 +563,7 @@ export function LiveViewLayoutEditor({
                     <p className="truncate text-[11px] font-medium">
                       {slot.title}
                     </p>
-                    <p className="font-mono text-[8px] uppercase text-muted-foreground">
+                    <p className="font-mono text-[8px] normal-case text-muted-foreground">
                       {index + 1} of {slots.length} · {WIDTH_LABELS[width]}
                     </p>
                   </div>
@@ -583,7 +583,7 @@ export function LiveViewLayoutEditor({
                     >
                       <ChevronLeft className="h-3.5 w-3.5" />
                     </button>
-                    <span className="min-w-10 text-center font-mono text-[8px] uppercase text-muted-foreground">
+                    <span className="min-w-10 text-center font-mono text-[8px] normal-case text-muted-foreground">
                       {WIDTH_LABELS[width]}
                     </span>
                     <button

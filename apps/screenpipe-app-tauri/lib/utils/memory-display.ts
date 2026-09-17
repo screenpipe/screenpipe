@@ -242,9 +242,9 @@ export function getMemoryCardDisplay(memory: MemoryRecordForDisplay): MemoryCard
         /##\s*(?:🎯\s*)?Headline\s*\n+([^\n#]+)/i,
         /\*\*Focus:\*\*\s*([^\n]+)/i,
       ]) || base.preview;
-    if (date) properties.push({ label: "date", value: date });
-    if (apps) properties.push({ label: "top apps", value: apps });
-    if (people) properties.push({ label: "people", value: people });
+    if (date) properties.push({ label: "Date", value: date });
+    if (apps) properties.push({ label: "Top apps", value: apps });
+    if (people) properties.push({ label: "People", value: people });
   } else if (kind === "person") {
     const personTag = memory.tags.find((tag) => tag.startsWith("person:"));
     const relationship = firstMatch(memory.content, [/\*\*Relationship:\*\*\s*([^\n]+)/i]);
@@ -253,15 +253,15 @@ export function getMemoryCardDisplay(memory: MemoryRecordForDisplay): MemoryCard
     title = headingTitle(memory.content) || (personTag ? titleize(personTag.slice(7)) : title);
     subtitle = relationship || "Person memory";
     summary = openLoops || base.preview;
-    if (lastSeen) properties.push({ label: "last seen", value: lastSeen });
-    if (openLoops) properties.push({ label: "open loops", value: openLoops });
+    if (lastSeen) properties.push({ label: "Last seen", value: lastSeen });
+    if (openLoops) properties.push({ label: "Open loops", value: openLoops });
   } else if (kind === "crm") {
     const lastInteraction = listSectionPreview(memory.content, "Recent interactions", 2);
     const followUp = listSectionPreview(memory.content, "Follow-ups", 2);
     subtitle = "Personal CRM";
     summary = lastInteraction || followUp || base.preview;
-    if (lastInteraction) properties.push({ label: "last interaction", value: lastInteraction });
-    if (followUp) properties.push({ label: "follow-up", value: followUp });
+    if (lastInteraction) properties.push({ label: "Last interaction", value: lastInteraction });
+    if (followUp) properties.push({ label: "Follow-up", value: followUp });
   } else if (kind === "meeting") {
     const meetingTag = memory.tags.find((tag) => tag.startsWith("meeting:"));
     const attendees = firstMatch(memory.content, [
@@ -271,8 +271,8 @@ export function getMemoryCardDisplay(memory: MemoryRecordForDisplay): MemoryCard
     const actions = listSectionPreview(memory.content, "Action items", 2);
     subtitle = meetingTag ? `Meeting ${meetingTag.slice(8)}` : "Meeting memory";
     summary = actions || base.preview;
-    if (attendees) properties.push({ label: "attendees", value: attendees });
-    if (actions) properties.push({ label: "actions", value: actions });
+    if (attendees) properties.push({ label: "Attendees", value: attendees });
+    if (actions) properties.push({ label: "Actions", value: actions });
   } else if (kind === "fact") {
     subtitle = "Saved fact";
     summary = "";

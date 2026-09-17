@@ -69,7 +69,7 @@ export function LiveViewItemControls({
   return (
     <div
       className="mt-2 flex flex-wrap items-center gap-1"
-      aria-label={`actions for ${title}`}
+      aria-label={`Actions for ${title}`}
     >
       {actions.has("snooze") && (
         <Popover open={snoozeOpen} onOpenChange={setSnoozeOpen}>
@@ -79,16 +79,16 @@ export function LiveViewItemControls({
               variant="outline"
               size="sm"
               data-testid={`live-view-item-${itemId}-snooze`}
-              aria-label={`snooze ${title}`}
-              className="h-7 rounded-none px-2 text-[11px]"
+              aria-label={`Snooze ${title}`}
+              className="h-7 rounded-md px-2 text-[11px]"
               disabled={itemActionDisabled}
             >
               <Clock3 className="mr-1.5 h-3 w-3" />
               Later
             </Button>
           </PopoverTrigger>
-          <PopoverContent align="start" className="w-44 rounded-none p-1">
-            <p className="px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+          <PopoverContent align="start" className="w-44 rounded-lg p-1">
+            <p className="px-2 py-1 text-[10px] normal-case tracking-wide text-muted-foreground">
               Remind me
             </p>
             {snoozeOptions().map((option) => (
@@ -97,7 +97,7 @@ export function LiveViewItemControls({
                 type="button"
                 variant="ghost"
                 data-testid={`live-view-item-${itemId}-snooze-${option.label.toLowerCase().replaceAll(" ", "-")}`}
-                className="h-8 w-full justify-start rounded-none px-2 text-xs"
+                className="h-8 w-full justify-start rounded-md px-2 text-xs"
                 onClick={() => {
                   void onAction({
                     action: "snooze",
@@ -119,10 +119,10 @@ export function LiveViewItemControls({
             size="sm"
             data-testid={`live-view-item-${itemId}-not-right`}
             data-state={notRightOpen ? "open" : "closed"}
-            aria-label={`not right ${title}`}
+            aria-label={`Not right ${title}`}
             aria-expanded={notRightOpen}
             aria-controls={`live-view-item-${itemId}-not-right-panel`}
-            className="h-7 rounded-none px-2 text-[11px] data-[state=open]:bg-foreground data-[state=open]:text-background"
+            className="h-7 rounded-md px-2 text-[11px] data-[state=open]:bg-foreground data-[state=open]:text-background"
             disabled={itemActionDisabled}
             onClick={() => {
               setNotRightOpen((open) => {
@@ -139,7 +139,7 @@ export function LiveViewItemControls({
               id={`live-view-item-${itemId}-not-right-panel`}
               data-testid={`live-view-item-${itemId}-not-right-panel`}
               role="group"
-              aria-label={`what is not right about ${title}`}
+              aria-label={`What is not right about ${title}`}
               className="order-last mt-1 w-full flex-none border border-border bg-background p-3 sm:max-w-2xl"
               onKeyDown={(event) => {
                 if (event.key !== "Escape") return;
@@ -175,8 +175,8 @@ export function LiveViewItemControls({
                     data-testid={`live-view-item-${itemId}-correction-input`}
                     value={correction}
                     onChange={(event) => setCorrection(event.target.value)}
-                    placeholder="e.g. Sam owns this, due Friday"
-                    className="h-8 rounded-none text-xs"
+                    placeholder="E.g. Sam owns this, due Friday"
+                    className="h-8 rounded-md text-xs"
                     maxLength={500}
                   />
                   <div className="flex items-center justify-between gap-2">
@@ -184,7 +184,7 @@ export function LiveViewItemControls({
                       type="button"
                       variant="ghost"
                       size="sm"
-                      className="h-7 rounded-none text-xs"
+                      className="h-7 rounded-md text-xs"
                       disabled={itemActionDisabled}
                       onClick={() => setEditingCorrection(false)}
                     >
@@ -194,7 +194,7 @@ export function LiveViewItemControls({
                       type="submit"
                       size="sm"
                       data-testid={`live-view-item-${itemId}-correction-save`}
-                      className="h-7 rounded-none text-xs"
+                      className="h-7 rounded-md text-xs"
                       disabled={!correction.trim() || itemActionDisabled}
                     >
                       {saving === "correct" && (
@@ -219,7 +219,7 @@ export function LiveViewItemControls({
                         type="button"
                         variant="outline"
                         data-testid={`live-view-item-${itemId}-correct`}
-                        className="h-auto items-start justify-start whitespace-normal rounded-none px-3 py-2 text-left"
+                        className="h-auto items-start justify-start whitespace-normal rounded-md px-3 py-2 text-left"
                         onClick={() => setEditingCorrection(true)}
                       >
                         <Pencil className="mr-2 mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -236,7 +236,7 @@ export function LiveViewItemControls({
                         type="button"
                         variant="outline"
                         data-testid={`live-view-item-${itemId}-dismiss`}
-                        className="h-auto items-start justify-start whitespace-normal rounded-none px-3 py-2 text-left"
+                        className="h-auto items-start justify-start whitespace-normal rounded-md px-3 py-2 text-left"
                         disabled={itemActionDisabled}
                         onClick={() => {
                           void onAction({ action: "dismiss" }).then((saved) => {
@@ -272,8 +272,8 @@ export function LiveViewItemControls({
           variant="ghost"
           size="sm"
           data-testid={`live-view-item-${itemId}-handoff`}
-          aria-label={`send ${title} to another app`}
-          className="h-7 rounded-none px-2 text-[11px]"
+          aria-label={`Send ${title} to another app`}
+          className="h-7 rounded-md px-2 text-[11px]"
           disabled={busy}
           onClick={() => onHandoff(item)}
         >

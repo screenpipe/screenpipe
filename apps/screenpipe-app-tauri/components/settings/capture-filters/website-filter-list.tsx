@@ -101,7 +101,7 @@ export function WebsiteRuleList(props: WebsiteRuleListProps) {
 					))}
 				</datalist>
 				<Button type="button" size="sm" className="h-8 gap-1" onClick={addRule}>
-					<Plus className="h-3 w-3" /> add
+					<Plus className="h-3 w-3" /> Add
 				</Button>
 			</div>
 			{error && (
@@ -133,7 +133,7 @@ export function WebsiteRuleList(props: WebsiteRuleListProps) {
 								{rule.domain}
 								{legacy && normalizedLegacy === "" && (
 									<span className="ml-1 font-sans text-[10px] text-muted-foreground">
-										legacy broad match
+										Legacy broad match
 									</span>
 								)}
 							</span>
@@ -158,7 +158,7 @@ export function WebsiteRuleList(props: WebsiteRuleListProps) {
 									}
 									aria-label={`Include subdomains of ${rule.domain}`}
 								/>
-								include subdomains
+								Include subdomains
 							</label>
 							<Button
 								type="button"
@@ -195,7 +195,7 @@ export function WebsiteRuleList(props: WebsiteRuleListProps) {
 											),
 										)
 									}
-									placeholder={`e.g. private.${rule.domain}`}
+									placeholder={`E.g. Private.${rule.domain}`}
 									allowCustomValues
 								/>
 							</div>

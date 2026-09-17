@@ -2,36 +2,37 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>This app requires microphone access to record audio.</string>
-    <key>NSScreenCaptureUsageDescription</key>
-    <string>This app requires screen capture access to record the screen.</string>
-    <key>CGRequestScreenCaptureAccess</key>
-    <string>This app requires screen capture access to record the screen.</string>
-    <key>NSAudioCaptureUsageDescription</key>
-    <string>screenpipe captures system audio (via the CoreAudio Process Tap) for local transcription. Specific apps can be excluded by listing their bundle IDs in ~/.screenpipe/audio-exclusions.json.</string>
-    <key>NSSystemExtensionUsageDescription</key>
-    <string>This app requires system extension access to capture audio output.</string>
-    <key>NSRemindersUsageDescription</key>
-    <string>screenpipe saves action items it detects from your screen and audio activity to Apple Reminders.</string>
-    <key>NSCalendarsUsageDescription</key>
-    <string>screenpipe reads your calendar to detect meetings. Your calendar data stays on-device.</string>
-    <key>NSCalendarsFullAccessUsageDescription</key>
-    <string>screenpipe reads your calendar to detect meetings. Your calendar data stays on-device.</string>
-    <!-- Required for the Automation (Apple Events) consent prompt. Browser URL
-         capture sends Apple Events in-process since #5123 (previously routed
-         through osascript, which carried its own usage description); without
-         this key macOS denies the request silently and never shows a prompt. -->
-    <key>NSAppleEventsUsageDescription</key>
-    <string>screenpipe reads the active tab URL from your browser so captured screens are linked to the page you were on. Your browsing data stays on-device.</string>
-    <key>NSAppTransportSecurity</key>
-    <dict>
-        <key>NSAllowsLocalNetworking</key>
-        <true/>
-    </dict>
-    <key>NSSupportsAutomaticTermination</key>
-    <true/>
-    <key>NSSupportsSuddenTermination</key>
-    <true/>
+	<key>CGRequestScreenCaptureAccess</key>
+	<string>This app requires screen capture access to record the screen.</string>
+	<key>LSEnvironment</key>
+	<dict>
+		<key>SCREENPIPE_DEV_USE_PROD_DATA</key>
+		<string>1</string>
+	</dict>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>screenpipe reads the active tab URL from your browser so captured screens are linked to the page you were on. Your browsing data stays on-device.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>screenpipe captures system audio (via the CoreAudio Process Tap) for local transcription. Specific apps can be excluded by listing their bundle IDs in ~/.screenpipe/audio-exclusions.json.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>screenpipe reads your calendar to detect meetings. Your calendar data stays on-device.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>screenpipe reads your calendar to detect meetings. Your calendar data stays on-device.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>This app requires microphone access to record audio.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>screenpipe saves action items it detects from your screen and audio activity to Apple Reminders.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>This app requires screen capture access to record the screen.</string>
+	<key>NSSupportsAutomaticTermination</key>
+	<true/>
+	<key>NSSupportsSuddenTermination</key>
+	<true/>
+	<key>NSSystemExtensionUsageDescription</key>
+	<string>This app requires system extension access to capture audio output.</string>
 </dict>
 </plist>

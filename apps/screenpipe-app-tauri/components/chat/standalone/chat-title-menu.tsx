@@ -181,14 +181,14 @@ export function ChatTitleMenu({
               setOpen((value) => !value);
             }}
             className="inline-flex h-7 w-7 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            title={`chat options for ${title}`}
-            aria-label={`chat options for ${title}`}
+            title={`Chat options for ${title}`}
+            aria-label={`Chat options for ${title}`}
           >
             <MoreHorizontal className="h-4 w-4" aria-hidden />
           </button>
         </PopoverTrigger>
         <PopoverContent
-          className="w-48 rounded-none border border-border bg-background p-1 shadow-sm"
+          className="w-48 rounded-lg border border-border bg-background p-1 shadow-sm"
           align="start"
           side="bottom"
           onMouseDown={(e) => e.stopPropagation()}

@@ -161,14 +161,14 @@ export function WindowPicker({
         <div className="flex-1 overflow-y-auto border border-border rounded-md">
           {isLoading && (
             <div className="p-4 text-xs text-muted-foreground text-center">
-              loading apps and windows...
+              Loading apps and windows...
             </div>
           )}
           {!isLoading && filtered.length === 0 && (
             <div className="p-4 text-xs text-muted-foreground text-center">
               {search
-                ? `nothing in the last 7 days matches "${search}".`
-                : "no recorded apps yet. record something first."}
+                ? `Nothing in the last 7 days matches "${search}".`
+                : "No recorded apps yet. Record something first."}
             </div>
           )}
           {!isLoading &&
@@ -203,7 +203,7 @@ export function WindowPicker({
                     </span>
                     <span className="text-[10px] text-muted-foreground tabular-nums">
                       {node.totalCount === 0
-                        ? "not captured yet"
+                        ? "Not captured yet"
                         : node.windowCount > 1
                           ? `${node.windowCount} windows · ${formatCount(node.totalCount)}`
                           : formatCount(node.totalCount)}
@@ -225,7 +225,7 @@ export function WindowPicker({
                     >
                       {appAdded ? (
                         <>
-                          <Check className="h-3 w-3 mr-1" /> added
+                          <Check className="h-3 w-3 mr-1" /> Added
                         </>
                       ) : (
                         <>
@@ -239,8 +239,8 @@ export function WindowPicker({
                       {node.windows.length === 0 && (
                         <div className="pl-9 pr-2 py-1.5 text-[11px] text-muted-foreground italic">
                           {node.totalCount === 0
-                            ? "not captured yet. add the whole app above."
-                            : "no window titles available — accessibility permission may be blocked for this app"}
+                            ? "Not captured yet. Add the whole app above."
+                            : "No window titles available — accessibility permission may be blocked for this app"}
                         </div>
                       )}
                       {node.windows.map((w) => {
@@ -274,7 +274,7 @@ export function WindowPicker({
                               }}
                               title={
                                 winAdded
-                                  ? "already covered"
+                                  ? "Already covered"
                                   : `${action} ${scoped}`
                               }
                             >
@@ -304,7 +304,7 @@ export function WindowPicker({
 
         <div className="text-[10px] text-muted-foreground flex items-center gap-2">
           <span>
-            tip: typing in the search filters both apps and window titles.
+            Tip: typing in the search filters both apps and window titles.
           </span>
         </div>
       </DialogContent>

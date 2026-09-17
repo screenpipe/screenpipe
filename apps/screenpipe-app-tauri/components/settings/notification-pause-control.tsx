@@ -93,7 +93,7 @@ export function NotificationPauseControl({
           <button
             type="button"
             onClick={onResume}
-            className="border border-foreground px-3 py-1.5 text-[11px] font-medium uppercase tracking-wide transition-colors hover:bg-foreground hover:text-background"
+            className="border border-foreground px-3 py-1.5 text-[11px] font-medium normal-case tracking-wide transition-colors hover:bg-foreground hover:text-background"
           >
             Resume
           </button>
@@ -105,7 +105,7 @@ export function NotificationPauseControl({
       {/* snooze presets — only when not already paused */}
       {!paused && (
         <div className="flex flex-wrap items-center gap-1.5 border-t border-border px-4 py-3">
-          <span className="mr-1 text-[11px] text-muted-foreground">pause for</span>
+          <span className="mr-1 text-[11px] text-muted-foreground">Pause for</span>
           {SNOOZE_PRESETS.map((p) => (
             <button
               key={p.label}
@@ -123,7 +123,7 @@ export function NotificationPauseControl({
             onClick={onTurnOff}
             className="ml-auto text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
           >
-            turn off
+            Turn off
           </button>
         </div>
       )}
@@ -137,12 +137,12 @@ export function NotificationPauseControl({
               Quiet hours
               {quietNow && quietHours.enabled && (
                 <span className="ml-1.5 text-[10px] font-normal text-muted-foreground">
-                  active now
+                  Active now
                 </span>
               )}
             </p>
             <p className="text-[11px] text-muted-foreground">
-              silence non-critical alerts on a nightly schedule
+              Silence non-critical alerts on a nightly schedule
             </p>
           </div>
         </div>

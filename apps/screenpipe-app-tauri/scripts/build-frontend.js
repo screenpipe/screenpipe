@@ -96,6 +96,17 @@ async function walk(dir, files) {
 export async function computeInputHash(root = appRoot) {
 	const files = []
 	await walk(root, files)
+	// Local packages are frontend inputs even though node_modules is excluded.
+	const manifestPath = path.join(root, 'package.json')
+	const manifest = await fs.readFile(manifestPath, 'utf8').then(JSON.parse).catch((error) => {
+		if (error.code === 'ENOENT') return {}
+		throw error
+	})
+	for (const spec of Object.values({ ...manifest.dependencies, ...manifest.devDependencies })) {
+		if (typeof spec === 'string' && spec.startsWith('file:')) {
+			await walk(path.resolve(root, spec.slice(5)), files)
+		}
+	}
 	files.sort() // deterministic regardless of readdir order
 
 	const hash = crypto.createHash('sha256')

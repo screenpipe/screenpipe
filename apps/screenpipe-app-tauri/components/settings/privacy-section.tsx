@@ -194,7 +194,7 @@ function RedactionExamplePreview({ labels }: { labels: string[] }) {
   const isOn = (cat: string) => cat === "secret" || labels.includes(cat);
   return (
     <div className="rounded-md border border-border bg-muted/40 px-2.5 py-2">
-      <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+      <p className="text-[10px] normal-case tracking-wider text-muted-foreground mb-1">
         Preview
       </p>
       <p className="text-xs leading-relaxed text-foreground">
@@ -299,7 +299,7 @@ function RedactionWherePreview({
             {region(
               "browser_url",
               <span className="block truncate rounded-full bg-muted px-2 py-0.5 text-muted-foreground">
-                app.example.com/account
+                App.example.com/account
               </span>,
               true,
             )}
@@ -309,16 +309,16 @@ function RedactionWherePreview({
           <div className="flex gap-3">
             {region(
               "ui_element_name",
-              <span className="font-medium text-foreground">dashboard</span>,
+              <span className="font-medium text-foreground">Dashboard</span>,
             )}
             {region(
               "ui_element_name",
-              <span className="text-muted-foreground">settings</span>,
+              <span className="text-muted-foreground">Settings</span>,
             )}
           </div>
 
           <div>
-            <div className="mb-0.5 text-[10px] text-muted-foreground">email</div>
+            <div className="mb-0.5 text-[10px] text-muted-foreground">Email</div>
             <div className="rounded border border-border px-1.5 py-1">
               {region("element_properties", "jordan@example.com")}
             </div>
@@ -326,7 +326,7 @@ function RedactionWherePreview({
               {region(
                 "ui_element_description",
                 <span className="text-muted-foreground">
-                  we&apos;ll never share your email
+                  We&apos;ll never share your email
                 </span>,
               )}
             </div>
@@ -334,7 +334,7 @@ function RedactionWherePreview({
 
           <div>
             <div className="mb-0.5 text-[10px] text-muted-foreground">
-              password
+              Password
             </div>
             <div className="rounded border border-border px-1.5 py-1 font-mono">
               {region("element_properties", "hunter2-s3cret", true)}
@@ -344,7 +344,7 @@ function RedactionWherePreview({
           <div className="text-[10px]">
             {region(
               "a11y_url_field",
-              <span className="text-foreground underline">reset password</span>,
+              <span className="text-foreground underline">Reset password</span>,
             )}
           </div>
 
@@ -352,7 +352,7 @@ function RedactionWherePreview({
             <div className="h-1.5 w-full rounded bg-foreground" />
             <div className="h-1.5 w-4/5 rounded bg-foreground" />
             <div className="text-[9px] text-muted-foreground">
-              typed text, transcripts &amp; on-screen text — always hidden
+              Typed text, transcripts &amp; on-screen text — always hidden
             </div>
           </div>
         </div>
@@ -781,7 +781,7 @@ export function PrivacySection() {
 
       if (permissionPlan.kind === "arc-only") {
         toast({
-          title: "basic detection is enough",
+          title: "Basic detection is enough",
           description: "Arc private windows are already detected without extra access",
         });
         return;
@@ -789,8 +789,8 @@ export function PrivacySection() {
 
       if (permissionPlan.kind === "open-browser") {
         toast({
-          title: "open a supported browser first",
-          description: "open Chrome, Edge, Brave, or another Chromium browser, then try again",
+          title: "Open a supported browser first",
+          description: "Open Chrome, Edge, Brave, or another Chromium browser, then try again",
         });
         return;
       }
@@ -801,8 +801,8 @@ export function PrivacySection() {
       ) {
         await commands.openPermissionSettings("automation");
         toast({
-          title: "browser access needed",
-          description: "allow screenpipe to control your browser in macOS Automation settings",
+          title: "Browser access needed",
+          description: "Allow screenpipe to control your browser in macOS Automation settings",
           variant: "destructive",
         });
         return;
@@ -810,14 +810,14 @@ export function PrivacySection() {
 
       handleSettingsChange({ enhancedIncognitoDetection: true }, true);
       toast({
-        title: "enhanced detection ready",
-        description: "apply changes to use browser-native incognito detection",
+        title: "Enhanced detection ready",
+        description: "Apply changes to use browser-native incognito detection",
       });
     } catch (error) {
       console.error("Failed to enable enhanced incognito detection:", error);
       toast({
-        title: "couldn't enable enhanced detection",
-        description: "check macOS Automation settings and try again",
+        title: "Couldn't enable enhanced detection",
+        description: "Check macOS Automation settings and try again",
         variant: "destructive",
       });
     } finally {
@@ -921,7 +921,7 @@ export function PrivacySection() {
 
       {/* Security */}
       <div className="space-y-2">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+        <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">
           Security
         </h2>
         <LockedSetting settingKey="api_auth">
@@ -950,7 +950,7 @@ export function PrivacySection() {
             {hasUnsavedChanges && (
               <p className="text-xs text-amber-600 dark:text-amber-400 mt-2 flex items-center gap-1">
                 <RefreshCw className="h-3 w-3 shrink-0" />
-                click &quot;Apply &amp; Restart&quot; above for auth changes to take effect; existing browser connections keep using the old key until then
+                Click &quot;Apply &amp; Restart&quot; above for auth changes to take effect; existing browser connections keep using the old key until then
               </p>
             )}
             <LockedSetting settingKey="api_key">
@@ -959,7 +959,7 @@ export function PrivacySection() {
                 <Input
                   type="text"
                   readOnly={!revealApiKey}
-                  placeholder="e.g. sp-abc12345"
+                  placeholder="E.g. sp-abc12345"
                   data-testid="privacy-api-key-input"
                   value={
                     liveApiKey
@@ -1013,7 +1013,7 @@ export function PrivacySection() {
                       toast({ title: "API key copied to clipboard" });
                     } catch (error) {
                       toast({
-                        title: "couldn't copy API key",
+                        title: "Couldn't copy API key",
                         description: error instanceof Error ? error.message : String(error),
                         variant: "destructive",
                       });
@@ -1033,7 +1033,7 @@ export function PrivacySection() {
                     const { confirm } = await import("@tauri-apps/plugin-dialog");
                     const confirmed = await confirm(
                       "Regenerate API key? Existing browser extensions stay connected until you Apply & Restart, then they must reconnect with the new key.",
-                      { title: "screenpipe", kind: "info" },
+                      { title: "Screenpipe", kind: "info" },
                     );
                     if (!confirmed) return;
                     setRegeneratingKey(true);
@@ -1118,7 +1118,7 @@ export function PrivacySection() {
 
       {/* Capture Rules */}
       <div className="space-y-2">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+        <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">
           Capture rules
         </h2>
 
@@ -1144,18 +1144,18 @@ export function PrivacySection() {
                   type="button"
                   variant={enhancedIncognitoDetection ? "outline" : "ghost"}
                   size="sm"
-                  className="h-7 px-2 text-[10px] uppercase tracking-wide"
+                  className="h-7 px-2 text-[10px] normal-case tracking-wide"
                   onClick={handleEnhancedIncognitoDetection}
                   disabled={isEnhancingIncognito}
                   aria-pressed={enhancedIncognitoDetection}
-                  title="use browser-native detection; requires macOS Automation access"
+                  title="Use browser-native detection; requires macOS Automation access"
                 >
                   {isEnhancingIncognito ? (
                     <Loader2 className="mr-1 h-3 w-3 animate-spin" />
                   ) : (
                     <Shield className="mr-1 h-3 w-3" />
                   )}
-                  {enhancedIncognitoDetection ? "enhanced" : "enhance"}
+                  {enhancedIncognitoDetection ? "Enhanced" : "Enhance"}
                 </Button>
               )}
               <Switch
@@ -1342,7 +1342,7 @@ export function PrivacySection() {
       {/* Data Protection */}
       <LockedSetting settingKey="pii_removal">
       <div className="space-y-2">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+        <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">
           Data protection
         </h2>
         {/* One PII Removal section with two modes — Basic (regex on the
@@ -1409,7 +1409,7 @@ export function PrivacySection() {
                     />
                     <span>
                       <span className="font-medium text-foreground">Smart</span>
-                      <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted px-1.5 py-0.5 rounded ml-1">
+                      <span className="text-[10px] font-medium normal-case tracking-wider text-muted-foreground bg-muted px-1.5 py-0.5 rounded ml-1">
                         Experimental
                       </span>
                       <span className="text-muted-foreground">
@@ -1610,7 +1610,7 @@ export function PrivacySection() {
       </LockedSetting>
 
       <div className="space-y-2">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+        <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">
           Agent logs
         </h2>
 
@@ -1642,7 +1642,7 @@ export function PrivacySection() {
       </div>
 
       <div className="space-y-2">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+        <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">
           Content filters
         </h2>
 
@@ -1681,7 +1681,7 @@ export function PrivacySection() {
 
       {/* Telemetry */}
       <div className="space-y-2">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+        <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">
           Telemetry
         </h2>
         <LockedSetting settingKey="telemetry">
@@ -1779,13 +1779,13 @@ function AdminTeamTokenCard() {
   const handleSave = useCallback(async () => {
     const trimmed = (pendingToken ?? "").trim();
     if (!trimmed) {
-      toast({ title: "paste a token first" });
+      toast({ title: "Paste a token first" });
       return;
     }
     if (!trimmed.startsWith("sk_ent_")) {
       toast({
-        title: "that doesn't look like an admin token",
-        description: "expected format: sk_ent_…",
+        title: "That doesn't look like an admin token",
+        description: "Expected format: sk_ent_…",
       });
       return;
     }
@@ -1796,12 +1796,12 @@ function AdminTeamTokenCard() {
       setLiveToken(trimmed);
       setPendingToken(null);
       toast({
-        title: "admin token saved",
-        description: "open a new pi chat to use it — no app restart needed",
+        title: "Admin token saved",
+        description: "Open a new pi chat to use it — no app restart needed",
       });
     } catch (e) {
       toast({
-        title: "failed to save",
+        title: "Failed to save",
         description: e instanceof Error ? e.message : String(e),
         variant: "destructive",
       });
@@ -1818,10 +1818,10 @@ function AdminTeamTokenCard() {
       setLiveToken(null);
       setPendingToken(null);
       setRevealToken(false);
-      toast({ title: "admin token cleared" });
+      toast({ title: "Admin token cleared" });
     } catch (e) {
       toast({
-        title: "failed to clear",
+        title: "Failed to clear",
         description: e instanceof Error ? e.message : String(e),
         variant: "destructive",
       });
@@ -1859,7 +1859,7 @@ function AdminTeamTokenCard() {
                     openUrl(screenpipeWebUrl("/enterprise?tab=tokens", "https://screenpipe.com"))
                   }
                 >
-                  screenpipe.com/enterprise → api tokens
+                  Screenpipe.com/enterprise → API tokens
                 </button>
                 .
               </p>
@@ -1873,7 +1873,7 @@ function AdminTeamTokenCard() {
             // to type a fresh token in. Only lock the input when we're displaying
             // an EXISTING token in masked form; clicking the eye unlocks edit mode.
             readOnly={Boolean(liveToken) && !revealToken && pendingToken === null}
-            placeholder="sk_ent_…"
+            placeholder="Sk_ent_…"
             data-testid="privacy-admin-token-input"
             value={displayValue}
             onChange={(e) => {
@@ -1914,10 +1914,10 @@ function AdminTeamTokenCard() {
               if (!liveToken) return;
               try {
                 await commands.copyTextToClipboard(liveToken);
-                toast({ title: "admin token copied to clipboard" });
+                toast({ title: "Admin token copied to clipboard" });
               } catch (error) {
                 toast({
-                  title: "couldn't copy admin token",
+                  title: "Couldn't copy admin token",
                   description: error instanceof Error ? error.message : String(error),
                   variant: "destructive",
                 });
@@ -1934,7 +1934,7 @@ function AdminTeamTokenCard() {
               onClick={handleSave}
               data-testid="privacy-admin-token-save"
             >
-              save
+              Save
             </Button>
           )}
           {!hasPending && liveToken && (
@@ -1946,7 +1946,7 @@ function AdminTeamTokenCard() {
               onClick={handleClear}
               data-testid="privacy-admin-token-clear"
             >
-              clear
+              Clear
             </Button>
           )}
         </div>

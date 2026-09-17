@@ -262,7 +262,7 @@ export function NativeTimelineBridge({
         "timeline-export-video-selection",
         (event) => {
           const selection = event.payload;
-          toast({ title: "exporting selected timeline…" });
+          toast({ title: "Exporting selected timeline…" });
           void localFetch("/export", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -283,7 +283,7 @@ export function NativeTimelineBridge({
               const outputPath = String(result.output_path || "");
               if (outputPath) await revealItemInDir(outputPath);
               toast({
-                title: "timeline video exported",
+                title: "Timeline video exported",
                 description: outputPath || "Saved in screenpipe exports.",
               });
               posthog.capture("timeline_selection_exported", {
@@ -300,7 +300,7 @@ export function NativeTimelineBridge({
               );
               toast({
                 variant: "destructive",
-                title: "timeline export failed",
+                title: "Timeline export failed",
                 description:
                   error instanceof Error ? error.message : "Try again.",
               });

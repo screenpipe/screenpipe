@@ -297,13 +297,13 @@ describe("global chat mentions", () => {
     },
     {
       token: "~lastweek",
-      label: "previous week",
+      label: "Previous week",
       start: [2026, 6, 20, 0],
       end: [2026, 6, 26, 23],
     },
     {
       token: "~lastmonth",
-      label: "previous month",
+      label: "Previous month",
       start: [2026, 5, 1, 0],
       end: [2026, 5, 30, 23],
     },

@@ -1602,6 +1602,25 @@ extension TimelineViewModel: FrameStreamClientDelegate {
         }
     }
 
+    nonisolated func frameStream(_ stream: FrameStreamClient, didComplete completion: FrameStreamCompletion) {
+        Task { @MainActor in
+            guard self.stream === stream else { return }
+            self.completeFrameRequest(completion)
+        }
+    }
+
+    func completeFrameRequest(_ completion: FrameStreamCompletion) {
+        let range = TimelineDateNavigation.dayRange(for: currentDate)
+        // A completed background day or a narrow search window cannot end the
+        // current day's loader. The server echoes the original request bounds.
+        guard abs(completion.start.timeIntervalSince(range.start)) < 0.001,
+              abs(completion.end.timeIntervalSince(range.end)) < 0.001 else { return }
+        flushPending()
+        isLoading = false
+        isNavigating = false
+        connectionError = completion.error
+    }
+
     nonisolated func frameStream(_ stream: FrameStreamClient, didReceive audioUpdate: AudioUpdate) {
         Task { @MainActor in
             guard self.stream === stream else { return }

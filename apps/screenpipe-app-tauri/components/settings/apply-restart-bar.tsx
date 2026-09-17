@@ -16,7 +16,7 @@ interface ApplyRestartBarProps {
   isUpdating?: boolean;
   /** Extra disable condition (e.g. validation errors). */
   disabled?: boolean;
-  /** Left-hand message. Keep it lowercase + on-brand, no dashes. */
+  /** Left-hand message. Use sentence case, no dashes. */
   message?: string;
   /** Forwarded to the action button so e2e specs can target it. */
   testId?: string;
@@ -71,7 +71,7 @@ export function ApplyRestartBar({
           data-testid={testId}
           className={cn(
             "shrink-0 inline-flex items-center gap-2 border border-foreground bg-foreground",
-            "px-5 py-2 text-xs font-medium uppercase tracking-wide text-background",
+            "px-5 py-2 text-xs font-medium normal-case tracking-wide text-background",
             "transition-colors duration-150 hover:bg-background hover:text-foreground",
             "disabled:pointer-events-none disabled:opacity-50",
           )}
@@ -81,7 +81,7 @@ export function ApplyRestartBar({
           ) : (
             <RefreshCw className="h-3.5 w-3.5" />
           )}
-          apply &amp; restart
+          Apply &amp; restart
         </button>
       </div>
     </div>

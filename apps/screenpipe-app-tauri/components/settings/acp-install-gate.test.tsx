@@ -70,7 +70,7 @@ describe("Cursor ACP installation", () => {
     await waitFor(() => expect(installAgent).toHaveBeenCalledWith("cursor"));
     const progress = screen.getByTestId("acp-setup-progress");
     expect(progress).toHaveTextContent("Installing Cursor");
-    expect(progress).toHaveTextContent("step 1 of 3");
+    expect(progress).toHaveTextContent("Step 1 of 3");
 
     await act(async () =>
       finishInstall?.({

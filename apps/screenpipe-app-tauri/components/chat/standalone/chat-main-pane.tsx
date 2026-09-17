@@ -194,12 +194,12 @@ export function ChatMainPane({
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-medium">
                     {continuousPipeChat.state === "on"
-                      ? "one chat"
+                      ? "One chat"
                       : continuousPipeChat.state === "off"
-                        ? "memory paused"
+                        ? "Memory paused"
                         : continuousPipeChat.state === "missing"
-                          ? "scheduled task unavailable"
-                          : "checking one-chat memory"}
+                          ? "Scheduled task unavailable"
+                          : "Checking one-chat memory"}
                   </p>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
                     {continuousPipeChat.state === "on"
@@ -218,7 +218,7 @@ export function ChatMainPane({
                   className="h-7 shrink-0 px-2 text-[11px]"
                   onClick={onOpenPipeSettings}
                 >
-                  manage
+                  Manage
                 </Button>
               </div>
             )}

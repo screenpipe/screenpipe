@@ -26,7 +26,7 @@ describe("ACP preset setup progress", () => {
     expect(progress).toHaveTextContent("Download");
     expect(progress).toHaveTextContent("Start");
     expect(progress).toHaveTextContent("Connect");
-    expect(progress).toHaveTextContent("step 2 of 3");
+    expect(progress).toHaveTextContent("Step 2 of 3");
     expect(progress).not.toHaveTextContent("%");
   });
 
@@ -59,6 +59,6 @@ describe("ACP preset setup progress", () => {
     const progress = screen.getByTestId("acp-setup-progress");
     expect(progress).toHaveTextContent("Installing Cursor");
     expect(progress).toHaveTextContent("Install");
-    expect(progress).toHaveTextContent("step 1 of 3");
+    expect(progress).toHaveTextContent("Step 1 of 3");
   });
 });

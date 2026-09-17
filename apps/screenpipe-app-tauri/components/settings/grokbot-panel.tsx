@@ -26,11 +26,12 @@ export function GrokBotPanel({ onChanged }: { onChanged?: (connected: boolean) =
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
-        On macOS and Windows, Screenpipe automatically installs its skill when Grok Bot is installed and signed in.
-        The skill is available across your Bots.
+        Connect to install Screenpipe's skills in Grok Bot. This reads Grok Bot's saved
+        connection credential on this computer and contacts its service. Nothing is
+        connected automatically.
       </p>
       <p role="status" className="text-xs">
-        {busy ? "Checking Grok Bot..." : status?.connected ? "Screenpipe skill installed" : status?.optedOut ? "Automatic installation is off" : "Waiting for Grok Bot"}
+        {busy ? "Checking Grok Bot..." : status?.connected ? (status.cached ? "Screenpipe skill last confirmed installed" : "Screenpipe skill installed") : status?.optedOut ? (status.cached ? "Disconnected locally. Remote removal not verified." : "Disconnected") : "Connect to verify installation"}
       </p>
       <p className="text-xs text-muted-foreground">
         Keep both apps open to retrieve your history. Grok Bot asks for local-computer access
@@ -41,7 +42,7 @@ export function GrokBotPanel({ onChanged }: { onChanged?: (connected: boolean) =
           {busy && <Loader2 className="h-3 w-3 animate-spin" />}
           {status?.connected ? "repair connection" : "connect Grok Bot"}
         </Button>
-        {(status?.connected || error) && <Button disabled={busy} variant="outline" size="sm" onClick={() => update("disconnect")} className="h-7 text-xs normal-case font-sans tracking-normal">disconnect</Button>}
+        {(status?.connected || error) && <Button disabled={busy} variant="outline" size="sm" onClick={() => update("disconnect")} className="h-7 text-xs normal-case font-sans tracking-normal">Disconnect</Button>}
       </div>
       {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
     </div>

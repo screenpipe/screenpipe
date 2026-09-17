@@ -1,0 +1,29 @@
+/* screenpipe — AI that knows everything you've seen, said, or heard */
+/* https://screenpipe.com */
+
+.markdown { font: inherit; line-height: 1.65; overflow-wrap: anywhere; min-width: 0; }
+.markdown p { margin: 0 0 12px; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown h1, .markdown h2, .markdown h3, .markdown h4 { font: inherit; font-weight: 650; line-height: 1.4; margin: 20px 0 8px; }
+.markdown > :first-child { margin-top: 0; }
+.markdown ul, .markdown ol { padding-left: 21px; margin: 8px 0 16px; }
+.markdown li { padding-left: 3px; margin: 6px 0; }
+.markdown li > p { margin: 0 0 6px; }
+.markdown a { color: inherit; text-decoration: underline; text-decoration-color: #aaa; text-underline-offset: 3px; cursor: pointer; }
+.markdown a:hover { text-decoration-color: currentColor; }
+.markdown blockquote { margin: 12px 0; border-left: 2px solid #b8b8af; padding-left: 14px; color: var(--chat-muted, #78786f); }
+.markdown pre { margin: 12px 0; overflow-x: auto; padding: 12px; border-radius: 6px; border: 1px solid var(--chat-line, #dedfd8); background: var(--chat-soft, #f6f6f3); }
+.markdown code { font: .87em/1.6 "IBM Plex Mono", ui-monospace, monospace; background: var(--chat-soft, #f6f6f3); padding: 2px 4px; border-radius: 3px; }
+.markdown pre code { padding: 0; background: none; }
+.tableScroll { width: 100%; overflow-x: auto; overscroll-behavior-x: contain; margin: 12px 0; border: 1px solid var(--chat-line, #dedfd8); border-radius: 6px; }
+.tableScroll table { border-collapse: collapse; min-width: 100%; font-size: .92em; }
+.tableScroll th, .tableScroll td { padding: 8px 11px; border-bottom: 1px solid var(--chat-line, #dedfd8); text-align: left; min-width: 110px; }
+.tableScroll th { background: var(--chat-soft, #f6f6f3); font-weight: 600; }
+.tail { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
+.jumpAnchor { position: relative; height: 0; z-index: 3; pointer-events: none; }
+.jump { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--chat-line, #dedfd8); border-radius: 50%; color: var(--chat-ink, #333); background: var(--chat-surface, #fff); box-shadow: 0 2px 8px #0000000a; cursor: pointer; }
+.jump[data-visible="false"] { opacity: 0; pointer-events: none; }
+.jump[data-visible="true"] { pointer-events: auto; }
+.jump:hover { background: var(--chat-soft, #f6f6f3); }
+.jump:focus-visible { outline: 1px solid currentColor; outline-offset: 3px; }
+:global(.dark) .jumpAnchor { --chat-line: #44443f; --chat-ink: #e6e6df; --chat-surface: #20211e; --chat-soft: #30312e; }

@@ -45,7 +45,7 @@ describe("transcript row alignment", () => {
       />,
     );
 
-    const list = getByLabelText("meeting transcript");
+    const list = getByLabelText("Meeting transcript");
     // Same centered column as the header title, chips and tabs.
     expect(list.className).toContain("mx-auto");
     expect(list.className).toContain("max-w-3xl");
@@ -57,7 +57,7 @@ describe("transcript row alignment", () => {
       <TranscriptRows blocks={[block]} query="" onSpeakerAssigned={vi.fn()} />,
     );
 
-    const list = getByLabelText("meeting transcript");
+    const list = getByLabelText("Meeting transcript");
     expect(list.className).toMatch(/\bpx-4\b/);
     expect(list.className).not.toContain("max-w-3xl");
   });

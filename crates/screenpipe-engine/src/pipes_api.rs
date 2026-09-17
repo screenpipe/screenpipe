@@ -517,7 +517,12 @@ pub async fn install_bundled_pipe(
         }));
     }
 
-    Json(json!({ "success": true, "name": id, "installed": installed }))
+    let enabled_override = screenpipe_core::pipes::load_local_overrides(mgr.pipes_dir())
+        .get(&id)
+        .copied();
+    Json(
+        json!({ "success": true, "name": id, "installed": installed, "enabled_override": enabled_override }),
+    )
 }
 
 /// POST /pipes/install — install a pipe from URL or local path.

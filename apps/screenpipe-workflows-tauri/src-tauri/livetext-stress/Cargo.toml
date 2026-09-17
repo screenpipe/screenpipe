@@ -1,0 +1,28 @@
+# standalone stress test for the Live Text bridge race; excluded from the
+# app workspace so it never affects app builds. macOS only.
+[workspace]
+
+[package]
+name = "livetext-stress"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "livetext-stress"
+path = "src/main.rs"
+
+[[bin]]
+name = "livetext-frame-scope"
+path = "src/bin/frame-scope.rs"
+
+[[bin]]
+name = "livetext-window-scope"
+path = "src/bin/window-scope.rs"
+
+[[bin]]
+name = "livetext-interactive"
+path = "src/bin/interactive.rs"
+
+[profile.release]
+debug = true

@@ -88,6 +88,15 @@ describe("ComposerDictationControl", () => {
     expect(mocks.finish).toHaveBeenCalledTimes(1);
   });
 
+  it("supports keyboard activation without double-starting a pointer click", () => {
+    renderControl();
+    const button = screen.getByRole("button", { name: "Dictate message (⌘D)" });
+    fireEvent.click(button, { detail: 0 });
+    expect(mocks.start).toHaveBeenCalledTimes(1);
+    fireEvent.click(button, { detail: 1 });
+    expect(mocks.start).toHaveBeenCalledTimes(1);
+  });
+
   it("shows true recording state with explicit cancel and finish actions", () => {
     mocks.status = "recording";
     renderControl();

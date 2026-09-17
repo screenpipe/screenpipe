@@ -749,11 +749,13 @@ mod tests {
     }
 
     #[test]
-    fn obsidian_heading_escape_does_not_change_agent_digests() {
+    fn obsidian_heading_escape_does_not_change_agent_recall_guidance() {
         let memory = entry("# Meeting\n## Summary", 0.9, "2026-01-01T00:00:00Z");
         for dest in [Destination::CLAUDE_CODE, Destination::CODEX] {
             let digest = render_digest(std::slice::from_ref(&memory), &dest);
-            assert!(digest.contains("\n- # Meeting ## Summary _(updated: 2026-01-01)_\n"));
+            assert_eq!(digest, render_digest(&[], &dest));
+            assert!(digest.contains("search-content"));
+            assert!(!digest.contains("# Meeting"));
             assert!(!digest.contains("\\#"));
         }
     }

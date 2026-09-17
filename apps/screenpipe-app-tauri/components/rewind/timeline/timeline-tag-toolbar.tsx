@@ -128,8 +128,8 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 		try {
 			await tagFrames(frameIds, tag.trim());
 			toast({
-				title: "tagged",
-				description: `applied "${tag.trim()}" to ${frameIds.length} frames`,
+				title: "Tagged",
+				description: `Applied "${tag.trim()}" to ${frameIds.length} frames`,
 			});
 			posthog.capture("timeline_tag_applied", {
 				tag: tag.trim(),
@@ -140,8 +140,8 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 			setSelectionRange(null);
 		} catch {
 			toast({
-				title: "tagging failed",
-				description: "some frames could not be tagged",
+				title: "Tagging failed",
+				description: "Some frames could not be tagged",
 				variant: "destructive",
 			});
 		} finally {
@@ -161,8 +161,8 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 			});
 		} catch {
 			toast({
-				title: "remove failed",
-				description: `could not remove "${tag}"`,
+				title: "Remove failed",
+				description: `Could not remove "${tag}"`,
 				variant: "destructive",
 			});
 		} finally {
@@ -191,8 +191,8 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 			if (!resp.ok) throw new Error(await resp.text());
 			const data = await resp.json();
 			toast({
-				title: "deleted",
-				description: `removed ${data.frames_deleted} frames, ${data.audio_transcriptions_deleted} audio segments`,
+				title: "Deleted",
+				description: `Removed ${data.frames_deleted} frames, ${data.audio_transcriptions_deleted} audio segments`,
 			});
 			posthog.capture("timeline_range_deleted", {
 				duration_ms: selectionRange.end.getTime() - selectionRange.start.getTime(),
@@ -204,7 +204,7 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 			await clearTimelineCache();
 			window.location.reload();
 		} catch (e) {
-			toast({ title: "deletion failed", description: String(e), variant: "destructive" });
+			toast({ title: "Deletion failed", description: String(e), variant: "destructive" });
 		} finally {
 			setIsDeleting(false);
 		}
@@ -265,7 +265,7 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 				<button
 					onClick={() => setSelectionRange(null)}
 					className="absolute top-1.5 right-1.5 p-0.5 text-muted-foreground hover:text-foreground transition-colors"
-					title="close"
+					title="Close"
 				>
 					<X className="w-3 h-3" />
 				</button>
@@ -288,7 +288,7 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 								? "text-destructive bg-destructive/10"
 								: "text-muted-foreground hover:text-destructive hover:bg-destructive/10"
 						)}
-						title="delete selected range"
+						title="Delete selected range"
 					>
 						{isDeleting ? (
 							<Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -313,12 +313,12 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 								<button
 									onClick={onAskAI}
 									className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-md bg-foreground text-background hover:bg-foreground/90 transition-colors font-medium flex-shrink-0 cursor-pointer"
-									title="ask ai"
+									title="Ask AI"
 								>
 									<span className="pointer-events-none">
 										<PipeAIIcon size={14} animated={radialOpen} />
 									</span>
-									ask ai
+									Ask AI
 								</button>
 								<AnimatePresence>
 									{radialOpen && templatePipes && templatePipes.length > 0 && (() => {
@@ -445,14 +445,14 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 							onClick={handleRetranscribe}
 							disabled={isRetranscribing}
 							className="flex items-center gap-1 text-xs px-2 py-1 rounded-md border border-border hover:bg-muted transition-colors flex-shrink-0"
-							title="re-transcribe audio in this range via AI"
+							title="Re-transcribe audio in this range via AI"
 						>
 							{isRetranscribing ? (
 								<Loader2 className="w-3 h-3 animate-spin" />
 							) : (
 								<RefreshCw className="w-3 h-3" />
 							)}
-							re-transcribe
+							Re-transcribe
 						</button>
 					</div>
 				</div>
@@ -462,8 +462,8 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 					   instead of a disconnected centered modal */
 					<div className="flex flex-col gap-2">
 						<p className="text-xs text-muted-foreground leading-relaxed">
-							permanently delete all screen recordings, audio, and transcriptions from{" "}
-							<span className="font-medium text-foreground">{startTime} → {endTime}</span> ({durationStr})? this cannot be undone.
+							Permanently delete all screen recordings, audio, and transcriptions from{" "}
+							<span className="font-medium text-foreground">{startTime} → {endTime}</span> ({durationStr})? This cannot be undone.
 						</p>
 						<div className="flex items-center justify-end gap-2">
 							<button
@@ -471,7 +471,7 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 								disabled={isDeleting}
 								className="text-xs px-2.5 py-1 rounded-md border border-border hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
 							>
-								cancel
+								Cancel
 							</button>
 							<button
 								onClick={handleDeleteRange}
@@ -481,12 +481,12 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 								{isDeleting ? (
 									<>
 										<Loader2 className="w-3 h-3 animate-spin" />
-										deleting…
+										Deleting…
 									</>
 								) : (
 									<>
 										<Trash2 className="w-3 h-3" />
-										delete permanently
+										Delete permanently
 									</>
 								)}
 							</button>
@@ -507,7 +507,7 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 									onClick={() => handleRemoveTag(t)}
 									disabled={isApplying}
 									className="flex-shrink-0 rounded-full hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
-									aria-label={`remove tag ${t}`}
+									aria-label={`Remove tag ${t}`}
 								>
 									<X className="w-2.5 h-2.5" />
 								</button>
@@ -542,7 +542,7 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 						type="text"
 						value={customTag}
 						onChange={(e) => setCustomTag(e.target.value)}
-						placeholder="custom tag..."
+						placeholder="Custom tag..."
 						disabled={isApplying}
 						maxLength={50}
 						className="flex-1 text-xs px-2 py-1 rounded-md border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 min-w-0"
@@ -553,7 +553,7 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 						className="text-xs px-2 py-1 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1 flex-shrink-0"
 					>
 						<Plus className="w-3 h-3" />
-						add
+						Add
 					</button>
 				</form>
 				</>

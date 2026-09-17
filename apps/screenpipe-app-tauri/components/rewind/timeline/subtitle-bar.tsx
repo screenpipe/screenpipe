@@ -150,7 +150,7 @@ export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcri
 					title="Show captions"
 				>
 					<MessageSquareText className="w-3.5 h-3.5" />
-					<span className="text-[10px] font-medium">captions</span>
+					<span className="text-[10px] font-medium">Captions</span>
 				</button>
 			</div>
 		);
@@ -174,7 +174,7 @@ export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcri
 					title="Hide captions"
 				>
 					<X className="w-3 h-3" />
-					<span>hide</span>
+					<span>Hide</span>
 				</button>
 			</div>
 			<div
@@ -189,7 +189,7 @@ export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcri
 							<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
 							<span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-amber-500"></span>
 						</span>
-						<span>transcription paused{meetingApp ? ` (${meetingApp})` : ""}</span>
+						<span>Transcription paused{meetingApp ? ` (${meetingApp})` : ""}</span>
 					</div>
 				)}
 
@@ -227,7 +227,7 @@ export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcri
 				{/* CTA hint */}
 				<div className={`flex items-center justify-center gap-1 transition-all duration-200 overflow-hidden ${isHovered ? "max-h-6 opacity-100 pt-0.5" : "max-h-0 opacity-0"}`}>
 					<ChevronDown className="w-3 h-3 text-muted-foreground/60" />
-					<span className="text-[10px] text-muted-foreground/60">click for full transcript</span>
+					<span className="text-[10px] text-muted-foreground/60">Click for full transcript</span>
 				</div>
 			</div>
 		</div>
@@ -285,7 +285,7 @@ function SubtitleLine({
 			{isPending ? (
 				<span className="text-sm text-muted-foreground/50 flex-1 flex items-center gap-1.5 italic">
 					<Loader2 className="w-3 h-3 animate-spin" />
-					transcribing…
+					Transcribing…
 				</span>
 			) : (
 				<span className={`text-sm text-muted-foreground flex-1 transition-all duration-200 ${isHovered || isLookahead ? "whitespace-normal" : "whitespace-normal line-clamp-2"}`}>

@@ -1,0 +1,53 @@
+---
+title: "Choose local or cloud AI for recorded work"
+sidebarTitle: "Local or cloud AI"
+description: "Choose the AI provider separately from your recording and storage settings."
+icon: "cloud"
+---
+
+Choose the AI provider separately from your recording and storage settings. Local capture does not mean every AI request stays local. Cloud transcription, cloud AI, media analysis, sync, and connected apps each create their own data path.
+
+## Start here
+
+List the inputs needed for one task: text, audio transcript, images, or an external app. Inspect the selected transcription provider and the model used by that task. Review enabled sync and media-analysis settings before testing.
+
+## Copy this prompt
+
+Use this in Screenpipe chat or an assistant with the required connections. Replace the brackets with your details. If the assistant lacks access, provide a reviewed excerpt; a prompt alone does not connect it to your history.
+
+```text
+Help me compare two configurations for [task]: [configuration A] and
+[configuration B]. Use only settings or documentation I provide.
+For capture, transcription, AI inference, media analysis, sync, and external
+writes, list input, destination, purpose, and any unknowns.
+Compare a small reviewed sample for accuracy, latency, and observed usage.
+Do not claim that a local database makes the entire workflow local.
+```
+
+## Check the result
+
+Run the same bounded task with the chosen configuration and inspect the answer against its sources. A faster answer is not useful if names, decisions, or source times are wrong.
+
+<AccordionGroup>
+<Accordion title="See a worked example" id="worked-example">
+
+| Decision | What to verify |
+| --- | --- |
+| Local model | It supports the task and has enough machine resources. |
+| Cloud model | Which context is sent and which provider processes it. |
+| Transcription | Whether audio processing is local or uses a service. |
+| Connected app | What request or output reaches that external system. |
+
+</Accordion>
+<Accordion title="Go deeper: setup choices and edge cases" id="details">
+
+Local models can reduce reliance on a remote inference service, but their quality, context capacity, and resource demands vary. A small text summary and a long multimodal investigation are different workloads.
+
+Avoid assuming one provider selection controls every scheduled task or integration. Check the task configuration and failure behavior. If a fallback provider is configured, include it in the data-flow review. Use actual account usage for cost comparisons rather than converting a single run into an unlimited-use promise.
+
+</Accordion>
+</AccordionGroup>
+
+## Continue
+
+[Ollama](/ollama) · [privacy data flow](/privacy-data-flow) · [AI usage and controls](/ai-usage-and-controls)

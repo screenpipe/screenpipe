@@ -362,8 +362,8 @@ export function CardAskModal({
   const copy =
     trigger === "grant_expiry" && daysRemaining !== null
       ? {
-          title: "keep Business access",
-          body: `you will lose your trial in ${daysRemaining} ${daysRemaining === 1 ? "day" : "days"}. add your card to keep access.`,
+          title: "Keep Business access",
+          body: `You will lose your trial in ${daysRemaining} ${daysRemaining === 1 ? "day" : "days"}. add your card to keep access.`,
           cta: "add card & keep access",
         }
       : COPY[trigger];
@@ -382,13 +382,13 @@ export function CardAskModal({
         {embeddedComplete ? (
           <>
             <DialogHeader>
-              <DialogTitle>your access is set</DialogTitle>
+              <DialogTitle>Your access is set</DialogTitle>
               <DialogDescription>
-                no charge today. your Business subscription starts when your
+                No charge today. Your Business subscription starts when your
                 current trial ends.
               </DialogDescription>
             </DialogHeader>
-            <Button onClick={onConsume}>done</Button>
+            <Button onClick={onConsume}>Done</Button>
           </>
         ) : (
           <>
@@ -400,7 +400,7 @@ export function CardAskModal({
               <iframe
                 ref={checkoutFrameRef}
                 src={`${checkoutBaseUrl}/business-trial/checkout?embedded=1`}
-                title="secure Business trial card form"
+                title="Secure Business trial card form"
                 allow="payment"
                 className="h-[420px] w-full border-0 bg-background"
                 data-testid="business-trial-checkout-frame"
@@ -412,7 +412,7 @@ export function CardAskModal({
                 disabled={busy}
                 data-testid="card-ask-start"
               >
-                {busy ? "opening checkout" : error ? "try again" : copy.cta}
+                {busy ? "Opening checkout" : error ? "Try again" : copy.cta}
               </Button>
             )}
             {error && (
@@ -420,7 +420,7 @@ export function CardAskModal({
                 className="text-center text-[11px] text-muted-foreground"
                 data-testid="card-ask-error"
               >
-                checkout could not be opened. check your connection and try
+                Checkout could not be opened. Check your connection and try
                 again.
               </p>
             )}

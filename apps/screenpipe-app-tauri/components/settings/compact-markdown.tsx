@@ -18,7 +18,7 @@ function MermaidDiagramBlock({ chart }: { chart: string }) {
     <React.Suspense
       fallback={
         <div className="my-4 text-xs text-muted-foreground">
-          rendering diagram...
+          Rendering diagram...
         </div>
       }
     >
@@ -116,11 +116,11 @@ export function CompactMarkdown({
         >
           {expanded ? (
             <>
-              <ChevronUp className="h-2.5 w-2.5" /> show less
+              <ChevronUp className="h-2.5 w-2.5" /> Show less
             </>
           ) : (
             <>
-              <ChevronDown className="h-2.5 w-2.5" /> show more
+              <ChevronDown className="h-2.5 w-2.5" /> Show more
             </>
           )}
         </button>

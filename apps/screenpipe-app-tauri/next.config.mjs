@@ -1,5 +1,20 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+
+import { fileURLToPath } from "node:url";
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+    transpilePackages: ['@screenpipe/workflows-ui'],
+    webpack: (config) => {
+        config.resolve.symlinks = false;
+        // This local file dependency changes without a package version bump.
+        config.snapshot = { ...config.snapshot, unmanagedPaths: [
+            ...(config.snapshot?.unmanagedPaths ?? []),
+            fileURLToPath(new URL("./node_modules/@screenpipe/workflows-ui", import.meta.url)),
+        ] };
+        return config;
+    },
     output: 'export',
     images: {
         unoptimized: true,
@@ -19,4 +34,3 @@ const nextConfig = {
     productionBrowserSourceMaps: process.env.SHIP_SOURCE_MAPS === '1',
 }
 export default nextConfig;
-

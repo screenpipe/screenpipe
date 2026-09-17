@@ -1,25 +1,25 @@
 ---
 title: "Claude Code - AI coding with screen context"
-sidebarTitle: "claude code"
-description: "Use screenpipe with Claude Code CLI to give Claude access to your screen history, meeting transcriptions, and app context while coding."
+sidebarTitle: "Claude Code"
+description: "Use Screenpipe with Claude Code CLI to give Claude access to your screen history, meeting transcriptions, and app context while coding."
 icon: "terminal"
 ---
 
-[Claude Code](https://code.claude.com) is Anthropic's official CLI for agentic coding. with screenpipe integration, Claude can reference what you've been working on, recall information from your screen, and access meeting transcriptions.
+[Claude Code](https://code.claude.com) is Anthropic's official CLI for agentic coding. With Screenpipe integration, Claude can reference what you've been working on, recall information from your screen, and access meeting transcriptions.
 
-## setup
+## Setup
 
 ```bash
 claude mcp add screenpipe --transport stdio -- npx -y screenpipe-mcp
 ```
 
-to make it available across all your projects:
+To make it available across all your projects:
 
 ```bash
 claude mcp add screenpipe --transport stdio --scope user -- npx -y screenpipe-mcp
 ```
 
-## verify connection
+## Verify connection
 
 ```bash
 # list MCP servers
@@ -29,22 +29,22 @@ claude mcp list
 /mcp
 ```
 
-## available tools
+## Available tools
 
-once connected, Claude Code has access to these tools:
+Once connected, Claude Code has access to these tools:
 
-| tool | description |
+| Tool | Description |
 |------|-------------|
-| `search-content` | search screen text (accessibility-first, OCR fallback), audio transcriptions, and input |
-| `activity-summary` | lightweight overview of app usage, speakers, and recent texts for a time range |
-| `search-elements` | search structured UI elements from the accessibility tree |
-| `frame-context` | full accessibility tree, URLs, and text for a specific frame |
-| `list-meetings` | list detected meetings with duration, app, and attendees |
-| `export-video` | export screen recordings as MP4 for a time range |
+| `search-content` | Search screen text (accessibility-first, OCR fallback), audio transcriptions, and input |
+| `activity-summary` | Lightweight overview of app usage, speakers, and recent texts for a time range |
+| `search-elements` | Search structured UI elements from the accessibility tree |
+| `frame-context` | Full accessibility tree, URLs, and text for a specific frame |
+| `list-meetings` | List detected meetings with duration, app, and attendees |
+| `export-video` | Export screen recordings as MP4 for a time range |
 
-## usage examples
+## Usage examples
 
-ask Claude Code to use screenpipe naturally:
+Ask Claude Code to use Screenpipe naturally:
 
 ```
 > what was I looking at in my browser an hour ago?
@@ -66,115 +66,115 @@ ask Claude Code to use screenpipe naturally:
 > which apps did I switch between most today?
 ```
 
-## search parameters
+## Search parameters
 
-### search-content (vision + audio + input)
+### Search-content (vision + audio + input)
 
-| parameter | description |
+| Parameter | Description |
 |-----------|-------------|
-| `q` | search query (optional - omit to get all content) |
+| `q` | Search query (optional - omit to get all content) |
 | `content_type` | `vision`, `audio`, `accessibility`, `input`, or `all` (default: `all`) |
-| `limit` | max results (default: 10) |
-| `offset` | pagination offset |
+| `limit` | Max results (default: 10) |
+| `offset` | Pagination offset |
 | `start_time` | ISO 8601 UTC start time |
 | `end_time` | ISO 8601 UTC end time |
-| `app_name` | filter by app (e.g., "Chrome", "Slack") |
-| `window_name` | filter by window title |
-| `include_frames` | include base64 screenshots |
+| `app_name` | Filter by app (e.g., "Chrome", "Slack") |
+| `window_name` | Filter by window title |
+| `include_frames` | Include base64 screenshots |
 | `speaker_ids` | comma-separated speaker IDs for audio filtering |
-| `speaker_name` | filter audio by speaker name |
+| `speaker_name` | Filter audio by speaker name |
 
 
-## example workflows
+## Example workflows
 
-**recall context from earlier:**
+**Recall context from earlier:**
 ```
 > I was reading a blog post about rust async earlier today,
 > search screenpipe and summarize the key points
 ```
 
-**reference meeting discussion:**
+**Reference meeting discussion:**
 ```
 > search my audio transcriptions for what was discussed in standup
 > about the API refactor, then help me implement it
 ```
 
-**debug with screen history:**
+**Debug with screen history:**
 ```
 > I saw an error message flash on screen, search screenpipe
 > to find it and help me fix the issue
 ```
 
-**find code examples:**
+**Find code examples:**
 ```
 > search screenpipe for the python code I was looking at
 > in the browser yesterday about asyncio patterns
 ```
 
-**track what you typed:**
+**Track what you typed:**
 ```
 > what did I write in Notion this morning? search for my
 > keyboard input using content_type=input
 ```
 
-**recall clipboard history:**
+**Recall clipboard history:**
 ```
 > I copied something important earlier, search clipboard
 > events to find it
 ```
 
-## requirements
+## Requirements
 
-- screenpipe running on localhost:3030
+- Screenpipe running on localhost:3030
 - Claude Code CLI installed
 - Node.js >= 18.0.0
 
-## troubleshooting
+## Troubleshooting
 
 **AI agent crashed with "Error: AI agent crashed — restarting automatically..."?**
 
-this happens when Claude Code can't communicate with screenpipe or screenpipe encounters an error. try these steps in order:
+This happens when Claude Code can't communicate with Screenpipe or Screenpipe encounters an error. Try these steps in order:
 
-1. **check screenpipe is running:**
+1. **Check Screenpipe is running:**
    ```bash
    curl http://localhost:3030/health
    ```
-   you should see `{"status":"healthy"}`. if this fails, start screenpipe first.
+   you should see `{"status":"healthy"}`. If this fails, start Screenpipe first.
 
-2. **verify MCP is connected:**
+2. **Verify MCP is connected:**
    ```bash
    claude mcp list
    ```
    you should see `screenpipe` in the list with status "ready".
 
-3. **check screenpipe has recorded data:**
+3. **Check Screenpipe has recorded data:**
    ```bash
    curl "http://localhost:3030/search?limit=1"
    ```
-   if empty, screenpipe hasn't recorded anything yet—let it run for a minute and try again.
+   if empty, Screenpipe hasn't recorded anything yet—let it run for a minute and try again.
 
-4. **restart the MCP connection:**
+4. **Restart the MCP connection:**
    ```bash
    claude mcp remove screenpipe
    claude mcp add screenpipe --transport stdio -- npx -y screenpipe-mcp
    ```
 
-5. **check screenpipe logs:**
+5. **Check Screenpipe logs:**
    - macOS/Linux: `~/.screenpipe/screenpipe.log`
    - Windows: check event viewer or `%APPDATA%\screenpipe\logs`
 
 **MCP not connecting?**
-- verify screenpipe is running: `curl http://localhost:3030/health`
-- check MCP status in Claude Code: `/mcp`
-- remove and re-add: `claude mcp remove screenpipe && claude mcp add screenpipe --transport stdio -- npx -y screenpipe-mcp`
+- Verify Screenpipe is running: `curl http://localhost:3030/health`
+- Check MCP status in Claude Code: `/mcp`
+- Remove and re-add: `claude mcp remove screenpipe && claude mcp add screenpipe --transport stdio -- npx -y screenpipe-mcp`
 
-**queries returning empty?**
-- check screenpipe has data: `curl "http://localhost:3030/search?limit=1"`
-- ensure screen recording permissions are granted
-- verify the time range you're querying
+**Queries returning empty?**
+- Check Screenpipe has data: `curl "http://localhost:3030/search?limit=1"`
+- Ensure screen recording permissions are granted
+- Verify the time range you're querying
 
-**permission errors?**
-- macos: check System Settings > Privacy & Security > Screen Recording
-- ensure screenpipe app is listed and enabled
+**Permission errors?**
+- macOS: check System Settings > Privacy & Security > Screen Recording
+- Ensure Screenpipe app is listed and enabled
 
-still stuck? [ask in our discord](https://discord.gg/screenpipe).
+Still stuck? [ask in our Discord](https://discord.gg/screenpipe).

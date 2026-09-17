@@ -128,11 +128,11 @@ export function ChatResponseFeedback({
           </button>
         </PopoverTrigger>
         <PopoverContent
-          className="ph-no-capture w-64 rounded-none p-3"
+          className="ph-no-capture w-64 rounded-lg p-3"
           align="end"
           side="top"
         >
-          <p className="mb-2 text-xs font-medium">what went wrong?</p>
+          <p className="mb-2 text-xs font-medium">What went wrong?</p>
           <div className="grid grid-cols-2 gap-1.5">
             {CHAT_RESPONSE_FEEDBACK_REASONS.map((option) => (
               <button
@@ -154,7 +154,7 @@ export function ChatResponseFeedback({
             className="mt-2 min-h-4 text-[10px] text-muted-foreground"
             role={saveState === "error" ? "alert" : "status"}
           >
-            {saveState === "saving" && "saving locally…"}
+            {saveState === "saving" && "Saving locally…"}
             {(saveState === "idle" || saveState === "saved") &&
               "local by default · no chat text shared"}
             {saveState === "error" &&

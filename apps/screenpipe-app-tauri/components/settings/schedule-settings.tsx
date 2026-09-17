@@ -166,8 +166,8 @@ export function ScheduleSettings({
             <div>
               <h3 className="text-sm font-medium text-foreground">
                 Recording Schedule
-                <span className="ml-1.5 text-[9px] font-mono uppercase tracking-wider bg-muted text-muted-foreground px-1 py-0.5 rounded">
-                  beta
+                <span className="ml-1.5 text-[9px] font-mono normal-case tracking-wider bg-muted text-muted-foreground px-1 py-0.5 rounded">
+                  Beta
                 </span>
               </h3>
               <p className="text-xs text-muted-foreground mt-0.5">
@@ -392,7 +392,7 @@ function RuleEditor({ rule, onUpdate, onRemove }: RuleEditorProps) {
         className="w-24 h-6 text-xs font-mono px-1.5 text-center rounded border border-input bg-background"
       />
 
-      <span className="text-xs text-muted-foreground">to</span>
+      <span className="text-xs text-muted-foreground">To</span>
 
       <input
         type="time"

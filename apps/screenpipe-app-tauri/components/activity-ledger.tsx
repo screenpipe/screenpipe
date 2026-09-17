@@ -1079,7 +1079,7 @@ function ArtifactPreviewTooltip({
         side="top"
         collisionPadding={16}
         aria-label={`${artifactName} activity preview`}
-        className="w-80 rounded-none border-border bg-popover p-0 shadow-lg shadow-black/10"
+        className="w-80 rounded-lg border-border bg-popover p-0 shadow-lg shadow-black/10"
         data-testid="activity-artifact-preview"
       >
         <div className="relative aspect-video w-full overflow-hidden border-b border-border bg-muted">
@@ -1125,14 +1125,14 @@ function ArtifactPreviewTooltip({
               onError={() => removeUnavailableFrame(currentFrame.frame_id)}
             />
           ) : status === "unavailable" ? (
-            <div className="flex h-full items-center justify-center font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-              preview unavailable
+            <div className="flex h-full items-center justify-center font-mono text-[10px] normal-case tracking-wider text-muted-foreground">
+              Preview unavailable
             </div>
           ) : (
             <div className="relative h-full w-full">
               <Skeleton className="h-full w-full rounded-none" />
-              <span className="absolute inset-0 flex items-center justify-center font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                loading preview
+              <span className="absolute inset-0 flex items-center justify-center font-mono text-[10px] normal-case tracking-wider text-muted-foreground">
+                Loading preview
               </span>
             </div>
           )}
@@ -1149,7 +1149,7 @@ function ArtifactPreviewTooltip({
             ) : null}
           </div>
           {displayPreview ? (
-            <span className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            <span className="shrink-0 font-mono text-[10px] normal-case tracking-wider text-muted-foreground">
               {formatPreviewDuration(displayPreview)}
             </span>
           ) : null}
@@ -1963,7 +1963,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                 }}
               >
                 <SelectTrigger
-                  className="h-9 w-auto min-w-0 shrink-0 justify-center gap-1.5 rounded-none px-2 text-xs [&>svg:last-child]:hidden"
+                  className="h-9 w-auto min-w-0 shrink-0 justify-center gap-1.5 rounded-md px-2 text-xs [&>svg:last-child]:hidden"
                   data-testid="activity-range"
                   aria-label={`Time range: ${RANGE_COPY[preset]}`}
                   title={`Time range: ${RANGE_COPY[preset]}`}
@@ -2003,9 +2003,9 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                   variant="outline"
                   disabled
                   aria-label="AI preset"
-                  className="h-9 w-[190px] max-w-[36vw] justify-start rounded-none text-xs"
+                  className="h-9 w-[190px] max-w-[36vw] justify-start rounded-md text-xs"
                 >
-                  {reviewPreset.model || "auto"}
+                  {reviewPreset.model || "Auto"}
                 </Button>
               )}
               <Button
@@ -2039,7 +2039,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                 <PopoverTrigger asChild>
                   <Button
                     variant="outline"
-                    className="h-9 justify-start rounded-none border-border bg-background px-3 font-mono text-xs font-normal normal-case tracking-normal"
+                    className="h-9 justify-start rounded-md border-border bg-background px-3 font-mono text-xs font-normal normal-case tracking-normal"
                     aria-label="Choose custom date range"
                   >
                     <CalendarDays className="mr-2 h-3.5 w-3.5" />
@@ -2048,7 +2048,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                 </PopoverTrigger>
                 <PopoverContent
                   align="end"
-                  className="w-auto rounded-none border-border p-0 shadow-lg shadow-black/5"
+                  className="w-auto rounded-lg border-border p-0 shadow-lg shadow-black/5"
                 >
                   <Calendar
                     mode="range"
@@ -2140,7 +2140,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                   </p>
                   <Button
                     size="sm"
-                    className="mt-5 h-10 px-5 uppercase tracking-wide"
+                    className="mt-5 h-10 px-5 normal-case tracking-wide"
                     onClick={() => void enableActivities()}
                   >
                     {historyError ? "Try again" : "Enable activities"}
@@ -2201,7 +2201,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                           <button
                             type="button"
                             onClick={() => makeSkill(entry)}
-                            className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
+                            className="font-mono text-[10px] normal-case tracking-wider text-muted-foreground transition-colors hover:text-foreground"
                             aria-label={`Make skill from ${entry.title}`}
                           >
                             Make skill
@@ -2210,7 +2210,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                           <button
                             type="button"
                             onClick={() => askAboutActivity(entry)}
-                            className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
+                            className="font-mono text-[10px] normal-case tracking-wider text-muted-foreground transition-colors hover:text-foreground"
                             aria-label={`Chat about ${entry.title}`}
                           >
                             Chat
@@ -2244,7 +2244,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                 </p>
                 <Button
                   size="sm"
-                  className="mt-5 h-10 px-5 uppercase tracking-wide"
+                  className="mt-5 h-10 px-5 normal-case tracking-wide"
                   onClick={() => regenerateSelectedRange("empty_state")}
                 >
                   {historyError ? "Try again" : "Generate activities"}

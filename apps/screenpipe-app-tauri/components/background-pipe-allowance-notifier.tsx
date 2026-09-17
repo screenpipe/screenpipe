@@ -101,14 +101,14 @@ export function BackgroundPipeAllowanceNotifier() {
         actions: [
           {
             id: "open-scheduled",
-            label: "review scheduled tasks",
+            label: "Review scheduled tasks",
             type: "deeplink",
             url: "screenpipe://scheduled",
             primary: true,
           },
           {
             id: "dismiss",
-            label: "dismiss",
+            label: "Dismiss",
             type: "dismiss",
           },
         ],
