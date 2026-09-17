@@ -1,5 +1,6 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
+import { workflowModelPreference } from "./model-choice";
 import { desktopGuides } from "./guides";
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -119,6 +120,7 @@ async function saveWorkProfile(profile: WorkProfile) {
 }
 
 export const desktopWorkflowsPlatform: WorkflowsPlatform = {
+  modelPreference: workflowModelPreference,
   ...(!browserPreview ? { loadWorkflowRecording: async (timestamp: string, app: string) => {
     const media = await invoke<WorkflowRecording | null>("load_workflow_recording", { timestamp, appName: app });
     if (!media) return null;

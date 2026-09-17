@@ -179,7 +179,7 @@ async function responseErrorCode(response: Response): Promise<string> {
 async function fire(
 	env: Env,
 	authResult: AuthResult,
-	opts: { freeModel?: boolean },
+	opts: { freeModel?: boolean; privateModel?: boolean },
 	n: number,
 ) {
 	let last: { allowed: boolean; response?: Response } = { allowed: true };
@@ -765,4 +765,15 @@ describe('global Clerk lookup coordinator', () => {
 		clockNow += CLERK_LOOKUP_WINDOW_MS;
 		expect((await permit()).status).toBe(204);
 	});
+});
+
+describe('Private GPU capacity', () => {
+  it('keeps Private independent after Auto exhausts its bucket and still enforces capacity', async () => {
+    const env = makeEnv({ LIMIT_LOGGED_IN_FREE_RPM: '30' } as any);
+    const a = auth('logged_in');
+    await fire(env, a, { freeModel: true }, 30);
+    expect((await checkRateLimit(chatReq(), env, a, { freeModel: true })).allowed).toBe(false);
+    expect((await fire(env, a, { privateModel: true }, 30)).allowed).toBe(true);
+    expect((await checkRateLimit(chatReq(), env, a, { privateModel: true })).allowed).toBe(false);
+  });
 });

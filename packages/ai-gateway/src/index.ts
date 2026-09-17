@@ -340,10 +340,12 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 		// Check rate limit with tier info. Chat completions are checked inside
 		// their own block instead — there we know the model, so free (weight-0)
 		// models get routed to the high `freeRpm` bucket rather than the low
-		// paid-model `rpm`. Every other endpoint uses the standard tier limit.
+		// paid-model `rpm`. Private GLM has an independent GPU-capacity bucket.
 		const isChatCompletion = path === '/v1/chat/completions' && request.method === 'POST';
 		if (!isChatCompletion) {
-			const rateLimit = await checkRateLimit(request, env, authResult);
+			const rateLimit = await checkRateLimit(request, env, authResult, {
+				privateModel: path === '/v1/tinfoil/glm/chat/completions' && request.method === 'POST',
+			});
 			if (!rateLimit.allowed && rateLimit.response) {
 				return rateLimit.response;
 			}

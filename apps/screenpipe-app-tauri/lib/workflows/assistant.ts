@@ -7,7 +7,7 @@ import { loadAssistantFromDisk, saveAssistantToDisk } from "./disk-storage";
 import { runWorkflowAgent } from "./agent-runner";
 import { saveWorkflowFeedback, applyWorkflowFeedback, loadScheduledCatalog } from "./scheduled-discovery";
 import { parseWorkflowRefinement, type WorkflowRefinement } from "../../../../packages/workflows-ui/src/feedback-tool";
-import { LUNA_MODEL } from "./luna";
+import { WORKFLOW_MODELS } from "@screenpipe/workflows-ui";
 import { ASSISTANT_TOOLS, buildAssistantPrompt } from "./assistant-prompt";
 import { open } from "@tauri-apps/plugin-shell";
 import { isAssistantLink } from "@screenpipe/workflows-ui";
@@ -15,7 +15,7 @@ import { isAssistantLink } from "@screenpipe/workflows-ui";
 export { ASSISTANT_TOOLS, buildAssistantPrompt } from "./assistant-prompt";
 
 export const assistantProviderConfig: PiProviderConfig = {
-  provider: "screenpipe-cloud", model: LUNA_MODEL, url: "", apiKey: null,
+  provider: "screenpipe-cloud", model: WORKFLOW_MODELS.intelligent.model, url: "", apiKey: null,
   maxTokens: 4096, systemPrompt: null, allowedTools: ASSISTANT_TOOLS,
 };
 

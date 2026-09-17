@@ -29,3 +29,11 @@ it.each(["business_ultra", "super_admin"])("accepts gateway plan %s without bypa
 it.each(["free", "basic", "internal"])("does not grant workflows to %s", (plan) => {
   expect(workflowAccess(usage({ hosted_ai: { plan } })).state).toBe("upgrade");
 });
+
+it("keeps Private usable after Intelligent is exhausted while retaining verified plan access", () => {
+  const exhausted = usage({ remaining: 0, cost_limit_reached: true, background_pipe_advisory: { reason: "background_pipe_allowance_low" } });
+  expect(workflowAccess(exhausted, "private").state).toBe("ready");
+  expect(workflowAccess(exhausted, "intelligent").state).toBe("paused");
+  expect(workflowAccess(null, "private").state).toBe("unavailable");
+  expect(workflowAccess(usage({ hosted_ai: { plan: "free" } }), "private").state).toBe("upgrade");
+});

@@ -2142,10 +2142,24 @@ impl AgentExecutor for PiExecutor {
         // Provider resolution:
         // 1. Explicit provider from pipe frontmatter → use it
         // 2. No provider specified → screenpipe cloud (default)
-        if crate::workflows::pipeline::task_at(working_dir).is_some() {
+        let workflow_task = crate::workflows::pipeline::task_at(working_dir).is_some();
+        let model = if workflow_task {
+            crate::workflows::model_choice::selected_model()?
+        } else {
+            model
+        };
+        let provider = if workflow_task {
+            Some("screenpipe")
+        } else {
+            provider
+        };
+        let provider_url = if workflow_task { None } else { provider_url };
+        let provider_api_key = if workflow_task { None } else { provider_api_key };
+        if workflow_task {
             crate::workflows::pipeline::check_admission(
                 &self.api_url,
                 self.current_user_token().as_deref(),
+                model,
             )
             .await?;
             if !crate::workflows::pipeline::has_pending_input(working_dir).await? {
@@ -2276,10 +2290,24 @@ impl AgentExecutor for PiExecutor {
         session_owner: Option<&str>,
         _executor_config: Option<&serde_json::Value>,
     ) -> Result<AgentOutput> {
-        if crate::workflows::pipeline::task_at(working_dir).is_some() {
+        let workflow_task = crate::workflows::pipeline::task_at(working_dir).is_some();
+        let model = if workflow_task {
+            crate::workflows::model_choice::selected_model()?
+        } else {
+            model
+        };
+        let provider = if workflow_task {
+            Some("screenpipe")
+        } else {
+            provider
+        };
+        let provider_url = if workflow_task { None } else { provider_url };
+        let provider_api_key = if workflow_task { None } else { provider_api_key };
+        if workflow_task {
             crate::workflows::pipeline::check_admission(
                 &self.api_url,
                 self.current_user_token().as_deref(),
+                model,
             )
             .await?;
             if !crate::workflows::pipeline::has_pending_input(working_dir).await? {

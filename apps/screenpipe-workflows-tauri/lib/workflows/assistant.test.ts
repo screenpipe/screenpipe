@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (e: AgentEventEnvelope) => void>(),
   start: vi.fn(), prompt: vi.fn(), stop: vi.fn(), save: vi.fn(),
 }));
+vi.mock("./model-choice", () => ({ workflowModelPreference: { load: vi.fn(async () => "intelligent") } }));
 vi.mock("./disk-storage", () => ({ loadAssistantFromDisk: vi.fn(), saveAssistantToDisk: mocks.save }));
 vi.mock("@/lib/events/bus", () => ({
   mountAgentEventBus: vi.fn(),
@@ -18,11 +19,14 @@ vi.mock("@/lib/utils/tauri", () => ({ commands: {
   getScreenpipeBaseDir: async () => ({ status: "ok", data: "/isolated/profile" }),
   getCloudToken: async () => "test-token", piStart: mocks.start, piPrompt: mocks.prompt, piStop: mocks.stop,
 } }));
+import { workflowModelPreference } from "./model-choice";
+import { WORKFLOW_MODELS } from "@screenpipe/workflows-ui";
 import { ASSISTANT_TOOLS, assistantProviderConfig, buildAssistantPrompt, desktopAssistant } from "./assistant";
 
 describe("workflow assistant agent transport", () => {
-  beforeEach(() => { vi.clearAllMocks(); mocks.handlers.clear(); mocks.start.mockResolvedValue({ status: "ok", data: { running: true } }); mocks.stop.mockResolvedValue({ status: "ok" }); });
-  it("uses the existing harness, exact session routing, read-only tools and real deltas", async () => {
+  beforeEach(() => { vi.clearAllMocks(); vi.mocked(workflowModelPreference.load).mockResolvedValue("intelligent"); mocks.handlers.clear(); mocks.start.mockResolvedValue({ status: "ok", data: { running: true } }); mocks.stop.mockResolvedValue({ status: "ok" }); });
+  it.each(["intelligent", "private"] as const)("uses the existing harness, exact session routing, read-only tools and real deltas", async (mode) => {
+    vi.mocked(workflowModelPreference.load).mockResolvedValue(mode);
     mocks.prompt.mockImplementation(async (id: string) => {
       const emit = (event: AgentEventEnvelope["event"], sessionId = id) => mocks.handlers.get(id)?.({ sessionId, source: "pi", event });
       emit({ assistantMessageEvent: { type: "text_delta", delta: "Wrong session" } }, "another-chat");
@@ -33,7 +37,7 @@ describe("workflow assistant agent transport", () => {
     });
     const progress = vi.fn();
     await expect(desktopAssistant.ask({ question: "Find yesterday’s review", context: null, history: [], signal: new AbortController().signal, onProgress: progress })).resolves.toBe("Found a moment.");
-    expect(mocks.start).toHaveBeenCalledWith(expect.stringContaining("workflow-assistant"), "/isolated/profile/pi-workflows-assistant", null, assistantProviderConfig);
+    expect(mocks.start).toHaveBeenCalledWith(expect.stringContaining("workflow-assistant"), "/isolated/profile/pi-workflows-assistant", "test-token", expect.objectContaining({ ...assistantProviderConfig, model: WORKFLOW_MODELS[mode].model }));
     expect(ASSISTANT_TOOLS).toEqual(["search-content", "list-meetings", "get-meeting", "frame-context"]);
     expect(progress).toHaveBeenCalledWith({ text: "", activity: "searching" });
     expect(mocks.stop).toHaveBeenCalled(); expect(mocks.handlers.size).toBe(0);

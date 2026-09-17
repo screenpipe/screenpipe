@@ -1,7 +1,8 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 "use client";
-import { useEffect } from "react";
+import { workflowModelPreference } from "@/lib/workflows/model-choice";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useUsageStatusQuery } from "@/lib/hooks/use-usage-status";
 import { workflowAccess } from "@/lib/workflows/access";
@@ -12,7 +13,14 @@ import { WorkflowTasksPrompt } from "./workflow-tasks-prompt";
 export function WorkflowAccess({ active, requested = false, onRequestChange, onAccessChange }: { active: boolean; requested?: boolean; onRequestChange?: (open: boolean) => void; onAccessChange?: (reason: string | undefined) => void }) {
   const query = useUsageStatusQuery(active);
   const router = useRouter();
-  const access = workflowAccess(query.usage);
+  const [mode, setMode] = useState<"intelligent" | "private">("intelligent");
+  useEffect(() => {
+    const refresh = () => { void workflowModelPreference.load().then(setMode).catch(() => setMode("intelligent")); };
+    refresh(); window.addEventListener("workflows:model-changed", refresh);
+    window.addEventListener("focus", refresh);
+    return () => { window.removeEventListener("workflows:model-changed", refresh); window.removeEventListener("focus", refresh); };
+  }, []);
+  const access = workflowAccess(query.usage, mode);
   const reason = query.isLoading ? "Checking workflow access…" : access.state === "ready" ? undefined : access.message;
   useEffect(() => { onAccessChange?.(reason); }, [onAccessChange, reason]);
   useEffect(() => { if (requested && access.state === "ready") onRequestChange?.(false); }, [requested, access.state, onRequestChange]);

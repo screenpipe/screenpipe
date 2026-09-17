@@ -35,6 +35,7 @@ export type WorkflowAnalysisJob = {
 };
 
 export type WorkflowsPlatform = {
+  modelPreference?: import("./model-choice").WorkflowModelPreference;
   /** The existing scheduled-task runtime owns reconciliation and persistence. */
   managesAnalysis?: boolean;
   ensureAnalysisTask?: () => Promise<void>;

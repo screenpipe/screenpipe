@@ -8,7 +8,7 @@
 
 use screenpipe_core::agents::pi::{
     apply_custom_provider_compat, screenpipe_cloud_models, PI_AI_PACKAGE, PI_NAMESPACE_DIR,
-    PI_PACKAGE, SCREENPIPE_API_URL,
+    PI_PACKAGE, SCREENPIPE_API_URL, TINFOIL_SDK_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -255,12 +255,13 @@ static REQUIRED_PI_PACKAGE_INSTALL_LOCK: std::sync::OnceLock<Mutex<()>> =
 static PI_EXTENSION_SAFE_MODE_PROJECTS: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
     std::sync::OnceLock::new();
 
-const MANAGED_PI_EXTENSION_FILES: [&str; 6] = [
+const MANAGED_PI_EXTENSION_FILES: [&str; 7] = [
     "web-search.ts",
     "mcp-bridge.ts",
     "save-artifact.ts",
     "live-views.ts",
     "connection-gate.ts",
+    "tinfoil.ts",
     "workflow-memory.ts",
 ];
 
@@ -1221,6 +1222,7 @@ fn seed_pi_package_json(install_dir: &std::path::Path) {
     // main app exits with code 255. macOS Enterprise v2.4.244 hit this on
     // every upgrade from 243.
     let expected_sdk = json!("^0.91.1");
+    let expected_tinfoil = json!(TINFOIL_SDK_VERSION);
     let expected_pi_version = json!(PI_PACKAGE.rsplit('@').next().unwrap_or(""));
     let expected_pi_ai_version = json!(PI_AI_PACKAGE.rsplit('@').next().unwrap_or(""));
     let expected_cross_spawn = json!("^7.0.6");
@@ -1275,6 +1277,10 @@ fn seed_pi_package_json(install_dir: &std::path::Path) {
                             );
                             changed = true;
                         }
+                        if deps_obj.get("tinfoil") != Some(&expected_tinfoil) {
+                            deps_obj.insert("tinfoil".to_string(), expected_tinfoil.clone());
+                            changed = true;
+                        }
                         if deps_obj.get("cross-spawn") != Some(&expected_cross_spawn) {
                             deps_obj
                                 .insert("cross-spawn".to_string(), expected_cross_spawn.clone());
@@ -1316,6 +1322,7 @@ fn seed_pi_package_json(install_dir: &std::path::Path) {
     let pkg_json = json!({
         "dependencies": {
             "@anthropic-ai/sdk": expected_sdk,
+            "tinfoil": expected_tinfoil,
             "@earendil-works/pi-coding-agent": expected_pi_version,
             "@earendil-works/pi-ai": expected_pi_ai_version,
             "cross-spawn": expected_cross_spawn,
@@ -1409,6 +1416,16 @@ fn local_pi_install_integrity_error(install_dir: &Path) -> Option<String> {
         return Some(format!("Pi package version is not {}", PI_PACKAGE));
     }
 
+    let tinfoil_dir = node_module_package_dir(install_dir, "tinfoil");
+    let tinfoil_version = std::fs::read_to_string(tinfoil_dir.join("package.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v["version"].as_str().map(str::to_owned));
+    if tinfoil_version.as_deref() != Some(TINFOIL_SDK_VERSION)
+        || !tinfoil_dir.join("dist/index.js").is_file()
+    {
+        return Some("missing or outdated Tinfoil SDK".to_string());
+    }
     let resolve_start = pi_dir.join("dist");
     for package_name in ["@earendil-works/pi-ai", "@anthropic-ai/sdk", "cross-spawn"] {
         if resolve_node_module_package_from(&resolve_start, install_dir, package_name).is_none() {
@@ -1802,6 +1819,8 @@ fn ensure_shared_pi_extensions(project_dir: &str) -> Result<(), String> {
     ensure_self_improvement_extension(project_dir)?;
     ensure_chat_control_extension(project_dir)?;
     ensure_context_usage_extension(project_dir)?;
+    screenpipe_core::agents::pi::PiExecutor::ensure_tinfoil_extension(Path::new(project_dir))
+        .map_err(|e| e.to_string())?;
     // MCP bridge: lets the agent reach user-registered MCP servers.
     ensure_mcp_bridge_extension(project_dir)?;
     // Save artifact: lets the agent register deliverables in the Artifacts library.
@@ -1827,6 +1846,7 @@ const SHARED_PI_EXTENSION_FILES: &[&str] = &[
     "save-artifact.ts",
     "live-views.ts",
     "connection-gate.ts",
+    "tinfoil.ts",
     "workflow-memory.ts",
 ];
 
@@ -6925,6 +6945,10 @@ printf '%s\n' '{"type":"agent_end"}'
     }
 
     fn write_pi_package(install_dir: &std::path::Path) {
+        let tinfoil_dir = super::node_module_package_dir(install_dir, "tinfoil");
+        write_package_json(&tinfoil_dir, "tinfoil", super::TINFOIL_SDK_VERSION);
+        std::fs::create_dir_all(tinfoil_dir.join("dist")).unwrap();
+        std::fs::write(tinfoil_dir.join("dist/index.js"), "// fixture").unwrap();
         let pi_dir = super::pi_package_dir(install_dir);
         write_package_json(
             &pi_dir,

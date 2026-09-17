@@ -683,7 +683,13 @@ fn scope_workflow_agent(mut config: PiProviderConfig, skill: bool) -> PiProvider
         }
         .to_string(),
     );
-    config.max_tokens = if skill { 6_000 } else { 20_000 };
+    config.max_tokens = if skill {
+        6_000
+    } else if config.model == screenpipe_core::workflows::model_choice::PRIVATE_MODEL {
+        8_192
+    } else {
+        20_000
+    };
     config.unattended = true;
     config
 }
@@ -693,7 +699,15 @@ async fn configured_workflow_agent(
     skill: bool,
 ) -> Result<(PiProviderConfig, Option<String>), String> {
     let settings = crate::store::SettingsStore::get(app)?.ok_or("Settings are not available")?;
-    let (config, token) = crate::activity_history::provider_config(&settings, None, "")?;
+    let config = PiProviderConfig {
+        provider: "screenpipe-cloud".into(),
+        model: screenpipe_core::workflows::model_choice::selected_model()
+            .map_err(|error| error.to_string())?.into(),
+        url: String::new(), api_key: None, backend: None, acp_agent: None,
+        max_tokens: 4096, max_context_chars: None, system_prompt: None,
+        allowed_tools: None, resume_session_id: None, unattended: true,
+    };
+    let token = settings.user.token.clone().filter(|token| !token.is_empty());
     let token = match token {
         Some(token) => Some(token),
         None => cloud_token().await,

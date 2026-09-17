@@ -40,7 +40,11 @@ pub fn task_at(path: &Path) -> Option<&str> {
         .filter(|n| stage(n).is_some() && path.join("pipe.md").is_file())
 }
 
+#[cfg(test)]
 pub fn admission(usage: &Value) -> Result<(), (&'static str, &'static str)> {
+    admission_for_model(usage, "auto")
+}
+fn admission_for_model(usage: &Value, model: &str) -> Result<(), (&'static str, &'static str)> {
     let plan = usage
         .pointer("/hosted_ai/plan")
         .and_then(Value::as_str)
@@ -69,6 +73,11 @@ pub fn admission(usage: &Value) -> Result<(), (&'static str, &'static str)> {
             | "super_admin"
     ) {
         return Err(("workflow_business_required", "Automatic workflow discovery requires Business. Your saved workflows are still available."));
+    }
+    // Owned-GPU inference has no paid-provider allowance debit. Authentication,
+    // Business entitlement and gateway capacity limits still apply.
+    if model == super::model_choice::PRIVATE_MODEL {
+        return Ok(());
     }
     if usage["cost_limit_reached"] == true || usage["remaining"].as_f64().is_some_and(|n| n <= 0.0)
     {
@@ -155,7 +164,7 @@ pub async fn has_pending_input(path: &Path) -> anyhow::Result<bool> {
         .ok_or_else(|| anyhow::anyhow!("Workflow input status unavailable"))
 }
 
-pub async fn check_admission(api_url: &str, token: Option<&str>) -> anyhow::Result<()> {
+pub async fn check_admission(api_url: &str, token: Option<&str>, model: &str) -> anyhow::Result<()> {
     require_rollout(rollout_enabled())?;
     let token = token.filter(|s| !s.is_empty()).ok_or_else(|| {
         anyhow::anyhow!("workflow_sign_in_required: Sign in to enable workflow updates.")
@@ -179,7 +188,7 @@ pub async fn check_admission(api_url: &str, token: Option<&str>) -> anyhow::Resu
         .json()
         .await
         .map_err(|_| anyhow::anyhow!("workflow_usage_unavailable: Invalid allowance response."))?;
-    admission(&value).map_err(|(code, message)| {
+    admission_for_model(&value, model).map_err(|(code, message)| {
         anyhow::anyhow!("{}", json!({"error":{"code":code,"message":message}}))
     })
 }
@@ -249,6 +258,15 @@ mod tests {
             .await;
         assert!(has_pending_input(&task).await.unwrap());
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+    #[test]
+    fn private_model_ignores_paid_allowance_but_requires_business() {
+        let mut usage = json!({"hosted_ai":{"plan":"business"},"remaining":0,"cost_limit_reached":true});
+        assert!(admission_for_model(&usage, super::super::model_choice::PRIVATE_MODEL).is_ok());
+        assert!(admission(&usage).is_err());
+        usage["hosted_ai"]["plan"] = json!("free");
+        assert!(admission_for_model(&usage, super::super::model_choice::PRIVATE_MODEL).is_err());
+        assert!(admission_for_model(&Value::Null, super::super::model_choice::PRIVATE_MODEL).is_err());
     }
     #[test]
     fn privileged_gateway_plan_retains_all_admission_checks() {

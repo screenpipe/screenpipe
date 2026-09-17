@@ -2,18 +2,19 @@
 // https://screenpipe.com
 
 import type { WorkflowsAssistantPlatform, AssistantContext, AssistantMessage } from "@screenpipe/workflows-ui";
+import { workflowModelPreference } from "./model-choice";
 import { commands, type PiProviderConfig } from "@/lib/utils/tauri";
 import { mountAgentEventBus, registerForeground, onTerminated, onEvicted } from "@/lib/events/bus";
 import { advanceMeetingChatStream, emptyStreamState } from "@/components/meeting-notes/meeting-chat-stream";
 import { INTERNAL_TITLE_PREFIX } from "@/lib/utils/internal-session";
 import { loadAssistantFromDisk, saveAssistantToDisk } from "./disk-storage";
-import { LUNA_MODEL } from "./luna";
+import { WORKFLOW_MODELS } from "@screenpipe/workflows-ui";
 import { open } from "@tauri-apps/plugin-shell";
 import { isAssistantLink } from "@screenpipe/workflows-ui";
 
 export const ASSISTANT_TOOLS = ["search-content", "list-meetings", "get-meeting", "frame-context"];
 export const assistantProviderConfig: PiProviderConfig = {
-  provider: "screenpipe-cloud", model: LUNA_MODEL, url: "", apiKey: null,
+  provider: "screenpipe-cloud", model: WORKFLOW_MODELS.intelligent.model, url: "", apiKey: null,
   maxTokens: 4096, systemPrompt: null, allowedTools: ASSISTANT_TOOLS,
 };
 
@@ -82,7 +83,11 @@ export const desktopAssistant: WorkflowsAssistantPlatform = {
       }));
       unregister.push(onTerminated((event) => { if (event.sessionId === sessionId) fail(new Error("The conversation was interrupted. Try again.")); }));
       unregister.push(onEvicted((event) => { if (event.sessionId === sessionId) fail(new Error("The conversation was interrupted. Try again.")); }));
-      const started = await commands.piStart(sessionId, `${base.data}/pi-workflows-assistant`, null, assistantProviderConfig);
+      const choice = await workflowModelPreference.load(); assertActive();
+      const token = await commands.getCloudToken(); assertActive();
+      if (!token) throw new Error("Sign in to Screenpipe to continue.");
+      const started = await commands.piStart(sessionId, `${base.data}/pi-workflows-assistant`, token,
+        { ...assistantProviderConfig, model: WORKFLOW_MODELS[choice].model });
       assertActive();
       if (started.status === "error" || !started.data.running) throw new Error(started.status === "error" ? started.error : "Couldn’t start the assistant.");
       const prompted = await commands.piPrompt(sessionId, buildAssistantPrompt(question, context, history), null, null);

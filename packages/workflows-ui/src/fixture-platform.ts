@@ -410,7 +410,9 @@ export function fixtureGuides(): NonNullable<WorkflowsPlatform["guides"]> {
 
 export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixtureWorkflowAnalysis): WorkflowsPlatform {
   let profile = fixturePersonalWorkProfile;
+  let mode: import("./model-choice").WorkflowModelMode = "intelligent";
   return {
+    modelPreference: { load: async () => mode, save: async next => { mode = next; } },
     assistant: fixtureAssistant(),
     contextDiscovery: true,
     fillContext: async ({ signal, onField, onActivity }) => {

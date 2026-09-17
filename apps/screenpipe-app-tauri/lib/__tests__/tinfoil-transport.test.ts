@@ -2,6 +2,7 @@
 // https://screenpipe.com
 
 import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
+import type { Model } from "@earendil-works/pi-ai";
 import { SecureClient, Verifier } from "tinfoil";
 import { CipherSuite } from "hpke";
 import { KEM_DHKEM_X25519_HKDF_SHA256, KDF_HKDF_SHA256, AEAD_AES_256_GCM } from "@panva/hpke-noble";
@@ -75,7 +76,7 @@ describe("GLM verified client transport", () => {
         expect(config.models).toBeUndefined();
         provider = config;
       } });
-      const selected: any = { id: model, name: "GLM", provider: "screenpipe", api: "screenpipe-tinfoil", baseUrl: "https://gateway.test/v1", contextWindow: 32768, maxTokens: 8192, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+      const selected: Model<any> = { id: model, name: "GLM", provider: "screenpipe", api: "screenpipe-tinfoil", baseUrl: "https://gateway.test/v1", contextWindow: 32768, maxTokens: 8192, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
       const context: any = { messages: [{ role: "user", content: "PRIVATE_PROMPT_CANARY", timestamp: 1 }], tools: [{ name: "read", description: "Read a file", parameters: { type: "object", properties: { path: { type: "string" } } } }] };
       const first = await provider.streamSimple(selected, context, { apiKey: "user-token" }).result();
       expect(first.stopReason).toBe("toolUse");
@@ -179,8 +180,9 @@ describe("GLM verified client transport", () => {
   it("uses real SDK encryption and rejects an unencrypted successful response", async () => {
     // Only hardware verification is stubbed. EHBP/HPKE and response validation
     // are the real pinned SDK; the generated key belongs to this test alone.
-    const pair = await crypto.subtle.generateKey("X25519", true, ["deriveBits"]) as CryptoKeyPair;
-    const hpkePublicKey = Buffer.from(await crypto.subtle.exportKey("raw", pair.publicKey)).toString("hex");
+    const suite = new CipherSuite(KEM_DHKEM_X25519_HKDF_SHA256, KDF_HKDF_SHA256, AEAD_AES_256_GCM);
+    const pair = await suite.GenerateKeyPair(true);
+    const hpkePublicKey = bytesToHex(await suite.SerializePublicKey(pair.publicKey));
     spyOn(Verifier.prototype, "verifyBundle").mockResolvedValue({ hpkePublicKey, tlsPublicKeyFingerprint: "fixture" } as any);
     const network = mock(async (input: any, requestInit?: RequestInit) => {
       const request = new Request(input, requestInit);
