@@ -723,7 +723,11 @@ pub(super) fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<St
         parts.next()?;
         let frontmatter = parts.next()?;
         let original_body = parts.next()?.trim();
-        if original_body != body && original_body != without_timing.trim() {
+        // Upgrade the unmodified staged prompt shipped before local suggestions.
+        // Custom bodies opt out; all replacement instructions come from the asset.
+        let before_notifications = simple_hash(original_body) == "120adaeac3926f64";
+        if original_body != body && original_body != without_timing.trim() && !before_notifications
+        {
             return None;
         }
         let mut config: serde_yaml::Value = serde_yaml::from_str(frontmatter).ok()?;
@@ -731,9 +735,15 @@ pub(super) fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<St
             .get_mut("permissions")?
             .get_mut("allow")?
             .as_sequence_mut()?;
-        let rule = serde_yaml::Value::String("Api(GET /workflows/pipeline)".into());
-        if !allow.contains(&rule) {
-            allow.push(rule);
+        for rule in [
+            "Api(GET /workflows/pipeline)",
+            "Api(GET /feedback)",
+            "Api(POST /notify)",
+        ] {
+            let rule = serde_yaml::Value::String(rule.into());
+            if !allow.contains(&rule) {
+                allow.push(rule);
+            }
         }
         let map = config.as_mapping_mut()?;
         let trigger = map
@@ -826,6 +836,29 @@ mod tests {
             &format!("{legacy}\nMy custom instruction")
         )
         .is_none());
+    }
+    #[test]
+    fn workflow_notification_upgrade_preserves_settings_and_custom_prompts() {
+        let old =
+            include_str!("../../assets/pipes/workflow-discovery/legacy-before-notifications.md");
+        for enabled in ["false", "true"] {
+            let original = old
+                .replace("enabled: false", &format!("enabled: {enabled}"))
+                .replace("every 24h", "every 48h");
+            let updated =
+                super::migrate_builtin_pipe_text("workflow-discovery", &original).unwrap();
+            assert!(updated.contains(&format!("enabled: {enabled}")));
+            assert!(updated.contains("every 48h"));
+            assert!(updated.contains("Api(GET /feedback)"));
+            assert!(updated.contains("Api(POST /notify)"));
+            assert!(updated.contains("## Optional notification after a useful save"));
+            assert!(super::migrate_builtin_pipe_text("workflow-discovery", &updated).is_none());
+            assert!(super::migrate_builtin_pipe_text(
+                "workflow-discovery",
+                &format!("{original}\nMy custom instruction")
+            )
+            .is_none());
+        }
     }
     use super::*;
     use crate::pipes::{parse_frontmatter, PipeManager};
