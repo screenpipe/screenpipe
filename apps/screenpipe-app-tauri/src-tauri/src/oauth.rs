@@ -102,6 +102,17 @@ pub fn activate_app_after_oauth(app_handle: AppHandle, window: WebviewWindow) {
     activate_app_after_oauth_impl(&app_handle, &window);
 }
 
+async fn cloud_context() -> screenpipe_engine::cloud_connections::CustodyContext {
+    screenpipe_engine::cloud_connections::CustodyContext {
+        screenpipe_dir: screenpipe_core::paths::default_screenpipe_data_dir(),
+        secret_store: open_secret_store().await.map(std::sync::Arc::new),
+    }
+}
+async fn cloud_oauth_references(id: &str, instance: Option<&str>) -> Vec<serde_json::Value> {
+    screenpipe_engine::cloud_connection_desktop::references(&cloud_context().await).await.into_iter()
+        .filter(|row| row["integration_id"] == id && instance.map_or(true, |instance| row["instance"] == instance)).collect()
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
@@ -557,6 +568,11 @@ pub async fn oauth_connect(
     let effective_instance = derive_effective_instance(&integration_id, instance, &token_data);
     let store_instance = effective_instance.as_deref();
 
+    let existed = oauth::oauth_instance_token_exists(store.as_ref(), &integration_id, store_instance).await
+        || oauth::oauth_instance_token_exists(store.as_ref(), &integration_id, None).await;
+    if !cloud_oauth_references(&integration_id, store_instance).await.is_empty() {
+        return Err("Disconnect this cloud account before reconnecting it.".into());
+    }
     oauth::write_oauth_token_instance(store.as_ref(), &integration_id, store_instance, &token_data)
         .await
         .map_err(|e| format!("failed to save token: {}", e))?;
@@ -603,6 +619,8 @@ pub async fn oauth_connect(
         crate::google_calendar::poke();
     }
 
+    let key = store_instance.map(|instance| format!("{}:{}", integration_id, instance)).unwrap_or_else(|| integration_id.clone());
+    let _ = screenpipe_engine::cloud_connection_desktop::complete_new_connection(cloud_context().await, &key, existed).await;
     activate_app_after_oauth_impl(&app_handle, &window);
 
     Ok(OAuthStatus {
@@ -639,6 +657,10 @@ pub async fn oauth_status(
     integration_id: String,
     instance: Option<String>,
 ) -> Result<OAuthStatus, String> {
+    let cloud = cloud_oauth_references(&integration_id, instance.as_deref()).await;
+    if let Some(reference) = cloud.first() {
+        return Ok(OAuthStatus { connected: true, display_name: reference["label"].as_str().map(str::to_owned), needs_attention:false });
+    }
     let store = open_secret_store().await;
     let connected =
         oauth::is_oauth_instance_connected(store.as_ref(), &integration_id, instance.as_deref())
@@ -680,6 +702,11 @@ pub async fn oauth_disconnect(
     integration_id: String,
     instance: Option<String>,
 ) -> Result<bool, String> {
+    let context = cloud_context().await;
+    for reference in cloud_oauth_references(&integration_id, instance.as_deref()).await {
+        screenpipe_engine::cloud_connection_desktop::disconnect(&context, &reference).await
+            .map_err(|_| "Could not disconnect the cloud account. Check your network.".to_string())?;
+    }
     let store = open_secret_store().await;
     if instance.is_none() {
         // load_oauth_json falls back to named instances (e.g. the user's email) when
@@ -736,6 +763,12 @@ pub async fn oauth_list_instances(
         });
     }
 
+    for reference in cloud_oauth_references(&integration_id, None).await {
+        let instance = reference["instance"].as_str().map(str::to_owned);
+        if !result.iter().any(|row| row.instance == instance) {
+            result.push(OAuthInstanceInfo { instance, display_name:reference["label"].as_str().map(str::to_owned) });
+        }
+    }
     Ok(result)
 }
 

@@ -37,7 +37,7 @@ fn identifier(value: &str) -> bool {
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
 }
-fn native_available(id: &str) -> bool {
+pub(crate) fn native_available(id: &str) -> bool {
     ![
         "obsidian",
         "obsidian-memories",
@@ -56,6 +56,38 @@ fn native_available(id: &str) -> bool {
             .iter()
             .any(|integration| integration.def().id == id)
 }
+pub(crate) fn mcp_cloud_available(config: &McpServerConfig) -> bool {
+    if config.transport != McpTransport::Http {
+        return false;
+    }
+    let Ok(url) = reqwest::Url::parse(&config.url) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https")
+        || host == "localhost"
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
+        || host.ends_with(".internal")
+    {
+        return false;
+    }
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => {
+            !ip.is_private() && !ip.is_loopback() && !ip.is_link_local() && !ip.is_unspecified()
+        }
+        Some(url::Host::Ipv6(ip)) => {
+            !ip.is_loopback()
+                && !ip.is_unspecified()
+                && !ip.is_unique_local()
+                && !ip.is_unicast_link_local()
+                && ip.to_ipv4_mapped().is_none()
+        }
+        _ => true,
+    }
+}
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     kind: String,
@@ -72,7 +104,13 @@ fn validate(snapshot: &Snapshot) -> Result<(), ()> {
             let row: SyncedConnection =
                 serde_json::from_value(snapshot.payload.clone()).map_err(|_| ())?;
             let expected = match row.instance.as_deref() {
-                Some(instance) if identifier(instance) => {
+                Some(instance)
+                    if !instance.is_empty()
+                        && instance.len() <= 160
+                        && instance
+                            .bytes()
+                            .all(|c| c.is_ascii_alphanumeric() || b"_@.+-".contains(&c)) =>
+                {
                     format!("{}:{}", row.integration_id, instance)
                 }
                 None => row.integration_id.clone(),
@@ -112,7 +150,7 @@ fn validate(snapshot: &Snapshot) -> Result<(), ()> {
             }
             if !identifier(&cfg.id)
                 || snapshot.integration_id != "custom-mcp"
-                || cfg.transport != McpTransport::Http
+                || !mcp_cloud_available(&cfg)
                 || !cfg.enabled
                 || cfg.command.is_some()
                 || cfg.env.is_some()
@@ -124,13 +162,33 @@ fn validate(snapshot: &Snapshot) -> Result<(), ()> {
     }
     Ok(())
 }
+#[derive(Clone)]
+pub struct CustodyContext {
+    pub screenpipe_dir: std::path::PathBuf,
+    pub secret_store: Option<Arc<SecretStore>>,
+}
+impl From<&ConnectionsState> for CustodyContext {
+    fn from(state: &ConnectionsState) -> Self {
+        Self {
+            screenpipe_dir: state.screenpipe_dir.clone(),
+            secret_store: state.secret_store.clone(),
+        }
+    }
+}
+
 pub fn routes() -> Router<ConnectionsState> {
     Router::new()
         .route("/cloud", get(inventory))
+        .route(
+            "/cloud/settings",
+            axum::routing::put(crate::cloud_connection_desktop::settings),
+        )
         .route("/cloud/share", post(share))
         .route("/cloud/execute", post(execute))
 }
 async fn inventory(State(state): State<ConnectionsState>, headers: HeaderMap) -> Json<Value> {
+    let context = CustodyContext::from(&state);
+    let cloud = crate::cloud_connection_desktop::sync_accounts(&context).await;
     let manifest = sync::build_local_manifest(
         &state.screenpipe_dir,
         "cloud-export",
@@ -141,6 +199,10 @@ async fn inventory(State(state): State<ConnectionsState>, headers: HeaderMap) ->
     if let Some(store) = state.secret_store.as_ref() {
         for key in store.list("cloud-move-pending:").await.unwrap_or_default() {
             if let Ok(Some(pending)) = store.get_json::<Value>(&key).await {
+                let token = crate::auth_key::find_cloud_token(&state.screenpipe_dir).await;
+                if pending["owner"].as_str() != token.as_deref().and_then(jwt_subject).as_deref() {
+                    continue;
+                }
                 connections.push(json!({"key": format!("pending:{}", pending["account_id"].as_str().unwrap_or("")), "name": format!("Finish moving {}", pending["label"].as_str().unwrap_or("connection")), "cloud_available": true, "pending": true}));
             }
         }
@@ -157,31 +219,67 @@ async fn inventory(State(state): State<ConnectionsState>, headers: HeaderMap) ->
     let mcp = McpServerStore::new(state.screenpipe_dir.clone(), state.secret_store.clone());
     if let Ok(servers) = mcp.list().await {
         for cfg in servers.into_iter().filter(|cfg| cfg.enabled) {
-            connections.push(json!({"key": format!("mcp:{}", cfg.id), "name": cfg.name, "cloud_available": cfg.transport == McpTransport::Http, "kind": "mcp", "rotating_credentials": cfg.auth_mode == screenpipe_connect::mcp_servers::McpAuthMode::OAuth}));
+            connections.push(json!({"key": format!("mcp:{}", cfg.id), "name": cfg.name, "cloud_available": mcp_cloud_available(&cfg), "kind": "mcp", "rotating_credentials": cfg.auth_mode == screenpipe_connect::mcp_servers::McpAuthMode::OAuth}));
         }
     }
     Json(
-        json!({"connections": connections, "snapshot_schema": 1, "runtime_available": runtime_authorized(&state, &headers)}),
+        json!({"connections": connections, "cloud_accounts": crate::cloud_connection_desktop::references(&context).await, "cloud_available": cloud.is_ok(), "storage": crate::cloud_connection_desktop::storage(&context).await, "snapshot_schema": 1, "runtime_available": runtime_authorized(&state, &headers)}),
     )
 }
 #[derive(Deserialize)]
-struct ShareBody {
-    key: String,
-    license_id: String,
-    token: String,
-    allow_cloud: bool,
+pub(crate) struct ShareBody {
+    pub key: String,
+    #[serde(default)]
+    pub license_id: String,
+    #[serde(default)]
+    pub token: String,
+    pub allow_cloud: bool,
 }
-async fn share(State(state): State<ConnectionsState>, Json(body): Json<ShareBody>) -> Reply {
+async fn share(State(state): State<ConnectionsState>, Json(mut body): Json<ShareBody>) -> Reply {
+    let context = CustodyContext::from(&state);
+    body.token = crate::auth_key::find_cloud_token(&context.screenpipe_dir)
+        .await
+        .unwrap_or_default();
+    if let (Some(id), Some(store)) = (body.key.strip_prefix("pending:"), &context.secret_store) {
+        if let Ok(Some(pending)) = store
+            .get_json::<Value>(&format!("cloud-move-pending:{}", id))
+            .await
+        {
+            if pending["owner"].as_str() != jwt_subject(&body.token).as_deref() {
+                return failure(
+                    StatusCode::FORBIDDEN,
+                    "Sign into the account that started this connection.",
+                );
+            }
+            body.license_id = pending["license_id"].as_str().unwrap_or("").to_owned();
+        }
+    }
+    share_with_context(context, body).await
+}
+pub(crate) async fn share_with_context(state: CustodyContext, body: ShareBody) -> Reply {
     let Some(store) = state.secret_store.as_ref() else {
         return failure(
             StatusCode::CONFLICT,
             "A local credential vault is required to move connections.",
         );
     };
-    let key = if let Some(id) = body.key.strip_prefix("mcp:") {
+    let connection_key = if let Some(id) = body.key.strip_prefix("pending:") {
+        match store
+            .get_json::<Value>(&format!("cloud-move-pending:{}", id))
+            .await
+        {
+            Ok(Some(row)) if row["owner"].as_str() == jwt_subject(&body.token).as_deref() => {
+                row["local_key"].as_str().unwrap_or("").to_owned()
+            }
+            _ => return failure(StatusCode::FORBIDDEN, "Connection handoff not found."),
+        }
+    } else {
+        body.key.clone()
+    };
+    let key = if let Some(id) = connection_key.strip_prefix("mcp:") {
         format!("cloud-custody:mcp:{}", id)
     } else {
-        format!("cloud-custody:oauth:{}", body.key)
+        format!("cloud-custody:oauth:{}", connection_key)
     };
     let owner = uuid::Uuid::new_v4().to_string();
     if !store
@@ -199,9 +297,9 @@ async fn share(State(state): State<ConnectionsState>, Json(body): Json<ShareBody
     result
 }
 
-async fn share_inner(state: ConnectionsState, body: ShareBody) -> Reply {
+async fn share_inner(state: CustodyContext, body: ShareBody) -> Reply {
     if !body.allow_cloud
-        || uuid::Uuid::parse_str(&body.license_id).is_err()
+        || (!body.license_id.is_empty() && uuid::Uuid::parse_str(&body.license_id).is_err())
         || body.token.is_empty()
     {
         return failure(
@@ -211,6 +309,12 @@ async fn share_inner(state: ConnectionsState, body: ShareBody) -> Reply {
     }
     // Only the account already signed into this device can receive its vault.
     // The control plane independently verifies the supplied JWT before storing.
+    if crate::cloud_connection_desktop::storage(&state).await == "local" {
+        return failure(
+            StatusCode::FORBIDDEN,
+            "Connections are configured to stay on this device.",
+        );
+    }
     let local_token = crate::auth_key::find_cloud_token(&state.screenpipe_dir).await;
     if jwt_subject(&body.token).is_none()
         || jwt_subject(&body.token) != local_token.as_deref().and_then(jwt_subject)
@@ -291,10 +395,51 @@ async fn share_inner(state: ConnectionsState, body: ShareBody) -> Reply {
         Ok(client) => client,
         Err(_) => return failure(StatusCode::SERVICE_UNAVAILABLE, "Cloud unavailable."),
     };
+    // Persist only an opaque attempt ID before the request, so an uncertain import
+    // can be retried without creating an unreachable inactive cloud account.
+    let attempt_key = format!(
+        "cloud-import-attempt:{}:{}",
+        jwt_subject(&body.token).unwrap_or_default(),
+        body.key
+    );
+    let store = state.secret_store.as_ref().unwrap();
+    let attempt = match store.get_json::<Value>(&attempt_key).await {
+        Ok(Some(value))
+            if value["id"]
+                .as_str()
+                .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) =>
+        {
+            value["id"].as_str().unwrap().to_owned()
+        }
+        Ok(_) => {
+            let id = uuid::Uuid::new_v4().to_string();
+            if store
+                .set_json(&attempt_key, &json!({"id":id}))
+                .await
+                .is_err()
+            {
+                return failure(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Could not save the connection handoff.",
+                );
+            }
+            id
+        }
+        Err(_) => {
+            return failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Could not read the connection handoff.",
+            )
+        }
+    };
     let response = client
-        .post("https://screenpipe.com/api/enterprise/cloud-connections/import")
+        .post(if body.license_id.is_empty() {
+            "https://screenpipe.com/api/connections/accounts"
+        } else {
+            "https://screenpipe.com/api/enterprise/cloud-connections/import"
+        })
         .bearer_auth(&body.token)
-        .json(&json!({"license_id": body.license_id, "allow_cloud": true, "connection": snapshot}))
+        .json(&json!({"license_id": body.license_id, "allow_cloud": true, "connection": snapshot, "account_id": if body.license_id.is_empty() {Some(&attempt)} else {None}}))
         .send()
         .await;
     let Ok(response) = response else {
@@ -332,7 +477,7 @@ async fn share_inner(state: ConnectionsState, body: ShareBody) -> Reply {
         .unwrap()
         .set_json(
             &format!("cloud-move-pending:{}", id),
-            &json!({"account_id": id, "license_id": body.license_id, "local_key": body.key, "label": snapshot.label}),
+            &json!({"account_id": id, "license_id": body.license_id, "owner": jwt_subject(&body.token), "local_key": body.key, "label": snapshot.label, "kind": snapshot.kind, "integration_id": snapshot.integration_id, "instance": snapshot.payload["instance"], "mcp_config": if snapshot.kind == "mcp" { snapshot.payload["config"].clone() } else { Value::Null }}),
         )
         .await
         .is_err()
@@ -342,6 +487,7 @@ async fn share_inner(state: ConnectionsState, body: ShareBody) -> Reply {
             "Connection was saved in the cloud but activation is incomplete.",
         );
     }
+    let _ = store.delete(&attempt_key).await;
     // A move, not two independent refreshers racing on a rotating OAuth token.
     let removed = if let Some(id) = body.key.strip_prefix("mcp:") {
         mcp.delete(id).await.is_ok()
@@ -369,9 +515,9 @@ async fn share_inner(state: ConnectionsState, body: ShareBody) -> Reply {
     finish_move(&state, &body, id).await
 }
 #[derive(Deserialize)]
-struct ExecuteBody {
-    connection: Snapshot,
-    request: Value,
+pub(crate) struct ExecuteBody {
+    pub connection: Snapshot,
+    pub request: Value,
 }
 async fn execute(
     State(state): State<ConnectionsState>,
@@ -402,7 +548,14 @@ fn runtime_authorized(state: &ConnectionsState, headers: &HeaderMap) -> bool {
             .and_then(|value| value.to_str().ok())
             == key.map(|key| format!("Bearer {}", key)).as_deref()
 }
-async fn execute_inner(mut state: ConnectionsState, body: ExecuteBody) -> anyhow::Result<Value> {
+pub(crate) async fn execute_inner(
+    mut state: ConnectionsState,
+    body: ExecuteBody,
+) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        validate(&body.connection).is_ok(),
+        "Invalid cloud connection."
+    );
     let dir = tempfile::tempdir()?;
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
@@ -524,18 +677,33 @@ async fn execute_native_request(
     Ok(serde_json::from_slice(&bytes)?)
 }
 fn allowed_path(id: &str, path: &str) -> bool {
-    path.starts_with(&format!("/{}/", id))
-        && !path.contains("..")
-        && !path.contains('%')
-        && !path.contains('\\')
-        && !path.contains('#')
-        && !path.contains("instance=")
-        && !path.starts_with(&format!("/{}/instances", id))
-        && !path.starts_with(&format!("/{}/test", id))
+    if !path.starts_with(&format!("/{}/", id)) || path.contains('\\') || path.contains('#') {
+        return false;
+    }
+    let Ok(url) = reqwest::Url::parse(&format!("http://localhost{}", path)) else {
+        return false;
+    };
+    let raw_path = path.split('?').next().unwrap_or("");
+    // Query values may be URL-encoded (dates, search text); account selection may not be overridden.
+    !raw_path.contains("..")
+        && !raw_path.contains('%')
+        && url.path().starts_with(&format!("/{}/", id))
+        && !url.path().starts_with(&format!("/{}/instances", id))
+        && !url.path().starts_with(&format!("/{}/test", id))
+        && !url.query_pairs().any(|(key, _)| key == "instance")
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn provider_queries_allow_encoded_values_but_not_account_overrides() {
+        assert!(allowed_path("slack", "/slack/proxy/search?q=hello%20world"));
+        assert!(!allowed_path(
+            "slack",
+            "/slack/proxy/search?%69nstance=another"
+        ));
+        assert!(!allowed_path("slack", "/slack/proxy/../instances"));
+    }
     #[test]
     fn execution_cannot_leave_its_provider_or_choose_another_account() {
         assert!(allowed_path("notion", "/notion/proxy/v1/search"));
@@ -579,12 +747,23 @@ mod tests {
         assert!(validate(&snapshot).is_err());
         snapshot.payload["oauth_token"] = json!({"access_token":"fixture"});
         assert!(validate(&snapshot).is_ok());
+        let public = snapshot.payload["config"]["url"].clone();
+        for url in [
+            "http://localhost:3000/mcp",
+            "http://127.0.0.1/mcp",
+            "http://192.168.1.3/mcp",
+            "http://[::1]/mcp",
+        ] {
+            snapshot.payload["config"]["url"] = json!(url);
+            assert!(validate(&snapshot).is_err());
+        }
+        snapshot.payload["config"]["url"] = public;
         snapshot.payload["config"]["header_names"] = json!(["Authorization"]);
         assert!(validate(&snapshot).is_err());
     }
 }
 
-fn jwt_subject(token: &str) -> Option<String> {
+pub(crate) fn jwt_subject(token: &str) -> Option<String> {
     let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(token.split('.').nth(1)?)
         .ok()?;
@@ -595,7 +774,7 @@ fn jwt_subject(token: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-async fn finish_move(state: &ConnectionsState, body: &ShareBody, id: &str) -> Reply {
+async fn finish_move(state: &CustodyContext, body: &ShareBody, id: &str) -> Reply {
     let store = state.secret_store.as_ref().unwrap();
     let pending = store
         .get_json::<Value>(&format!("cloud-move-pending:{}", id))
@@ -629,7 +808,11 @@ async fn finish_move(state: &ConnectionsState, body: &ShareBody, id: &str) -> Re
             .timeout(Duration::from_secs(20))
             .build()?;
         let response = client
-            .patch("https://screenpipe.com/api/enterprise/cloud-connections/import")
+            .patch(if body.license_id.is_empty() {
+                "https://screenpipe.com/api/connections/accounts"
+            } else {
+                "https://screenpipe.com/api/enterprise/cloud-connections/import"
+            })
             .bearer_auth(&body.token)
             .json(&json!({"license_id": body.license_id, "account_id": id, "local_removed": true}))
             .send()
@@ -640,6 +823,24 @@ async fn finish_move(state: &ConnectionsState, body: &ShareBody, id: &str) -> Re
     .await;
     if result.is_err() {
         return failure(StatusCode::SERVICE_UNAVAILABLE, "Cloud move saved. Refresh connections and select Finish cloud move to retry activation.");
+    }
+    if let Some(reference) = pending {
+        if store
+            .set_json(
+                &format!(
+                    "cloud-ref:{}",
+                    reference["local_key"].as_str().unwrap_or(&body.key)
+                ),
+                &reference,
+            )
+            .await
+            .is_err()
+        {
+            return failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Connection saved. Refresh connections to restore its desktop reference.",
+            );
+        }
     }
     let _ = state
         .secret_store

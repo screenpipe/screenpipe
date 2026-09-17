@@ -46,6 +46,7 @@ mod capture_exclusions;
 pub mod cli;
 pub mod cli_reminder;
 pub mod cloud_connections;
+pub mod cloud_connection_desktop;
 pub mod cloud_search;
 pub mod compaction_encoder;
 pub mod connections_api;

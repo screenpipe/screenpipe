@@ -1,78 +1,84 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 "use client";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { localFetch } from "@/lib/api";
 import { useSettings } from "@/lib/hooks/use-settings";
-import { screenpipeWebUrl } from "@/lib/web-url";
-import { notifyConnectionsUpdated } from "@/lib/connections-events";
+import { CONNECTIONS_UPDATED_EVENT, notifyConnectionsUpdated } from "@/lib/connections-events";
 
-type Connection = { key: string; name: string; instance?: string; cloud_available: boolean; rotating_credentials: boolean };
-/** The shared inventory comes from native adapters, so new providers need no UI allowlist. */
+type Connection = { key: string; name: string; instance?: string; cloud_available: boolean; pending?: boolean };
+/** One default for every supported adapter. Existing credentials require a separate migration. */
 export function CloudConnectionAccess() {
   const { settings } = useSettings();
+  const [storage, setStorage] = useState("cloud");
+  const [available, setAvailable] = useState(false);
   const [connections, setConnections] = useState<Connection[]>([]);
-  const [workspaces, setWorkspaces] = useState<{ id: string; org_name: string }[]>([]);
-  const [selected, setSelected] = useState("");
-  const [workspace, setWorkspace] = useState("");
+  const [expanded, setExpanded] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  async function load() {
-    setBusy(true);
+  const signedIn = Boolean(settings.user?.token);
+  const load = useCallback(async () => {
     try {
-      const token = settings.user?.token;
-      if (!token) throw new Error("Sign in before moving a connection to the cloud.");
-      const [local, remote] = await Promise.all([
-        localFetch("/connections/cloud"),
-        fetch(screenpipeWebUrl("/api/enterprise/cloud-connections/workspaces", "https://screenpipe.com"), { headers: { Authorization: `Bearer ${token}` } }),
-      ]);
-      if (!local.ok || !remote.ok) throw new Error("Could not load cloud access. Check your connection and app version.");
-      setConnections((await local.json()).connections);
-      setWorkspaces((await remote.json()).workspaces);
-      setMessage("");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Cloud access unavailable."); }
-    finally { setBusy(false); }
+      const response = await localFetch("/connections/cloud");
+      if (!response.ok) throw new Error();
+      const body = await response.json();
+      setStorage(body.storage || "cloud");
+      setAvailable(Boolean(body.cloud_available));
+      setConnections(body.connections || []);
+    } catch { setAvailable(false); }
+  }, []);
+  useEffect(() => {
+    void load();
+    window.addEventListener(CONNECTIONS_UPDATED_EVENT, load);
+    return () => window.removeEventListener(CONNECTIONS_UPDATED_EVENT, load);
+  }, [load, signedIn]);
+  async function setDefault(value: string) {
+    setBusy(true); setMessage("");
+    try {
+      const response = await localFetch("/connections/cloud/settings", {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({storage:value})});
+      if (!response.ok) throw new Error("Could not change the storage preference.");
+      setStorage(value); setConsent(false); setSelected([]);
+    } catch (error) {setMessage(error instanceof Error ? error.message : "Could not save the preference.");}
+    finally {setBusy(false);}
   }
-  async function move() {
-    setBusy(true);
+  async function migrate() {
+    if (!consent || !selected.length) return;
+    setBusy(true); setMessage("");
     try {
-      const result = await localFetch("/connections/cloud/share", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: selected, license_id: workspace, token: settings.user?.token, allow_cloud: consent }),
-      });
-      const receipt = await result.json();
-      if (!result.ok) throw new Error(receipt.error || "Could not move the connection.");
-      setConsent(false);
-      if (receipt.local_cleanup_required) {
-        setMessage("Saved in the cloud, but the local copy could not be removed. Disconnect it locally before enabling cloud tasks.");
-      } else {
-        setConnections(items => items.filter(item => item.key !== selected));
-        setSelected("");
-        notifyConnectionsUpdated();
-        setMessage("Moved to cloud storage. Choose which tasks may use it in the workspace’s Machines → Cloud connections page.");
+      for (const key of selected) {
+        const response = await localFetch("/connections/cloud/share", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key,allow_cloud:true})});
+        const result = await response.json();
+        if (!response.ok || !result.moved) throw new Error(result.error || "Connection setup is incomplete. Retry to finish it.");
+        setSelected(items => items.filter(item => item !== key));
       }
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Could not move the connection."); }
-    finally { setBusy(false); }
+      setConsent(false); setSelected([]); setExpanded(false);
+      setMessage("Connections are ready on this device and for cloud tasks. Choose which tasks may use them in your workspace.");
+      notifyConnectionsUpdated(); await load();
+    } catch (error) {setMessage(error instanceof Error ? error.message : "Could not finish connection setup."); await load();}
+    finally {setBusy(false);}
   }
-  const active = connections.find(item => item.key === selected);
-  const control = "border border-border bg-background p-2 text-xs disabled:opacity-50";
-  return <details className="border border-border p-3 space-y-3" onToggle={event => { if (event.currentTarget.open) void load(); }}>
-    <summary className="text-sm cursor-pointer">Cloud access</summary>
-    <p className="text-xs text-muted-foreground">Keep connections local, or move them to your workspace so cloud tasks can run while this computer is off. Cloud credentials are encrypted and accessible to the trusted workspace runner.</p>
-    <div className="flex flex-wrap gap-2">
-      <select aria-label="Connection to move" className={control} value={selected} onChange={event => { setSelected(event.target.value); setConsent(false); }}>
-        <option value="">Select a connection</option>
-        {connections.map(item => <option key={item.key} value={item.key}>{item.name}{item.instance ? ` (${item.instance})` : ""}{item.cloud_available ? "" : " · requires local environment"}</option>)}
-      </select>
-      <select aria-label="Cloud workspace" className={control} value={workspace} onChange={event => { setWorkspace(event.target.value); setConsent(false); }}>
-        <option value="">Select a workspace</option>
-        {workspaces.map(item => <option key={item.id} value={item.id}>{item.org_name}</option>)}
-      </select>
+  const existing = connections.filter(connection => connection.cloud_available);
+  const control = "rounded-md border border-border bg-background px-2 py-1 text-xs disabled:opacity-50";
+  return <section aria-label="Connection storage" className="mb-4 space-y-2 text-xs text-muted-foreground">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <p>{storage === "local" ? "New connections stay on this device." : signedIn && available ? "Connect once. Use your apps on this device and in cloud tasks." : signedIn ? "Cloud connections are unavailable. New connections stay on this device for now." : "Sign in to use new connections across devices and cloud tasks."}</p>
+      <label className="flex items-center gap-2">New connections
+        <select aria-label="Storage for new connections" className={control} value={storage} disabled={busy} onChange={event => void setDefault(event.target.value)}>
+          <option value="cloud">This device + cloud</option>
+          <option value="local">This device only</option>
+        </select>
+      </label>
     </div>
-    {active && !active.cloud_available && <p className="text-xs">This connection depends on local files, a desktop app, or a local process. Use a device-targeted task for this connection.</p>}
-    {active?.cloud_available && <label className="flex items-start gap-2 text-xs"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} />Move this connection to cloud storage and remove it from this device. Stop using other copies before moving OAuth accounts so only the cloud runner refreshes their tokens.</label>}
-    <button className={control} disabled={busy || !consent || !workspace || !active?.cloud_available} onClick={move}>Move to cloud</button>
-    <p role="status" className="text-xs">{message}</p>
-  </details>;
+    {storage === "cloud" && signedIn && available && <p>Supported connection credentials are encrypted in your account. Local apps and files stay on this device. Each cloud task needs its own access grant.</p>}
+    {storage === "cloud" && signedIn && available && existing.length > 0 && <button className="text-foreground underline underline-offset-4" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>Use existing connections in the cloud</button>}
+    {expanded && storage === "cloud" && available && <div className="space-y-3 rounded-lg border border-border p-3 text-foreground">
+      <p>These connections were saved locally. Select which credentials to move to your encrypted account storage. They will keep working on this device.</p>
+      {existing.map(connection => <label key={connection.key} className="flex items-center gap-2"><input type="checkbox" checked={selected.includes(connection.key)} disabled={busy} onChange={event => {setSelected(items => event.target.checked ? [...items,connection.key] : items.filter(key => key !== connection.key)); setConsent(false);}} />{connection.name}{connection.instance ? ` (${connection.instance})` : ""}</label>)}
+      <label className="flex items-start gap-2"><input type="checkbox" checked={consent} disabled={busy || !selected.length} onChange={event => setConsent(event.target.checked)} />Move the selected credentials to cloud storage. Stop other devices using old copies before migrating OAuth accounts.</label>
+      <button className={control} disabled={busy || !consent || !selected.length} onClick={() => void migrate()}>{busy ? "Setting up…" : "Enable cloud access"}</button>
+    </div>}
+    {message && <p role="status">{message}</p>}
+  </section>;
 }

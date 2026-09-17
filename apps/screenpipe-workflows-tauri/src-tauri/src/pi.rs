@@ -4269,7 +4269,10 @@ async fn foreground_connections_context(app: &AppHandle) -> String {
     let api = crate::recording::local_api_context_from_app(app);
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
     let store = open_secret_store_for_connection_context().await;
-    screenpipe_connect::connections::render_context(&data_dir, api.port, store.as_ref()).await
+    let store = store.map(std::sync::Arc::new);
+    let local = screenpipe_connect::connections::render_context(&data_dir, api.port, store.as_deref()).await;
+    let cloud = screenpipe_engine::cloud_connection_desktop::render_context(&screenpipe_engine::cloud_connections::CustodyContext {screenpipe_dir: data_dir, secret_store: store}, api.port).await;
+    format!("{}{}", local, cloud)
 }
 
 async fn attach_foreground_connections_context(

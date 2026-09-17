@@ -313,6 +313,14 @@ pub async fn run_pipe_now(
     let conn_ctx = join_context_blocks([
         connections::render_context(&screenpipe_dir, api_port, ss).await,
         mcp_servers::render_context(&screenpipe_dir, api_port).await,
+        crate::cloud_connection_desktop::render_context(
+            &crate::cloud_connections::CustodyContext {
+                screenpipe_dir: screenpipe_dir.clone(),
+                secret_store: secret_store.as_ref().map(|e| e.0.clone()),
+            },
+            api_port,
+        )
+        .await,
     ]);
     mgr.set_connections_context(conn_ctx);
 

@@ -31,6 +31,7 @@ pub type SharedMcpServerStore = Arc<McpServerStore>;
 pub struct McpServersState {
     pub store: SharedMcpServerStore,
     pub session_access: Option<McpSessionAccessRegistry>,
+    pub cloud: Option<crate::connections_api::ConnectionsState>,
 }
 
 #[derive(Deserialize)]
@@ -113,6 +114,57 @@ pub struct OAuthStartBody {
     pub enabled: bool,
 }
 
+async fn cloud_refs(state: &McpServersState) -> Vec<Value> {
+    let Some(cloud) = &state.cloud else {
+        return vec![];
+    };
+    crate::cloud_connection_desktop::references(&cloud.into())
+        .await
+        .into_iter()
+        .filter(|r| r["kind"] == "mcp")
+        .collect()
+}
+async fn cloud_ref(state: &McpServersState, id: &str) -> Option<Value> {
+    cloud_refs(state)
+        .await
+        .into_iter()
+        .find(|r| r["local_key"] == format!("mcp:{}", id))
+}
+fn cloud_config(reference: &Value) -> Value {
+    if reference["mcp_config"].is_object() {
+        return reference["mcp_config"].clone();
+    }
+    json!({"id":reference["local_key"].as_str().unwrap_or("").trim_start_matches("mcp:"),"name":reference["label"],"transport":"http","url":"","auth_mode":"headers","enabled":true,"created_at":0,"storage":"cloud"})
+}
+async fn complete_new(state: &McpServersState, id: &str, existed: bool) {
+    if let Some(cloud) = &state.cloud {
+        let _ = crate::cloud_connection_desktop::complete_new_connection(
+            cloud.into(),
+            &format!("mcp:{}", id),
+            existed,
+        )
+        .await;
+    }
+}
+async fn run_cloud(state: &McpServersState, id: &str, request: Value) -> Option<Response> {
+    let reference = cloud_ref(state, id).await?;
+    let cloud = state.cloud.clone()?;
+    let tools = matches!(
+        request["operation"].as_str(),
+        Some("tools") | Some("describe")
+    );
+    Some(
+        match crate::cloud_connection_desktop::run(cloud, &reference, request).await {
+            Ok(data) if tools => {
+                Json(json!({"data":{"count":data.as_array().map_or(0,Vec::len),"tools":data}}))
+                    .into_response()
+            }
+            Ok(data) => Json(json!({"data":data})).into_response(),
+            Err(_) => bad_gateway("Cloud connection unavailable. Check your network or reconnect."),
+        },
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -126,6 +178,20 @@ async fn list_servers(State(state): State<McpServersState>, headers: HeaderMap) 
             for server in list {
                 if mcp_server_allowed(&state, session.as_deref(), &server.id).await {
                     allowed.push(server);
+                }
+            }
+            let mut allowed: Vec<Value> = allowed
+                .into_iter()
+                .filter_map(|cfg| serde_json::to_value(cfg).ok())
+                .collect();
+            for reference in cloud_refs(&state).await {
+                let cfg = cloud_config(&reference);
+                if let Some(id) = cfg["id"].as_str() {
+                    if !allowed.iter().any(|row| row["id"] == id)
+                        && mcp_server_allowed(&state, session.as_deref(), id).await
+                    {
+                        allowed.push(cfg);
+                    }
                 }
             }
             Json(json!({ "data": allowed })).into_response()
@@ -142,6 +208,9 @@ async fn get_server(
 ) -> Response {
     if let Err(resp) = ensure_mcp_server_allowed(&state, &headers, &id).await {
         return resp;
+    }
+    if let Some(reference) = cloud_ref(&state, &id).await {
+        return Json(json!({"data":cloud_config(&reference)})).into_response();
     }
     match state.store.get(&id).await {
         Ok(Some(cfg)) => Json(json!({ "data": cfg })).into_response(),
@@ -185,6 +254,9 @@ async fn upsert_server(
         }
     }
 
+    if cloud_ref(&state, &id).await.is_some() {
+        return bad_request("Disconnect the cloud account before changing credentials.");
+    }
     let existing = match state.store.get(&id).await {
         Ok(e) => e,
         Err(e) => return internal_error(&e.to_string()),
@@ -251,13 +323,22 @@ async fn upsert_server(
     };
 
     match state.store.upsert(cfg, header_values).await {
-        Ok(saved) => Json(json!({ "data": saved })).into_response(),
+        Ok(saved) => {
+            complete_new(&state, &id, existing.is_some()).await;
+            Json(json!({ "data": saved })).into_response()
+        }
         Err(e) => bad_request(&e.to_string()),
     }
 }
 
 /// DELETE /mcp-servers/:id — remove a server.
 async fn delete_server(State(state): State<McpServersState>, Path(id): Path<String>) -> Response {
+    if let (Some(cloud), Some(reference)) = (&state.cloud, cloud_ref(&state, &id).await) {
+        return match crate::cloud_connection_desktop::disconnect(&cloud.into(), &reference).await {
+            Ok(()) => Json(json!({"success":true})).into_response(),
+            Err(_) => bad_gateway("Could not disconnect cloud account."),
+        };
+    }
     match state.store.delete(&id).await {
         Ok(()) => Json(json!({ "success": true })).into_response(),
         Err(e) => internal_error(&e.to_string()),
@@ -361,6 +442,9 @@ fn merge_headers(existing: &[McpHeader], supplied: &[McpHeader]) -> Vec<McpHeade
 
 /// POST /mcp-servers/:id/test — probe stored server.
 async fn test_server(State(state): State<McpServersState>, Path(id): Path<String>) -> Response {
+    if let Some(response) = run_cloud(&state, &id, json!({"operation":"tools"})).await {
+        return response;
+    }
     match state.store.probe_tools(&id).await {
         Ok(tools) => {
             Json(json!({ "data": { "tools": tools, "count": tools.len() } })).into_response()
@@ -401,6 +485,9 @@ async fn list_tools(
     if let Err(resp) = ensure_mcp_server_allowed(&state, &headers, &id).await {
         return resp;
     }
+    if let Some(response) = run_cloud(&state, &id, json!({"operation":"tools"})).await {
+        return response;
+    }
     match state.store.probe_tools(&id).await {
         Ok(tools) => Json(json!({ "data": { "tools": tools } })).into_response(),
         Err(e) => bad_gateway(&e.to_string()),
@@ -417,6 +504,15 @@ async fn call_tool(
     if let Err(resp) = ensure_mcp_server_allowed(&state, &headers, &id).await {
         return resp;
     }
+    if let Some(response) = run_cloud(
+        &state,
+        &id,
+        json!({"operation":"execute","tool":body.tool,"arguments":body.arguments}),
+    )
+    .await
+    {
+        return response;
+    }
     match state.store.call_tool(&id, &body.tool, body.arguments).await {
         Ok(result) => Json(json!({ "data": result })).into_response(),
         Err(e) => bad_gateway(&e.to_string()),
@@ -425,6 +521,12 @@ async fn call_tool(
 
 /// GET /mcp-servers/:id/oauth/status — whether a token is stored.
 async fn oauth_status(State(state): State<McpServersState>, Path(id): Path<String>) -> Response {
+    if cloud_ref(&state, &id).await.is_some() {
+        return Json(
+            json!({"data":{"connected":true,"storage":"cloud","has_refresh_token":false}}),
+        )
+        .into_response();
+    }
     match state.store.oauth_status(&id).await {
         Ok(status) => Json(json!({ "data": status })).into_response(),
         Err(e) => bad_request(&e.to_string()),
@@ -437,6 +539,9 @@ async fn oauth_start(
     Path(id): Path<String>,
     Json(body): Json<OAuthStartBody>,
 ) -> Response {
+    if cloud_ref(&state, &id).await.is_some() {
+        return bad_request("Disconnect the cloud account before reconnecting.");
+    }
     let redirect_uri = match mcp_oauth_redirect_uri(&id, body.app_scheme.as_deref()) {
         Ok(uri) => uri,
         Err(message) => return bad_request(message),
@@ -502,11 +607,15 @@ async fn oauth_callback(
             "screenpipe MCP OAuth failed: missing code",
         );
     };
+    let existed = !matches!(state.store.get(&id).await, Ok(None));
     match state.store.complete_oauth(state_value, code).await {
-        Ok(server_id) if server_id == id => html_response(
-            StatusCode::OK,
-            "screenpipe MCP OAuth connected. You can close this tab.",
-        ),
+        Ok(server_id) if server_id == id => {
+            complete_new(&state, &id, existed).await;
+            html_response(
+                StatusCode::OK,
+                "screenpipe MCP OAuth connected. You can close this tab.",
+            )
+        }
         Ok(_) => html_response(
             StatusCode::BAD_REQUEST,
             "screenpipe MCP OAuth failed: callback server mismatch",
@@ -523,6 +632,9 @@ async fn oauth_disconnect(
     State(state): State<McpServersState>,
     Path(id): Path<String>,
 ) -> Response {
+    if cloud_ref(&state, &id).await.is_some() {
+        return delete_server(State(state), Path(id)).await;
+    }
     match state.store.disconnect_oauth(&id).await {
         Ok(()) => Json(json!({ "success": true })).into_response(),
         Err(e) => bad_request(&e.to_string()),
@@ -739,9 +851,17 @@ pub fn router<S>(
 where
     S: Clone + Send + Sync + 'static,
 {
+    router_with_cloud(store, session_access, None)
+}
+pub(crate) fn router_with_cloud<S: Clone + Send + Sync + 'static>(
+    store: SharedMcpServerStore,
+    session_access: Option<McpSessionAccessRegistry>,
+    cloud: Option<crate::connections_api::ConnectionsState>,
+) -> Router<S> {
     let state = McpServersState {
         store,
         session_access,
+        cloud,
     };
     Router::new()
         .route("/", get(list_servers))
@@ -950,6 +1070,7 @@ mod tests {
         let state = McpServersState {
             store: Arc::new(McpServerStore::new(dir.path().to_path_buf(), None)),
             session_access: Some(registry),
+            cloud: None,
         };
 
         assert!(mcp_server_allowed(&state, Some("pipe:scoped"), "linear").await);
