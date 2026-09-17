@@ -236,7 +236,7 @@ describe("AiToolsCard", () => {
     fireEvent.click(await screen.findByRole("button", { name: /connect all/i }));
 
     expect(await screen.findByText("Gemini CLI")).toBeTruthy();
-    expect(screen.getByText("screen and audio history")).toBeTruthy();
+    expect(screen.getByText("Screen and audio history")).toBeTruthy();
     expect(screen.queryByText("MCP + skills")).toBeNull();
     await waitFor(() => expect(libMocks.connectAiToolTargets).toHaveBeenCalledWith(["gemini"]));
   });

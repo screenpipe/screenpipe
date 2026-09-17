@@ -102,7 +102,7 @@ export function StorageMigrationPrompt({ activity }: { activity: StorageMigratio
     <AlertDialog open={open} onOpenChange={(open) => { if (!open) dismiss(); }}>
       <AlertDialogContent data-testid="storage-migration-prompt">
         <AlertDialogHeader>
-          <AlertDialogTitle>{success ? "storage migration complete" : failure ? "migration needs attention" : status?.pending ? "finish migrating your history" : "upgrade your history storage"}</AlertDialogTitle>
+          <AlertDialogTitle>{success ? "Storage migration complete" : failure ? "Migration needs attention" : status?.pending ? "Finish migrating your history" : "Upgrade your history storage"}</AlertDialogTitle>
           <AlertDialogDescription>
             {success ? activity.message : <>
               {!failure && "Your history is in the older storage format. Upgrade it to reduce database size and keep it searchable. "}
@@ -118,9 +118,9 @@ export function StorageMigrationPrompt({ activity }: { activity: StorageMigratio
         {failure && <p className="text-sm text-destructive" role="alert">{failure}</p>}
         {!success && <p className="text-xs text-muted-foreground">{status?.pending && status.in_place ? "Your completed progress is saved. Migration continues from that progress when you retry." : "You can also start later in Settings → Storage."}</p>}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={submitting} onClick={dismiss}>{success ? "done" : "do later"}</AlertDialogCancel>
-          {status?.can_cancel && !success && <Button variant="outline" disabled={submitting} onClick={() => void run(true)}>use original database</Button>}
-          {status?.can_migrate && !success && <Button disabled={submitting} onClick={() => void run()}>{submitting ? "starting…" : failure ? "try again" : "start now"}</Button>}
+          <AlertDialogCancel disabled={submitting} onClick={dismiss}>{success ? "Done" : "Do later"}</AlertDialogCancel>
+          {status?.can_cancel && !success && <Button variant="outline" disabled={submitting} onClick={() => void run(true)}>Use original database</Button>}
+          {status?.can_migrate && !success && <Button disabled={submitting} onClick={() => void run()}>{submitting ? "Starting…" : failure ? "Try again" : "Start now"}</Button>}
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

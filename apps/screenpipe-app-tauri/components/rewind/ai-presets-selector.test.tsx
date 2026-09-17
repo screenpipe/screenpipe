@@ -149,10 +149,10 @@ function ControlledSelector() {
 
 async function createChatGptPreset() {
   fireEvent.click(screen.getByRole("combobox"));
-  fireEvent.click(await screen.findByText("create new preset"));
-  fireEvent.click(screen.getByRole("button", { name: /advanced/ }));
-  fireEvent.click(screen.getByRole("button", { name: "chatgpt" }));
-  fireEvent.change(screen.getByLabelText("name"), {
+  fireEvent.click(await screen.findByText("Create new preset"));
+  fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Chatgpt" }));
+  fireEvent.change(screen.getByLabelText("Name"), {
     target: { value: "new chat preset" },
   });
   fireEvent.click(screen.getByRole("button", { name: "continue" }));
@@ -175,36 +175,36 @@ describe("AIPresetsSelector controlled preset creation", () => {
     render(<AIPresetsSelector compact showModelOnly />);
 
     fireEvent.click(screen.getByRole("combobox"));
-    fireEvent.click(await screen.findByText("create new preset"));
+    fireEvent.click(await screen.findByText("Create new preset"));
 
     expect(
-      screen.getByRole("heading", { name: "choose your ai" }),
+      screen.getByRole("heading", { name: "Choose your AI" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Pi" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Codex" })).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Claude Code" }),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "chatgpt" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "claude API" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "ollama" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Chatgpt" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Claude API" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Ollama" })).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "coding agent" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "use an API key" }),
+      screen.queryByRole("button", { name: "Use an API key" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "use a command" }),
+      screen.queryByRole("button", { name: "Use a command" }),
     ).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("name")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/api key/i)).not.toBeInTheDocument();
-    expect(screen.getByText("choose one to continue")).toBeInTheDocument();
+    expect(screen.getByText("Choose one to continue")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "continue" })).toBeDisabled();
 
     const dialog = screen.getByRole("dialog", { name: "Create New Preset" });
     const primaryChoices = new Set([
-      "screenpipe",
+      "Screenpipe",
       "Codex",
       "Claude Code",
       "Cursor",
@@ -217,7 +217,7 @@ describe("AIPresetsSelector controlled preset creation", () => {
         .map((button) => button.textContent?.trim() || "")
         .filter((label) => primaryChoices.has(label)),
     ).toEqual([
-      "screenpipe",
+      "Screenpipe",
       "Codex",
       "Claude Code",
       "Cursor",
@@ -228,26 +228,26 @@ describe("AIPresetsSelector controlled preset creation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Pi" }));
     expect(screen.queryByText("how this works")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "screenpipe" }));
-    const nameInput = screen.getByLabelText("name");
+    fireEvent.click(screen.getByRole("button", { name: "Screenpipe" }));
+    const nameInput = screen.getByLabelText("Name");
     expect(nameInput).toBeEnabled();
     fireEvent.change(nameInput, { target: { value: "my claude preset" } });
     expect(nameInput).toHaveValue("my claude preset");
 
-    fireEvent.click(screen.getByRole("button", { name: /advanced/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
 
-    expect(screen.getByText("use a model directly")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "chatgpt" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "claude API" })).toBeInTheDocument();
+    expect(screen.getByText("Use a model directly")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Chatgpt" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Claude API" })).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "ollama" }).querySelector("img"),
+      screen.getByRole("button", { name: "Ollama" }).querySelector("img"),
     ).toHaveAttribute("src", "/images/ollama.png");
     expect(
-      screen.getByRole("button", { name: "use an API key" }),
+      screen.getByRole("button", { name: "Use an API key" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("connect another agent")).toBeInTheDocument();
+    expect(screen.getByText("Connect another agent")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "use a command" }),
+      screen.getByRole("button", { name: "Use a command" }),
     ).toBeInTheDocument();
   });
 
@@ -387,7 +387,7 @@ describe("AIPresetsSelector controlled preset creation", () => {
 
     const trigger = screen.getByRole("combobox");
     expect(trigger).toHaveTextContent("screenpipe/Auto");
-    expect(trigger).not.toHaveTextContent("recommended");
+    expect(trigger).not.toHaveTextContent("Recommended");
   });
 });
 

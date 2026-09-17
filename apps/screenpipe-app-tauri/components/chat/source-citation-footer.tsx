@@ -181,7 +181,7 @@ function SourceCitationRow({
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="truncate font-medium text-foreground/80">{citation.title}</span>
-          <span className="shrink-0 rounded border border-border/50 px-1 py-0.5 text-[10px] font-medium uppercase leading-none text-muted-foreground/75">
+          <span className="shrink-0 rounded border border-border/50 px-1 py-0.5 text-[10px] font-medium normal-case leading-none text-muted-foreground/75">
             {kindLabel}
           </span>
           {canOpen && <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground/70" />}
@@ -210,11 +210,11 @@ function SourceCitationRow({
       data-testid={canPreview ? "source-citation-file" : undefined}
       title={
         canSearch
-          ? "open in search"
+          ? "Open in search"
           : canJump
-            ? "open in timeline"
+            ? "Open in timeline"
             : canPreview
-              ? "open in preview"
+              ? "Open in preview"
               : undefined
       }
       onClick={() => {

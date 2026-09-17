@@ -25,7 +25,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
 }) {
   const shortcuts = useSidebarShortcuts();
   const [open, setOpen] = useState(false);
-  const [state, setState] = useState<AssistantState>(() => ({ ...emptyAssistantState(), mode: headerToggle ? "sidebar" : "floating" }));
+  const [state, setState] = useState<AssistantState>(emptyAssistantState);
   const useHeaderToggle = headerToggle && state.mode === "sidebar";
   const launcherLabel = headerToggle ? "Open chat" : "Ask Screenpipe";
   const stateRef = useRef(state);
@@ -62,6 +62,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
   const loadInFlight = useRef(false);
   const conversation = state.conversations.find((c) => c.id === state.activeId)!;
   const feedbackContext = conversation.feedbackContext;
+  const selectedSop = useRef<string | null>(null);
   const width = Number.isFinite(state.sidebarWidth) ? Math.max(340, Math.min(560, state.sidebarWidth!)) : 420;
 
   const persist = useCallback(async (snapshot: AssistantState) => {
@@ -94,11 +95,22 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
     finally { loadInFlight.current = false; }
   }, [platform]);
 
-  useEffect(() => { if (open && !loadedRef.current && !loadError) void restore(); }, [open, restore, loadError]);
+  useEffect(() => { if (active && !loadedRef.current && !loadError) void restore(); }, [active, restore, loadError]);
+  useEffect(() => {
+    if (context.purpose !== "sop") { selectedSop.current = null; return; }
+    if (!loaded || busy || selectedSop.current === context.key) return;
+    selectedSop.current = context.key;
+    // Keep existing feedback and ordinary drafts separate from SOP edits.
+    const existing = [...stateRef.current.conversations].reverse().find(c =>
+      !c.feedbackContext && (c.pageKey === context.key || c.messages.some(m => m.context?.key === context.key)));
+    const next = existing ?? { ...newAssistantConversation(), pageKey: context.key };
+    update(s => ({ ...s, activeId: next.id, conversations: existing ? s.conversations : [...s.conversations, next] }));
+    setError(""); setHistoryOpen(false);
+  }, [context.key, context.purpose, loaded, busy, update]);
   useEffect(() => { onDockChange(open && state.mode === "sidebar"); }, [open, state.mode, onDockChange]);
   useEffect(() => { onWidthChange?.(width); }, [width, onWidthChange]);
   useEffect(() => { onOpenChange?.(open); }, [open, onOpenChange]);
-  useEffect(() => { onModeChange?.(state.mode); }, [state.mode, onModeChange]);
+  useEffect(() => { if (loaded || loadError) onModeChange?.(state.mode); }, [state.mode, loaded, loadError, onModeChange]);
   useEffect(() => { if (open && loaded) (historyOpen ? historyInput.current : input.current)?.focus(); }, [open, loaded, historyOpen]);
   useEffect(() => {
     if (displayOpen) displayMenu.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
@@ -255,7 +267,9 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
 
   const lastUser = [...conversation.messages].reverse().find((message) => message.role === "user");
   const lastAnswer = conversation.messages.at(-1);
-  const suggestions = context.workflow
+  const suggestions = context.purpose === "sop"
+    ? ["Make this SOP shorter", "Make the steps easier to follow"]
+    : context.workflow
     ? ["Summarize this workflow", "Find recent examples in my memory"]
     : ["What did I work on yesterday?", "Find a conversation I had this week"];
   const history = [...state.conversations].reverse().filter((item) =>
@@ -274,14 +288,14 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
     requestAnimationFrame(() => input.current?.focus());
   }
   function newConversation() {
-    const fresh = newAssistantConversation();
+    const fresh = { ...newAssistantConversation(), ...(context.purpose === "sop" ? { pageKey: context.key } : {}) };
     update((current) => ({ ...current, activeId: fresh.id, conversations: [...current.conversations, fresh] }));
     setHistoryOpen(false); setHistoryQuery(""); setError("");
     requestAnimationFrame(() => input.current?.focus());
   }
 
   return <>
-    {!open && !useHeaderToggle && <button ref={launcher} className={styles.launcher} onClick={() => setOpen(true)} title={`${launcherLabel} (${shortcuts.right.keys.join(" ")})`} aria-keyshortcuts={shortcuts.right.aria} aria-label={launcherLabel} aria-expanded={false}>
+    {!open && (loaded || loadError) && !useHeaderToggle && <button ref={launcher} className={styles.launcher} onClick={() => setOpen(true)} title={`${launcherLabel} (${shortcuts.right.keys.join(" ")})`} aria-keyshortcuts={shortcuts.right.aria} aria-label={launcherLabel} aria-expanded={false}>
       <MessageCircle size={20} strokeWidth={1.65} /><span>{launcherLabel}<kbd>{shortcuts.right.keys.join(" ")}</kbd></span>{busy && <i aria-label="Answer in progress" />}
     </button>}
     <aside id="workflows-assistant" ref={panel} hidden={!open} className={[styles.panel, state.mode === "sidebar" ? styles.docked : styles.floating].join(" ")}
@@ -334,7 +348,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
           {!history.length && <p>{historyQuery ? "No matching conversations." : "Your conversations will appear here."}</p>}
         </div> : loaded && <>
           {!conversation.messages.length && <div className={styles.empty}>
-            <h2>{feedbackContext ? "What should change?" : context.workflow ? "Ask about this workflow" : "Search your memory"}</h2>
+            <h2>{feedbackContext ? "What should change?" : context.purpose === "sop" ? "Edit this SOP" : context.workflow ? "Ask about this workflow" : "Search your memory"}</h2>
             {!feedbackContext && <div>{suggestions.map((question) => <button key={question} onClick={() => void send(question)}><Search size={15} /><span>{question}</span><ArrowUp size={13} /></button>)}</div>}
           </div>}
           {conversation.messages.map((message) => <article key={message.id} className={message.role === "user" ? styles.user : styles.assistant} aria-label={message.role === "user" ? "Your question" : "Screenpipe answer"}>
@@ -360,7 +374,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
       {saveError && <div className={styles.saveError} role="alert">Couldn’t save this conversation.<button onClick={() => void persist(stateRef.current).catch(() => {})}>Retry save</button></div>}
       {!historyOpen && <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(conversation.draft); }}>
         {feedbackContext ? <span className={styles.context}><span className={styles.contextDot} /><span>{feedbackContext.title}</span></span> : <button type="button" className={styles.context} aria-pressed={includeContext} title={includeContext ? "Remove current page from the next message" : "Include current page in the next message"} onClick={() => setIncludeContext(!includeContext)}>{includeContext ? <><span className={styles.contextDot} /><span>{context.title}</span><X size={12} /></> : <><Plus size={13} /><span>Add current page</span></>}</button>}
-        <ComposerTextArea ref={input} aria-label="Ask Screenpipe" placeholder={feedbackContext ? platform.learnsFromFeedback ? "Share feedback to refine this workflow…" : "Answer a question or share feedback…" : includeContext && context.workflow ? "Ask about this workflow…" : "Ask or find anything…"} rows={1}
+        <ComposerTextArea ref={input} aria-label="Ask Screenpipe" placeholder={feedbackContext ? platform.learnsFromFeedback ? "Share feedback to refine this workflow…" : "Answer a question or share feedback…" : includeContext && context.purpose === "sop" ? "Ask Screenpipe to edit this SOP…" : includeContext && context.workflow ? "Ask about this workflow…" : "Ask or find anything…"} rows={1}
           value={conversation.draft} maxLength={8000} disabled={!loaded} onChange={(event) => update((current) => ({
             ...current, conversations: current.conversations.map((item) => item.id === current.activeId ? { ...item, draft: event.target.value } : item),
           }))} onSend={() => void send(conversation.draft)} />

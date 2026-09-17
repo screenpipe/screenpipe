@@ -549,7 +549,7 @@ describe("UpgradeQuotaBanner", () => {
     renderBanner();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "dismiss AI usage notice" }),
+      screen.getByRole("button", { name: "Dismiss AI usage notice" }),
     );
     expect(mocks.clearQuotaUpgrade).toHaveBeenCalledOnce();
   });

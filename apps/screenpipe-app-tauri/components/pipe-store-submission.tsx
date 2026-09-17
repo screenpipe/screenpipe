@@ -36,7 +36,7 @@ export function PipeStoreSubmissionDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>submit your scheduled task</DialogTitle>
+          <DialogTitle>Submit your scheduled task</DialogTitle>
           <DialogDescription>
             Store publishing is curated
           </DialogDescription>
@@ -46,7 +46,7 @@ export function PipeStoreSubmissionDialog({
           <div className="border border-border bg-muted/30 p-4 space-y-2">
             <div className="flex items-center gap-2 text-sm font-medium">
               <Mail className="h-4 w-4" />
-              email {PIPE_STORE_SUBMISSION_EMAIL}
+              Email {PIPE_STORE_SUBMISSION_EMAIL}
             </div>
             <p className="text-xs leading-relaxed text-muted-foreground">
               We review every scheduled task before it appears in the Store. Send a
@@ -57,7 +57,7 @@ export function PipeStoreSubmissionDialog({
 
           {defaultPipe ? (
             <div className="text-xs text-muted-foreground">
-              selected scheduled task: <span className="font-medium text-foreground">{defaultPipe}</span>
+              Selected scheduled task: <span className="font-medium text-foreground">{defaultPipe}</span>
             </div>
           ) : null}
 

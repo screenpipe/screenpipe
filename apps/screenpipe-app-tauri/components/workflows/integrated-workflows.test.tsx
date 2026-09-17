@@ -25,7 +25,7 @@ it("renders the native recording dot and opens device controls in Workflows", as
     <RecordingStatus devices={[{ name: "Display 1", fullName: "Display 1", kind: "monitor", active: true, id: 1 }]}
       onDevicesChange={vi.fn()} meetingActive={false} onPauseRecording={vi.fn()} />
   } />);
-  fireEvent.click(await screen.findByRole("button", { name: "recording" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Recording" }));
   expect(await screen.findByTestId("recording-status-popover")).toBeVisible();
   expect(screen.getByText("Display 1")).toBeVisible();
   expect(screen.getByRole("button", { name: "pause all recording" })).toBeVisible();

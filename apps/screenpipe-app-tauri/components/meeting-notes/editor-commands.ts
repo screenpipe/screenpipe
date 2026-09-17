@@ -35,8 +35,8 @@ export interface SlashCommandItem {
 export const SLASH_COMMANDS: SlashCommandItem[] = [
   {
     id: "text",
-    label: "text",
-    hint: "plain paragraph",
+    label: "Text",
+    hint: "Plain paragraph",
     keywords: ["paragraph", "plain", "p"],
     icon: Pilcrow,
     run: (editor, range) =>
@@ -44,8 +44,8 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   },
   {
     id: "h1",
-    label: "heading 1",
-    hint: "large section",
+    label: "Heading 1",
+    hint: "Large section",
     keywords: ["heading", "h1", "title", "large"],
     icon: Heading1,
     run: (editor, range) =>
@@ -53,8 +53,8 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   },
   {
     id: "h2",
-    label: "heading 2",
-    hint: "medium section",
+    label: "Heading 2",
+    hint: "Medium section",
     keywords: ["heading", "h2", "subtitle", "medium"],
     icon: Heading2,
     run: (editor, range) =>
@@ -62,8 +62,8 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   },
   {
     id: "h3",
-    label: "heading 3",
-    hint: "small section",
+    label: "Heading 3",
+    hint: "Small section",
     keywords: ["heading", "h3", "small"],
     icon: Heading3,
     run: (editor, range) =>
@@ -71,8 +71,8 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   },
   {
     id: "bullet-list",
-    label: "bullet list",
-    hint: "unordered list",
+    label: "Bullet list",
+    hint: "Unordered list",
     keywords: ["bullet", "list", "unordered", "ul"],
     icon: List,
     run: (editor, range) =>
@@ -80,8 +80,8 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   },
   {
     id: "numbered-list",
-    label: "numbered list",
-    hint: "ordered list",
+    label: "Numbered list",
+    hint: "Ordered list",
     keywords: ["numbered", "list", "ordered", "ol"],
     icon: ListOrdered,
     run: (editor, range) =>
@@ -89,8 +89,8 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   },
   {
     id: "task-list",
-    label: "task list",
-    hint: "checkboxes",
+    label: "Task list",
+    hint: "Checkboxes",
     keywords: ["task", "todo", "checkbox", "check", "action"],
     icon: ListTodo,
     run: (editor, range) =>
@@ -98,8 +98,8 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   },
   {
     id: "quote",
-    label: "quote",
-    hint: "block quote",
+    label: "Quote",
+    hint: "Block quote",
     keywords: ["quote", "blockquote", "callout"],
     icon: TextQuote,
     run: (editor, range) =>
@@ -107,8 +107,8 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   },
   {
     id: "code-block",
-    label: "code block",
-    hint: "preformatted",
+    label: "Code block",
+    hint: "Preformatted",
     keywords: ["code", "pre", "block", "snippet"],
     icon: Code,
     run: (editor, range) =>
@@ -116,8 +116,8 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   },
   {
     id: "divider",
-    label: "divider",
-    hint: "horizontal rule",
+    label: "Divider",
+    hint: "Horizontal rule",
     keywords: ["divider", "horizontal", "rule", "line", "hr"],
     icon: Minus,
     run: (editor, range) =>

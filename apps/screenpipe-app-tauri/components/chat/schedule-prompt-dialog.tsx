@@ -163,8 +163,8 @@ export function SchedulePromptDialog({
         <div className="space-y-4 mt-2">
           {/* Preview */}
           <div className="p-2.5 rounded-lg bg-muted/30 border border-border/30">
-            <div className="text-[10px] text-muted-foreground/60 uppercase tracking-wider font-medium mb-1">
-              prompt preview
+            <div className="text-[10px] text-muted-foreground/60 normal-case tracking-wider font-medium mb-1">
+              Prompt preview
             </div>
             <div className="text-[11px] text-muted-foreground line-clamp-3">
               {originalPrompt.slice(0, 200)}
@@ -174,20 +174,20 @@ export function SchedulePromptDialog({
 
           {/* Name */}
           <div>
-            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">
+            <label className="text-[11px] font-medium text-muted-foreground normal-case tracking-wider mb-1.5 block">
               Task name
             </label>
             <Input
               value={pipeName}
               onChange={(e) => setPipeName(e.target.value)}
-              placeholder="e.g. daily-recap, standup-notes"
+              placeholder="E.g. daily-recap, standup-notes"
               className="h-9 text-[12px]"
             />
           </div>
 
           {/* Schedule */}
           <div>
-            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">
+            <label className="text-[11px] font-medium text-muted-foreground normal-case tracking-wider mb-1.5 block">
               Schedule
             </label>
             <div className="space-y-1">
@@ -221,7 +221,7 @@ export function SchedulePromptDialog({
                 <Input
                   value={customCron}
                   onChange={(e) => setCustomCron(e.target.value)}
-                  placeholder="e.g. 0 */2 * * * (every 2 hours)"
+                  placeholder="E.g. 0 */2 * * * (every 2 hours)"
                   className="h-8 text-[11px] mt-1"
                   autoFocus
                 />

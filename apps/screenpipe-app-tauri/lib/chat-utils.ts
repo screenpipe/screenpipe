@@ -532,7 +532,7 @@ function parseExplicitTimeRanges(input: string, now: Date): {
     return {
       start,
       end: new Date(startOfThisWeek.getTime() - 1),
-      label: "previous week",
+      label: "Previous week",
     };
   });
 
@@ -540,7 +540,7 @@ function parseExplicitTimeRanges(input: string, now: Date): {
     const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const end = new Date(now.getFullYear(), now.getMonth(), 1);
     end.setMilliseconds(-1);
-    return { start, end, label: "previous month" };
+    return { start, end, label: "Previous month" };
   });
 
   consume(new RegExp(`~(${MONTH_PATTERN})(\\d{4})\\b`, "gi"), (match) => {
@@ -779,7 +779,7 @@ export function parseMentions(input: string, options?: ParseMentionsOptions): Pa
     timeRanges.push({
       start: options.selectionRange.start,
       end: options.selectionRange.end,
-      label: "selected range",
+      label: "Selected range",
       sourceToken: "@selection",
     });
     cleanedInput = cleanedInput.replace(selectionPattern, "").trim();
@@ -792,7 +792,7 @@ export function parseMentions(input: string, options?: ParseMentionsOptions): Pa
       getRange: () => {
         const start = new Date(now);
         start.setHours(0, 0, 0, 0);
-        return { start, end: now, label: "today" };
+        return { start, end: now, label: "Today" };
       },
     },
     {
@@ -803,7 +803,7 @@ export function parseMentions(input: string, options?: ParseMentionsOptions): Pa
         start.setHours(0, 0, 0, 0);
         const end = new Date(start);
         end.setHours(23, 59, 59, 999);
-        return { start, end, label: "yesterday" };
+        return { start, end, label: "Yesterday" };
       },
     },
     {
@@ -812,7 +812,7 @@ export function parseMentions(input: string, options?: ParseMentionsOptions): Pa
         const start = new Date(now);
         start.setDate(start.getDate() - 7);
         start.setHours(0, 0, 0, 0);
-        return { start, end: now, label: "last week" };
+        return { start, end: now, label: "Last week" };
       },
     },
     {
@@ -822,14 +822,14 @@ export function parseMentions(input: string, options?: ParseMentionsOptions): Pa
         start.setHours(6, 0, 0, 0);
         const end = new Date(now);
         end.setHours(12, 0, 0, 0);
-        return { start, end: now < end ? now : end, label: "this morning" };
+        return { start, end: now < end ? now : end, label: "This morning" };
       },
     },
     {
       pattern: /@last[- ]?hour\b/gi,
       getRange: () => {
         const start = new Date(now.getTime() - 60 * 60 * 1000);
-        return { start, end: now, label: "last hour" };
+        return { start, end: now, label: "Last hour" };
       },
     },
   ];
@@ -1009,7 +1009,7 @@ export function buildChatMentionSuggestions(
     .map((item) => ({
       tag: `@chat:${item.id}`,
       label: item.title.trim() || "untitled",
-      description: "previous chat",
+      description: "Previous chat",
       category: "chat" as const,
       conversationId: item.id,
     }));
@@ -1051,15 +1051,15 @@ export function buildSkillMentionSuggestions(
 }
 
 export const TIME_RANGE_MENTION_SUGGESTIONS: MentionSuggestion[] = [
-  { tag: "~7days", description: "rolling past 7 days", category: "range" },
-  { tag: "~lastweek", description: "previous Monday–Sunday", category: "range" },
-  { tag: "~lastmonth", description: "previous calendar month", category: "range" },
-  { tag: "~april", description: "most recent April", category: "range" },
+  { tag: "~7days", description: "Rolling past 7 days", category: "range" },
+  { tag: "~lastweek", description: "Previous Monday–Sunday", category: "range" },
+  { tag: "~lastmonth", description: "Previous calendar month", category: "range" },
+  { tag: "~april", description: "Most recent April", category: "range" },
   { tag: "~april2025", description: "April 2025", category: "range" },
-  { tag: "~(03/04/2025)", description: "one day (DD/MM/YYYY)", category: "range" },
+  { tag: "~(03/04/2025)", description: "One day (DD/MM/YYYY)", category: "range" },
   {
     tag: "~(03/04/2025 - 06/07/2025)",
-    description: "inclusive range (DD/MM/YYYY)",
+    description: "Inclusive range (DD/MM/YYYY)",
     category: "range",
   },
 ];

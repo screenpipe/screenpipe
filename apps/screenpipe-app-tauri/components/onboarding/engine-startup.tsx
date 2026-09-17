@@ -737,14 +737,14 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
   };
 
   const progressSteps = [
-    { label: "engine", done: serverStarted, active: !serverStarted },
+    { label: "Engine", done: serverStarted, active: !serverStarted },
     {
-      label: "audio",
+      label: "Audio",
       done: audioReady,
       active: serverStarted && !audioReady,
     },
     {
-      label: "vision",
+      label: "Vision",
       done: visionReady,
       active: serverStarted && !visionReady && audioReady,
     },
@@ -764,9 +764,9 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
         transition={{ duration: 0.4 }}
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="w-12 h-12 mb-2" src="/128x128.png" alt="screenpipe" />
+        <img className="w-12 h-12 mb-2" src="/128x128.png" alt="Screenpipe" />
         <h1 className="font-mono text-base font-bold text-foreground">
-          screenpipe
+          Screenpipe
         </h1>
       </motion.div>
 
@@ -793,7 +793,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
             >
-              {bootPhase?.message ?? "starting engine..."}
+              {bootPhase?.message ?? "Starting engine..."}
             </motion.p>
           )}
         </AnimatePresence>
@@ -803,7 +803,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
             reports it via the boot-phase snapshot. */}
         {bootPhase?.cpuCompatMode && (
           <p className="font-mono text-[10px] text-muted-foreground/60 mt-2 max-w-[360px] text-center">
-            compatibility mode: this CPU lacks AVX2 — local whisper
+            Compatibility mode: this CPU lacks AVX2 — local whisper
             transcription is unavailable (cloud + parakeet engines still work)
           </p>
         )}
@@ -822,7 +822,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
               {spawnErrorKind === "port_conflict" ? (
                 <>
                   <p className="font-mono text-sm text-foreground text-center">
-                    port conflict — cannot start recording.
+                    Port conflict — cannot start recording.
                   </p>
                   <p className="font-mono text-[11px] text-muted-foreground text-center leading-relaxed break-words">
                     {spawnError}
@@ -855,7 +855,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
                       }}
                       className="font-mono text-xs h-8 px-3"
                     >
-                      retry
+                      Retry
                     </Button>
                     <Button
                       variant="outline"
@@ -863,7 +863,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
                       onClick={handleContinueWithoutRecording}
                       className="font-mono text-xs h-8 px-3"
                     >
-                      continue without recording
+                      Continue without recording
                     </Button>
                   </div>
                   <div className="flex items-center gap-3">
@@ -873,7 +873,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
                       onClick={openLogsFolder}
                       className="font-mono text-[10px] h-7 px-2"
                     >
-                      logs
+                      Logs
                     </Button>
                     <Button
                       variant="outline"
@@ -883,24 +883,24 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
                       }
                       className="font-mono text-[10px] h-7 px-2"
                     >
-                      <Calendar className="w-3 h-3 mr-1" /> help
+                      <Calendar className="w-3 h-3 mr-1" /> Help
                     </Button>
                   </div>
                 </>
               ) : spawnErrorKind === "permission" ? (
                 <>
                   <p className="font-mono text-sm text-foreground text-center">
-                    screen recording permission is required.
+                    Screen recording permission is required.
                   </p>
                   <p className="font-mono text-[11px] text-muted-foreground text-center leading-relaxed">
-                    macOS tracks this permission per app signature. if you
+                    MacOS tracks this permission per app signature. If you
                     switched between prod / beta / dev builds, your previous
-                    grant doesn&apos;t carry over — each bundle id has its own
+                    grant doesn&apos;t carry over — each bundle ID has its own
                     record.
                   </p>
                   {bundleId && (
                     <p className="font-mono text-[10px] text-muted-foreground/60 text-center">
-                      currently running as:{" "}
+                      Currently running as:{" "}
                       <span className="text-foreground/80">{bundleId}</span>
                     </p>
                   )}
@@ -912,7 +912,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
                       }
                       className="font-mono text-xs h-8 px-3"
                     >
-                      open system settings →
+                      Open system settings →
                     </Button>
                     <Button
                       variant="outline"
@@ -924,7 +924,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
                       {isResettingPerm ? (
                         <Loader className="w-3 h-3 animate-spin" />
                       ) : (
-                        "reset & re-request"
+                        "Reset & re-request"
                       )}
                     </Button>
                   </div>
@@ -934,21 +934,21 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
                     }
                     className="font-mono text-[10px] text-muted-foreground hover:text-foreground transition-colors underline underline-offset-4"
                   >
-                    troubleshooting guide ↗
+                    Troubleshooting guide ↗
                   </button>
                 </>
               ) : (
                 spawnError && (
                   <>
                     <p className="font-mono text-sm text-foreground text-center">
-                      engine failed to start.
+                      Engine failed to start.
                     </p>
                     <p className="font-mono text-[11px] text-muted-foreground text-center leading-relaxed break-words">
                       {spawnError}
                     </p>
                     {bundleId && (
                       <p className="font-mono text-[10px] text-muted-foreground/60 text-center">
-                        running as:{" "}
+                        Running as:{" "}
                         <span className="text-foreground/80">{bundleId}</span>
                       </p>
                     )}
@@ -960,7 +960,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
                 data-testid="onboarding-startup-skip"
                 className="font-mono text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-4"
               >
-                continue without recording →
+                Continue without recording →
               </button>
               <div className="flex items-center gap-3">
                 <Button
@@ -969,7 +969,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
                   onClick={openLogsFolder}
                   className="font-mono text-[10px] h-7 px-2"
                 >
-                  logs
+                  Logs
                 </Button>
                 <Button
                   variant="outline"
@@ -982,11 +982,11 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
                     <Loader className="w-3 h-3 animate-spin" />
                   ) : logsSent ? (
                     <>
-                      <Check className="w-3 h-3 mr-1" /> sent
+                      <Check className="w-3 h-3 mr-1" /> Sent
                     </>
                   ) : (
                     <>
-                      <Upload className="w-3 h-3 mr-1" /> send logs
+                      <Upload className="w-3 h-3 mr-1" /> Send logs
                     </>
                   )}
                 </Button>
@@ -998,7 +998,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
                   }
                   className="font-mono text-[10px] h-7 px-2"
                 >
-                  <Calendar className="w-3 h-3 mr-1" /> help
+                  <Calendar className="w-3 h-3 mr-1" /> Help
                 </Button>
               </div>
             </motion.div>

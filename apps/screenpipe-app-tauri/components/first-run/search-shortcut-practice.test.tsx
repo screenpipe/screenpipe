@@ -115,7 +115,7 @@ describe("first-run search shortcut practice", () => {
 
     expect(
       screen.getByTestId("first-run-search-shortcut-complete"),
-    ).toHaveTextContent("shortcut learned");
+    ).toHaveTextContent("Shortcut learned");
     expect(
       JSON.parse(
         window.localStorage.getItem(FIRST_RUN_SEARCH_SHORTCUT_STORAGE_KEY) ||
@@ -144,7 +144,7 @@ describe("first-run search shortcut practice", () => {
     expect(
       screen.getByTestId("first-run-search-shortcut-issue"),
     ).toHaveTextContent("search did not open");
-    fireEvent.click(screen.getByRole("button", { name: "change shortcut" }));
+    fireEvent.click(screen.getByRole("button", { name: "Change shortcut" }));
     expect(mocks.openSettingsWindow).toHaveBeenCalledWith("shortcuts");
   });
 

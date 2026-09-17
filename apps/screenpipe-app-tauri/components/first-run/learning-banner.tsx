@@ -25,7 +25,7 @@ function CapturedAppIcon({ app }: { app: FirstRunCapturedApp }) {
     <span
       title={app.name}
       data-testid={`first-run-captured-app-${app.name}`}
-      className="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden border border-border text-[10px] font-medium uppercase text-muted-foreground"
+      className="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden border border-border text-[10px] font-medium normal-case text-muted-foreground"
     >
       {failed ? (
         app.name.trim().charAt(0) || "?"
@@ -62,15 +62,15 @@ export function FirstRunReadyPanel({
       <div className="p-5">
         <div className="flex items-center gap-2">
           <span className="h-2 w-2 bg-signal" aria-hidden="true" />
-          <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-signal">
-            first result · ready
+          <span className="font-mono text-[9px] normal-case tracking-[0.2em] text-signal">
+            First result · ready
           </span>
         </div>
-        <h2 className="mt-3 font-mono text-base font-semibold lowercase text-foreground">
-          screenpipe learned enough to help
+        <h2 className="mt-3 font-mono text-base font-semibold normal-case text-foreground">
+          Screenpipe learned enough to help
         </h2>
         <p className="mt-2 max-w-xl text-[11px] leading-relaxed text-muted-foreground">
-          an evidence-backed summary of the apps and activity captured since
+          An evidence-backed summary of the apps and activity captured since
           setup is waiting in a new chat.
         </p>
         <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -80,7 +80,7 @@ export function FirstRunReadyPanel({
             data-testid="first-run-open-summary"
             onClick={onOpenSummary}
           >
-            open the summary
+            Open the summary
           </Button>
           <AgentHandoffPicker targets={handoffTargets} onPick={onPickAgent} />
         </div>
@@ -97,7 +97,7 @@ export function FirstRunReadyPanel({
 
       <div className="flex items-center justify-between gap-4 border-t border-border px-4 py-3">
         <p className="text-[10px] leading-relaxed text-muted-foreground">
-          this summary stays available in chat history.
+          This summary stays available in chat history.
         </p>
         <Button
           size="sm"
@@ -105,7 +105,7 @@ export function FirstRunReadyPanel({
           className="h-7 shrink-0 px-2 text-[9px]"
           onClick={onDismiss}
         >
-          this is ready
+          This is ready
         </Button>
       </div>
     </div>
@@ -122,15 +122,15 @@ export function FirstRunSetupReadyPanel({
       <div className="p-5">
         <div className="flex items-center gap-2">
           <span className="h-2 w-2 bg-signal" aria-hidden="true" />
-          <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-signal">
-            setup · ready
+          <span className="font-mono text-[9px] normal-case tracking-[0.2em] text-signal">
+            Setup · ready
           </span>
         </div>
-        <h2 className="mt-3 font-mono text-base font-semibold lowercase text-foreground">
-          screenpipe is ready
+        <h2 className="mt-3 font-mono text-base font-semibold normal-case text-foreground">
+          Screenpipe is ready
         </h2>
         <p className="mt-2 max-w-xl text-[11px] leading-relaxed text-muted-foreground">
-          there was not enough activity in this short setup window to write a
+          There was not enough activity in this short setup window to write a
           useful first summary. Screenpipe will keep recording in the
           background.
         </p>
@@ -138,7 +138,7 @@ export function FirstRunSetupReadyPanel({
 
       <div className="flex items-center justify-between gap-4 border-t border-border px-4 py-3">
         <p className="text-[10px] leading-relaxed text-muted-foreground">
-          ask about anything you see, say, or hear from now on.
+          Ask about anything you see, say, or hear from now on.
         </p>
         <Button
           size="sm"
@@ -147,7 +147,7 @@ export function FirstRunSetupReadyPanel({
           data-testid="first-run-setup-complete"
           onClick={onDismiss}
         >
-          this is ready
+          This is ready
         </Button>
       </div>
     </div>
@@ -351,14 +351,14 @@ export function TrialActivationSummaryExperience() {
             <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
           )}
         </div>
-        <h1 className="mt-7 text-2xl font-semibold lowercase">
+        <h1 className="mt-7 text-2xl font-semibold normal-case">
           {phase === "ready"
-            ? "your first summary is ready"
+            ? "Your first summary is ready"
             : phase === "empty"
-              ? "we need another try"
+              ? "We need another try"
               : phase === "writing"
-                ? "writing your first summary"
-                : "building your first summary"}
+                ? "Writing your first summary"
+                : "Building your first summary"}
         </h1>
         <p className="mx-auto mt-3 max-w-lg text-sm leading-relaxed text-muted-foreground">
           {phase === "empty"
@@ -369,7 +369,7 @@ export function TrialActivationSummaryExperience() {
         </p>
         {phase === "empty" ? (
           <Button className="mt-8 h-12 px-8 text-sm" onClick={() => void retry()}>
-            retry summary
+            Retry summary
           </Button>
         ) : (
           <Button
@@ -378,7 +378,7 @@ export function TrialActivationSummaryExperience() {
             onClick={() => void openSummary()}
             data-testid="trial-activation-view-summary"
           >
-            view summary
+            View summary
           </Button>
         )}
       </section>
@@ -409,7 +409,7 @@ export function TrialActivationUnlockPrompt({
           data-testid="trial-activation-start-trial"
           onClick={onStartTrial}
         >
-          start your 7-day free trial to unlock full access
+          Start your 7-day free trial to unlock full access
         </Button>
       </div>
     </div>

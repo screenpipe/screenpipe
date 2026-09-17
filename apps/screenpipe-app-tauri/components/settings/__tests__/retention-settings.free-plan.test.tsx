@@ -140,7 +140,7 @@ describe("RetentionSettings account-plan independence", () => {
 
     expect(
       screen.getByTestId("low-disk-recording-guard-copy"),
-    ).toHaveTextContent("when free space falls to 32.00 GB");
+    ).toHaveTextContent("When free space falls to 32.00 GB");
     expect(mocks.getLowDiskGuardConfig).toHaveBeenCalledOnce();
   });
 });

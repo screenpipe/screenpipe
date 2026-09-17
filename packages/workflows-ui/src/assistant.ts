@@ -4,7 +4,7 @@
 import type { WorkProfile, WorkflowMap } from "./model";
 
 export type AssistantContext = {
-  purpose?: "feedback";
+  purpose?: "feedback" | "sop";
   key: string;
   title: string;
   workflow?: WorkflowMap;
@@ -20,7 +20,7 @@ export type AssistantMessage = {
   status?: "stopped" | "error";
   feedbackSaved?: boolean;
 };
-export type AssistantConversation = { id: string; title: string; messages: AssistantMessage[]; draft: string; feedbackContext?: AssistantContext };
+export type AssistantConversation = { id: string; title: string; messages: AssistantMessage[]; draft: string; pageKey?: string; feedbackContext?: AssistantContext };
 export type AssistantState = {
   version: 1;
   mode: "floating" | "sidebar";

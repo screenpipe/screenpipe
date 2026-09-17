@@ -32,7 +32,7 @@ import { cn } from "@/lib/utils";
  */
 
 const FIELD_LABEL =
-  "block text-[10px] font-medium uppercase tracking-wide text-muted-foreground";
+  "block text-[10px] font-medium normal-case tracking-wide text-muted-foreground";
 
 const FIELD_CONTROL =
   "mt-1 h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground " +

@@ -74,7 +74,7 @@ describe("ComposioCard multi-account", () => {
       // no label, no email → numbered fallback
       expect(screen.getByText("account 3")).toBeTruthy();
     });
-    expect(screen.getByText("add another account")).toBeTruthy();
+    expect(screen.getByText("Add another account")).toBeTruthy();
     expect(screen.getByText("disconnect all")).toBeTruthy();
   });
 
@@ -89,7 +89,7 @@ describe("ComposioCard multi-account", () => {
       expect(screen.getByText(/Gmail connected/)).toBeTruthy();
     });
     // no multi-account affordances against an old server
-    expect(screen.queryByText("add another account")).toBeNull();
+    expect(screen.queryByText("Add another account")).toBeNull();
     expect(screen.getByText("disconnect")).toBeTruthy();
   });
 
@@ -109,7 +109,7 @@ describe("ComposioCard multi-account", () => {
     await waitFor(() => expect(screen.getByText("work")).toBeTruthy());
 
     mocks.fetch.mockResolvedValue({ ok: true, json: async () => ({ success: true }) });
-    fireEvent.click(screen.getAllByTitle("disconnect this account")[0]);
+    fireEvent.click(screen.getAllByTitle("Disconnect this account")[0]);
 
     await waitFor(() => {
       expect(screen.queryByText("work")).toBeNull();
@@ -137,8 +137,8 @@ describe("ComposioCard multi-account", () => {
     render(<ComposioCard toolkit="gmail" initialConnected />);
     await waitFor(() => expect(screen.getByText("personal@gmail.com")).toBeTruthy());
 
-    fireEvent.click(screen.getAllByTitle("edit label")[0]);
-    const input = screen.getByPlaceholderText("label — e.g. work") as HTMLInputElement;
+    fireEvent.click(screen.getAllByTitle("Edit label")[0]);
+    const input = screen.getByPlaceholderText("Label — e.g. work") as HTMLInputElement;
     // unlabeled account: input opens empty, email stays visible beside it
     expect(input.value).toBe("");
     expect(screen.getByText("personal@gmail.com")).toBeTruthy();

@@ -1,25 +1,25 @@
 ---
-title: "give AI memory of your screen"
-sidebarTitle: "ai memory"
+title: "Give AI memory of your screen"
+sidebarTitle: "AI memory"
 description: "Give Claude, Cursor, Ollama, and other LLMs persistent memory of everything on your screen so they can answer questions with full context."
 icon: "brain"
 ---
 
-screenpipe acts as a memory layer for AI — it gives LLMs context about what you've been doing on your computer.
+Screenpipe acts as a memory layer for AI — it gives LLMs context about what you've been doing on your computer.
 
-## why AI needs memory
+## Why AI needs memory
 
-LLMs are stateless — they don't know what you were working on 5 minutes ago. screenpipe bridges this by:
+LLMs are stateless — they don't know what you were working on 5 minutes ago. Screenpipe bridges this by:
 
-- capturing everything on your screen 24/7
-- extracting app text primarily via accessibility APIs, with OCR fallback for visual-only surfaces
-- making it searchable via REST API on `localhost:3030`
+- Capturing everything on your screen 24/7
+- Extracting app text primarily via accessibility APIs, with OCR fallback for visual-only surfaces
+- Making it searchable via REST API on `localhost:3030`
 
-## connect to AI
+## Connect to AI
 
 ### MCP (recommended)
 
-screenpipe has a built-in MCP server that works with Claude Desktop, Cursor, and other MCP-compatible tools:
+Screenpipe has a built-in MCP server that works with Claude Desktop, Cursor, and other MCP-compatible tools:
 
 ```json
 {
@@ -32,17 +32,17 @@ screenpipe has a built-in MCP server that works with Claude Desktop, Cursor, and
 }
 ```
 
-<Tip>or run `npx -y screenpipe@latest agent setup <target>` (`claude-desktop`, `cursor`, `claude-code`, `codex`, `openclaw`, `hermes`, `windsurf`) to install the screenpipe skills and register the MCP server in one command.</Tip>
+<Tip>Or run `npx -y screenpipe@latest agent setup <target>` (`claude-desktop`, `cursor`, `claude-code`, `codex`, `openclaw`, `hermes`, `windsurf`) to install the Screenpipe skills and register the MCP server in one command.</Tip>
 
-see [MCP server setup](/mcp-server) for details.
+See [MCP server setup](/mcp-server) for details.
 
-### scheduled tasks (scheduled agents)
+### Scheduled tasks (scheduled agents)
 
-[scheduled tasks](/scheduled-tasks) are AI agents that run on a schedule and act on your screen data automatically — like syncing to Obsidian, tracking time in Toggl, or sending daily summaries. spin one up from the CLI — `npx -y screenpipe@latest pipe install <url-or-path> && npx -y screenpipe@latest pipe enable <name>` (`bunx` / `bun x` work too) — or ask any connected agent to build one for you.
+[Scheduled tasks](/scheduled-tasks) are AI agents that run on a schedule and act on your screen data automatically — like syncing to Obsidian, tracking time in Toggl, or sending daily summaries. Spin one up from the CLI — `npx -y screenpipe@latest pipe install <url-or-path> && npx -y screenpipe@latest pipe enable <name>` (`bunx` / `bun x` work too) — or ask any connected agent to build one for you.
 
-### direct API
+### Direct API
 
-any tool that can make HTTP requests can query screenpipe:
+Any tool that can make HTTP requests can query Screenpipe:
 
 ```bash
 # get recent screen activity
@@ -52,35 +52,35 @@ curl "http://localhost:3030/search?content_type=all&limit=20"
 curl "http://localhost:3030/search?q=meeting+notes&app_name=Slack&limit=10"
 ```
 
-<Note>the local API needs no auth by default. if you've enabled API auth in settings, add `-H "Authorization: Bearer <your-api-key>"` to these requests.</Note>
+<Note>The local API needs no auth by default. If you've enabled API auth in settings, add `-H "Authorization: Bearer <your-api-key>"` to these requests.</Note>
 
-## use cases
+## Use cases
 
-| use case | how |
+| Use case | How |
 |----------|-----|
-| "what was I working on?" | search by time range |
-| "summarize today's meetings" | query audio transcriptions |
-| "find that code snippet" | search screen text |
+| "What was I working on?" | Search by time range |
+| "Summarize today's meetings" | Query audio transcriptions |
+| "Find that code snippet" | Search screen text |
 | "auto-track my time" | toggl-sync scheduled task |
-| "sync activity to notes" | obsidian-sync scheduled task |
+| "Sync activity to notes" | obsidian-sync scheduled task |
 
-## privacy-first
+## Privacy-first
 
-- all data stays on your device
-- use local LLMs (Ollama, LMStudio) for complete privacy
-- filter what gets captured in **settings → privacy** — ignore or include specific apps, windows, and URLs ([privacy filters](/privacy-filter))
-- no data sent to cloud unless you explicitly choose cloud providers
+- All data stays on your device
+- Use local LLMs (Ollama, LMStudio) for complete privacy
+- Filter what gets captured in **Settings → Privacy** — ignore or include specific apps, windows, and URLs ([privacy filters](/privacy-filter))
+- No data sent to cloud unless you explicitly choose cloud providers
 
-## next steps
+## Next steps
 
-- [build a second brain](/second-brain) — let your agent watch your activity and remember your workflows in the background
-- [set up MCP server](/mcp-server) — connect to Claude, Cursor
-- [set up scheduled tasks](/scheduled-tasks) — scheduled AI agents
+- [Build a second brain](/second-brain) — let your agent watch your activity and remember your workflows in the background
+- [Set up MCP server](/mcp-server) — connect to Claude, Cursor
+- [Set up scheduled tasks](/scheduled-tasks) — scheduled AI agents
 - [API reference](/cli-reference) — REST API search parameters and endpoints
-- [join our discord](https://discord.gg/screenpipe) — get help from the community
+- [Join our Discord](https://discord.gg/screenpipe) — get help from the community
 
-## get screenpipe
+## Get Screenpipe
 
-screenpipe gives your AI assistants memory of everything on your screen.
+Screenpipe gives your AI assistants memory of everything on your screen.
 
-[download screenpipe →](https://screenpi.pe/onboarding)
+[Download Screenpipe →](https://screenpi.pe/onboarding)

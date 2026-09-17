@@ -32,10 +32,10 @@ import { openExternalUrl } from "@/lib/open-external-url";
 import { UpgradeVignette } from "@/components/chat/standalone/upgrade-vignettes";
 
 const VALUE_CARDS = [
-  { scene: "pipes", title: "scheduled automations" },
-  { scene: "meeting", title: "meeting summaries" },
-  { scene: "timeline", title: "timeline recaps" },
-  { scene: "models", title: "premium models" },
+  { scene: "pipes", title: "Scheduled automations" },
+  { scene: "meeting", title: "Meeting summaries" },
+  { scene: "timeline", title: "Timeline recaps" },
+  { scene: "models", title: "Premium models" },
 ] as const;
 
 /** Stage 1 — quiet remaining-messages counter beside the model controls. */
@@ -59,7 +59,7 @@ export function FreePlanCounterChip() {
     <div className="mt-1 flex justify-end">
       <span
         data-testid="free-plan-counter-chip"
-        className="inline-flex items-center gap-1 border border-border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
+        className="inline-flex items-center gap-1 border border-border px-1.5 py-0.5 font-mono text-[10px] normal-case tracking-wide text-muted-foreground"
       >
         {usage.remaining} of {usage.limit_today} free messages left
       </span>
@@ -129,7 +129,7 @@ export function FreeUpgradeSheet() {
     <Dialog open onOpenChange={(open) => !open && close()}>
       <DialogContent data-testid="free-upgrade-sheet" className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>upgrade to keep going</DialogTitle>
+          <DialogTitle>Upgrade to keep going</DialogTitle>
           <DialogDescription>
             Free messages{resets ? ` reset ${resets}` : " reset daily"}.
             Upgrading unlocks:
@@ -139,7 +139,7 @@ export function FreeUpgradeSheet() {
           {VALUE_CARDS.map((card) => (
             <div key={card.scene} className="border border-border bg-background">
               <UpgradeVignette scene={card.scene} />
-              <div className="px-3 py-2 font-mono text-[10px] uppercase tracking-wide">
+              <div className="px-3 py-2 font-mono text-[10px] normal-case tracking-wide">
                 {card.title}
               </div>
             </div>
@@ -147,14 +147,14 @@ export function FreeUpgradeSheet() {
         </div>
         <div className="flex items-center gap-4">
           <span className="mr-auto text-[10px] text-muted-foreground">
-            cancel anytime
+            Cancel anytime
           </span>
           <button
             type="button"
             onClick={close}
-            className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground underline underline-offset-4 transition-colors hover:text-foreground"
+            className="font-mono text-[11px] normal-case tracking-wide text-muted-foreground underline underline-offset-4 transition-colors hover:text-foreground"
           >
-            not now
+            Not now
           </button>
           <Button
             type="button"

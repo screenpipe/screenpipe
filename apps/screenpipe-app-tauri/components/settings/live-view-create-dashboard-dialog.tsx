@@ -54,7 +54,7 @@ export function LiveViewCreateDashboardDialog({
       >
         <DialogHeader className="border-b border-border px-5 py-4 text-left">
           <DialogTitle className="flex items-center gap-2 text-base">
-            <LayoutDashboard className="h-4 w-4" /> new dashboard
+            <LayoutDashboard className="h-4 w-4" /> New dashboard
           </DialogTitle>
           <DialogDescription>
             Describe the outcome you want. AI will design the Blocks and connect
@@ -88,7 +88,7 @@ export function LiveViewCreateDashboardDialog({
             disabled={busy}
             onClick={onCreateBlank}
           >
-            start with a blank dashboard
+            Start with a blank dashboard
           </Button>
         </div>
       </DialogContent>

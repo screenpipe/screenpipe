@@ -1125,14 +1125,14 @@ function ArtifactPreviewTooltip({
               onError={() => removeUnavailableFrame(currentFrame.frame_id)}
             />
           ) : status === "unavailable" ? (
-            <div className="flex h-full items-center justify-center font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-              preview unavailable
+            <div className="flex h-full items-center justify-center font-mono text-[10px] normal-case tracking-wider text-muted-foreground">
+              Preview unavailable
             </div>
           ) : (
             <div className="relative h-full w-full">
               <Skeleton className="h-full w-full rounded-none" />
-              <span className="absolute inset-0 flex items-center justify-center font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                loading preview
+              <span className="absolute inset-0 flex items-center justify-center font-mono text-[10px] normal-case tracking-wider text-muted-foreground">
+                Loading preview
               </span>
             </div>
           )}
@@ -1149,7 +1149,7 @@ function ArtifactPreviewTooltip({
             ) : null}
           </div>
           {displayPreview ? (
-            <span className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            <span className="shrink-0 font-mono text-[10px] normal-case tracking-wider text-muted-foreground">
               {formatPreviewDuration(displayPreview)}
             </span>
           ) : null}
@@ -2005,7 +2005,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                   aria-label="AI preset"
                   className="h-9 w-[190px] max-w-[36vw] justify-start rounded-md text-xs"
                 >
-                  {reviewPreset.model || "auto"}
+                  {reviewPreset.model || "Auto"}
                 </Button>
               )}
               <Button
@@ -2140,7 +2140,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                   </p>
                   <Button
                     size="sm"
-                    className="mt-5 h-10 px-5 uppercase tracking-wide"
+                    className="mt-5 h-10 px-5 normal-case tracking-wide"
                     onClick={() => void enableActivities()}
                   >
                     {historyError ? "Try again" : "Enable activities"}
@@ -2201,7 +2201,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                           <button
                             type="button"
                             onClick={() => makeSkill(entry)}
-                            className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
+                            className="font-mono text-[10px] normal-case tracking-wider text-muted-foreground transition-colors hover:text-foreground"
                             aria-label={`Make skill from ${entry.title}`}
                           >
                             Make skill
@@ -2210,7 +2210,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                           <button
                             type="button"
                             onClick={() => askAboutActivity(entry)}
-                            className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
+                            className="font-mono text-[10px] normal-case tracking-wider text-muted-foreground transition-colors hover:text-foreground"
                             aria-label={`Chat about ${entry.title}`}
                           >
                             Chat
@@ -2244,7 +2244,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                 </p>
                 <Button
                   size="sm"
-                  className="mt-5 h-10 px-5 uppercase tracking-wide"
+                  className="mt-5 h-10 px-5 normal-case tracking-wide"
                   onClick={() => regenerateSelectedRange("empty_state")}
                 >
                   {historyError ? "Try again" : "Generate activities"}

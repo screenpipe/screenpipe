@@ -42,8 +42,8 @@ export const BUILTIN_COMPOSER_COMMANDS = [
   {
     id: "new-chat",
     invocation: "/new",
-    title: "new chat",
-    description: "start a new chat",
+    title: "New chat",
+    description: "Start a new chat",
     aliases: ["clear", "reset"],
     group: "chat",
     kind: "action",
@@ -55,8 +55,8 @@ export const BUILTIN_COMPOSER_COMMANDS = [
   {
     id: "stop",
     invocation: "/stop",
-    title: "stop response",
-    description: "stop the current response",
+    title: "Stop response",
+    description: "Stop the current response",
     aliases: ["cancel", "abort"],
     group: "chat",
     kind: "action",
@@ -68,8 +68,8 @@ export const BUILTIN_COMPOSER_COMMANDS = [
   {
     id: "inspector",
     invocation: "/inspector",
-    title: "inspector",
-    description: "toggle the inspector panel",
+    title: "Inspector",
+    description: "Toggle the inspector panel",
     aliases: ["sources", "trace"],
     group: "view",
     kind: "action",
@@ -81,8 +81,8 @@ export const BUILTIN_COMPOSER_COMMANDS = [
   {
     id: "pipes",
     invocation: "/pipes",
-    title: "automations",
-    description: "open automations",
+    title: "Automations",
+    description: "Open automations",
     aliases: ["automations", "schedules", "tasks"],
     group: "automation",
     kind: "action",

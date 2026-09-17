@@ -150,9 +150,9 @@ const LiveViewCanvas = dynamic(
     loading: () => (
       <div
         data-testid="live-view-canvas-loading"
-        className="flex min-h-[480px] items-center justify-center border border-border font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
+        className="flex min-h-[480px] items-center justify-center border border-border font-mono text-[10px] normal-case tracking-wide text-muted-foreground"
       >
-        loading process map
+        Loading process map
       </div>
     ),
   },
@@ -770,7 +770,7 @@ export function BrainOverview({
           if (canvasSaveErrorsRef.current.get(viewId) !== result.error) {
             canvasSaveErrorsRef.current.set(viewId, result.error);
             toast({
-              title: "canvas changes were not saved",
+              title: "Canvas changes were not saved",
               description: result.error,
               variant: "destructive",
             });
@@ -948,7 +948,7 @@ export function BrainOverview({
           setError(
             loadError instanceof Error
               ? loadError.message
-              : "failed to load Live Views",
+              : "Failed to load Live Views",
           );
         }
       } finally {
@@ -1410,7 +1410,7 @@ export function BrainOverview({
       onboardingRetrying
     ) {
       toast({
-        title: "setup could not resume",
+        title: "Setup could not resume",
         description:
           "Create or customize this Live View directly from Brain instead.",
         variant: "destructive",
@@ -1445,7 +1445,7 @@ export function BrainOverview({
           retryError instanceof Error ? retryError.name : "unknown",
       });
       toast({
-        title: "setup still needs attention",
+        title: "Setup still needs attention",
         description:
           retryError instanceof Error
             ? retryError.message
@@ -1607,7 +1607,7 @@ export function BrainOverview({
         dashboard_count: views.length,
       });
       toast({
-        title: "dashboard limit reached",
+        title: "Dashboard limit reached",
         description: `Delete a dashboard before creating another. You can keep up to ${MAX_DASHBOARDS}.`,
         variant: "destructive",
       });
@@ -1771,10 +1771,10 @@ export function BrainOverview({
             tone: "working",
             label:
               phase === "starting"
-                ? "starting"
+                ? "Starting"
                 : phase === "working"
-                  ? "drafting changes"
-                  : "preparing review",
+                  ? "Drafting changes"
+                  : "Preparing review",
           }),
       });
       if (!reference) {
@@ -1840,7 +1840,7 @@ export function BrainOverview({
             ).length
           : generated.blocks.length,
       });
-      setBuilderFeedback({ tone: "success", label: "changes ready to review" });
+      setBuilderFeedback({ tone: "success", label: "Changes ready to review" });
       builderFeedbackTimerRef.current = window.setTimeout(
         () => setBuilderFeedback(null),
         2_500,
@@ -1871,11 +1871,11 @@ export function BrainOverview({
         label:
           quota.kind === "daily"
             ? "AI usage limit reached"
-            : "could not update · try again",
+            : "Could not update · try again",
         detail: failureDetail,
       });
       toast({
-        title: "could not update the Live View",
+        title: "Could not update the Live View",
         description: failureDetail,
         variant: "destructive",
       });
@@ -2006,7 +2006,7 @@ export function BrainOverview({
         failure_type: analyticsErrorType(feedbackError),
       });
       toast({
-        title: "failed to save feedback",
+        title: "Failed to save feedback",
         description:
           feedbackError instanceof Error
             ? feedbackError.message
@@ -2068,7 +2068,7 @@ export function BrainOverview({
         failure_type: analyticsErrorType(actionError),
       });
       toast({
-        title: "could not update this item",
+        title: "Could not update this item",
         description:
           actionError instanceof Error
             ? actionError.message
@@ -2095,7 +2095,7 @@ export function BrainOverview({
       });
     } catch (handoffError) {
       toast({
-        title: "could not open the handoff",
+        title: "Could not open the handoff",
         description:
           handoffError instanceof Error
             ? handoffError.message
@@ -2111,7 +2111,7 @@ export function BrainOverview({
   ): Promise<boolean> => {
     if (!view || !selectedAiPreset) {
       toast({
-        title: "choose an AI model first",
+        title: "Choose an AI model first",
         description: "Add an AI preset in Settings, then try again.",
         variant: "destructive",
       });
@@ -2220,10 +2220,10 @@ export function BrainOverview({
       if (changedSlots.length > 0) {
         void refreshConnectedPipes(result.data, changedSlots, "card_ai_edit");
       }
-      toast({ title: "accepted changes applied" });
+      toast({ title: "Accepted changes applied" });
     } catch (applyError) {
       toast({
-        title: "could not apply accepted changes",
+        title: "Could not apply accepted changes",
         description:
           applyError instanceof Error ? applyError.message : String(applyError),
         variant: "destructive",
@@ -2287,7 +2287,7 @@ export function BrainOverview({
       setAiNote(null);
       setReplaceConfirmationOpen(false);
       toast({
-        title: creatingNew ? `${result.data.title} created` : "dashboard saved",
+        title: creatingNew ? `${result.data.title} created` : "Dashboard saved",
       });
       let slotsToRefresh: ViewSlot[] = [];
       if (refreshData) {
@@ -2337,7 +2337,7 @@ export function BrainOverview({
         failure_type: analyticsErrorType(saveError),
       });
       toast({
-        title: "failed to save Live View",
+        title: "Failed to save Live View",
         description:
           saveError instanceof Error ? saveError.message : String(saveError),
         variant: "destructive",
@@ -2414,7 +2414,7 @@ export function BrainOverview({
         ...liveViewAnalyticsProperties(result.data, views.length),
         action: "renamed",
       });
-      toast({ title: `renamed to ${result.data.title}` });
+      toast({ title: `Renamed to ${result.data.title}` });
     } catch (renameError) {
       posthog.capture("live_view_dashboard_action_failed", {
         analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
@@ -2422,7 +2422,7 @@ export function BrainOverview({
         failure_type: analyticsErrorType(renameError),
       });
       toast({
-        title: "could not rename dashboard",
+        title: "Could not rename dashboard",
         description:
           renameError instanceof Error
             ? renameError.message
@@ -2439,7 +2439,7 @@ export function BrainOverview({
     if (!view) return;
     if (views.length >= MAX_DASHBOARDS) {
       toast({
-        title: "dashboard limit reached",
+        title: "Dashboard limit reached",
         description: `Delete a dashboard before duplicating another. You can keep up to ${MAX_DASHBOARDS}.`,
         variant: "destructive",
       });
@@ -2507,7 +2507,7 @@ export function BrainOverview({
         failure_type: analyticsErrorType(duplicateError),
       });
       toast({
-        title: "could not duplicate dashboard",
+        title: "Could not duplicate dashboard",
         description:
           duplicateError instanceof Error
             ? duplicateError.message
@@ -2540,7 +2540,7 @@ export function BrainOverview({
         ...liveViewAnalyticsProperties(view, views.length),
         dashboard_count_after: nextViews.length,
       });
-      toast({ title: "dashboard deleted" });
+      toast({ title: "Dashboard deleted" });
     } catch (deleteError) {
       posthog.capture("live_view_dashboard_action_failed", {
         analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
@@ -2548,7 +2548,7 @@ export function BrainOverview({
         failure_type: analyticsErrorType(deleteError),
       });
       toast({
-        title: "could not delete dashboard",
+        title: "Could not delete dashboard",
         description:
           deleteError instanceof Error
             ? deleteError.message
@@ -2588,7 +2588,7 @@ export function BrainOverview({
         source: "undo",
         refresh_requested: true,
       });
-      toast({ title: "previous dashboard restored" });
+      toast({ title: "Previous dashboard restored" });
       void refreshConnectedPipes(result.data, undefined, "undo");
     } catch (restoreError) {
       posthog.capture("live_view_dashboard_action_failed", {
@@ -2597,7 +2597,7 @@ export function BrainOverview({
         failure_type: analyticsErrorType(restoreError),
       });
       toast({
-        title: "could not restore the previous dashboard",
+        title: "Could not restore the previous dashboard",
         description:
           restoreError instanceof Error
             ? restoreError.message
@@ -2643,7 +2643,7 @@ export function BrainOverview({
       )
     ) {
       toast({
-        title: "this dashboard uses a fixed period",
+        title: "This dashboard uses a fixed period",
         description:
           "Choose another dashboard or template for a different period.",
         variant: "destructive",
@@ -2670,7 +2670,7 @@ export function BrainOverview({
         previous_time_range: previousView.timeRange,
       });
       toast({
-        title: `showing ${getLiveViewTimeRangeOption(timeRange).label.toLowerCase()}`,
+        title: `Showing ${getLiveViewTimeRangeOption(timeRange).label.toLowerCase()}`,
       });
       void refreshConnectedPipes(result.data, undefined, "time_range");
     } catch (rangeError) {
@@ -2680,7 +2680,7 @@ export function BrainOverview({
         failure_type: analyticsErrorType(rangeError),
       });
       toast({
-        title: "could not change the time range",
+        title: "Could not change the time range",
         description:
           rangeError instanceof Error ? rangeError.message : String(rangeError),
         variant: "destructive",
@@ -2694,7 +2694,7 @@ export function BrainOverview({
   if (loading) {
     return (
       <div className="flex min-h-64 items-center justify-center text-sm text-muted-foreground">
-        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> loading Live Views
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading Live Views
       </div>
     );
   }
@@ -2704,7 +2704,7 @@ export function BrainOverview({
       <div className="flex min-h-64 flex-col items-center justify-center gap-3 border border-border text-center">
         <AlertCircle className="h-5 w-5 text-muted-foreground" />
         <div>
-          <p className="text-sm">failed to load Live Views</p>
+          <p className="text-sm">Failed to load Live Views</p>
           <p className="mt-1 text-xs text-muted-foreground">{error}</p>
         </div>
         <Button
@@ -2713,7 +2713,7 @@ export function BrainOverview({
           className="rounded-md"
           onClick={() => void load()}
         >
-          retry
+          Retry
         </Button>
       </div>
     );
@@ -2730,8 +2730,8 @@ export function BrainOverview({
           className="mx-auto flex min-h-full w-full max-w-5xl flex-col justify-center px-6 py-8"
         >
           <div className="mb-7 max-w-2xl">
-            <p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-              choose an outcome
+            <p className="font-mono text-[10px] normal-case tracking-wide text-muted-foreground">
+              Choose an outcome
             </p>
             <h2 className="mt-2 text-xl font-semibold tracking-tight">
               What should screenpipe keep updated for you?
@@ -2764,7 +2764,7 @@ export function BrainOverview({
               className="mt-4 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
               onClick={beginManualCreate}
             >
-              or start with a blank canvas
+              Or start with a blank canvas
             </button>
           </div>
         </div>
@@ -2812,7 +2812,7 @@ export function BrainOverview({
         >
           <div className="mb-5 flex flex-wrap items-start justify-between gap-4 border-b border-border pb-4">
             <div>
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              <p className="text-[10px] normal-case tracking-wide text-muted-foreground">
                 {templatePreview ? "Template preview" : "AI draft"}
               </p>
               <h2 className="text-lg font-semibold tracking-tight">
@@ -2835,7 +2835,7 @@ export function BrainOverview({
                   setAiNote(null);
                 }}
               >
-                discard
+                Discard
               </Button>
               {!templatePreview && (
                 <Button
@@ -2849,7 +2849,7 @@ export function BrainOverview({
                     setEditing(true);
                   }}
                 >
-                  edit manually
+                  Edit manually
                 </Button>
               )}
               <Button
@@ -2896,7 +2896,7 @@ export function BrainOverview({
               <div>
                 <label
                   htmlFor="preview-dashboard-name"
-                  className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+                  className="text-[10px] font-medium normal-case tracking-wide text-muted-foreground"
                 >
                   Dashboard name
                 </label>
@@ -2915,7 +2915,7 @@ export function BrainOverview({
                     <p>{templateReadiness?.explanation}</p>
                     <details className="mt-1 text-[11px]">
                       <summary className="cursor-pointer select-none hover:text-foreground">
-                        template starting points
+                        Template starting points
                       </summary>
                       <p className="mt-1 font-mono">
                         {templatePreview.pipes
@@ -2948,12 +2948,12 @@ export function BrainOverview({
                     onClick={() => setPreviewDestination("new")}
                   >
                     <span className="block text-xs font-medium">
-                      create new
+                      Create new
                     </span>
                     <span className="mt-1 block text-[11px] text-muted-foreground">
                       {dashboardLimitReached
                         ? `${MAX_DASHBOARDS} dashboard limit reached`
-                        : `keep “${view?.title}” unchanged`}
+                        : `Keep “${view?.title}” unchanged`}
                     </span>
                   </button>
                   <button
@@ -2969,13 +2969,13 @@ export function BrainOverview({
                   >
                     <span className="block text-xs font-medium">
                       {replacingBlankStarter
-                        ? "use this dashboard"
-                        : "replace current"}
+                        ? "Use this dashboard"
+                        : "Replace current"}
                     </span>
                     <span className="mt-1 block text-[11px] text-muted-foreground">
                       {replacingBlankStarter
-                        ? "turn the empty starter into this view"
-                        : "confirmation required"}
+                        ? "Turn the empty starter into this view"
+                        : "Confirmation required"}
                     </span>
                   </button>
                 </div>
@@ -3035,14 +3035,14 @@ export function BrainOverview({
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel disabled={saving}>cancel</AlertDialogCancel>
+              <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
               <AlertDialogAction
                 data-testid="overview-confirm-replace"
                 variant="destructive"
                 disabled={saving}
                 onClick={() => void applyPreview()}
               >
-                replace dashboard
+                Replace dashboard
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
@@ -3182,7 +3182,7 @@ export function BrainOverview({
                 variant="outline"
                 size="icon"
                 className="h-9 w-9 shrink-0 rounded-md"
-                aria-label="undo last Live View change"
+                aria-label="Undo last Live View change"
                 title={`Undo last Live View change (${isMac ? "⌘Z" : "Ctrl+Z"})`}
                 disabled={saving}
                 onClick={() => void restorePreviousView()}
@@ -3225,8 +3225,8 @@ export function BrainOverview({
                 variant="outline"
                 size="icon"
                 className="h-9 w-9 shrink-0 rounded-md"
-                aria-label={refreshIsActive ? "loading data" : "refresh data"}
-                title={refreshIsActive ? "loading data" : "refresh data"}
+                aria-label={refreshIsActive ? "Loading data" : "Refresh data"}
+                title={refreshIsActive ? "Loading data" : "Refresh data"}
                 disabled={dashboardBusy}
                 onClick={() => void refreshConnectedPipes(view)}
               >
@@ -3246,7 +3246,7 @@ export function BrainOverview({
                 disabled={dashboardBusy}
                 onClick={() => setShareOpen(true)}
               >
-                <Send className="mr-1.5 h-3.5 w-3.5" /> send
+                <Send className="mr-1.5 h-3.5 w-3.5" /> Send
               </Button>
             )}
           </div>
@@ -3260,12 +3260,12 @@ export function BrainOverview({
             <div className="min-w-0 flex-1">
               <p className="text-xs font-medium">
                 {freshness.dataOutsideRange
-                  ? `showing data older than ${getLiveViewTimeRangeOption(view.timeRange).label.toLowerCase()}`
+                  ? `Showing data older than ${getLiveViewTimeRangeOption(view.timeRange).label.toLowerCase()}`
                   : stalledSourceCount > 0
-                    ? "this view will not update by itself"
+                    ? "This view will not update by itself"
                     : freshness.waiting > 0
-                      ? "some data is missing"
-                      : "some sources have not checked recently"}
+                      ? "Some data is missing"
+                      : "Some sources have not checked recently"}
               </p>
               <p
                 data-testid="overview-freshness"
@@ -3291,7 +3291,7 @@ export function BrainOverview({
                 disabled={dashboardBusy}
                 onClick={() => void refreshConnectedPipes(view)}
               >
-                refresh data
+                Refresh data
               </Button>
             )}
           </div>
@@ -3327,13 +3327,13 @@ export function BrainOverview({
         )}
         {canvasSaving && (
           <p className="sr-only" role="status">
-            saving canvas
+            Saving canvas
           </p>
         )}
         {templateGalleryOpen && !onboardingColdStart && (
           <div className="relative mb-5 max-h-[min(50vh,32rem)] shrink-0 overflow-y-auto border border-border p-4 pr-12">
             <Button
-              aria-label="close templates"
+              aria-label="Close templates"
               variant="ghost"
               size="icon"
               className="absolute right-2 top-2 h-8 w-8 rounded-md"
@@ -3381,7 +3381,7 @@ export function BrainOverview({
                 title="Accept and save every proposed change"
                 onClick={() => void acceptAllAiProposals()}
               >
-                <Check className="mr-1 h-3 w-3" /> accept all
+                <Check className="mr-1 h-3 w-3" /> Accept all
               </Button>
               <Button
                 data-testid="live-view-ai-reject-all"
@@ -3392,7 +3392,7 @@ export function BrainOverview({
                 title="Reject and discard every proposed change"
                 onClick={discardAiProposals}
               >
-                <X className="mr-1 h-3 w-3" /> reject all
+                <X className="mr-1 h-3 w-3" /> Reject all
               </Button>
               <Button
                 data-testid="live-view-ai-apply-accepted"
@@ -3406,14 +3406,14 @@ export function BrainOverview({
                 }
                 onClick={() => void applyAcceptedAiProposals()}
               >
-                apply accepted
+                Apply accepted
               </Button>
               <Button
                 data-testid="live-view-ai-discard"
                 size="icon"
                 variant="ghost"
                 className="h-7 w-7 rounded-md"
-                aria-label="discard all AI changes"
+                aria-label="Discard all AI changes"
                 onClick={discardAiProposals}
               >
                 <X className="h-3 w-3" />
@@ -3470,8 +3470,8 @@ export function BrainOverview({
           >
             <div className="mx-auto w-full max-w-5xl px-6 pb-32 pt-8">
               <div className="mb-7 max-w-2xl">
-                <p className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-                  choose an outcome
+                <p className="font-mono text-[10px] normal-case tracking-wide text-muted-foreground">
+                  Choose an outcome
                 </p>
                 <h2 className="mt-2 text-xl font-semibold tracking-tight">
                   What should screenpipe keep updated for you?
@@ -3508,7 +3508,7 @@ export function BrainOverview({
                   className="mt-4 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
                   onClick={beginEdit}
                 >
-                  or start with a blank canvas
+                  Or start with a blank canvas
                 </button>
               </div>
             </div>
@@ -3516,9 +3516,9 @@ export function BrainOverview({
         ) : applyingAiProposals ? (
           <div
             data-testid="live-view-canvas-applying"
-            className="flex min-h-0 flex-1 items-center justify-center border border-border font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
+            className="flex min-h-0 flex-1 items-center justify-center border border-border font-mono text-[10px] normal-case tracking-wide text-muted-foreground"
           >
-            applying changes
+            Applying changes
           </div>
         ) : canvasReady && canvasDocument ? (
           <LiveViewCanvas
@@ -3546,9 +3546,9 @@ export function BrainOverview({
         ) : canvasLoading ? (
           <div
             data-testid="live-view-canvas-loading"
-            className="flex min-h-0 flex-1 items-center justify-center border border-border font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
+            className="flex min-h-0 flex-1 items-center justify-center border border-border font-mono text-[10px] normal-case tracking-wide text-muted-foreground"
           >
-            loading process map
+            Loading process map
           </div>
         ) : null}
       </div>

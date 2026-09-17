@@ -1,19 +1,19 @@
 ---
-title: "obsidian - sync screen history to your notes"
-sidebarTitle: "obsidian"
-description: "Sync screenpipe's screen history and meeting transcripts into Obsidian via the Copilot plugin so you can query your activity from your local notes vault."
+title: "Obsidian - sync screen history to your notes"
+sidebarTitle: "Obsidian"
+description: "Sync Screenpipe's screen history and meeting transcripts into Obsidian via the Copilot plugin so you can query your activity from your local notes vault."
 icon: "gem"
 ---
 
-[Obsidian](https://obsidian.md) is a powerful knowledge base that works on local markdown files. with screenpipe, you can query your screen history and meeting transcriptions directly from Obsidian using AI plugins.
+[Obsidian](https://obsidian.md) is a powerful knowledge base that works on local markdown files. With Screenpipe, you can query your screen history and meeting transcriptions directly from Obsidian using AI plugins.
 
-## setup with copilot plugin
+## Setup with Copilot plugin
 
-the [Obsidian Copilot](https://github.com/logancyang/obsidian-copilot) plugin supports MCP servers, letting you query screenpipe from within Obsidian.
+The [Obsidian Copilot](https://github.com/logancyang/obsidian-copilot) plugin supports MCP servers, letting you query Screenpipe from within Obsidian.
 
-1. install the Copilot plugin from Obsidian community plugins
-2. open Copilot settings → MCP Servers
-3. add screenpipe:
+1. Install the Copilot plugin from Obsidian community plugins
+2. Open Copilot settings → MCP Servers
+3. Add Screenpipe:
 
 ```json
 {
@@ -24,16 +24,16 @@ the [Obsidian Copilot](https://github.com/logancyang/obsidian-copilot) plugin su
 }
 ```
 
-4. restart Obsidian
+4. Restart Obsidian
 
-now you can ask Copilot things like:
-- "what was I reading about yesterday?"
-- "find my meeting notes from this morning"
-- "what code was I looking at in VS Code?"
+Now you can ask Copilot things like:
+- "What was I reading about yesterday?"
+- "Find my meeting notes from this morning"
+- "What code was I looking at in VS Code?"
 
-## manual workflow
+## Manual workflow
 
-if you prefer not to use plugins, you can query screenpipe's API and paste results into notes:
+If you prefer not to use plugins, you can query Screenpipe's API and paste results into notes:
 
 ```bash
 # search recent screen content
@@ -43,45 +43,45 @@ curl "http://localhost:3030/search?q=meeting&limit=10" | jq '.data[].content.tex
 curl "http://localhost:3030/search?content_type=audio&limit=20"
 ```
 
-## use cases
+## Use cases
 
-- **daily notes**: automatically pull what you worked on into daily notes
-- **meeting notes**: capture transcriptions and screen context from meetings
-- **research**: recall articles and documentation you've read
-- **project logs**: track what you've done across different apps
+- **Daily notes**: automatically pull what you worked on into daily notes
+- **Meeting notes**: capture transcriptions and screen context from meetings
+- **Research**: recall articles and documentation you've read
+- **Project logs**: track what you've done across different apps
 
-## requirements
+## Requirements
 
-- screenpipe running on localhost:3030
+- Screenpipe running on localhost:3030
 - Obsidian with Copilot plugin (for MCP integration)
 - Node.js >= 18.0.0
 
-## troubleshooting
+## Troubleshooting
 
-### Copilot plugin can't connect to screenpipe
+### Copilot plugin can't connect to Screenpipe
 
-1. verify screenpipe is running: `screenpipe health`
-2. check it's accessible: `curl http://localhost:3030/health`
-3. verify MCP command: `npx screenpipe-mcp --help`
-4. if using CLI, set API key: `screenpipe auth`
-5. restart Obsidian
+1. Verify Screenpipe is running: `screenpipe health`
+2. Check it's accessible: `curl http://localhost:3030/health`
+3. Verify MCP command: `npx screenpipe-mcp --help`
+4. If using CLI, set API key: `screenpipe auth`
+5. Restart Obsidian
 
 ### Queries return no results
 
-- screenpipe hasn't indexed yet (wait 30+ seconds)
-- recording is paused — check Settings → Recording
-- try broad queries first: "what did I do today?"
+- Screenpipe hasn't indexed yet (wait 30+ seconds)
+- Recording is paused — check Settings → Recording
+- Try broad queries first: "what did I do today?"
 
 ### Sync scheduled task fails to write
 
-1. verify vault path in scheduled task settings
-2. check screenpipe has file permissions to vault folder
-3. restart both apps
-4. check logs: `SCREENPIPE_LOG=debug screenpipe`
+1. Verify vault path in scheduled task settings
+2. Check Screenpipe has file permissions to vault folder
+3. Restart both apps
+4. Check logs: `SCREENPIPE_LOG=debug screenpipe`
 
 ### "Unauthorized" error from Copilot
 
-screenpipe API requires authentication. Add to MCP settings:
+Screenpipe API requires authentication. Add to MCP settings:
 
 ```json
 {
@@ -93,4 +93,4 @@ screenpipe API requires authentication. Add to MCP settings:
 }
 ```
 
-need help? [join our discord](https://discord.gg/screenpipe).
+Need help? [join our Discord](https://discord.gg/screenpipe).

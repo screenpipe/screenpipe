@@ -173,6 +173,23 @@ impl DatabaseManager {
         }
     }
 
+    /// Read only the text retained by a timeline response. Full payload reads
+    /// keep their existing admission limits; previews never accumulate a day's
+    /// untruncated text before applying that limit.
+    pub(crate) async fn frame_payload_previews(
+        &self,
+        ids: &[i64],
+        chars: usize,
+    ) -> Result<BTreeMap<i64, FramePayload>, sqlx::Error> {
+        let Some(storage) = &self.storage else {
+            return Ok(BTreeMap::new());
+        };
+        self.consistent_read(|| {
+            storage.read_with_preview(&self.pool, ids, Projection::Search, Some(chars))
+        })
+        .await
+    }
+
     pub(crate) async fn hydrate_ocr_rows(
         &self,
         rows: &mut [crate::OCRResultRaw],
@@ -293,16 +310,37 @@ impl HybridStorage {
         ids: &[i64],
         projection: Projection,
     ) -> Result<BTreeMap<i64, FramePayload>, sqlx::Error> {
+        self.read_with_preview(pool, ids, projection, None).await
+    }
+
+    async fn read_with_preview(
+        self: &Arc<Self>,
+        pool: &SqlitePool,
+        ids: &[i64],
+        projection: Projection,
+        preview_chars: Option<usize>,
+    ) -> Result<BTreeMap<i64, FramePayload>, sqlx::Error> {
         if ids.is_empty() {
             return Ok(BTreeMap::new());
         }
         let token = self.read_token(pool).await?;
         let mut snapshot = super::snapshot::frame_snapshot(pool).await?;
-        let columns = projection.sqlite_columns();
+        debug_assert!(preview_chars.is_none() || projection == Projection::Search);
+        let columns = match preview_chars {
+            // Legacy records retained in SQLite can exceed even the response
+            // budget. Truncate in SQL so those blobs never enter the response.
+            Some(chars) => format!("SUBSTR(COALESCE(f.full_text,f.accessibility_text),1,{chars}) AS full_text,NULL AS accessibility_text,NULL AS accessibility_tree_json,NULL AS text_json"),
+            None => projection.sqlite_columns().to_owned(),
+        };
         let ids_json = serde_json::to_string(ids).map_err(storage_error)?;
-        let size = match projection {
-            Projection::Search => "CASE WHEN p.state='staged' THEN COALESCE(length(CAST(f.full_text AS BLOB)),0)+COALESCE(length(CAST(f.accessibility_text AS BLOB)),0) ELSE MIN(p.bytes,4*(f.payload_full_text_length+f.payload_accessibility_length)) END",
-            Projection::Detail | Projection::All => "p.bytes",
+        let size = match preview_chars {
+            // A Unicode character needs at most four UTF-8 bytes. Admission
+            // accounts for retained previews, not the source document sizes.
+            Some(chars) => format!("MIN(p.bytes,{})", chars.saturating_mul(4)),
+            None => match projection {
+                Projection::Search => "CASE WHEN p.state='staged' THEN COALESCE(length(CAST(f.full_text AS BLOB)),0)+COALESCE(length(CAST(f.accessibility_text AS BLOB)),0) ELSE MIN(p.bytes,4*(f.payload_full_text_length+f.payload_accessibility_length)) END",
+                Projection::Detail | Projection::All => "p.bytes",
+            }.to_owned(),
         };
         let preflight=format!("SELECT COALESCE(SUM({size}),0) FROM frames f JOIN frame_payloads p ON p.frame_id=f.id WHERE f.id IN (SELECT value FROM json_each(?))");
         let total: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(preflight))
@@ -396,11 +434,25 @@ impl HybridStorage {
                 requested
                     .into_iter()
                     .map(|(id, generation)| {
-                        let record = records
+                        let mut record = records
                             .remove(&id)
                             .ok_or_else(|| storage_error("Parquet locator missing"))?;
                         if record.generation != generation {
                             return Err(storage_error("Parquet locator generation mismatch"));
+                        }
+                        if let Some(chars) = preview_chars {
+                            // Decode/check one immutable file at a time, then
+                            // drop full text before accumulating the next file.
+                            // Match SQLite SUBSTR's embedded-NUL termination.
+                            record.full_text = Some(
+                                record
+                                    .text()
+                                    .chars()
+                                    .take(chars)
+                                    .take_while(|ch| *ch != '\0')
+                                    .collect(),
+                            );
+                            record.accessibility_text = None;
                         }
                         Ok((id, record))
                     })

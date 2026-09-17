@@ -99,7 +99,7 @@ export function LiveViewTemplateGallery({
                     {kit.description}
                   </p>
                 </div>
-                <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
+                <span className="shrink-0 text-[10px] normal-case tracking-wide text-muted-foreground">
                   {kit.slots.length} section{kit.slots.length === 1 ? "" : "s"}{" "}
                   · {getLiveViewTimeRangeOption(kit.timeRange).label}
                 </span>
@@ -117,7 +117,7 @@ export function LiveViewTemplateGallery({
               </div>
               <details className="mt-2 text-[10px] text-muted-foreground">
                 <summary className="cursor-pointer select-none hover:text-foreground">
-                  possible starting points
+                  Possible starting points
                 </summary>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {kit.pipes.map((pipe) => {
@@ -149,7 +149,7 @@ export function LiveViewTemplateGallery({
                   className="rounded-md"
                   onClick={() => onPreview(kit)}
                 >
-                  preview
+                  Preview
                 </Button>
               </div>
             </article>

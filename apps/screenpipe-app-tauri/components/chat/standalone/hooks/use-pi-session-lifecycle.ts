@@ -377,7 +377,7 @@ export function usePiSessionLifecycle({
   const handlePiRestart = useCallback((preset: AIPreset) => {
     if (isStreamingRef.current) {
       pendingPresetRef.current = preset;
-      toast({ title: "model will switch after this response finishes" });
+      toast({ title: "Model will switch after this response finishes" });
       return;
     }
 

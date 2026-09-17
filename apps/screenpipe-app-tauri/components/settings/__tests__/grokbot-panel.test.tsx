@@ -39,7 +39,7 @@ describe("Grok Bot connection panel", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "connect Grok Bot" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "connect Grok Bot" }));
     await waitFor(() => expect(onChanged).toHaveBeenLastCalledWith(true));
-    fireEvent.click(screen.getByRole("button", { name: "disconnect" }));
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Disconnected"));
     expect(onChanged).toHaveBeenLastCalledWith(false);
   });
@@ -49,6 +49,6 @@ describe("Grok Bot connection panel", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Open Grok Bot and sign in.");
     expect(screen.getByRole("status")).not.toHaveTextContent("installed");
     expect(screen.getByRole("button", { name: "connect Grok Bot" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "disconnect" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Disconnect" })).toBeEnabled();
   });
 });

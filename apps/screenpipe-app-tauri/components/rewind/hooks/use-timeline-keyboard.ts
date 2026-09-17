@@ -156,15 +156,15 @@ export function useTimelineKeyboard(opts: {
 			commands.copyFrameToClipboard(parseInt(String(frameId), 10))
 				.then(() =>
 					toast({
-						title: "copied image",
-						description: "frame copied to clipboard",
+						title: "Copied image",
+						description: "Frame copied to clipboard",
 					}),
 				)
 				.catch((err) => {
 					console.warn("Copy frame failed:", err);
 					toast({
-						title: "copy failed",
-						description: err instanceof Error ? err.message : "could not copy",
+						title: "Copy failed",
+						description: err instanceof Error ? err.message : "Could not copy",
 						variant: "destructive",
 					});
 				});

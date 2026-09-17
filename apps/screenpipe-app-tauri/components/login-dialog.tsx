@@ -1,3 +1,5 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,9 +19,9 @@ export function LoginDialog() {
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>login required</DialogTitle>
+          <DialogTitle>Login required</DialogTitle>
           <DialogDescription>
-            please login to continue. you will be redirected to screenpipe.com
+            Please login to continue. You will be redirected to screenpipe.com
           </DialogDescription>
         </DialogHeader>
         <div className="flex justify-end">
@@ -30,7 +32,7 @@ export function LoginDialog() {
               setIsOpen(false);
             }}
           >
-            login <ExternalLinkIcon className="w-4 h-4 ml-2" />
+            Login <ExternalLinkIcon className="w-4 h-4 ml-2" />
           </Button>
         </div>
       </DialogContent>

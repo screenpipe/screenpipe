@@ -35,10 +35,10 @@ function rowLabel(index: number): string {
 }
 
 function rowDescription(index: number): string {
-  if (index === 0) return "tried first";
-  if (index === 1) return "second attempt";
-  if (index === 2) return "third attempt";
-  return "final attempt";
+  if (index === 0) return "Tried first";
+  if (index === 1) return "Second attempt";
+  if (index === 2) return "Third attempt";
+  return "Final attempt";
 }
 
 export function PipePresetChain({
@@ -85,9 +85,9 @@ export function PipePresetChain({
     <section className="p-4" data-testid="pipe-preset-chain">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <Label className="text-xs font-medium">model fallback chain</Label>
+          <Label className="text-xs font-medium">Model fallback chain</Label>
           <p className="mt-0.5 max-w-md text-[11px] text-muted-foreground">
-            screenpipe tries these models from top to bottom when a run can be
+            Screenpipe tries these models from top to bottom when a run can be
             retried.
           </p>
         </div>
@@ -179,12 +179,12 @@ export function PipePresetChain({
             onClick={() => setAddingFallback(true)}
           >
             <Plus className="h-3 w-3" />
-            add fallback
+            Add fallback
           </button>
         )}
 
       <p className="mt-3 text-[10px] text-muted-foreground">
-        coding-agent presets run unattended and use this scheduled task&apos;s
+        Coding-agent presets run unattended and use this scheduled task&apos;s
         permissions
       </p>
     </section>

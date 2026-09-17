@@ -10,15 +10,15 @@ export const ANNOUNCEMENT_KIND_META: Record<
   { icon: LucideIcon; label: string }
 > = {
   // Grayscale, differentiated by shape rather than color (DESIGN.md).
-  news: { icon: Megaphone, label: "news" },
-  tip: { icon: Lightbulb, label: "tip" },
-  reminder: { icon: Clock, label: "reminder" },
+  news: { icon: Megaphone, label: "News" },
+  tip: { icon: Lightbulb, label: "Tip" },
+  reminder: { icon: Clock, label: "Reminder" },
 };
 
 export function AnnouncementKindChip({ kind }: { kind: AnnouncementKind }) {
   const { icon: Icon, label } = ANNOUNCEMENT_KIND_META[kind];
   return (
-    <span className="inline-flex w-fit items-center gap-1.5 border border-border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+    <span className="inline-flex w-fit items-center gap-1.5 border border-border px-1.5 py-0.5 font-mono text-[10px] normal-case tracking-wide text-muted-foreground">
       <Icon className="h-3 w-3" />
       {label}
     </span>

@@ -140,7 +140,7 @@ export function ComposerDictationControl({
       >
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
         <span className="font-mono text-[10px]">
-          {isTranscribing ? "transcribing" : "microphone"}
+          {isTranscribing ? "Transcribing" : "Microphone"}
         </span>
         <Button
           type="button"
@@ -169,7 +169,7 @@ export function ComposerDictationControl({
         title={dictation.error || undefined}
       >
         <span className="max-w-28 truncate font-mono text-[10px]">
-          {dictation.error || "dictation failed"}
+          {dictation.error || "Dictation failed"}
         </span>
         <Button
           type="button"

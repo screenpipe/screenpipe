@@ -152,8 +152,8 @@ export function SpeakerAssignPopover({
 						});
 						if (!resp.ok) throw new Error("rename undo failed");
 						toast({
-							title: "undone",
-							description: "the voice is unnamed again",
+							title: "Undone",
+							description: "The voice is unnamed again",
 						});
 						return;
 					}
@@ -168,16 +168,16 @@ export function SpeakerAssignPopover({
 					if (!undoResp.ok) throw new Error("undo failed");
 					const undoResult = await undoResp.json();
 					toast({
-						title: "undone",
-						description: `restored ${undoResult.restored} transcriptions`,
+						title: "Undone",
+						description: `Restored ${undoResult.restored} transcriptions`,
 					});
 				};
 
 				toast({
-					title: `assigned to "${trimmedName}"`,
+					title: `Assigned to "${trimmedName}"`,
 					description: result.renamed_whole_speaker
-						? `every line from this voice${lines > 1 ? ` (${lines})` : ""} is now ${trimmedName}`
-						: "this line only — the rest of the voice is unchanged",
+						? `Every line from this voice${lines > 1 ? ` (${lines})` : ""} is now ${trimmedName}`
+						: "This line only — the rest of the voice is unchanged",
 					action: undoable ? (
 						<ToastAction
 							altText="Undo speaker assignment"
@@ -186,11 +186,11 @@ export function SpeakerAssignPopover({
 									await undo();
 									onAssigned?.(result.new_speaker_id, result.new_speaker_name);
 								} catch {
-									toast({ title: "undo failed", variant: "destructive" });
+									toast({ title: "Undo failed", variant: "destructive" });
 								}
 							}}
 						>
-							undo
+							Undo
 						</ToastAction>
 					) : undefined,
 				});
@@ -271,7 +271,7 @@ export function SpeakerAssignPopover({
 			</PopoverTrigger>
 			<PopoverContent className="w-80 p-3 z-[9999] border border-border rounded-lg shadow-none" align="start">
 				<div className="space-y-3">
-					<div className="text-sm font-medium lowercase">assign speaker</div>
+					<div className="text-sm font-medium normal-case">Assign speaker</div>
 
 					{/* Search input */}
 					<div className="relative">

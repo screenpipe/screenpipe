@@ -213,7 +213,7 @@
 .commandSearch > kbd { padding: 3px 6px; }
 .commandResults { min-height: 180px; overflow-y: auto; overscroll-behavior: contain; padding: 8px; }
 .commandGroup { padding: 4px 0 7px; }
-.commandGroup > span { display: block; padding: 5px 9px 6px; color: #8a8e84; font-size: 8px; font-weight: 750; letter-spacing: .11em; text-transform: uppercase; }
+.commandGroup > span { display: block; padding: 5px 9px 6px; color: #8a8e84; font-size: 8px; font-weight: 750; letter-spacing: .11em; text-transform: none; }
 .commandRow, .commandRowActive {
   width: 100%;
   min-height: 48px;
@@ -253,7 +253,7 @@
 .periodControl { height: 32px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: #72766c; font-size: 8px; white-space: nowrap; }
 .periodControl select { border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 700; cursor: pointer; }
 .periodControl:focus-within { border-color: #8b9083; outline: 1px solid #8b9083; outline-offset: 1px; }
-.profilePeriod { height: 32px; display: flex; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: #60655a; font-size: 8px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; white-space: nowrap; }
+.profilePeriod { height: 32px; display: flex; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: #60655a; font-size: 8px; font-weight: 700; letter-spacing: .05em; text-transform: none; white-space: nowrap; }
 .main { max-width: 1420px; min-height: calc(100vh - 59px); margin: 0 auto; padding: 38px clamp(28px, 4vw, 64px) 70px; }
 
 .pill { display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; border: 1px solid #dadcd4; border-radius: 999px; background: #f6f6f2; color: #5f6259; font-size: 9px; font-weight: 680; white-space: nowrap; }
@@ -290,7 +290,7 @@
 @keyframes workflowSpin { to { transform: rotate(360deg); } }
 
 .heroProof { display: flex; flex-direction: column; padding: 21px; border: 1px solid var(--line); border-radius: 10px; background: #fff; box-shadow: 0 12px 30px rgba(40,42,32,.06); }
-.heroProof > span { color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
+.heroProof > span { color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .11em; text-transform: none; }
 .heroProof > strong { margin-top: 13px; font-size: 35px; letter-spacing: -.05em; }
 .heroProof > small { margin-top: 2px; color: var(--muted); font-size: 9px; }
 .heroProof > div { height: 5px; margin: 20px 0 10px; overflow: hidden; border-radius: 4px; background: #eceee6; }
@@ -300,12 +300,12 @@
 .statGrid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); margin-bottom: 48px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .statGrid > div { min-width: 0; padding: 19px 20px; border-right: 1px solid #e7e8e2; }
 .statGrid > div:last-child { border: 0; }
-.statGrid span, .detailStats span, .headerMetric span, .detailTotal span, .bottleneckTime span { display: block; color: #8c8f86; font-size: 8px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.statGrid span, .detailStats span, .headerMetric span, .detailTotal span, .bottleneckTime span { display: block; color: #8c8f86; font-size: 8px; font-weight: 700; letter-spacing: .07em; text-transform: none; }
 .statGrid strong { display: block; margin: 7px 0 4px; font-size: 22px; letter-spacing: -.035em; }
 .statGrid small { display: block; overflow: hidden; color: #8d9087; font-size: 8px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
 
 .sectionHeading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin: 0 0 15px; }
-.sectionHeading > div > span, .panelTitle > div > span { display: block; margin-bottom: 6px; color: #7b825d; font-size: 8px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.sectionHeading > div > span, .panelTitle > div > span { display: block; margin-bottom: 6px; color: #7b825d; font-size: 8px; font-weight: 750; letter-spacing: .12em; text-transform: none; }
 .sectionHeading h2 { margin: 0; font-size: 17px; }
 .textButton, .backButton { display: inline-flex; align-items: center; gap: 6px; padding: 7px; border: 0; background: transparent; color: #60635b; font-size: 10px; font-weight: 650; cursor: pointer; }
 .textButton:hover, .backButton:hover { color: #111; }
@@ -369,7 +369,7 @@
 .qualityDetails > div { padding: 15px 16px; border-right: 1px solid #e7ebdf; }
 .qualityDetails > div:nth-child(3n) { border-right: 0; }
 .qualityDetails > div:nth-child(-n+3) { border-bottom: 1px solid #e7ebdf; }
-.qualityDetails span { display: block; color: #8a8f80; font-size: 7px; font-weight: 720; letter-spacing: .08em; text-transform: uppercase; }
+.qualityDetails span { display: block; color: #8a8f80; font-size: 7px; font-weight: 720; letter-spacing: .08em; text-transform: none; }
 .qualityDetails strong { display: block; margin-top: 6px; font-size: 11px; }
 .qualityDetails p, .qualityDetails li { color: #7e8278; font-size: 8px; line-height: 1.45; }
 .qualityDetails p { margin: 5px 0 0; }
@@ -381,7 +381,7 @@
 .procedureDetails { grid-column: 1 / -1; min-width: 0; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
 .procedureDetails > ol { margin: 0; padding: 0 0 0 22px; }
 .procedureDetails > ol > li { padding: 8px 8px 16px; border-bottom: 1px solid var(--line); }
-.procedureKind { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: #6e7269; }
+.procedureKind { font-size: 10px; text-transform: none; letter-spacing: .06em; color: #6e7269; }
 .procedureDetails p { margin: 5px 0 9px; }
 .procedureDetails summary { cursor: pointer; font-size: 11px; color: #6e7269; }
 .procedureDetails blockquote { margin: 10px 0; padding: 8px 12px; border-left: 2px solid var(--line); white-space: pre-wrap; }
@@ -397,7 +397,7 @@
 .timeSummary { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); margin: -21px 0 34px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .timeSummary > div { min-width: 0; padding: 18px 19px; border-right: 1px solid #e7e8e2; }
 .timeSummary > div:last-child { border-right: 0; }
-.timeSummary span { display: block; color: #898d83; font-size: 8px; font-weight: 720; letter-spacing: .07em; text-transform: uppercase; }
+.timeSummary span { display: block; color: #898d83; font-size: 8px; font-weight: 720; letter-spacing: .07em; text-transform: none; }
 .timeSummary strong { display: block; margin: 7px 0 4px; font-size: 21px; letter-spacing: -.035em; }
 .timeValueNotice { grid-template-columns: 26px minmax(0,1fr); margin: -21px 0 34px; }
 .timeLensTabs { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; margin-bottom: 13px; }
@@ -441,7 +441,7 @@
 .clearButton { border: 0; color: #81857c; }
 .filterPanel { display: grid; grid-template-columns: repeat(6,minmax(100px,1fr)) auto; gap: 10px; align-items: end; margin: 0 0 13px; padding: 14px; border: 1px solid #dfe1d9; border-radius: 9px; background: #f4f5f0; }
 .filterPanel label { display: flex; flex-direction: column; gap: 6px; }
-.filterPanel label > span { color: #7e8277; font-size: 7px; font-weight: 720; letter-spacing: .08em; text-transform: uppercase; }
+.filterPanel label > span { color: #7e8277; font-size: 7px; font-weight: 720; letter-spacing: .08em; text-transform: none; }
 .filterPanel select { width: 100%; height: 32px; padding: 0 26px 0 9px; border: 1px solid #d7d9d1; border-radius: 6px; outline: 0; background: #fff; color: #484c44; font-size: 9px; }
 .filterPanel select:focus { border-color: #a8b47e; box-shadow: 0 0 0 2px #e7edda; }
 .filterPanel > button { height: 32px; padding: 0 10px; border: 0; background: transparent; color: #73776e; font-size: 9px; cursor: pointer; }
@@ -468,7 +468,7 @@
 .detailHeader h1 { margin: 16px 0 9px; font-size: clamp(32px,4vw,49px); letter-spacing: -.052em; }
 .detailHeader > div > p { max-width: 760px; margin: 0; color: #70746a; font-size: 12px; line-height: 1.6; }
 .workflowActions { display: flex; flex-wrap: wrap; gap: 8px; }
-.skillButton { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; margin-top: 17px; padding: 0 12px; border: 1px solid #20221e; border-radius: 6px; background: #fff; color: #20221e; font-size: 8.5px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; cursor: pointer; transition: .15s ease; }
+.skillButton { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; margin-top: 17px; padding: 0 12px; border: 1px solid #20221e; border-radius: 6px; background: #fff; color: #20221e; font-size: 8.5px; font-weight: 750; letter-spacing: .04em; text-transform: none; cursor: pointer; transition: .15s ease; }
 .skillButton:hover { background: #20221e; color: #fff; }
 .detailTotal { padding: 18px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
 .detailTotal strong { display: block; margin: 8px 0 4px; font-size: 31px; letter-spacing: -.04em; }
@@ -503,11 +503,11 @@
 .flowMap { margin-bottom: 14px; padding: 20px; border: 1px solid var(--line); border-radius: 10px; background: #f3f4ef; }
 .flowMapHeader { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -2px 0 13px; }
 .flowMapHeader > div { display: flex; flex-direction: column; gap: 3px; }
-.flowMapHeader span { color: #868b7f; font-size: 7px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
+.flowMapHeader span { color: #868b7f; font-size: 7px; font-weight: 750; letter-spacing: .09em; text-transform: none; }
 .flowMapHeader strong { font-size: 10px; }
 .flowMapHeader button { padding: 6px 8px; border: 0; background: transparent; color: #686d62; font-size: 8px; font-weight: 650; cursor: pointer; }
 .flowEndpoint { display: grid; grid-template-columns: 90px 1fr; gap: 14px; align-items: center; min-height: 42px; padding: 10px 14px; border: 1px solid #dcddd7; border-radius: 7px; background: #fff; }
-.flowEndpoint span { color: #8c8f86; font-size: 8px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.flowEndpoint span { color: #8c8f86; font-size: 8px; font-weight: 700; letter-spacing: .08em; text-transform: none; }
 .flowEndpoint strong { font-size: 10px; }
 .stageList { position: relative; display: flex; flex-direction: column; padding: 14px 0 14px 35px; }
 .stageList::before { content: ""; position: absolute; top: 0; bottom: 0; left: 48px; width: 1px; background: #cfd1c8; }
@@ -557,14 +557,14 @@
 .plainList li:last-child { border: 0; }
 .panelEmpty { margin: 22px 0 5px; color: #898c83; font-size: 9px; line-height: 1.55; }
 .handoffs { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; padding-top: 13px; border-top: 1px solid #e6e7e1; }
-.handoffs strong { margin-bottom: 2px; color: #7f8379; font-size: 8px; letter-spacing: .07em; text-transform: uppercase; }
+.handoffs strong { margin-bottom: 2px; color: #7f8379; font-size: 8px; letter-spacing: .07em; text-transform: none; }
 .handoffs span { display: flex; align-items: flex-start; gap: 6px; color: #62675c; font-size: 8.5px; line-height: 1.4; }
 .handoffs svg { flex: 0 0 auto; margin-top: 1px; color: #76814e; }
 
 .skillBackdrop { position: fixed; z-index: 80; inset: 0; display: flex; justify-content: flex-end; padding: 12px; background: rgba(20,21,18,.25); backdrop-filter: blur(2px); animation: skillFade .15s ease; }
 .skillDialog { width: min(570px,calc(100vw - 24px)); height: calc(100svh - 24px); display: flex; flex-direction: column; overflow: hidden; border: 1px solid #20221e; border-radius: 8px; background: #f7f7f3; box-shadow: 0 8px 24px rgba(20,21,18,.16); animation: skillSlide .18s ease; }
 .skillDialogHeader { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0,1fr) 32px; gap: 18px; padding: 22px 22px 19px; border-bottom: 1px solid #d9dbd4; background: #fff; }
-.skillDialogHeader span { color: #858980; font-size: 7.5px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+.skillDialogHeader span { color: #858980; font-size: 7.5px; font-weight: 750; letter-spacing: .08em; text-transform: none; }
 .skillDialogHeader h2 { margin: 5px 0 6px; font-size: 25px; letter-spacing: -.035em; }
 .skillDialogHeader p { max-width: 570px; margin: 0; color: #74786f; font-size: 9px; line-height: 1.5; }
 .skillDialogHeader > button { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid #dedfd9; border-radius: 6px; background: #fff; color: #62665e; cursor: pointer; }
@@ -619,7 +619,7 @@
 .skillRunPhases .skillRunPhaseDone { color: #5e6358; }
 .skillRunPhases .skillRunPhaseDone > span { border-color: var(--ink); background: var(--ink); color: #fff; }
 .skillLiveDraft { min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #d8dad3; border-radius: 7px; background: #fff; }
-.skillLiveDraft > span, .skillReview > div > span { display: block; padding: 10px 12px; border-bottom: 1px solid #e5e6e0; color: #858980; font-size: 7.5px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+.skillLiveDraft > span, .skillReview > div > span { display: block; padding: 10px 12px; border-bottom: 1px solid #e5e6e0; color: #858980; font-size: 7.5px; font-weight: 750; letter-spacing: .08em; text-transform: none; }
 .skillLiveDraft pre, .skillReview pre { min-height: 0; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: #34372f; font: 10px/1.7 system-ui, sans-serif; }
 .skillLiveDraft pre { flex: 1; padding: 16px; }
 .skillLiveDraft pre i { width: 2px; height: 1em; display: inline-block; margin-left: 2px; background: var(--lime); vertical-align: -.12em; animation: skillCaret .75s steps(1) infinite; }
@@ -638,7 +638,7 @@
 .skillEdit[open] > summary svg { transform: rotate(180deg); }
 .skillFields { display: flex; flex-direction: column; gap: 13px; padding: 14px; }
 .skillFields label { display: flex; flex-direction: column; gap: 6px; }
-.skillFields label > span { color: #777b72; font-size: 7.5px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+.skillFields label > span { color: #777b72; font-size: 7.5px; font-weight: 750; letter-spacing: .08em; text-transform: none; }
 .skillFields input, .skillFields textarea { width: 100%; padding: 10px 11px; border: 1px solid #d3d5ce; border-radius: 6px; outline: 0; background: #fff; color: #22241f; font: 9px/1.55 IBM Plex Mono, ui-monospace, monospace; }
 .skillFields input { min-height: 39px; }
 .skillFields textarea { resize: vertical; }

@@ -1065,6 +1065,7 @@ impl DatabaseManager {
     }
 
     const DEFAULT_TIMELINE_CHUNK_LIMIT: usize = 10_000;
+    const TIMELINE_PREVIEW_CHARS: usize = 200;
 
     fn bounded_timeline_limit(limit: usize) -> i64 {
         limit.clamp(1, Self::DEFAULT_TIMELINE_CHUNK_LIMIT) as i64
@@ -1124,8 +1125,8 @@ impl DatabaseManager {
 	            f.timestamp,
 	            f.offset_index,
             COALESCE(
-                SUBSTR(f.full_text, 1, 200),
-                SUBSTR(f.accessibility_text, 1, 200)
+                SUBSTR(f.full_text, 1, {preview_chars}),
+                SUBSTR(f.accessibility_text, 1, {preview_chars})
             ) as text,
             f.app_name as app_name,
             f.window_name as window_name,
@@ -1140,7 +1141,8 @@ impl DatabaseManager {
 	          AND COALESCE(vc.file_path, f.snapshot_path, '') NOT LIKE 'cloud://%'
 	        ORDER BY f.timestamp {order_sql}, f.offset_index {order_sql}
 	        LIMIT ?3
-	    "#
+	    "#,
+                preview_chars = Self::TIMELINE_PREVIEW_CHARS,
             );
 
             // Get audio data with proper time windows for synchronization
@@ -1235,7 +1237,7 @@ impl DatabaseManager {
 
             let payloads = if self.storage.is_some() {
                 let ids: Vec<i64> = frame_rows.iter().map(|r| r.get("id")).collect();
-                self.frame_payloads(&ids, crate::storage::Projection::Search)
+                self.frame_payload_previews(&ids, Self::TIMELINE_PREVIEW_CHARS)
                     .await?
             } else {
                 Default::default()
@@ -1259,7 +1261,7 @@ impl DatabaseManager {
                 });
 
                 let text: String = if let Some(payload) = payloads.get(&row.get::<i64, _>("id")) {
-                    payload.text().chars().take(200).collect()
+                    payload.text().to_owned()
                 } else {
                     row.try_get::<String, _>("text").unwrap_or_default()
                 };

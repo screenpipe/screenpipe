@@ -22,7 +22,7 @@ export function useChatExportMenu({ messages, citationPlan }: UseChatExportMenuO
     if (messages.length === 0) return;
     const md = formatChatAsMarkdown(messages, citationPlan);
     await commands.copyTextToClipboard(md);
-    toast({ title: "copied full chat as markdown" });
+    toast({ title: "Copied full chat as markdown" });
   }, [citationPlan, messages]);
 
   const exportChatAsMarkdownFile = useCallback(async () => {
@@ -35,11 +35,11 @@ export function useChatExportMenu({ messages, citationPlan }: UseChatExportMenuO
       });
       if (filePath) {
         await writeTextFile(filePath, md);
-        toast({ title: "chat exported as markdown" });
+        toast({ title: "Chat exported as markdown" });
       }
     } catch (e) {
       console.error("Failed to export chat:", e);
-      toast({ title: "failed to export chat", variant: "destructive" });
+      toast({ title: "Failed to export chat", variant: "destructive" });
     }
   }, [citationPlan, messages]);
 

@@ -135,7 +135,7 @@ describe("TrialActivationPaywall", () => {
     render(<TrialActivationPaywall open locked />);
 
     expect(
-      await screen.findByText("checkout closed before payment was confirmed"),
+      await screen.findByText("Checkout closed before payment was confirmed"),
     ).toBeInTheDocument();
     expect(submitSpy).not.toHaveBeenCalled();
     expect(mocks.capture).toHaveBeenCalledWith(
@@ -149,7 +149,7 @@ describe("TrialActivationPaywall", () => {
       window.sessionStorage.getItem(TRIAL_ACTIVATION_CHECKOUT_STATE_KEY),
     ).toBe("returned");
 
-    fireEvent.click(screen.getByRole("button", { name: "try checkout again" }));
+    fireEvent.click(screen.getByRole("button", { name: "Try checkout again" }));
 
     await waitFor(() => expect(submitSpy).toHaveBeenCalledOnce());
     expect(

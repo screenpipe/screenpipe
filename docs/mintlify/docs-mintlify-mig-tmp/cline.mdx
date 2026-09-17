@@ -1,18 +1,18 @@
 ---
-title: "cline - VS Code agent with screen memory"
-sidebarTitle: "cline"
-description: "Connect screenpipe to Cline via MCP to give this autonomous VS Code coding agent access to your screen history, meetings, and app context."
+title: "Cline - VS Code agent with screen memory"
+sidebarTitle: "Cline"
+description: "Connect Screenpipe to Cline via MCP to give this autonomous VS Code coding agent access to your screen history, meetings, and app context."
 icon: "code"
 ---
 
-[Cline](https://github.com/cline/cline) is an autonomous AI coding agent for VS Code with 30k+ GitHub stars. it supports MCP servers, so you can connect screenpipe to give Cline context about what you've been working on across all your apps.
+[Cline](https://github.com/cline/cline) is an autonomous AI coding agent for VS Code with 30k+ GitHub stars. It supports MCP servers, so you can connect Screenpipe to give Cline context about what you've been working on across all your apps.
 
-## setup
+## Setup
 
-1. open VS Code with Cline installed
-2. open Cline settings (gear icon in Cline panel)
-3. go to **MCP Servers**
-4. add screenpipe:
+1. Open VS Code with Cline installed
+2. Open Cline settings (gear icon in Cline panel)
+3. Go to **MCP Servers**
+4. Add Screenpipe:
 
 ```json
 {
@@ -25,11 +25,11 @@ icon: "code"
 }
 ```
 
-5. click the refresh icon to reload MCP servers
+5. Click the refresh icon to reload MCP servers
 
-## usage
+## Usage
 
-once configured, Cline can search your screen history while coding:
+Once configured, Cline can search your screen history while coding:
 
 ```
 > I was reading documentation about async/await patterns earlier,
@@ -40,37 +40,37 @@ once configured, Cline can search your screen history while coding:
 > find the API response format I was looking at in the browser
 ```
 
-## plan mode with context
+## Plan mode with context
 
-Cline's "Plan" mode works great with screenpipe:
+Cline's "Plan" mode works great with Screenpipe:
 
-1. switch to Plan mode
-2. ask Cline to find relevant context from your screen history
-3. let it create a plan based on what you've been working on
-4. switch to Act mode to execute
+1. Switch to Plan mode
+2. Ask Cline to find relevant context from your screen history
+3. Let it create a plan based on what you've been working on
+4. Switch to Act mode to execute
 
 ```
 > [Plan mode] I was researching authentication patterns earlier,
 > find what I was looking at and plan how to implement it here
 ```
 
-## available tools
+## Available tools
 
-screenpipe provides:
+Screenpipe provides:
 
-| tool | description |
+| Tool | Description |
 |------|-------------|
-| `search-content` | search screen text (accessibility-first, OCR fallback), audio transcriptions, and input |
-| `activity-summary` | lightweight overview of app usage, speakers, and recent texts for a time range |
-| `search-elements` | search structured UI elements from the accessibility tree |
-| `frame-context` | full accessibility tree, URLs, and text for a specific frame |
-| `list-meetings` | list detected meetings with duration, app, and attendees |
-| `export-video` | export screen recordings as MP4 for a time range |
+| `search-content` | Search screen text (accessibility-first, OCR fallback), audio transcriptions, and input |
+| `activity-summary` | Lightweight overview of app usage, speakers, and recent texts for a time range |
+| `search-elements` | Search structured UI elements from the accessibility tree |
+| `frame-context` | Full accessibility tree, URLs, and text for a specific frame |
+| `list-meetings` | List detected meetings with duration, app, and attendees |
+| `export-video` | Export screen recordings as MP4 for a time range |
 
-## requirements
+## Requirements
 
-- screenpipe running on localhost:3030
+- Screenpipe running on localhost:3030
 - VS Code with Cline extension
 - Node.js >= 18.0.0
 
-need help? [join our discord](https://discord.gg/screenpipe).
+Need help? [join our Discord](https://discord.gg/screenpipe).

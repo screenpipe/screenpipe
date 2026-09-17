@@ -109,16 +109,16 @@ function LiveViewCardBody({
     return (
       <div className="flex min-h-24 items-center justify-center border border-dashed border-border px-4 text-center text-xs text-muted-foreground">
         {preview ? (
-          "data loads after you apply this dashboard"
+          "Data loads after you apply this dashboard"
         ) : refreshing && slot.binding ? (
           <span className="inline-flex items-center gap-2">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            asking {slot.binding.pipeName} for fresh data
+            Asking {slot.binding.pipeName} for fresh data
           </span>
         ) : slot.binding ? (
           `${slot.binding.pipeName} has not published this data yet`
         ) : (
-          "connect a scheduled task to fill this Block"
+          "Connect a scheduled task to fill this Block"
         )}
       </div>
     );
@@ -187,14 +187,14 @@ function LiveViewCardBody({
               data-testid={`live-view-list-${slot.id}-clear`}
               className="flex min-h-20 items-center justify-center px-4 text-center text-xs text-muted-foreground"
             >
-              nothing needs attention
+              Nothing needs attention
             </div>
           )}
           {handledItems.length > 0 && (
             <details className="border-t border-border">
               <summary
                 data-testid={`live-view-list-${slot.id}-handled-toggle`}
-                className="cursor-pointer px-1 py-2 font-mono text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
+                className="cursor-pointer px-1 py-2 font-mono text-[10px] normal-case tracking-wide text-muted-foreground hover:text-foreground"
               >
                 {handledItems.length} handled · show
               </summary>
@@ -231,7 +231,7 @@ function LiveViewCardBody({
               }
             />
             {typeof item.status === "string" && (
-              <span className="shrink-0 border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+              <span className="shrink-0 border border-border px-1.5 py-0.5 text-[10px] normal-case tracking-wide text-muted-foreground">
                 {item.status}
               </span>
             )}
@@ -306,7 +306,7 @@ function LiveViewCardBody({
                 </td>
                 <td className="py-2.5 pl-4 text-right align-top">
                   {typeof item.status === "string" && (
-                    <span className="border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                    <span className="border border-border px-1.5 py-0.5 text-[10px] normal-case tracking-wide text-muted-foreground">
                       {item.status}
                     </span>
                   )}
@@ -459,7 +459,7 @@ export function LiveViewCard({
       <div className="mb-4 flex items-start justify-between gap-3">
         <div className={`min-w-0 ${hasActions ? "pr-32" : ""}`}>
           <h3 className="truncate text-sm font-medium">{slot.title}</h3>
-          <p className="mt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+          <p className="mt-0.5 text-[10px] normal-case tracking-wide text-muted-foreground">
             {COMPONENT_LABELS[slot.component]} · requested:{" "}
             {getLiveViewTimeRangeOption(timeRange).label}
           </p>
@@ -474,7 +474,7 @@ export function LiveViewCard({
             type="button"
             variant="ghost"
             size="icon"
-            aria-label={`mark ${slot.title} useful`}
+            aria-label={`Mark ${slot.title} useful`}
             aria-pressed={feedback === "up"}
             className={`h-7 w-7 rounded-md ${
               feedback === "up" ? "bg-foreground text-background" : ""
@@ -500,7 +500,7 @@ export function LiveViewCard({
                 type="button"
                 variant="ghost"
                 size="icon"
-                aria-label={`mark ${slot.title} not useful`}
+                aria-label={`Mark ${slot.title} not useful`}
                 aria-pressed={feedback === "down"}
                 className={`h-7 w-7 rounded-md ${
                   feedback === "down" ? "bg-foreground text-background" : ""
@@ -536,7 +536,7 @@ export function LiveViewCard({
                   autoFocus
                   value={feedbackNote}
                   onChange={(event) => setFeedbackNote(event.target.value)}
-                  placeholder="e.g. exclude meetings"
+                  placeholder="E.g. exclude meetings"
                   className="h-8 rounded-md text-xs"
                   maxLength={500}
                 />
@@ -550,7 +550,7 @@ export function LiveViewCard({
                       disabled={feedbackSaving !== null}
                       onClick={() => void saveFeedback(null)}
                     >
-                      clear
+                      Clear
                     </Button>
                   ) : (
                     <span />
@@ -564,7 +564,7 @@ export function LiveViewCard({
                     {feedbackSaving === "down" && (
                       <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
                     )}
-                    save feedback
+                    Save feedback
                   </Button>
                 </div>
               </form>
@@ -574,8 +574,8 @@ export function LiveViewCard({
             type="button"
             variant="ghost"
             size="icon"
-            aria-label={`regenerate ${slot.title}`}
-            title="regenerate this section"
+            aria-label={`Regenerate ${slot.title}`}
+            title="Regenerate this section"
             className="h-7 w-7 rounded-md"
             disabled={!slot.binding || busy}
             onClick={onRegenerate}
@@ -592,8 +592,8 @@ export function LiveViewCard({
                 type="button"
                 variant="ghost"
                 size="icon"
-                aria-label={`edit ${slot.title} with AI`}
-                title="edit this section with AI"
+                aria-label={`Edit ${slot.title} with AI`}
+                title="Edit this section with AI"
                 className="h-7 w-7 rounded-md"
                 disabled={busy}
               >
@@ -620,7 +620,7 @@ export function LiveViewCard({
                   autoFocus
                   value={aiPrompt}
                   onChange={(event) => setAiPrompt(event.target.value)}
-                  placeholder="e.g. group by project instead"
+                  placeholder="E.g. group by project instead"
                   className="h-8 rounded-md text-xs"
                   maxLength={500}
                 />
@@ -634,7 +634,7 @@ export function LiveViewCard({
                     {aiEditing && (
                       <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
                     )}
-                    update
+                    Update
                   </Button>
                 </div>
               </form>
@@ -665,7 +665,7 @@ export function LiveViewCard({
         {SOURCE_STATUS_LABELS[effectiveSourceStatus] && (
           <span
             data-testid={`overview-card-source-status-${slot.id}`}
-            className="shrink-0 border border-border px-1 py-px uppercase tracking-wide"
+            className="shrink-0 border border-border px-1 py-px normal-case tracking-wide"
             title={SOURCE_STATUS_TITLES[effectiveSourceStatus] ?? undefined}
           >
             {SOURCE_STATUS_LABELS[effectiveSourceStatus]}
@@ -676,7 +676,7 @@ export function LiveViewCard({
             data-testid={`overview-card-updated-${slot.id}`}
             className="ml-auto shrink-0"
           >
-            updated {timeAgo(slot.value.updatedAt)} · artifact #
+            Updated {timeAgo(slot.value.updatedAt)} · artifact #
             {slot.value.artifactOutputId} · v
             {slot.value.artifactVersion}
           </span>

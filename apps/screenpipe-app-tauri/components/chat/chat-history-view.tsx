@@ -272,7 +272,7 @@ export function ChatHistoryView({
       if (!store.sessions[id] && meta) {
         store.actions.upsert({
           id,
-          title: meta.title || "untitled",
+          title: meta.title || "Untitled",
           preview: "",
           status: "idle",
           messageCount: meta.messageCount ?? 0,
@@ -431,7 +431,7 @@ export function ChatHistoryView({
               conv.hidden ? "text-muted-foreground" : "text-foreground"
             )}
           >
-            {(isInjectedTitle(conv.title) ? undefined : conv.title) || "untitled"}
+            {(isInjectedTitle(conv.title) ? undefined : conv.title) || "Untitled"}
           </p>
         </div>
 
@@ -908,10 +908,10 @@ export function ChatHistoryView({
                   <Input
                     ref={searchInputRef}
                     placeholder={
-                      tab === "chats" ? "search chats"
-                      : tab === "pipes" ? "search scheduled tasks"
-                      : tab === "archived" ? "search archived"
-                      : "search all"
+                      tab === "chats" ? "Search chats"
+                      : tab === "pipes" ? "Search scheduled tasks"
+                      : tab === "archived" ? "Search archived"
+                      : "Search all"
                     }
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
@@ -1001,12 +1001,12 @@ export function ChatHistoryView({
             {loadingMore && (
               <div className="flex items-center justify-center py-4 text-xs text-muted-foreground">
                 <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" aria-hidden />
-                <span>loading more…</span>
+                <span>Loading more…</span>
               </div>
             )}
             {!hasMore && !loadingMore && list.length >= HISTORY_PAGE_SIZE && (
-              <div className="py-6 text-center text-[11px] tracking-wide text-muted-foreground/60 lowercase">
-                end of list
+              <div className="py-6 text-center text-[11px] tracking-wide text-muted-foreground/60 normal-case">
+                End of list
               </div>
             )}
           </div>

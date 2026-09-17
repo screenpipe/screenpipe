@@ -526,7 +526,7 @@ export default function NotificationPanelPage() {
               fontWeight: 500,
               letterSpacing: "0.05em",
               color: "hsl(var(--foreground) / 0.4)",
-              textTransform: "lowercase",
+              textTransform: "none",
             }}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -542,7 +542,7 @@ export default function NotificationPanelPage() {
           <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
             <button
               type="button"
-              aria-label="notification options"
+              aria-label="Notification options"
               aria-expanded={optionsExpanded}
               onClick={() => setOptionsExpanded((expanded) => !expanded)}
               style={{
@@ -562,7 +562,7 @@ export default function NotificationPanelPage() {
               <MoreHorizontal size={14} />
             </button>
             <button
-              aria-label="dismiss notification"
+              aria-label="Dismiss notification"
               onClick={() => hide("explicit")}
               style={{
                 background: "none",
@@ -600,7 +600,7 @@ export default function NotificationPanelPage() {
         >
           <div
             onClick={payload.source_url ? openSource : undefined}
-            title={payload.source_url ? "open source chat" : undefined}
+            title={payload.source_url ? "Open source chat" : undefined}
             style={{
               fontSize: "12px",
               fontWeight: 500,
@@ -675,8 +675,8 @@ export default function NotificationPanelPage() {
                             e.currentTarget.style.color =
                               "hsl(var(--foreground) / 0.35)";
                           }}
-                          title="open in default app"
-                          aria-label="open in default app"
+                          title="Open in default app"
+                          aria-label="Open in default app"
                           style={{
                             marginLeft: "3px",
                             padding: "0 3px",
@@ -724,7 +724,7 @@ export default function NotificationPanelPage() {
                   fontWeight: 500,
                 }}
               >
-                restarting...
+                Restarting...
               </span>
             ) : restartState === "success" ? (
               <span
@@ -735,7 +735,7 @@ export default function NotificationPanelPage() {
                   fontWeight: 500,
                 }}
               >
-                restarted successfully
+                Restarted successfully
               </span>
             ) : restartState === "error" ? (
               <span
@@ -746,7 +746,7 @@ export default function NotificationPanelPage() {
                   fontWeight: 500,
                 }}
               >
-                restart failed{restartError ? `: ${restartError}` : ""}
+                Restart failed{restartError ? `: ${restartError}` : ""}
               </span>
             ) : (
               visibleActions.map((action, index) => {
@@ -760,7 +760,7 @@ export default function NotificationPanelPage() {
                   (action.type === "source" ? "source" : undefined) ||
                   action.action ||
                   action.type ||
-                  "action";
+                  "Action";
                 return (
                   <NotificationActionButton
                     key={action.id || action.action || action.type || index}
@@ -798,8 +798,8 @@ export default function NotificationPanelPage() {
           >
             <button
               onClick={copyNotification}
-              title="copy notification"
-              aria-label={copied ? "copied notification" : "copy notification"}
+              title="Copy notification"
+              aria-label={copied ? "Copied notification" : "Copy notification"}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -832,7 +832,7 @@ export default function NotificationPanelPage() {
             {payload.source_url && (
               <button
                 onClick={openSource}
-                title="open source chat"
+                title="Open source chat"
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
@@ -856,7 +856,7 @@ export default function NotificationPanelPage() {
                 }
               >
                 <ExternalLink size={12} strokeWidth={1.8} />
-                source
+                Source
               </button>
             )}
             {isNotificationFeedbackEligible(payload) && (
@@ -876,7 +876,7 @@ export default function NotificationPanelPage() {
                   fontSize: "9px",
                 }}
               >
-                <MessageSquare size={12} /> feedback
+                <MessageSquare size={12} /> Feedback
               </button>
             )}
             <button
@@ -887,7 +887,7 @@ export default function NotificationPanelPage() {
                   await commands.showWindow({ Home: { page: null } });
                 } catch {}
               }}
-              title="manage notification settings"
+              title="Manage notification settings"
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -912,7 +912,7 @@ export default function NotificationPanelPage() {
               }
             >
               <Bell size={12} strokeWidth={1.8} />
-              manage
+              Manage
             </button>
           </div>
         )}

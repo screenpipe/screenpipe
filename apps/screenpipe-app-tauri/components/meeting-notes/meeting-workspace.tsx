@@ -39,15 +39,15 @@ export const MEETING_QUIET_CONTROL_CLASS =
 // reads as one band instead of a strip of floating boxes. Shared with the note
 // view now that the meeting actions live here rather than in a footer.
 export const MEETING_RULE_ACTION_CLASS =
-  "flex h-11 shrink-0 items-center gap-2 border-l border-border font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-foreground disabled:text-muted-foreground/50 disabled:hover:bg-transparent";
+  "flex h-11 shrink-0 items-center gap-2 border-l border-border font-mono text-[11px] normal-case tracking-[0.12em] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-foreground disabled:text-muted-foreground/50 disabled:hover:bg-transparent";
 
 const MEETING_TABS: ReadonlyArray<{
   value: MeetingWorkspaceTab;
   label: string;
 }> = [
-  { value: "notes", label: "notes" },
-  { value: "transcript", label: "transcript" },
-  { value: "summary", label: "summary" },
+  { value: "notes", label: "Notes" },
+  { value: "transcript", label: "Transcript" },
+  { value: "summary", label: "Summary" },
 ];
 
 export function MeetingWorkspaceTabs({
@@ -78,7 +78,7 @@ export function MeetingWorkspaceTabs({
   const tablist = (
     <div
       role="tablist"
-      aria-label="meeting workspace"
+      aria-label="Meeting workspace"
       className={cn(
         "flex min-w-0 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         !trailing && "border-b border-border",
@@ -116,7 +116,7 @@ export function MeetingWorkspaceTabs({
               }
             }}
             className={cn(
-              "relative flex h-11 shrink-0 items-center gap-2 border-r border-border px-4 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground transition-colors focus-visible:z-10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-foreground sm:min-w-32 sm:justify-center",
+              "relative flex h-11 shrink-0 items-center gap-2 border-r border-border px-4 font-mono text-[11px] normal-case tracking-[0.12em] text-muted-foreground transition-colors focus-visible:z-10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-foreground sm:min-w-32 sm:justify-center",
               selected && "bg-foreground text-background",
               !selected && "hover:bg-muted hover:text-foreground",
             )}
@@ -124,7 +124,7 @@ export function MeetingWorkspaceTabs({
             <span>{tab.label}</span>
             {state && (
               <span
-                aria-label={`summary ${state}`}
+                aria-label={`Summary ${state}`}
                 className={cn(
                   "h-1.5 w-1.5 shrink-0",
                   state === "working" &&
@@ -263,7 +263,7 @@ export function MeetingSummarySurface({
             role={state === "working" ? "status" : undefined}
             aria-live={state === "working" ? "polite" : undefined}
           >
-            <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+            <div className="flex items-center gap-2 font-mono text-[10px] normal-case tracking-[0.14em] text-muted-foreground">
               {state === "working" && (
                 <Loader2
                   className="h-3 w-3 animate-spin motion-reduce:animate-none"
@@ -272,8 +272,8 @@ export function MeetingSummarySurface({
               )}
               <span>
                 {state === "working"
-                  ? "writing summary"
-                  : "meeting summary"}
+                  ? "Writing summary"
+                  : "Meeting summary"}
               </span>
             </div>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
@@ -295,13 +295,13 @@ export function MeetingSummarySurface({
                 type="button"
                 onClick={onGenerate}
                 disabled={!canGenerate}
-                className="h-9 shrink-0 border border-foreground bg-foreground px-3 font-mono text-[10px] uppercase tracking-[0.12em] text-background transition-colors hover:bg-background hover:text-foreground disabled:border-border disabled:bg-muted disabled:text-muted-foreground"
+                className="h-9 shrink-0 border border-foreground bg-foreground px-3 font-mono text-[10px] normal-case tracking-[0.12em] text-background transition-colors hover:bg-background hover:text-foreground disabled:border-border disabled:bg-muted disabled:text-muted-foreground"
               >
                 {state === "attention"
-                  ? "retry"
+                  ? "Retry"
                   : state === "ready"
-                    ? "summarize again"
-                    : "generate"}
+                    ? "Summarize again"
+                    : "Generate"}
               </button>
             )}
           </div>
@@ -319,7 +319,7 @@ export function MeetingSummarySurface({
                 aria-hidden="true"
               />
               <div className="min-w-0 flex-1">
-                <h2 className="font-mono text-xs uppercase tracking-[0.12em] text-foreground">
+                <h2 className="font-mono text-xs normal-case tracking-[0.12em] text-foreground">
                   {attention.title}
                 </h2>
                 <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
@@ -331,7 +331,7 @@ export function MeetingSummarySurface({
                       type="button"
                       data-testid="meeting-summary-upgrade-button"
                       onClick={attention.upgrade.onSelect}
-                      className="h-9 border border-foreground bg-foreground px-3 font-mono text-[10px] uppercase tracking-[0.12em] text-background transition-colors hover:bg-background hover:text-foreground"
+                      className="h-9 border border-foreground bg-foreground px-3 font-mono text-[10px] normal-case tracking-[0.12em] text-background transition-colors hover:bg-background hover:text-foreground"
                     >
                       {attention.upgrade.label}
                     </button>
@@ -343,11 +343,11 @@ export function MeetingSummarySurface({
                           type="button"
                           data-testid="meeting-summary-change-model"
                           disabled={attention.model.saving}
-                          className="flex h-9 items-center gap-2 border border-border bg-background px-3 font-mono text-[10px] uppercase tracking-[0.12em] text-foreground transition-colors hover:border-foreground disabled:text-muted-foreground"
+                          className="flex h-9 items-center gap-2 border border-border bg-background px-3 font-mono text-[10px] normal-case tracking-[0.12em] text-foreground transition-colors hover:border-foreground disabled:text-muted-foreground"
                         >
                           {attention.model.saving
-                            ? "changing model"
-                            : "change summary model"}
+                            ? "Changing model"
+                            : "Change summary model"}
                           <ChevronDown className="h-3 w-3" aria-hidden="true" />
                         </button>
                       </DropdownMenuTrigger>
@@ -356,8 +356,8 @@ export function MeetingSummarySurface({
                         className="w-72 rounded-lg"
                       >
                         <div className="border-b border-border px-2 py-2">
-                          <p className="font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground">
-                            current summary model
+                          <p className="font-mono text-[9px] normal-case tracking-[0.12em] text-muted-foreground">
+                            Current summary model
                           </p>
                           <p className="mt-1 truncate text-xs text-foreground">
                             {attention.model.selectedLabel}
@@ -387,9 +387,9 @@ export function MeetingSummarySurface({
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
                           onSelect={attention.model.onManage}
-                          className="rounded-sm font-mono text-[10px] uppercase tracking-[0.1em]"
+                          className="rounded-sm font-mono text-[10px] normal-case tracking-[0.1em]"
                         >
-                          manage models &amp; keys
+                          Manage models &amp; keys
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -406,7 +406,7 @@ export function MeetingSummarySurface({
         >
           {summary ? (
             <div aria-busy={isStreaming}>
-              <MemoizedReactMarkdown className="prose prose-sm max-w-none flex flex-col items-start break-words text-foreground dark:prose-invert prose-headings:font-mono prose-headings:text-xs prose-headings:uppercase prose-headings:tracking-[0.12em] prose-p:leading-7 prose-li:leading-7 [&>*:first-child]:mt-0">
+              <MemoizedReactMarkdown className="prose prose-sm max-w-none flex flex-col items-start break-words text-foreground dark:prose-invert prose-headings:font-mono prose-headings:text-xs prose-headings:normal-case prose-headings:tracking-[0.12em] prose-p:leading-7 prose-li:leading-7 [&>*:first-child]:mt-0">
                 {summary}
               </MemoizedReactMarkdown>
               {isStreaming && (
@@ -432,10 +432,10 @@ export function MeetingSummarySurface({
           ) : state === "attention" ? null : (
             <div className="border-l border-border py-2 pl-5">
               <p className="text-sm font-medium text-foreground">
-                no summary yet
+                No summary yet
               </p>
               <p className="mt-2 max-w-lg text-sm leading-6 text-muted-foreground">
-                Stop the meeting first. screenpipe will keep your notes and
+                Stop the meeting first. Screenpipe will keep your notes and
                 transcript intact while the summary is written.
               </p>
             </div>

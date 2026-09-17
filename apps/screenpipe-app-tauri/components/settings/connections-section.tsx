@@ -93,7 +93,7 @@ interface McpVersionInfo { available: string | null; installed: string | null; }
 
 function formatRelativeTime(ts: number): string {
   const secs = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-  if (secs < 5) return "just now";
+  if (secs < 5) return "Just now";
   if (secs < 60) return `${secs}s ago`;
   const mins = Math.floor(secs / 60);
   if (mins < 60) return `${mins}m ago`;
@@ -440,7 +440,7 @@ async function detectInstalledConnectionIds(): Promise<Set<string>> {
 function buildGrokMcpServer(config: McpCommand): Record<string, unknown> {
   const server: Record<string, unknown> = {
     id: "screenpipe",
-    label: "screenpipe",
+    label: "Screenpipe",
     enabled: true,
     transport: "stdio",
     command: config.command,
@@ -1073,7 +1073,7 @@ function PanelConfigError({ err }: { err: FriendlyToolError }) {
           onClick={() => revealPath(err.path!)}
           className="underline text-foreground/80 hover:text-foreground transition-colors shrink-0"
         >
-          open file
+          Open file
         </button>
       )}
     </div>
@@ -1202,20 +1202,20 @@ function ClaudePanel({
       <div className="flex flex-wrap gap-2">
         {state === "connected" ? (
           <Button onClick={handleDisconnect} variant="outline" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-            <LogOut className="h-3 w-3" />disconnect
+            <LogOut className="h-3 w-3" />Disconnect
           </Button>
         ) : (
           <Button onClick={handleConnect} disabled={state === "connecting"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-            {state === "connecting" ? (<><Loader2 className="h-3 w-3 animate-spin" />connecting...</>) : connectError ? (<><RotateCw className="h-3 w-3" />retry</>) : (<><Download className="h-3 w-3" />connect</>)}
+            {state === "connecting" ? (<><Loader2 className="h-3 w-3 animate-spin" />Connecting...</>) : connectError ? (<><RotateCw className="h-3 w-3" />Retry</>) : (<><Download className="h-3 w-3" />Connect</>)}
           </Button>
         )}
         {targets.includes("claude") && claudeAppInstalled === false ? (
           <Button variant="outline" onClick={() => openUrl("https://claude.ai/download")} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-            <ExternalLink className="h-3 w-3" />get claude desktop
+            <ExternalLink className="h-3 w-3" />Get claude desktop
           </Button>
         ) : targets.includes("claude") ? (
           <Button variant="outline" onClick={openClaude} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-            <ExternalLink className="h-3 w-3" />open claude
+            <ExternalLink className="h-3 w-3" />Open claude
           </Button>
         ) : null}
       </div>
@@ -1304,26 +1304,26 @@ function CursorPanel({ onConnected, onDisconnected }: { onConnected?: () => void
       <div className="flex flex-wrap gap-2">
         {state === "installed" ? (
           <Button onClick={handleDisconnect} variant="outline" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-            <LogOut className="h-3 w-3" />disconnect
+            <LogOut className="h-3 w-3" />Disconnect
           </Button>
         ) : (
           <Button onClick={handleConnect} disabled={state === "installing"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-            {state === "installing" ? (<><Loader2 className="h-3 w-3 animate-spin" />installing...</>) : connectError ? (<><RotateCw className="h-3 w-3" />retry</>) : (<><Download className="h-3 w-3" />connect</>)}
+            {state === "installing" ? (<><Loader2 className="h-3 w-3 animate-spin" />Installing...</>) : connectError ? (<><RotateCw className="h-3 w-3" />Retry</>) : (<><Download className="h-3 w-3" />Connect</>)}
           </Button>
         )}
         {cursorAppInstalled === false ? (
           <Button variant="outline" onClick={() => openUrl("https://cursor.com/download")} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-            <ExternalLink className="h-3 w-3" />get cursor
+            <ExternalLink className="h-3 w-3" />Get cursor
           </Button>
         ) : (
           <Button variant="outline" onClick={openCursor} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-            <ExternalLink className="h-3 w-3" />open cursor
+            <ExternalLink className="h-3 w-3" />Open cursor
           </Button>
         )}
       </div>
       {connectError && <PanelConfigError err={connectError} />}
       <details className="text-xs text-muted-foreground">
-        <summary className="cursor-pointer">manual config</summary>
+        <summary className="cursor-pointer">Manual config</summary>
         <pre className="mt-2 bg-muted border border-border rounded-lg p-3 text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">{`add to ~/.cursor/mcp.json:\n\n${JSON.stringify({ mcpServers: { screenpipe: { command: "npx", args: ["-y", "screenpipe-mcp@latest"] } } }, null, 2)}`}</pre>
       </details>
     </div>
@@ -1382,15 +1382,15 @@ function CodexPanel({ onConnected, onDisconnected }: { onConnected?: () => void;
       <div className="flex flex-wrap gap-2">
         {state === "installed" ? (
           <Button onClick={handleDisconnect} variant="outline" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-            <LogOut className="h-3 w-3" />disconnect
+            <LogOut className="h-3 w-3" />Disconnect
           </Button>
         ) : (
           <Button onClick={handleConnect} disabled={state === "installing"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-            {state === "installing" ? (<><Loader2 className="h-3 w-3 animate-spin" />connecting...</>) : connectError ? (<><RotateCw className="h-3 w-3" />retry</>) : (<><Download className="h-3 w-3" />connect</>)}
+            {state === "installing" ? (<><Loader2 className="h-3 w-3 animate-spin" />Connecting...</>) : connectError ? (<><RotateCw className="h-3 w-3" />Retry</>) : (<><Download className="h-3 w-3" />Connect</>)}
           </Button>
         )}
         <Button variant="outline" onClick={openCodex} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-          <ExternalLink className="h-3 w-3" />open codex
+          <ExternalLink className="h-3 w-3" />Open codex
         </Button>
       </div>
       {connectError && <PanelConfigError err={connectError} />}
@@ -1400,7 +1400,7 @@ function CodexPanel({ onConnected, onDisconnected }: { onConnected?: () => void;
         </p>
       )}
       <details className="text-xs text-muted-foreground">
-        <summary className="cursor-pointer">manual config</summary>
+        <summary className="cursor-pointer">Manual config</summary>
         <pre className="mt-2 bg-muted border border-border rounded-lg p-3 text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">{manualConfig}</pre>
       </details>
       <MemorySyncSubsection
@@ -1448,15 +1448,15 @@ function GrokPanel({ onConnected, onDisconnected }: { onConnected?: () => void; 
       <div className="flex flex-wrap gap-2">
         {state === "installed" ? (
           <Button onClick={handleDisconnect} variant="outline" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-            <LogOut className="h-3 w-3" />disconnect
+            <LogOut className="h-3 w-3" />Disconnect
           </Button>
         ) : (
           <Button onClick={handleConnect} disabled={state === "installing"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-            {state === "installing" ? (<><Loader2 className="h-3 w-3 animate-spin" />connecting...</>) : connectError ? (<><RotateCw className="h-3 w-3" />retry</>) : (<><Download className="h-3 w-3" />connect</>)}
+            {state === "installing" ? (<><Loader2 className="h-3 w-3 animate-spin" />Connecting...</>) : connectError ? (<><RotateCw className="h-3 w-3" />Retry</>) : (<><Download className="h-3 w-3" />Connect</>)}
           </Button>
         )}
         <Button variant="outline" onClick={() => openUrl("https://github.com/superagent-ai/grok-cli")} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-          <ExternalLink className="h-3 w-3" />grok cli
+          <ExternalLink className="h-3 w-3" />Grok cli
         </Button>
       </div>
       {connectError && <PanelConfigError err={connectError} />}
@@ -1466,7 +1466,7 @@ function GrokPanel({ onConnected, onDisconnected }: { onConnected?: () => void; 
         </p>
       )}
       <details className="text-xs text-muted-foreground">
-        <summary className="cursor-pointer">manual config</summary>
+        <summary className="cursor-pointer">Manual config</summary>
         <pre className="mt-2 bg-muted border border-border rounded-lg p-3 text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">{manualConfig}</pre>
       </details>
     </div>
@@ -1481,14 +1481,14 @@ function GrokPanel({ onConnected, onDisconnected }: { onConnected?: () => void; 
 function describeSyncOutcome(result: any): string {
   if (result?.wrote) {
     const n = result.wrote.entries;
-    return `wrote ${n} ${n === 1 ? "memory" : "memories"}`;
+    return `Wrote ${n} ${n === 1 ? "memory" : "memories"}`;
   }
   if (result?.unchanged) {
     const n = result.unchanged.entries;
-    return `up to date · ${n} ${n === 1 ? "memory" : "memories"}`;
+    return `Up to date · ${n} ${n === 1 ? "memory" : "memories"}`;
   }
   if (result?.skipped) {
-    return `skipped · ${result.skipped.reason}`;
+    return `Skipped · ${result.skipped.reason}`;
   }
   return "synced";
 }
@@ -1532,14 +1532,14 @@ function useMemorySyncDestination(integrationId: string) {
         const resultText = describeSyncOutcome(me.outcome.result);
         setLastResult(resultText);
         setLastResultAt(Date.now());
-        toast({ title: "memory sync", description: resultText });
+        toast({ title: "Memory sync", description: resultText });
       } else if (me) {
         throw new Error(me?.outcome?.error || "sync failed");
       }
     } catch (e: any) {
       const msg = e?.message || "sync failed";
       setError(msg);
-      toast({ title: "memory sync failed", description: msg, variant: "destructive" });
+      toast({ title: "Memory sync failed", description: msg, variant: "destructive" });
     } finally {
       setStatus("idle");
     }
@@ -1574,7 +1574,7 @@ function useMemorySyncDestination(integrationId: string) {
       posthog.capture("connection_saved", { integration: integrationId });
       await triggerSyncNow();
     } catch (e: any) {
-      setError(e?.message || "connection failed");
+      setError(e?.message || "Connection failed");
     } finally {
       setStatus("idle");
     }
@@ -1590,7 +1590,7 @@ function useMemorySyncDestination(integrationId: string) {
       setLastResultAt(null);
       notifyConnectionsUpdated();
     } catch (e: any) {
-      setError(e?.message || "disconnect failed");
+      setError(e?.message || "Disconnect failed");
     }
   }, [integrationId]);
 
@@ -1638,10 +1638,10 @@ function MemorySyncSubsection({
   return (
     <div className="border-t border-border pt-3 mt-3 space-y-2">
       <div className="space-y-0.5">
-        <p className="text-xs font-medium text-foreground">memory sync (beta)</p>
+        <p className="text-xs font-medium text-foreground">Memory sync (beta)</p>
         <p className="text-xs text-muted-foreground">
-          writes safe recall instructions into {targetFilename} so {assistantName} can retrieve
-          relevant memories through screenpipe MCP. updates automatically every 5 minutes.
+          Writes safe recall instructions into {targetFilename} so {assistantName} can retrieve
+          relevant memories through screenpipe MCP. Updates automatically every 5 minutes.
         </p>
       </div>
 
@@ -1649,29 +1649,29 @@ function MemorySyncSubsection({
         <>
           <div className="p-2 bg-muted border border-border rounded-lg space-y-1">
             <div className="space-y-0.5">
-              <p className="text-xs text-muted-foreground">file</p>
+              <p className="text-xs text-muted-foreground">File</p>
               <p className="text-xs text-foreground font-mono break-all">{persistedPath}/{targetFilename}</p>
             </div>
             {lastResult && (
               <div className="pt-1 border-t border-border space-y-0.5">
-                <p className="text-xs text-muted-foreground">last sync{lastResultAt && ` · ${formatRelativeTime(lastResultAt)}`}</p>
+                <p className="text-xs text-muted-foreground">Last sync{lastResultAt && ` · ${formatRelativeTime(lastResultAt)}`}</p>
                 <p className="text-xs text-foreground break-all">{lastResult}</p>
               </div>
             )}
           </div>
           <div className="flex flex-wrap gap-2">
             <Button onClick={triggerSyncNow} disabled={status === "syncing"} size="sm" variant="outline" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-              {status === "syncing" ? (<><Loader2 className="h-3 w-3 animate-spin" />syncing...</>) : (<><Send className="h-3 w-3" />sync now</>)}
+              {status === "syncing" ? (<><Loader2 className="h-3 w-3 animate-spin" />Syncing...</>) : (<><Send className="h-3 w-3" />Sync now</>)}
             </Button>
             <Button onClick={disconnect} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-              <LogOut className="h-3 w-3" />stop syncing
+              <LogOut className="h-3 w-3" />Stop syncing
             </Button>
           </div>
         </>
       ) : (
         <>
           <div className="space-y-1">
-            <Label className="text-xs text-muted-foreground">home directory (optional)</Label>
+            <Label className="text-xs text-muted-foreground">Home directory (optional)</Label>
             <Input
               value={homePath}
               onChange={(e) => setHomePath(e.target.value)}
@@ -1681,7 +1681,7 @@ function MemorySyncSubsection({
             />
           </div>
           <Button onClick={() => connect({ home_path: persistedPath })} disabled={status === "connecting"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-            {status === "connecting" ? (<><Loader2 className="h-3 w-3 animate-spin" />enabling...</>) : (<><Download className="h-3 w-3" />enable memory sync</>)}
+            {status === "connecting" ? (<><Loader2 className="h-3 w-3 animate-spin" />Enabling...</>) : (<><Download className="h-3 w-3" />Enable memory sync</>)}
           </Button>
         </>
       )}
@@ -1762,7 +1762,7 @@ function ObsidianMemorySyncSubsection() {
 
   const handleEnable = useCallback(() => {
     const vault = vaultPath.trim();
-    if (!vault) { setError("pick a vault folder first"); return; }
+    if (!vault) { setError("Pick a vault folder first"); return; }
     // Backend re-sanitizes the folder authoritatively; send the raw value.
     return connect({ vault_path: vault, memories_folder: folder.trim() || OBSIDIAN_DEFAULT_FOLDER });
   }, [vaultPath, folder, connect, setError]);
@@ -1774,10 +1774,10 @@ function ObsidianMemorySyncSubsection() {
   return (
     <div className="border-t border-border pt-3 mt-1 space-y-2">
       <div className="space-y-0.5">
-        <p className="text-xs font-medium text-foreground">memory sync (beta)</p>
+        <p className="text-xs font-medium text-foreground">Memory sync (beta)</p>
         <p className="text-xs text-muted-foreground">
-          writes your screenpipe memories into a note in this vault so they show up
-          in your graph and search. updates automatically every 5 minutes.
+          Writes your screenpipe memories into a note in this vault so they show up
+          in your graph and search. Updates automatically every 5 minutes.
         </p>
       </div>
 
@@ -1785,29 +1785,29 @@ function ObsidianMemorySyncSubsection() {
         <>
           <div className="p-2 bg-muted border border-border rounded-lg space-y-1">
             <div className="space-y-0.5">
-              <p className="text-xs text-muted-foreground">note</p>
+              <p className="text-xs text-muted-foreground">Note</p>
               <p className="text-xs text-foreground font-mono break-all">{notePath}</p>
             </div>
             {lastResult && (
               <div className="pt-1 border-t border-border space-y-0.5">
-                <p className="text-xs text-muted-foreground">last sync{lastResultAt && ` · ${formatRelativeTime(lastResultAt)}`}</p>
+                <p className="text-xs text-muted-foreground">Last sync{lastResultAt && ` · ${formatRelativeTime(lastResultAt)}`}</p>
                 <p className="text-xs text-foreground break-all">{lastResult}</p>
               </div>
             )}
           </div>
           <div className="flex flex-wrap gap-2">
             <Button onClick={triggerSyncNow} disabled={status === "syncing"} size="sm" variant="outline" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-              {status === "syncing" ? (<><Loader2 className="h-3 w-3 animate-spin" />syncing...</>) : (<><Send className="h-3 w-3" />sync now</>)}
+              {status === "syncing" ? (<><Loader2 className="h-3 w-3 animate-spin" />Syncing...</>) : (<><Send className="h-3 w-3" />Sync now</>)}
             </Button>
             <Button onClick={disconnect} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-              <LogOut className="h-3 w-3" />stop syncing
+              <LogOut className="h-3 w-3" />Stop syncing
             </Button>
           </div>
         </>
       ) : (
         <>
           <div className="space-y-1">
-            <Label className="text-xs text-muted-foreground">vault folder</Label>
+            <Label className="text-xs text-muted-foreground">Vault folder</Label>
             <div className="relative">
               <Input
                 value={vaultPath}
@@ -1818,7 +1818,7 @@ function ObsidianMemorySyncSubsection() {
               />
               <button
                 type="button"
-                title="browse for vault folder"
+                title="Browse for vault folder"
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 onClick={async () => {
                   const selected = await openDialog({ directory: true, multiple: false, title: "Select Obsidian Vault Folder" });
@@ -1830,7 +1830,7 @@ function ObsidianMemorySyncSubsection() {
             </div>
           </div>
           <div className="space-y-1">
-            <Label className="text-xs text-muted-foreground">folder inside vault (optional)</Label>
+            <Label className="text-xs text-muted-foreground">Folder inside vault (optional)</Label>
             <Input
               value={folder}
               onChange={(e) => setFolder(e.target.value)}
@@ -1840,7 +1840,7 @@ function ObsidianMemorySyncSubsection() {
             />
           </div>
           <Button onClick={handleEnable} disabled={status === "connecting" || !vaultPath.trim()} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-            {status === "connecting" ? (<><Loader2 className="h-3 w-3 animate-spin" />enabling...</>) : (<><Download className="h-3 w-3" />enable memory sync</>)}
+            {status === "connecting" ? (<><Loader2 className="h-3 w-3 animate-spin" />Enabling...</>) : (<><Download className="h-3 w-3" />Enable memory sync</>)}
           </Button>
         </>
       )}
@@ -1924,10 +1924,10 @@ function MstyPanel() {
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">
-        3. Give the tool a name (e.g. <strong>screenpipe</strong>) and click <strong>Add</strong>
+        3. Give the tool a name (e.g. <strong>Screenpipe</strong>) and click <strong>Add</strong>
       </p>
       <Button variant="outline" onClick={() => openUrl("https://msty.app")} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-        <ExternalLink className="h-3 w-3" />open msty
+        <ExternalLink className="h-3 w-3" />Open msty
       </Button>
     </div>
   );
@@ -1973,7 +1973,7 @@ function WarpPanel() {
         3. Click <strong>Save</strong>. The server should show <strong>Running</strong>. Then ask Warp&apos;s agent: <em>&quot;what did I do in the last 5 minutes?&quot;</em>
       </p>
       <Button variant="outline" onClick={() => openUrl("https://www.warp.dev")} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-        <ExternalLink className="h-3 w-3" />open warp
+        <ExternalLink className="h-3 w-3" />Open warp
       </Button>
     </div>
   );
@@ -2004,22 +2004,22 @@ function OllamaPanel() {
         Use Ollama as a local AI provider for screenpipe.
       </p>
       <Button onClick={handleCheck} disabled={status === "checking"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-        {status === "checking" ? (<><Loader2 className="h-3 w-3 animate-spin" />checking...</>) : "check connection"}
+        {status === "checking" ? (<><Loader2 className="h-3 w-3 animate-spin" />Checking...</>) : "Check connection"}
       </Button>
       {status === "connected" && (
         <div className="p-3 bg-muted border border-border rounded-lg space-y-1">
-          <p className="text-xs font-medium text-foreground">ollama detected</p>
+          <p className="text-xs font-medium text-foreground">Ollama detected</p>
           {models.length > 0 ? (
             <ul className="text-xs text-muted-foreground list-disc list-inside">
               {models.map(m => <li key={m}>{m}</li>)}
             </ul>
           ) : (
-            <p className="text-xs text-muted-foreground">no models found. run &quot;ollama pull &lt;model&gt;&quot; to get started.</p>
+            <p className="text-xs text-muted-foreground">No models found. Run &quot;ollama pull &lt;model&gt;&quot; to get started.</p>
           )}
         </div>
       )}
       {status === "error" && (
-        <p className="text-xs text-destructive">ollama not detected. make sure it&apos;s running on localhost:11434.</p>
+        <p className="text-xs text-destructive">Ollama not detected. Make sure it&apos;s running on localhost:11434.</p>
       )}
     </div>
   );
@@ -2052,26 +2052,26 @@ function LMStudioPanel() {
       </p>
       <div className="flex flex-wrap gap-2">
         <Button onClick={() => openUrl(deeplink)} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-          <Download className="h-3 w-3" /> add screenpipe MCP to LM Studio
+          <Download className="h-3 w-3" /> Add screenpipe MCP to LM Studio
         </Button>
         <Button onClick={handleCheck} variant="outline" disabled={status === "checking"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-          {status === "checking" ? (<><Loader2 className="h-3 w-3 animate-spin" />checking...</>) : "check connection"}
+          {status === "checking" ? (<><Loader2 className="h-3 w-3 animate-spin" />Checking...</>) : "Check connection"}
         </Button>
       </div>
       {status === "connected" && (
         <div className="p-3 bg-muted border border-border rounded-lg space-y-1">
-          <p className="text-xs font-medium text-foreground">lm studio detected</p>
+          <p className="text-xs font-medium text-foreground">Lm studio detected</p>
           {models.length > 0 ? (
             <ul className="text-xs text-muted-foreground list-disc list-inside">
               {models.map(m => <li key={m}>{m}</li>)}
             </ul>
           ) : (
-            <p className="text-xs text-muted-foreground">no models loaded. load a model in lm studio to get started.</p>
+            <p className="text-xs text-muted-foreground">No models loaded. Load a model in lm studio to get started.</p>
           )}
         </div>
       )}
       {status === "error" && (
-        <p className="text-xs text-destructive">lm studio not detected. make sure it&apos;s running on localhost:1234.</p>
+        <p className="text-xs text-destructive">Lm studio not detected. Make sure it&apos;s running on localhost:1234.</p>
       )}
     </div>
   );
@@ -2168,7 +2168,7 @@ function ChatGptPanel() {
           <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
           <span>
             Your ChatGPT session has expired. Click{" "}
-            <strong>reconnect</strong> to sign in again.
+            <strong>Reconnect</strong> to sign in again.
           </span>
         </div>
       )}
@@ -2181,7 +2181,7 @@ function ChatGptPanel() {
             className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
           >
             <Loader2 className="h-3 w-3 animate-spin" />
-            {status === "checking" ? "checking session..." : "connecting..."}
+            {status === "checking" ? "Checking session..." : "Connecting..."}
           </Button>
         )}
 
@@ -2193,7 +2193,7 @@ function ChatGptPanel() {
             className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
           >
             <LogOut className="h-3 w-3" />
-            disconnect
+            Disconnect
           </Button>
         )}
 
@@ -2204,7 +2204,7 @@ function ChatGptPanel() {
             className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal"
           >
             <LogIn className="h-3 w-3" />
-            {status === "expired" ? "reconnect" : "connect with ChatGPT"}
+            {status === "expired" ? "Reconnect" : "Connect with ChatGPT"}
           </Button>
         )}
       </div>
@@ -2441,7 +2441,7 @@ export function OAuthPanel({
             return (
               <div key={key} className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2 text-xs">
                 <span className="text-muted-foreground truncate">
-                  {account.displayName || account.instance || "default account"}
+                  {account.displayName || account.instance || "Default account"}
                 </span>
                 <Button
                   onClick={() => handleDisconnect(account.instance)}
@@ -2496,10 +2496,10 @@ export function OAuthPanel({
         {status === "loading" ? (
           <div className="flex gap-2 items-center">
             <Button disabled size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal whitespace-nowrap">
-              <Loader2 className="h-3 w-3 animate-spin" />connecting...
+              <Loader2 className="h-3 w-3 animate-spin" />Connecting...
             </Button>
             <Button onClick={handleCancel} variant="outline" size="sm" className="h-7 text-xs normal-case font-sans tracking-normal">
-              cancel
+              Cancel
             </Button>
           </div>
         ) : (
@@ -2507,8 +2507,8 @@ export function OAuthPanel({
             {connected && supportsOAuthInstances
               ? (<><Plus className="h-3 w-3" />{panelCopy.addAnotherLabel}</>)
               : connected
-                ? (<><LogIn className="h-3 w-3" />reconnect {integrationName}</>)
-              : (<><LogIn className="h-3 w-3" />connect with {integrationName}</>)}
+                ? (<><LogIn className="h-3 w-3" />Reconnect {integrationName}</>)
+              : (<><LogIn className="h-3 w-3" />Connect with {integrationName}</>)}
           </Button>
         )}
       </div>
@@ -2640,7 +2640,7 @@ export function ConnectionCredentialForm({
       posthog.capture("connection_saved", { integration: integrationId });
       onSaved?.();
     } catch (e: any) {
-      setError(e?.message || "unknown error");
+      setError(e?.message || "Unknown error");
       setStatus("error");
     }
   };
@@ -2658,7 +2658,7 @@ export function ConnectionCredentialForm({
       notifyConnectionsUpdated();
       onDisconnect?.();
     } catch (e: any) {
-      setError(e?.message || "disconnect failed");
+      setError(e?.message || "Disconnect failed");
     }
   };
 
@@ -2686,7 +2686,7 @@ export function ConnectionCredentialForm({
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="top" align="start" alignOffset={8} sideOffset={8} className="text-xs max-w-[220px] space-y-1">
-                    <p>Learn how to find your {field.label.toLowerCase()} for this integration.</p>
+                    <p>Learn how to find your {field.label} for this integration.</p>
                     <button onClick={() => openUrl(field.help_url)} className="underline hover:text-primary cursor-pointer">
                       Open guide →
                     </button>
@@ -2698,7 +2698,7 @@ export function ConnectionCredentialForm({
           <div className="relative">
             <Input
               type={field.secret && !visible[field.key] ? "password" : "text"}
-              placeholder={isSaved && field.secret ? "stored securely" : field.placeholder}
+              placeholder={isSaved && field.secret ? "Stored securely" : field.placeholder}
               value={creds[field.key] || ""}
               onChange={(e) => { setCreds(prev => ({ ...prev, [field.key]: e.target.value })); }}
               className="h-8 text-xs pr-8"
@@ -2720,14 +2720,14 @@ export function ConnectionCredentialForm({
       <div className="flex gap-2">
         {!isSaved && (
           <Button onClick={handleConnect} disabled={missingRequiredField || status === "connecting"} variant={status === "error" ? "outline" : "default"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-            {status === "connecting" ? (<><Loader2 className="h-3 w-3 animate-spin" />connecting...</>)
-             : status === "error" ? (<>retry</>)
-             : (<><Check className="h-3 w-3" />connect</>)}
+            {status === "connecting" ? (<><Loader2 className="h-3 w-3 animate-spin" />Connecting...</>)
+             : status === "error" ? (<>Retry</>)
+             : (<><Check className="h-3 w-3" />Connect</>)}
           </Button>
         )}
         {isSaved && (
           <Button onClick={handleDisconnect} variant="ghost" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal text-destructive">
-            <X className="h-3 w-3" />disconnect
+            <X className="h-3 w-3" />Disconnect
           </Button>
         )}
       </div>
@@ -2853,7 +2853,7 @@ function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => vo
       posthog.capture("connection_saved", { integration: "obsidian" });
       onConnected?.();
     } catch (e: any) {
-      setError(e?.message || "connection failed");
+      setError(e?.message || "Connection failed");
     } finally {
       setBusyPath(null);
     }
@@ -2889,7 +2889,7 @@ function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => vo
       notifyConnectionsUpdated();
       onDisconnected?.();
     } catch (e: any) {
-      setError(e?.message || "disconnect failed");
+      setError(e?.message || "Disconnect failed");
       loadConnected();
     }
   };
@@ -2902,7 +2902,7 @@ function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => vo
     <div className="space-y-4">
       {connected.length > 0 && (
         <div className="space-y-1.5">
-          <p className="text-xs text-muted-foreground">connected {connected.length === 1 ? "vault" : "vaults"}</p>
+          <p className="text-xs text-muted-foreground">Connected {connected.length === 1 ? "vault" : "vaults"}</p>
           <div className="space-y-1">
             {connected.map(v => (
               <div
@@ -2916,7 +2916,7 @@ function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => vo
                 <button
                   type="button"
                   onClick={() => handleDisconnect(v)}
-                  title="disconnect vault"
+                  title="Disconnect vault"
                   className="text-muted-foreground hover:text-destructive shrink-0"
                 >
                   <X className="h-3.5 w-3.5" />
@@ -2929,7 +2929,7 @@ function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => vo
 
       {suggestions.length > 0 && (
         <div className="space-y-1.5">
-          <p className="text-xs text-muted-foreground">{connected.length > 0 ? "add another vault" : "detected vaults"}</p>
+          <p className="text-xs text-muted-foreground">{connected.length > 0 ? "Add another vault" : "Detected vaults"}</p>
           <div className="space-y-1">
             {suggestions.map(v => (
               <button
@@ -2951,7 +2951,7 @@ function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => vo
 
       <div className="space-y-1.5">
         <p className="text-xs text-muted-foreground">
-          {connected.length > 0 || suggestions.length > 0 ? "or enter a vault path manually" : "select your vault folder"}
+          {connected.length > 0 || suggestions.length > 0 ? "Or enter a vault path manually" : "Select your vault folder"}
         </p>
         <div className="flex gap-2">
           <div className="relative flex-1">
@@ -2964,7 +2964,7 @@ function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => vo
             />
             <button
               type="button"
-              title="browse for vault folder"
+              title="Browse for vault folder"
               className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
               onClick={async () => {
                 const selected = await openDialog({ directory: true, multiple: false, title: "Select Obsidian Vault Folder" });
@@ -2981,7 +2981,7 @@ function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => vo
             className="gap-1.5 h-8 text-xs normal-case font-sans tracking-normal shrink-0"
           >
             {busyPath && busyPath === manualPath.trim() ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-            add vault
+            Add vault
           </Button>
         </div>
       </div>
@@ -3085,12 +3085,12 @@ function BeePairPanel({ onConnected }: { onConnected: () => void }) {
         {busy ? (
           <>
             <Loader2 className="h-3 w-3 animate-spin" />
-            waiting for approval…
+            Waiting for approval…
           </>
         ) : (
           <>
             <LogIn className="h-3 w-3" />
-            connect with Bee
+            Connect with Bee
           </>
         )}
       </Button>
@@ -3189,7 +3189,7 @@ export function ApiIntegrationPanel({ integration, onRefresh }: {
     <div className="space-y-4">
       {/* Default instance */}
       <div>
-        <p className="text-xs text-muted-foreground mb-2">default</p>
+        <p className="text-xs text-muted-foreground mb-2">Default</p>
         <ConnectionCredentialForm
           integrationId={integration.id}
           fields={integration.fields}
@@ -3226,17 +3226,17 @@ export function ApiIntegrationPanel({ integration, onRefresh }: {
             <Input
               value={newInstanceName}
               onChange={(e) => setNewInstanceName(e.target.value)}
-              placeholder="instance name (e.g. work, personal)"
+              placeholder="Instance name (e.g. work, personal)"
               className="h-7 text-xs flex-1"
               spellCheck={false}
               onKeyDown={(e) => { if (e.key === "Enter") handleAddInstance(); }}
               autoFocus
             />
             <Button onClick={handleAddInstance} size="sm" className="h-7 text-xs" disabled={!newInstanceName.trim()}>
-              add
+              Add
             </Button>
             <Button onClick={() => { setAddingInstance(false); setNewInstanceName(""); }} variant="ghost" size="sm" className="h-7 text-xs">
-              cancel
+              Cancel
             </Button>
           </div>
         ) : (
@@ -4208,7 +4208,7 @@ export function ConnectionsSection({
           {hasManual && existing && (
             <details open={existing.connected && !mcpProviderConnected[mcpProvider.id]}>
               <summary className="text-[11px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
-                advanced: {existing.connected
+                Advanced: {existing.connected
                   ? "manage your existing connection"
                   : "connect with an API key instead"}
               </summary>
@@ -4273,7 +4273,7 @@ export function ConnectionsSection({
           {googleDocsConnected && (
             <details>
               <summary className="text-[11px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
-                advanced: manage the legacy google docs connection
+                Advanced: manage the legacy google docs connection
               </summary>
               <div className="pt-2">
                 <GoogleDocsCard />
@@ -4295,7 +4295,7 @@ export function ConnectionsSection({
           {selectedIntegration?.is_oauth && selectedIntegration.connected && (
             <details>
               <summary className="text-[11px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
-                advanced: manage the legacy zoom connection
+                Advanced: manage the legacy zoom connection
               </summary>
               <div className="pt-2">
                 <OAuthPanel
@@ -4375,7 +4375,7 @@ export function ConnectionsSection({
                 {selectedIntegration.fields.length > 0 && (
                   <details>
                     <summary className="text-[11px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
-                      advanced: connect with a token instead
+                      Advanced: connect with a token instead
                     </summary>
                     <div className="pt-2">
                       <ApiIntegrationPanel
@@ -4403,7 +4403,7 @@ export function ConnectionsSection({
                 />
                 <details>
                   <summary className="text-[11px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
-                    advanced: connect with a token instead
+                    Advanced: connect with a token instead
                   </summary>
                   <div className="pt-2">
                     <ApiIntegrationPanel
@@ -4427,14 +4427,14 @@ export function ConnectionsSection({
           return (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" />
-              loading connection...
+              Loading connection...
             </div>
           );
         }
         return (
           <div className="space-y-2">
             <p className="text-xs text-muted-foreground">
-              couldn&apos;t load connection metadata. the local screenpipe server may be starting up.
+              Couldn&apos;t load connection metadata. The local screenpipe server may be starting up.
             </p>
             <Button
               size="sm"
@@ -4443,7 +4443,7 @@ export function ConnectionsSection({
               onClick={() => { notifyConnectionsUpdated(); fetchIntegrations(); }}
             >
               <Loader2 className="h-3 w-3" />
-              retry
+              Retry
             </Button>
           </div>
         );
@@ -4619,24 +4619,24 @@ export function ConnectionsSection({
                     {selectedTile.id === "apple-calendar" && (
                       <span className="px-2 py-0.5 text-xs font-medium border border-border text-muted-foreground rounded-full inline-flex items-center gap-1">
                         <CalendarIcon className="h-2.5 w-2.5" />
-                        macOS
+                        MacOS
                       </span>
                     )}
                   </div>
                   {selectedTile.connected && (
                     <span className="text-xs text-foreground">
-                      {selectedTile.id === "pi-extensions" ? "ready" : "connected"}
+                      {selectedTile.id === "pi-extensions" ? "Ready" : "Connected"}
                     </span>
                   )}
                 </div>
                 <DialogClose asChild>
                   <button
                     type="button"
-                    aria-label="close"
+                    aria-label="Close"
                     className="ml-auto text-muted-foreground transition-colors hover:text-foreground"
                   >
                     <X className="h-4 w-4" />
-                    <span className="sr-only">close</span>
+                    <span className="sr-only">Close</span>
                   </button>
                 </DialogClose>
               </DialogHeader>

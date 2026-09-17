@@ -151,7 +151,7 @@ describe("trial activation summary experience", () => {
     mocks.view = view({ activationState: "summary", phase: "empty" });
     render(<TrialActivationSummaryExperience />);
 
-    fireEvent.click(screen.getByRole("button", { name: "retry summary" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry summary" }));
     await waitFor(() => expect(mocks.completeOnboarding).toHaveBeenCalled());
     expect(screen.queryByTestId("trial-activation-paywall")).not.toBeInTheDocument();
   });
@@ -211,7 +211,7 @@ describe("first-run learning banner", () => {
     );
     expect(screen.queryByTestId("normal-home")).not.toBeInTheDocument();
     expect(
-      screen.getByText("screenpipe learned enough to help"),
+      screen.getByText("Screenpipe learned enough to help"),
     ).toBeInTheDocument();
     expect(mocks.view.markReadyShown).toHaveBeenCalledTimes(1);
 
@@ -289,12 +289,12 @@ describe("first-run learning banner", () => {
     render(<FirstRunLearningBanner />);
 
     expect(
-      screen.getByText("screenpipe learned enough to help"),
+      screen.getByText("Screenpipe learned enough to help"),
     ).toBeInTheDocument();
     expect(
       screen.queryByTestId("first-run-next-steps"),
     ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "this is ready" }));
+    fireEvent.click(screen.getByRole("button", { name: "This is ready" }));
     expect(dismiss).toHaveBeenCalled();
   });
 
@@ -316,7 +316,7 @@ describe("first-run learning banner", () => {
         dismiss,
       });
       const rendered = render(<FirstRunLearningBanner />);
-      expect(screen.getByText("screenpipe is ready")).toBeInTheDocument();
+      expect(screen.getByText("Screenpipe is ready")).toBeInTheDocument();
       expect(
         screen.queryByTestId("first-run-next-steps"),
       ).not.toBeInTheDocument();
@@ -328,7 +328,7 @@ describe("first-run learning banner", () => {
 
     mocks.view = view({ phase: "empty", showProgress: true, dismiss });
     render(<FirstRunLearningBanner />);
-    fireEvent.click(screen.getByRole("button", { name: "this is ready" }));
+    fireEvent.click(screen.getByRole("button", { name: "This is ready" }));
     expect(dismiss).toHaveBeenCalled();
   });
 

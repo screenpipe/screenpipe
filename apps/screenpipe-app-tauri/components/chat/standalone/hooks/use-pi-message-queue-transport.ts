@@ -86,7 +86,7 @@ export function createPiMessageQueueTransport(
       if (result.status !== "ok") {
         setInput(prevInput);
         if (hadPastedImages) setPastedImages(queuedImageDataUrls);
-        toast({ title: "failed to queue message", description: result.error, variant: "destructive" });
+        toast({ title: "Failed to queue message", description: result.error, variant: "destructive" });
         return;
       }
 

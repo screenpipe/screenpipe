@@ -30,7 +30,7 @@ const isLowTier = (tier: string | null | undefined) =>
 
 // Each "frame" is a skeleton layout of a different app the user was in.
 const MOCK_FRAMES = [
-  { label: "now · your editor", bars: [85, 60, 72, 40, 65] },
+  { label: "Now · your editor", bars: [85, 60, 72, 40, 65] },
   { label: "-2m · browser", bars: [50, 90, 45, 78, 30] },
   { label: "-10m · a meeting", bars: [70, 35, 88, 55, 62] },
   { label: "-1h · slack", bars: [40, 75, 52, 85, 48] },
@@ -199,7 +199,7 @@ export default function TimelineChoice({
       posthog.capture("onboarding_timeline_choice_failed", {
         stage: "persist",
       });
-      setError("couldn't save that choice. check disk space and try again.");
+      setError("Couldn't save that choice. check disk space and try again.");
       inFlight.current = false;
       setPending(null);
       return;
@@ -212,7 +212,7 @@ export default function TimelineChoice({
   const recommendedTag = (
     <span className="flex items-center gap-1 font-mono text-[9px] normal-case tracking-normal opacity-70">
       <Check className="w-2.5 h-2.5" strokeWidth={2.5} />
-      recommended
+      Recommended
     </span>
   );
   const subtext = (text: string) => (
@@ -235,11 +235,11 @@ export default function TimelineChoice({
         animate={{ opacity: 1 }}
         transition={{ delay: 0.1 }}
       >
-        <h2 className="font-mono text-base font-bold lowercase">
-          meet the timeline
+        <h2 className="font-mono text-base font-bold normal-case">
+          Meet the timeline
         </h2>
         <p className="font-mono text-[10px] text-muted-foreground/60 mt-1 max-w-[320px]">
-          rewind what you&apos;ve seen on screen
+          Rewind what you&apos;ve seen on screen
         </p>
       </motion.div>
 
@@ -281,11 +281,11 @@ export default function TimelineChoice({
           animate={{ opacity: 1 }}
           transition={{ delay: 0.3 }}
         >
-          <p className="font-mono text-[10px] text-amber-500/90 font-semibold lowercase">
-            timeline may slow down this device
+          <p className="font-mono text-[10px] text-amber-500/90 font-semibold normal-case">
+            Timeline may slow down this device
           </p>
           <p className="font-mono text-[10px] text-muted-foreground/70 mt-1 leading-snug">
-            keeping it off saves memory, cpu and disk. text exposed by your apps
+            Keeping it off saves memory, CPU and disk. Text exposed by your apps
             stays searchable; screenshots and image-only text won&apos;t be
             captured.
           </p>
@@ -314,7 +314,7 @@ export default function TimelineChoice({
         <button
           onClick={() => choose(true)}
           disabled={pending !== null}
-          className={`flex-1 flex flex-col items-center gap-1 border py-3 font-mono text-xs uppercase tracking-widest transition-colors duration-150 disabled:opacity-60 ${
+          className={`flex-1 flex flex-col items-center gap-1 border py-3 font-mono text-xs normal-case tracking-widest transition-colors duration-150 disabled:opacity-60 ${
             recommendEnabled
               ? "border-foreground bg-foreground text-background hover:bg-background hover:text-foreground"
               : "border-border text-foreground hover:border-foreground"
@@ -322,14 +322,14 @@ export default function TimelineChoice({
         >
           <span className="flex items-center gap-1.5">
             {pending === true && <Loader className="w-3 h-3 animate-spin" />}
-            timeline on
+            Timeline on
           </span>
           {recommendEnabled ? recommendedTag : subtext("visual rewind")}
         </button>
         <button
           onClick={() => choose(false)}
           disabled={pending !== null}
-          className={`flex-1 flex flex-col items-center gap-1 border py-3 font-mono text-xs uppercase tracking-widest transition-colors duration-150 disabled:opacity-60 ${
+          className={`flex-1 flex flex-col items-center gap-1 border py-3 font-mono text-xs normal-case tracking-widest transition-colors duration-150 disabled:opacity-60 ${
             !recommendEnabled
               ? "border-foreground bg-foreground text-background hover:bg-background hover:text-foreground"
               : "border-border text-foreground hover:border-foreground"
@@ -337,7 +337,7 @@ export default function TimelineChoice({
         >
           <span className="flex items-center gap-1.5">
             {pending === false && <Loader className="w-3 h-3 animate-spin" />}
-            keep it off
+            Keep it off
           </span>
           {!recommendEnabled
             ? recommendedTag
@@ -351,7 +351,7 @@ export default function TimelineChoice({
         animate={{ opacity: 1 }}
         transition={{ delay: 0.45 }}
       >
-        not a forever choice — change it anytime in settings
+        Not a forever choice — change it anytime in settings
       </motion.p>
     </motion.div>
   );

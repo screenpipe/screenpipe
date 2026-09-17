@@ -87,7 +87,7 @@ export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
         <div className="flex items-start gap-2.5">
           <Database className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
           <div className="min-w-0 flex-1 space-y-1">
-            <h3 className="text-sm font-medium">database storage</h3>
+            <h3 className="text-sm font-medium">Database storage</h3>
             <p className="text-xs text-muted-foreground">
               {status?.completed && status.using_new_storage
                 ? "Your recordings use the new compressed storage."
@@ -96,7 +96,7 @@ export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
           </div>
         </div>
 
-        {!status && !failure && <p className="text-xs text-muted-foreground" role="status">checking storage…</p>}
+        {!status && !failure && <p className="text-xs text-muted-foreground" role="status">Checking storage…</p>}
         {failure && <p className="text-xs text-destructive" role="alert">{failure}</p>}
         {status?.blocked_reason && <p className="text-xs text-muted-foreground">{status.blocked_reason}</p>}
         {status?.pending && !status.busy && (
@@ -121,13 +121,13 @@ export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
         {status?.can_migrate && (
           <Button variant="outline" size="sm" className="h-7 text-xs" disabled={busy}
             onClick={() => setMigrationRoot(status.root)}>
-            {status.completed ? "finish switching" : status.pending ? "resume migration" : "migrate storage"}
+            {status.completed ? "Finish switching" : status.pending ? "Resume migration" : "Migrate storage"}
           </Button>
         )}
         {status?.can_cancel && (
           <Button variant="ghost" size="sm" className="h-7 text-xs" disabled={busy}
             onClick={() => void run(() => commands.cancelStorageMigration(status.root))}>
-            cancel migration and use original
+            Cancel migration and use original
           </Button>
         )}
 
@@ -140,7 +140,7 @@ export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
                 setConfirmed(false);
                 setDeletion({ root: status.root, generation: status.generation });
               }}>
-              delete original database
+              Delete original database
             </Button>
             {!status.using_new_storage && <p className="text-xs text-muted-foreground">Available after Screenpipe is running on the new storage.</p>}
             {status.using_new_storage && !status.can_delete_source && !busy && !status.pending && !failure && !status.blocked_reason && (
@@ -152,17 +152,17 @@ export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
         <AlertDialog open={migrationRoot !== null} onOpenChange={(open) => { if (!open && !submitting) setMigrationRoot(null); }}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>{status?.completed ? "finish switching storage?" : "migrate storage?"}</AlertDialogTitle>
+              <AlertDialogTitle>{status?.completed ? "Finish switching storage?" : "Migrate storage?"}</AlertDialogTitle>
               <AlertDialogDescription>
                 <StorageMigrationDescription />
               </AlertDialogDescription>
             </AlertDialogHeader>
             {error && <p className="text-xs text-destructive" role="alert">{error}</p>}
             <AlertDialogFooter>
-              <AlertDialogCancel disabled={submitting}>keep current storage</AlertDialogCancel>
+              <AlertDialogCancel disabled={submitting}>Keep current storage</AlertDialogCancel>
               <Button disabled={busy || !status?.can_migrate || migrationRoot !== status?.root}
                 onClick={() => { if (migrationRoot) void run(() => commands.startStorageMigration(migrationRoot)); }}>
-                {submitting ? "starting…" : "start now"}
+                {submitting ? "Starting…" : "Start now"}
               </Button>
             </AlertDialogFooter>
           </AlertDialogContent>
@@ -171,7 +171,7 @@ export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
         <AlertDialog open={deletion !== null} onOpenChange={(open) => { if (!open && !submitting) setDeletion(null); }}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>delete the original database? no going back.</AlertDialogTitle>
+              <AlertDialogTitle>Delete the original database? No going back.</AlertDialogTitle>
               <AlertDialogDescription>
                 This permanently deletes {bytes(status?.source_bytes ?? 0)} of original database data.
                 You will lose this copy of your history from before migration. This cannot be undone.
@@ -185,10 +185,10 @@ export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
             </label>
             {error && <p className="text-xs text-destructive" role="alert">{error}</p>}
             <AlertDialogFooter>
-              <AlertDialogCancel disabled={submitting}>keep original database</AlertDialogCancel>
+              <AlertDialogCancel disabled={submitting}>Keep original database</AlertDialogCancel>
               <Button variant="destructive" disabled={!confirmed || !deletionAvailable || !sameDeletionTarget}
                 onClick={() => { if (deletion) void run(() => commands.deleteOriginalStorageDatabase(deletion.root, deletion.generation, true)); }}>
-                {submitting ? "deleting…" : "delete permanently"}
+                {submitting ? "Deleting…" : "Delete permanently"}
               </Button>
             </AlertDialogFooter>
           </AlertDialogContent>

@@ -1,141 +1,141 @@
 ---
-title: "Ollama — run AI locally with screenpipe"
-sidebarTitle: "ollama"
-description: "Run open-source LLMs like Llama, Qwen, and Mistral locally with Ollama and screenpipe — completely free, private, and offline with no API keys required."
-icon: "ollama-icon.svg"
+title: "Ollama — run AI locally with Screenpipe"
+sidebarTitle: "Ollama"
+description: "Run open-source LLMs like Llama, Qwen, and Mistral locally with Ollama and Screenpipe — completely free, private, and offline with no API keys required."
+icon: "bot"
 ---
 
-[Ollama](https://ollama.com) lets you run AI models locally on your machine. screenpipe integrates natively with Ollama — no API keys, no cloud, completely private.
+[Ollama](https://ollama.com) lets you run AI models locally on your machine. Screenpipe integrates natively with Ollama — no API keys, no cloud, completely private.
 
-## setup
+## Setup
 
-### 1. install Ollama & pull a model
+### 1. Install Ollama & pull a model
 
 ```bash
 # install from https://ollama.com then:
 ollama run llama3.2
 ```
 
-this downloads the model and starts Ollama. you can use any model — `llama3.2` is a good starting point (fast, works on most machines).
+This downloads the model and starts Ollama. You can use any model — `llama3.2` is a good starting point (fast, works on most machines).
 
-### 2. select Ollama in screenpipe
+### 2. Select Ollama in Screenpipe
 
-1. open the **screenpipe app**
-2. click the **AI preset selector** (top of the chat/timeline)
-3. click **Ollama**
-4. pick your model from the dropdown (screenpipe auto-detects pulled models)
-5. start chatting
+1. Open the **Screenpipe app**
+2. Click the **AI preset selector** (top of the chat/timeline)
+3. Click **Ollama**
+4. Pick your model from the dropdown (Screenpipe auto-detects pulled models)
+5. Start chatting
 
-that's it. screenpipe talks to Ollama on `localhost:11434` automatically.
+That's it. Screenpipe talks to Ollama on `localhost:11434` automatically.
 
-## recommended models
+## Recommended models
 
-| model | size | best for |
+| Model | Size | Best for |
 |-------|------|----------|
-| `llama3.2` | ~2 GB | fast, general use, recommended starting point |
-| `gemma3:4b` | ~3 GB | strong quality for size, good for summaries |
-| `qwen3:4b` | ~3 GB | multilingual, good reasoning |
+| `llama3.2` | ~2 GB | Fast, general use, recommended starting point |
+| `gemma3:4b` | ~3 GB | Strong quality for size, good for summaries |
+| `qwen3:4b` | ~3 GB | Multilingual, good reasoning |
 
-pull any model with:
+Pull any model with:
 
 ```bash
 ollama pull <model-name>
 ```
 
-## requirements
+## Requirements
 
 - [Ollama](https://ollama.com) installed and running
-- at least one model pulled
-- screenpipe running
+- At least one model pulled
+- Screenpipe running
 
-## custom OpenAI-compatible endpoints
+## Custom OpenAI-compatible endpoints
 
-if you're running a custom LLM server (Qwen, vLLM, Text Generation WebUI, etc.), screenpipe auto-detects the endpoint format:
+If you're running a custom LLM server (Qwen, vLLM, Text Generation WebUI, etc.), Screenpipe auto-detects the endpoint format:
 
-1. first tries OpenAI-compatible format: `GET {endpoint}/v1/models`
-2. falls back to Ollama format: `GET {endpoint}/api/tags`
+1. First tries OpenAI-compatible format: `GET {endpoint}/v1/models`
+2. Falls back to Ollama format: `GET {endpoint}/api/tags`
 
-**if your endpoint uses neither format**, you may need to:
+**If your endpoint uses neither format**, you may need to:
 
-- check what path your server uses for model listing (`/models`, `/v1/list`, etc.)
-- if unsure, test with curl first: `curl {your-endpoint}/path-to-models`
-- join our [Discord](https://discord.gg/screenpipe) — we can help troubleshoot custom setups
+- Check what path your server uses for model listing (`/models`, `/v1/list`, etc.)
+- If unsure, test with curl first: `curl {your-endpoint}/path-to-models`
+- Join our [Discord](https://discord.gg/screenpipe) — we can help troubleshoot custom setups
 
-example: a Qwen server on `http://localhost:5000` with OpenAI-compatible API should work automatically. if screenpipe can't find models, verify the server responds to: `curl http://localhost:5000/v1/models`
+Example: a Qwen server on `http://localhost:5000` with OpenAI-compatible API should work automatically. If Screenpipe can't find models, verify the server responds to: `curl http://localhost:5000/v1/models`
 
-## troubleshooting
+## Troubleshooting
 
-**"ollama not detected"**
-- make sure Ollama is running: `ollama serve`
-- check it's responding: `curl http://localhost:11434/api/tags`
+**"Ollama not detected"**
+- Make sure Ollama is running: `ollama serve`
+- Check it's responding: `curl http://localhost:11434/api/tags`
 
-**model not showing in dropdown?**
-- pull it first: `ollama pull llama3.2`
-- you can also type the model name manually in the input field
+**Model not showing in dropdown?**
+- Pull it first: `ollama pull llama3.2`
+- You can also type the model name manually in the input field
 
-**slow responses?**
-- try a smaller model (`llama3.2`)
-- close other GPU-heavy apps
-- ensure you have enough free RAM (model size + ~2 GB overhead)
+**Slow responses?**
+- Try a smaller model (`llama3.2`)
+- Close other GPU-heavy apps
+- Ensure you have enough free RAM (model size + ~2 GB overhead)
 
-## troubleshooting Azure & custom OpenAI endpoints
+## Troubleshooting Azure & custom OpenAI endpoints
 
 ### Error: "unsupported tool use" or "does not support more than one tool call"
 
-screenpipe sends multiple tool calls to the LLM for agentic features. some models (especially older Azure-hosted models like Phi-4, older Llama versions) don't support this.
+Screenpipe sends multiple tool calls to the LLM for agentic features. Some models (especially older Azure-hosted models like Phi-4, older Llama versions) don't support this.
 
-**fixes:**
-- use a model that supports tool use — most current frontier and mid-size open models do; check the model's documentation for tool/function-calling support
-- or disable agentic features in your scheduled task prompts (remove tool calls, just ask for text summaries)
-- on Azure, try switching to the latest model version available
+**Fixes:**
+- Use a model that supports tool use — most current frontier and mid-size open models do; check the model's documentation for tool/function-calling support
+- Or disable agentic features in your scheduled task prompts (remove tool calls, just ask for text summaries)
+- On Azure, try switching to the latest model version available
 
 ### Error: "max tokens is not supported"
 
-your endpoint doesn't recognize the `max_tokens` parameter that screenpipe sends.
+Your endpoint doesn't recognize the `max_tokens` parameter that Screenpipe sends.
 
-**fixes:**
-1. verify your endpoint supports OpenAI-compatible API: `curl -H "Authorization: Bearer YOUR_KEY" https://your-endpoint/v1/models`
-2. if using Azure, ensure you're using the OpenAI-compatible endpoint format (not the old REST API format)
-3. try a custom endpoint URL wrapper if your server needs parameter translation
+**Fixes:**
+1. Verify your endpoint supports OpenAI-compatible API: `curl -H "Authorization: Bearer YOUR_KEY" https://your-endpoint/v1/models`
+2. If using Azure, ensure you're using the OpenAI-compatible endpoint format (not the old REST API format)
+3. Try a custom endpoint URL wrapper if your server needs parameter translation
 
-### API key not being passed to screenpipe API
+### API key not being passed to Screenpipe API
 
-if screenpipe says "unauthorized" when accessing the local API, but your custom LLM endpoint is configured:
+If Screenpipe says "unauthorized" when accessing the local API, but your custom LLM endpoint is configured:
 
-**cause:** screenpipe CLI doesn't automatically share API credentials with the local REST API server.
+**Cause:** Screenpipe CLI doesn't automatically share API credentials with the local REST API server.
 
-**fix:** configure your scheduled task or app to use the API key explicitly:
+**Fix:** configure your scheduled task or app to use the API key explicitly:
 ```bash
 curl "http://localhost:3030/search?limit=5" \
   -H "Authorization: Bearer YOUR_SCREENPIPE_API_KEY"
 ```
 
-or set the API key in screenpipe settings → API security → enable API key auth, then provide that key in your requests.
+Or set the API key in Screenpipe settings → API security → enable API key auth, then provide that key in your requests.
 
 ### Custom endpoint not responding / models not detected
 
-screenpipe tries both OpenAI and Ollama formats. if neither works:
+Screenpipe tries both OpenAI and Ollama formats. If neither works:
 
-1. **test your endpoint manually:**
+1. **Test your endpoint manually:**
    ```bash
    curl https://your-endpoint/v1/models
    curl https://your-endpoint/api/tags
    ```
    (one should return a model list; if neither does, your server may use a different path)
 
-2. **check authorization:**
+2. **Check authorization:**
    ```bash
    curl -H "Authorization: Bearer YOUR_KEY" https://your-endpoint/v1/models
    ```
 
-3. **verify TLS/SSL:** if using https, ensure your certificate is valid (self-signed certs need special config)
+3. **Verify TLS/SSL:** if using https, ensure your certificate is valid (self-signed certs need special config)
 
-4. **common endpoint paths:**
+4. **Common endpoint paths:**
    - OpenAI-compatible: `/v1/models`, `/v1/chat/completions`
    - Ollama-compatible: `/api/tags`, `/api/generate`
-   - vLLM: `/v1/models` (OpenAI-compatible)
+   - VLLM: `/v1/models` (OpenAI-compatible)
    - Text Generation WebUI: `/api/v1/models` (may vary)
 
-if stuck, [join our Discord](https://discord.gg/screenpipe) — share your endpoint URL structure and error logs.
+If stuck, [join our Discord](https://discord.gg/screenpipe) — share your endpoint URL structure and error logs.
 
-need help? [join our discord](https://discord.gg/screenpipe) — get recommendations on models and configs from the community.
+Need help? [join our Discord](https://discord.gg/screenpipe) — get recommendations on models and configs from the community.

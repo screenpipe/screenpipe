@@ -54,7 +54,7 @@ function describeSnapshot(
         ? `${value.snapshot.length.toLocaleString()} characters`
         : null;
     return {
-      label: "frozen Screenpipe snapshot",
+      label: "Frozen Screenpipe snapshot",
       detail: [title, surface, size].filter(Boolean).join(" · "),
     };
   } catch {

@@ -44,11 +44,11 @@ describe("automatic storage migration prompt", () => {
     const app = render(<StorageMigrationPrompt activity={idle} />);
     await waitFor(() => expect(commands.getStorageMigrationStatus).toHaveBeenCalled());
     expect(screen.queryByRole("alertdialog")).toBeNull();
-    expect(screen.queryByRole("button", { name: "try again" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
     app.unmount();
     Object.assign(status, { busy: false, blocked_reason: null });
     render(<StorageMigrationPrompt activity={idle} />);
-    fireEvent.click(await screen.findByRole("button", { name: "try again" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
     await waitFor(() => expect(commands.startStorageMigration).toHaveBeenCalledOnce());
   });
 
@@ -58,8 +58,8 @@ describe("automatic storage migration prompt", () => {
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("completed progress is saved");
     expect(dialog).not.toHaveTextContent("recovery copy");
-    expect(screen.queryByRole("button", { name: "use original database" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "try again" }));
+    expect(screen.queryByRole("button", { name: "Use original database" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(commands.startStorageMigration).toHaveBeenCalledWith("/fixture"));
   });
   it("detects legacy storage, explains the pause and starts only on request", async () => {
@@ -70,14 +70,14 @@ describe("automatic storage migration prompt", () => {
     expect(dialog).toHaveTextContent("computer will stay awake");
     expect(dialog).not.toHaveTextContent(/M2|M5|minutes|hours/);
     expect(commands.startStorageMigration).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "start now" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start now" }));
     await waitFor(() => expect(commands.startStorageMigration).toHaveBeenCalledWith("/fixture"));
     expect(commands.deleteOriginalStorageDatabase).not.toHaveBeenCalled();
   });
 
   it("respects do later when a webview is recreated in the same app process", async () => {
     const app = render(<StorageMigrationPrompt activity={idle} />);
-    fireEvent.click(await screen.findByRole("button", { name: "do later" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Do later" }));
     expect(screen.queryByRole("alertdialog")).toBeNull();
     app.unmount();
     sessionStorage.clear();
@@ -92,7 +92,7 @@ describe("automatic storage migration prompt", () => {
     for (const session of ["app-launch-1", "app-launch-2", "app-launch-3"]) {
       status.app_session_id = session;
       const app = render(<StorageMigrationPrompt activity={idle} />);
-      fireEvent.click(await screen.findByRole("button", { name: "do later" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Do later" }));
       expect(screen.queryByRole("alertdialog")).toBeNull();
       app.unmount();
     }
@@ -152,14 +152,14 @@ describe("automatic storage migration prompt", () => {
     for (const session of ["app-launch-1", "app-launch-2"]) {
       status.app_session_id = session;
       const app = render(<StorageMigrationPrompt activity={{ ...idle, error: status.error }} />);
-      await screen.findByRole("button", { name: "try again" });
+      await screen.findByRole("button", { name: "Try again" });
       expect(commands.startStorageMigration).not.toHaveBeenCalled();
-      fireEvent.click(screen.getByRole("button", { name: "do later" }));
+      fireEvent.click(screen.getByRole("button", { name: "Do later" }));
       app.unmount();
     }
     status.app_session_id = "app-launch-3";
     render(<StorageMigrationPrompt activity={{ ...idle, error: status.error }} />);
-    fireEvent.click(await screen.findByRole("button", { name: "try again" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
     await waitFor(() => expect(commands.startStorageMigration).toHaveBeenCalledTimes(1));
     expect(commands.startStorageMigration).toHaveBeenCalledWith("/fixture");
   });
@@ -167,9 +167,9 @@ describe("automatic storage migration prompt", () => {
   it("surfaces start failures and permits retry without losing the original", async () => {
     commands.startStorageMigration.mockResolvedValueOnce({ status: "error", error: "Could not prevent sleep. Migration has not started." });
     render(<StorageMigrationPrompt activity={idle} />);
-    fireEvent.click(await screen.findByRole("button", { name: "start now" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Start now" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not prevent sleep");
-    fireEvent.click(screen.getByRole("button", { name: "try again" }));
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(commands.startStorageMigration).toHaveBeenCalledTimes(2));
   });
 
@@ -180,10 +180,10 @@ describe("automatic storage migration prompt", () => {
       finishRestart = () => resolve({ status: "ok", data: null });
     }));
     const app = render(<StorageMigrationPrompt activity={idle} />);
-    fireEvent.click(await screen.findByRole("button", { name: "try again" }));
-    const starting = screen.getByRole("button", { name: "starting…" });
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+    const starting = screen.getByRole("button", { name: "Starting…" });
     expect(starting).toBeDisabled();
-    expect(screen.getByRole("button", { name: "do later" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Do later" })).toBeDisabled();
     fireEvent.click(starting);
     expect(commands.startStorageMigration).toHaveBeenCalledOnce();
     expect(commands.startStorageMigration).toHaveBeenCalledWith("/fixture");
@@ -198,7 +198,7 @@ describe("automatic storage migration prompt", () => {
     Object.assign(status, { pending: true, can_cancel: true, error: "Verification failed; original kept." });
     render(<StorageMigrationPrompt activity={{ ...idle, error: status.error }} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("Verification failed");
-    fireEvent.click(screen.getByRole("button", { name: "use original database" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use original database" }));
     await waitFor(() => expect(commands.cancelStorageMigration).toHaveBeenCalledWith("/fixture"));
     expect(commands.deleteOriginalStorageDatabase).not.toHaveBeenCalled();
   });
@@ -210,8 +210,8 @@ describe("automatic storage migration prompt", () => {
     expect(dialog).toHaveTextContent("recording has resumed");
     expect(dialog).toHaveTextContent("Completed in 1h 2m 3s");
     expect(dialog).toHaveTextContent("recovery copy");
-    expect(screen.queryByRole("button", { name: /delete/ })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "done" }));
+    expect(screen.queryByRole("button", { name: /Delete/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 });

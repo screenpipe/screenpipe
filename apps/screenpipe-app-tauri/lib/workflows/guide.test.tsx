@@ -1,6 +1,6 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
-import React from "react";
+import React, { useState } from "react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   render,
@@ -17,6 +17,21 @@ import {
 } from "../../../../packages/workflows-ui/src/guide";
 import { WorkflowGuide } from "../../../../packages/workflows-ui/src/workflow-guide";
 import { fixtureWorkflowAnalysis } from "../../../../packages/workflows-ui/src/fixture-platform";
+import { sanitizeWorkflowAnalysis } from "../../../../packages/workflows-ui/src/catalog";
+import { PageAssistantContext, type PageAssistant } from "../../../../packages/workflows-ui/src/page-assistant";
+import { WorkflowAssistant } from "@screenpipe/workflows-ui";
+import { emptyAssistantState } from "../../../../packages/workflows-ui/src/assistant";
+import type { WorkflowsPlatform } from "../../../../packages/workflows-ui/src/platform";
+function GuideChat({ edit, save = vi.fn(), previousFeedback = false }: { edit: NonNullable<WorkflowsPlatform["guides"]>["edit"]; save?: ReturnType<typeof vi.fn>; previousFeedback?: boolean }) {
+  const previous = emptyAssistantState();
+  previous.conversations[0].feedbackContext = { key: "feedback:research", title: workflow.title, workflow, purpose: "feedback" };
+  previous.conversations[0].draft = "Keep this feedback draft";
+  const [page, setPage] = useState<PageAssistant | null>(null);
+  return <PageAssistantContext.Provider value={setPage}>
+    <WorkflowGuide workflow={workflow} close={() => {}} platform={{ load: async () => guide, generate: vi.fn(), save, export: vi.fn(), edit }} />
+    {page && <WorkflowAssistant context={page.context} onDockChange={() => {}} platform={{ load: async () => previousFeedback ? previous : null, save: async () => {}, ask: page.ask }} />}
+  </PageAssistantContext.Provider>;
+}
 const workflow = structuredClone(fixtureWorkflowAnalysis.analysis.workflows[0]);
 workflow.id = "research";
 workflow.revision = 3;
@@ -103,6 +118,41 @@ describe("guide contracts and export", () => {
       "<img ",
     );
   });
+  it("keeps older images through catalog loading without counting them as verified evidence", () => {
+    const catalog = structuredClone(fixtureWorkflowAnalysis);
+    catalog.analysis.workflows = [catalog.analysis.workflows[0]];
+    const stage = catalog.analysis.workflows[0].stages[0];
+    stage.screenshot = {
+      ...workflow.stages[0].screenshot!,
+      visualVerified: undefined,
+    };
+    const clean = sanitizeWorkflowAnalysis(catalog);
+    expect(clean.analysis.workflows[0].stages[0].screenshot).toEqual(
+      stage.screenshot,
+    );
+    expect(clean.analysis.workflows[0].quality.screenshotCount).toBe(2);
+  });
+  it("persists human review, but never accepts it from generated output or for another source", () => {
+    const w = structuredClone(workflow);
+    delete w.stages[0].screenshot!.visualVerified;
+    const reviewed = structuredClone(guide);
+    reviewed.steps[0].imageReview = {
+      frameId: 1,
+      timestamp: w.stages[0].screenshot!.timestamp,
+    };
+    const reopened = parseGuide(JSON.parse(JSON.stringify(reviewed)));
+    expect(guideHtml(reopened, w, true)).toContain("<img ");
+    expect(guideHtml(reopened, w, false)).not.toContain("<img ");
+    expect(guideHtml(parseGuide(reviewed, w), w, true)).not.toContain("<img ");
+    w.stages[0].screenshot!.frameId = 2;
+    expect(guideHtml(reopened, w, true)).not.toContain("<img ");
+    w.stages[0].screenshot!.frameId = 1;
+    expect(guideHtml(reopened, { ...w, revision: 4 }, true)).not.toContain(
+      "<img ",
+    );
+    w.stages[0].screenshot!.dataUrl = "https://example.com/tracker";
+    expect(guideHtml(reopened, w, true)).not.toContain("<img ");
+  });
   it("keeps image payloads and local paths out of the agent prompt", () => {
     expect(guidePrompt(workflow)).not.toContain("data:image");
     expect(guidePrompt(workflow)).toContain("Do not execute the workflow");
@@ -141,6 +191,69 @@ describe("guide editor", () => {
         "Review",
       ),
     );
+  });
+  it("lets an older saved SOP review and include a local screenshot without regenerating", async () => {
+    const w = structuredClone(workflow);
+    delete w.stages[0].screenshot!.visualVerified;
+    w.stages[1].screenshot = undefined;
+    const oldGuide = structuredClone(guide);
+    oldGuide.steps[0].includeImage = false;
+    const platform = { ...host(), load: vi.fn(async () => oldGuide) };
+    const view = render(
+      <WorkflowGuide workflow={w} platform={platform} close={() => {}} />,
+    );
+    await screen.findByRole("heading", { name: "Research guide" });
+    expect(screen.queryByRole("img")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Review screenshot" }));
+    const preview = screen.getByRole("img", {
+      name: "Review source for Collect sources",
+    });
+    const include = screen.getByRole("button", { name: "Include screenshot" });
+    expect(include).toBeDisabled();
+    fireEvent.load(preview);
+    fireEvent.click(include);
+    await screen.findByRole("img", { name: "Source for Collect sources" });
+    await waitFor(() => expect(platform.save).toHaveBeenCalled());
+    const saved = parseGuide(
+      JSON.parse(JSON.stringify(platform.save.mock.calls.at(-1)![0])),
+    );
+    expect(saved.steps[0].includeImage).toBe(true);
+    expect(saved.steps[0].imageReview?.frameId).toBe(1);
+    view.unmount();
+    render(
+      <WorkflowGuide
+        workflow={w}
+        platform={{ ...platform, load: async () => saved }}
+        close={() => {}}
+      />,
+    );
+    await screen.findByRole("img", { name: "Source for Collect sources" });
+    expect(platform.generate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Edit SOP" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove screenshot" }));
+    await waitFor(() =>
+      expect(platform.save.mock.calls.at(-1)![0].steps[0].includeImage).toBe(
+        false,
+      ),
+    );
+  });
+  it("does not include a screenshot that fails to load", async () => {
+    const w = structuredClone(workflow);
+    delete w.stages[0].screenshot!.visualVerified;
+    w.stages[1].screenshot = undefined;
+    render(<WorkflowGuide workflow={w} platform={host()} close={() => {}} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Review screenshot" }),
+    );
+    fireEvent.error(
+      screen.getByRole("img", { name: "Review source for Collect sources" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Include screenshot" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByText("This screenshot could not be loaded."),
+    ).toBeInTheDocument();
   });
   it("scrolls guide sections without changing the host route", async () => {
     const scroll = vi.fn();
@@ -243,7 +356,7 @@ describe("SOP assistant and web editor", () => {
         }}
       />,
     );
-    fireEvent.click(await screen.findByText("Open web editor"));
+    fireEvent.click(await screen.findByRole("button", { name: "Open web editor", exact: true }));
     expect(openWeb).not.toHaveBeenCalled();
     expect(screen.queryByText("Create a short video")).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("Continue to web editor"));
@@ -255,27 +368,30 @@ describe("SOP assistant and web editor", () => {
       signal = s;
       return new Promise<Guide>(() => {});
     });
-    render(
-      <WorkflowGuide
-        workflow={workflow}
-        close={() => {}}
-        platform={{
-          load: async () => guide,
-          generate: vi.fn(),
-          save: vi.fn(),
-          export: vi.fn(),
-          edit,
-        }}
-      />,
-    );
-    const input = await screen.findByLabelText(
-      "Ask Screenpipe to edit the SOP",
-    );
-    fireEvent.change(input, { target: { value: "Make it shorter" } });
-    fireEvent.click(screen.getByLabelText("Edit with Screenpipe"));
+    render(<GuideChat edit={edit} />);
+    expect(screen.queryByRole("region", { name: "SOP assistant" })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Ask Screenpipe" }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "Ask Screenpipe" }), { target: { value: "Make it shorter" } });
+    await waitFor(() => expect(screen.getByLabelText("Send message")).toBeEnabled());
+    fireEvent.click(screen.getByLabelText("Send message"));
+    await waitFor(() => expect(edit).toHaveBeenCalled());
     expect(edit.mock.calls[0][2]).toBe("Make it shorter");
-    fireEvent.click(screen.getByText("Stop"));
+    fireEvent.click(screen.getByLabelText("Stop answer"));
     expect(signal?.aborted).toBe(true);
-    expect(screen.getByText("Stopped. Your SOP is saved.")).toBeInTheDocument();
   });
+  it("applies a chat edit to the SOP and saves it", async () => {
+    const save = vi.fn();
+    const edit = vi.fn(async (draft: Guide) => ({ ...draft, title: "Shorter research SOP" }));
+    render(<GuideChat edit={edit} save={save} previousFeedback />);
+    fireEvent.click(await screen.findByRole("button", { name: "Ask Screenpipe" }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "Ask Screenpipe" }), { target: { value: "Shorten the title" } });
+    await waitFor(() => expect(screen.getByLabelText("Send message")).toBeEnabled());
+    fireEvent.click(screen.getByLabelText("Send message"));
+    expect(await screen.findByRole("heading", { name: "Shorter research SOP" })).toBeInTheDocument();
+    await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ title: "Shorter research SOP" })));
+    fireEvent.click(screen.getByLabelText("Minimize chat"));
+    fireEvent.click(screen.getByRole("button", { name: "Ask Screenpipe" }));
+    expect(screen.getAllByText("Shorten the title").length).toBeGreaterThan(0);
+  });
+
 });

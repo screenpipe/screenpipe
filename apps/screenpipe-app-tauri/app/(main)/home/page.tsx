@@ -357,7 +357,7 @@ function HomeContent() {
     if (isNew) {
       store.actions.upsert({
         id,
-        title: "untitled",
+        title: "Untitled",
         preview: "",
         status: "idle",
         messageCount: 0,
@@ -1058,8 +1058,8 @@ function HomeContent() {
     if (isSectionHidden(activeSection) && activeSection !== "help") {
       return (
         <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-          <img src="/128x128.png" alt="screenpipe" className="w-16 h-16 opacity-30 mb-4" />
-          <p className="text-sm font-mono">screenpipe</p>
+          <img src="/128x128.png" alt="Screenpipe" className="w-16 h-16 opacity-30 mb-4" />
+          <p className="text-sm font-mono">Screenpipe</p>
         </div>
       );
     }
@@ -1139,8 +1139,8 @@ function HomeContent() {
       default:
         return (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-            <img src="/128x128.png" alt="screenpipe" className="w-16 h-16 opacity-30 mb-4" />
-            <p className="text-sm font-mono">screenpipe</p>
+            <img src="/128x128.png" alt="Screenpipe" className="w-16 h-16 opacity-30 mb-4" />
+            <p className="text-sm font-mono">Screenpipe</p>
           </div>
         );
     }
@@ -1206,8 +1206,8 @@ function HomeContent() {
       title: `${label} hidden`,
       description:
         id === "meetings"
-          ? "still one click away from the icon in the top bar."
-          : "use sidebar options in the top bar to bring it back.",
+          ? "Still one click away from the icon in the top bar."
+          : "Use sidebar options in the top bar to bring it back.",
       action: (
         <ToastAction
           altText={`Show ${label} in the sidebar again`}
@@ -1243,7 +1243,7 @@ function HomeContent() {
             aria-hidden="true"
             className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-red-500"
           />
-          <span className="sr-only">meeting recording active</span>
+          <span className="sr-only">Meeting recording active</span>
         </>
       ) : undefined,
   }));
@@ -1413,7 +1413,7 @@ function HomeContent() {
               <TooltipTrigger asChild>
                 <button
                   onClick={toggleSidebar}
-                  aria-label={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
+                  aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
                   data-announcement-anchor="top-sidebar-toggle"
                   className={cn(
                     "p-1 rounded-md transition-colors",
@@ -1429,7 +1429,7 @@ function HomeContent() {
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-xs">
                 <span className="flex items-center gap-2">
-                  {sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
+                  {sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
                   <ShortcutKeycap>
                     {inAppShortcutLabel("toggle_sidebar", isMac)}
                   </ShortcutKeycap>
@@ -1444,7 +1444,7 @@ function HomeContent() {
                     onClick={() => {
                       void commands.showWindow({ Search: { query: null } });
                     }}
-                    aria-label="search"
+                    aria-label="Search"
                     data-announcement-anchor="top-search"
                     className={cn(
                       "p-1 rounded-md transition-colors",
@@ -1456,7 +1456,7 @@ function HomeContent() {
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-xs">
                   <span className="flex items-center gap-2">
-                    search
+                    Search
                     {!settings.disabledShortcuts.includes("searchShortcut") &&
                     settings.searchShortcut ? (
                     <ShortcutKeycap>
@@ -1495,7 +1495,7 @@ function HomeContent() {
                 <TooltipTrigger asChild>
                   <button
                     onClick={() => setActiveSection("meetings")}
-                    aria-label={meetingState.active ? "meetings — recording" : "meetings"}
+                    aria-label={meetingState.active ? "Meetings — recording" : "Meetings"}
                     aria-current={activeSection === "meetings" ? "page" : undefined}
                     disabled={trialActivationLocked}
                     data-testid="nav-meetings"
@@ -1519,13 +1519,13 @@ function HomeContent() {
                           aria-hidden="true"
                           className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-red-500 ring-2 ring-background"
                         />
-                        <span className="sr-only">meeting recording active</span>
+                        <span className="sr-only">Meeting recording active</span>
                       </>
                     )}
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-xs">
-                  {meetingState.active ? "meetings — recording" : "meetings"}
+                  {meetingState.active ? "Meetings — recording" : "Meetings"}
                 </TooltipContent>
               </Tooltip>
             )}
@@ -1703,8 +1703,8 @@ function HomeContent() {
                 <button
                   type="button"
                   onClick={returnToActivity}
-                  aria-label="back to activity"
-                  title="back to activity"
+                  aria-label="Back to activity"
+                  title="Back to activity"
                   className="absolute left-4 top-11 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-border/80 bg-background/90 text-foreground shadow-lg shadow-black/10 backdrop-blur-sm transition-colors hover:border-foreground hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-2"
                 >
                   <ArrowLeft className="h-4 w-4" />

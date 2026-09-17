@@ -145,7 +145,7 @@ describe("ConnectedShareDialog", () => {
 
     fireEvent.click(send);
 
-    await screen.findByText("sent to Slack");
+    await screen.findByText("Sent to Slack");
     const sendCall = mocks.localFetch.mock.calls.find(
       ([path]) => path === "/connections/slack/send",
     );
@@ -222,7 +222,7 @@ describe("ConnectedShareDialog", () => {
 
     fireEvent.click(create);
 
-    await screen.findByText("created ENG-42");
+    await screen.findByText("Created ENG-42");
     const mutationCall = mocks.localFetch.mock.calls.find(
       ([path, init]) =>
         path === "/connections/linear/proxy/graphql" &&
@@ -268,10 +268,10 @@ describe("ConnectedShareDialog", () => {
     await openDestinations();
     expect(
       await screen.findByTestId("connected-share-connect-slack"),
-    ).toHaveTextContent("connect Slack");
+    ).toHaveTextContent("Connect Slack");
     expect(
       screen.getByTestId("connected-share-connect-linear"),
-    ).toHaveTextContent("connect Linear");
+    ).toHaveTextContent("Connect Linear");
 
     fireEvent.click(screen.getByTestId("connected-share-connect-notion"));
 
@@ -297,11 +297,11 @@ describe("ConnectedShareDialog", () => {
     expect(onOpenChange).not.toHaveBeenCalled();
     expect(openSettings).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId("connected-share-preview-toggle"));
-    fireEvent.change(screen.getByLabelText("edit before sending"), { target: { value: "My edited workflow" } });
+    fireEvent.change(screen.getByLabelText("Edit before sending"), { target: { value: "My edited workflow" } });
     const checks = mocks.localFetch.mock.calls.length;
     view.rerender(<ConnectedShareDialog {...props} connectionsRevision={1} />);
     await waitFor(() => expect(mocks.localFetch.mock.calls.length).toBeGreaterThan(checks));
-    expect(screen.getByLabelText("edit before sending")).toHaveValue("My edited workflow");
+    expect(screen.getByLabelText("Edit before sending")).toHaveValue("My edited workflow");
     expect(onOpenChange).not.toHaveBeenCalled();
     window.removeEventListener("open-settings", openSettings);
   });
@@ -544,7 +544,7 @@ describe("ConnectedShareDialog", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByTestId("connected-share-confirm")).toBeDisabled();
 
-    fireEvent.click(screen.getByRole("button", { name: "retry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByTestId("connected-share-empty");
     expect(
       screen.queryByTestId("connected-share-connections-error"),
@@ -641,7 +641,7 @@ describe("ConnectedShareDialog", () => {
       await screen.findByTestId("connected-share-slack-channels-error"),
     ).toHaveTextContent("You can still send to your own Slack messages");
     fireEvent.click(screen.getByRole("button", { name: "send to Slack" }));
-    await screen.findByText("sent to Slack");
+    await screen.findByText("Sent to Slack");
   });
 
   it("keeps a failed provider action visible and retryable", async () => {
@@ -723,7 +723,7 @@ describe("ConnectedShareDialog", () => {
       // And the two controls they hide are genuinely not mounted.
       expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
       expect(
-        screen.queryByLabelText(/edits here apply only to Slack/),
+        screen.queryByLabelText(/Edits here apply only to Slack/),
       ).not.toBeInTheDocument();
     });
 
@@ -744,7 +744,7 @@ describe("ConnectedShareDialog", () => {
         await screen.findByTestId("connected-share-preview-toggle"),
       );
       expect(
-        screen.getByLabelText(/edits here apply only to Slack/),
+        screen.getByLabelText(/Edits here apply only to Slack/),
       ).toBeVisible();
 
       fireEvent.click(
@@ -861,7 +861,7 @@ describe("ConnectedShareDialog", () => {
       );
       fireEvent.click(confirm);
 
-      await screen.findByText("sent to Slack");
+      await screen.findByText("Sent to Slack");
       expect(sendBody()).toMatchObject({ channel: "C1", instance: "acme" });
     });
 
@@ -888,7 +888,7 @@ describe("ConnectedShareDialog", () => {
       );
       fireEvent.click(confirm);
 
-      await screen.findByText("sent to Slack");
+      await screen.findByText("Sent to Slack");
       expect(sendBody()).not.toHaveProperty("channel");
     });
 

@@ -113,15 +113,15 @@ describe("meeting workspace tabs", () => {
       />,
     );
 
-    const notes = screen.getByRole("tab", { name: "notes" });
-    const transcript = screen.getByRole("tab", { name: "transcript" });
+    const notes = screen.getByRole("tab", { name: "Notes" });
+    const transcript = screen.getByRole("tab", { name: "Transcript" });
     expect(notes).toHaveAttribute("aria-selected", "true");
     expect(transcript).toHaveAttribute("aria-selected", "false");
 
     fireEvent.keyDown(notes, { key: "ArrowRight" });
     expect(onValueChange).toHaveBeenCalledWith("transcript");
     expect(transcript).toHaveFocus();
-    expect(screen.getByLabelText("summary working")).toBeVisible();
+    expect(screen.getByLabelText("Summary working")).toBeVisible();
   });
 
   // The note-wide copy action shares the tab rule so it is visible from every
@@ -149,11 +149,11 @@ describe("meeting workspace tabs", () => {
     expect(copy.closest('[role="tablist"]')).toBeNull();
 
     // End must land on the last real tab, not the trailing action.
-    fireEvent.keyDown(screen.getByRole("tab", { name: "notes" }), {
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Notes" }), {
       key: "End",
     });
     expect(onValueChange).toHaveBeenCalledWith("summary");
-    expect(screen.getByRole("tab", { name: "summary" })).toHaveFocus();
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveFocus();
   });
 
   // A dot on a tab is a request for attention. Work in flight and failures
@@ -167,7 +167,7 @@ describe("meeting workspace tabs", () => {
         summaryState="working"
       />,
     );
-    expect(screen.getByLabelText("summary working")).toBeVisible();
+    expect(screen.getByLabelText("Summary working")).toBeVisible();
 
     rerender(
       <MeetingWorkspaceTabs
@@ -176,7 +176,7 @@ describe("meeting workspace tabs", () => {
         summaryState="attention"
       />,
     );
-    expect(screen.getByLabelText("summary attention")).toBeVisible();
+    expect(screen.getByLabelText("Summary attention")).toBeVisible();
 
     rerender(
       <MeetingWorkspaceTabs
@@ -285,7 +285,7 @@ describe("meeting summary surface", () => {
         .closest(".max-w-3xl"),
     ).not.toBeNull();
     expect(screen.queryByText(/private draft/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "summarize again" }));
+    fireEvent.click(screen.getByRole("button", { name: "Summarize again" }));
     expect(onGenerate).toHaveBeenCalledOnce();
   });
 
@@ -345,8 +345,8 @@ describe("meeting summary surface", () => {
       />,
     );
 
-    expect(screen.getByText("no summary yet")).toBeVisible();
-    expect(screen.getByRole("button", { name: "generate" })).toBeDisabled();
+    expect(screen.getByText("No summary yet")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Generate" })).toBeDisabled();
   });
 
   it("keeps an existing summary visible while a refresh is running", () => {
@@ -361,7 +361,7 @@ describe("meeting summary surface", () => {
     );
 
     expect(screen.getByText("Existing decision.")).toBeVisible();
-    expect(screen.getByRole("status")).toHaveTextContent("writing summary");
+    expect(screen.getByRole("status")).toHaveTextContent("Writing summary");
     expect(screen.getByRole("status")).toHaveTextContent(
       "writing an updated summary",
     );
@@ -378,7 +378,7 @@ describe("meeting summary surface", () => {
       />,
     );
 
-    expect(screen.getByRole("status")).toHaveTextContent("writing summary");
+    expect(screen.getByRole("status")).toHaveTextContent("Writing summary");
     expect(screen.getByText("Draft will appear here")).toBeVisible();
     expect(
       screen.getByTestId("meeting-summary-writing-placeholder"),
@@ -406,7 +406,7 @@ describe("meeting summary surface", () => {
       ),
     ).toBeVisible();
     expect(screen.queryByText("Earlier summary.")).not.toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("writing summary");
+    expect(screen.getByRole("status")).toHaveTextContent("Writing summary");
     expect(screen.getByTestId("meeting-summary-stream-cursor")).toBeVisible();
 
     rerender(
@@ -428,7 +428,7 @@ describe("meeting summary surface", () => {
       ),
     ).toBeVisible();
     expect(screen.queryByText("Earlier summary.")).not.toBeInTheDocument();
-    expect(screen.queryByText("no summary yet")).not.toBeInTheDocument();
+    expect(screen.queryByText("No summary yet")).not.toBeInTheDocument();
     expect(
       screen.queryByTestId("meeting-summary-stream-cursor"),
     ).not.toBeInTheDocument();
@@ -443,7 +443,7 @@ describe("meeting summary surface", () => {
       <MeetingSummarySurface
         note="notes only"
         state="attention"
-        detail="summary needs attention"
+        detail="Summary needs attention"
         onGenerate={onGenerate}
         canGenerate
         recovery={{
@@ -480,8 +480,8 @@ describe("meeting summary surface", () => {
       screen.getByText("Generation stopped before a summary was written."),
     ).toBeVisible();
     expect(screen.getAllByText(/configured summary model/i)).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: "retry" })).toBeNull();
-    expect(screen.queryByText("no summary yet")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByText("No summary yet")).toBeNull();
 
     fireEvent.click(
       screen.getByRole("button", { name: "upgrade to business" }),
@@ -504,7 +504,7 @@ describe("meeting summary surface", () => {
       { key: "Enter" },
     );
     fireEvent.click(
-      await screen.findByRole("menuitem", { name: "manage models & keys" }),
+      await screen.findByRole("menuitem", { name: "Manage models & keys" }),
     );
     expect(onManage).toHaveBeenCalledOnce();
   });
@@ -515,7 +515,7 @@ describe("meeting summary surface", () => {
       <MeetingSummarySurface
         note="notes only"
         state="attention"
-        detail="summary needs attention"
+        detail="Summary needs attention"
         onGenerate={onGenerate}
         canGenerate
         recovery={{
@@ -526,7 +526,7 @@ describe("meeting summary surface", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "retry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onGenerate).toHaveBeenCalledOnce();
   });
 });

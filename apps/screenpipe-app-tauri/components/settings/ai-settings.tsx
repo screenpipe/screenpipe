@@ -102,8 +102,8 @@ export function AISettings() {
                   Use AI for smarter suggestions and on-demand daily summaries
                 </p>
                 <p className="text-[10px] text-muted-foreground/60 mt-0.5">
-                  daily summaries use your configured AI model; suggestions may
-                  use screenpipe cloud. relevant activity is processed only when
+                  Daily summaries use your configured AI model; suggestions may
+                  use screenpipe cloud. Relevant activity is processed only when
                   needed.
                 </p>
               </div>

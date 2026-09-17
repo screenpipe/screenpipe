@@ -1,3 +1,5 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
 // Inspired by Chatbot-UI and modified to fit the needs of this project
 // @see https://github.com/mckaywrigley/chatbot-ui/blob/main/components/Markdown/CodeBlock.tsx
 
@@ -95,7 +97,7 @@ const CodeBlock: FC<Props> = memo(({ language, value }) => {
   return (
     <div className="relative w-full font-sans codeblock bg-zinc-950">
       <div className="flex items-center justify-between w-full px-6 py-2 pr-4 bg-zinc-800 text-zinc-100">
-        <span className="text-xs lowercase">{language}</span>
+        <span className="text-xs normal-case">{language}</span>
         <div className="flex items-center space-x-1">
           <Button
             variant="ghost"

@@ -117,7 +117,7 @@ export function LiveViewOnboardingActivation({
         </span>
         <div>
           <p className="text-xs font-semibold">
-            your first real result is ready
+            Your first real result is ready
           </p>
           <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
             {copy.reviewAction} You can also use the thumbs controls on any card
@@ -158,11 +158,11 @@ export function LiveViewOnboardingActivation({
     >
       <div className="grid gap-4 border-b border-border p-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
         <div>
-          <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-            first result
+          <p className="text-[10px] font-medium normal-case tracking-[0.16em] text-muted-foreground">
+            First result
           </p>
           <h3 className="mt-2 text-lg font-semibold tracking-tight">
-            this Live View starts with your real work
+            This Live View starts with your real work
           </h3>
           <p className="mt-2 max-w-2xl text-xs leading-relaxed text-muted-foreground">
             There is no sample data to pretend the setup worked.{" "}
@@ -181,7 +181,7 @@ export function LiveViewOnboardingActivation({
       <div className="px-5">
         <StatusRow
           state={captureStatus.state}
-          label="capture"
+          label="Capture"
           detail={captureStatus.detail}
         />
         <StatusRow
@@ -192,7 +192,7 @@ export function LiveViewOnboardingActivation({
                 ? "ready"
                 : "working"
           }
-          label="setup"
+          label="Setup"
           detail={
             setupStatus === "needs_retry"
               ? (setupError ?? "Setup paused before it finished.")
@@ -203,7 +203,7 @@ export function LiveViewOnboardingActivation({
         />
         <StatusRow
           state="working"
-          label="first result"
+          label="First result"
           detail={
             refreshing
               ? "Reading recent activity now."
@@ -224,7 +224,7 @@ export function LiveViewOnboardingActivation({
             <RefreshCw
               className={`mr-1.5 h-3.5 w-3.5 ${retrying ? "animate-spin" : ""}`}
             />
-            {retrying ? "finishing setup" : "finish setup"}
+            {retrying ? "Finishing setup" : "Finish setup"}
           </Button>
         ) : captureReadiness === "blocked" ? (
           <Button
@@ -233,7 +233,7 @@ export function LiveViewOnboardingActivation({
             className="rounded-md"
             onClick={onFixCapture}
           >
-            fix capture
+            Fix capture
           </Button>
         ) : (
           <Button
@@ -247,7 +247,7 @@ export function LiveViewOnboardingActivation({
             <RefreshCw
               className={`mr-1.5 h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`}
             />
-            {refreshing ? "checking" : "check now"}
+            {refreshing ? "Checking" : "Check now"}
           </Button>
         )}
         <span className="text-[11px] text-muted-foreground">

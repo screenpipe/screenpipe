@@ -336,7 +336,7 @@ export function ChatMessageList({
                   {intentLabel ? (
                     <div
                       className={cn(
-                        "mb-1 px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground/80",
+                        "mb-1 px-1 text-[11px] font-medium normal-case tracking-[0.16em] text-muted-foreground/80",
                         message.role === "user" ? "text-right" : "text-left"
                       )}
                     >

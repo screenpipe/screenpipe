@@ -365,7 +365,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
                   <div className="min-w-0 flex-1">
                     <span className="text-[13px] text-foreground">{DISPLAY_NAMES[id]}</span>
                     <span className="ml-2 text-xs text-muted-foreground">
-                      screen and audio history
+                      Screen and audio history
                     </span>
                     {err && (
                       <p className="text-[11px] mt-1 flex items-center gap-1.5 flex-wrap">
@@ -379,7 +379,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
                             onClick={() => revealPath(err.path!)}
                             className="underline text-foreground/80 hover:text-foreground"
                           >
-                            open file
+                            Open file
                           </button>
                         )}
                       </p>

@@ -130,7 +130,7 @@ export function ChatInspector({
       <Separator />
 
       <div className="px-4 pb-1 pt-3">
-        <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        <h3 className="text-[11px] font-medium normal-case tracking-wider text-muted-foreground">
           Sources
         </h3>
       </div>

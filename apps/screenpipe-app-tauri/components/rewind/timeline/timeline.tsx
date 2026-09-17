@@ -90,16 +90,16 @@ function formatUiEvent(ev: UiEventSummary): { icon: string; label: string; conte
 	switch (ev.event_type) {
 		case "text":
 			return ev.text_content
-				? { icon: "\u2328", label: `typed "${truncate(ev.text_content)}"`, context: ev.app_name }
+				? { icon: "\u2328", label: `Typed "${truncate(ev.text_content)}"`, context: ev.app_name }
 				: null;
 		case "clipboard":
 			return ev.text_content
-				? { icon: "\ud83d\udccb", label: `copied "${truncate(ev.text_content)}"`, context: ev.app_name }
+				? { icon: "\ud83d\udccb", label: `Copied "${truncate(ev.text_content)}"`, context: ev.app_name }
 				: null;
 		case "click":
-			return { icon: "\ud83d\uddb1", label: `clicked "${truncate(ev.text_content || "element")}"`, context: ev.app_name };
+			return { icon: "\ud83d\uddb1", label: `Clicked "${truncate(ev.text_content || "element")}"`, context: ev.app_name };
 		case "app_switch":
-			return { icon: "\u21d4", label: `switched to ${ev.app_name || "app"}`, context: null };
+			return { icon: "\u21d4", label: `Switched to ${ev.app_name || "app"}`, context: null };
 		default:
 			return null; // skip key, scroll, window_focus, move etc.
 	}
@@ -1969,7 +1969,7 @@ export const TimelineSlider = ({
 																src={getFrameThumbnailSources(frameId).src}
 																srcSet={getFrameThumbnailSources(frameId).srcSet}
 																sizes="256px"
-																alt="frame preview"
+																alt="Frame preview"
 																className="w-full h-full object-cover select-none"
 																loading="lazy"
 																decoding="async"
@@ -2003,7 +2003,7 @@ export const TimelineSlider = ({
 													{hasAudio && (
 														<p className="text-muted-foreground flex items-center gap-1 mt-1">
 															<Mic className="w-3 h-3" />
-															<span>audio recorded</span>
+															<span>Audio recorded</span>
 														</p>
 													)}
 													{hasTags && (

@@ -19,7 +19,12 @@ import {
 } from "lucide-react";
 import type { WorkflowMap } from "./model";
 import type { WorkflowsPlatform } from "./platform";
-import { guideHtml, guideImage, type WorkflowGuide as Guide } from "./guide";
+import {
+  guideHtml,
+  guideImage,
+  guideSourceImage,
+  type WorkflowGuide as Guide,
+} from "./guide";
 import { GuideAssistant } from "./guide-assistant";
 import styles from "./workflow-guide.module.css";
 
@@ -174,7 +179,24 @@ export function WorkflowGuide({
           Back to workflow
         </button>
         <div>
-          <span role="status">{saved}</span>
+          <span role="status" className={styles.saveStatus} title={saved}>
+            {saved.startsWith("Could not") ? (
+              saved
+            ) : (
+              <>
+                {saved === "Saving…" ? (
+                  <Loader2
+                    size={16}
+                    className={styles.spin}
+                    aria-hidden="true"
+                  />
+                ) : saved ? (
+                  <Check size={16} aria-hidden="true" />
+                ) : null}
+                <span className={styles.srOnly}>{saved}</span>
+              </>
+            )}
+          </span>
           {saved.startsWith("Could not") && (
             <button
               onClick={() => latest.current && void persist(latest.current)}
@@ -186,29 +208,41 @@ export function WorkflowGuide({
             <>
               {platform.openWeb && (
                 <button
-                  className={styles.primary}
+                  className={styles.iconButton}
+                  aria-label="Open web editor"
+                  title="Open web editor"
                   onClick={() => {
                     setWebReview(true);
                     setWebError("");
                   }}
                 >
-                  <ExternalLink size={15} />
-                  Open web editor
+                  <ExternalLink size={18} aria-hidden="true" />
                 </button>
               )}
-              <button onClick={() => setEditing(!editing)}>
-                {editing ? <Check size={15} /> : <Pencil size={15} />}
-                {editing ? "Done editing" : "Edit SOP"}
+              <button
+                className={styles.iconButton}
+                aria-label={editing ? "Done editing" : "Edit SOP"}
+                title={editing ? "Done editing" : "Edit SOP"}
+                aria-pressed={editing}
+                onClick={() => setEditing(!editing)}
+              >
+                {editing ? (
+                  <Check size={18} aria-hidden="true" />
+                ) : (
+                  <Pencil size={18} aria-hidden="true" />
+                )}
               </button>
               <button
+                className={styles.iconButton}
+                aria-label="Export SOP"
+                title="Export SOP"
                 onClick={() => {
                   setImages(false);
                   setExportError("");
                   dialog.current?.showModal();
                 }}
               >
-                <Download size={15} />
-                Export SOP
+                <Download size={18} aria-hidden="true" />
               </button>
             </>
           )}
@@ -379,8 +413,11 @@ export function WorkflowGuide({
               {draft.steps.map((step, i) => {
                 const image =
                   !stale && step.includeImage
-                    ? guideImage(workflow, step.sourceStage)
+                    ? guideImage(workflow, step.sourceStage, step.imageReview)
                     : null;
+                const source = !stale
+                  ? guideSourceImage(workflow, step.sourceStage)
+                  : null;
                 return (
                   <section
                     className={styles.step}
@@ -491,27 +528,35 @@ export function WorkflowGuide({
                           </button>
                         )}
                       </figure>
+                    ) : source ? (
+                      <ScreenshotReview
+                        key={`${step.sourceStage}:${source.dataUrl}`}
+                        source={source}
+                        title={step.title}
+                        include={() => {
+                          update({
+                            ...draft,
+                            steps: draft.steps.map((s, j) =>
+                              j === i
+                                ? {
+                                    ...s,
+                                    includeImage: true,
+                                    imageReview: {
+                                      frameId: source.frameId,
+                                      timestamp: source.timestamp,
+                                    },
+                                  }
+                                : s,
+                            ),
+                          });
+                        }}
+                      />
                     ) : (
-                      <div className={styles.noImage}>
-                        <ImageOff size={15} />
-                        <span>No screenshot included</span>
-                        {editing &&
-                          !stale &&
-                          guideImage(workflow, step.sourceStage) && (
-                            <button
-                              onClick={() =>
-                                update({
-                                  ...draft,
-                                  steps: draft.steps.map((s, j) =>
-                                    j === i ? { ...s, includeImage: true } : s,
-                                  ),
-                                })
-                              }
-                            >
-                              Include source screenshot
-                            </button>
-                          )}
-                      </div>
+                      <p className={styles.muted}>
+                        {stale
+                          ? "Source changed. Regenerate this SOP to review its screenshots."
+                          : "No captured screenshot for this step."}
+                      </p>
                     )}
                     {editing ? (
                       <label className={styles.result}>
@@ -635,6 +680,57 @@ export function WorkflowGuide({
           {exporting ? "Exporting…" : "Export HTML"}
         </button>
       </dialog>
+    </div>
+  );
+}
+
+function ScreenshotReview({
+  source,
+  title,
+  include,
+}: {
+  source: NonNullable<ReturnType<typeof guideSourceImage>>;
+  title: string;
+  include: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  return (
+    <div className={styles.imageReview}>
+      <div className={styles.imageReviewHeader}>
+        <span>Saved screenshot available</span>
+        <button aria-expanded={open} onClick={() => setOpen(!open)}>
+          {open ? "Hide screenshot" : "Review screenshot"}
+        </button>
+      </div>
+      {open && (
+        <>
+          <img
+            src={source.dataUrl}
+            alt={`Review source for ${title}`}
+            draggable={false}
+            onLoad={() => {
+              setLoaded(true);
+              setFailed(false);
+            }}
+            onError={() => {
+              setFailed(true);
+              setLoaded(false);
+            }}
+          />
+          <div className={styles.imageReviewHeader}>
+            <span>
+              {failed
+                ? "This screenshot could not be loaded."
+                : "Does this image show the step clearly?"}
+            </span>
+            <button disabled={!loaded || failed} onClick={include}>
+              Include screenshot
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

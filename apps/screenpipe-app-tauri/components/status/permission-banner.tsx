@@ -75,13 +75,13 @@ export function PermissionBanner() {
         <div className="flex items-center gap-2 min-w-0">
           <span className="font-semibold text-destructive-foreground text-base">
             {permissions.screenRestartRequired
-              ? "restart required"
+              ? "Restart required"
               : `${missingPerms.join(" & ")} disabled`}
           </span>
           <span className="text-destructive-foreground/80 hidden sm:inline text-sm">
             {permissions.screenRestartRequired
-              ? "screenpipe won’t work until you restart"
-              : "recording is paused"}
+              ? "Screenpipe won’t work until you restart"
+              : "Recording is paused"}
           </span>
         </div>
       </div>
@@ -111,8 +111,8 @@ export function PermissionBanner() {
           }}
         >
           {permissions.screenRestartRequired
-            ? "restart screenpipe"
-            : "fix permissions"}
+            ? "Restart screenpipe"
+            : "Fix permissions"}
         </Button>
 
       </div>

@@ -1,28 +1,28 @@
 ---
-title: "OpenClaw - AI assistant with screenpipe memory"
+title: "OpenClaw - AI assistant with Screenpipe memory"
 sidebarTitle: "OpenClaw"
-description: "Connect screenpipe to OpenClaw, a self-hosted personal AI that ties into WhatsApp, Telegram, Discord, and iMessage, so it can recall your screen history."
-icon: "robot"
+description: "Connect Screenpipe to OpenClaw, a self-hosted personal AI that ties into WhatsApp, Telegram, Discord, and iMessage, so it can recall your screen history."
+icon: "bot"
 ---
 
 [OpenClaw](https://openclaw.ai) is a self-hosted personal AI assistant that connects to your messaging apps (WhatsApp, Telegram, Discord, iMessage, etc.) and can take actions on your behalf.
 
-With screenpipe, OpenClaw can recall what you've seen on screen, reference past conversations, and answer questions about your digital history.
+With Screenpipe, OpenClaw can recall what you've seen on screen, reference past conversations, and answer questions about your digital history.
 
 <iframe
-  width="315"
+  Width="315"
   height="560"
   src="https://www.youtube.com/embed/EJ0BTyhFtfk"
-  title="OpenClaw + screenpipe demo"
+  title="OpenClaw + Screenpipe demo"
   frameBorder="0"
   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
   allowFullScreen
-  style={{ borderRadius: "12px", margin: "0 auto", display: "block" }}
+  style={{ borderRadius: "8px", margin: "0 auto", display: "block" }}
 ></iframe>
 
-## quick setup
+## Quick setup
 
-One command makes OpenClaw screenpipe-aware: it installs the screenpipe skills into OpenClaw's skills directory and registers the screenpipe MCP server in its config.
+One command makes OpenClaw screenpipe-aware: it installs the Screenpipe skills into OpenClaw's skills directory and registers the Screenpipe MCP server in its config.
 
 ```bash
 npx -y screenpipe@latest agent setup openclaw
@@ -36,13 +36,13 @@ The same command wires up other agents too: `npx -y screenpipe@latest agent setu
 
 Want to wire it up by hand, or run OpenClaw on another machine? See the manual and remote setups below.
 
-## same machine (manual)
+## Same machine (manual)
 
-If OpenClaw and screenpipe run on the same machine, setup is straightforward.
+If OpenClaw and Screenpipe run on the same machine, setup is straightforward.
 
 ### MCP
 
-Add screenpipe to your OpenClaw MCP config:
+Add Screenpipe to your OpenClaw MCP config:
 
 ```json
 {
@@ -63,7 +63,7 @@ You can test the MCP server independently:
 npx @modelcontextprotocol/inspector npx screenpipe-mcp
 ```
 
-### custom skill (alternative)
+### Custom skill (alternative)
 
 Create `~/openclaw/skills/screenpipe/skill.md`:
 
@@ -94,13 +94,13 @@ curl -s "http://localhost:3030/search?limit=10&content_type=all"
 
 Restart OpenClaw to load the skill.
 
-## different machines
+## Different machines
 
-If OpenClaw runs on a different machine (e.g., a VPS or home server) than screenpipe, the simplest path is to sync your data over and run the one-command setup. You can also query screenpipe's API over the network — see the options below.
+If OpenClaw runs on a different machine (e.g., a VPS or home server) than Screenpipe, the simplest path is to sync your data over and run the one-command setup. You can also query Screenpipe's API over the network — see the options below.
 
-### recommended: selective sync + one-command setup
+### Recommended: selective sync + one-command setup
 
-**1. sync your data to the server (lightly).** screenpipe's remote sync pushes `~/.screenpipe` over SSH — no cloud account needed. Skip the heavy media and exclude anything sensitive, so you ship just text, transcripts, and memories:
+**1. Sync your data to the server (lightly).** Screenpipe's remote sync pushes `~/.screenpipe` over SSH — no cloud account needed. Skip the heavy media and exclude anything sensitive, so you ship just text, transcripts, and memories:
 
 ```bash
 npx -y screenpipe@latest sync remote now \
@@ -116,7 +116,7 @@ npx -y screenpipe@latest sync remote now \
 
 Put it on a timer for continuous sync (see the cron example below).
 
-**2. point OpenClaw at the synced data.** On the server, one command writes the skill + MCP config targeting the local synced copy:
+**2. Point OpenClaw at the synced data.** On the server, one command writes the skill + MCP config targeting the local synced copy:
 
 ```bash
 npx -y screenpipe@latest agent setup openclaw --api-url http://localhost:3030
@@ -124,9 +124,9 @@ npx -y screenpipe@latest agent setup openclaw --api-url http://localhost:3030
 
 Headless `npx -y screenpipe@latest login` writes the cloud token where the engine reads it, so cloud features work on the server without the desktop app.
 
-### option 1: query screenpipe's REST API directly
+### Option 1: query Screenpipe's REST API directly
 
-If both machines are on the same network, OpenClaw can query screenpipe's API directly. Use a custom skill:
+If both machines are on the same network, OpenClaw can query Screenpipe's API directly. Use a custom skill:
 
 Create `~/openclaw/skills/screenpipe/skill.md`:
 
@@ -151,10 +151,10 @@ curl -s "http://SCREENPIPE_IP:3030/search?q=QUERY&limit=20"
 ## filter by type
 
 ```bash
-# screen content (accessibility-first text plus OCR fallback)
+# Screen content (accessibility-first text plus OCR fallback)
 curl -s "http://SCREENPIPE_IP:3030/search?q=QUERY&content_type=all"
 
-# audio transcriptions
+# Audio transcriptions
 curl -s "http://SCREENPIPE_IP:3030/search?q=QUERY&content_type=audio"
 ```
 
@@ -171,11 +171,11 @@ curl -s "http://SCREENPIPE_IP:3030/meetings?limit=20"
 ```
 ````
 
-Replace `SCREENPIPE_IP` with the IP of the machine running screenpipe. If the machines aren't on the same network, use [Tailscale](https://tailscale.com) to create a private network between them.
+Replace `SCREENPIPE_IP` with the IP of the machine running Screenpipe. If the machines aren't on the same network, use [Tailscale](https://tailscale.com) to create a private network between them.
 
-### option 2: push data to the OpenClaw machine over SSH
+### Option 2: push data to the OpenClaw machine over SSH
 
-Use screenpipe's built-in **remote sync** to push your `~/.screenpipe/` directory to the OpenClaw machine over SFTP. No screenpipe-cloud account needed — just SSH access to your server.
+Use Screenpipe's built-in **remote sync** to push your `~/.screenpipe/` directory to the OpenClaw machine over SFTP. No screenpipe-cloud account needed — just SSH access to your server.
 
 > **⚠️ clipboard sensitivity:** Remote sync includes clipboard events and content by default. If you're syncing to a less-trusted machine (VPS, shared server), disable clipboard capture first with `--disable-clipboard-capture` to avoid syncing passwords, API keys, or other sensitive data that flows through your clipboard.
 
@@ -209,11 +209,11 @@ Run that on a cron / launchd / systemd timer for continuous sync:
 
 Or set env vars instead of flags: `SCREENPIPE_REMOTE_HOST`, `SCREENPIPE_REMOTE_USER`, `SCREENPIPE_REMOTE_KEY`, `SCREENPIPE_REMOTE_PATH`.
 
-On the OpenClaw machine, point its skill at the synced directory or run a local screenpipe pointing to the same data dir — OpenClaw can then query `localhost:3030` as if the data were captured locally.
+On the OpenClaw machine, point its skill at the synced directory or run a local Screenpipe pointing to the same data dir — OpenClaw can then query `localhost:3030` as if the data were captured locally.
 
 > The old **Settings → Cloud** sync flow is being phased out in favor of explicit remote sync setups. Use `npx -y screenpipe@latest sync remote` for new setups where you control the destination.
 
-## available MCP tools
+## Available MCP tools
 
 When connected via MCP (same machine setup), OpenClaw gets access to these tools:
 
@@ -228,36 +228,36 @@ When connected via MCP (same machine setup), OpenClaw gets access to these tools
 
 The MCP server also provides **resources** (`screenpipe://context` for current time, `screenpipe://guide` for search strategy) and **prompts** (search-recent, find-in-app, meeting-notes).
 
-## example prompts
+## Example prompts
 
 Once configured, message OpenClaw from any chat app:
 
-- "what was I reading about yesterday afternoon?"
-- "find the slack message from john about the deployment"
-- "what code was I looking at in cursor this morning?"
-- "summarize my meetings from last week"
-- "what tabs did I have open when researching that bug?"
-- "when did I last see the budget spreadsheet?"
-- "what did I copy to clipboard recently?"
-- "show me what buttons I clicked in Figma today"
+- "What was I reading about yesterday afternoon?"
+- "Find the Slack message from john about the deployment"
+- "What code was I looking at in cursor this morning?"
+- "Summarize my meetings from last week"
+- "What tabs did I have open when researching that bug?"
+- "When did I last see the budget spreadsheet?"
+- "What did I copy to clipboard recently?"
+- "Show me what buttons I clicked in Figma today"
 
-## build a second brain (automation)
+## Build a second brain (automation)
 
-the prompts above answer questions on demand. to have OpenClaw *proactively* segment your workflows, summarize your processes, and keep a living memory of you — like the [digital clone scheduled task](/task-library), but inside OpenClaw — paste the prompt from [build a second brain](/second-brain) into OpenClaw and let it run on a schedule.
+The prompts above answer questions on demand. To have OpenClaw *proactively* segment your workflows, summarize your processes, and keep a living memory of you — like the [digital clone scheduled task](/task-library), but inside OpenClaw — paste the prompt from [build a second brain](/second-brain) into OpenClaw and let it run on a schedule.
 
-prefer to run it inside the screenpipe app instead of OpenClaw? do the same thing as a [scheduled task](/scheduled-tasks) — `npx -y screenpipe@latest pipe install <path> && npx -y screenpipe@latest pipe enable <name>` (`bunx` works too).
+Prefer to run it inside the Screenpipe app instead of OpenClaw? Do the same thing as a [scheduled task](/scheduled-tasks) — `npx -y screenpipe@latest pipe install <path> && npx -y screenpipe@latest pipe enable <name>` (`bunx` works too).
 
-## troubleshooting
+## Troubleshooting
 
 **MCP not connecting?**
 - Test the server: `npx @modelcontextprotocol/inspector npx screenpipe-mcp`
-- Check screenpipe is running: `curl http://localhost:3030/health`
+- Check Screenpipe is running: `curl http://localhost:3030/health`
 
-**remote machine can't reach screenpipe?**
+**Remote machine can't reach Screenpipe?**
 - Check Tailscale is connected: `tailscale status`
 - Check SSH tunnel is up: `curl http://localhost:3030/health` on the remote
-- Make sure screenpipe is running on your computer
+- Make sure Screenpipe is running on your computer
 
-**no results from queries?**
-- Verify screenpipe is running: `curl http://localhost:3030/health`
-- Ensure screenpipe has screen recording permissions
+**No results from queries?**
+- Verify Screenpipe is running: `curl http://localhost:3030/health`
+- Ensure Screenpipe has screen recording permissions

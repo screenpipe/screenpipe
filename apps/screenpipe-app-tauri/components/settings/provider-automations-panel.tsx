@@ -134,9 +134,9 @@ function cronLabel(schedule: string): string | null {
     month === "*" &&
     dayOfWeek === "*"
   ) {
-    if (minute === "*") return "every minute";
+    if (minute === "*") return "Every minute";
     const everyMinutes = minute.match(/^\*\/(\d+)$/)?.[1];
-    if (everyMinutes) return `every ${everyMinutes} minutes`;
+    if (everyMinutes) return `Every ${everyMinutes} minutes`;
     if (/^\d+$/.test(minute)) {
       return Number(minute) === 0
         ? "every hour"
@@ -151,7 +151,7 @@ function cronLabel(schedule: string): string | null {
     month === "*" &&
     dayOfWeek === "*"
   ) {
-    return `every ${everyHours} hours${Number(minute) === 0 ? "" : ` at :${minute.padStart(2, "0")}`}`;
+    return `Every ${everyHours} hours${Number(minute) === 0 ? "" : ` at :${minute.padStart(2, "0")}`}`;
   }
   if (
     /^\d+$/.test(minute) &&
@@ -160,8 +160,8 @@ function cronLabel(schedule: string): string | null {
     month === "*"
   ) {
     const time = `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
-    if (dayOfWeek === "*") return `daily at ${time}`;
-    if (dayOfWeek === "1-5") return `weekdays at ${time}`;
+    if (dayOfWeek === "*") return `Daily at ${time}`;
+    if (dayOfWeek === "1-5") return `Weekdays at ${time}`;
   }
   return null;
 }
@@ -181,7 +181,7 @@ export function providerScheduleLabel(task: ProviderAutomation): string {
     const hour = Number(parts.BYHOUR);
     const minute = Number(parts.BYMINUTE || "0");
     if (Number.isFinite(hour)) {
-      return `daily at ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+      return `Daily at ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
     }
     return interval === 1 ? "daily" : `every ${interval} days`;
   }
@@ -203,7 +203,7 @@ export function providerManagementUrl(provider: string): string | null {
 function providerManagementActionLabel(provider: string): string {
   const name =
     provider.toLowerCase() === "claude" ? "Claude" : providerLabel(provider);
-  return `open ${name} schedules`;
+  return `Open ${name} schedules`;
 }
 
 type ProviderOpenDependencies = {
@@ -410,8 +410,8 @@ export function ProviderAutomationsPanel({
           </div>
           <button
             type="button"
-            aria-label="open Claude schedules"
-            title="open Claude schedules"
+            aria-label="Open Claude schedules"
+            title="Open Claude schedules"
             className="inline-flex h-10 w-10 shrink-0 items-center justify-center border-l border-border text-muted-foreground transition-colors hover:bg-foreground hover:text-background"
             onClick={() => void manageProvider("claude")}
           >
@@ -451,7 +451,7 @@ export function ProviderAutomationsPanel({
         {hasMultipleProviders ? (
           <div
             role="tablist"
-            aria-label="schedule owner"
+            aria-label="Schedule owner"
             className="flex min-w-0 flex-1 overflow-x-auto bg-muted/20 px-2"
           >
             {providers.map((provider) => {
@@ -539,8 +539,8 @@ export function ProviderAutomationsPanel({
                 >
                   <span
                     role="img"
-                    aria-label={isOn ? "active" : "paused"}
-                    title={isOn ? "active" : "paused"}
+                    aria-label={isOn ? "Active" : "Paused"}
+                    title={isOn ? "Active" : "Paused"}
                     className={cn(
                       "h-2 w-2 shrink-0 border border-current text-muted-foreground",
                       isOn && "bg-foreground text-foreground",
@@ -598,7 +598,7 @@ export function ProviderAutomationsPanel({
                         <DropdownMenuTrigger asChild>
                           <button
                             type="button"
-                            aria-label={`actions for ${task.name}`}
+                            aria-label={`Actions for ${task.name}`}
                             disabled={isPending}
                             className="inline-flex h-7 w-7 items-center justify-center border border-border transition-colors hover:bg-foreground hover:text-background disabled:opacity-50"
                           >
@@ -614,7 +614,7 @@ export function ProviderAutomationsPanel({
                             onSelect={() => setTaskToDelete(task)}
                           >
                             <Trash2 className="mr-2 h-4 w-4" />
-                            delete schedule
+                            Delete schedule
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -628,7 +628,7 @@ export function ProviderAutomationsPanel({
           {hiddenTaskCount > 0 && (
             <button
               type="button"
-              aria-label={`show ${hiddenTaskCount} more`}
+              aria-label={`Show ${hiddenTaskCount} more`}
               className="w-full border-t border-border px-3 py-2 text-left font-mono text-[10px] text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
               onClick={() => setExpandedProvider(activeProvider)}
             >
@@ -662,7 +662,7 @@ export function ProviderAutomationsPanel({
         <AlertDialogContent className="rounded-lg">
           <AlertDialogHeader>
             <AlertDialogTitle>
-              delete {taskToDelete?.name ?? "this schedule"}?
+              Delete {taskToDelete?.name ?? "this schedule"}?
             </AlertDialogTitle>
             <AlertDialogDescription>
               This permanently removes the schedule from {activeProviderLabel}.
@@ -670,7 +670,7 @@ export function ProviderAutomationsPanel({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>cancel</AlertDialogCancel>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               onClick={() => {
@@ -680,7 +680,7 @@ export function ProviderAutomationsPanel({
                 void mutateTask(task, "delete");
               }}
             >
-              delete schedule
+              Delete schedule
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

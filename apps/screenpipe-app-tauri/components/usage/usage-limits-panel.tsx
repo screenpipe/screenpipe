@@ -47,11 +47,11 @@ export function UsageLimitsPanel({
         className="group flex w-full items-center justify-between gap-3 border-b border-border pb-2.5 text-left transition-colors duration-150"
       >
         <span className="flex min-w-0 items-baseline gap-1.5 text-xs">
-          <span className="shrink-0 font-medium lowercase text-foreground">
-            screenpipe cloud usage
+          <span className="shrink-0 font-medium normal-case text-foreground">
+            Screenpipe cloud usage
           </span>
           {/* The plan is a product name, so it keeps its own casing while the
-              heading around it stays lowercase like every other title. */}
+              heading around it uses sentence case like other titles. */}
           {planLabel && (
             <span className="min-w-0 truncate font-mono text-muted-foreground">
               · {planLabel}
@@ -90,7 +90,7 @@ export function UsageLimitsPanel({
               type="button"
               variant="ghost"
               size="sm"
-              className="-mr-2 h-7 shrink-0 gap-1.5 rounded-md px-2 text-xs lowercase"
+              className="-mr-2 h-7 shrink-0 gap-1.5 rounded-md px-2 text-xs normal-case"
               disabled={isRefreshing}
               onClick={onRefresh}
             >
@@ -98,7 +98,7 @@ export function UsageLimitsPanel({
                 className={`h-3.5 w-3.5 ${isRefreshing ? "animate-spin" : ""}`}
                 aria-hidden
               />
-              refresh
+              Refresh
             </Button>
           )}
         </div>

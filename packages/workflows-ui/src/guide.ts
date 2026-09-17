@@ -15,6 +15,7 @@ export type WorkflowGuide = {
     expectedResult: string;
     sourceStage: number | null;
     includeImage: boolean;
+    imageReview?: { frameId: number; timestamp: string };
     narration?: string;
   }>;
   exceptions: string[];
@@ -54,6 +55,10 @@ export function parseGuide(
         (s.narration === undefined ||
           (text(s.narration) && [...s.narration].length <= 800)) &&
         typeof s.includeImage === "boolean" &&
+        (s.imageReview === undefined ||
+          (Number.isInteger(s.imageReview?.frameId) &&
+            s.imageReview.frameId >= 0 &&
+            text(s.imageReview.timestamp))) &&
         (s.sourceStage === null ||
           (Number.isInteger(s.sourceStage) && s.sourceStage >= 0)),
     )
@@ -89,6 +94,7 @@ export function parseGuide(
         sourceStage,
         includeImage,
         narration,
+        imageReview,
       }) => ({
         title,
         instruction,
@@ -96,6 +102,9 @@ export function parseGuide(
         sourceStage,
         includeImage,
         ...(narration !== undefined ? { narration } : {}),
+        // A workflow argument validates agent output. Only disk/UI drafts may
+        // carry a human review; an agent cannot grant itself that approval.
+        ...(!workflow && imageReview ? { imageReview } : {}),
       }),
     ),
     exceptions: g.exceptions,
@@ -117,16 +126,31 @@ Attached workflow evidence:
 ${evidence}`;
 }
 
+/** Existing local imagery is available for review even without legacy verification metadata. */
+export function guideSourceImage(
+  workflow: WorkflowMap,
+  sourceStage: number | null,
+) {
+  const image =
+    sourceStage === null ? null : workflow.stages[sourceStage]?.screenshot;
+  return image &&
+    /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(image.dataUrl)
+    ? image
+    : null;
+}
+
 export function guideImage(
   workflow: WorkflowMap,
   sourceStage: number | null,
+  review?: WorkflowGuide["steps"][number]["imageReview"],
 ): string | null {
-  const image =
-    sourceStage === null ? null : workflow.stages[sourceStage]?.screenshot;
-  return image?.visualVerified &&
-    /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(image.dataUrl)
-    ? image.dataUrl
-    : null;
+  const image = guideSourceImage(workflow, sourceStage);
+  const reviewed =
+    image &&
+    review &&
+    review.frameId === image.frameId &&
+    review.timestamp === image.timestamp;
+  return image && (image.visualVerified || reviewed) ? image.dataUrl : null;
 }
 const escape = (text: string) =>
   text.replace(
@@ -153,7 +177,7 @@ export function guideHtml(
         includeImages &&
         guide.sourceRevision === (workflow.revision ?? 0) &&
         s.includeImage
-          ? guideImage(workflow, s.sourceStage)
+          ? guideImage(workflow, s.sourceStage, s.imageReview)
           : null;
       return `<article><h2>${i + 1}. ${escape(s.title)}</h2><p>${escape(s.instruction)}</p>${image ? `<img alt="${escape(s.title)}" src="${image}">` : ""}${s.expectedResult ? `<p><strong>Expected result:</strong> ${escape(s.expectedResult)}</p>` : ""}</article>`;
     })

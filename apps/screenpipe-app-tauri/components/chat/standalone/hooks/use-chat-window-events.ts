@@ -320,7 +320,7 @@ export function useChatConversationRoutingEvents({
     if (session) {
       loadConversationRef.current({
         id: convId,
-        title: session.title || "untitled",
+        title: session.title || "Untitled",
         messages: [],
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
@@ -423,7 +423,7 @@ export function useChatE2EGlobals({
       if (!existing) {
         store.actions.upsert({
           id: sid,
-          title: "e2e",
+          title: "E2e",
           preview,
           status: "idle",
           messageCount: nextMessages.length,
@@ -605,7 +605,7 @@ export function useChatE2EGlobals({
       if (!store.sessions[sid]) {
         store.actions.upsert({
           id: sid,
-          title: "untitled",
+          title: "Untitled",
           preview: "",
           status: "idle",
           messageCount: 0,

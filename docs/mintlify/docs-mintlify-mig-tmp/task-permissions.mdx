@@ -1,25 +1,25 @@
 ---
 title: "Scheduled task permissions: scope Screenpipe API access"
 sidebarTitle: "Task permissions"
-description: "Control which screenpipe API endpoints your scheduled tasks can access by allowlisting endpoints, restricting writes, and scoping permissions per automation."
-icon: "shield-halved"
+description: "Control which Screenpipe API endpoints your scheduled tasks can access by allowlisting endpoints, restricting writes, and scoping permissions per automation."
+icon: "shield-check"
 ---
 
 <Note>
-The app calls these **scheduled tasks**. The CLI command `screenpipe pipe`, local API paths under `/pipes`, and configuration file `pipe.md` retain their technical names. Use those exact identifiers in commands and configuration.
+The app calls these **Scheduled tasks**. The CLI command `screenpipe pipe`, local API paths under `/pipes`, and configuration file `pipe.md` retain their technical names. Use those exact identifiers in commands and configuration.
 </Note>
 
-## overview
+## Overview
 
-scheduled tasks can access the screenpipe API to read screen data, manage meetings, send notifications, and more. by default, scheduled tasks have **full access** to every endpoint — no restrictions.
+Scheduled tasks can access the Screenpipe API to read screen data, manage meetings, send notifications, and more. By default, scheduled tasks have **full access** to every endpoint — no restrictions.
 
-if you want to limit what a scheduled task can do, add a `permissions` block to the YAML frontmatter in `pipe.md`. this is useful for:
+If you want to limit what a scheduled task can do, add a `permissions` block to the YAML frontmatter in `pipe.md`. This is useful for:
 
-- **preventing accidents** — a scheduled task that reads meetings shouldn't be able to stop one
-- **least privilege** — scheduled tasks from the store should only access what they need
-- **safety** — deny destructive endpoints like `/data/delete-range`
+- **Preventing accidents** — a scheduled task that reads meetings shouldn't be able to stop one
+- **Least privilege** — scheduled tasks from the store should only access what they need
+- **Safety** — deny destructive endpoints like `/data/delete-range`
 
-## quick start
+## Quick start
 
 ```yaml
 ---
@@ -32,7 +32,7 @@ Summarize my screen activity...
 
 This preset restricts supported Screenpipe API calls. It blocks meeting start/stop, deletion, and raw SQL, but also allows selected operations such as notifications, speaker-name updates, and submissions to output targets bound to the authenticated task. It does not sandbox shell commands, files, or external tools.
 
-## presets
+## Presets
 
 ### `reader` — restricted API defaults
 
@@ -40,29 +40,29 @@ This preset restricts supported Screenpipe API calls. It blocks meeting start/st
 permissions: reader
 ```
 
-allowed endpoints:
+Allowed endpoints:
 
-| method | endpoint | description |
+| Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/search` | query screen/audio data |
-| GET | `/activity-summary` | app usage overview |
+| GET | `/search` | Query screen/audio data |
+| GET | `/activity-summary` | App usage overview |
 | GET | `/elements` | UI element search |
-| GET | `/frames/*` | screenshots (if `allow_frames: true`) |
-| GET | `/meetings` | list meetings |
-| GET | `/meetings/*` | get meeting details |
-| GET | `/meetings/status` | check if in meeting |
-| POST | `/notify` | send notifications |
-| GET | `/speakers` | list speakers |
-| POST | `/speakers/update` | update speaker names |
-| GET | `/pipes/info` | scheduled task metadata |
-| GET | `/health` | health check |
-| GET | `/workflows`, `/workflows/*` | workflow discovery and details |
-| GET | `/feedback` | feedback attributed to this authenticated task |
-| GET | `/outputs/targets` | discover output targets bound to this task |
-| POST | `/outputs/targets/*/submit` | fill an output target bound to this task |
-| GET | `/connections/*` | connection credentials |
+| GET | `/frames/*` | Screenshots (if `allow_frames: true`) |
+| GET | `/meetings` | List meetings |
+| GET | `/meetings/*` | Get meeting details |
+| GET | `/meetings/status` | Check if in meeting |
+| POST | `/notify` | Send notifications |
+| GET | `/speakers` | List speakers |
+| POST | `/speakers/update` | Update speaker names |
+| GET | `/pipes/info` | Scheduled task metadata |
+| GET | `/health` | Health check |
+| GET | `/workflows`, `/workflows/*` | Workflow discovery and details |
+| GET | `/feedback` | Feedback attributed to this authenticated task |
+| GET | `/outputs/targets` | Discover output targets bound to this task |
+| POST | `/outputs/targets/*/submit` | Fill an output target bound to this task |
+| GET | `/connections/*` | Connection credentials |
 
-everything else is **denied**.
+Everything else is **denied**.
 
 ### `writer` — reader + write operations
 
@@ -70,17 +70,17 @@ everything else is **denied**.
 permissions: writer
 ```
 
-includes all `reader` endpoints, plus:
+Includes all `reader` endpoints, plus:
 
-| method | endpoint | description |
+| Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/meetings/start` | start a manual meeting |
-| POST | `/meetings/stop` | stop a manual meeting |
-| PUT | `/meetings/*` | update meeting details |
-| POST | `/meetings/merge` | merge meetings |
-| POST | `/memories` | create memories |
-| PUT | `/memories/*` | update memories |
-| DELETE | `/memories/*` | delete memories |
+| POST | `/meetings/start` | Start a manual meeting |
+| POST | `/meetings/stop` | Stop a manual meeting |
+| PUT | `/meetings/*` | Update meeting details |
+| POST | `/meetings/merge` | Merge meetings |
+| POST | `/memories` | Create memories |
+| PUT | `/memories/*` | Update memories |
+| DELETE | `/memories/*` | Delete memories |
 
 ### `admin` — full access (explicit)
 
@@ -88,11 +88,11 @@ includes all `reader` endpoints, plus:
 permissions: admin
 ```
 
-allows everything. functionally the same as no `permissions` block, but creates a token for logging/auditing.
+Allows everything. Functionally the same as no `permissions` block, but creates a token for logging/auditing.
 
-## custom rules
+## Custom rules
 
-for fine-grained control, use `allow` and `deny` lists with `Api(METHOD /path)` patterns:
+For fine-grained control, use `allow` and `deny` lists with `Api(METHOD /path)` patterns:
 
 ```yaml
 permissions:
@@ -104,33 +104,33 @@ permissions:
     - Api(* /data/delete-*)
 ```
 
-### pattern syntax
+### Pattern syntax
 
-| pattern | matches |
+| Pattern | Matches |
 |---------|---------|
-| `Api(GET /search)` | exact: GET to /search |
-| `Api(GET /meetings/*)` | glob: GET to /meetings/42, /meetings/status, etc. |
-| `Api(* /meetings/stop)` | any method to /meetings/stop |
-| `Api(POST /notify)` | exact: POST to /notify |
-| `Api(* /data/*)` | any method to any /data/ subpath |
+| `Api(GET /search)` | Exact: GET to /search |
+| `Api(GET /meetings/*)` | Glob: GET to /meetings/42, /meetings/status, etc. |
+| `Api(* /meetings/stop)` | Any method to /meetings/stop |
+| `Api(POST /notify)` | Exact: POST to /notify |
+| `Api(* /data/*)` | Any method to any /data/ subpath |
 
 `*` in the method position matches GET, POST, PUT, DELETE, etc.
 `*` in the path position matches any sequence of characters.
 
-### evaluation order
+### Evaluation order
 
-rules are evaluated in this order — **first match wins**:
+Rules are evaluated in this order — **first match wins**:
 
-1. **deny** — if the request matches any deny rule, it's blocked (403)
-2. **allow** — if the request matches any allow rule, it passes
-3. **default allowlist** — if `allow` is empty and the scheduled task uses a preset with defaults (reader/writer), the default list is checked
-4. **reject** — if nothing matched, the request is blocked
+1. **Deny** — if the request matches any deny rule, it's blocked (403)
+2. **Allow** — if the request matches any allow rule, it passes
+3. **Default allowlist** — if `allow` is empty and the scheduled task uses a preset with defaults (reader/writer), the default list is checked
+4. **Reject** — if nothing matched, the request is blocked
 
-deny always wins over allow, just like firewall rules.
+Deny always wins over allow, just like firewall rules.
 
-### examples
+### Examples
 
-**deny specific endpoints (keep full access otherwise):**
+**Deny specific endpoints (keep full access otherwise):**
 
 ```yaml
 permissions:
@@ -141,7 +141,7 @@ permissions:
     - Api(* /data/delete-*)
 ```
 
-**allow only what you need (everything else denied):**
+**Allow only what you need (everything else denied):**
 
 ```yaml
 permissions:
@@ -150,7 +150,7 @@ permissions:
     - Api(POST /notify)
 ```
 
-**reader defaults + custom deny:**
+**Reader defaults + custom deny:**
 
 ```yaml
 permissions:
@@ -158,11 +158,11 @@ permissions:
     - Api(GET /frames/*)
 ```
 
-this uses the reader defaults but also blocks screenshot access.
+This uses the reader defaults but also blocks screenshot access.
 
-## data access rules
+## Data access rules
 
-data filtering uses the same `allow`/`deny` lists with `App()`, `Window()`, and `Content()` rules:
+Data filtering uses the same `allow`/`deny` lists with `App()`, `Window()`, and `Content()` rules:
 
 ```yaml
 ---
@@ -182,34 +182,34 @@ permissions:
 ---
 ```
 
-| rule type | syntax | description |
+| Rule type | Syntax | Description |
 |-----------|--------|-------------|
-| `App(name)` | `App(Slack)` or `App(Slack, Chrome)` | filter by app name (case-insensitive substring match) |
-| `Window(glob)` | `Window(*meeting*)` | filter by window title (glob pattern) |
-| `Content(type)` | `Content(accessibility, audio)` | filter content types: `accessibility`, `ocr`, `audio`, `input` |
-| `time` | `"09:00-17:00"` | daily time window — supports midnight wrap (`"22:00-06:00"`) |
-| `days` | `"Mon,Tue,Wed,Thu,Fri"` | allowed days of the week |
+| `App(name)` | `App(Slack)` or `App(Slack, Chrome)` | Filter by app name (case-insensitive substring match) |
+| `Window(glob)` | `Window(*meeting*)` | Filter by window title (glob pattern) |
+| `Content(type)` | `Content(accessibility, audio)` | Filter content types: `accessibility`, `ocr`, `audio`, `input` |
+| `time` | `"09:00-17:00"` | Daily time window — supports midnight wrap (`"22:00-06:00"`) |
+| `days` | `"Mon,Tue,Wed,Thu,Fri"` | Allowed days of the week |
 
-deny rules always win over allow rules. if no rules of a given type exist, everything is allowed.
+Deny rules always win over allow rules. If no rules of a given type exist, everything is allowed.
 
-## how it works
+## How it works
 
-when a scheduled task has any restrictions (permissions block, data filters, etc.):
+When a scheduled task has any restrictions (permissions block, data filters, etc.):
 
-1. screenpipe generates a unique token (`sp_pipe_*`) for the scheduled task session
-2. the token is registered with the server middleware
-3. every API request from the scheduled task includes the token in `Authorization: Bearer sp_pipe_*`
-4. the middleware checks `is_endpoint_allowed(method, path)` before forwarding
-5. the Pi extension also enforces rules client-side (blocks curl commands before they run)
-6. when the scheduled task finishes, the token is cleaned up
+1. Screenpipe generates a unique token (`sp_pipe_*`) for the scheduled task session
+2. The token is registered with the server middleware
+3. Every API request from the scheduled task includes the token in `Authorization: Bearer sp_pipe_*`
+4. The middleware checks `is_endpoint_allowed(method, path)` before forwarding
+5. The Pi extension also enforces rules client-side (blocks curl commands before they run)
+6. When the scheduled task finishes, the token is cleaned up
 
-scheduled tasks without any restrictions run without a token — full access, zero overhead.
+Scheduled tasks without any restrictions run without a token — full access, zero overhead.
 
-## common recipes
+## Common recipes
 
-### meeting-safe scheduled task
+### Meeting-safe scheduled task
 
-your scheduled task reads meeting data but should never interfere with active meetings:
+Your scheduled task reads meeting data but should never interfere with active meetings:
 
 ```yaml
 ---
@@ -226,7 +226,7 @@ permissions:
 Summarize my meetings from the last hour...
 ```
 
-### read-only analytics scheduled task
+### Read-only analytics scheduled task
 
 ```yaml
 ---
@@ -241,7 +241,7 @@ permissions:
 Generate a daily browsing report...
 ```
 
-### work-hours-only scheduled task
+### Work-hours-only scheduled task
 
 ```yaml
 ---
@@ -254,6 +254,6 @@ permissions:
 Track my work activity...
 ```
 
-full API access, but time and day restrictions limit when data is visible.
+Full API access, but time and day restrictions limit when data is visible.
 
-need help? [ask in our discord](https://discord.gg/screenpipe)
+Need help? [ask in our Discord](https://discord.gg/screenpipe)

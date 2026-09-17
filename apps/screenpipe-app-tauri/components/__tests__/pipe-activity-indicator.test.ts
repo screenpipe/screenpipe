@@ -18,8 +18,8 @@ describe("pipe activity time labels", () => {
   });
 
   it("formats upcoming run countdowns compactly", () => {
-    expect(formatPipeCountdown("2026-05-13T12:00:30.000Z", now)).toBe("in 30s");
-    expect(formatPipeCountdown("2026-05-13T12:08:00.000Z", now)).toBe("in 8m");
+    expect(formatPipeCountdown("2026-05-13T12:00:30.000Z", now)).toBe("In 30s");
+    expect(formatPipeCountdown("2026-05-13T12:08:00.000Z", now)).toBe("In 8m");
     expect(formatPipeCountdown("2026-05-13T15:30:00.000Z", now)).toBe("in 3h 30m");
     expect(formatPipeCountdown("2026-05-15T15:00:00.000Z", now)).toBe("in 2d 3h");
   });

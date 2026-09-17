@@ -94,7 +94,7 @@ describe("LiveViewDashboardSwitcher", () => {
       ctrlKey: false,
       pointerType: "mouse",
     });
-    fireEvent.click(await screen.findByText("rename"));
+    fireEvent.click(await screen.findByText("Rename"));
     fireEvent.change(await screen.findByTestId("overview-dashboard-name"), {
       target: { value: "Founder dashboard" },
     });
@@ -106,7 +106,7 @@ describe("LiveViewDashboardSwitcher", () => {
       ctrlKey: false,
       pointerType: "mouse",
     });
-    fireEvent.click(await screen.findByText("duplicate"));
+    fireEvent.click(await screen.findByText("Duplicate"));
     expect(onDuplicate).toHaveBeenCalledTimes(1);
 
     fireEvent.pointerDown(screen.getByTestId("overview-dashboard-menu"), {
@@ -114,7 +114,7 @@ describe("LiveViewDashboardSwitcher", () => {
       ctrlKey: false,
       pointerType: "mouse",
     });
-    fireEvent.click(await screen.findByText("delete"));
+    fireEvent.click(await screen.findByText("Delete"));
     expect(await screen.findByText("Delete “Daily focus”?")).toBeTruthy();
     expect(onDelete).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId("overview-confirm-delete"));

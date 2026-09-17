@@ -51,7 +51,7 @@ export function parseStructuredAssistantOutput(
 
     return {
       json: JSON.stringify(value, null, 2),
-      label: `structured output · ${detail}`,
+      label: `Structured output · ${detail}`,
     };
   } catch {
     return null;

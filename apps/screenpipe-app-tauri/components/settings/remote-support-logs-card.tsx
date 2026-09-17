@@ -121,7 +121,7 @@ export function RemoteSupportLogsCard() {
 
   return (
     <div className="space-y-2">
-      <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+      <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">
         Support access
       </h2>
       <Card className="border-border bg-card">

@@ -38,7 +38,7 @@ function ToolbarButton({
       title={shortcut ? `${label}  ${shortcut}` : label}
       data-tauri-drag-region="false"
       className={
-        "px-3 py-1 text-[10px] tracking-wider uppercase font-mono " +
+        "px-3 py-1 text-[10px] tracking-wider normal-case font-mono " +
         "border border-border transition-colors duration-150 " +
         (primary
           ? "bg-foreground/[0.06] hover:bg-foreground hover:text-background"
@@ -159,20 +159,20 @@ export default function ViewerPage() {
           )}
         </div>
         <ToolbarButton
-          label="reveal"
+          label="Reveal"
           shortcut={isMacPlatform() ? "⌘R" : "Ctrl+R"}
           onClick={revealInFinder}
           primary
         />
         {content?.kind === "text" && content.text !== "" && (
           <ToolbarButton
-            label={copyContentToast ? "copied" : "copy"}
+            label={copyContentToast ? "Copied" : "Copy"}
             shortcut={isMacPlatform() ? "⇧⌘C" : "Ctrl+Shift+C"}
             onClick={copyContent}
           />
         )}
         <ToolbarButton
-          label={copyToast ? "copied" : "copy path"}
+          label={copyToast ? "Copied" : "Copy path"}
           shortcut={isMacPlatform() ? "⌘L" : "Ctrl+L"}
           onClick={copyPath}
         />

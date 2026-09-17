@@ -1,104 +1,104 @@
 ---
-title: "screenpipe vs Microsoft Recall - privacy-focused alternative"
-sidebarTitle: "vs microsoft recall"
-description: "Compare screenpipe and Microsoft Recall: a source-available Windows Recall alternative that runs on Mac, Windows, and Linux with no cloud dependency."
-icon: "scale-balanced"
+title: "Screenpipe vs Microsoft Recall - privacy-focused alternative"
+sidebarTitle: "Vs. Microsoft Recall"
+description: "Compare Screenpipe and Microsoft Recall: a source-available Windows Recall alternative that runs on Mac, Windows, and Linux with no cloud dependency."
+icon: "scale"
 ---
 
-Microsoft Recall is a Windows 11 feature that captures screenshots and makes them searchable. screenpipe offers similar functionality but with complete privacy, auditable source, and cross-platform support.
+Microsoft Recall is a Windows 11 feature that captures screenshots and makes them searchable. Screenpipe offers similar functionality but with complete privacy, auditable source, and cross-platform support.
 
-## comparison
+## Comparison
 
-| feature | screenpipe | microsoft recall |
+| Feature | Screenpipe | Microsoft recall |
 |---------|-----------|------------------|
-| **source access** | source-available, auditable | no |
-| **platforms** | macOS, Windows, Linux | Windows 11 only |
-| **data location** | 100% local | local (with cloud concerns) |
-| **NPU required** | no | yes (Copilot+ PCs) |
-| **privacy** | auditable source code | closed source |
-| **AI provider** | your choice (local or cloud) | Microsoft AI |
-| **extensibility** | plugins (scheduled tasks) | none |
+| **Source access** | source-available, auditable | No |
+| **Platforms** | macOS, Windows, Linux | Windows 11 only |
+| **Data location** | 100% local | Local (with cloud concerns) |
+| **NPU required** | No | Yes (Copilot+ PCs) |
+| **Privacy** | Auditable source code | Closed source |
+| **AI provider** | Your choice (local or cloud) | Microsoft AI |
+| **Extensibility** | Plugins (scheduled tasks) | None |
 
-## why choose screenpipe?
+## Why choose Screenpipe?
 
-### true privacy
+### True privacy
 
-- source-available: you can audit the local capture and storage code
-- no Microsoft account required
-- no telemetry or data collection
-- use completely local AI (Ollama)
+- Source-available: you can audit the local capture and storage code
+- No Microsoft account required
+- No telemetry or data collection
+- Use completely local AI (Ollama)
 
-### works everywhere
+### Works everywhere
 
 - macOS, Windows, Linux
-- no special hardware required
-- runs on any modern computer
+- No special hardware required
+- Runs on any modern computer
 
-### you control the AI
+### You control the AI
 
-- use Ollama for 100% local AI
-- or connect to OpenAI, Claude, etc.
-- your choice, not Microsoft's
+- Use Ollama for 100% local AI
+- Or connect to OpenAI, Claude, etc.
+- Your choice, not Microsoft's
 
-### extensible
+### Extensible
 
-build custom integrations with the REST API or [scheduled tasks](/scheduled-tasks):
+Build custom integrations with the REST API or [scheduled tasks](/scheduled-tasks):
 
 ```bash
 curl "http://localhost:3030/search?q=meeting+notes&content_type=all"
 ```
 
-## recall privacy concerns
+## Recall privacy concerns
 
 Microsoft Recall has faced criticism for:
 
-- storing sensitive data (passwords, financial info)
-- potential security vulnerabilities
-- data being accessible to other apps
-- unclear data handling policies
+- Storing sensitive data (passwords, financial info)
+- Potential security vulnerabilities
+- Data being accessible to other apps
+- Unclear data handling policies
 
-screenpipe addresses these:
+Screenpipe addresses these:
 
 - **PII removal**: optional automatic redaction of sensitive data
-- **window filtering**: exclude apps like password managers
-- **local-only**: data never leaves your device
-- **source-available**: security researchers can audit the local capture and storage code
+- **Window filtering**: exclude apps like password managers
+- **Local-only**: data never leaves your device
+- **Source-available**: security researchers can audit the local capture and storage code
 
-## filtering sensitive content
+## Filtering sensitive content
 
-in the desktop app settings, you can exclude specific windows (like password managers and banking apps) and enable PII removal to automatically redact sensitive data.
+In the desktop app settings, you can exclude specific windows (like password managers and banking apps) and enable PII removal to automatically redact sensitive data.
 
-## get started
+## Get started
 
-[download the desktop app](https://screenpi.pe)
+[Download the desktop app](https://screenpi.pe)
 
 ---
 
-## more comparisons
+## More comparisons
 
-- [vs Rewind](/vs-rewind) — local-first alternative
-- [vs Limitless](/vs-limitless) — hardware vs software
-- [vs Granola](/vs-granola) — meeting notepad vs full screen memory
-- [vs Otter.ai](/vs-otter) — cloud transcription vs local capture
-- [vs Fathom](/vs-fathom) — meeting bot vs 24/7 capture
-- [vs Fireflies.ai](/vs-fireflies) — cloud meeting bot vs local-first
+- [Vs Rewind](/vs-rewind) — local-first alternative
+- [Vs Limitless](/vs-limitless) — hardware vs software
+- [Vs Granola](/vs-granola) — meeting notepad vs full screen memory
+- [Vs Otter.ai](/vs-otter) — cloud transcription vs local capture
+- [Vs Fathom](/vs-fathom) — meeting bot vs 24/7 capture
+- [Vs Fireflies.ai](/vs-fireflies) — cloud meeting bot vs local-first
 
-## resources
+## Resources
 
 - [AI recall tools guide](https://screenpi.pe/resources/use-cases/ai-recall-tools) - how screen memory works
-- [local AI assistant setup](https://screenpi.pe/resources/use-cases/local-ai-assistant) - complete privacy with Ollama
-- [screenpipe blog](https://screenpi.pe/blog) - latest updates and tutorials
+- [Local AI assistant setup](https://screenpi.pe/resources/use-cases/local-ai-assistant) - complete privacy with Ollama
+- [Screenpipe blog](https://screenpi.pe/blog) - latest updates and tutorials
 
-## frequently asked questions
+## Frequently asked questions
 
-### is there a privacy-focused alternative to Windows Recall?
+### Is there a privacy-focused alternative to Windows Recall?
 
-yes. screenpipe is the privacy-focused, source-available alternative to Microsoft Recall. unlike Recall, screenpipe works on macOS, Windows, and Linux, requires no special hardware (no NPU needed), and stores all data locally by default with no cloud dependency. you can use local AI models (Ollama) for complete privacy and audit the local capture and storage code.
+Yes. Screenpipe is the privacy-focused, source-available alternative to Microsoft Recall. Unlike Recall, Screenpipe works on macOS, Windows, and Linux, requires no special hardware (no NPU needed), and stores all data locally by default with no cloud dependency. You can use local AI models (Ollama) for complete privacy and audit the local capture and storage code.
 
-### does screenpipe work on Windows without a Copilot+ PC?
+### Does Screenpipe work on Windows without a Copilot+ PC?
 
-yes. screenpipe runs on any modern Windows computer — no NPU or Copilot+ hardware required. it uses Windows accessibility APIs for structured app text, with CPU-based OCR fallback, and works on Windows 10 and 11.
+Yes. Screenpipe runs on any modern Windows computer — no NPU or Copilot+ hardware required. It uses Windows accessibility APIs for structured app text, with CPU-based OCR fallback, and works on Windows 10 and 11.
 
-### how is screenpipe different from Windows Recall?
+### How is Screenpipe different from Windows Recall?
 
-screenpipe is source-available, cross-platform, and has no cloud dependency by default. Recall is closed source, Windows 11 only, requires Copilot+ hardware, and has faced privacy concerns. screenpipe also offers extensibility through scheduled tasks (scheduled AI agents) and a full REST API that Recall doesn't provide.
+Screenpipe is source-available, cross-platform, and has no cloud dependency by default. Recall is closed source, Windows 11 only, requires Copilot+ hardware, and has faced privacy concerns. Screenpipe also offers extensibility through scheduled tasks (scheduled AI agents) and a full REST API that Recall doesn't provide.

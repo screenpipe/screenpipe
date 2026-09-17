@@ -253,7 +253,7 @@ describe("TimelineDailySummary", () => {
 				screen.queryByTestId("timeline-daily-summary-panel"),
 			).not.toBeInTheDocument();
 		});
-		expect(screen.queryByText("turn on enhanced ai?")).not.toBeInTheDocument();
+		expect(screen.queryByText("Turn on enhanced AI?")).not.toBeInTheDocument();
 	});
 
 	it("closes the top summary before Escape can close its overlay host", async () => {
@@ -293,7 +293,7 @@ describe("TimelineDailySummary", () => {
 
 		fireEvent.click(screen.getByTestId("timeline-daily-summary-trigger"));
 
-		expect(screen.getByText("turn on enhanced ai?")).toBeInTheDocument();
+		expect(screen.getByText("Turn on enhanced AI?")).toBeInTheDocument();
 		expect(
 			screen.getByText(/never run on a timer or generate automatically/i),
 		).toBeInTheDocument();

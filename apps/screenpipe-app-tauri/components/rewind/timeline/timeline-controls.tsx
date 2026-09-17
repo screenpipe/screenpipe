@@ -379,7 +379,7 @@ export function TimelineControls({
 							{searchShortcutDisplay ? (
 								<span className="text-xs text-muted-foreground group-hover:text-background">{searchShortcutDisplay}</span>
 							) : null}
-							<span className="text-xs text-foreground group-hover:text-background">search</span>
+							<span className="text-xs text-foreground group-hover:text-background">Search</span>
 						</button>
 					)
 				)}
@@ -393,7 +393,7 @@ export function TimelineControls({
 						{chatShortcutDisplay ? (
 							<span className="text-xs text-muted-foreground group-hover:text-background">{chatShortcutDisplay}</span>
 						) : null}
-						<span className="text-xs text-foreground group-hover:text-background">chat</span>
+						<span className="text-xs text-foreground group-hover:text-background">Chat</span>
 					</button>
 				)}
 			</div>

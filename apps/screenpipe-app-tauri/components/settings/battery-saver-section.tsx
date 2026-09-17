@@ -140,7 +140,7 @@ export function BatterySaverSection() {
     } catch (error) {
       await updateSettings({ keepComputerAwake: previous });
       toast({
-        title: "couldn't update keep-awake",
+        title: "Couldn't update keep-awake",
         description: error instanceof Error ? error.message : String(error),
       });
     } finally {
@@ -180,9 +180,9 @@ export function BatterySaverSection() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-medium text-foreground">power &amp; battery</h3>
+          <h3 className="text-sm font-medium text-foreground">Power &amp; battery</h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            controls capture frequency, quality, and transcription to save battery
+            Controls capture frequency, quality, and transcription to save battery
           </p>
         </div>
 
@@ -218,10 +218,10 @@ export function BatterySaverSection() {
           <Zap className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
           <div>
             <label htmlFor="keepComputerAwake" className="text-sm font-medium text-foreground">
-              keep computer awake
+              Keep computer awake
             </label>
             <p className="text-xs text-muted-foreground mt-0.5">
-              keeps recording and scheduled tasks running when you step away. without it, idle sleep pauses capture.
+              Keeps recording and scheduled tasks running when you step away. Without it, idle sleep pauses capture.
             </p>
           </div>
         </div>
@@ -230,7 +230,7 @@ export function BatterySaverSection() {
           checked={keepAwakeEnabled}
           onCheckedChange={setKeepAwake}
           disabled={keepAwakeUpdating}
-          aria-label="keep computer awake"
+          aria-label="Keep computer awake"
         />
       </div>
 

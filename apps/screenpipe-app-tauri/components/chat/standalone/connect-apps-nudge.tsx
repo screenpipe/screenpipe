@@ -24,7 +24,7 @@ export function ConnectAppsNudge({
         onClick={() => banner.onOpenConnectionSetup("connections")}
         className="group/connect flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2 text-left text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-signal motion-reduce:transition-none"
       >
-        <span className="truncate font-mono text-[10px] font-semibold uppercase tracking-[0.12em]">
+        <span className="truncate font-mono text-[10px] font-semibold normal-case tracking-[0.12em]">
           Connect apps for better answers
         </span>
         <ArrowRight className="h-3.5 w-3.5 shrink-0 transition-transform duration-150 group-hover/connect:translate-x-0.5 motion-reduce:transform-none motion-reduce:transition-none" />

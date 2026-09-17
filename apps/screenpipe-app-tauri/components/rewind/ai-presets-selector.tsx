@@ -218,7 +218,7 @@ function ChatGptSignInButton() {
       ) : (
         <LogIn className="h-3 w-3 mr-1" />
       )}
-      {loggedIn ? "signed in — sign out" : "sign in with chatgpt"}
+      {loggedIn ? "Signed in — sign out" : "Sign in with chatgpt"}
     </Button>
   );
 }
@@ -664,7 +664,7 @@ export function AIProviderConfig({
     <div className="w-full space-y-3 rounded-lg bg-card p-4">
       <div>
         <h2 className="text-base font-semibold">
-          {defaultPreset?.id ? "edit ai" : "choose your ai"}
+          {defaultPreset?.id ? "Edit AI" : "Choose your AI"}
         </h2>
       </div>
 
@@ -687,7 +687,7 @@ export function AIProviderConfig({
               }}
             >
               <Icons.terminal className="h-3.5 w-3.5" />
-              <span>screenpipe</span>
+              <span>Screenpipe</span>
             </Button>
           )}
 
@@ -734,7 +734,7 @@ export function AIProviderConfig({
 
         {!selectedProvider && (
           <p className="text-xs text-muted-foreground">
-            choose one to continue
+            Choose one to continue
           </p>
         )}
 
@@ -754,7 +754,7 @@ export function AIProviderConfig({
           <div className="space-y-1">
             <div className="space-y-1">
               <Label htmlFor="apiKey" className="text-xs">
-                api key{apiKeyRequired && <span className="text-destructive"> *</span>}
+                API key{apiKeyRequired && <span className="text-destructive"> *</span>}
               </Label>
               <div className="relative">
                 <Input
@@ -783,7 +783,7 @@ export function AIProviderConfig({
               </div>
             </div>
             <div className="space-y-1">
-              <Label htmlFor="model" className="text-xs">model</Label>
+              <Label htmlFor="model" className="text-xs">Model</Label>
               <ModelPicker
                 id="model"
                 value={formData.model}
@@ -792,7 +792,7 @@ export function AIProviderConfig({
                 status={modelDiscoveryStatus}
                 errorMessage={modelDiscoveryError}
                 idleMessage="enter an API key to discover models"
-                emptyMessage="no models available for this API key"
+                emptyMessage="No models available for this API key"
                 disabled={!formData.apiKey}
               />
             </div>
@@ -802,7 +802,7 @@ export function AIProviderConfig({
         {selectedProvider === "native-ollama" && (
           <div className="space-y-1">
             <div className="space-y-1">
-              <Label htmlFor="baseUrl" className="text-xs">base url</Label>
+              <Label htmlFor="baseUrl" className="text-xs">Base URL</Label>
               <Input
                 id="baseUrl"
                 type="text"
@@ -815,7 +815,7 @@ export function AIProviderConfig({
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="model" className="text-xs">model</Label>
+              <Label htmlFor="model" className="text-xs">Model</Label>
               <ModelPicker
                 id="model"
                 value={formData.model}
@@ -823,12 +823,12 @@ export function AIProviderConfig({
                 onValueChange={(model) => setFormData({ ...formData, model })}
                 status={modelDiscoveryStatus}
                 errorMessage={modelDiscoveryError}
-                placeholder="e.g. qwen3.5:9b"
-                emptyMessage="no Ollama models installed — type a model name manually"
+                placeholder="E.g. qwen3.5:9b"
+                emptyMessage="No Ollama models installed — type a model name manually"
                 allowManualEntry
               />
               <p className="text-[10px] text-muted-foreground">
-                recommended: qwen3.5:9b, glm-4.7:9b, qwen3.5:4b (tool calling). GPU required.
+                Recommended: qwen3.5:9b, glm-4.7:9b, qwen3.5:4b (tool calling). GPU required.
               </p>
             </div>
           </div>
@@ -837,7 +837,7 @@ export function AIProviderConfig({
         {selectedProvider === "custom" && (
           <div className="space-y-1">
             <div className="space-y-1">
-              <Label htmlFor="baseUrl" className="text-xs">base url</Label>
+              <Label htmlFor="baseUrl" className="text-xs">Base URL</Label>
               <Input
                 id="baseUrl"
                 type="text"
@@ -850,7 +850,7 @@ export function AIProviderConfig({
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="apiKey" className="text-xs">api key</Label>
+              <Label htmlFor="apiKey" className="text-xs">API key</Label>
               <div className="relative">
                 <Input
                   id="apiKey"
@@ -878,7 +878,7 @@ export function AIProviderConfig({
               </div>
             </div>
             <div className="space-y-1">
-              <Label htmlFor="model" className="text-xs">model</Label>
+              <Label htmlFor="model" className="text-xs">Model</Label>
               <ModelPicker
                 id="model"
                 value={formData.model}
@@ -887,8 +887,8 @@ export function AIProviderConfig({
                 status={modelDiscoveryStatus}
                 errorMessage={modelDiscoveryError}
                 idleMessage="enter a valid base URL to discover models"
-                placeholder="type or select model"
-                emptyMessage="no models discovered — type a model name manually"
+                placeholder="Type or select model"
+                emptyMessage="No models discovered — type a model name manually"
                 allowManualEntry
               />
             </div>
@@ -898,11 +898,11 @@ export function AIProviderConfig({
         {selectedProvider === "openai-chatgpt" && (
           <div className="space-y-1">
             <div className="space-y-1">
-              <Label className="text-xs">chatgpt account</Label>
+              <Label className="text-xs">Chatgpt account</Label>
               <ChatGptSignInButton />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="model" className="text-xs">model</Label>
+              <Label htmlFor="model" className="text-xs">Model</Label>
               <ModelPicker
                 id="model"
                 value={formData.model}
@@ -911,7 +911,7 @@ export function AIProviderConfig({
                 status={modelDiscoveryStatus}
                 errorMessage={modelDiscoveryError}
                 placeholder="gpt-5.6-terra"
-                emptyMessage="no ChatGPT models discovered — type a model name manually"
+                emptyMessage="No ChatGPT models discovered — type a model name manually"
                 allowManualEntry
               />
             </div>
@@ -922,7 +922,7 @@ export function AIProviderConfig({
           <div className="space-y-1">
             {selectedProvider === "anthropic" && (
               <div className="space-y-1 pt-1">
-                <Label htmlFor="anthropicApiKey" className="text-xs">api key</Label>
+                <Label htmlFor="anthropicApiKey" className="text-xs">API key</Label>
                 <div className="relative">
                   <Input
                     id="anthropicApiKey"
@@ -946,19 +946,19 @@ export function AIProviderConfig({
             )}
 
             <div className="space-y-1">
-              <Label htmlFor="model" className="text-xs">model</Label>
+              <Label htmlFor="model" className="text-xs">Model</Label>
               <Select
                 value={formData.model}
                 onValueChange={(value) => setFormData({ ...formData, model: value })}
               >
                 <SelectTrigger className="h-8 text-sm">
-                  <SelectValue placeholder="select model" />
+                  <SelectValue placeholder="Select model" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="claude-opus-5">claude opus 5</SelectItem>
-                  <SelectItem value="claude-fable-5">claude fable 5</SelectItem>
-                  <SelectItem value="claude-opus-4-8">claude opus 4.8</SelectItem>
-                  <SelectItem value="claude-sonnet-5">claude sonnet 5</SelectItem>
+                  <SelectItem value="claude-opus-5">Claude opus 5</SelectItem>
+                  <SelectItem value="claude-fable-5">Claude fable 5</SelectItem>
+                  <SelectItem value="claude-opus-4-8">Claude opus 4.8</SelectItem>
+                  <SelectItem value="claude-sonnet-5">Claude sonnet 5</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -967,7 +967,7 @@ export function AIProviderConfig({
 
         {selectedProvider === "screenpipe-cloud" && (
           <div className="space-y-1">
-            <Label htmlFor="model" className="text-xs">model</Label>
+            <Label htmlFor="model" className="text-xs">Model</Label>
             <Select
               value={formData.model}
               onValueChange={async (value) => {
@@ -975,7 +975,7 @@ export function AIProviderConfig({
               }}
             >
               <SelectTrigger className="h-8 text-sm">
-                <SelectValue placeholder="select model" />
+                <SelectValue placeholder="Select model" />
               </SelectTrigger>
               <SelectContent>
                 {piModels.map((m) => {
@@ -984,13 +984,13 @@ export function AIProviderConfig({
                   return (
                   <SelectItem key={m.id} value={m.id} disabled={locked} className={locked ? "opacity-60" : undefined}>
                     <span className="flex items-center gap-1.5">
-                      {m.health?.status === 'down' && <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" title="overloaded" />}
-                      {m.health?.status === 'degraded' && <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-500" title="degraded" />}
+                      {m.health?.status === 'down' && <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" title="Overloaded" />}
+                      {m.health?.status === 'degraded' && <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-500" title="Degraded" />}
                       {m.name}{m.free ? " (free)" : ""}
-                      {locked && <span className="text-[9px] font-medium text-muted-foreground border rounded px-1">business</span>}
+                      {locked && <span className="text-[9px] font-medium text-muted-foreground border rounded px-1">Business</span>}
                       {!locked && costLabel && <span className="text-[9px] font-medium text-muted-foreground">{costLabel}</span>}
-                      {m.recommended_for?.includes('pipes') && <span className="text-[9px] text-muted-foreground bg-muted rounded px-1">tasks</span>}
-                      {m.health?.status === 'down' && <span className="text-[9px] text-red-400 ml-1">overloaded</span>}
+                      {m.recommended_for?.includes('pipes') && <span className="text-[9px] text-muted-foreground bg-muted rounded px-1">Tasks</span>}
+                      {m.health?.status === 'down' && <span className="text-[9px] text-red-400 ml-1">Overloaded</span>}
                     </span>
                   </SelectItem>
                   );
@@ -1015,7 +1015,7 @@ export function AIProviderConfig({
           <div className="space-y-2 border p-2.5">
             <div className="flex items-center justify-between gap-2">
               <div>
-                <p className="text-xs font-medium">connection test</p>
+                <p className="text-xs font-medium">Connection test</p>
                 <p className={cn(
                   "text-[10px]",
                   (connectionTestStatus === "fail" && connectionTestResultIsCurrent) ||
@@ -1031,8 +1031,8 @@ export function AIProviderConfig({
                       : connectionTestStatus === "fail" && connectionTestResultIsCurrent
                       ? connectionTestMessage
                       : connectionTestRequired
-                      ? "required before saving"
-                      : "optional for unchanged settings")}
+                      ? "Required before saving"
+                      : "Optional for unchanged settings")}
                 </p>
               </div>
               <Button
@@ -1058,7 +1058,7 @@ export function AIProviderConfig({
         {selectedProvider && (
           <div className="space-y-1">
             <Label htmlFor="name" className="flex items-center gap-2 text-xs">
-              name
+              Name
               {idError && (
                 <span className="text-xs text-destructive font-normal">
                   {idError}
@@ -1068,7 +1068,7 @@ export function AIProviderConfig({
             <Input
               id="name"
               type="text"
-              placeholder="generated automatically"
+              placeholder="Generated automatically"
               value={formData.id ?? ""}
               onChange={(e) => handleIdChange(e.target.value)}
               onBlur={refillEmptyName}
@@ -1094,13 +1094,13 @@ export function AIProviderConfig({
           onClick={() => setShowAdvanced(!showAdvanced)}
         >
           <span>{showAdvanced ? "▾" : "▸"}</span>
-          <span>advanced</span>
+          <span>Advanced</span>
         </button>
 
         {showAdvanced && (
           <div className="space-y-1.5">
             <div className="space-y-1">
-              <p className="text-xs font-medium">use a model directly</p>
+              <p className="text-xs font-medium">Use a model directly</p>
               <div className="grid grid-cols-2 gap-2">
                 <Button
                   type="button"
@@ -1117,7 +1117,7 @@ export function AIProviderConfig({
                   }}
                 >
                   <Icons.openai className="h-3.5 w-3.5" />
-                  <span>chatgpt</span>
+                  <span>Chatgpt</span>
                 </Button>
                 <Button
                   type="button"
@@ -1135,7 +1135,7 @@ export function AIProviderConfig({
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src="/images/claude-ai.svg" alt="" className="h-3.5 w-3.5 rounded-sm" />
-                  <span>claude API</span>
+                  <span>Claude API</span>
                 </Button>
                 <Button
                   type="button"
@@ -1156,7 +1156,7 @@ export function AIProviderConfig({
                     alt=""
                     className="h-3.5 w-3.5 object-contain dark:invert"
                   />
-                  <span>ollama</span>
+                  <span>Ollama</span>
                 </Button>
                 <Button
                   type="button"
@@ -1172,13 +1172,13 @@ export function AIProviderConfig({
                   }}
                 >
                   <Icons.settings className="h-3.5 w-3.5" />
-                  <span>use an API key</span>
+                  <span>Use an API key</span>
                 </Button>
               </div>
             </div>
             {acpEnabled && customAcpAdapter && (
               <div className="space-y-1">
-                <p className="text-xs font-medium">connect another agent</p>
+                <p className="text-xs font-medium">Connect another agent</p>
                 <div className="grid grid-cols-2 gap-2">
                   <Button
                     type="button"
@@ -1210,7 +1210,7 @@ export function AIProviderConfig({
                       alt=""
                       className="h-3.5 w-3.5 rounded-sm"
                     />
-                    <span>use a command</span>
+                    <span>Use a command</span>
                   </Button>
                 </div>
               </div>
@@ -1219,14 +1219,14 @@ export function AIProviderConfig({
               <>
             {resolvedModelLimits && (
               <p className="text-[10px] text-muted-foreground">
-                known model limits are configured automatically
+                Known model limits are configured automatically
               </p>
             )}
             {selectedProvider !== "screenpipe-cloud" &&
               selectedProvider !== "acp" &&
               !resolvedModelLimits?.contextWindow && (
               <div className="space-y-1">
-                <Label htmlFor="maxContextTokens" className="text-xs">model context tokens</Label>
+                <Label htmlFor="maxContextTokens" className="text-xs">Model context tokens</Label>
                 <Input
                   id="maxContextTokens"
                   type="number"
@@ -1241,7 +1241,7 @@ export function AIProviderConfig({
                   className="h-6 text-[10px]"
                 />
                 <p className="text-[10px] text-muted-foreground">
-                  use this only when the endpoint does not publish a context window; Screenpipe agents need at least 32,768
+                  Use this only when the endpoint does not publish a context window; Screenpipe agents need at least 32,768
                 </p>
               </div>
             )}
@@ -1249,7 +1249,7 @@ export function AIProviderConfig({
               selectedProvider !== "acp" &&
               !resolvedModelLimits?.maxOutputTokens && (
               <div className="space-y-1">
-                <Label htmlFor="maxTokens" className="text-xs">max output tokens</Label>
+                <Label htmlFor="maxTokens" className="text-xs">Max output tokens</Label>
                 <Input
                   id="maxTokens"
                   type="number"
@@ -1265,14 +1265,14 @@ export function AIProviderConfig({
               </div>
             )}
             <div className="space-y-1">
-              <Label htmlFor="prompt" className="text-xs">prompt</Label>
+              <Label htmlFor="prompt" className="text-xs">Prompt</Label>
               <Textarea
                 id="prompt"
                 value={formData.prompt || DEFAULT_PROMPT}
                 onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
                   setFormData({ ...formData, prompt: e.target.value })
                 }
-                placeholder="enter your custom prompt here"
+                placeholder="Enter your custom prompt here"
                 className="min-h-[60px] max-h-[100px] text-xs resize-none"
               />
             </div>
@@ -1957,7 +1957,7 @@ export const AIPresetsSelector = ({
                   ) : allowNone && isControlled ? (
                     <span className="text-muted-foreground">{noneLabel}</span>
                   ) : (
-                    "select ai preset..."
+                    "Select AI preset..."
                   )}
                   {!providerIconOnly && (
                     <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -1977,7 +1977,7 @@ export const AIPresetsSelector = ({
                     <kbd className="px-1.5 py-0.5 text-xs font-semibold bg-muted rounded">
                       ⌘/
                     </kbd>
-                    <span>to cycle presets</span>
+                    <span>To cycle presets</span>
                   </p>
                 )}
               </TooltipContent>
@@ -1991,9 +1991,9 @@ export const AIPresetsSelector = ({
             className="min-w-[500px] w-[--radix-popover-trigger-width] p-0"
           >
             <Command>
-              <CommandInput placeholder="search presets..." />
+              <CommandInput placeholder="Search presets..." />
               <CommandList>
-                <CommandEmpty>no presets found.</CommandEmpty>
+                <CommandEmpty>No presets found.</CommandEmpty>
                 {allowNone && (
                   <CommandGroup>
                     <CommandItem
@@ -2037,7 +2037,7 @@ export const AIPresetsSelector = ({
                               {preset.id}
                             </span>
                             <span className="rounded bg-primary/10 text-primary px-1.5 py-0.5 text-xs font-medium shrink-0">
-                              recommended
+                              Recommended
                             </span>
                           </div>
                           <div className="flex items-center justify-end gap-2 text-xs text-muted-foreground shrink-0">
@@ -2153,12 +2153,12 @@ export const AIPresetsSelector = ({
                           </span>
                           {isGated && (
                             <span className="rounded bg-muted text-muted-foreground px-1.5 py-0.5 text-[10px] font-medium shrink-0 ml-1 border border-border/50">
-                              business plan only
+                              Business plan only
                             </span>
                           )}
                           {preset.defaultPreset && (
                             <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium shrink-0">
-                              default
+                              Default
                             </span>
                           )}
                         </div>
@@ -2244,7 +2244,7 @@ export const AIPresetsSelector = ({
                       }}
                     >
                       <Plus className="mr-2 h-4 w-4" />
-                      create new preset
+                      Create new preset
                     </CommandItem>
                   </CommandGroup>
                 )}

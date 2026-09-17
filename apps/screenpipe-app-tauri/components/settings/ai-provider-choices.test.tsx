@@ -70,7 +70,7 @@ describe("AIProviderChoices", () => {
     );
 
     const primaryLabels = new Set([
-      "screenpipe",
+      "Screenpipe",
       "Codex",
       "Claude Code",
       "Cursor",
@@ -83,7 +83,7 @@ describe("AIProviderChoices", () => {
         .map((button) => button.getAttribute("aria-label") || "")
         .filter((label) => primaryLabels.has(label)),
     ).toEqual([
-      "screenpipe",
+      "Screenpipe",
       "Codex",
       "Claude Code",
       "Cursor",
@@ -97,9 +97,9 @@ describe("AIProviderChoices", () => {
     expect(screen.queryByRole("button", { name: /Ollama/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /Use an API key/ })).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "advanced" }));
+    fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
 
-    expect(screen.getByText("use a model directly")).toBeInTheDocument();
+    expect(screen.getByText("Use a model directly")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /ChatGPT/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Claude API/ })).toBeInTheDocument();
     expect(
@@ -108,7 +108,7 @@ describe("AIProviderChoices", () => {
     expect(
       screen.getByRole("button", { name: /Use an API key/ }),
     ).toBeInTheDocument();
-    expect(screen.getByText("connect another agent")).toBeInTheDocument();
+    expect(screen.getByText("Connect another agent")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /Use a command/ }),
     ).toBeInTheDocument();
@@ -152,7 +152,7 @@ describe("AIProviderChoices", () => {
       />,
     );
 
-    expect(screen.getByText("use a model directly")).toBeInTheDocument();
+    expect(screen.getByText("Use a model directly")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /ChatGPT/ })).toHaveAttribute(
       "aria-pressed",
       "true",

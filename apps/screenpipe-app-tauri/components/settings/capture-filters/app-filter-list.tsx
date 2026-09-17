@@ -50,11 +50,11 @@ const AppRow = React.memo(function AppRow({ row, onToggle, onRemoveRule }: AppRo
 
 	const note = (() => {
 		if (row.state === "partial") {
-			return `capturing, except ${row.scopedRules.length === 1 ? "1 window rule" : `${row.scopedRules.length} window rules`}`;
+			return `Capturing, except ${row.scopedRules.length === 1 ? "1 window rule" : `${row.scopedRules.length} window rules`}`;
 		}
-		if (row.state === "outside-allowlist") return "not in the allowlist";
-		if (row.origin === "installed") return "installed, not captured yet";
-		if (row.origin === "rule") return "from a rule, not seen on this machine";
+		if (row.state === "outside-allowlist") return "Not in the allowlist";
+		if (row.origin === "installed") return "Installed, not captured yet";
+		if (row.origin === "rule") return "From a rule, not seen on this machine";
 		return formatCaptures(row.captures);
 	})();
 
@@ -92,7 +92,7 @@ const AppRow = React.memo(function AppRow({ row, onToggle, onRemoveRule }: AppRo
 								onClick={() => onRemoveRule(row.blockingRules[0])}
 								className="ml-1 underline underline-offset-2 hover:text-foreground"
 							>
-								remove
+								Remove
 							</button>
 						</>
 					)}

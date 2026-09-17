@@ -47,7 +47,7 @@ function renderPicker(
       onSaveSchedule={vi.fn()}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: "add trigger" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add trigger" }));
   return { applyOptimistic };
 }
 
@@ -58,7 +58,7 @@ function chooseOption(name: RegExp) {
 }
 
 function clickDetailAdd() {
-  const buttons = screen.getAllByRole("button", { name: "add trigger" });
+  const buttons = screen.getAllByRole("button", { name: "Add trigger" });
   fireEvent.click(buttons[buttons.length - 1]);
 }
 
@@ -71,16 +71,16 @@ describe("PipeTriggerPicker app trigger catalog", () => {
   it("saves multiple spoken phrases without requiring a connection", async () => {
     const { applyOptimistic } = renderPicker();
     chooseOption(/^spoken phrase/i);
-    const add = screen.getAllByRole("button", { name: "add trigger" }).at(-1)!;
+    const add = screen.getAllByRole("button", { name: "Add trigger" }).at(-1)!;
     expect(add).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("words or phrases, one per line"), { target: { value: "!!!" } });
+    fireEvent.change(screen.getByLabelText("Words or phrases, one per line"), { target: { value: "!!!" } });
     expect(add).toBeDisabled();
     for (const value of ["x".repeat(257), Array(33).fill("start job").join("\n")]) {
-      fireEvent.change(screen.getByLabelText("words or phrases, one per line"), { target: { value } });
+      fireEvent.change(screen.getByLabelText("Words or phrases, one per line"), { target: { value } });
       expect(add).toBeDisabled();
     }
-    fireEvent.change(screen.getByLabelText("words or phrases, one per line"), { target: { value: "  start job  \nstop job\n" } });
-    expect(screen.getByLabelText("listen to")).toHaveValue("input");
+    fireEvent.change(screen.getByLabelText("Words or phrases, one per line"), { target: { value: "  start job  \nstop job\n" } });
+    expect(screen.getByLabelText("Listen to")).toHaveValue("input");
     clickDetailAdd();
     const expected = { sources: [{ app: "audio", kind: "phrase", filter: { phrases: "start job\nstop job", device: "input" } }] };
     expect(applyOptimistic).toHaveBeenCalledWith(expected);
@@ -91,8 +91,8 @@ describe("PipeTriggerPicker app trigger catalog", () => {
   it("only includes system audio when explicitly selected", () => {
     const { applyOptimistic } = renderPicker();
     chooseOption(/^spoken phrase/i);
-    fireEvent.change(screen.getByLabelText("words or phrases, one per line"), { target: { value: "stop job" } });
-    fireEvent.change(screen.getByLabelText("listen to"), { target: { value: "all" } });
+    fireEvent.change(screen.getByLabelText("Words or phrases, one per line"), { target: { value: "stop job" } });
+    fireEvent.change(screen.getByLabelText("Listen to"), { target: { value: "all" } });
     clickDetailAdd();
     expect(applyOptimistic).toHaveBeenCalledWith({ sources: [{ app: "audio", kind: "phrase", filter: { phrases: "stop job", device: "all" } }] });
   });
@@ -101,17 +101,17 @@ describe("PipeTriggerPicker app trigger catalog", () => {
     renderPicker();
 
     for (const label of [
-      "new email",
-      "email sent",
-      "new Outlook email",
+      "New email",
+      "Email sent",
+      "New Outlook email",
       "Outlook email sent",
-      "calendar event starts",
-      "new issue",
-      "new pull request",
-      "new Linear issue",
+      "Calendar event starts",
+      "New issue",
+      "New pull request",
+      "New Linear issue",
       "Linear issue assigned to me",
       "Linear issue status changed",
-      "new task",
+      "New task",
     ]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }

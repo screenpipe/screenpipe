@@ -474,7 +474,7 @@ export default function ShortcutReminderPage() {
       : healthSubsystem === "screen"
         ? "screen capture needs help"
         : "recording needs help";
-  // The pill is lowercase by design; the accessible name is a sentence.
+  // Use sentence case for both the pill and its accessible name.
   const failureHeadlineSentence =
     failureHeadline.charAt(0).toUpperCase() + failureHeadline.slice(1);
   const latestTranscript = meetingOverlay.items.at(-1);
@@ -547,7 +547,7 @@ export default function ShortcutReminderPage() {
               >
                 <Power style={{ width: `${smIconPx}px`, height: `${smIconPx}px` }} className="shrink-0" />
                 <span className="font-mono font-bold" style={{ fontSize: `${fontPx}px` }}>
-                  quit &amp; reopen
+                  Quit &amp; reopen
                 </span>
               </div>
             ) : (
@@ -561,7 +561,7 @@ export default function ShortcutReminderPage() {
               >
                 <RotateCw style={{ width: `${smIconPx}px`, height: `${smIconPx}px` }} className="shrink-0" />
                 <span className="font-mono font-bold" style={{ fontSize: `${fontPx}px` }}>
-                  restart
+                  Restart
                 </span>
               </button>
             )}
@@ -606,10 +606,10 @@ export default function ShortcutReminderPage() {
             style={{ fontSize: `${fontPx}px` }}
           >
             {healthState === "recovering"
-              ? "checking recovery..."
+              ? "Checking recovery..."
               : healthDetail
-                ? `fixing — ${healthDetail}...`
-                : "fixing recording..."}
+                ? `Fixing — ${healthDetail}...`
+                : "Fixing recording..."}
           </span>
         </div>
       </div>
@@ -639,7 +639,7 @@ export default function ShortcutReminderPage() {
             className="font-mono text-white/90 whitespace-nowrap"
             style={{ fontSize: `${fontPx}px` }}
           >
-            recording again
+            Recording again
           </span>
         </div>
       </div>
@@ -670,7 +670,7 @@ export default function ShortcutReminderPage() {
               style={{ width: `${dotPx}px`, height: `${dotPx}px` }}
             />
             <span className="font-mono text-white/85 truncate" style={{ fontSize: `${fontPx}px` }}>
-              meeting live{meetingOverlay.meetingApp ? ` · ${meetingOverlay.meetingApp}` : ""}
+              Meeting live{meetingOverlay.meetingApp ? ` · ${meetingOverlay.meetingApp}` : ""}
             </span>
             <button
               onClick={(event) => {
@@ -707,16 +707,16 @@ export default function ShortcutReminderPage() {
               ) : (
                 <Square fill="currentColor" style={{ width: `${smIconPx * 0.75}px`, height: `${smIconPx * 0.75}px` }} />
               )}
-              stop
+              Stop
             </button>
           </div>
           <div className="bg-white/15" />
           <div className="flex items-center min-w-0" style={{ padding: `0 ${padX}px`, gap: `${gap * 2}px` }}>
             <span className="font-mono text-white/40 shrink-0" style={{ fontSize: `${fontPx}px` }}>
-              {meetingOverlay.stopError ? "stop failed" : latestSpeaker || "live transcript"}
+              {meetingOverlay.stopError ? "Stop failed" : latestSpeaker || "Live transcript"}
             </span>
             <span className="font-mono text-white/80 truncate" style={{ fontSize: `${fontPx}px` }}>
-              {meetingOverlay.stopError || latestTranscript?.text || "listening for speech…"}
+              {meetingOverlay.stopError || latestTranscript?.text || "Listening for speech…"}
             </span>
           </div>
         </div>
@@ -892,8 +892,8 @@ export default function ShortcutReminderPage() {
         </div>
         <div className="my-1 bg-white/25" style={{ width: "1px" }} />
         <button
-          title="screenpipe — right-click for options"
-          aria-label="screenpipe — open timeline; right-click for options"
+          title="Screenpipe — right-click for options"
+          aria-label="Screenpipe — open timeline; right-click for options"
           className={dockButtonClass}
           style={dockButtonStyle}
           onMouseEnter={() => setHoveredControl("brand")}
@@ -937,7 +937,7 @@ export default function ShortcutReminderPage() {
             title="Hide for 1 hour"
             onClick={(e) => void handleHourSnooze(e)}
           >
-            hide for 1 hour
+            Hide for 1 hour
           </button>
           <div className="mx-2 bg-white/20" style={{ height: "1px" }} />
           <button
@@ -946,7 +946,7 @@ export default function ShortcutReminderPage() {
             title="Open overlay settings"
             onClick={handleOpenSettings}
           >
-            settings…
+            Settings…
           </button>
         </div>
       ) : (

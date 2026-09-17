@@ -43,7 +43,7 @@ const COMPATIBILITY_CLASS = {
 } as const;
 
 function compatibilityLabel(item: PiExtensionCatalogItem): string {
-  if (item.compatibility === "pi-only") return "screenpipe only";
+  if (item.compatibility === "pi-only") return "Screenpipe only";
   return item.compatibilityVerified
     ? "works with every agent"
     : "may work with other agents";
@@ -107,17 +107,17 @@ function PiExtensionRow({
             {enabled && (
               <span className="inline-flex items-center gap-1 border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
                 <CheckCircle2 className="h-3 w-3" />
-                on
+                On
               </span>
             )}
             {item.required && (
               <span className="border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                required
+                Required
               </span>
             )}
             {stale && (
               <span className="border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-800 dark:text-amber-300">
-                repair needed
+                Repair needed
               </span>
             )}
             <span
@@ -170,7 +170,7 @@ function PiExtensionRow({
           onClick={() => openUrl(item.npmUrl)}
           className="ml-auto inline-flex items-center gap-1 underline-offset-4 hover:underline"
         >
-          package <ExternalLink className="h-3 w-3" />
+          Package <ExternalLink className="h-3 w-3" />
         </button>
         {item.sourceUrl && (
           <button
@@ -178,7 +178,7 @@ function PiExtensionRow({
             onClick={() => openUrl(item.sourceUrl!)}
             className="inline-flex items-center gap-1 underline-offset-4 hover:underline"
           >
-            code <ExternalLink className="h-3 w-3" />
+            Code <ExternalLink className="h-3 w-3" />
           </button>
         )}
       </div>
@@ -200,7 +200,7 @@ function PortableExtensionRow({
           className="inline-flex shrink-0 items-center gap-1 text-[10px] font-medium text-muted-foreground"
         >
           <CheckCircle2 className="h-3.5 w-3.5" />
-          ready
+          Ready
         </span>
       </div>
       <p className="mt-2.5 text-xs leading-relaxed text-muted-foreground">{item.summary}</p>
@@ -264,7 +264,7 @@ function PiExtensionRecentCard({
           disabled={disabled || busy}
           onClick={() => onToggle(stale || !enabled)}
           aria-label={`${action.charAt(0).toUpperCase()}${action.slice(1)} ${item.name}`}
-          className="h-6 px-2 text-[10px] uppercase tracking-[0.12em]"
+          className="h-6 px-2 text-[10px] normal-case tracking-[0.12em]"
         >
           {busy && <Loader2 className="h-3 w-3 animate-spin" />}
           {action}
@@ -504,13 +504,13 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
       {!loaded ? (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          loading tools...
+          Loading tools...
         </div>
       ) : (
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h4 className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
+              <h4 className="text-xs font-medium normal-case tracking-[0.14em] text-muted-foreground">
                 Recommended
               </h4>
               <p className="mt-1 text-[11px] text-muted-foreground">
@@ -543,7 +543,7 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h4 className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            <h4 className="text-xs font-medium normal-case tracking-[0.14em] text-muted-foreground">
               Included
             </h4>
             <p className="mt-1 text-[11px] text-muted-foreground">
@@ -593,11 +593,11 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
           {recentRegistryItems.length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-3">
-                <h4 className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                <h4 className="text-xs font-medium normal-case tracking-[0.14em] text-muted-foreground">
                   Recently added
                 </h4>
                 <span className="text-[11px] text-muted-foreground">
-                  community
+                  Community
                 </span>
               </div>
               <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
@@ -621,14 +621,14 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
 
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-3">
-              <h4 className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
+              <h4 className="text-xs font-medium normal-case tracking-[0.14em] text-muted-foreground">
                 Community
               </h4>
               <span className="text-[11px] text-muted-foreground">
                 {registryLoading
-                  ? "searching..."
+                  ? "Searching..."
                   : registryTotal === null
-                    ? "tools"
+                    ? "Tools"
                     : `${visibleRegistryItems.length} shown / ${registryTotal.toLocaleString()} found`}
               </span>
             </div>
@@ -661,7 +661,7 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
             {registryLoading && visibleRegistryItems.length === 0 && (
               <div className="flex items-center gap-2 border border-border bg-muted/25 p-3 text-xs text-muted-foreground">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                searching tools...
+                Searching tools...
               </div>
             )}
           </div>
@@ -689,12 +689,12 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
                 <div className="flex shrink-0 items-center gap-2">
                   <span className="text-[11px] text-muted-foreground">
                     {pkg.filtered
-                      ? "unavailable"
+                      ? "Unavailable"
                       : !pkg.installed
-                        ? "repair needed"
+                        ? "Repair needed"
                         : pkg.acpCompatible
-                          ? "works with every agent"
-                          : "screenpipe only"}
+                          ? "Works with every agent"
+                          : "Screenpipe only"}
                   </span>
                   {busySource === pkg.source ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />

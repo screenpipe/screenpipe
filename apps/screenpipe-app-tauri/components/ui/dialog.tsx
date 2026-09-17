@@ -101,8 +101,8 @@ const DialogTitle = React.forwardRef<
   <DialogPrimitive.Title
     ref={ref}
     className={cn(
-      // Screenpipe Brand: Monospace, lowercase
-      "text-lg font-mono font-medium leading-none tracking-tight lowercase",
+      // Screenpipe Brand: Monospace, sentence case
+      "text-lg font-mono font-medium leading-none tracking-tight normal-case",
       className
     )}
     {...props}

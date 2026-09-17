@@ -64,7 +64,7 @@ export function buildAppWindowChatRequest(
     ].join("\n"),
     prompt:
       "Search screenpipe only within this meeting time range. Tell me what I was doing in this app and window, then explain how it related to the meeting.",
-    displayLabel: `Ask about ${window.app_name.toLowerCase()} · ${window.window_name}`,
+    displayLabel: `Ask about ${window.app_name} · ${window.window_name}`,
     autoSend: true,
     source: "meeting-receipt-chat",
   } as const;
@@ -91,8 +91,8 @@ export function Receipts({ activity }: ReceiptsProps) {
     } catch (error) {
       console.error("failed to ask about meeting activity", error);
       toast({
-        title: "couldn't open chat",
-        description: "try again in a moment.",
+        title: "Couldn't open chat",
+        description: "Try again in a moment.",
         variant: "destructive",
       });
     } finally {
@@ -105,9 +105,9 @@ export function Receipts({ activity }: ReceiptsProps) {
 
   return (
     <section className="border-t border-border pt-5">
-      <h3 className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground mb-3 flex items-center gap-2">
+      <h3 className="text-[11px] normal-case tracking-[0.18em] text-muted-foreground mb-3 flex items-center gap-2">
         <Layers className="h-3 w-3" />
-        related during this meeting
+        Related during this meeting
       </h3>
 
       {urls.length > 0 && (
@@ -159,7 +159,7 @@ export function Receipts({ activity }: ReceiptsProps) {
                   className="group inline-flex items-center gap-1.5 border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors duration-150 hover:border-foreground hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-wait disabled:opacity-60 motion-reduce:transition-none"
                 >
                   <span className="text-foreground/80 transition-colors duration-150 group-hover:text-background group-focus-visible:text-foreground motion-reduce:transition-none">
-                    {w.app_name.toLowerCase()}
+                    {w.app_name}
                   </span>
                   <span
                     className="text-muted-foreground/60 transition-colors duration-150 group-hover:text-background/60 motion-reduce:transition-none"
@@ -190,7 +190,7 @@ export function Receipts({ activity }: ReceiptsProps) {
                       <Sparkles
                         className={`h-3 w-3 ${asking ? "animate-pulse" : ""}`}
                       />
-                      ask
+                      Ask
                     </span>
                   </span>
                 </button>
@@ -206,8 +206,8 @@ export function Receipts({ activity }: ReceiptsProps) {
           render (length-zero check). */}
       {files.length > 0 && (
         <div>
-          <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground/60 mb-1.5 px-1">
-            files edited
+          <div className="text-[10px] normal-case tracking-[0.18em] text-muted-foreground/60 mb-1.5 px-1">
+            Files edited
           </div>
           <ul className="border border-border divide-y divide-border">
             {files.map((f) => (

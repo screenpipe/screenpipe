@@ -37,7 +37,7 @@ function CategoryRow({ category, state, onToggle }: CategoryRowProps) {
 				<div className="min-w-0 flex-1">
 					<p className="text-[13px] leading-tight text-foreground">{category.name}</p>
 					<p className="text-[11px] leading-tight text-muted-foreground">
-						{state === "partial" ? "partly on, switch to apply the rest" : category.description}
+						{state === "partial" ? "Partly on, switch to apply the rest" : category.description}
 					</p>
 				</div>
 

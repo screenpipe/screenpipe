@@ -72,3 +72,18 @@ it("preserves unreadable drafts instead of replacing them", async () => {
   await expect(saveGuideToDisk(guide)).rejects.toThrow("unreadable");
   expect([...files.values()]).toEqual(["broken", "also broken"]);
 });
+
+it("keeps screenshot review through disk validation and backup recovery", async () => {
+  const reviewed = structuredClone(guide);
+  reviewed.steps[0] = {
+    ...reviewed.steps[0],
+    sourceStage: 0,
+    includeImage: true,
+    imageReview: { frameId: 3090, timestamp: "2026-09-11T10:00:00Z" },
+  };
+  await saveGuideToDisk(reviewed);
+  expect(await loadGuideFromDisk("research")).toEqual(reviewed);
+  await saveGuideToDisk({ ...reviewed, title: "Updated" });
+  files.set("workflows/guides.json", "broken");
+  expect(await loadGuideFromDisk("research")).toEqual(reviewed);
+});

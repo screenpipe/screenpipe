@@ -34,10 +34,10 @@ describe("ContextUsagePanel", () => {
     render(<ContextUsagePanel snapshot={detailedSnapshot} />);
 
     expect(screen.getByText(/15% · ~38.8K \/ 256K/)).toBeInTheDocument();
-    const disclosure = screen.getByText("breakdown").closest("details");
+    const disclosure = screen.getByText("Breakdown").closest("details");
     expect(disclosure).not.toHaveAttribute("open");
 
-    fireEvent.click(screen.getByText("breakdown"));
+    fireEvent.click(screen.getByText("Breakdown"));
     expect(disclosure).toHaveAttribute("open");
     expect(screen.getByText("Tool definitions")).toBeInTheDocument();
     expect(screen.getByText("10.1K")).toBeInTheDocument();
@@ -64,7 +64,7 @@ describe("ContextUsagePanel", () => {
     expect(
       screen.getByRole("progressbar", { name: "Context window usage" }),
     ).toBeInTheDocument();
-    expect(screen.queryByText("breakdown")).not.toBeInTheDocument();
+    expect(screen.queryByText("Breakdown")).not.toBeInTheDocument();
     expect(
       screen.getByText(/reports context totals without a category breakdown/i),
     ).toBeInTheDocument();

@@ -142,14 +142,14 @@ export function useChatQueue(currentQueueSessionId: string, piSessionIdRef: Muta
       const result = await commands.piCancelQueued(piSessionIdRef.current, prompt.id);
       if (result.status !== "ok") {
         if (!options.silent) {
-          toast({ title: "failed to cancel queued message", description: result.error, variant: "destructive" });
+          toast({ title: "Failed to cancel queued message", description: result.error, variant: "destructive" });
         }
         return false;
       }
       if (!result.data) {
         if (!options.silent) {
           toast({
-            title: "message already started",
+            title: "Message already started",
             description: "Use stop if you want to interrupt the active reply.",
           });
         }
@@ -161,7 +161,7 @@ export function useChatQueue(currentQueueSessionId: string, piSessionIdRef: Muta
     } catch (e) {
       if (!options.silent) {
         toast({
-          title: "failed to cancel queued message",
+          title: "Failed to cancel queued message",
           description: e instanceof Error ? e.message : String(e),
           variant: "destructive",
         });

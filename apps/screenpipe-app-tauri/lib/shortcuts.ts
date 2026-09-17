@@ -28,50 +28,50 @@ export const IN_APP_SHORTCUTS: readonly InAppShortcutDefinition[] = [
   {
     id: "new_chat",
     section: "chat",
-    label: "new chat",
-    description: "start a clean conversation",
+    label: "New chat",
+    description: "Start a clean conversation",
   },
   {
     id: "close_tab",
     section: "navigation",
-    label: "close tab",
-    description: "close the current chat tab, not the app",
+    label: "Close tab",
+    description: "Close the current chat tab, not the app",
   },
   {
     id: "archive_chat",
     section: "chat",
-    label: "archive chat",
-    description: "hide this conversation, stop the agent, and close the tab",
+    label: "Archive chat",
+    description: "Hide this conversation, stop the agent, and close the tab",
   },
   {
     id: "next_recent_chat",
     section: "chat",
-    label: "next chat tab",
-    description: "hold control, cycle open tabs, then release",
+    label: "Next chat tab",
+    description: "Hold control, cycle open tabs, then release",
   },
   {
     id: "previous_recent_chat",
     section: "chat",
-    label: "previous chat tab",
-    description: "cycle open chat tabs backward",
+    label: "Previous chat tab",
+    description: "Cycle open chat tabs backward",
   },
   {
     id: "toggle_sidebar",
     section: "app",
-    label: "toggle sidebar",
-    description: "show or hide the durable chat index",
+    label: "Toggle sidebar",
+    description: "Show or hide the durable chat index",
   },
   {
     id: "command_menu",
     section: "app",
-    label: "command menu",
-    description: "find an action without memorizing it",
+    label: "Command menu",
+    description: "Find an action without memorizing it",
   },
   {
     id: "shortcut_guide",
     section: "app",
-    label: "keyboard shortcuts",
-    description: "open this reference",
+    label: "Keyboard shortcuts",
+    description: "Open this reference",
   },
 ] as const;
 
@@ -88,13 +88,13 @@ export const GLOBAL_SHORTCUTS: readonly {
   id: GlobalShortcutKey;
   label: string;
 }[] = [
-  { id: "showScreenpipeShortcut", label: "toggle screenpipe overlay" },
-  { id: "showChatShortcut", label: "toggle ai chat" },
-  { id: "searchShortcut", label: "open search" },
-  { id: "startRecordingShortcut", label: "start screen recording" },
-  { id: "stopRecordingShortcut", label: "stop screen recording" },
-  { id: "startAudioShortcut", label: "start audio recording" },
-  { id: "stopAudioShortcut", label: "stop audio recording" },
+  { id: "showScreenpipeShortcut", label: "Toggle screenpipe overlay" },
+  { id: "showChatShortcut", label: "Toggle AI chat" },
+  { id: "searchShortcut", label: "Open search" },
+  { id: "startRecordingShortcut", label: "Start screen recording" },
+  { id: "stopRecordingShortcut", label: "Stop screen recording" },
+  { id: "startAudioShortcut", label: "Start audio recording" },
+  { id: "stopAudioShortcut", label: "Stop audio recording" },
 ] as const;
 
 export type ShortcutHintSettings = { disabledShortcuts?: string[] } & Partial<

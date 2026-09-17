@@ -494,7 +494,7 @@ function BackgroundTranscriptionDialog({
       setPendingTotal(data.pending ?? data.items?.length ?? 0);
     } catch (error) {
       toast({
-        title: "could not load backlog",
+        title: "Could not load backlog",
         description: error instanceof Error ? error.message : String(error),
         variant: "destructive",
       });
@@ -550,7 +550,7 @@ function BackgroundTranscriptionDialog({
       .catch((error) => {
         if (canceled) return;
         toast({
-          title: "could not load audio",
+          title: "Could not load audio",
           description: error instanceof Error ? error.message : String(error),
           variant: "destructive",
         });
@@ -639,8 +639,8 @@ function BackgroundTranscriptionDialog({
 
     void audio.play().catch(() => {
       toast({
-        title: "could not play audio",
-        description: "the audio file could not be opened for preview",
+        title: "Could not play audio",
+        description: "The audio file could not be opened for preview",
         variant: "destructive",
       });
     });
@@ -676,16 +676,16 @@ function BackgroundTranscriptionDialog({
       }
       const result = await response.json();
       toast({
-        title: result.chunks_processed > 0 ? "chunk transcribed" : "nothing processed",
+        title: result.chunks_processed > 0 ? "Chunk transcribed" : "Nothing processed",
         description:
           result.chunks_processed > 0
-            ? `audio chunk ${audioChunkId} was processed`
-            : `audio chunk ${audioChunkId} did not produce a transcript`,
+            ? `Audio chunk ${audioChunkId} was processed`
+            : `Audio chunk ${audioChunkId} did not produce a transcript`,
       });
       await refreshItems({ showLoading: false });
     } catch (error) {
       toast({
-        title: "could not run transcription",
+        title: "Could not run transcription",
         description: error instanceof Error ? error.message : String(error),
         variant: "destructive",
       });
@@ -714,12 +714,12 @@ function BackgroundTranscriptionDialog({
       );
       setPendingTotal((current) => Math.max(0, (current ?? visiblePending) - 1));
       toast({
-        title: "audio chunk dropped",
+        title: "Audio chunk dropped",
         description: getAudioFileName(item.file_path),
       });
     } catch (error) {
       toast({
-        title: "could not drop chunk",
+        title: "Could not drop chunk",
         description: error instanceof Error ? error.message : String(error),
         variant: "destructive",
       });
@@ -742,8 +742,8 @@ function BackgroundTranscriptionDialog({
         variant="ghost"
         size="icon"
         className="relative h-7 w-7 shrink-0 border border-border bg-background text-foreground hover:bg-muted hover:text-foreground active:bg-muted"
-        aria-label="open background transcription backlog"
-        title="background transcription backlog"
+        aria-label="Open background transcription backlog"
+        title="Background transcription backlog"
         onClick={() => setOpen(true)}
       >
         <ListTodo className="h-3.5 w-3.5" />
@@ -778,25 +778,25 @@ function BackgroundTranscriptionDialog({
               </DialogDescription>
             </div>
             <Badge variant="outline" className="mt-0.5 shrink-0 rounded-none font-mono text-[10px]">
-              worker {workerState}
+              Worker {workerState}
             </Badge>
           </div>
 
           <div className="grid shrink-0 grid-cols-2 gap-2 text-xs sm:grid-cols-4">
             <div className="border border-border px-2 py-1.5">
-              <div className="text-muted-foreground">ready loaded</div>
+              <div className="text-muted-foreground">Ready loaded</div>
               <div className="font-mono text-sm">{readyItems.length.toLocaleString()}</div>
             </div>
             <div className="border border-border px-2 py-1.5">
-              <div className="text-muted-foreground">quiet loaded</div>
+              <div className="text-muted-foreground">Quiet loaded</div>
               <div className="font-mono text-sm">{quietItems.length.toLocaleString()}</div>
             </div>
             <div className="border border-border px-2 py-1.5">
-              <div className="text-muted-foreground">total candidates</div>
+              <div className="text-muted-foreground">Total candidates</div>
               <div className="font-mono text-sm">{visiblePending.toLocaleString()}</div>
             </div>
             <div className="border border-border px-2 py-1.5">
-              <div className="text-muted-foreground">oldest candidate</div>
+              <div className="text-muted-foreground">Oldest candidate</div>
               <div className="font-mono text-sm">{oldestPending}</div>
             </div>
           </div>
@@ -807,7 +807,7 @@ function BackgroundTranscriptionDialog({
               <Input
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="search chunk, time, or file..."
+                placeholder="Search chunk, time, or file..."
                 className="h-8 pl-7 text-xs"
                 spellCheck={false}
               />
@@ -844,7 +844,7 @@ function BackgroundTranscriptionDialog({
               onClick={() => void refreshItems()}
             >
               <RefreshCw className={cn("h-3 w-3", loading && "animate-spin")} />
-              refresh
+              Refresh
             </Button>
           </div>
 
@@ -852,12 +852,12 @@ function BackgroundTranscriptionDialog({
             <table className="w-full min-w-[720px] table-fixed text-xs">
               <thead className="sticky top-0 z-10 bg-background">
                 <tr className="border-b border-border/60 bg-muted/30 text-left text-muted-foreground">
-                  <th className="w-[72px] px-2 py-1.5 font-medium">chunk</th>
-                  <th className="w-[64px] px-2 py-1.5 font-medium">age</th>
-                  <th className="w-[92px] px-2 py-1.5 font-medium">captured</th>
-                  <th className="px-2 py-1.5 font-medium">file</th>
-                  <th className="w-[92px] px-2 py-1.5 font-medium">status</th>
-                  <th className="w-[120px] px-2 py-1.5 text-right font-medium">actions</th>
+                  <th className="w-[72px] px-2 py-1.5 font-medium">Chunk</th>
+                  <th className="w-[64px] px-2 py-1.5 font-medium">Age</th>
+                  <th className="w-[92px] px-2 py-1.5 font-medium">Captured</th>
+                  <th className="px-2 py-1.5 font-medium">File</th>
+                  <th className="w-[92px] px-2 py-1.5 font-medium">Status</th>
+                  <th className="w-[120px] px-2 py-1.5 text-right font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -894,10 +894,10 @@ function BackgroundTranscriptionDialog({
                   <tr>
                     <td colSpan={6} className="px-2 py-6 text-center text-muted-foreground">
                       {items.length === 0
-                        ? "no waiting chunks"
+                        ? "No waiting chunks"
                         : activeItems.length === 0 && !showQuietChunks
-                          ? "only quiet/no-speech chunks are loaded"
-                          : "no matching chunks"}
+                          ? "Only quiet/no-speech chunks are loaded"
+                          : "No matching chunks"}
                     </td>
                   </tr>
                 )}
@@ -963,7 +963,7 @@ function BackgroundTranscriptionDialog({
                                       "h-7 w-7 border border-border bg-background text-foreground hover:bg-muted hover:text-foreground active:bg-muted",
                                       isPreviewing && "bg-muted"
                                     )}
-                                    aria-label={`preview audio chunk ${item.audio_chunk_id}`}
+                                    aria-label={`Preview audio chunk ${item.audio_chunk_id}`}
                                     disabled={droppingId === item.audio_chunk_id}
                                     onClick={(event) => {
                                       event.stopPropagation();
@@ -978,7 +978,7 @@ function BackgroundTranscriptionDialog({
                                   </Button>
                                 </TooltipTrigger>
                                 <TooltipContent side="top">
-                                  {isPreviewing ? "close audio controls" : "open audio controls"}
+                                  {isPreviewing ? "Close audio controls" : "Open audio controls"}
                                 </TooltipContent>
                               </Tooltip>
                               <Tooltip>
@@ -988,7 +988,7 @@ function BackgroundTranscriptionDialog({
                                     variant="ghost"
                                     size="icon"
                                     className="h-7 w-7 border border-border bg-background text-foreground hover:bg-muted hover:text-foreground active:bg-muted"
-                                    aria-label={`transcribe audio chunk ${item.audio_chunk_id}`}
+                                    aria-label={`Transcribe audio chunk ${item.audio_chunk_id}`}
                                     disabled={runningId === item.audio_chunk_id || droppingId === item.audio_chunk_id}
                                     onClick={(event) => {
                                       event.stopPropagation();
@@ -1002,7 +1002,7 @@ function BackgroundTranscriptionDialog({
                                     )}
                                   </Button>
                                 </TooltipTrigger>
-                                <TooltipContent side="top">transcribe this chunk now</TooltipContent>
+                                <TooltipContent side="top">Transcribe this chunk now</TooltipContent>
                               </Tooltip>
                               <Tooltip>
                                 <TooltipTrigger asChild>
@@ -1011,7 +1011,7 @@ function BackgroundTranscriptionDialog({
                                     variant="ghost"
                                     size="icon"
                                     className="h-7 w-7 border border-border bg-background text-muted-foreground hover:bg-muted hover:text-destructive active:bg-muted"
-                                    aria-label={`drop audio chunk ${item.audio_chunk_id}`}
+                                    aria-label={`Drop audio chunk ${item.audio_chunk_id}`}
                                     disabled={droppingId === item.audio_chunk_id || runningId === item.audio_chunk_id}
                                     onClick={(event) => {
                                       event.stopPropagation();
@@ -1025,7 +1025,7 @@ function BackgroundTranscriptionDialog({
                                     )}
                                   </Button>
                                 </TooltipTrigger>
-                                <TooltipContent side="top">drop this waiting chunk</TooltipContent>
+                                <TooltipContent side="top">Drop this waiting chunk</TooltipContent>
                               </Tooltip>
                             </div>
                           </TooltipProvider>
@@ -1055,7 +1055,7 @@ function BackgroundTranscriptionDialog({
               {previewLoadingId === previewItem.audio_chunk_id && !previewSrc ? (
                 <div className="flex h-9 items-center gap-2 bg-muted/60 px-3 text-[11px] text-muted-foreground">
                   <Loader2 className="h-3 w-3 animate-spin" />
-                  loading audio
+                  Loading audio
                 </div>
               ) : previewSrc ? (
                 <div className="flex h-9 min-w-0 items-center gap-2 bg-muted/60 px-2">
@@ -1087,7 +1087,7 @@ function BackgroundTranscriptionDialog({
                     size="icon"
                     className="h-7 w-7 shrink-0 border border-border bg-background text-foreground hover:bg-muted hover:text-foreground active:bg-muted"
                     onClick={handlePreviewPlayback}
-                    aria-label={previewPlaying ? "pause audio preview" : "play audio preview"}
+                    aria-label={previewPlaying ? "Pause audio preview" : "Play audio preview"}
                   >
                     {previewPlaying ? (
                       <Pause className="h-3.5 w-3.5" />
@@ -1101,7 +1101,7 @@ function BackgroundTranscriptionDialog({
                     size="icon"
                     className="h-7 w-7 shrink-0 border border-border bg-background text-foreground hover:bg-muted hover:text-foreground active:bg-muted"
                     onClick={() => stepPreview(-10)}
-                    aria-label="back 10 seconds"
+                    aria-label="Back 10 seconds"
                     disabled={previewDuration <= 0}
                   >
                     <Rewind className="h-3.5 w-3.5" />
@@ -1115,7 +1115,7 @@ function BackgroundTranscriptionDialog({
                     onChange={(event) => seekPreview(Number(event.target.value))}
                     disabled={previewDuration <= 0}
                     className="h-1 min-w-[180px] flex-1 accent-foreground"
-                    aria-label="audio preview position"
+                    aria-label="Audio preview position"
                   />
                   <span className="w-[76px] shrink-0 text-right font-mono text-[10px] text-muted-foreground">
                     {formatAudioPreviewTime(previewCurrentTime)} / {formatAudioPreviewTime(previewDuration)}
@@ -1126,7 +1126,7 @@ function BackgroundTranscriptionDialog({
                     size="icon"
                     className="h-7 w-7 shrink-0 border border-border bg-background text-foreground hover:bg-muted hover:text-foreground active:bg-muted"
                     onClick={() => stepPreview(10)}
-                    aria-label="forward 10 seconds"
+                    aria-label="Forward 10 seconds"
                     disabled={previewDuration <= 0}
                   >
                     <FastForward className="h-3.5 w-3.5" />
@@ -1134,7 +1134,7 @@ function BackgroundTranscriptionDialog({
                 </div>
               ) : (
                 <div className="flex h-9 items-center bg-muted/60 px-3 text-[11px] text-muted-foreground">
-                  audio unavailable
+                  Audio unavailable
                 </div>
               )}
             </div>
@@ -1142,7 +1142,7 @@ function BackgroundTranscriptionDialog({
 
           <div className="flex shrink-0 items-center justify-between gap-3 text-xs text-muted-foreground">
             <span className="min-w-0 truncate">
-              showing {filteredItems.length.toLocaleString()} of{" "}
+              Showing {filteredItems.length.toLocaleString()} of{" "}
               {(showQuietChunks ? items.length : readyItems.length).toLocaleString()}{" "}
               {showQuietChunks ? "loaded chunks" : "ready loaded chunks"}
               {!showQuietChunks && quietItems.length > 0 ? ` - ${quietItems.length.toLocaleString()} quiet hidden` : ""}
@@ -1296,13 +1296,13 @@ function TranscriptionDictionary({
     const available = VOCAB_LIMIT - vocabularyWords.length;
     const toAdd = newTerms.slice(0, available);
     if (toAdd.length === 0) {
-      toast({ title: "no new terms", description: "all terms already exist in your dictionary" });
+      toast({ title: "No new terms", description: "All terms already exist in your dictionary" });
       return;
     }
     const updated = [...vocabularyWords, ...toAdd.map((w) => ({ word: w }))];
     onChange(updated);
     toast({
-      title: `added ${toAdd.length} terms`,
+      title: `Added ${toAdd.length} terms`,
       description: newTerms.length > toAdd.length
         ? `${newTerms.length - toAdd.length} skipped (limit: ${VOCAB_LIMIT})`
         : undefined,
@@ -1327,7 +1327,7 @@ function TranscriptionDictionary({
                 </Badge>
               )}
             </h3>
-            <p className="text-xs text-muted-foreground">teach names, brands & jargon to your transcription</p>
+            <p className="text-xs text-muted-foreground">Teach names, brands & jargon to your transcription</p>
           </div>
           <div className="flex items-center gap-1 shrink-0">
             <Button
@@ -1337,7 +1337,7 @@ function TranscriptionDictionary({
               onClick={() => setShowBulk(!showBulk)}
             >
               <Download className="h-3 w-3" />
-              bulk import
+              Bulk import
             </Button>
             {vocabularyWords.length > 0 && (
               <Button
@@ -1359,8 +1359,8 @@ function TranscriptionDictionary({
         {/* Engine limits info */}
         {vocabularyWords.length > 0 && (
           <div className="text-[10px] text-muted-foreground/60 font-mono mb-2 px-1 flex gap-3">
-            <span>offline: {Math.min(vocabularyWords.reduce((n, e) => n + (e.replacement || e.word).length + 2, 0), WHISPER_CHAR_LIMIT)}/{WHISPER_CHAR_LIMIT} chars</span>
-            <span>cloud: {Math.min(vocabularyWords.length, DEEPGRAM_LIMIT)}/{DEEPGRAM_LIMIT} keywords</span>
+            <span>Offline: {Math.min(vocabularyWords.reduce((n, e) => n + (e.replacement || e.word).length + 2, 0), WHISPER_CHAR_LIMIT)}/{WHISPER_CHAR_LIMIT} chars</span>
+            <span>Cloud: {Math.min(vocabularyWords.length, DEEPGRAM_LIMIT)}/{DEEPGRAM_LIMIT} keywords</span>
           </div>
         )}
 
@@ -1370,7 +1370,7 @@ function TranscriptionDictionary({
             <Textarea
               value={bulkText}
               onChange={(e) => setBulkText(e.target.value)}
-              placeholder={"paste terms separated by commas, newlines, semicolons, or tabs\n\ne.g. kubernetes, posthog, screenpipe, terraform"}
+              placeholder={"Paste terms separated by commas, newlines, semicolons, or tabs\n\ne.g. kubernetes, posthog, screenpipe, terraform"}
               className="text-xs font-mono min-h-[80px] resize-y"
               spellCheck={false}
               autoCorrect="off"
@@ -1387,7 +1387,7 @@ function TranscriptionDictionary({
                     )}
                   </>
                 ) : (
-                  "paste or type terms above"
+                  "Paste or type terms above"
                 )}
               </span>
               <div className="flex gap-1">
@@ -1397,7 +1397,7 @@ function TranscriptionDictionary({
                   className="h-7 text-xs px-2"
                   onClick={() => { setBulkText(""); setShowBulk(false); }}
                 >
-                  cancel
+                  Cancel
                 </Button>
                 <Button
                   size="sm"
@@ -1405,7 +1405,7 @@ function TranscriptionDictionary({
                   disabled={parsed.length === 0}
                   onClick={handleBulkImport}
                 >
-                  add {Math.min(parsed.length, VOCAB_LIMIT - vocabularyWords.length)} terms
+                  Add {Math.min(parsed.length, VOCAB_LIMIT - vocabularyWords.length)} terms
                 </Button>
               </div>
             </div>
@@ -1419,7 +1419,7 @@ function TranscriptionDictionary({
             <Input
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              placeholder="filter terms..."
+              placeholder="Filter terms..."
               className="h-7 text-xs pl-7"
               spellCheck={false}
             />
@@ -1455,7 +1455,7 @@ function TranscriptionDictionary({
             })}
             {filter && filtered.length < vocabularyWords.length && (
               <p className="text-[10px] text-muted-foreground px-2 pt-1">
-                showing {filtered.length} of {vocabularyWords.length}
+                Showing {filtered.length} of {vocabularyWords.length}
               </p>
             )}
           </div>
@@ -1472,7 +1472,7 @@ function TranscriptionDictionary({
             const word = wordInput.value.trim();
             if (!word) return;
             if (vocabularyWords.length >= VOCAB_LIMIT) {
-              toast({ title: "limit reached", description: `maximum ${VOCAB_LIMIT} terms allowed` });
+              toast({ title: "Limit reached", description: `Maximum ${VOCAB_LIMIT} terms allowed` });
               return;
             }
             const replacement = replacementInput.value.trim() || undefined;
@@ -1486,7 +1486,7 @@ function TranscriptionDictionary({
               const toAdd = newTerms.slice(0, available);
               if (toAdd.length > 0) {
                 onChange([...vocabularyWords, ...toAdd.map((w) => ({ word: w }))]);
-                toast({ title: `added ${toAdd.length} terms` });
+                toast({ title: `Added ${toAdd.length} terms` });
               }
               wordInput.value = "";
               replacementInput.value = "";
@@ -1498,10 +1498,10 @@ function TranscriptionDictionary({
             replacementInput.value = "";
           }}
         >
-          <Input name="vocab-word" placeholder="e.g. screenpipe" className="h-7 text-xs flex-1" spellCheck={false} autoCorrect="off" autoCapitalize="off" />
-          <Input name="vocab-replacement" placeholder="replacement (optional)" className="h-7 text-xs flex-1" spellCheck={false} autoCorrect="off" autoCapitalize="off" />
+          <Input name="vocab-word" placeholder="E.g. screenpipe" className="h-7 text-xs flex-1" spellCheck={false} autoCorrect="off" autoCapitalize="off" />
+          <Input name="vocab-replacement" placeholder="Replacement (optional)" className="h-7 text-xs flex-1" spellCheck={false} autoCorrect="off" autoCapitalize="off" />
           <Button type="submit" size="sm" variant="outline" className="h-7 text-xs px-2">
-            add
+            Add
           </Button>
         </form>
       </CardContent>
@@ -2196,9 +2196,9 @@ export function RecordingSettings({ section }: { section: RecordingSettingsSecti
   // Listen for data-dir-fallback event (custom dir unavailable, fell back to default)
   useTauriEvent("data-dir-fallback", () => {
     toast({
-      title: "custom data directory unavailable",
+      title: "Custom data directory unavailable",
       description:
-        "the configured data directory could not be accessed. recordings are using the default directory (~/.screenpipe).",
+        "The configured data directory could not be accessed. Recordings are using the default directory (~/.screenpipe).",
       variant: "destructive",
       duration: 10000,
     });
@@ -2730,7 +2730,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
       <>
       {/* Audio */}
       <div className="space-y-2 pt-2">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Audio &amp; meetings</h2>
+        <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">Audio &amp; meetings</h2>
 
         <LockedSetting settingKey="audio_recording">
         <div className="space-y-2">
@@ -2782,7 +2782,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
 
         {!settings.disableAudio && (
           <div className="flex items-center gap-2 px-1 pt-1.5">
-            <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">transcription</span>
+            <span className="text-[11px] font-medium normal-case tracking-wider text-muted-foreground/70">Transcription</span>
             <div className="h-px flex-1 bg-border/60" />
           </div>
         )}
@@ -2812,14 +2812,14 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
-                      <SelectLabel className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">cloud</SelectLabel>
+                      <SelectLabel className="text-[10px] text-muted-foreground/70 normal-case tracking-wider">Cloud</SelectLabel>
                       <SelectItem value="screenpipe-cloud">
                         Screenpipe Cloud{hwCapability?.recommendedEngine === "screenpipe-cloud" && " ★"}
                       </SelectItem>
                       <SelectItem value="deepgram">Deepgram</SelectItem>
                     </SelectGroup>
                     <SelectGroup>
-                      <SelectLabel className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">offline</SelectLabel>
+                      <SelectLabel className="text-[10px] text-muted-foreground/70 normal-case tracking-wider">Offline</SelectLabel>
                       <SelectItem value="whisper-large-v3-turbo">Whisper Turbo</SelectItem>
                       <SelectItem value="whisper-large-v3-turbo-quantized">Whisper Turbo (fast)</SelectItem>
                       <SelectItem value="whisper-tiny">Whisper Tiny</SelectItem>
@@ -2828,7 +2828,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                       <SelectItem value="parakeet">Parakeet{isMacOS ? " (experimental)" : ""}</SelectItem>
                     </SelectGroup>
                     <SelectGroup>
-                      <SelectLabel className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">other</SelectLabel>
+                      <SelectLabel className="text-[10px] text-muted-foreground/70 normal-case tracking-wider">Other</SelectLabel>
                       <SelectItem value="openai-compatible">OpenAI Compatible</SelectItem>
                       <SelectItem value="disabled">Disabled (capture only)</SelectItem>
                     </SelectGroup>
@@ -2979,7 +2979,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                             className="text-xs text-muted-foreground hover:text-foreground transition-colors"
                             onClick={() => setFilterTranscriptionModels(!filterTranscriptionModels)}
                           >
-                            {filterTranscriptionModels ? "show all" : "filter STT only"}
+                            {filterTranscriptionModels ? "Show all" : "Filter STT only"}
                           </button>
                         )}
                       </div>
@@ -3018,12 +3018,12 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     onChange={(e) => updateOpenAICompatibleDraft({ rawAudio: e.target.checked })}
                     className="rounded border-border"
                   />
-                  <span>send raw WAV audio (instead of MP3)</span>
+                  <span>Send raw WAV audio (instead of MP3)</span>
                 </label>
 
                 {/* Custom Headers */}
                 <div className="space-y-1">
-                  <label className="text-xs text-muted-foreground">custom headers (JSON)</label>
+                  <label className="text-xs text-muted-foreground">Custom headers (JSON)</label>
                   <Input
                     defaultValue={openAICompatibleDraft.headers ? JSON.stringify(openAICompatibleDraft.headers) : ""}
                     onBlur={(e) => {
@@ -3339,7 +3339,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
 
         {!settings.disableAudio && (
           <div className="flex items-center gap-2 px-1 pt-1.5">
-            <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">meetings</span>
+            <span className="text-[11px] font-medium normal-case tracking-wider text-muted-foreground/70">Meetings</span>
             <div className="h-px flex-1 bg-border/60" />
           </div>
         )}
@@ -3374,7 +3374,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="selected-engine">Current transcription engine</SelectItem>
-                      <SelectItem value="screenpipe-cloud">screenpipe cloud live</SelectItem>
+                      <SelectItem value="screenpipe-cloud">Screenpipe cloud live</SelectItem>
                       <SelectItem value="deepgram-live">Direct Deepgram live</SelectItem>
                     </SelectContent>
                   </Select>
@@ -3452,7 +3452,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     data-testid="settings-ignore-meeting-apps-button"
                   >
                     <UserX className="h-3.5 w-3.5" />
-                    ignore apps
+                    Ignore apps
                     {(settings.ignoredMeetingApps?.length ?? 0) > 0 && (
                       <span
                         className="rounded bg-muted px-1.5 py-0.5 text-[10px] tabular-nums"
@@ -3473,7 +3473,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
             </div>
             {settings.disableMeetingDetector && (
               <p className="mt-2 ml-[26px] text-xs text-muted-foreground">
-                disabling this also stops live meeting notes, smart recording, and &quot;during meetings only&quot; capture mode.
+                Disabling this also stops live meeting notes, smart recording, and &quot;during meetings only&quot; capture mode.
               </p>
             )}
           </CardContent>
@@ -3489,7 +3489,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
 
         {!settings.disableAudio && (
           <div className="flex items-center gap-2 px-1 pt-1.5">
-            <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">devices & capture</span>
+            <span className="text-[11px] font-medium normal-case tracking-wider text-muted-foreground/70">Devices & capture</span>
             <div className="h-px flex-1 bg-border/60" />
           </div>
         )}
@@ -3615,7 +3615,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 <div>
                   <h3 className="text-sm font-medium text-foreground">Always record bluetooth mic</h3>
                   <p className="text-xs text-muted-foreground">
-                    by default bluetooth mics are only recorded during meetings to avoid degrading headphone audio quality. turn on to record always.
+                    By default bluetooth mics are only recorded during meetings to avoid degrading headphone audio quality. Turn on to record always.
                   </p>
                 </div>
               </div>
@@ -3631,7 +3631,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
 
         {!settings.disableAudio && (
           <div className="flex items-center gap-2 px-1 pt-1.5">
-            <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">voice & vocabulary</span>
+            <span className="text-[11px] font-medium normal-case tracking-wider text-muted-foreground/70">Voice & vocabulary</span>
             <div className="h-px flex-1 bg-border/60" />
           </div>
         )}
@@ -3651,7 +3651,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
               <div className="flex items-center gap-1.5">
                 <div className="relative">
                   <Input
-                    placeholder="e.g. Louis"
+                    placeholder="E.g. Louis"
                     value={settings.userName || ""}
                     onChange={(e) => handleSettingsChange({ userName: e.target.value }, false)}
                     onFocus={() => setSpeakerInputFocused(true)}
@@ -3684,7 +3684,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   onClick={handleStartTraining}
                   disabled={voiceTraining.active || !settings.userName?.trim()}
                 >
-                  train
+                  Train
                 </Button>
               </div>
             </div>
@@ -3711,7 +3711,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
       {/* Screen */}
       <LockedSetting settingKey="screen_recording">
       <div className="space-y-2 pt-2">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">Screen</h2>
+        <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">Screen</h2>
 
         {/* Screen context capture toggle */}
         <Card className="border-border bg-card">
@@ -3954,10 +3954,10 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="low">low — 1280px, smallest</SelectItem>
-                    <SelectItem value="balanced">balanced — 1920px (default)</SelectItem>
-                    <SelectItem value="high">high — 3840px, ultrawide-safe</SelectItem>
-                    <SelectItem value="max">max — native, no downscale</SelectItem>
+                    <SelectItem value="low">Low — 1280px, smallest</SelectItem>
+                    <SelectItem value="balanced">Balanced — 1920px (default)</SelectItem>
+                    <SelectItem value="high">High — 3840px, ultrawide-safe</SelectItem>
+                    <SelectItem value="max">Max — native, no downscale</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -3992,7 +3992,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-xs text-muted-foreground">Minimum interval</span>
                   <span className="text-xs font-mono text-foreground">
-                    {seconds === 0 ? "auto (power profile)" : `every ${seconds}s`}
+                    {seconds === 0 ? "Auto (power profile)" : `Every ${seconds}s`}
                   </span>
                 </div>
                 <Slider
@@ -4013,8 +4013,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   className="w-full"
                 />
                 <div className="flex justify-between text-[10px] text-muted-foreground mt-0.5">
-                  <span>auto</span>
-                  <span>every 10s</span>
+                  <span>Auto</span>
+                  <span>Every 10s</span>
                 </div>
                 <CaptureFrequencyPreview seconds={seconds} />
               </CardContent>
@@ -4040,7 +4040,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
 
       {/* System */}
       <div className="space-y-2 pt-2">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">System</h2>
+        <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">System</h2>
 
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
@@ -4087,7 +4087,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         <DialogContent className="max-w-lg">
           <DialogTitle className="text-sm font-medium">Read this aloud</DialogTitle>
           <DialogDescription className="text-xs text-muted-foreground">
-            speak naturally at your normal pace — this helps screenpipe learn your voice
+            Speak naturally at your normal pace — this helps screenpipe learn your voice
           </DialogDescription>
           <div className="space-y-4">
 
@@ -4099,7 +4099,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
 
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>{voiceTraining.secondsLeft > 0 ? `${voiceTraining.secondsLeft}s remaining` : "done — click finish"}</span>
+                <span>{voiceTraining.secondsLeft > 0 ? `${voiceTraining.secondsLeft}s remaining` : "Done — click finish"}</span>
                 <span>{Math.round(((30 - voiceTraining.secondsLeft) / 30) * 100)}%</span>
               </div>
               <Progress value={((30 - voiceTraining.secondsLeft) / 30) * 100} className="h-1.5" />
@@ -4111,7 +4111,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 onClick={handleFinishTraining}
                 disabled={voiceTraining.secondsLeft > 25}
               >
-                {voiceTraining.secondsLeft > 25 ? "keep reading..." : voiceTraining.secondsLeft > 0 ? "finish early" : "done"}
+                {voiceTraining.secondsLeft > 25 ? "Keep reading..." : voiceTraining.secondsLeft > 0 ? "Finish early" : "Done"}
               </Button>
             </div>
           </div>
