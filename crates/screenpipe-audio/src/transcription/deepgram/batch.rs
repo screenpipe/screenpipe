@@ -173,6 +173,16 @@ async fn get_deepgram_response(
             Ok(resp) if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS => {
                 let headers = resp.headers().clone();
                 let body = resp.text().await.unwrap_or_default();
+                if config.is_screenpipe_cloud() {
+                    if let Some(code) = hosted_transcription_denial_code(&body) {
+                        // Account policy is not provider congestion. Preserve the
+                        // safe code so reconciliation leaves audio pending and
+                        // pauses the sweep without exhausting chunk attempts.
+                        return Err(anyhow::anyhow!(
+                            "Screenpipe hosted transcription paused ({code})"
+                        ));
+                    }
+                }
                 let delay = rate_limit_delay(&headers, &body);
                 // Keep the shared cooldown active even when this request has
                 // exhausted its retries, so newly arriving chunks do not resume
@@ -180,7 +190,8 @@ async fn get_deepgram_response(
                 extend_rate_limit_cooldown(delay).await;
                 if attempt + 1 == MAX_ATTEMPTS {
                     return Err(anyhow::anyhow!(
-                        "Deepgram API rate limit persisted after {MAX_ATTEMPTS} attempts"
+                        "{} transcription rate limit persisted after {MAX_ATTEMPTS} attempts",
+                        config.provider_slug_for_log()
                     ));
                 }
                 debug!(
@@ -208,6 +219,26 @@ async fn get_deepgram_response(
         }
     }
     unreachable!("retry loop always returns on its final attempt")
+}
+
+/// The gateway wraps structured errors in a JSON string. Only retain known
+/// policy codes; provider bodies can contain request/customer data.
+fn hosted_transcription_denial_code(body: &str) -> Option<&'static str> {
+    let mut value: Value = serde_json::from_str(body).ok()?;
+    for _ in 0..4 {
+        match value {
+            Value::String(ref code) if code == "daily_cost_limit_exceeded" => {
+                return Some("daily_cost_limit_exceeded")
+            }
+            Value::String(ref code) if code == "transcription_capacity_paused" => {
+                return Some("transcription_capacity_paused")
+            }
+            Value::String(ref nested) => value = serde_json::from_str(nested).ok()?,
+            Value::Object(ref object) => value = object.get("error")?.clone(),
+            _ => return None,
+        }
+    }
+    None
 }
 
 const MIN_RATE_LIMIT_DELAY: Duration = Duration::from_millis(100);
@@ -799,6 +830,26 @@ mod tests {
 
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         assert_eq!(*request_count.lock().await, 2);
+    }
+
+    #[test]
+    fn hosted_policy_denials_preserve_only_known_codes() {
+        for code in ["daily_cost_limit_exceeded", "transcription_capacity_paused"] {
+            let nested = serde_json::json!({"error": serde_json::json!({"error": code, "message": "private details"}).to_string()}).to_string();
+            assert_eq!(hosted_transcription_denial_code(&nested), Some(code));
+            assert_eq!(
+                hosted_transcription_denial_code(&serde_json::json!({"error":code}).to_string()),
+                Some(code)
+            );
+        }
+        for body in [
+            r#"{"err_code":"TOO_MANY_REQUESTS"}"#,
+            r#"{"error":{"reset_in":10}}"#,
+            r#"{"message":"daily_cost_limit_exceeded"}"#,
+            "not-json",
+        ] {
+            assert_eq!(hosted_transcription_denial_code(body), None);
+        }
     }
 
     #[test]
