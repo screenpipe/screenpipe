@@ -34,10 +34,20 @@ jobs:
                   pullRequest(number: $number) {
                     author {
                       __typename
+                      login
                     }
                     authorAssociation
                     number
                     state
+                    timelineItems(last: 1, itemTypes: [REOPENED_EVENT]) {
+                      nodes {
+                        ... on ReopenedEvent {
+                          actor {
+                            login
+                          }
+                        }
+                      }
+                    }
                   }
                 }
               }
@@ -68,6 +78,20 @@ jobs:
               ) {
                 core.info(
                   `Leaving PR #${pullRequest.number} open: author association is ${pullRequest.authorAssociation}.`,
+                );
+                return;
+              }
+
+              // Reopening someone else's PR requires repository triage access.
+              // Respect that decision in event runs and scheduled sweeps, using
+              // the latest reopen so a later author reopen still closes again.
+              const latestReopen = pullRequest.timelineItems.nodes[0];
+              if (
+                latestReopen &&
+                (!latestReopen.actor || latestReopen.actor.login !== pullRequest.author?.login)
+              ) {
+                core.info(
+                  `Leaving PR #${pullRequest.number} open: reopened by ${latestReopen.actor?.login ?? "an unavailable actor"}.`,
                 );
                 return;
               }
