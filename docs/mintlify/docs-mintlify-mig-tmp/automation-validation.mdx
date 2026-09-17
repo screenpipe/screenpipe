@@ -28,7 +28,7 @@ API/UI behavior. Do not execute external actions while drafting the plan.
 Inspect the actual destination and compare fields with expected results. Verify that failures leave the external system in an acceptable state. A run log saying “done” is insufficient.
 
 <AccordionGroup>
-  <Accordion title="See a worked example" id="worked-example">
+<Accordion title="See a worked example" id="worked-example">
 
 | Case | Expected behavior |
 | --- | --- |
@@ -39,14 +39,14 @@ Inspect the actual destination and compare fields with expected results. Verify 
 | Uncertain submission | Check authoritative state before retrying. |
 | Changed UI or API | Stop with a useful error instead of guessing. |
 
-  </Accordion>
-  <Accordion title="Go deeper: setup choices and edge cases" id="details">
+</Accordion>
+<Accordion title="Go deeper: setup choices and edge cases" id="details">
 
 Use a small set of representative examples with an owner who knows the workflow. Keep failures and corrections in an evaluation log so a prompt change does not silently reintroduce an earlier error.
 
 Only add a schedule after manual tests pass. Define who responds to failures, retry limits, usage review, and how to disable future runs. Re-test when a provider, prompt, input format, or external system changes.
 
-  </Accordion>
+</Accordion>
 </AccordionGroup>
 
 ## Continue

@@ -28,7 +28,7 @@ Do not claim that a local database makes the entire workflow local.
 Run the same bounded task with the chosen configuration and inspect the answer against its sources. A faster answer is not useful if names, decisions, or source times are wrong.
 
 <AccordionGroup>
-  <Accordion title="See a worked example" id="worked-example">
+<Accordion title="See a worked example" id="worked-example">
 
 | Decision | What to verify |
 | --- | --- |
@@ -37,14 +37,14 @@ Run the same bounded task with the chosen configuration and inspect the answer a
 | Transcription | Whether audio processing is local or uses a service. |
 | Connected app | What request or output reaches that external system. |
 
-  </Accordion>
-  <Accordion title="Go deeper: setup choices and edge cases" id="details">
+</Accordion>
+<Accordion title="Go deeper: setup choices and edge cases" id="details">
 
 Local models can reduce reliance on a remote inference service, but their quality, context capacity, and resource demands vary. A small text summary and a long multimodal investigation are different workloads.
 
 Avoid assuming one provider selection controls every pipe or integration. Check the task configuration and failure behavior. If a fallback provider is configured, include it in the data-flow review. Use actual account usage for cost comparisons rather than converting a single run into an unlimited-use promise.
 
-  </Accordion>
+</Accordion>
 </AccordionGroup>
 
 ## Continue
