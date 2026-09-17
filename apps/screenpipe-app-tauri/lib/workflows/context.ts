@@ -5,7 +5,7 @@ import { type ContextFillRequest, buildContextPrompt, normalizeContextWebsite, p
 import { ASSISTANT_TOOLS, assistantProviderConfig } from "./assistant";
 import { runWorkflowAgent } from "./agent-runner";
 
-export const CONTEXT_TOOLS = [...ASSISTANT_TOOLS, "user_profile", "skill_manage", "read", "screenpipe_list_connections", "sp_mcp_list_tools", "sp_mcp_read", "fill_work_context"];
+export const CONTEXT_TOOLS = [...ASSISTANT_TOOLS, "user_profile", "skill_manage", "fill_work_context"];
 
 export async function fillWorkContext({ documents, website, profile, signal, onField, onActivity }: ContextFillRequest) {
   validateContextDocuments(documents);
