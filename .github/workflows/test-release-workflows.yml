@@ -1,0 +1,36 @@
+# screenpipe — AI that knows everything you've seen, said, or heard
+# https://screenpipe.com
+
+name: Release workflow contracts
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/release-app.yml
+      - .github/workflows/release-enterprise.yml
+      - .github/workflows/test-release-workflows.yml
+      - .github/actions/install-windows-frontend-dependencies/**
+      - .github/scripts/release-workflows.test.ts
+      - .github/scripts/enterprise-release.cjs
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release-app.yml
+      - .github/workflows/release-enterprise.yml
+      - .github/workflows/test-release-workflows.yml
+      - .github/actions/install-windows-frontend-dependencies/**
+      - .github/scripts/release-workflows.test.ts
+      - .github/scripts/enterprise-release.cjs
+
+permissions:
+  contents: read
+
+jobs:
+  release-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+      - run: bun test ./.github/scripts/release-workflows.test.ts

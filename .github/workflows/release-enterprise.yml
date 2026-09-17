@@ -8,7 +8,7 @@
 # macOS: signs with Apple Developer cert, notarizes/staples fresh-install and
 # updater artifacts, then verifies the exact updater archive before upload.
 # Linux: builds AppImage/deb artifacts and signs updater artifacts.
-# Does not run as part of consumer release — keeps consumer releases fast.
+# Dispatched automatically after consumer succeeds, or manually for recovery.
 name: Release Enterprise
 
 on:
@@ -30,8 +30,9 @@ on:
         default: false
 
 concurrency:
-  # Serialize releases — aborting a release mid-flight is worse than waiting.
-  group: ${{ github.workflow }}
+  # Manual recovery and automatic builds of one revision must not overlap.
+  # Different versions queue on their runners without cancelling older releases.
+  group: release-enterprise-${{ inputs.commit_hash || github.sha }}
   cancel-in-progress: false
 
 env:
@@ -53,8 +54,8 @@ jobs:
         id: resolve
         shell: bash
         env:
-          REQUESTED_SHA: ${{ github.event.inputs.commit_hash || github.sha }}
-          REQUESTED_VERSION: ${{ github.event.inputs.version }}
+          REQUESTED_SHA: ${{ inputs.commit_hash || github.sha }}
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
 
@@ -90,7 +91,7 @@ jobs:
   # ─── Windows x64 ──────────────────────────────────────────────────────────
   release-enterprise-windows:
     needs: resolve-release
-    runs-on: ${{ github.event.inputs.force_github_runners == 'true' && 'windows-2022' || 'screenpipe-release-windows' }}
+    runs-on: ${{ inputs.force_github_runners && 'windows-2022' || 'screenpipe-release-windows' }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -105,13 +106,14 @@ jobs:
         shell: pwsh
         run: git clean -ffdx -e apps/screenpipe-app-tauri/node_modules/
 
-      - name: Checkout persistent Windows cache action
-        if: runner.environment == 'self-hosted'
+      - name: Checkout Windows release actions
         uses: actions/checkout@v4
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-workflow
-          sparse-checkout: .github/actions/setup-persistent-windows-cache
+          sparse-checkout: |
+            .github/actions/setup-persistent-windows-cache
+            .github/actions/install-windows-frontend-dependencies
 
       - name: Attach persistent Azure Windows cache
         if: runner.environment == 'self-hosted'
@@ -224,9 +226,8 @@ jobs:
           restore-keys: |
             windows-2022-x86_64-pc-windows-msvc-pre-build-
 
-      - name: Install frontend dependencies
-        working-directory: apps/screenpipe-app-tauri
-        run: bun install
+      - name: Install frontend dependencies without symlinks (Windows)
+        uses: ./.release-workflow/.github/actions/install-windows-frontend-dependencies
 
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
@@ -488,7 +489,7 @@ jobs:
           } catch { Write-Host ".intunewin creation failed: $_" }
 
       - name: Upload enterprise Windows artifacts
-        if: github.event.inputs.dry_run != 'true'
+        if: ${{ !inputs.dry_run }}
         shell: bash
         env:
           RELEASE_UPLOAD_URL: ${{ vars.RELEASE_UPLOAD_URL }}
@@ -513,7 +514,7 @@ jobs:
   # ─── Linux x64 ────────────────────────────────────────────────────────────
   release-enterprise-linux:
     needs: resolve-release
-    runs-on: ${{ github.event.inputs.force_github_runners == 'true' && 'ubuntu-24.04' || 'screenpipe-release-linux' }}
+    runs-on: ${{ inputs.force_github_runners && 'ubuntu-24.04' || 'screenpipe-release-linux' }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -762,7 +763,7 @@ jobs:
           done
 
       - name: Upload to R2
-        if: github.event.inputs.dry_run != 'true'
+        if: ${{ !inputs.dry_run }}
         shell: bash
         env:
           RELEASE_UPLOAD_URL: ${{ vars.RELEASE_UPLOAD_URL }}
@@ -802,7 +803,7 @@ jobs:
             target: x86_64-apple-darwin
             features: metal,redact-onnx-coreml,enterprise-build
             package_arch: x64
-    runs-on: ${{ github.event.inputs.force_github_runners == 'true' && matrix.platform || 'screenpipe-release-macos' }}
+    runs-on: ${{ inputs.force_github_runners && matrix.platform || 'screenpipe-release-macos' }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -1424,7 +1425,7 @@ jobs:
           test -s "${PERSISTENT_PKG}.sig"
 
       - name: Upload to R2
-        if: github.event.inputs.dry_run != 'true'
+        if: ${{ !inputs.dry_run }}
         shell: bash
         env:
           RELEASE_UPLOAD_URL: ${{ vars.RELEASE_UPLOAD_URL }}
@@ -1458,3 +1459,36 @@ jobs:
           BUILD_KC="$HOME/Library/Keychains/build.keychain-db"
           security delete-keychain "$BUILD_KC" 2>/dev/null || true
           security list-keychain -d user -s ~/Library/Keychains/login.keychain-db 2>/dev/null || true
+
+  enterprise-complete:
+    name: Enterprise artifacts complete
+    if: always()
+    needs: [resolve-release, release-enterprise-windows, release-enterprise-linux, release-enterprise-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+      - uses: actions/github-script@v7
+        env:
+          RELEASE_SHA: ${{ needs.resolve-release.outputs.release_sha || inputs.commit_hash || github.sha }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          BUILD_RESULTS: ${{ toJSON(needs) }}
+        with:
+          script: |
+            const { reportEnterprise } = require('./.github/scripts/enterprise-release.cjs');
+            const results = JSON.parse(process.env.BUILD_RESULTS);
+            await core.summary.addHeading('Enterprise artifact results')
+              .addTable([
+                [{ data: 'Job', header: true }, { data: 'Result', header: true }],
+                ...Object.entries(results).map(([name, job]) => [name, job.result]),
+              ]).write();
+            await reportEnterprise({
+              github, context,
+              sha: process.env.RELEASE_SHA,
+              dryRun: process.env.DRY_RUN === 'true',
+              results,
+            });

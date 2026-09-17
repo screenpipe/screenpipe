@@ -237,13 +237,15 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
-      - name: Checkout persistent Windows cache action
-        if: runner.environment == 'self-hosted' && matrix.os_type == 'windows'
+      - name: Checkout Windows release actions
+        if: matrix.os_type == 'windows'
         uses: actions/checkout@v4
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-workflow
-          sparse-checkout: .github/actions/setup-persistent-windows-cache
+          sparse-checkout: |
+            .github/actions/setup-persistent-windows-cache
+            .github/actions/install-windows-frontend-dependencies
 
       - name: Attach persistent Azure Windows cache
         if: runner.environment == 'self-hosted' && matrix.os_type == 'windows'
@@ -557,37 +559,7 @@ jobs:
 
       - name: Install frontend dependencies without symlinks (Windows)
         if: matrix.os_type == 'windows'
-        working-directory: ${{ github.workspace }}/apps/screenpipe-app-tauri
-        shell: pwsh
-        # Bun forces per-file symlinks for ../ folder dependencies on Windows,
-        # even with copyfile (oven-sh/bun#13379). Stage the exact checked-out
-        # source inside the app so its normal copy backend is used. Keep the
-        # locked dependency graph; only the local package location changes.
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $source = (Resolve-Path '../../packages/workflows-ui').Path
-          $destination = Join-Path (Get-Location) 'node_modules/@screenpipe/workflows-ui'
-          if (Test-Path -LiteralPath $destination) {
-            $item = Get-Item -LiteralPath $destination -Force
-            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-              cmd /c rmdir "$destination"
-              if ($LASTEXITCODE -ne 0) { throw 'failed to remove stale local package link' }
-            } else {
-              Remove-Item -LiteralPath $destination -Recurse -Force
-            }
-          }
-          $staged = Join-Path (Get-Location) '.release-workflows-ui'
-          New-Item -ItemType Directory -Force -Path $staged | Out-Null
-          Copy-Item -LiteralPath "$source/package.json" -Destination $staged -Force
-          Copy-Item -LiteralPath "$source/src" -Destination $staged -Recurse -Force
-          foreach ($file in @('package.json', 'bun.lock')) {
-            $path = Join-Path (Get-Location) $file
-            $text = [IO.File]::ReadAllText($path)
-            if (-not $text.Contains('file:../../packages/workflows-ui')) { throw "local dependency missing from $file" }
-            [IO.File]::WriteAllText($path, $text.Replace('file:../../packages/workflows-ui', 'file:./.release-workflows-ui'))
-          }
-          bun install --frozen-lockfile --backend=copyfile
-          if ($LASTEXITCODE -ne 0) { throw 'frontend dependency installation failed' }
+        uses: ./.release-workflow/.github/actions/install-windows-frontend-dependencies
 
       - name: Set up MSVC
         if: matrix.os_type == 'windows'
@@ -1843,3 +1815,36 @@ jobs:
           BUILD_KC="$HOME/Library/Keychains/build.keychain-db"
           security delete-keychain "$BUILD_KC" 2>/dev/null || true
           security list-keychain -d user -s ~/Library/Keychains/login.keychain-db 2>/dev/null || true
+
+  dispatch-enterprise:
+    name: Start enterprise after consumer
+    needs: [check_commit, publish-tauri]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+      statuses: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+      - uses: actions/github-script@v7
+        env:
+          RELEASE_SHA: ${{ needs.check_commit.outputs.release_sha }}
+          RELEASE_VERSION: ${{ needs.check_commit.outputs.release_version }}
+          FORCE_GITHUB_RUNNERS: ${{ inputs.force_github_runners }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        with:
+          script: |
+            const { dispatchEnterprise } = require('./.github/scripts/enterprise-release.cjs');
+            await dispatchEnterprise({
+              github, context,
+              sha: process.env.RELEASE_SHA,
+              version: process.env.RELEASE_VERSION,
+              forceGithubRunners: process.env.FORCE_GITHUB_RUNNERS === 'true',
+              dryRun: process.env.DRY_RUN === 'true',
+            });
+            await core.summary
+              .addHeading(`Consumer ${process.env.RELEASE_VERSION} ready; enterprise queued`)
+              .addRaw('The Enterprise artifacts commit check stays pending until its build finishes. Public publication remains a human action.')
+              .write();
