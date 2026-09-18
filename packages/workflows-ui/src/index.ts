@@ -21,3 +21,5 @@ export { WorkflowRunProgress } from "./workflow-run-progress";
 export * from "./guide";
 
 export { guideMarkdown } from "./guide";
+
+export * from "./confidential-verification";

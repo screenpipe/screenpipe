@@ -3,9 +3,11 @@
 
 "use client";
 import { useEffect, useState } from "react";
+import { ConfidentialVerificationBadge, type ConfidentialVerificationSource } from "./confidential-verification";
 
 export type WorkflowModelMode = "intelligent" | "private";
 export type WorkflowModelPreference = {
+  verification?: ConfidentialVerificationSource;
   load(): Promise<WorkflowModelMode>;
   save(mode: WorkflowModelMode): Promise<void>;
 };
@@ -52,6 +54,7 @@ export function WorkflowModelControl({ preference }: { preference: WorkflowModel
         {Object.entries(WORKFLOW_MODELS).map(([key, value]) => <option key={key} value={key}>{value.label}</option>)}
       </select>
     </label>
+    {mode === "private" && <ConfidentialVerificationBadge source={preference.verification} />}
     {error && <span role="alert">{error}</span>}
   </div>;
 }

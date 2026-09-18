@@ -1,6 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
+import { listen } from "@tauri-apps/api/event";
 import { exists, readTextFile, writeTextFile, rename, remove } from "@tauri-apps/plugin-fs";
 import { commands } from "@/lib/utils/tauri";
 import { parseWorkflowModel, type WorkflowModelPreference } from "@screenpipe/workflows-ui";
@@ -11,6 +12,11 @@ async function path() {
   return `${base.data}/workflows-model.json`;
 }
 export const workflowModelPreference: WorkflowModelPreference = {
+  verification: {
+    subscribe: listener => listen<{ source: string; sessionId: string; event: Record<string, unknown> }>("agent_event", ({ payload }) => {
+      if (payload.source === "pi" && payload.sessionId.startsWith("__title:workflow-")) listener(payload);
+    }),
+  },
   async load() {
     const file = await path();
     return parseWorkflowModel(await exists(file) ? await readTextFile(file) : null);

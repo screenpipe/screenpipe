@@ -70,7 +70,7 @@ describe("GLM verified client transport", () => {
         .replace("__SCREENPIPE_PI_PACKAGE_JSON__", JSON.stringify(resolve(import.meta.dir, "../../package.json"))));
       const extension = (await import(pathToFileURL(join(dir, "tinfoil.ts")).href)).default;
       let provider: any;
-      await extension({ registerProvider: (name: string, config: any) => {
+      await extension({ on: () => {}, registerProvider: (name: string, config: any) => {
         expect(name).toBe("screenpipe");
         expect(config.api).toBe("screenpipe-tinfoil");
         expect(config.models).toBeUndefined();
@@ -210,5 +210,41 @@ describe("GLM verified client transport", () => {
     const clientFetch = createGlmEncryptedFetch("https://gateway.test/v1", config => new SecureClient({ ...config, userCacheSecret: "test-cache-scope" }));
     await expect(clientFetch(endpoint, init())).rejects.toThrow("invalid hardware signature");
     expect(network).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe("confidential verification status", () => {
+  const proof = { securityVerified: true, configRepo: GLM_CONFIG_REPO, enclaveHost: new URL(GLM_ENCLAVE).host, codeFingerprint: "a".repeat(96), enclaveFingerprint: "a".repeat(96), hpkePublicKey: "b".repeat(64), releaseTag: "fixture", verifiedAt: new Date().toISOString(), secretField: "must not cross UI" };
+  it("only reports a verified response after all decrypted chunks complete and filters evidence", async () => {
+    const updates: any[] = [];
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const transport = createGlmEncryptedFetch("https://gateway.test/v1", () => ({ ready: async () => {}, getVerificationDocument: () => proof, fetch: async () => new Response(new ReadableStream({ start(value) { controller = value; } })) }), value => updates.push(value));
+    const response = await transport(endpoint, init());
+    expect(updates.map(v => v.state)).toEqual(["verifying", "attested"]);
+    expect(updates[1].document.secretField).toBeUndefined();
+    controller.enqueue(new TextEncoder().encode("answer"));
+    const body = response.text();
+    expect(updates.some(v => v.state === "response_verified")).toBe(false);
+    controller.close();
+    expect(await body).toBe("answer");
+    expect(updates.map(v => v.state)).toEqual(["verifying", "attested", "response_verified"]);
+    expect(new Set(updates.map(v => v.requestId)).size).toBe(1);
+  });
+  it("reports failure rather than verified when decryption fails midstream", async () => {
+    const updates: any[] = [];
+    const transport = createGlmEncryptedFetch("https://gateway.test/v1", () => ({ ready: async () => {}, getVerificationDocument: () => proof, fetch: async () => new Response(new ReadableStream({ pull(controller) { controller.error(new Error("authentication failed")); } })) }), value => updates.push(value));
+    const response = await transport(endpoint, init());
+    await expect(response.text()).rejects.toThrow("authentication failed");
+    expect(updates.at(-1).state).toBe("failed");
+    expect(updates.some(v => v.state === "response_verified")).toBe(false);
+  });
+  it("reports blocked verification without sending or leaking the error", async () => {
+    const updates: any[] = []; let sent = false;
+    const transport = createGlmEncryptedFetch("https://gateway.test/v1", () => ({ ready: async () => { throw Error("private internal detail"); }, fetch: async () => { sent = true; return new Response(); } }), value => updates.push(value));
+    await expect(transport(endpoint, init())).rejects.toThrow();
+    expect(sent).toBe(false);
+    expect(updates.map(v => v.state)).toEqual(["verifying", "failed"]);
+    expect(JSON.stringify(updates)).not.toContain("private internal detail");
   });
 });

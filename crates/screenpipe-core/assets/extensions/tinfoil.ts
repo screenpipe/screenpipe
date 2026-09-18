@@ -22,6 +22,11 @@ export default async function (pi: ExtensionAPI) {
   // distinct model API has no built-in handler, so missing/disabled extensions
   // or failed verification cannot silently send GLM via ordinary OpenAI TLS.
   const sdk = () => import(pathToFileURL(runtimeRequire.resolve("tinfoil")).href);
+  let publish: ((text: string) => void) | undefined;
+  pi.on("before_agent_start", (_event, ctx) => {
+    publish = text => ctx.ui.setStatus("screenpipe-confidential", text);
+  });
+  pi.on("session_shutdown", () => { publish = undefined; });
   const transports = new Map<string, typeof fetch>();
   pi.registerProvider("screenpipe", {
     api: GLM_SECURE_API,
@@ -34,7 +39,7 @@ export default async function (pi: ExtensionAPI) {
         let encryptedFetch: typeof fetch | undefined;
         transport = async (input, init) => {
           const { SecureClient } = await sdk();
-          encryptedFetch ??= createGlmEncryptedFetch(baseURL, (config) => new SecureClient(config));
+          encryptedFetch ??= createGlmEncryptedFetch(baseURL, (config) => new SecureClient(config), update => publish?.(JSON.stringify(update)));
           return encryptedFetch(input, init);
         };
         transports.set(baseURL, transport);
