@@ -45,9 +45,7 @@ where
 /// Accept a JSON `null` in place of a `Vec<String>` field and return an empty
 /// vector. This handles settings.bin files written by older app versions or
 /// frontend bugs that stored `null` instead of `[]`.
-fn deserialize_null_as_empty_string_vec<'de, D>(
-    deserializer: D,
-) -> Result<Vec<String>, D::Error>
+fn deserialize_null_as_empty_string_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
