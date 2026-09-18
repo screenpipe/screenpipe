@@ -3,13 +3,15 @@
 "use client";
 import { useMemo } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { ConfidentialVerificationBadge, type ConfidentialVerificationSource } from "@screenpipe/workflows-ui";
-export function PrivateModelVerification({ sessionId, preset }: { sessionId: string | null; preset?: { model?: string; provider?: string } | null }) {
+import { ConfidentialVerificationDetails, useConfidentialVerification, type ConfidentialVerificationSource } from "@screenpipe/workflows-ui";
+export function usePrivateModelVerification({ sessionId, preset }: { sessionId: string | null; preset?: { model?: string; provider?: string } | null }) {
   const source = useMemo<ConfidentialVerificationSource>(() => ({
     subscribe: listener => listen<{ source: string; sessionId: string; event: Record<string, unknown> }>("agent_event", ({ payload }) => {
       if (sessionId && payload.source === "pi" && payload.sessionId === sessionId) listener(payload);
     }),
   }), [sessionId]);
-  if (preset?.provider !== "screenpipe-cloud" || preset.model !== "glm-5.3-flash-reap50-iq3m") return null;
-  return <ConfidentialVerificationBadge key={sessionId} source={source} />;
+  const isPrivate = preset?.provider === "screenpipe-cloud" && preset.model === "glm-5.3-flash-reap50-iq3m";
+  // Keep observing while the model popover is unmounted.
+  const current = useConfidentialVerification(isPrivate ? source : undefined);
+  return isPrivate ? <ConfidentialVerificationDetails current={current} showLabel /> : null;
 }

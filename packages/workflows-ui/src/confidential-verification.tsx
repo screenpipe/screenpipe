@@ -29,24 +29,32 @@ export function parseConfidentialVerification(event: Record<string, unknown>): C
 }
 const labels = { idle: "Not verified yet", verifying: "Verifying enclave…", attested: "Enclave verified", response_verified: "Encrypted response verified", failed: "Private request failed" };
 /** Evidence is live and request-scoped. Never restore a verified badge from disk. */
-export function ConfidentialVerificationBadge({ source }: { source?: ConfidentialVerificationSource }) {
-  const [current, setCurrent] = useState<ConfidentialVerification | null>(null);
-  const dialog = useRef<HTMLDialogElement>(null);
+export function useConfidentialVerification(source?: ConfidentialVerificationSource) {
+  const [observed, setObserved] = useState<{ source: typeof source; value: ConfidentialVerification } | null>(null);
   useEffect(() => {
     let disposed = false;
     let request: { sessionId: string; requestId: string } | null = null;
-    setCurrent(null);
+    setObserved(null);
     const subscription = source?.subscribe(({ event, sessionId }) => {
       if (disposed) return;
       const next = parseConfidentialVerification(event);
       if (!next) return;
       if (next.state === "verifying") request = { sessionId, requestId: next.requestId };
       if (request?.sessionId !== sessionId || request.requestId !== next.requestId) return;
-      setCurrent(next);
+      setObserved({ source, value: next });
     });
-    void subscription?.catch(() => { if (!disposed) setCurrent(null); });
+    void subscription?.catch(() => { if (!disposed) setObserved(null); });
     return () => { disposed = true; void subscription?.then(off => off()).catch(() => {}); };
   }, [source]);
+  return observed?.source === source ? observed?.value ?? null : null;
+}
+
+export function ConfidentialVerificationBadge({ source }: { source?: ConfidentialVerificationSource }) {
+  return <ConfidentialVerificationDetails current={useConfidentialVerification(source)} />;
+}
+
+export function ConfidentialVerificationDetails({ current, showLabel = false }: { current: ConfidentialVerification | null; showLabel?: boolean }) {
+  const dialog = useRef<HTMLDialogElement>(null);
   const state = current?.state ?? "idle";
   const proof = current?.document;
   const Icon = state === "response_verified" ? ShieldCheck : state === "failed" ? ShieldAlert : Shield;
@@ -58,8 +66,8 @@ export function ConfidentialVerificationBadge({ source }: { source?: Confidentia
   };
   return <span style={{ display: "inline-flex", alignItems: "center" }}>
     <button type="button" aria-label={`Private AI: ${labels[state]}`} title={labels[state]} onClick={() => dialog.current?.showModal()}
-      style={{ color: "inherit", background: "transparent", border: "1px solid currentColor", borderRadius: 6, padding: 5, cursor: "pointer" }}><Icon size={15} aria-hidden="true" /></button>
-    <dialog ref={dialog} aria-label="Private AI verification" onClick={event => { if (event.target === event.currentTarget) dialog.current?.close(); }}
+      style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "inherit", background: "transparent", border: showLabel ? 0 : "1px solid currentColor", borderRadius: 6, padding: 5, cursor: "pointer", font: "inherit", textAlign: "left" }}><Icon size={15} aria-hidden="true" />{showLabel && <span>Private AI · {labels[state]}</span>}</button>
+    <dialog ref={dialog} aria-label="Private AI verification" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); dialog.current?.close(); } }} onClick={event => { if (event.target === event.currentTarget) dialog.current?.close(); }}
       style={{ background: "Canvas", color: "CanvasText", colorScheme: "light dark", border: "1px solid GrayText", borderRadius: 8, padding: 24, width: 460, maxWidth: "calc(100vw - 32px)", maxHeight: "80vh", overflow: "auto", font: "inherit", fontSize: 13 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}><strong>Private AI verification</strong><button type="button" aria-label="Close verification" onClick={() => dialog.current?.close()} style={{ background: "transparent", color: "inherit", border: 0, cursor: "pointer" }}><X size={18} /></button></div>
       <p role="status" style={{ margin: "18px 0 8px" }}><strong>{labels[state]}</strong></p>
