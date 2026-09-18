@@ -10,6 +10,7 @@ const repoRoot = resolve(import.meta.dir,"../../..");
 const evalModel = process.env.WORKFLOW_EVAL_MODEL || "auto";
 const mismatchedWorkflow = process.argv.includes("--mismatched-workflow");
 const reviewOnly = process.argv.includes("--review-only");
+const invalidUpstreamQuote = process.argv.includes("--invalid-upstream-quote");
 const unavailableReviewImages = process.argv.includes("--unavailable-review-images");
 const privateModel = evalModel === "glm-5.3-flash-reap50-iq3m";
 const reviewContext = process.argv.includes("--review-context");
@@ -27,6 +28,7 @@ if (real && (recorderUrl.protocol !== "http:" || !["localhost","127.0.0.1","[::1
 const recorderKey = real ? (process.env.SCREENPIPE_LOCAL_API_KEY || (await new Response(Bun.spawn(["screenpipe","auth","token"], {stdout:"pipe",stderr:"pipe"}).stdout).text()).trim()) : "";
 const seedContext = real && process.env.WORKFLOW_EVAL_CONTEXT ? await Bun.file(process.env.WORKFLOW_EVAL_CONTEXT).json() : null;
 if (seedContext && reportDir) await writeFile(join(reportDir,"context.json"),JSON.stringify(seedContext),{mode:0o600});
+if (invalidUpstreamQuote && (!reviewOnly || !reviewContext || real)) throw new Error("Invalid-quote fixture requires isolated customer review");
 if (mismatchedWorkflow && (!reviewOnly || real)) throw new Error("Mismatched identity requires the isolated review-only fixture");
 const existingWorkflows = mismatchedWorkflow ? [{id:"existing-demo",title:"Produce a product demo",trigger:"A product launch needs a demo",outcome:"A demo is published",stages:[],correction:{text:"Keep this demo workflow separate from customer feedback."}}] : seedContext?.workflows || [];
 const contextRevision = mismatchedWorkflow ? 7 : seedContext?.revision || 0;
@@ -78,6 +80,9 @@ if (reviewOnly) {
   outputs[3] = {revision:4,checkedThrough:now,coverage:[{start,end:now,complete:true}],items:[0,3].map((offset,index)=>{
     const rows=records.slice(offset,offset+3);
     const sources=rows.map(row=>({timestamp:row.content.timestamp,app:row.content.app_name,quote:row.content.text}));
+    // Earlier stages can paraphrase a source incorrectly. The reviewer must
+    // repair or omit it; the final evidence validator must still reject it.
+    if (invalidUpstreamQuote) sources[0].quote = "The customer confirmed every generated step was correct.";
     const steps=reviewContext ? [
       {kind:"action",text:"Ask the customer where the generated procedure differs from their work.",...sources[0]},
       {kind:"action",text:"Record the wrong screenshot and ask which input was missing.",...sources[2]},
@@ -269,7 +274,7 @@ try {
     }
     if(Date.parse(run.end.timestamp)-Date.parse(run.start.timestamp)!==120000) throw new Error("Timing combined separate receipt occurrences");
   }
-  console.log(JSON.stringify({passed:true,stages:metrics.length,workflows:final.workflows.length,timingRuns:runs.length,activityRowsRead:activityReads.size,coverageHours:reviewOnly?null:19,reviewContext}));
+  console.log(JSON.stringify({passed:true,stages:metrics.length,workflows:final.workflows.length,timingRuns:runs.length,activityRowsRead:activityReads.size,coverageHours:reviewOnly?null:19,reviewContext,invalidUpstreamQuote}));
   }
 } finally {
   if (reportDir) {
