@@ -19,21 +19,37 @@ where
 /// Older desktop builds persisted a single selected monitor as a string, while
 /// current builds persist an array. Accept both shapes so an upgrade preserves
 /// the user's selection instead of rejecting the entire settings store.
+/// Also accepts JSON `null` (produced by some older app versions or frontend bugs)
+/// and returns an empty vec in that case.
 fn deserialize_monitor_ids<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     #[derive(Deserialize)]
     #[serde(untagged)]
-    enum StringOrVec {
+    enum StringOrVecOrNull {
         Vec(Vec<String>),
         String(String),
+        Null,
     }
 
-    Ok(match StringOrVec::deserialize(deserializer)? {
-        StringOrVec::Vec(ids) => ids,
-        StringOrVec::String(id) => vec![id],
-    })
+    Ok(
+        match Option::<StringOrVecOrNull>::deserialize(deserializer)? {
+            Some(StringOrVecOrNull::Vec(ids)) => ids,
+            Some(StringOrVecOrNull::String(id)) => vec![id],
+            Some(StringOrVecOrNull::Null) | None => vec![],
+        },
+    )
+}
+
+/// Accept a JSON `null` in place of a `Vec<String>` field and return an empty
+/// vector. This handles settings.bin files written by older app versions or
+/// frontend bugs that stored `null` instead of `[]`.
+fn deserialize_null_as_empty_string_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<Vec<String>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// Custom vocabulary entry for transcription biasing and word replacement.
@@ -304,7 +320,11 @@ pub struct RecordingSettings {
     pub meeting_live_transcription_provider: String,
 
     /// Audio device names/IDs to capture from.
-    #[serde(rename = "audioDevices")]
+    #[serde(
+        rename = "audioDevices",
+        default,
+        deserialize_with = "deserialize_null_as_empty_string_vec"
+    )]
     pub audio_devices: Vec<String>,
 
     /// Automatically follow the system default audio devices.
@@ -573,11 +593,19 @@ pub struct RecordingSettings {
 
     // ── Filters ────────────────────────────────────────────────────────
     /// Window titles to exclude from capture.
-    #[serde(rename = "ignoredWindows")]
+    #[serde(
+        rename = "ignoredWindows",
+        default,
+        deserialize_with = "deserialize_null_as_empty_string_vec"
+    )]
     pub ignored_windows: Vec<String>,
 
     /// Window titles to exclusively capture (empty = capture all).
-    #[serde(rename = "includedWindows")]
+    #[serde(
+        rename = "includedWindows",
+        default,
+        deserialize_with = "deserialize_null_as_empty_string_vec"
+    )]
     pub included_windows: Vec<String>,
 
     /// Browser URLs to exclude from capture. Existing string entries remain
@@ -643,6 +671,7 @@ pub struct RecordingSettings {
     pub record_while_locked: bool,
 
     /// Languages for transcription (ISO 639-1 codes).
+    #[serde(default, deserialize_with = "deserialize_null_as_empty_string_vec")]
     pub languages: Vec<String>,
 
     // ── Privacy ────────────────────────────────────────────────────────
@@ -1510,5 +1539,45 @@ mod tests {
         let toml_str = toml::to_string_pretty(&settings).unwrap();
         let deserialized: RecordingSettings = toml::from_str(&toml_str).unwrap();
         assert_eq!(settings, deserialized);
+    }
+
+    /// Regression test for SCREENPIPE-APP-P4:
+    /// "settings failed to deserialize, attempting snapshot recovery:
+    ///  invalid type: null, expected a sequence"
+    ///
+    /// Older app versions or frontend bugs may persist JSON `null` for Vec<String>
+    /// fields instead of `[]`. Every affected field must deserialize as an empty vec.
+    #[test]
+    fn null_vec_fields_deserialize_as_empty_vecs() {
+        let json = r#"{
+            "audioDevices": null,
+            "ignoredWindows": null,
+            "includedWindows": null,
+            "languages": null,
+            "monitorIds": null
+        }"#;
+        let settings: RecordingSettings = serde_json::from_str(json)
+            .expect("null Vec<String> fields must not fail deserialization");
+
+        assert!(
+            settings.audio_devices.is_empty(),
+            "audioDevices: null should yield []"
+        );
+        assert!(
+            settings.ignored_windows.is_empty(),
+            "ignoredWindows: null should yield []"
+        );
+        assert!(
+            settings.included_windows.is_empty(),
+            "includedWindows: null should yield []"
+        );
+        assert!(
+            settings.languages.is_empty(),
+            "languages: null should yield []"
+        );
+        assert!(
+            settings.monitor_ids.is_empty(),
+            "monitorIds: null should yield []"
+        );
     }
 }
