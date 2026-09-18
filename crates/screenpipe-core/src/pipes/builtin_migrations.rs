@@ -712,11 +712,16 @@ fn meeting_summary_evidence_steps() -> Option<&'static str> {
 /// the shipped pipeline prompts from #7020, #7045, #7071 and the handoff repairs.
 fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> {
     let shipped_hashes: &[&str] = match name {
-        "workflow-discovery" => &["57b754f5d27ad27d"],
+        "workflow-discovery" => &["9e7b057416c5e119", "57b754f5d27ad27d"],
         "workflow-activity" => &["f5adb347d838aff7", "f4afd94ec5e0270a", "5c54891aced4f9d2"],
         "workflow-patterns" => &["a31c48cdb79f4b6d", "f9b67dd914738d05", "09e892b7e53bc79b"],
         "workflow-procedures" => &["5d59624801ae318f", "e0337eafa55e446a", "20950f99d0200c6a"],
-        "workflow-timing" => &["5d4517bb8ae2d8bb", "06c5c09cfe623e48", "8e07b86d6863e354"],
+        "workflow-timing" => &[
+            "8c232b41d405af3f",
+            "5d4517bb8ae2d8bb",
+            "06c5c09cfe623e48",
+            "8e07b86d6863e354",
+        ],
         _ => return None,
     };
     let parts: Vec<_> = original.splitn(3, "---").collect();
@@ -860,6 +865,8 @@ mod tests {
     #[test]
     fn all_staged_workflow_prompts_upgrade_without_changing_user_configuration() {
         let fixtures = [
+            ("workflow-discovery", include_str!("../../assets/pipes/legacy-workflow-prompts/before-bounded-review-workflow-discovery.md")),
+            ("workflow-timing", include_str!("../../assets/pipes/legacy-workflow-prompts/before-bounded-review-workflow-timing.md")),
             ("workflow-activity", include_str!("../../assets/pipes/legacy-workflow-prompts/before-normal-tools-workflow-activity.md")),
             ("workflow-patterns", include_str!("../../assets/pipes/legacy-workflow-prompts/before-normal-tools-workflow-patterns.md")),
             ("workflow-procedures", include_str!("../../assets/pipes/legacy-workflow-prompts/before-normal-tools-workflow-procedures.md")),

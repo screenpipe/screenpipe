@@ -14,6 +14,8 @@
     "scripts/eval-workflow-assistant.ts",
     "scripts/eval-workflow-discovery.ts",
     "scripts/eval-workflow-guide.ts",
+    "scripts/eval-private-ai.ts",
+    "scripts/eval-workflow-quality.ts",
     "scripts/eval-workflow-pipeline.ts",
     "scripts/eval-workflows-context.ts",
     "scripts/**/*.js"

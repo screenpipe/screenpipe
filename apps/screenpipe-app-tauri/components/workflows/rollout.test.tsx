@@ -40,7 +40,7 @@ it("syncs revocation to the engine without enabling a task", async () => {
   expect(state.fetch.mock.calls.every(([path]) => path === "/workflows/rollout")).toBe(true);
 });
 
-it("does not let a secondary window revoke the home window grant", async () => {
+it("does not treat an unresolved secondary window flag as revocation", async () => {
   state.flag = true;
   render(<WorkflowsRolloutSync />);
   await waitFor(() => expect(state.fetch).toHaveBeenCalledTimes(1));
@@ -72,4 +72,26 @@ it("acknowledges the resolved grant before dispatching the selected stage", asyn
   expect(state.fetch.mock.calls[0][0]).toBe("/workflows/rollout");
   expect(JSON.parse(state.fetch.mock.calls[0][1].body)).toEqual({ enabled: true });
   expect(state.fetch.mock.calls.at(-1)![0]).toBe("/pipes/workflow-activity/run");
+});
+
+it("does not write before flags resolve, and syncs outside home once resolved", async () => {
+  state.pathname = "/settings";
+  const view = render(<WorkflowsRolloutSync />);
+  expect(state.fetch).not.toHaveBeenCalled();
+  state.flag = true;
+  view.rerender(<WorkflowsRolloutSync />);
+  await waitFor(() => expect(state.fetch).toHaveBeenCalledTimes(1));
+  expect(JSON.parse(state.fetch.mock.calls[0][1].body)).toEqual({enabled:true});
+});
+it("reasserts resolved access after the engine restarts and stops on unmount", async () => {
+  vi.useFakeTimers();
+  try {
+    state.flag = true;
+    const view = render(<WorkflowsRolloutSync />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(state.fetch).toHaveBeenCalledTimes(2);
+    view.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(state.fetch).toHaveBeenCalledTimes(2);
+  } finally { vi.useRealTimers(); }
 });
