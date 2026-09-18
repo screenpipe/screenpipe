@@ -16,6 +16,7 @@ describe("workflow scheduled-task adapter", () => {
     const enabled = new Map(WORKFLOW_TASKS.map(name => [name, true]));
     fetchMock.mockImplementation(async (path, init) => {
       const url = String(path);
+      if (url === "/workflows/rollout") return response({ enabled: true });
       if (url.includes("/install")) return response({ installed: false });
       const task = WORKFLOW_TASKS.find(name => url.startsWith(`/pipes/${name}`))!;
       if (url.endsWith("/enable")) { enabled.set(task, JSON.parse(String(init?.body)).enabled); return response({ success: true }); }
@@ -42,6 +43,26 @@ describe("workflow scheduled-task adapter", () => {
     pipelineMock();
     expect(await startWorkflowJob()).toMatchObject({id:"workflow-timing:24"});
     expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/pipes/workflow-timing/run");
+    expect(fetchMock.mock.calls[0]).toEqual(["/workflows/rollout", expect.objectContaining({body: JSON.stringify({enabled:true})})]);
+  });
+  it("waits for rollout synchronization before installing or running tasks", async () => {
+    pipelineMock();
+    let resolve!: (value: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(done => { resolve = done; }));
+    const started = startWorkflowJob();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    resolve(response({enabled:true}));
+    await expect(started).resolves.toMatchObject({id:"workflow-timing:24"});
+  });
+  it("does not run tasks when rollout synchronization fails", async () => {
+    pipelineMock();
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({error:"Access synchronization unavailable"}), {status:503}));
+    await expect(startWorkflowJob()).rejects.toThrow("Access synchronization unavailable");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it("shows a rollout rejection instead of a generic update failure", async () => {
+    fetchMock.mockResolvedValueOnce(response({data:{id:51,status:"failed",error_message:"workflow_rollout_disabled: Workflows is not available for this account yet."}}));
+    expect(await getWorkflowJob("51")).toMatchObject({status:"failed",message:"Workflow access could not be confirmed. Retry from the Workflows window."});
   });
   it("keeps a partially disabled group paused until explicit consent", async () => {
     const enabled = pipelineMock(); enabled.set("workflow-patterns",false);
