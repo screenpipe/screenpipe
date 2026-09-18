@@ -1132,11 +1132,10 @@ impl PiExecutor {
         if legacy_memory.exists() {
             std::fs::remove_file(legacy_memory)?;
         }
-        if crate::workflows::pipeline::task_at(project_dir).is_some() {
-            std::fs::write(
-                ext_dir.join("workflow-catalog.ts"),
-                include_str!("../../assets/extensions/workflow-catalog.ts"),
-            )?;
+        // Remove the retired workflow tool layer in existing installations too.
+        let legacy_catalog = ext_dir.join("workflow-catalog.ts");
+        if legacy_catalog.exists() {
+            std::fs::remove_file(legacy_catalog)?;
         }
 
         if project_dir.file_name().and_then(|name| name.to_str()) == Some("skill-learning")
@@ -2127,6 +2126,7 @@ impl AgentExecutor for PiExecutor {
                 });
             }
         }
+        let workflow_save_state = crate::workflows::pipeline::save_state(working_dir).await?;
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
 
         let (resolved_model, fell_back_from) = self
@@ -2174,7 +2174,7 @@ impl AgentExecutor for PiExecutor {
             resolved_provider, resolved_model
         );
 
-        let output = self
+        let mut output = self
             .spawn_pi(
                 &pi_path,
                 prompt,
@@ -2210,7 +2210,7 @@ impl AgentExecutor for PiExecutor {
                 provider_url,
             )
             .await?;
-            return self
+            output = self
                 .spawn_pi(
                     &pi_path,
                     prompt,
@@ -2222,9 +2222,22 @@ impl AgentExecutor for PiExecutor {
                     continue_session,
                     None,
                 )
-                .await;
+                .await?;
         }
 
+        if output.success {
+            if let Err(error) =
+                crate::workflows::pipeline::verify_saved(working_dir, workflow_save_state).await
+            {
+                output.success = false;
+                output.stderr.push_str(
+                    &serde_json::json!({"error": {
+                        "code": "missing_output", "message": error.to_string()
+                    }})
+                    .to_string(),
+                );
+            }
+        }
         Ok(output)
     }
 
@@ -2260,6 +2273,7 @@ impl AgentExecutor for PiExecutor {
                 });
             }
         }
+        let workflow_save_state = crate::workflows::pipeline::save_state(working_dir).await?;
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
         let (resolved_model, fell_back_from) = self
             .resolve_screenpipe_model(model, &resolved_provider)
@@ -2404,6 +2418,19 @@ impl AgentExecutor for PiExecutor {
         })
         .await?;
 
+        if output.success {
+            if let Err(error) =
+                crate::workflows::pipeline::verify_saved(working_dir, workflow_save_state).await
+            {
+                output.success = false;
+                output.stderr.push_str(
+                    &serde_json::json!({"error": {
+                        "code": "missing_output", "message": error.to_string()
+                    }})
+                    .to_string(),
+                );
+            }
+        }
         Ok(output)
     }
 
@@ -4707,17 +4734,18 @@ mod tests {
     }
 
     #[test]
-    fn workflow_extension_removes_legacy_memory_without_removing_shared_tools() {
+    fn workflow_cleanup_preserves_shared_tools() {
         let root = tempfile::tempdir().expect("tempdir");
         let dir = root.path().join("workflow-activity");
         let extensions = dir.join(".pi/extensions");
         std::fs::create_dir_all(&extensions).unwrap();
         std::fs::write(dir.join("pipe.md"), "test task").unwrap();
         std::fs::write(extensions.join("workflow-memory.ts"), "legacy override").unwrap();
+        std::fs::write(extensions.join("workflow-catalog.ts"), "legacy override").unwrap();
         std::fs::write(extensions.join("mcp-bridge.ts"), "shared bridge").unwrap();
         PiExecutor::ensure_self_improvement_extension(&dir).unwrap();
         assert!(!extensions.join("workflow-memory.ts").exists());
-        assert!(extensions.join("workflow-catalog.ts").exists());
+        assert!(!extensions.join("workflow-catalog.ts").exists());
         assert!(extensions.join("self-improvement.ts").exists());
         assert_eq!(
             std::fs::read_to_string(extensions.join("mcp-bridge.ts")).unwrap(),

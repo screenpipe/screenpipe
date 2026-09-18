@@ -7796,7 +7796,7 @@ fn render_prompt_with_port(
     // Workflow batches resume their durable coverage cursor. A schedule-derived
     // lookback can skip unread history, so only their pipeline supplies a range.
     let mut prompt = if crate::workflows::pipeline::stage(&config.name).is_some() {
-        "Workflow run: call workflow_context for the authoritative pipeline.window.\n".to_string()
+        "Workflow run: use the screenpipe-api skill to read /workflows/pipeline for the authoritative window.\n".to_string()
     } else {
         let lookback_duration = parse_duration_str(&config.schedule)
             .unwrap_or(std::time::Duration::from_secs(3600))
@@ -12682,7 +12682,7 @@ Run the scheduled task.
                     ..config.clone()
                 };
                 let prompt = render_prompt_with_port(&config, "body text", 3031, None, None);
-                assert!(prompt.contains("workflow_context"));
+                assert!(prompt.contains("/workflows/pipeline"));
                 assert!(prompt.contains("pipeline.window"));
                 assert!(!prompt.contains("Default run lookback:"));
                 assert!(prompt.contains(&format!("Pipe name: {task}")));

@@ -712,6 +712,7 @@ fn meeting_summary_evidence_steps() -> Option<&'static str> {
 /// the shipped pipeline prompts from #7020, #7045, #7071 and the handoff repairs.
 fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> {
     let shipped_hashes: &[&str] = match name {
+        "workflow-discovery" => &["57b754f5d27ad27d"],
         "workflow-activity" => &["f5adb347d838aff7", "f4afd94ec5e0270a", "5c54891aced4f9d2"],
         "workflow-patterns" => &["a31c48cdb79f4b6d", "f9b67dd914738d05", "09e892b7e53bc79b"],
         "workflow-procedures" => &["5d59624801ae318f", "e0337eafa55e446a", "20950f99d0200c6a"],
@@ -859,6 +860,11 @@ mod tests {
     #[test]
     fn all_staged_workflow_prompts_upgrade_without_changing_user_configuration() {
         let fixtures = [
+            ("workflow-activity", include_str!("../../assets/pipes/legacy-workflow-prompts/before-normal-tools-workflow-activity.md")),
+            ("workflow-patterns", include_str!("../../assets/pipes/legacy-workflow-prompts/before-normal-tools-workflow-patterns.md")),
+            ("workflow-procedures", include_str!("../../assets/pipes/legacy-workflow-prompts/before-normal-tools-workflow-procedures.md")),
+            ("workflow-timing", include_str!("../../assets/pipes/legacy-workflow-prompts/before-normal-tools-workflow-timing.md")),
+            ("workflow-discovery", include_str!("../../assets/pipes/legacy-workflow-prompts/before-normal-tools-workflow-discovery.md")),
             (
                 "workflow-activity",
                 include_str!("../../assets/pipes/legacy-workflow-prompts/workflow-activity.md"),
@@ -951,7 +957,15 @@ mod tests {
             assert!(updated.contains("every 48h"));
             assert!(updated.contains("Api(GET /feedback)"));
             assert!(updated.contains("Api(POST /notify)"));
-            assert!(updated.contains("## Optional notification after a useful save"));
+            assert_eq!(
+                updated.splitn(3, "---").nth(2).unwrap().trim(),
+                super::bundled_prompt("workflow-discovery")
+                    .unwrap()
+                    .splitn(3, "---")
+                    .nth(2)
+                    .unwrap()
+                    .trim()
+            );
             assert!(super::migrate_builtin_pipe_text("workflow-discovery", &updated).is_none());
             assert!(super::migrate_builtin_pipe_text(
                 "workflow-discovery",

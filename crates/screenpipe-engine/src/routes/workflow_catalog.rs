@@ -244,6 +244,18 @@ pub(crate) async fn commit(
     Json(body): Json<CommitRequest>,
 ) -> Result<Json<Value>, ApiError> {
     allowed(&state, &perms)?;
+    if perms
+        .0
+        .as_ref()
+        .is_some_and(|p| p.pipe_name == "workflow-discovery")
+        && body.pipeline_revision.is_none()
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "Final review requires its upstream pipeline revision.",
+        ));
+    }
+
     let through = DateTime::parse_from_rfc3339(&body.checked_through)
         .map_err(|_| error(StatusCode::BAD_REQUEST, "Invalid checkpoint."))?
         .with_timezone(&Utc);
@@ -324,8 +336,8 @@ pub(crate) async fn commit(
     {
         return Err(error(StatusCode::UNPROCESSABLE_ENTITY,"Only save useful steps supported by source quotes. Investigate further or leave the catalog unchanged."));
     }
-    // Screenshots are attached only when explicitly inspected by the agent and
-    // their exact frame identity belongs to this stage. No nearest-frame guess.
+    // The agent inspects images with the normal harness tools. Independently
+    // enforce exact source/frame identity here; never guess a nearby frame.
     for w in updates.iter_mut() {
         if let Some(proposed) = body.workflows.iter().find(|p| p["title"] == w["title"]) {
             for stage in w["stages"].as_array_mut().into_iter().flatten() {

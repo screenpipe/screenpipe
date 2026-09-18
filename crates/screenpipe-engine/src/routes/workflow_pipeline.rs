@@ -151,6 +151,7 @@ pub(crate) async fn context(
         json!({"task":query.task,"stage":index,"revision":saved["revision"],
         "inputRevision":input_revision,"input":input,"previous":previous,
         "catalogRevision":catalog["revision"].as_u64().unwrap_or(0),
+        "catalogPipelineRevision":catalog["pipelineRevision"].as_u64().unwrap_or(0),
         "blockedReason":blocked_reason,
         "upToDate":root_ready && catalog["needsWorkflowReview"] != true,
         "reviewRequested":catalog["needsWorkflowReview"] == true,
@@ -170,6 +171,68 @@ pub struct StageCommit {
     pub items: Vec<Value>,
     /// Explicitly reviewed intervals. Empty or partial coverage cannot advance.
     pub coverage: Vec<Value>,
+}
+
+// Validate persistence boundaries here, regardless of which agent/tool sends the request.
+fn validate_handoff(index: usize, parent: &Value, items: &[Value]) -> Result<(), String> {
+    if index < 2 {
+        return Ok(());
+    }
+    let upstream = parent["items"].as_array().cloned().unwrap_or_default();
+    let identity = |item: &Value| {
+        item["candidateId"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .or_else(|| item["workflowId"].as_str())
+            .map(str::to_owned)
+    };
+    let mut seen = std::collections::HashSet::new();
+    for item in items {
+        let id = identity(item)
+            .filter(|id| !id.is_empty())
+            .ok_or("Candidate identity is required.")?;
+        if !seen.insert(id.clone()) {
+            return Err("Duplicate candidate identity.".into());
+        }
+        if !upstream.is_empty() {
+            let prior = upstream
+                .iter()
+                .find(|p| identity(p).as_ref() == Some(&id))
+                .ok_or("Enrich upstream candidates instead of replacing them.")?;
+            if prior["workflowId"] != item["workflowId"] {
+                return Err("Preserve workflow IDs.".into());
+            }
+            if index == 3
+                && prior
+                    .as_object()
+                    .is_some_and(|p| p.keys().any(|key| item.get(key).is_none()))
+            {
+                return Err("Timing must retain the full upstream procedure and sources.".into());
+            }
+        }
+        if index == 3
+            && !item["timingRuns"].as_array().is_some_and(|runs| {
+                !runs.is_empty()
+                    || item["timingNote"]
+                        .as_str()
+                        .is_some_and(|note| !note.trim().is_empty())
+            })
+        {
+            return Err(
+                "Keep timingRuns for every candidate; unknown timing needs [] and a timingNote."
+                    .into(),
+            );
+        }
+    }
+    if upstream
+        .iter()
+        .any(|item| !identity(item).is_some_and(|id| seen.contains(&id)))
+    {
+        return Err(
+            "Keep every upstream candidate, including procedures with unknown timing.".into(),
+        );
+    }
+    Ok(())
 }
 
 fn validate(saved: &Value, body: &StageCommit) -> Result<(), String> {
@@ -200,9 +263,25 @@ fn validate(saved: &Value, body: &StageCommit) -> Result<(), String> {
         {
             return Err("Upstream result changed or is missing. Read it before saving.".into());
         }
+        if parent["coverage"].as_array().cloned().unwrap_or_default() != body.coverage {
+            return Err("Preserve upstream coverage.".into());
+        }
+        validate_handoff(index, parent, &body.items)?;
     } else {
         if body.input_revision != 0 {
             return Err("Activity stage has no upstream revision.".into());
+        }
+        let last = saved["stages"][TASKS[0]]["checkedThrough"]
+            .as_str()
+            .and_then(|v| DateTime::parse_from_rfc3339(v).ok())
+            .map(|v| v.with_timezone(&Utc));
+        let now = Utc::now();
+        if through
+            > last
+                .map(|v| (v + Duration::days(2)).min(now))
+                .unwrap_or(now)
+        {
+            return Err("Save only completed coverage inside this batch.".into());
         }
         let mut ranges = Vec::new();
         for range in &body.coverage {
@@ -329,6 +408,29 @@ pub(crate) async fn commit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn handoff_keeps_candidates_procedures_and_unknown_timing() {
+        let first = json!({"candidateId":"invoice","workflowId":"wf-invoice","steps":["Save receipt"],"sources":[]});
+        let second = json!({"candidateId":"follow-up","steps":["Draft reply"]});
+        let parent = json!({"items":[first,second]});
+        let mut measured = first.clone();
+        measured["timingRuns"] = json!([]);
+        measured["timingNote"] = json!("Start not captured");
+        let mut unknown = second.clone();
+        unknown["timingRuns"] = json!([]);
+        unknown["timingNote"] = json!("Outcome not captured");
+        assert!(validate_handoff(3, &parent, &[measured.clone(), unknown.clone()]).is_ok());
+        assert!(validate_handoff(3, &parent, &[measured.clone()]).is_err());
+        assert!(validate_handoff(3, &parent, &[first.clone(), second.clone()]).is_err());
+        measured.as_object_mut().unwrap().remove("steps");
+        assert!(validate_handoff(3, &parent, &[measured, unknown]).is_err());
+        let mut changed = first.clone();
+        changed["workflowId"] = json!("different");
+        assert!(validate_handoff(2, &parent, &[changed, second.clone()]).is_err());
+        assert!(validate_handoff(2, &parent, &[first.clone(), first]).is_err());
+        assert!(validate_handoff(2, &parent, &[]).is_err());
+    }
+
     #[test]
     fn rejects_gaps_failed_pages_and_stale_dependencies() {
         let end = Utc::now() - Duration::minutes(1);

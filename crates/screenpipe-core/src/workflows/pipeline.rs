@@ -93,6 +93,16 @@ pub async fn has_pending_input(path: &Path) -> anyhow::Result<bool> {
     let Some(task) = task_at(path) else {
         return Ok(true);
     };
+    let value = read_input(path, task).await?;
+    if let Some(reason) = value["blockedReason"].as_str() {
+        anyhow::bail!("workflow_dependency_paused: {reason}");
+    }
+    value["ready"]
+        .as_bool()
+        .ok_or_else(|| anyhow::anyhow!("Workflow input status unavailable"))
+}
+
+async fn read_input(path: &Path, task: &str) -> anyhow::Result<Value> {
     let permissions: Value =
         serde_json::from_slice(&std::fs::read(path.join(".screenpipe-permissions.json"))?)?;
     let base = permissions["api_base"]
@@ -111,48 +121,53 @@ pub async fn has_pending_input(path: &Path) -> anyhow::Result<bool> {
         .send()
         .await?
         .error_for_status()?;
-    let value: Value = response.json().await?;
-    if let Some(reason) = value["blockedReason"].as_str() {
-        anyhow::bail!("workflow_dependency_paused: {reason}");
-    }
-    if value["ready"] == true
-        && stage(task).is_some_and(|index| index > 0)
-        && value["reviewRequested"] != true
-        && (value["input"]["unchanged"] == true
-            || value["input"]["items"]
-                .as_array()
-                .is_some_and(Vec::is_empty))
-    {
-        // Deterministic no-change propagation. Keep prior enrichment and advance
-        // only its coverage, without asking a model to restate identical input.
-        let final_stage = task == TASKS[4];
-        let body = if final_stage {
-            json!({"expected_revision":value["catalogRevision"],"pipeline_revision":value["inputRevision"],"checked_through":value["checkedThrough"],"workflows":[]})
-        } else {
-            json!({"task":task,"expected_revision":value["revision"],"input_revision":value["inputRevision"],"checked_through":value["checkedThrough"],
-                "items":value["previous"]["items"].as_array().cloned().unwrap_or_default(),"coverage":value["input"]["coverage"].as_array().cloned().unwrap_or_default()})
-        };
-        let route = if final_stage { "catalog" } else { "pipeline" };
-        let receipt: Value = reqwest::Client::new()
-            .post(format!("{base}/workflows/{route}"))
-            .bearer_auth(permissions["pipe_token"].as_str().unwrap_or_default())
-            .json(&body)
-            .timeout(std::time::Duration::from_secs(30))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
-        if receipt["checkedThrough"] != value["checkedThrough"]
-            || receipt["revision"].as_u64().is_none()
-        {
-            anyhow::bail!("missing_output: No valid no-change receipt");
+    Ok(response.json().await?)
+}
+
+/// Task completion is a durable write, not an assistant's claim that it saved.
+/// Uses persisted revisions only; all investigation stays in the normal agent.
+#[derive(Clone, Copy)]
+pub struct SaveState {
+    revision: u64,
+    input_revision: u64,
+    applied_input_revision: u64,
+}
+
+pub async fn save_state(path: &Path) -> anyhow::Result<Option<SaveState>> {
+    let Some(task) = task_at(path) else {
+        return Ok(None);
+    };
+    let value = read_input(path, task).await?;
+    let (revision, applied) = if task == TASKS[4] {
+        (
+            value["catalogRevision"]
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("Catalog revision unavailable"))?,
+            value["catalogPipelineRevision"].as_u64().unwrap_or(0),
+        )
+    } else {
+        (
+            value["previous"]["revision"].as_u64().unwrap_or(0),
+            value["previous"]["inputRevision"].as_u64().unwrap_or(0),
+        )
+    };
+    Ok(Some(SaveState {
+        revision,
+        input_revision: value["inputRevision"].as_u64().unwrap_or(0),
+        applied_input_revision: applied,
+    }))
+}
+
+pub async fn verify_saved(path: &Path, before: Option<SaveState>) -> anyhow::Result<()> {
+    if let Some(before) = before {
+        if !save_state(path).await?.is_some_and(|after| {
+            after.revision > before.revision
+                && after.applied_input_revision >= before.input_revision
+        }) {
+            anyhow::bail!("missing_output: The task finished without saving a workflow update.");
         }
-        return Ok(false);
     }
-    value["ready"]
-        .as_bool()
-        .ok_or_else(|| anyhow::anyhow!("Workflow input status unavailable"))
+    Ok(())
 }
 
 pub async fn check_admission(api_url: &str, token: Option<&str>) -> anyhow::Result<()> {
@@ -196,7 +211,7 @@ mod tests {
     }
     use super::*;
     #[tokio::test]
-    async fn unchanged_input_advances_a_verified_receipt_without_a_model() {
+    async fn unchanged_input_is_left_to_the_agent() {
         use wiremock::{
             matchers::{body_partial_json, method, path},
             Mock, MockServer, ResponseTemplate,
@@ -223,11 +238,71 @@ mod tests {
                 ResponseTemplate::new(200)
                     .set_body_json(json!({"revision":9,"checkedThrough":"2026-09-15T00:00:00Z"})),
             )
-            .expect(1)
+            .expect(0)
             .mount(&server)
             .await;
-        assert!(!has_pending_input(&task).await.unwrap());
+        assert!(has_pending_input(&task).await.unwrap());
+        assert!(verify_saved(
+            &task,
+            Some(SaveState {
+                revision: 0,
+                input_revision: 8,
+                applied_input_revision: 0
+            })
+        )
+        .await
+        .is_err());
     }
+    #[tokio::test]
+    async fn completion_requires_consuming_the_input_not_an_unrelated_catalog_edit() {
+        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let root = tempfile::tempdir().unwrap();
+        let task = root.path().join(TASKS[4]);
+        std::fs::create_dir(&task).unwrap();
+        std::fs::write(task.join("pipe.md"), "fixture").unwrap();
+        std::fs::write(
+            task.join(".screenpipe-permissions.json"),
+            serde_json::to_vec(&json!({"api_base":server.uri(),"pipe_token":"fixture"})).unwrap(),
+        )
+        .unwrap();
+        for (revision, applied, success) in [(4, 2, false), (5, 2, false), (5, 3, true)] {
+            server.reset().await;
+            Mock::given(method("GET")).respond_with(ResponseTemplate::new(200)
+                .set_body_json(json!({"catalogRevision":revision,"catalogPipelineRevision":applied,"inputRevision":3})))
+                .mount(&server).await;
+            assert_eq!(
+                verify_saved(
+                    &task,
+                    Some(SaveState {
+                        revision: 4,
+                        input_revision: 3,
+                        applied_input_revision: 2
+                    })
+                )
+                .await
+                .is_ok(),
+                success
+            );
+        }
+        server.reset().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        assert!(verify_saved(
+            &task,
+            Some(SaveState {
+                revision: 4,
+                input_revision: 3,
+                applied_input_revision: 2
+            })
+        )
+        .await
+        .is_err());
+        assert!(verify_saved(root.path(), None).await.is_ok());
+    }
+
     #[tokio::test]
     async fn requested_review_does_not_skip_the_agent() {
         use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};

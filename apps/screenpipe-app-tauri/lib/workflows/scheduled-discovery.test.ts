@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { localFetch } from "@/lib/api";
 import { WORKFLOW_TASKS, stopWorkflowJob, ensureWorkflowTask, enableWorkflowTask, loadWorkflowTaskSetup, getWorkflowJob, startWorkflowJob, saveWorkflowCorrections, saveWorkflowFeedback } from "./scheduled-discovery";
 import { fixtureWorkflowAnalysis } from "@screenpipe/workflows-ui/fixture";
-import { requireInspectedFrames } from "@screenpipe-ext/workflow-catalog";
 
 vi.mock("@/lib/api", () => ({ localFetch: vi.fn() }));
 const fetchMock = vi.mocked(localFetch);
@@ -116,11 +115,6 @@ describe("workflow scheduled-task adapter", () => {
       return response({inputRevision:0});
     });
     expect(await getWorkflowJob("workflow-timing:31")).toMatchObject({id:"workflow-activity:30",status:"failed",message:expect.stringContaining("previous workflows")});
-  });
-  it("requires inspecting selected frames, while allowing text-only evidence", () => {
-    expect(() => requireInspectedFrames([{ stages: [{ screenshotFrameId: 7 }] }], new Set())).toThrow(/Inspect/);
-    expect(() => requireInspectedFrames([{ stages: [{ screenshotFrameId: 7 }] }], new Set([7]))).not.toThrow();
-    expect(() => requireInspectedFrames([{ stages: [{}] }], new Set())).not.toThrow();
   });
   it("saves feedback through the authenticated correction endpoint without starting a task", async () => {
     fetchMock.mockResolvedValueOnce(response({ success: true }));

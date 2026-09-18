@@ -21,6 +21,58 @@ Screenpipe instance.
 5. Start broad activity questions with `activity-summary`; use `/search` only for specific or verbatim evidence. Let `activity-summary` own time math and check `data_status` before claiming there is no activity.
 6. Separate observed activity, explicit commitments, inferred open loops, and completed outcomes. Seeing a task or discussion is not evidence that the user performed or completed it.
 
+## Workflow maintenance
+
+Scheduled workflow Pipes use these endpoints through the normal tools. No special
+workflow tools are needed. Use your task's scoped environment token, never obtain
+a broader token to bypass a denied operation.
+
+- `GET /workflows/pipeline?task=$SCREENPIPE_PIPE_NAME` supplies `ready`, `window`,
+  `revision`, `inputRevision`, `checkedThrough`, `input.items`, `input.coverage`
+  and `previous`. Read this first. If `ready` is false, stop without saving.
+- `GET /workflows/context` supplies the saved catalog, user profile/corrections
+  and final catalog `outputContract`. It does **not** contain the stage input.
+
+Keep responses in local files using `curl --fail-with-body -o ...`. Use `bun`
+to inspect the metadata and enumerate candidate IDs, then read each needed item
+in bounded chunks. Do not print the entire catalog or input array. Process every
+upstream candidate; a truncated tool result is not the complete input. Fetch
+original evidence with the normal Screenpipe tools only where needed. Keep raw
+recordings out of logs and final responses.
+
+For stages 0–3, save via `POST /workflows/pipeline` with JSON:
+`{task, expected_revision, input_revision, checked_through, items, coverage}`.
+Copy `task`, `revision` (as `expected_revision`), `inputRevision` (as
+`input_revision`), and `checkedThrough` (as `checked_through`) from the stage
+response. Stages 1–3 copy `input.coverage` unchanged. Activity supplies only fully
+read intervals `{start, end, complete:true}` inside `window`; for a partial batch,
+use the last fully read boundary as `checked_through`. Never checkpoint failed
+reads. Keep every candidateId/workflowId through procedures and timing. Timing
+retains the full procedure and adds `timingRuns`; unknown boundaries use
+`timingRuns: []` plus a short `timingNote`.
+
+Final review saves via `POST /workflows/catalog` with JSON:
+`{expected_revision, pipeline_revision, checked_through, workflows}`.
+Use `revision` from **/workflows/context** for `expected_revision`, and
+`inputRevision` and `checkedThrough` from **/workflows/pipeline** for the other
+fields. Follow the context's `outputContract`. An empty workflows array records
+a completed investigation with no material changes; it never deletes saved work.
+
+Construct the request as a JavaScript object and serialize it with
+`JSON.stringify` using Bun. Copy revisions, coverage and existing candidate fields
+from parsed input files rather than retyping them. For example, an enrichment
+save uses `{task:p.task, expected_revision:p.revision,
+input_revision:p.inputRevision, checked_through:p.checkedThrough,
+items, coverage:p.input.coverage}` where `p` is the parsed stage response.
+Validate the request file as JSON before sending it. Chain validation and POST
+with `&&` so invalid JSON is never sent. POST with `--data-binary @file` and
+`Content-Type: application/json`. Inspect HTTP errors and repair rejected claims
+from their evidence. On a revision conflict, re-read the inputs and preserve
+newer edits. After success verify the receipt's revision increased and its
+checkedThrough equals the submitted checkpoint. If the response is interrupted,
+check persisted state before retrying. Never claim a save based on your prose or
+an HTTP 200 without a valid receipt. Do not restart discovery to repair one claim.
+
 ## Authentication
 
 **If screenpipe MCP tools are available in your session, prefer them** — same data, no key or network handling. Some agent sandboxes (e.g. Codex) block all shell network access including localhost, so curl can never work there.

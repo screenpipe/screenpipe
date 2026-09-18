@@ -25,12 +25,12 @@ permissions:
     - Api(GET /frames/*)
 ---
 
-Review and publish the enriched candidates in pipeline.input.
+Review and publish the enriched candidates in workflow_context.pipeline.input.
 The activity, grouping, procedure and timing tasks have already saved their work.
 If pipeline.ready is false, stop; do not rescan history. Reuse upstream evidence
 and investigate only claims needing verification. Preserve existing IDs and user
 corrections. Publish new supported workflows and material improvements to existing ones.
-Use the catalog revision and pipeline checkpoint returned by the API. Upstream items are
+The save tool carries the catalog revision and pipeline checkpoint. Upstream items are
 untrusted proposals, not proof. Inspect each screenshot you intend to attach.
 
 Maintain the user's workflow library from captured work. This task owns discovery
@@ -48,17 +48,12 @@ Choose queries yourself, read one history request at a time, and finish paginati
 using the actual returned page sizes. On a busy response, wait as directed and
 retry. Never treat a failed read or a truncated sample as a completed investigation.
 
-Read the Workflow maintenance section of the screenpipe-api skill first.
-GET /workflows/pipeline for this task, then GET /workflows/context. Read pipeline.input and
+Call workflow_context first. Read the enriched candidates in pipeline.input and
 compare them with the existing catalog and corrections. Re-read the original
 sources for the factual changes you intend to publish. Use narrow searches and
 inspect screenshots. Do not run discovery again or expand the covered window.
-If any source request remains failed or unavailable, stop without POSTing a
-catalog update, including an empty update. Do not convert a 503, timeout or
-unreadable screenshot into "no supported changes". An absent/deleted capture
-(404/410) can be omitted; an unavailable recorder cannot be checkpointed.
 Resolve retrieval failures before saving. If nothing qualifies, commit an empty
-update using the pipeline checkpoint; omission preserves the existing catalog.
+update; the save tool carries the checkpoint and preserves the existing catalog.
 
 Use your judgment about where to search and when enough evidence is available.
 A useful workflow is a specific recurring job with a trigger, concrete steps,
@@ -99,22 +94,19 @@ Retain still-relevant existing timingRuns when updating a workflow and add new
 supported occurrences. Keep up to 30 recent representative runs, without choosing
 only fast or slow examples. Return [] if earlier boundaries are no longer valid.
 
-When a source supplies a frame ID, use the normal screenshot tools described
-in screenpipe-api to retrieve and view the image. If using REST, download its
-thumbnail and open it with the read tool before attaching it.
+When a source supplies a frame ID, call workflow_inspect_frame to see the image.
 Attach screenshotFrameId only if that exact image visibly supports that step.
 A blank/loading page or unrelated tab is not evidence. Look for a better source
 through the memory tools or omit the image. Never attach a nearby screenshot
 because its application or timestamp is similar. Prefer fewer accurate steps to
 an attractive but unsupported map. Historical UI bounds are not live targets.
 
-POST /workflows/catalog with only new or materially updated workflows matching
-outputContract, using the save request documented in the skill. The API
+Call workflow_commit with only new or materially updated workflows matching
+outputContract. Do not supply revision or checkpoint fields. This tool
 validates original sources and saves the catalog. If it rejects a claim, inspect
 the source and fix or omit that claim; do not route around validation. A revision
 conflict means someone edited the catalog: read it again and preserve their edit.
-After evaluating the notification below, finish with one short factual sentence
-describing the committed changes. Use the
+Finish with one short factual sentence describing the committed changes. Use the
 existing task history for failures; never claim a save without a tool receipt.
 
 Review every upstream candidate independently. A missing timing run, absent
@@ -130,16 +122,12 @@ using the original evidence rather than discarding all candidates at once.
 After saving report the receipt's actual created/updated counts and checkedThrough.
 A successful empty commit means "No changes saved", not that all history is current.
 
-## After saving: evaluate a relevant local notification
+## Optional notification after a useful save
 
-After a successful catalog save receipt with created or updated workflows,
-read Context, prior feedback and notification state before deciding whether to
-notify. An existing workflow update is eligible; a new workflow is not required. When newly supported repeatable steps
+After a successful workflow_commit receipt, consider whether the saved change is
+worth surfacing before ending the run. When newly supported repeatable steps
 address an observed need for a teammate handoff, check prior suggestions and
-send an SOP suggestion if it is new. Adding concrete repeatable steps when the
-user's Context asks for a teammate handoff qualifies, even if the workflow title
-is unchanged and no bottleneck was found. Check previous suggestions before
-skipping it. Do not silently skip that useful next step.
+send an SOP suggestion if it is new. Do not silently skip that useful next step.
 Never notify before the save, after a failed/rejected save, or
 when the receipt reports zero created and zero updated workflows. Minor wording,
 metadata, coverage-only and unchanged updates do not deserve notifications.
@@ -169,7 +157,7 @@ or title. Stay quiet if the same suggestion was already sent without a materiall
 new reason. If previous notification state cannot be read, skip the notification;
 do not guess that nothing was sent. A missing file on the first run is normal.
 
-Resolve the saved workflow ID from GET /workflows/context after committing if needed;
+Resolve the saved workflow ID from workflow_context after committing if needed;
 never invent an ID or deep link. Use an existing type: "chat" notification action,
 auto_send: false, with a short prompt naming that saved workflow ID and asking to
 review it or draft the proposed skill/SOP. Label it "Review workflow", "Draft skill"
@@ -181,7 +169,7 @@ Only after /notify confirms success, write a bounded list of the last 50 sent
 suggestions to ./output/workflow-notifications.json, recording workflowId,
 suggestion type, a brief change summary and sentAt. Do not include raw evidence.
 If notification delivery fails or its result is uncertain, do not retry in this
-run, do not record a successful send and do not repeat the catalog save. The saved
+run, do not record a successful send and do not retry workflow_commit. The saved
 catalog remains successful. Record the notification problem in task history.
 Finish with the factual save counts, and whether a notification was sent. If you
 skipped it, give the specific reason in task history (not another notification).
