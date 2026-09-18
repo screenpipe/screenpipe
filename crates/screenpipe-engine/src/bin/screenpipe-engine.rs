@@ -559,7 +559,9 @@ async fn main() -> anyhow::Result<()> {
         !config.analytics_enabled,
     )?);
 
-    if let Err(e) = screenpipe_engine::power::set_keep_awake(config.keep_computer_awake) {
+    if let Err(e) =
+        screenpipe_engine::power::set_keep_awake_async(config.keep_computer_awake).await
+    {
         warn!("failed to apply keep-awake setting: {}", e);
     }
 

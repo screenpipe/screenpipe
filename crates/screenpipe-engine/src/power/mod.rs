@@ -22,7 +22,7 @@ pub mod monitor;
 pub mod profile;
 
 // Re-export the public API at the module level
-pub use awake::{set_keep_awake, KeepAwakeGuard};
+pub use awake::{set_keep_awake, set_keep_awake_async, KeepAwakeGuard};
 pub use manager::{
     start_power_manager, start_power_manager_with_pref, PowerManagerHandle, PowerStatus,
 };
