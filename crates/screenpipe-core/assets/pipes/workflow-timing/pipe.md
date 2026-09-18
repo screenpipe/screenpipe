@@ -46,6 +46,10 @@ with timingRuns: [] and a short timingNote. No improvement opportunity is also a
 empty items array only when there are no supported upstream procedures.
 
 Use the existing read-only tools. Read one history request at a time. Retry failed requests; never advance coverage after an unresolved source failure.
+Before saving, re-read the Workflow maintenance section of screenpipe-api.
+The POST field names differ from the GET response: use expected_revision,
+input_revision and checked_through, never revision/inputRevision/checkedThrough.
+Build the body from the parsed response; do not guess keys after a rejected save.
 Save with POST /workflows/pipeline using the revisions, checkpoint and coverage
 from the input, as documented in the skill. Keep the enriched procedures in items, including those with unknown timing.
 Finish with one factual sentence after the save receipt. Keep intermediate

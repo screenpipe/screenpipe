@@ -5,7 +5,7 @@
 import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
 import { join, resolve } from "node:path";
-const root = resolve("../..");
+const root = resolve(import.meta.dir,"../../..");
 const assets = join(root, "crates/screenpipe-core/assets");
 const prompt = (await Bun.file(join(assets, "pipes/workflow-discovery/pipe.md")).text()).replace(/^---[\s\S]*?---\s*/, "");
 const contract = await Bun.file(join(assets, "pipes/workflow-discovery/output.md")).text();
@@ -46,7 +46,7 @@ for (const scenario of ["blank-request-is-not-completed-work", "updates-existing
       return Response.json({data:matching.slice(offset,offset+limit),pagination:{total:matching.length,limit,offset}});
     }
     if (path === "/meetings") return Response.json({ data: [], pagination: { total: 0 } });
-    if (path.endsWith("/thumbnail")) return new Response(blank, { headers: { "Content-Type": "image/png" } });
+    if (path === "/frames/7" || path.endsWith("/thumbnail")) return new Response(blank, { headers: { "Content-Type": "image/png" } });
     if (path.endsWith("/metadata")) return Response.json({ frame_id: 7, timestamp: at });
     if (path.endsWith("/context")) return Response.json({ frames: [source.content] });
     return new Response("Not found", { status: 404 });

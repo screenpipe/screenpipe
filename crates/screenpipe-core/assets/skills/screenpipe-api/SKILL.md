@@ -40,6 +40,14 @@ upstream candidate; a truncated tool result is not the complete input. Fetch
 original evidence with the normal Screenpipe tools only where needed. Keep raw
 recordings out of logs and final responses.
 
+When preserving source references, copy a literal substring from the original
+source. Never insert your own ellipses or replace a quote with a summary.
+Keep summaries in action/description fields. Copy the original app name;
+audio rows without app_name use "Conversation" in workflow citations.
+If fields= returns flat keys, read row["content.timestamp"] and
+row["content.text"], not row.content.timestamp. Use JSON when you need pagination
+metadata; a CSV page alone does not show whether more results exist.
+
 For stages 0–3, save via `POST /workflows/pipeline` with JSON:
 `{task, expected_revision, input_revision, checked_through, items, coverage}`.
 Copy `task`, `revision` (as `expected_revision`), `inputRevision` (as
@@ -98,7 +106,10 @@ Include both attribution headers above on REST retrievals. The installer sets
 an unconfigured reference, leave it as `unknown`. Never substitute a project,
 user, model, prompt, or other dynamic identifier.
 
-No-auth endpoints: `/health`, `/ws/health`, `/audio/device/status`, `/connections/oauth/callback`, `/frames/*`, `/notify`, `/pipes/store/*`.
+No-auth endpoints include `/health`, `/ws/health`, `/audio/device/status`, `/connections/oauth/callback`, `/notify`, `/pipes/store/*`.
+Frame images, thumbnails, text, context and metadata all require the same Bearer
+header as other recording reads. A 401 after omitting that header is an
+authentication error, not missing evidence; retry with the existing scoped token.
 
 ## Context Window Protection
 

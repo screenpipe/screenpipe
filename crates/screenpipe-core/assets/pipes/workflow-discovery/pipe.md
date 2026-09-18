@@ -51,6 +51,9 @@ Review candidates independently:
   request at a time, finish pagination, and retry busy responses as directed.
   Distinguish requests, drafts and completed actions. Missing visibility is not
   a bottleneck. Exclude personal material and unrelated browser chrome.
+  A quoted promise or generated instruction cannot support an observed execution
+  step. Describe the actual request/review, or move the proposed work into an
+  open question; a disclaimer elsewhere does not correct a misleading step.
 - Keep complete supported procedures and earlier still-valid evidence when
   updating a workflow. Translate steps into source-linked stages/procedure
   entries using outputContract. Repair or omit unsupported claims independently;
@@ -74,6 +77,8 @@ those values and save again. If a claim is rejected, repair it from its original
 source or omit it, then save the remaining supported changes.
 
 Use workflows: [] only after a complete investigation finds no supported change.
+That empty POST is required to record a completed review. Finding no changes
+does not make saving optional; without its receipt, this task is unfinished.
 A 503, timeout, failed source read or unavailable screenshot is not an empty
 investigation: stop without any catalog POST until that failure is resolved.
 A missing/deleted capture (404/410) may be omitted. Never claim success without
@@ -87,6 +92,9 @@ After a successful save, decide whether a local suggestion is useful:
    repeatable steps calls for drafting an SOP, including improvements to an
    existing workflow. Repeated AI-assisted work can support generating a skill;
    merely seeing an AI app cannot. Use review only if neither action fits.
+   Compare the saved procedure with the pre-save catalog: adding its first usable
+   steps can enable a requested teammate handoff even with zero new workflows.
+   This is a material improvement; merely adding citations to unchanged steps is not.
 3. Compare that action and workflow ID with prior suggestions. If it was already
    suggested for the same procedure change, STOP here without /notify. Reworded
    steps, added citations, refreshed timestamps, a verification step for the same
