@@ -67,3 +67,9 @@ variable "key_vault_name" {
   }
 }
 variable "ssh_public_key" { type = string }
+
+variable "vm_size" {
+  type        = string
+  default     = "Standard_D2s_v5"
+  description = "x86-64 VM size available in your region, with at least 2 vCPUs and 4 GiB RAM."
+}

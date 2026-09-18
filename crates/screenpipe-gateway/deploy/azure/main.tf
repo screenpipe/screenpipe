@@ -10,6 +10,8 @@ terraform {
 provider "azurerm" {
   features {}
   subscription_id = var.subscription_id
+  # Required services are prerequisites; do not register unrelated services.
+  resource_provider_registrations = "none"
 }
 locals {
   runtime = {
@@ -64,7 +66,7 @@ resource "azurerm_linux_virtual_machine" "gateway" {
   name                            = var.name
   location                        = var.location
   resource_group_name             = var.resource_group
-  size                            = "Standard_D2s_v5"
+  size                            = var.vm_size
   admin_username                  = "screenpipeadmin"
   disable_password_authentication = true
   network_interface_ids           = [azurerm_network_interface.gateway.id]

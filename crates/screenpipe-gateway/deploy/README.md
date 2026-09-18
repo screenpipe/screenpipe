@@ -56,6 +56,13 @@ After:  device → Azure Blob or GCS → customer VM gateway → private search
 
 ## Azure credentials
 
+Register `Microsoft.Compute`, `Microsoft.Network`, `Microsoft.Storage`, and
+`Microsoft.KeyVault` in the target subscription before applying. The AzureRM
+provider is configured not to register unrelated subscription services.
+Azure SKU capacity varies by region. Override `vm_size` if the default
+`Standard_D2s_v5` is unavailable; use an x86-64 size with at least 2 vCPUs
+and 4 GiB RAM.
+
 Use a Blob container SAS restricted to **`cw`, HTTPS only**, expiring between
 one hour and seven days from activation. Prefer Entra user delegation. Do not
 send Screenpipe an account key, read SAS, reader service-principal credentials,
