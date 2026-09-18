@@ -21,8 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = GatewayConfig::from_env()?;
     info!(
         license_id = %cfg.license_id,
-        bucket = %cfg.s3_bucket,
-        endpoint = cfg.s3_endpoint.as_deref().unwrap_or("<aws>"),
+        storage_provider = ?cfg.storage_provider,
         bind = %cfg.bind,
         "screenpipe-gateway starting"
     );

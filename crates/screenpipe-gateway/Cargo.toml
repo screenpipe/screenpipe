@@ -60,7 +60,7 @@ screenpipe-sync = { path = "../screenpipe-sync", default-features = false }
 # configurable). The only net-new heavyweight dependency; deliberately in
 # this crate rather than screenpipe-sync so the desktop app's dependency
 # tree is untouched.
-object_store = { version = "0.14", features = ["aws"] }
+object_store = { version = "0.14", features = ["aws", "azure", "gcp"] }
 
 # Signed-policy verification (offline sk_ent_ token auth, SCR-291). The
 # gateway only ever VERIFIES; signing lives in the website control plane

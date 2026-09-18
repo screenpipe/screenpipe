@@ -1,0 +1,32 @@
+#!/bin/bash
+# screenpipe — AI that knows everything you've seen, said, or heard
+# https://screenpipe.com
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y docker.io python3
+install -d -m 700 /etc/screenpipe
+printf '%s' '${runtime_config}' | base64 -d > /etc/screenpipe/runtime.json
+printf '%s' '${secret_loader}' | base64 -d > /etc/screenpipe/load-secret.py
+cat > /etc/systemd/system/screenpipe-gateway.service <<'UNIT'
+[Unit]
+Description=Screenpipe private query gateway
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+StartLimitIntervalSec=0
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/python3 /etc/screenpipe/load-secret.py
+ExecStartPre=-/usr/bin/docker rm -f screenpipe-gateway
+ExecStart=/usr/bin/docker run --name screenpipe-gateway --network host --env-file /run/screenpipe-gateway.env --mount type=bind,source=/var/lib/screenpipe,target=/data --security-opt no-new-privileges --cap-drop ALL ${image}
+ExecStop=/usr/bin/docker stop -t 30 screenpipe-gateway
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=600
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl enable --now docker
+systemctl daemon-reload
+systemctl enable --now screenpipe-gateway

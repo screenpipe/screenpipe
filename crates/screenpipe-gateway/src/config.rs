@@ -12,8 +12,20 @@
 
 use crate::error::GatewayError;
 
+/// Archive backend. Omission preserves existing AWS/MinIO/R2 deployments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StorageProvider {
+    S3,
+    Azure,
+    Gcs,
+}
+
 #[derive(Debug, Clone)]
 pub struct GatewayConfig {
+    pub storage_provider: StorageProvider,
+    pub azure_account: Option<String>,
+    pub azure_container: Option<String>,
+    pub gcs_bucket: Option<String>,
     /// License id — the org scope. Object keys embed it
     /// (`enterprise-telemetry/{license_id}/…`).
     pub license_id: String,
@@ -165,9 +177,42 @@ impl GatewayConfig {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
         };
+        let storage_provider = match get("SCREENPIPE_GATEWAY_STORAGE_PROVIDER").as_deref() {
+            None | Some("s3") => StorageProvider::S3,
+            Some("azure") => StorageProvider::Azure,
+            Some("gcs") => StorageProvider::Gcs,
+            _ => {
+                return Err(GatewayError::Config(
+                    "SCREENPIPE_GATEWAY_STORAGE_PROVIDER must be s3, azure, or gcs".into(),
+                ))
+            }
+        };
+        let azure_account = if storage_provider == StorageProvider::Azure {
+            Some(env_required(get, "SCREENPIPE_GATEWAY_AZURE_ACCOUNT")?)
+        } else {
+            None
+        };
+        let azure_container = if storage_provider == StorageProvider::Azure {
+            Some(env_required(get, "SCREENPIPE_GATEWAY_AZURE_CONTAINER")?)
+        } else {
+            None
+        };
+        let gcs_bucket = if storage_provider == StorageProvider::Gcs {
+            Some(env_required(get, "SCREENPIPE_GATEWAY_GCS_BUCKET")?)
+        } else {
+            None
+        };
         Ok(Self {
+            storage_provider,
+            azure_account,
+            azure_container,
+            gcs_bucket,
             license_id: env_required(get, "SCREENPIPE_GATEWAY_LICENSE_ID")?,
-            s3_bucket: env_required(get, "SCREENPIPE_GATEWAY_S3_BUCKET")?,
+            s3_bucket: if storage_provider == StorageProvider::S3 {
+                env_required(get, "SCREENPIPE_GATEWAY_S3_BUCKET")?
+            } else {
+                String::new()
+            },
             s3_endpoint: get("SCREENPIPE_GATEWAY_S3_ENDPOINT"),
             s3_region: get("SCREENPIPE_GATEWAY_S3_REGION").unwrap_or_else(|| "us-east-1".into()),
             s3_access_key_id: get("SCREENPIPE_GATEWAY_S3_ACCESS_KEY_ID"),
@@ -380,5 +425,45 @@ mod tests {
             format!("{err}").contains("SCREENPIPE_GATEWAY_LICENSE_ID"),
             "got {err}"
         );
+    }
+    #[test]
+    fn cloud_backends_require_only_their_own_destination() {
+        for (provider, destination) in [
+            (
+                "azure",
+                vec![
+                    ("SCREENPIPE_GATEWAY_AZURE_ACCOUNT", "account"),
+                    ("SCREENPIPE_GATEWAY_AZURE_CONTAINER", "archive"),
+                ],
+            ),
+            ("gcs", vec![("SCREENPIPE_GATEWAY_GCS_BUCKET", "archive")]),
+        ] {
+            let mut values = std::collections::HashMap::from([
+                ("SCREENPIPE_GATEWAY_LICENSE_ID", "lic-1"),
+                ("SCREENPIPE_GATEWAY_STORAGE_PROVIDER", provider),
+            ]);
+            for (key, value) in &destination {
+                values.insert(key, value);
+            }
+            let cfg =
+                GatewayConfig::from_lookup(|key| values.get(key).map(|s| s.to_string())).unwrap();
+            assert!(cfg.s3_bucket.is_empty());
+            for (key, _) in destination {
+                let mut missing = values.clone();
+                missing.remove(key);
+                let error = GatewayConfig::from_lookup(|k| missing.get(k).map(|s| s.to_string()))
+                    .unwrap_err();
+                assert!(error.to_string().contains(key));
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_provider_never_falls_back_to_another_cloud() {
+        assert!(env(&[("SCREENPIPE_GATEWAY_STORAGE_PROVIDER", "azuer")])
+            .unwrap_err()
+            .to_string()
+            .contains("STORAGE_PROVIDER"));
+        assert_eq!(env(&[]).unwrap().storage_provider, StorageProvider::S3);
     }
 }

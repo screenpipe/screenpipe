@@ -1250,6 +1250,10 @@ mod tests {
     fn test_config(data_dir: &std::path::Path) -> GatewayConfig {
         GatewayConfig {
             license_id: "lic-1".to_string(),
+            storage_provider: crate::config::StorageProvider::S3,
+            azure_account: None,
+            azure_container: None,
+            gcs_bucket: None,
             s3_bucket: "bucket".to_string(),
             s3_endpoint: None,
             s3_region: "us-east-1".to_string(),
