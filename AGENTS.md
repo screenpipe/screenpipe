@@ -8,10 +8,10 @@ a pointer.
 
 ## Read on demand
 
-- `VISION.md` — before product, feature, or UX decisions. Stability over
+- `docs/VISION.md` — before product, feature, or UX decisions. Stability over
   features, activation over new capabilities, no feature creep.
-- `DESIGN.md` — before design decisions.
-- `TESTING.md` — before touching window management, tray/dock, monitors, or
+- `docs/DESIGN.md` — before design decisions.
+- `docs/TESTING.md` — before touching window management, tray/dock, monitors, or
   audio. Regression checklist with commit references.
 - `docs/human-only-app-publication.md` — before anything release-related.
 - `docs/macos-dev-builds.md` — canonical fast native build commands and the

@@ -32,6 +32,7 @@ import {
   shouldWarnLowHostedAiAllowance,
 } from "@/lib/hooks/use-usage-status";
 import { testAiPresetConnection } from "@/lib/utils/ai-preset-connection";
+import { CHATGPT_FALLBACK_MODELS } from "@/lib/utils/chatgpt-preset";
 import { openBusinessUpgradeSurface } from "@/lib/upgrade-flow";
 import { Label } from "../ui/label";
 import { Input } from "../ui/input";
@@ -805,14 +806,18 @@ const AISection = ({
       endpoint: { status: "running", message: "Connecting..." },
     }));
 
-    // Anthropic: skip /v1/models (may not be available for all keys) and go straight to chat test
+    // ChatGPT discovery uses the native subscription catalog separately. Test
+    // its selected model directly; the API-key catalog rejects OAuth tokens.
+    // Anthropic also verifies credentials through the chat test.
     let modelsResponse: Response | null = null;
-    if (isAnthropic) {
+    if (isAnthropic || isChatGpt) {
       setTestResults((prev) => ({
         ...prev,
-        endpoint: { status: "pass", message: "api.anthropic.com" },
+        endpoint: { status: "pass", message: isChatGpt ? "chatgpt.com" : "api.anthropic.com" },
         auth: { status: "pass", message: "Will verify with chat test" },
-        models: { status: "pass", message: "Using known models" },
+        models: isChatGpt
+          ? { status: "skip", message: "Testing selected model" }
+          : { status: "pass", message: "Using known models" },
         chat: { status: "running", message: "Sending test message..." },
       }));
     } else {
@@ -840,20 +845,12 @@ const AISection = ({
       // Step 1 pass
       setTestResults((prev) => ({
         ...prev,
-        endpoint: { status: "pass", message: isChatGpt ? "Reachable (OAuth)" : `GET ${modelsResponse!.status}` },
+        endpoint: { status: "pass", message: `GET ${modelsResponse!.status}` },
         auth: { status: "running", message: "Checking..." },
       }));
 
       // Step 2: Auth check
-      // ChatGPT OAuth tokens lack model.read scope so /v1/models returns 403 — skip to chat test
-      if (settingsPreset?.provider === "openai-chatgpt" && (modelsResponse!.status === 403 || modelsResponse!.status === 401)) {
-        setTestResults((prev) => ({
-          ...prev,
-          auth: { status: "pass", message: "OAuth token present" },
-          models: { status: "pass", message: "Using known models (API scope limited)" },
-          chat: { status: "running", message: "Sending test message..." },
-        }));
-      } else if (modelsResponse!.status === 401 || modelsResponse!.status === 403) {
+      if (modelsResponse!.status === 401 || modelsResponse!.status === 403) {
         const responseBody = await modelsResponse!.text().catch(() => "");
         const hint =
           settingsPreset?.provider === "openai"
@@ -890,7 +887,7 @@ const AISection = ({
         }));
       }
 
-      // Step 3: Parse models (skip for openai-chatgpt when /v1/models returned 403)
+      // Step 3: Parse API-key or local models.
       if (modelsResponse!.ok) {
         let modelCount = 0;
         let modelsParsed = false;
@@ -1138,47 +1135,20 @@ const AISection = ({
         }
 
         case "openai-chatgpt": {
-          // Try /v1/models with OAuth token; fall back to known models if it fails.
+          // Discover subscription models through the native ChatGPT catalog.
           let loaded = false;
           try {
-            const tokenResult = await commands.chatgptOauthGetToken();
-            if (tokenResult.status === "ok") {
-              const chatgptResp = await tauriFetchWithDeadline("https://api.openai.com/v1/models", {
-                headers: { Authorization: `Bearer ${tokenResult.data}` },
-              });
-              console.log("[chatgpt] /v1/models status:", chatgptResp.status);
-              if (chatgptResp.ok) {
-                const chatgptData = await chatgptResp.json();
-                const chatgptModels = (chatgptData.data || [])
-                  .map((m: { id: string }) => ({
-                    id: m.id,
-                    name: m.id,
-                    provider: "openai-chatgpt",
-                  }))
-                  .filter((m: { id: string }, idx: number, arr: { id: string }[]) => arr.findIndex((x) => x.id === m.id) === idx);
-                console.log("[chatgpt] fetched", chatgptModels.length, "models from API");
-                if (chatgptModels.length > 0) {
-                  setModels(chatgptModels);
-                  loaded = true;
-                }
-              } else {
-                const body = await chatgptResp.text();
-                console.warn("[chatgpt] /v1/models failed:", chatgptResp.status, body);
-              }
-            } else {
-              console.warn("[chatgpt] get_token failed:", tokenResult.status === "error" ? tokenResult.error : "unknown");
+            const result = await commands.chatgptOauthModels();
+            if (result.status === "ok" && result.data.length > 0) {
+              setModels(result.data.map((id) => ({ id, name: id, provider: "openai-chatgpt" })));
+              loaded = true;
             }
           } catch (err) {
             console.error("[chatgpt] model fetch error:", err);
           }
           if (!loaded) {
             // Codex models available via ChatGPT Plus/Pro subscription
-            setModels([
-              "gpt-5.5", "gpt-5.5-codex",
-              "gpt-5.4", "gpt-5.3-codex",
-              "gpt-5.2-codex", "gpt-5.2", "gpt-5.1-codex-max",
-              "gpt-5.1", "gpt-5.1-codex-mini",
-            ].map((id) => ({ id, name: id, provider: "openai-chatgpt" })));
+            setModels(CHATGPT_FALLBACK_MODELS.map((id) => ({ id, name: id, provider: "openai-chatgpt" })));
           }
           break;
         }

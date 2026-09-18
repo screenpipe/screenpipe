@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite": "screenpipe-app-coding-agent-regressions",
-  "dataset_version": "2026-09-14.1",
+  "dataset_version": "2026-09-18.1",
   "suite_type": "regression",
   "owner": "screenpipe engineering",
   "policy": {
@@ -1320,6 +1320,43 @@
           }
         ],
         "command": "\"${BUN_BIN:-bun}\" test ./evals/coding-agent/graders/app-provider-outage-vs-limit.test.ts"
+      }
+    },
+    {
+      "id": "app-entitlement-plan-consistency",
+      "name": "Preserve verified entitlement plans when the API omits a plan label",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "6ce45931c33a89cf27675e947bea3abec3d80159",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/5781"
+      },
+      "base_ref": "f0e9248ed600ee83e84e216e026ff98b6eead0e7",
+      "oracle_ref": "6ce45931c33a89cf27675e947bea3abec3d80159",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/lib/app-entitlement.ts"
+      ],
+      "gate": "advisory",
+      "trigger_paths": [
+        "apps/screenpipe-app-tauri/lib/app-entitlement.ts"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "entitlement",
+        "normalization",
+        "preserved-behavior"
+      ],
+      "prompt": "A paid account becomes unknown to local plan policy when an API response omits subscription_plan or returns it as null, even though the response includes a fresh, active entitlement for the correct plan. Preserve valid lifetime, pro_max and pro_ultra plan identity and verified paid consumer access when that top-level label is absent; cloud access must still follow the entitlement. Keep the normalized account identity and supplied session token. An explicitly supplied label, including an empty string or a conflicting plan, retains precedence; conflicting or empty evidence must not grant paid access. Explicit app denial with no cloud subscription must retain free policy. Preserve boolean-only legacy standard/pro fallbacks, and ignore null, whitespace-only or non-string entitlement plan labels as fallback candidates without treating malformed evidence as verified paid. Stale, future-dated or inactive non-lifetime evidence and accounts without stable identity must remain unknown. Enterprise entitlements must not become consumer subscriptions. Keep the existing normalization and policy interfaces. This task concerns pure account classification, not gate rendering, telemetry, live billing or recorder behavior.",
+      "agent_timeout_seconds": 900,
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/app-entitlement-plan-consistency.test.ts",
+            "destination_path": "evals/coding-agent/graders/app-entitlement-plan-consistency.test.ts"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test ./evals/coding-agent/graders/app-entitlement-plan-consistency.test.ts"
       }
     }
   ]

@@ -10,7 +10,7 @@
 //! Flow (matches Codex CLI):
 //!  1. PKCE authorize → auth code
 //!  2. Exchange auth code → access_token + refresh_token
-//!  3. Use access_token directly as Bearer token for OpenAI API
+//!  3. Use access_token as Bearer token for the ChatGPT Codex API
 //!
 //! Tokens are stored in the `secrets` table (encrypted with AES-256-GCM,
 //! key in OS keychain) via `screenpipe_secrets::SecretStore`.
@@ -749,9 +749,7 @@ pub async fn chatgpt_oauth_models() -> Result<Vec<String>, String> {
         .build()
         .map_err(|e| format!("failed to build HTTP client: {}", e))?;
 
-    let resp = client
-        .get("https://api.openai.com/v1/models")
-        .header("Authorization", format!("Bearer {}", token))
+    let resp = chatgpt_models_request(&client, &token)?
         .send()
         .await
         .map_err(|e| format!("failed to fetch models: {}", e))?;
@@ -767,14 +765,42 @@ pub async fn chatgpt_oauth_models() -> Result<Vec<String>, String> {
         .await
         .map_err(|e| format!("failed to parse models response: {}", e))?;
 
-    let models: Vec<String> = v["data"]
+    parse_chatgpt_models(&v)
+}
+
+fn chatgpt_models_request(
+    client: &reqwest::Client,
+    token: &str,
+) -> Result<reqwest::RequestBuilder, String> {
+    let account_id = extract_chatgpt_account_id(token).ok_or(MISSING_ACCOUNT_ID_MSG)?;
+    // Subscription tokens do not have the API-key catalog's model.read scope.
+    // Use the same account-scoped catalog as Codex, whose entries use `slug`.
+    Ok(client
+        .get("https://chatgpt.com/backend-api/codex/models")
+        .query(&[("client_version", env!("CARGO_PKG_VERSION"))])
+        .bearer_auth(token)
+        .header("ChatGPT-Account-Id", account_id)
+        .header("User-Agent", concat!("screenpipe/", env!("CARGO_PKG_VERSION"))))
+}
+
+fn parse_chatgpt_models(value: &serde_json::Value) -> Result<Vec<String>, String> {
+    let entries = value["models"]
         .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|m| m["id"].as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
+        .ok_or("missing models in ChatGPT catalog")?;
+    let mut models = Vec::new();
+    for entry in entries {
+        if entry["visibility"].as_str() != Some("list") {
+            continue;
+        }
+        if let Some(slug) = entry["slug"].as_str().filter(|slug| !slug.trim().is_empty()) {
+            if !models.iter().any(|model| model == slug) {
+                models.push(slug.to_string());
+            }
+        }
+    }
+    if models.is_empty() {
+        return Err("no selectable models in ChatGPT catalog".to_string());
+    }
 
     Ok(models)
 }
@@ -804,6 +830,59 @@ mod tests {
         let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
         let body = URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
         format!("{}.{}.sig", header, body)
+    }
+
+    #[test]
+    fn model_discovery_uses_the_chatgpt_account_catalog() {
+        let token = make_jwt(serde_json::json!({
+            JWT_AUTH_CLAIM: { "chatgpt_account_id": "acc-models" }
+        }));
+        let request = chatgpt_models_request(&reqwest::Client::new(), &token)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(request.url().host_str(), Some("chatgpt.com"));
+        assert_eq!(request.url().path(), "/backend-api/codex/models");
+        assert_eq!(
+            request
+                .url()
+                .query_pairs()
+                .find(|(key, _)| key == "client_version")
+                .unwrap()
+                .1,
+            env!("CARGO_PKG_VERSION")
+        );
+        assert_eq!(request.headers()["authorization"], format!("Bearer {}", token));
+        assert_eq!(request.headers()["chatgpt-account-id"], "acc-models");
+        assert!(chatgpt_models_request(&reqwest::Client::new(), "invalid").is_err());
+    }
+
+    #[test]
+    fn model_discovery_reads_unique_visible_codex_slugs() {
+        let catalog = serde_json::json!({ "models": [
+            { "slug": "gpt-account-new", "visibility": "list" },
+            { "slug": "gpt-hidden", "visibility": "hide" },
+            { "slug": "gpt-unlisted", "visibility": "none" },
+            { "slug": "gpt-account-new", "visibility": "list" },
+            { "slug": "gpt-other", "visibility": "list" },
+            { "slug": " ", "visibility": "list" },
+            { "id": "api-key-model", "visibility": "list" }
+        ] });
+        assert_eq!(
+            parse_chatgpt_models(&catalog).unwrap(),
+            vec!["gpt-account-new", "gpt-other"]
+        );
+    }
+
+    #[test]
+    fn model_discovery_rejects_missing_or_empty_catalogs() {
+        for catalog in [
+            serde_json::json!({ "data": [{ "id": "api-key-model" }] }),
+            serde_json::json!({ "models": [] }),
+            serde_json::json!({ "models": [{ "slug": "hidden", "visibility": "hide" }] }),
+        ] {
+            assert!(parse_chatgpt_models(&catalog).is_err());
+        }
     }
 
     #[test]

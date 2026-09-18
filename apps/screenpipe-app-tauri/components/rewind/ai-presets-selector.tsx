@@ -108,6 +108,7 @@ import {
   resolveModelLimits,
 } from "@/lib/model-metadata";
 import { compactModelLabel } from "@/lib/utils/model-label";
+import { CHATGPT_FALLBACK_MODELS } from "@/lib/utils/chatgpt-preset";
 
 // Helper to detect UUID-like strings and format preset names nicely
 const formatPresetName = (name: string): string => {
@@ -176,7 +177,11 @@ export const DEFAULT_PROMPT = `Rules:
 - Always answer my question/intent, do not make up things
 `;
 
-function ChatGptSignInButton() {
+function ChatGptSignInButton({
+  onAuthChange,
+}: {
+  onAuthChange: () => void;
+}) {
   const [loggedIn, setLoggedIn] = useState(false);
   const [loading, setLoading] = useState(false);
   useEffect(() => {
@@ -196,6 +201,7 @@ function ChatGptSignInButton() {
           setLoading(true);
           await commands.chatgptOauthLogout();
           setLoggedIn(false);
+          onAuthChange();
           setLoading(false);
         } else {
           setLoading(true);
@@ -203,6 +209,7 @@ function ChatGptSignInButton() {
             const res = await commands.chatgptOauthLogin();
             if (res.status === "ok" && res.data) {
               setLoggedIn(true);
+              onAuthChange();
             }
           } catch (e) {
             console.error("chatgpt oauth failed:", e);
@@ -234,6 +241,7 @@ export function AIProviderConfig({
   const { settings } = useSettings();
   const [isLoading, setIsLoading] = useState(false);
   const [openaiModels, setOpenAIModels] = useState<OpenAIModel[]>([]);
+  const [chatgptAuthRevision, setChatgptAuthRevision] = useState(0);
   const [modelDiscoveryStatus, setModelDiscoveryStatus] =
     useState<ModelDiscoveryStatus>("idle");
   const [modelDiscoveryError, setModelDiscoveryError] = useState<string | null>(
@@ -471,6 +479,7 @@ export function AIProviderConfig({
   };
 
   useEffect(() => {
+    let cancelled = false;
     setOpenAIModels([]);
     setModelDiscoveryStatus("idle");
     setModelDiscoveryError(null);
@@ -526,39 +535,29 @@ export function AIProviderConfig({
     ) {
       fetchOpenAIModels(formData.url, formData.apiKey);
     } else if (selectedProvider === "openai-chatgpt") {
-      // Try fetching from API, fall back to known models
+      const fallbackModels = CHATGPT_FALLBACK_MODELS.map((id) => ({ id }));
       (async () => {
         setModelDiscoveryStatus("loading");
         try {
-          const tokenResult = await commands.chatgptOauthGetToken();
-          if (tokenResult.status === "ok") {
-            const resp = await tauriFetchWithDeadline("https://api.openai.com/v1/models", {
-              headers: { Authorization: `Bearer ${tokenResult.data}` },
-            });
-            if (resp.ok) {
-              const data = await resp.json();
-              const uniqueModels = (data.data as { id: string }[]).filter((m, idx, arr) => arr.findIndex((x) => x.id === m.id) === idx);
-              setOpenAIModels(uniqueModels);
-              setModelDiscoveryStatus("ready");
-              return;
-            }
+          const result = await commands.chatgptOauthModels();
+          if (cancelled) return;
+          if (result.status === "ok" && result.data.length > 0) {
+            setOpenAIModels(result.data.map((id) => ({ id })));
+            setModelDiscoveryStatus("ready");
+            return;
           }
         } catch { /* ignore */ }
+        if (cancelled) return;
         // Fallback: known models for ChatGPT connections when model discovery fails.
-        setOpenAIModels([
-          { id: "gpt-5.6-terra" }, { id: "gpt-5.6" }, { id: "gpt-5.6-sol" }, { id: "gpt-5.6-luna" },
-          { id: "gpt-5.5" }, { id: "gpt-5.5-codex" },
-          { id: "gpt-5.4" }, { id: "gpt-5.3-codex" },
-          { id: "gpt-5.2-codex" }, { id: "gpt-5.2" }, { id: "gpt-5.1-codex-max" },
-          { id: "gpt-5.1" }, { id: "gpt-5.1-codex-mini" },
-        ]);
+        setOpenAIModels(fallbackModels);
         setModelDiscoveryStatus("error");
         setModelDiscoveryError(
           "couldn't load live ChatGPT models — showing known models",
         );
       })();
     }
-  }, [selectedProvider, formData.apiKey, formData.url, connectionFieldErrors.url]);
+    return () => { cancelled = true; };
+  }, [selectedProvider, formData.apiKey, formData.url, connectionFieldErrors.url, chatgptAuthRevision]);
 
   useEffect(() => {
     if (selectedProvider !== "native-ollama" || !formData.model) return;
@@ -899,7 +898,7 @@ export function AIProviderConfig({
           <div className="space-y-1">
             <div className="space-y-1">
               <Label className="text-xs">Chatgpt account</Label>
-              <ChatGptSignInButton />
+              <ChatGptSignInButton onAuthChange={() => setChatgptAuthRevision((revision) => revision + 1)} />
             </div>
             <div className="space-y-1">
               <Label htmlFor="model" className="text-xs">Model</Label>
