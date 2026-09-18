@@ -138,10 +138,7 @@ mod update_restart;
 mod updates;
 mod voice_training;
 mod window;
-// Reuse the workflow engine from the parent PR; recorder ownership stays here.
-#[path = "../../../screenpipe-workflows-tauri/src-tauri/src/workflows_runtime.rs"]
 mod workflows_runtime;
-#[path = "../../../screenpipe-workflows-tauri/src-tauri/src/workflows_media.rs"]
 mod workflows_media;
 mod windows_ca_bundle;
 #[cfg(target_os = "windows")]

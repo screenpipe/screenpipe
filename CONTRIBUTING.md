@@ -9,7 +9,7 @@ btw, we prefer that you don't contribute if you are not using or will use the pr
 before you begin:
 - try to run the [pre-built app](https://docs.screenpi.pe) to get familiar with the project
 - familiarize yourself with the repository structure and architecture.
-- new to contributing? the [beginner's onboarding guide](ONBOARDING.md) walks you from zero to a merged pr step by step (this file is the reference; that one is the walkthrough).
+- new to contributing? the [beginner's onboarding guide](docs/ONBOARDING.md) walks you from zero to a merged pr step by step (this file is the reference; that one is the walkthrough).
 
 ## installation and build guide
 
@@ -622,7 +622,7 @@ thank you for contributing to screen pipe! 🎉
 
 testing is one of the toughtest challenge, we love any help improving the testing pipeline before going into production
 
-see [TESTING.md](TESTING.md) for more details on the testing process.
+see [TESTING.md](docs/TESTING.md) for more details on the testing process.
 
 ### testing paid-plan code paths locally
 

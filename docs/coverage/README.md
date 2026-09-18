@@ -25,10 +25,10 @@ bun run coverage:all:check
 
 - `core-engine-map.json`: declarative map of core Rust test suites to flows.
 - `CORE.md`: generated core Rust flow coverage report.
-- `../../COVERAGE.md`: generated top-level summary combining E2E and core reports.
+- `../COVERAGE.md`: generated summary combining E2E and core reports.
 - `scripts/generate-core-engine-coverage-report.ts`: validates the core map,
   counts Rust test blocks, and writes `CORE.md`.
-- `scripts/generate-unified-coverage-report.ts`: writes the top-level summary.
+- `scripts/generate-unified-coverage-report.ts`: writes `docs/COVERAGE.md`.
 
 ## Core Line Coverage
 

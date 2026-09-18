@@ -17,7 +17,6 @@ updates:
     directories:
       - "/"
       - "/apps/screenpipe-app-tauri/src-tauri"
-      - "/apps/screenpipe-workflows-tauri/src-tauri"
       - "/packages/sdk"
       - "/packages/sdk/examples/tauri-app/src-tauri"
     schedule:
@@ -36,7 +35,6 @@ updates:
   - package-ecosystem: npm
     directories:
       - "/apps/screenpipe-app-tauri"
-      - "/apps/screenpipe-workflows-tauri"
       - "/apps/screenpipe-workflows-web"
       - "/packages/screenpipe-mcp"
       - "/packages/sdk"
