@@ -17,9 +17,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
  *    stays in control and can adapt its query.
  *
  * 2. `context` (old tool results) — Before each LLM call, prune raw
- *    tool-result content from older turns.  The model already processed those
- *    results; keeping the 100 KB blobs around just wastes context.  We replace
- *    them with a short placeholder so the conversation flow still makes sense.
+ *    tool-result content from completed earlier requests. Results from the active
+ *    request stay available until pi summarizes them through normal compaction,
+ *    even when the request requires more than 30 messages of tool calls.
  *
  * 3. `context` (oversized single message) — Issue #3852. pi's built-in
  *    compaction summarizes ACROSS messages but cuts at message boundaries, so
@@ -58,8 +58,8 @@ const TOOL_RESULT_WARN_CHARS = 30_000;
 // e.g. the morning-brief pipe failing to read screenpipe-api/SKILL.md (~33K).
 const TOOL_RESULT_GUARD_SKIP_TOOLS = new Set(["read"]);
 
-// In the context event we aggressively prune tool results from older turns.
-// Only keep full results for the N most recent messages.
+// Completed earlier requests may be pruned beyond this recent-message window.
+// Active tool loops are bounded by pi compaction, not by message count.
 const KEEP_RECENT_MESSAGES = 30;
 
 // When pruning old tool results in the context event, replace content above
@@ -321,11 +321,21 @@ export default function (pi: ExtensionAPI) {
 
     let modified = false;
 
-    // 2. Strip large tool-result content from older turns. The model already
-    //    acted on those results; the raw data doesn't need to live forever.
-    const total = event.messages.length;
-    if (total > KEEP_RECENT_MESSAGES) {
-      const cutoff = total - KEEP_RECENT_MESSAGES;
+    // 2. Prune completed requests only. A tool-call response is not a completed
+    // request, and a user message can be steering an unfinished tool loop.
+    // Dropping its earlier evidence forces rereads and can prevent a final save.
+    let completedEnd = 0;
+    let previousCompletion = 0;
+    for (let i = 0; i < event.messages.length; i++) {
+      const message = event.messages[i];
+      if (message?.role === "assistant" && message.stopReason === "stop") {
+        previousCompletion = i + 1;
+      } else if (message?.role === "user") {
+        completedEnd = previousCompletion;
+      }
+    }
+    const cutoff = Math.min(completedEnd, event.messages.length - KEEP_RECENT_MESSAGES);
+    if (cutoff > 0) {
       for (let i = 0; i < cutoff; i++) {
         const msg = event.messages[i];
         if (!msg || msg.role !== "toolResult") continue;

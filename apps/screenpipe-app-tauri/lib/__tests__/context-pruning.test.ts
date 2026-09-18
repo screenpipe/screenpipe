@@ -345,10 +345,27 @@ describe("context handler (issue #3852 end-to-end through the registered hook)",
     expect((res.messages[0].content as string).length).toBeLessThanOrEqual(maxMessageChars(32_000));
   });
 
+  it.each([false, true])("preserves evidence throughout a long active tool loop (steering=%s)", async (steering) => {
+    const evidence = "source evidence ".repeat(400);
+    const messages: any[] = [
+      { role: "user", content: "Review and save the workflows." },
+      { role: "toolResult", content: [{ type: "text", text: evidence }] },
+    ];
+    for (let i = 0; i < 20; i++) {
+      messages.push({ role: "assistant", stopReason: "toolUse", content: [] });
+      messages.push({ role: "toolResult", content: [{ type: "text", text: "ok" }] });
+      if (steering && i === 10) messages.push({ role: "user", content: "Keep going." });
+    }
+    expect(await handlers.context({ type: "context", messages }, ctx200k)).toBeUndefined();
+    expect(messages[1].content[0].text).toBe(evidence);
+  });
+
   it("still prunes old large tool results (pre-existing behavior preserved)", async () => {
-    // 31 messages so the first one is beyond KEEP_RECENT_MESSAGES (30).
+    // Completed prior request beyond KEEP_RECENT_MESSAGES (30).
     const messages: any[] = [
       { role: "toolResult", content: [{ type: "text", text: "R".repeat(5_000) }] },
+      { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done." }] },
+      { role: "user", content: "Next request." },
     ];
     for (let i = 0; i < 30; i++) {
       messages.push({ role: "assistant", content: [{ type: "text", text: `turn ${i}` }] });
@@ -359,9 +376,25 @@ describe("context handler (issue #3852 end-to-end through the registered hook)",
     expect(res.messages[0].content[0].text).not.toContain("RRRR");
   });
 
+  it("prunes only completed history when the active request also exceeds 30 messages", async () => {
+    const evidence = "active source ".repeat(400);
+    const messages: any[] = [
+      { role: "toolResult", content: [{ type: "text", text: "old source ".repeat(400) }] },
+      { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Previous answer." }] },
+      { role: "user", content: "Save the next batch." },
+      { role: "toolResult", content: [{ type: "text", text: evidence }] },
+      ...Array.from({ length: 32 }, () => ({ role: "assistant", stopReason: "toolUse", content: [] })),
+    ];
+    const result = await handlers.context({ type: "context", messages }, ctx200k);
+    expect(result.messages[0].content[0].text).toContain("previous tool result");
+    expect(result.messages[3].content[0].text).toBe(evidence);
+  });
+
   it("handles old-tool-result pruning AND an oversized recent message together", async () => {
     const messages: any[] = [
       { role: "toolResult", content: [{ type: "text", text: "R".repeat(5_000) }] },
+      { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done." }] },
+      { role: "user", content: "Next request." },
     ];
     for (let i = 0; i < 29; i++) {
       messages.push({ role: "assistant", content: [{ type: "text", text: `t${i}` }] });
