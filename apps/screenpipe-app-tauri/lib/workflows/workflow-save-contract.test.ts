@@ -2,7 +2,8 @@
 // https://screenpipe.com
 import { afterEach, expect, it, vi } from "vitest";
 import workflowCatalog, { validateStageHandoff } from "@screenpipe-ext/workflow-catalog";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import contextPruning from "@screenpipe-ext/context-pruning";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const directories: string[] = [];
@@ -40,6 +41,38 @@ it("recovers a rejected commit through Pi follow-up and accepts a no-change rece
   expect(h.pi.sendMessage).toHaveBeenCalledTimes(1);
   expect(h.stderr).not.toHaveBeenCalled();
   expect(process.exitCode).toBe(priorExitCode);
+});
+it("keeps small stage context inline", async () => {
+  const h = await harness(3, [{candidateId:"receipt", workflowId:"wf-receipt"}]);
+  const output = await h.tools.workflow_context.execute("context", {});
+  expect(JSON.parse(output.content[0].text).pipeline.input.items[0].candidateId).toBe("receipt");
+  expect(JSON.parse(output.content[0].text).contextFile).toBeUndefined();
+});
+it("preserves oversized handoffs through the real result guard and paginated read path", async () => {
+  const items = [
+    {candidateId:"receipt", workflowId:"wf-receipt", sources:Array.from({length:500}, (_,i) => ({quote:"Fictional invoice evidence " + i}))},
+    {candidateId:"final-candidate", workflowId:"wf-final", concreteSteps:["Retain this final procedure"], timingRuns:[]},
+  ];
+  const h = await harness(3, items);
+  const hooks: Record<string, any> = {};
+  contextPruning({on:(name:string, handler:any) => { hooks[name] = handler; }} as any);
+  // Reproduce the original loss of the stage input at the shared 30K guard.
+  const oversized = {content:[{type:"text",text:JSON.stringify({...h.context,pipeline:h.context})}]};
+  expect((await hooks.tool_result({toolName:"workflow_context",...oversized})).isError).toBe(true);
+  const output = await h.tools.workflow_context.execute("context", {});
+  expect(await hooks.tool_result({toolName:"workflow_context",...output})).toBeUndefined();
+  const receipt = JSON.parse(output.content[0].text);
+  expect(receipt).toMatchObject({stage:3,ready:true,inputCount:2});
+  const full = readFileSync(receipt.contextFile,"utf8");
+  expect(JSON.parse(full).pipeline.input.items).toEqual(items);
+  expect(JSON.parse(full).outputContract.saveTool).toBe("workflow_stage_commit");
+  if (process.platform !== "win32") expect(statSync(receipt.contextFile).mode & 0o777).toBe(0o600);
+  expect(await hooks.tool_result({toolName:"read",content:[{type:"text",text:full}]})).toBeUndefined();
+  // A refreshed context replaces the snapshot and retains the latest input.
+  h.context.input.items[1].concreteSteps = ["Updated procedure"];
+  await h.tools.workflow_context.execute("refresh", {});
+  expect(JSON.parse(readFileSync(receipt.contextFile,"utf8")).pipeline.input.items[1].concreteSteps).toEqual(["Updated procedure"]);
+  await expect(h.tools.workflow_stage_commit.execute("save",{items:[],coverage:[]})).rejects.toThrow("dropped");
 });
 it("bounds recovery and fails the process when the agent stops without a receipt", async () => {
   const h = await harness();

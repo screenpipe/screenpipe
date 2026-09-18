@@ -5,6 +5,7 @@
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
 import { resolve, join } from "node:path";
+const largeContext = process.argv.includes("--large-context");
 const assets = resolve("../../crates/screenpipe-core/assets");
 const tasks = ["workflow-activity", "workflow-patterns", "workflow-procedures", "workflow-timing", "workflow-discovery"];
 const directory = await mkdtemp(join(tmpdir(), "workflow-pipeline-eval-"));
@@ -32,7 +33,7 @@ const activityReads = new Set<string>();
 const server = Bun.serve({hostname:"127.0.0.1",port:0,async fetch(req) {
   if(req.headers.get("authorization") !== "Bearer fictional-pipeline") return new Response("Unauthorized",{status:401});
   const url = new URL(req.url);
-  if(url.pathname === "/workflows/context") return Response.json({revision:0,now:catalogNow,historyStart:new Date(clock-90*86400000).toISOString(),checkedThrough:previousCheckpoint,profile:{summary:"I manage vendor receipts for ExampleCo. Personal shopping is unrelated."},workflows:[],outputContract:await Bun.file(join(assets,"pipes/workflow-discovery/output.md")).text()});
+  if(url.pathname === "/workflows/context") return Response.json({revision:0,now:catalogNow,historyStart:new Date(clock-90*86400000).toISOString(),checkedThrough:previousCheckpoint,profile:{summary:"I manage vendor receipts for ExampleCo. Personal shopping is unrelated.", ...(largeContext ? {referenceNotes: Array.from({length:500},(_,i)=>`Fictional profile note ${i}: receipt entry is a professional task; personal shopping is excluded.`)} : {})},workflows:[],outputContract:await Bun.file(join(assets,"pipes/workflow-discovery/output.md")).text()});
   if(url.pathname === "/workflows/pipeline") {
     if(req.method === "POST") {
       const body = await req.json();
@@ -80,9 +81,14 @@ try {
     const template = await Bun.file(join(assets,`pipes/${task}/pipe.md`)).text();
     const allow_rules = [...template.matchAll(/Api\((GET|POST) ([^)]+)\)/g)].map(match=>({type:"api",method:match[1],path:match[2]}));
     await writeFile(join(cwd,".screenpipe-permissions.json"),JSON.stringify({pipe_token:"fictional-pipeline",api_base:apiBase,pipe_name:task,pipe_dir:cwd,allow_rules,deny_rules:[],use_default_allowlist:false}));
-    const child = Bun.spawn([process.execPath,join(homedir(),".screenpipe/pi-agent/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"),"--provider","screenpipe","--model","auto","--mode","json","--no-session", "--append-system-prompt", `Use only the fictional recorder at http://127.0.0.1:${server.port} for this evaluation, via SCREENPIPE_LOCAL_API_URL. Never contact port 3030 or any other recorder.`,"--no-extensions","--no-skills","--skill",join(assets,"skills/screenpipe-api/SKILL.md"),"--no-context-files","--no-prompt-templates","--extension",join(assets,"extensions/screenpipe-permissions.ts"),"--extension",join(assets,"extensions/mcp-bridge.ts"),"--extension",join(assets,"extensions/workflow-catalog.ts"),"--print",prompt],{cwd,env:{...process.env,SCREENPIPE_LOCAL_API_URL:apiBase,SCREENPIPE_LOCAL_API_KEY:"fictional-pipeline",SCREENPIPE_PORT:String(server.port),SCREENPIPE_MCP_SERVER_ALLOWLIST:"",SCREENPIPE_PIPE_NAME:task,BASH_ENV:join(homedir(),".screenpipe/pi-agent/bash-env.sh"),PI_CODING_AGENT_DIR:join(homedir(),".screenpipe/pi-config")},stdout:"pipe",stderr:"pipe"});
+    const child = Bun.spawn([process.execPath,join(homedir(),".screenpipe/pi-agent/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"),"--provider","screenpipe","--model","auto","--mode","json","--no-session", "--append-system-prompt", `Use only the fictional recorder at http://127.0.0.1:${server.port} for this evaluation, via SCREENPIPE_LOCAL_API_URL. Never contact port 3030 or any other recorder.`,"--no-extensions","--no-skills","--skill",join(assets,"skills/screenpipe-api/SKILL.md"),"--no-context-files","--no-prompt-templates","--extension",join(assets,"extensions/screenpipe-permissions.ts"),"--extension",join(assets,"extensions/mcp-bridge.ts"),"--extension",join(assets,"extensions/workflow-catalog.ts"),"--extension",join(assets,"extensions/context-pruning.ts"),"--print",prompt],{cwd,env:{...process.env,SCREENPIPE_LOCAL_API_URL:apiBase,SCREENPIPE_LOCAL_API_KEY:"fictional-pipeline",SCREENPIPE_PORT:String(server.port),SCREENPIPE_MCP_SERVER_ALLOWLIST:"",SCREENPIPE_PIPE_NAME:task,BASH_ENV:join(homedir(),".screenpipe/pi-agent/bash-env.sh"),PI_CODING_AGENT_DIR:join(homedir(),".screenpipe/pi-config")},stdout:"pipe",stderr:"pipe"});
     const timeout = setTimeout(()=>child.kill(),180000);
     const [stdout,stderr,exit] = await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);clearTimeout(timeout);
+    if (largeContext) {
+      const events = stdout.split("\n").flatMap(line=>{try{return [JSON.parse(line)];}catch{return [];}});
+      const readSnapshot = events.some(event=>event.type === "tool_execution_start" && event.toolName === "read" && String(event.args?.path || "").endsWith(".workflow-context.json"));
+      if (!readSnapshot) throw new Error(`${task} did not read its complete context snapshot`);
+    }
     const saved = stageIndex < 4 ? outputs[stageIndex] : final;
     console.log(JSON.stringify({task,exit,saved:!!saved,items:stageIndex<4?saved?.items.length:final?.workflows.length, classifications:stageIndex===0?saved?.items.map((i:any)=>i.classification):undefined}));
     if(exit !== 0 || !saved || (stageIndex === 3 && !saved.items.length) || (stageIndex === 0 && !saved.items.some((item:any)=>item.classification === "professional"))) {
