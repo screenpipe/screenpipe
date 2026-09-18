@@ -59,6 +59,10 @@ Use `/workflows/context.revision` for `expected_revision`, and the pipeline's
 for workflow objects. Serialize a JavaScript object with `JSON.stringify`; validate
 the file before POSTing with `Content-Type: application/json` and `--data-binary @file`.
 Inspect errors. Repair rejected claims from their original evidence, or omit them.
+If a quote is rejected, changing the action's wording cannot repair its source.
+Read that original capture and copy the literal quote, or remove only the affected
+claim while retaining supported peers. Do not repeatedly submit the same rejected
+quote or replace a rejected batch with an empty success.
 For a revision conflict, reread current state and preserve newer edits before retrying.
 
 An empty workflows array records a completed review with no material changes;

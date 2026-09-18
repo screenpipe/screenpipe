@@ -36,7 +36,8 @@ if (mixedReview) {
   if (!reviewOnly || !reviewContext || !mismatchedWorkflow || real) throw new Error("Mixed review requires the isolated mismatched customer-review fixture");
   existingWorkflows.push({id:"existing-code-review",title:"Review an agent's pull request",trigger:"An agent submits a pull request for review",outcome:"Review feedback is recorded on the proposed code",stages:[]});
 }
-const contextRevision = mismatchedWorkflow ? 7 : seedContext?.revision || 0;
+let contextRevision = mismatchedWorkflow ? 7 : seedContext?.revision || 0;
+let savedWorkflows = structuredClone(existingWorkflows);
 const reads: any[] = [];
 const retrievedEvidence: Evidence[] = [];
 const rejectedSaves: any[] = [];
@@ -109,7 +110,7 @@ const server = Bun.serve({hostname:"127.0.0.1",port:0,idleTimeout:120,
   async fetch(req) {
   if(req.headers.get("authorization") !== "Bearer fictional-pipeline") return new Response("Unauthorized",{status:401});
   const url = new URL(req.url);
-  if(url.pathname === "/workflows/context") return Response.json({revision:contextRevision,now:catalogNow,historyStart:new Date(clock-90*86400000).toISOString(),checkedThrough:previousCheckpoint,profile:real ? seedContext?.profile || null : {summary:reviewContext ? "I review generated workflows with customers to improve the product. Customers perform their own operational work." : "I manage vendor receipts for ExampleCo. Personal shopping is unrelated.", ...(largeContext ? {referenceNotes: Array.from({length:500},(_,i)=>`Fictional profile note ${i}: receipt entry is a professional task; personal shopping is excluded.`)} : {})},workflows:existingWorkflows,outputContract:await Bun.file(join(assets,"pipes/workflow-discovery/output.md")).text()});
+  if(url.pathname === "/workflows/context") return Response.json({revision:contextRevision,now:catalogNow,historyStart:new Date(clock-90*86400000).toISOString(),checkedThrough:final ? now : previousCheckpoint,profile:real ? seedContext?.profile || null : {summary:reviewContext ? "I review generated workflows with customers to improve the product. Customers perform their own operational work." : "I manage vendor receipts for ExampleCo. Personal shopping is unrelated.", ...(largeContext ? {referenceNotes: Array.from({length:500},(_,i)=>`Fictional profile note ${i}: receipt entry is a professional task; personal shopping is excluded.`)} : {})},workflows:savedWorkflows,outputContract:await Bun.file(join(assets,"pipes/workflow-discovery/output.md")).text()});
   if(url.pathname === "/workflows/pipeline") {
     if(req.method === "POST") {
       const body = await req.json();
@@ -186,7 +187,15 @@ const server = Bun.serve({hostname:"127.0.0.1",port:0,idleTimeout:120,
       if (unsupported) return Response.json({error:"Copy literal source quotes; invented/abbreviated quotes cannot support a procedure."},{status:422});
     }
     final = body;
-    return Response.json({revision:contextRevision+1,checkedThrough:now,changes:{created:final.workflows.filter((w:any)=>!w.id).length,updated:final.workflows.filter((w:any)=>w.id).length}});
+    // A verification read must see the accepted write, just like the real API.
+    // Returning the old context here makes a successful agent retry forever.
+    for (const workflow of body.workflows) {
+      const index = savedWorkflows.findIndex((prior:any)=>workflow.id && prior.id===workflow.id);
+      if (index >= 0) savedWorkflows[index] = workflow;
+      else savedWorkflows.push({...workflow,id:workflow.id || `eval-${savedWorkflows.length+1}`});
+    }
+    contextRevision++;
+    return Response.json({revision:contextRevision,checkedThrough:now,changes:{created:final.workflows.filter((w:any)=>!w.id).length,updated:final.workflows.filter((w:any)=>w.id).length}});
   }
   // Evaluation-only isolation: reads reach the real recorder; all saves and
   // notifications stay here. This proxy is never installed in the product.
