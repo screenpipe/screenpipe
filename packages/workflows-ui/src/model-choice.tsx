@@ -11,7 +11,7 @@ export type WorkflowModelPreference = {
 };
 export const WORKFLOW_MODELS = {
   intelligent: { label: "Intelligent", model: "auto", description: "Automatically chooses a model. Uses your AI allowance." },
-  private: { label: "Private", model: "glm-5.3-flash-reap50-iq3m", description: "Encrypted AI processing. Separate usage, subject to capacity limits." },
+  private: { label: "Private (Beta)", model: "glm-5.3-flash-reap50-iq3m", description: "Experimental encrypted AI processing. Separate usage, subject to capacity limits." },
 } as const;
 export function parseWorkflowModel(text: string | null): WorkflowModelMode {
   if (text === null) return "intelligent";
