@@ -52,63 +52,70 @@ async fn search_preserves_segments_with_shared_offsets_across_pages() {
         }
     }
 
-    for filter in [vec![], tags.clone()] {
-        let total = db
-            .count_search_results_with_tags(
-                "",
-                ContentType::Audio,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                &filter,
-            )
-            .await
-            .unwrap();
-        assert_eq!(total, phrases.len());
-        for order in [Order::Ascending, Order::Descending] {
-            let mut found = Vec::new();
-            for offset in [0, 2, 4, 6] {
-                let page = db
-                    .search_audio_ordered(
-                        "",
-                        2,
-                        offset,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        &filter,
-                        order.clone(),
-                    )
-                    .await
-                    .unwrap();
-                assert_eq!(page.len(), total.saturating_sub(offset as usize).min(2));
-                for result in page {
-                    // Tag joins must not multiply rows or mix segment contents.
-                    assert_eq!(result.tags.len(), 2);
-                    assert_eq!(result.offset_index, 0);
-                    assert!(result.start_time.is_some());
-                    found.push(result.transcription);
+    for query in ["", "review", "Customer", "absentkeyword"] {
+        let matching: Vec<_> = phrases
+            .iter()
+            .filter(|text| query.is_empty() || text.to_lowercase().contains(&query.to_lowercase()))
+            .copied()
+            .collect();
+        for filter in [vec![], tags.clone()] {
+            let total = db
+                .count_search_results_with_tags(
+                    query,
+                    ContentType::Audio,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    &filter,
+                )
+                .await
+                .unwrap();
+            assert_eq!(total, matching.len());
+            for order in [Order::Ascending, Order::Descending] {
+                let mut found = Vec::new();
+                for offset in [0, 2, 4, 6] {
+                    let page = db
+                        .search_audio_ordered(
+                            query,
+                            2,
+                            offset,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            &filter,
+                            order.clone(),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(page.len(), total.saturating_sub(offset as usize).min(2));
+                    for result in page {
+                        // Tag joins must not multiply rows or mix segment contents.
+                        assert_eq!(result.tags.len(), 2);
+                        assert_eq!(result.offset_index, 0);
+                        assert!(result.start_time.is_some());
+                        found.push(result.transcription);
+                    }
                 }
+                let mut expected: Vec<String> = matching.iter().map(|s| s.to_string()).collect();
+                if matches!(order, Order::Descending) {
+                    expected.reverse();
+                }
+                assert_eq!(found, expected);
             }
-            let mut expected: Vec<String> = phrases.iter().map(|s| s.to_string()).collect();
-            if matches!(order, Order::Descending) {
-                expected.reverse();
-            }
-            assert_eq!(found, expected);
         }
     }
     db.close().await;

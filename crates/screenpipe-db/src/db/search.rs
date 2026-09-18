@@ -1143,7 +1143,7 @@ impl DatabaseManager {
         // build where clause conditions in order
         let mut conditions = Vec::new();
         if !query.is_empty() {
-            conditions.push("audio_transcriptions.audio_chunk_id IN (SELECT at_inner.audio_chunk_id FROM audio_transcriptions_fts JOIN audio_transcriptions at_inner ON at_inner.id = audio_transcriptions_fts.rowid WHERE audio_transcriptions_fts MATCH ? ORDER BY audio_transcriptions_fts.rank LIMIT 5000)");
+            conditions.push("audio_transcriptions.id IN (SELECT rowid FROM audio_transcriptions_fts WHERE audio_transcriptions_fts MATCH ? ORDER BY audio_transcriptions_fts.rank LIMIT 5000)");
         }
         if start_time.is_some() {
             conditions.push("audio_transcriptions.timestamp >= ?");

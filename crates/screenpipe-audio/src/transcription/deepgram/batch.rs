@@ -876,27 +876,69 @@ mod tests {
 
     #[tokio::test]
     async fn hosted_control_outage_preserves_pause_code_without_private_body() {
-        let body = serde_json::json!({"error": serde_json::json!({
-            "error": "cost_control_unavailable", "message": "private details"
-        }).to_string()})
-        .to_string();
-        for hosted in [true, false] {
-            let response_text = format!("HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
-            let (endpoint, _) = sequential_http_server(vec![response_text]).await;
-            let response = reqwest::get(endpoint).await.unwrap();
-            let error = handle_deepgram_response(Ok(response), "test microphone", hosted)
+        for code in [
+            "cost_control_unavailable",
+            "daily_cost_limit_exceeded",
+            "transcription_capacity_paused",
+        ] {
+            let flat = serde_json::json!({"error": code, "message": "private details"});
+            for body in [
+                flat.to_string(),
+                serde_json::json!({"error": flat.to_string()}).to_string(),
+            ] {
+                for hosted in [true, false] {
+                    for status in [403, 429, 503] {
+                        let response_text = format!("HTTP/1.1 {status} Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+                        let (endpoint, _) = sequential_http_server(vec![response_text]).await;
+                        let response = reqwest::get(endpoint).await.unwrap();
+                        let error =
+                            handle_deepgram_response(Ok(response), "test microphone", hosted)
+                                .await
+                                .unwrap_err()
+                                .to_string();
+                        if hosted {
+                            assert_eq!(
+                                error,
+                                format!("Screenpipe hosted transcription paused ({code})")
+                            );
+                            assert!(!error.contains("private details"));
+                        } else {
+                            assert!(
+                                error.starts_with(&format!("Deepgram API error (HTTP {status}"))
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn unrelated_hosted_errors_stay_errors_and_success_still_parses() {
+        for body in [
+            "",
+            "not-json",
+            "<html>Unavailable</html>",
+            r#"{"error":"unknown_code"}"#,
+            r#"{"message":"cost_control_unavailable"}"#,
+        ] {
+            let response_text = format!("HTTP/1.1 503 Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+            let success = r#"{"results":{"channels":[{"alternatives":[{"transcript":"Recovered transcript"}]}]}}"#;
+            let success_response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", success.len(), success);
+            let (endpoint, calls) =
+                sequential_http_server(vec![response_text, success_response]).await;
+            let response = reqwest::get(&endpoint).await.unwrap();
+            let error = handle_deepgram_response(Ok(response), "test microphone", true)
                 .await
                 .unwrap_err()
                 .to_string();
-            if hosted {
-                assert_eq!(
-                    error,
-                    "Screenpipe hosted transcription paused (cost_control_unavailable)"
-                );
-                assert!(!error.contains("private details"));
-            } else {
-                assert!(error.starts_with("Deepgram API error (HTTP 503"));
-            }
+            assert!(!error.contains("hosted transcription paused"));
+            let response = reqwest::get(&endpoint).await.unwrap();
+            let output = handle_deepgram_response(Ok(response), "test microphone", true)
+                .await
+                .unwrap();
+            assert_eq!(output.transcription, "Recovered transcript");
+            assert_eq!(*calls.lock().await, 2);
         }
     }
 
