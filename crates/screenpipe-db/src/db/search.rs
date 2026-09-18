@@ -1143,7 +1143,7 @@ impl DatabaseManager {
         // build where clause conditions in order
         let mut conditions = Vec::new();
         if !query.is_empty() {
-            conditions.push("audio_transcriptions.audio_chunk_id IN (SELECT at_inner.audio_chunk_id FROM audio_transcriptions_fts JOIN audio_transcriptions at_inner ON at_inner.id = audio_transcriptions_fts.rowid WHERE audio_transcriptions_fts MATCH ? ORDER BY audio_transcriptions_fts.rank LIMIT 5000)");
+            conditions.push("audio_transcriptions.id IN (SELECT rowid FROM audio_transcriptions_fts WHERE audio_transcriptions_fts MATCH ? ORDER BY audio_transcriptions_fts.rank LIMIT 5000)");
         }
         if start_time.is_some() {
             conditions.push("audio_transcriptions.timestamp >= ?");
@@ -1202,9 +1202,11 @@ impl DatabaseManager {
             format!("WHERE {}", conditions.join(" AND "))
         };
 
-        // complete sql with group, order, limit and offset
+        // Collapse tag-join duplicates per transcription, not per chunk/offset.
+        // Live speech segments can share offset_index = 0 within one chunk.
+        // The row id also gives tied timestamps/offsets a stable page order.
         let sql = format!(
-            "{} {} GROUP BY audio_transcriptions.audio_chunk_id, audio_transcriptions.offset_index ORDER BY audio_transcriptions.timestamp {order_dir}, audio_transcriptions.audio_chunk_id {order_dir}, audio_transcriptions.offset_index {order_dir} LIMIT ? OFFSET ?",
+            "{} {} GROUP BY audio_transcriptions.id ORDER BY audio_transcriptions.timestamp {order_dir}, audio_transcriptions.audio_chunk_id {order_dir}, audio_transcriptions.offset_index {order_dir}, audio_transcriptions.id {order_dir} LIMIT ? OFFSET ?",
             base_sql,
             where_clause,
             order_dir = match order {
