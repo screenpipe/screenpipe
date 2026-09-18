@@ -62,7 +62,7 @@ pub async fn transcribe_with_deepgram_detailed(
 
     let response = get_deepgram_response(config, audio_bytes, query_params, content_type).await;
 
-    handle_deepgram_response(response, device).await
+    handle_deepgram_response(response, device, config.is_screenpipe_cloud()).await
 }
 
 fn create_mp3_data(audio_data: &[f32], sample_rate: u32) -> Result<(Vec<u8>, &'static str)> {
@@ -222,7 +222,7 @@ async fn get_deepgram_response(
 }
 
 /// The gateway wraps structured errors in a JSON string. Only retain known
-/// policy codes; provider bodies can contain request/customer data.
+/// policy and availability codes; provider bodies can contain request/customer data.
 fn hosted_transcription_denial_code(body: &str) -> Option<&'static str> {
     let mut value: Value = serde_json::from_str(body).ok()?;
     for _ in 0..4 {
@@ -232,6 +232,9 @@ fn hosted_transcription_denial_code(body: &str) -> Option<&'static str> {
             }
             Value::String(ref code) if code == "transcription_capacity_paused" => {
                 return Some("transcription_capacity_paused")
+            }
+            Value::String(ref code) if code == "cost_control_unavailable" => {
+                return Some("cost_control_unavailable")
             }
             Value::String(ref nested) => value = serde_json::from_str(nested).ok()?,
             Value::Object(ref object) => value = object.get("error")?.clone(),
@@ -452,6 +455,7 @@ fn transient_error_text(debug: &str) -> bool {
 async fn handle_deepgram_response(
     response: Result<Response>,
     device: &str,
+    is_screenpipe_cloud: bool,
 ) -> Result<TranscriptionOutput> {
     match response {
         Ok(resp) => {
@@ -491,6 +495,15 @@ async fn handle_deepgram_response(
             }
 
             if !status.is_success() {
+                if is_screenpipe_cloud {
+                    if let Some(code) = hosted_transcription_denial_code(&body_text) {
+                        // A hosted control outage is not a corrupt recording.
+                        // Preserve the code so reconciliation keeps audio pending.
+                        return Err(anyhow::anyhow!(
+                            "Screenpipe hosted transcription paused ({code})"
+                        ));
+                    }
+                }
                 error!(
                     "device: {}, deepgram API returned HTTP {} — body: {}",
                     device,
@@ -793,7 +806,9 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio::sync::Mutex;
 
-    async fn sequential_http_server(responses: Vec<&'static str>) -> (String, Arc<Mutex<usize>>) {
+    async fn sequential_http_server(
+        responses: Vec<impl AsRef<str> + Send + 'static>,
+    ) -> (String, Arc<Mutex<usize>>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let request_count = Arc::new(Mutex::new(0));
@@ -804,7 +819,10 @@ mod tests {
                 let mut request = vec![0; 16 * 1024];
                 let _ = stream.read(&mut request).await.unwrap();
                 *count.lock().await += 1;
-                stream.write_all(response.as_bytes()).await.unwrap();
+                stream
+                    .write_all(response.as_ref().as_bytes())
+                    .await
+                    .unwrap();
             }
         });
         (format!("http://{address}/v1/listen"), request_count)
@@ -834,7 +852,11 @@ mod tests {
 
     #[test]
     fn hosted_policy_denials_preserve_only_known_codes() {
-        for code in ["daily_cost_limit_exceeded", "transcription_capacity_paused"] {
+        for code in [
+            "daily_cost_limit_exceeded",
+            "transcription_capacity_paused",
+            "cost_control_unavailable",
+        ] {
             let nested = serde_json::json!({"error": serde_json::json!({"error": code, "message": "private details"}).to_string()}).to_string();
             assert_eq!(hosted_transcription_denial_code(&nested), Some(code));
             assert_eq!(
@@ -849,6 +871,32 @@ mod tests {
             "not-json",
         ] {
             assert_eq!(hosted_transcription_denial_code(body), None);
+        }
+    }
+
+    #[tokio::test]
+    async fn hosted_control_outage_preserves_pause_code_without_private_body() {
+        let body = serde_json::json!({"error": serde_json::json!({
+            "error": "cost_control_unavailable", "message": "private details"
+        }).to_string()})
+        .to_string();
+        for hosted in [true, false] {
+            let response_text = format!("HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+            let (endpoint, _) = sequential_http_server(vec![response_text]).await;
+            let response = reqwest::get(endpoint).await.unwrap();
+            let error = handle_deepgram_response(Ok(response), "test microphone", hosted)
+                .await
+                .unwrap_err()
+                .to_string();
+            if hosted {
+                assert_eq!(
+                    error,
+                    "Screenpipe hosted transcription paused (cost_control_unavailable)"
+                );
+                assert!(!error.contains("private details"));
+            } else {
+                assert!(error.starts_with("Deepgram API error (HTTP 503"));
+            }
         }
     }
 
