@@ -1,0 +1,17 @@
+/* screenpipe — AI that knows everything you've seen, said, or heard */
+/* https://screenpipe.com */
+.control { position: relative; color: var(--ink, #171815); font-size: 12px; }
+.trigger { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border: 1px solid var(--line, #dedfd8); border-radius: 6px; background: var(--paper, #fafaf7); color: inherit; font: inherit; white-space: nowrap; cursor: pointer; }
+.menu { position: absolute; top: calc(100% + 8px); right: 0; z-index: 50; width: 300px; max-width: calc(100vw - 32px); padding: 6px; border: 1px solid var(--line, #dedfd8); border-radius: 8px; background: var(--paper, #fafaf7); box-shadow: 0 4px 16px #00000014; }
+.menu > button { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 10px; border: 0; border-radius: 4px; color: inherit; background: transparent; text-align: left; font: inherit; cursor: pointer; }
+.menu > button > svg { flex-shrink: 0; margin-top: 2px; }
+.menu > button > span { flex: 1; }
+.menu strong, .menu small { display: block; }
+.menu strong { font-weight: 600; }
+.menu small { margin-top: 4px; opacity: .7; line-height: 1.5; }
+.menu > button:hover, .menu > button:focus-visible { background: #88888818; }
+.control button:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
+.control button:disabled { opacity: .5; cursor: wait; }
+.menu > p { margin: 8px 10px 4px; font-size: 11px; opacity: .65; }
+.verification { border-top: 1px solid var(--line, #dedfd8); padding: 8px 4px 0; }
+.error { display: block; position: absolute; right: 0; top: calc(100% + 8px); width: 280px; padding: 8px; background: var(--paper, #fafaf7); border: 1px solid var(--line, #dedfd8); border-radius: 6px; z-index: 51; }

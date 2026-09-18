@@ -2,8 +2,11 @@
 // https://screenpipe.com
 
 "use client";
-import { useEffect, useState } from "react";
-import { ConfidentialVerificationBadge, type ConfidentialVerificationSource } from "./confidential-verification";
+import { useEffect, useId, useRef, useState } from "react";
+import { ConfidentialVerificationDetails, useConfidentialVerification, type ConfidentialVerificationSource } from "./confidential-verification";
+
+import { Check, ChevronDown, Shield, Sparkles } from "lucide-react";
+import styles from "./model-choice.module.css";
 
 export type WorkflowModelMode = "intelligent" | "private";
 export type WorkflowModelPreference = {
@@ -23,6 +26,23 @@ export function parseWorkflowModel(text: string | null): WorkflowModelMode {
 }
 export function WorkflowModelControl({ preference }: { preference: WorkflowModelPreference }) {
   const [mode, setMode] = useState<WorkflowModelMode | null>(null);
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const menuId = useId();
+  // Keep listening while the dropdown is closed, without claiming verification
+  // merely because Private was selected.
+  const verification = useConfidentialVerification(preference.verification);
+  useEffect(() => {
+    if (!open) return;
+    menu.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
+    const dismiss = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", dismiss);
+    return () => document.removeEventListener("pointerdown", dismiss);
+  }, [open]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -40,21 +60,36 @@ export function WorkflowModelControl({ preference }: { preference: WorkflowModel
       window.removeEventListener("workflows:model-changed", refresh);
     };
   }, [preference]);
-  return <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-    <label title={mode ? `${WORKFLOW_MODELS[mode].description} Applies to new runs.` : "Choose how Workflows processes your data"}>
-      <span style={{ marginRight: 6 }}>AI</span>
-      <select aria-label="Workflows AI" value={mode ?? ""} disabled={busy} onChange={async event => {
-        const next = event.target.value as WorkflowModelMode;
-        setBusy(true); setError("");
-        try { await preference.save(next); setMode(next); }
-        catch { setError("Could not save your AI choice. Try again."); }
-        finally { setBusy(false); }
-      }} style={{ background: "transparent", color: "inherit", border: "1px solid currentColor", borderRadius: 6, padding: "4px 6px", font: "inherit" }}>
-        {!mode && <option value="" disabled>Choose…</option>}
-        {Object.entries(WORKFLOW_MODELS).map(([key, value]) => <option key={key} value={key}>{value.label}</option>)}
-      </select>
-    </label>
-    {mode === "private" && <ConfidentialVerificationBadge source={preference.verification} />}
-    {error && <span role="alert">{error}</span>}
+  const choose = async (next: WorkflowModelMode) => {
+    setBusy(true); setError("");
+    try { await preference.save(next); setMode(next); setOpen(false); trigger.current?.focus(); }
+    catch { setError("Could not save your AI choice. Try again."); }
+    finally { setBusy(false); }
+  };
+  return <div ref={root} className={styles.control} onKeyDown={event => {
+    if (event.key === "Escape" && open) { event.preventDefault(); setOpen(false); trigger.current?.focus(); }
+  }}>
+    <button ref={trigger} type="button" className={styles.trigger} aria-label="Workflows AI" aria-haspopup="menu" aria-expanded={open} aria-controls={menuId}
+      disabled={busy} onClick={() => setOpen(!open)} onKeyDown={event => {
+        if (["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); setOpen(true); }
+      }}>
+      {mode === "private" ? <Shield size={15} aria-hidden="true" /> : <Sparkles size={15} aria-hidden="true" />}
+      <span>{busy ? "Saving…" : mode ? WORKFLOW_MODELS[mode].label : "Choose AI"}</span><ChevronDown size={13} aria-hidden="true" />
+    </button>
+    {open && <div ref={menu} id={menuId} className={styles.menu} role="menu" aria-label="Workflows AI" onKeyDown={event => {
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) || (event.target as HTMLElement).closest("dialog")) return;
+      event.preventDefault();
+      const choices = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')).filter(button => !button.closest("dialog"));
+      const index = choices.indexOf(document.activeElement as HTMLButtonElement);
+      choices[event.key === "Home" ? 0 : event.key === "End" ? choices.length - 1 : (index + (event.key === "ArrowUp" ? -1 : 1) + choices.length) % choices.length]?.focus();
+    }}>
+      {Object.entries(WORKFLOW_MODELS).map(([key, value]) => <button type="button" key={key} role="menuitemradio" aria-checked={mode === key} disabled={busy} onClick={() => void choose(key as WorkflowModelMode)}>
+        {key === "private" ? <Shield size={16} aria-hidden="true" /> : <Sparkles size={16} aria-hidden="true" />}
+        <span><strong>{value.label}</strong><small>{value.description}</small></span>{mode === key && <Check size={15} aria-hidden="true" />}
+      </button>)}
+      {mode === "private" && <div className={styles.verification}><ConfidentialVerificationDetails current={verification} showLabel triggerRole="menuitem" /></div>}
+      <p>Applies to new chats and workflow updates.</p>
+    </div>}
+    {error && <span role="alert" className={styles.error}>{error}</span>}
   </div>;
 }

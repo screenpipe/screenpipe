@@ -18,13 +18,25 @@ export default async function (pi: ExtensionAPI) {
   const { streamSimple } = await import(pathToFileURL(join(dirname(runtimePackageJson),
     "node_modules", "@earendil-works", "pi-ai", "dist", "api", "openai-completions.js",
   )).href);
+  const { writeRawStdout } = await import(pathToFileURL(join(dirname(runtimePackageJson),
+    "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "output-guard.js",
+  )).href);
   // Load lazily so a missing SDK cannot break unrelated hosted models. The
   // distinct model API has no built-in handler, so missing/disabled extensions
   // or failed verification cannot silently send GLM via ordinary OpenAI TLS.
   const sdk = () => import(pathToFileURL(runtimeRequire.resolve("tinfoil")).href);
   let publish: ((text: string) => void) | undefined;
   pi.on("before_agent_start", (_event, ctx) => {
-    publish = text => ctx.ui.setStatus("screenpipe-confidential", text);
+    publish = text => {
+      if (ctx.mode === "json") {
+        // Pipes use Pi's JSON mode, where ui.setStatus is a no-op. Emit the
+        // same status envelope as RPC so the normal Pipe event bridge can
+        // forward public attestation evidence without adding it to AI context.
+        writeRawStdout(JSON.stringify({ type: "extension_ui_request", method: "setStatus", key: "screenpipe-confidential", text }) + "\n");
+      } else {
+        ctx.ui.setStatus("screenpipe-confidential", text);
+      }
+    };
   });
   pi.on("session_shutdown", () => { publish = undefined; });
   const transports = new Map<string, typeof fetch>();

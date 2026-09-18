@@ -2,6 +2,8 @@
 // https://screenpipe.com
 
 import { listen } from "@tauri-apps/api/event";
+import { parsePipeSessionId } from "@/lib/events/types";
+import { WORKFLOW_TASKS } from "./scheduled-discovery";
 import { exists, readTextFile, writeTextFile, rename, remove } from "@tauri-apps/plugin-fs";
 import { commands } from "@/lib/utils/tauri";
 import { parseWorkflowModel, type WorkflowModelPreference } from "@screenpipe/workflows-ui";
@@ -14,7 +16,9 @@ async function path() {
 export const workflowModelPreference: WorkflowModelPreference = {
   verification: {
     subscribe: listener => listen<{ source: string; sessionId: string; event: Record<string, unknown> }>("agent_event", ({ payload }) => {
-      if (payload.source === "pi" && payload.sessionId.startsWith("__title:workflow-")) listener(payload);
+      const pipe = payload.source === "pipe" ? parsePipeSessionId(payload.sessionId) : null;
+      if ((payload.source === "pi" && payload.sessionId.startsWith("__title:workflow-"))
+        || (pipe && WORKFLOW_TASKS.some(task => task === pipe.pipeName))) listener(payload);
     }),
   },
   async load() {

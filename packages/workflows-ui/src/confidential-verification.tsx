@@ -53,7 +53,7 @@ export function ConfidentialVerificationBadge({ source }: { source?: Confidentia
   return <ConfidentialVerificationDetails current={useConfidentialVerification(source)} />;
 }
 
-export function ConfidentialVerificationDetails({ current, showLabel = false }: { current: ConfidentialVerification | null; showLabel?: boolean }) {
+export function ConfidentialVerificationDetails({ current, showLabel = false, triggerRole }: { current: ConfidentialVerification | null; showLabel?: boolean; triggerRole?: "menuitem" }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const state = current?.state ?? "idle";
   const proof = current?.document;
@@ -65,7 +65,7 @@ export function ConfidentialVerificationDetails({ current, showLabel = false }: 
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   return <span style={{ display: "inline-flex", alignItems: "center" }}>
-    <button type="button" aria-label={`Private AI: ${labels[state]}`} title={labels[state]} onClick={() => dialog.current?.showModal()}
+    <button type="button" role={triggerRole} aria-label={`Private AI: ${labels[state]}`} title={labels[state]} onClick={() => dialog.current?.showModal()}
       style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "inherit", background: "transparent", border: showLabel ? 0 : "1px solid currentColor", borderRadius: 6, padding: 5, cursor: "pointer", font: "inherit", textAlign: "left" }}><Icon size={15} aria-hidden="true" />{showLabel && <span>Private AI · {labels[state]}</span>}</button>
     <dialog ref={dialog} aria-label="Private AI verification" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); dialog.current?.close(); } }} onClick={event => { if (event.target === event.currentTarget) dialog.current?.close(); }}
       style={{ background: "Canvas", color: "CanvasText", colorScheme: "light dark", border: "1px solid GrayText", borderRadius: 8, padding: 24, width: 460, maxWidth: "calc(100vw - 32px)", maxHeight: "80vh", overflow: "auto", font: "inherit", fontSize: 13 }}>

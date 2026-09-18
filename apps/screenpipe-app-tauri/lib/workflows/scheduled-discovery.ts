@@ -1,7 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-import { requireWorkflowsRollout } from "./rollout";
+import { requireWorkflowsRollout, syncWorkflowsRollout } from "./rollout";
 import { localFetch } from "@/lib/api";
 import type { WorkflowAnalysis, WorkflowAnalysisJob, WorkflowMap } from "@screenpipe/workflows-ui";
 
@@ -43,6 +43,8 @@ export async function loadWorkflowTaskSetup(): Promise<WorkflowTaskSetup> {
 // Only the explicit enable action opts in. Scheduling stays in the Pipe harness.
 export async function enableWorkflowTask() {
   await ensureWorkflowTask();
+  requireWorkflowsRollout();
+  await syncWorkflowsRollout(true);
   // Enable dependencies last so a scheduled entry cannot outrun setup.
   for (const task of [...WORKFLOW_TASKS].reverse()) await request(`/pipes/${task}/enable`, { enabled: true });
   const setup = await loadWorkflowTaskSetup();
@@ -66,6 +68,7 @@ function job(execution: any): WorkflowAnalysisJob {
       : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_business_required") ? "Automatic workflow discovery requires Business. Your saved workflows are still available."
       : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_usage_unavailable") ? "Could not check AI allowance. Reconnect and try again."
       : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_sign_in_required") ? "Sign in again to resume workflow updates."
+      : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_rollout_disabled") ? "Workflows access was not confirmed. Try Update now to reconnect."
       : execution.error_type === "missing_output" ? "The update could not be saved. Your previous workflows are still available. Try again."
       : status === "failed" ? "Could not update workflows. Your saved workflows are still available. See the scheduled task for details."
       : status === "processing" ? "Updating workflows" : "Waiting to update workflows",
@@ -131,6 +134,7 @@ export async function getWorkflowJob(id: string): Promise<WorkflowAnalysisJob> {
 
 export async function startWorkflowJob(): Promise<WorkflowAnalysisJob> {
   requireWorkflowsRollout();
+  await syncWorkflowsRollout(true);
   const setup = await loadWorkflowTaskSetup();
   if (!setup.enabled) throw new Error("Enable workflow tasks before updating. Open Workflows again to review setup.");
   const tasks = await latestTasks();
