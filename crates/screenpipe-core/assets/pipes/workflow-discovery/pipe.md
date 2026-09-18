@@ -30,7 +30,9 @@ workflow-timing and publish supported improvements. Use the normal Pi harness,
 Screenpipe skills, and tools. Do not repeat the earlier discovery stages. Your deliverable is a validated
 catalog save, not another research report.
 
-Read the Workflow maintenance section of screenpipe-api. Retrieve this task's
+Read .pi/skills/screenpipe-workflow-maintenance/SKILL.md. It contains the focused API
+contract for this task; read other API documentation only for a missing operation.
+Retrieve this task's
 /workflows/pipeline input and /workflows/context using its scoped credentials.
 If pipeline.ready is false, stop. Read every upstream candidate, the user's
 Context, existing catalog and corrections in bounded portions. Keep the exact
@@ -57,12 +59,16 @@ a prior run's request revisions without rereading the authoritative state.
 Review candidates independently:
 - A workflow is a specific recurring job with a trigger, concrete steps and an
   observable outcome, not a broad category or a target number of cards.
-- Preserve existing workflow IDs and corrections. Use upstream workflowId as
-  catalog id when it is the same job. Check the actual trigger and outcome:
-  a shared project or broad goal is not an identity match. If upstream attached
-  the wrong existing ID to a different supported job, use null for the new job
-  and leave the unrelated saved workflow intact. Omission never
-  deletes saved workflows.
+- Decide each candidate's identity BEFORE grouping or copying an ID. Compare
+  its observed action, trigger and outcome against the catalog's actual jobs.
+  Treat upstream workflowId only as an unverified suggestion. Shared product,
+  customer or project names do not make two jobs the same workflow. If the
+  suggested ID is wrong, choose another catalog ID only when its job matches;
+  otherwise use null for a new supported job. Record this identity decision in
+  review-notes.md before constructing the payload. Preserve corrections and
+  earlier valid steps only for the job you actually matched. Do not attach
+  unrelated activity to an existing workflow merely to retain upstream IDs.
+  Omission never deletes saved workflows.
 - Publish new useful workflows and material improvements to existing ones.
   Better supported steps, corrections, sources and timing runs qualify even
   without a bottleneck, automation opportunity or screenshot. An existing
@@ -103,7 +109,7 @@ Review candidates independently:
 Save through POST /workflows/catalog using the shared skill's request contract.
 Prepare and save the supported changes before doing optional enrichment.
 Construct the payload programmatically from the parsed context and pipeline
-responses. Group candidates with the same workflowId into one update, retaining
+responses. Group candidates with the same VERIFIED workflow identity into one update, retaining
 that workflow's still-valid steps and user corrections. Multiple occurrences or
 candidate IDs for the same trigger, job and outcome are one workflow, including
 new candidates with null workflowId. Combine their evidence and distinct timing

@@ -817,6 +817,10 @@ impl PiExecutor {
         let skills: &[(&str, &str)] = &[
             ("screenpipe-api", api_skill.as_str()),
             (
+                "screenpipe-workflow-maintenance",
+                include_str!("../../assets/skills/screenpipe-workflow-maintenance/SKILL.md"),
+            ),
+            (
                 "screenpipe-cli",
                 include_str!("../../assets/skills/screenpipe-cli/SKILL.md"),
             ),
@@ -893,8 +897,9 @@ impl PiExecutor {
     /// [`Self::USER_SKILL_MARKER`], be deleted by a later sync. The desktop
     /// importer already rejects these names; this guards any folder that reaches
     /// the store another way.
-    const BASELINE_SKILL_NAMES: [&'static str; 5] = [
+    const BASELINE_SKILL_NAMES: [&'static str; 6] = [
         "screenpipe-api",
+        "screenpipe-workflow-maintenance",
         "screenpipe-cli",
         "screenpipe-chats",
         "screenpipe-team",
@@ -1038,6 +1043,11 @@ impl PiExecutor {
                 "screenpipe-api",
                 api_skill.as_str(),
                 Box::new(|_| true), // always installed — unified API skill
+            ),
+            (
+                "screenpipe-workflow-maintenance",
+                include_str!("../../assets/skills/screenpipe-workflow-maintenance/SKILL.md"),
+                Box::new(|_| true), // guidance only; existing API permissions still apply
             ),
             (
                 "screenpipe-cli",
@@ -4690,6 +4700,33 @@ mod tests {
             }
         });
         assert_eq!(pi_event_protocol_error(&valid), None);
+    }
+
+    #[test]
+    fn workflow_maintenance_skill_installs_in_chat_and_restricted_pipes() {
+        let chat = tempfile::tempdir().unwrap();
+        let pipe = tempfile::tempdir().unwrap();
+        PiExecutor::ensure_screenpipe_skill(chat.path()).unwrap();
+        let config: crate::pipes::PipeConfig = serde_yaml::from_str(
+            "name: test\npermissions:\n  allow: [Api(GET /workflows/context)]\n",
+        )
+        .unwrap();
+        PiExecutor::ensure_screenpipe_skill_filtered(pipe.path(), &config).unwrap();
+        let expected = include_str!("../../assets/skills/screenpipe-workflow-maintenance/SKILL.md");
+        assert!(
+            expected.len() < 5000,
+            "maintenance guide must fit small-context models"
+        );
+        for root in [chat.path(), pipe.path()] {
+            assert_eq!(
+                std::fs::read_to_string(
+                    root.join(".pi/skills/screenpipe-workflow-maintenance/SKILL.md")
+                )
+                .unwrap(),
+                expected
+            );
+        }
+        assert!(PiExecutor::BASELINE_SKILL_NAMES.contains(&"screenpipe-workflow-maintenance"));
     }
 
     #[test]
