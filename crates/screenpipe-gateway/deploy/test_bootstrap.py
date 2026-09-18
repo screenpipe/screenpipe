@@ -11,6 +11,19 @@ loader = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(loader)
 
 class BootstrapTests(unittest.TestCase):
+    def test_index_disk_handles_nvme_scsi_and_gcp_without_guessing_raw_devices(self):
+        for cloud, present in [
+            ("azure", "/dev/disk/azure/data/by-lun/0"),
+            ("azure", "/dev/disk/azure/scsi1/lun0"),
+            ("gcp", "/dev/disk/by-id/google-screenpipe-data"),
+        ]:
+            with self.subTest(cloud=cloud, present=present):
+                with patch.object(loader.os.path, "exists", side_effect=lambda p: p == present):
+                    self.assertEqual(loader.index_disk(cloud), present)
+        with patch.object(loader.os.path, "exists", side_effect=lambda p: p == "/dev/nvme0n1"):
+            with self.assertRaises(RuntimeError):
+                loader.index_disk("azure")
+
     def config(self, cloud="azure"):
         return dict(cloud=cloud, license_id="lic-1", control_plane="https://screenpipe.test",
                     policy_public_key="public", prefix="", account="archive", container="telemetry",

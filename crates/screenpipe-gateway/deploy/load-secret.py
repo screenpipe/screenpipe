@@ -56,12 +56,23 @@ def environment(config, enrollment):
     return "\n".join(k + "=" + str(v) for k, v in values.items()) + "\n"
 
 
+def index_disk(cloud):
+    # Use Azure's stable data-LUN links for both NVMe (newer VM sizes) and
+    # legacy SCSI. Never guess a raw /dev/nvme* name: it could be the OS disk.
+    candidates = (
+        ["/dev/disk/azure/data/by-lun/0", "/dev/disk/azure/scsi1/lun0"]
+        if cloud == "azure" else ["/dev/disk/by-id/google-screenpipe-data"]
+    )
+    for disk in candidates:
+        if os.path.exists(disk):
+            return disk
+    raise RuntimeError("index disk not attached yet or stable data-LUN link missing")
+
+
 def main():
     with open("/etc/screenpipe/runtime.json") as file:
         config = json.load(file)
-    disk = "/dev/disk/azure/scsi1/lun0" if config["cloud"] == "azure" else "/dev/disk/by-id/google-screenpipe-data"
-    if not os.path.exists(disk):
-        raise RuntimeError("index disk not attached yet")
+    disk = index_disk(config["cloud"])
     mount = "/var/lib/screenpipe"
     os.makedirs(mount, exist_ok=True)
     if not os.path.ismount(mount):

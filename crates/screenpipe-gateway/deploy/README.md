@@ -61,7 +61,8 @@ Register `Microsoft.Compute`, `Microsoft.Network`, `Microsoft.Storage`, and
 provider is configured not to register unrelated subscription services.
 Azure SKU capacity varies by region. Override `vm_size` if the default
 `Standard_D2s_v5` is unavailable; use an x86-64 size with at least 2 vCPUs
-and 4 GiB RAM.
+and 4 GiB RAM. The loader supports the stable data-disk LUN links for both
+SCSI and NVMe, as documented in [Azure VM utilities](https://learn.microsoft.com/en-us/azure/virtual-machines/linux/azure-virtual-machine-utilities).
 
 Use a Blob container SAS restricted to **`cw`, HTTPS only**, expiring between
 one hour and seven days from activation. Prefer Entra user delegation. Do not
