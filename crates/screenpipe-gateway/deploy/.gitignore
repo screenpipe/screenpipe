@@ -1,0 +1,8 @@
+.terraform/
+*.tfstate*
+*.tfvars
+*.tfplan
+__pycache__/
+
+!load-secret.py
+!test_bootstrap.py

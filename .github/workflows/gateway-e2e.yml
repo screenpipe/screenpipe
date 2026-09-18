@@ -35,6 +35,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  cloud-deployment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        cloud: [azure, gcp]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - run: terraform fmt -check -recursive crates/screenpipe-gateway/deploy
+      - run: terraform -chdir=crates/screenpipe-gateway/deploy/${{ matrix.cloud }} init -backend=false -input=false
+      - run: terraform -chdir=crates/screenpipe-gateway/deploy/${{ matrix.cloud }} validate
+      - run: terraform -chdir=crates/screenpipe-gateway/deploy/${{ matrix.cloud }} test
+      - run: python3 -m unittest discover -s crates/screenpipe-gateway/deploy -p 'test_*.py' -v
   unit:
     runs-on: ubuntu-latest
     timeout-minutes: 30

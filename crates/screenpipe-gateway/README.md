@@ -4,6 +4,11 @@
 
 # screenpipe-gateway — deployment guide
 
+For customer-hosted Azure Blob and Google Cloud Storage deployments, see
+[Azure/GCP deployment and credential setup](deploy/README.md). Existing S3
+configuration remains the default.
+
+
 Operator-facing. If you are looking for the **trust model** — why the archive is
 write-only, what the signed policy contains, what Screenpipe can and cannot see
 — read the website repo's `docs/query-gateway-architecture.md` first. This
