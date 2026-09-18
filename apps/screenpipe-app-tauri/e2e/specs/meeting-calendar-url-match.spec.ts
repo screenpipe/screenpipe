@@ -140,7 +140,7 @@ describe("meeting calendar URL association", function () {
     await meetingsNav.click();
 
     const correctRow = await $(
-      `//*[@role="button"][.//*[contains(text(), "${CORRECT_TITLE}")]]`,
+      `//span[normalize-space(.)="${CORRECT_TITLE}"]`,
     );
     await correctRow.waitForExist({ timeout: t(25_000) });
     expect(await correctRow.isDisplayed()).toBe(true);

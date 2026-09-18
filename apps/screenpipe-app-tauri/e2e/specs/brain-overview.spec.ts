@@ -185,25 +185,17 @@ async function openDashboardMenu() {
     }
     return false;
   };
-  const focusTrigger = () =>
-    browser.execute(() => {
-      document
-        .querySelector<HTMLElement>(
-          "[data-testid='overview-dashboard-menu']",
-        )
-        ?.focus();
-    });
-
-  await focusTrigger();
-  await browser.keys(["Enter"]);
-  if (await waitForMenuItem(2_000)) return;
-
-  await focusTrigger();
-  await browser.keys([" "]);
-  if (await waitForMenuItem(2_000)) return;
-
-  const trigger = await waitForTestId("overview-dashboard-menu", 5_000);
-  await trigger.click();
+  // Radix opens on pointerdown or ArrowDown, while hosted Windows and WebKit
+  // drivers can deliver click/OS keys without the corresponding DOM event.
+  await browser.execute(() => {
+    const trigger = document.querySelector<HTMLElement>(
+      "[data-testid='overview-dashboard-menu']",
+    );
+    trigger?.focus();
+    trigger?.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "ArrowDown", code: "ArrowDown", bubbles: true, cancelable: true,
+    }));
+  });
   if (await waitForMenuItem(3_000)) return;
 
   const diagnostic = await browser.execute(() => {
@@ -455,7 +447,11 @@ async function restartPiAfterInstallSettles(
   for (let attempt = 1; attempt <= 4; attempt += 1) {
     try {
       await piConversation.restartPi();
-      await piConversation.waitForRuntimeReady(label);
+      // Raw Pi RPC can stay silent until its first command, especially on
+      // Windows. Prove readiness with the local model request itself.
+      await piConversation.prompt("reply with ready", `${label} preflight`);
+      await piConversation.waitForRequestCount(1, `${label} preflight`, 20_000);
+      await piConversation.clearCaptures();
       return;
     } catch (error) {
       lastError = error;
@@ -684,7 +680,7 @@ async function readCanvasBlockCenterOffset(testId: string) {
 }
 
 describe("Brain Live Views", function () {
-  this.timeout(120_000);
+  this.timeout(t(120_000));
 
   it("keeps the delete-last-dashboard template journey scrollable and reviewable", async () => {
     await waitForAppReady();
@@ -696,9 +692,6 @@ describe("Brain Live Views", function () {
     await piConversation.initialize();
     await piConversation.configureAppPreset();
     await restartPiAfterInstallSettles(piConversation, "Template model");
-    await piConversation.prompt("reply with ready", "Template model preflight");
-    await piConversation.waitForRequestCount(1, "Template model preflight");
-    await piConversation.clearCaptures();
     piConversation.setResponseDelay(350);
     // The builder reads the schema-validated screenpipe_live_view_propose tool
     // arguments, not assistant text, so the model has to actually call the tool.
@@ -755,7 +748,7 @@ describe("Brain Live Views", function () {
       const deleteClicked = await browser.execute(() => {
         const item = Array.from(
           document.querySelectorAll<HTMLElement>("[role='menuitem']"),
-        ).find((candidate) => candidate.textContent?.trim() === "delete");
+        ).find((candidate) => candidate.textContent?.trim() === "Delete");
         item?.click();
         return Boolean(item);
       });
@@ -861,7 +854,7 @@ describe("Brain Live Views", function () {
       expect(await $("[data-testid='overview-apply-ai']").getText()).toContain(
         "create dashboard",
       );
-      expect(await $("button=add your first Block").isExisting()).toBe(false);
+      expect(await $("button*=Add your first Block").isExisting()).toBe(false);
       const reviewScreenshot = await saveScreenshot(
         "brain-template-generated-review",
       );
@@ -944,12 +937,6 @@ describe("Brain Live Views", function () {
     await piConversation.initialize();
     await piConversation.configureAppPreset();
     await restartPiAfterInstallSettles(piConversation, "Empty Canvas model");
-    await piConversation.prompt(
-      "reply with ready",
-      "Empty Canvas model preflight",
-    );
-    await piConversation.waitForRequestCount(1, "Empty Canvas model preflight");
-    await piConversation.clearCaptures();
     piConversation.setResponseDelay(350);
     piConversation.setToolCallSequence([
       {
@@ -988,9 +975,48 @@ describe("Brain Live Views", function () {
       await brainNav.click();
       await waitForTestId("section-brain", 15_000);
       await selectDashboard(emptyViewId);
-      await $("button=add your first Block").waitForDisplayed({
-        timeout: t(10_000),
-      });
+      const readCanvasAudit = async () =>
+        (await browser.execute(() => {
+          const isVisible = (element: Element | null) => {
+            if (!(element instanceof HTMLElement)) return false;
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return (
+              rect.width > 0 &&
+              rect.height > 0 &&
+              style.display !== "none" &&
+              style.visibility !== "hidden"
+            );
+          };
+          return {
+            canvasVisible: isVisible(
+              document.querySelector("[data-testid='live-view-canvas']"),
+            ),
+            visibleBlockIds: Array.from(
+              document.querySelectorAll<HTMLElement>(
+                "[data-testid^='canvas-block-']",
+              ),
+            )
+              .filter(isVisible)
+              .map((element) =>
+                (element.dataset.testid ?? "").replace("canvas-block-", ""),
+              )
+              .sort(),
+          };
+        })) as {
+          canvasVisible: boolean;
+          visibleBlockIds: string[];
+        };
+      await browser.waitUntil(
+        async () => {
+          const canvas = await readCanvasAudit();
+          return canvas.canvasVisible && canvas.visibleBlockIds.length === 0;
+        },
+        {
+          timeout: t(10_000),
+          timeoutMsg: "newly saved Canvas did not render empty",
+        },
+      );
 
       const prompt = await waitForTestId("live-view-ai-prompt", 10_000);
       await prompt.setValue("add four useful Blocks to this Canvas");
@@ -1009,53 +1035,12 @@ describe("Brain Live Views", function () {
       ).find((candidate) => candidate.id === emptyViewId);
       expect(persistedBeforeAcceptance?.slots).toHaveLength(0);
 
-      const readPreviewAudit = async () =>
-        (await browser.execute(() => {
-          const isVisible = (element: Element | null) => {
-            if (!(element instanceof HTMLElement)) return false;
-            const rect = element.getBoundingClientRect();
-            const style = getComputedStyle(element);
-            return (
-              rect.width > 0 &&
-              rect.height > 0 &&
-              style.display !== "none" &&
-              style.visibility !== "hidden"
-            );
-          };
-          return {
-            canvasVisible: isVisible(
-              document.querySelector("[data-testid='live-view-canvas']"),
-            ),
-            emptyStateVisible: Array.from(
-              document.querySelectorAll("button"),
-            ).some(
-              (button) =>
-                button.textContent?.trim() === "add your first Block" &&
-                isVisible(button),
-            ),
-            visibleBlockIds: Array.from(
-              document.querySelectorAll<HTMLElement>(
-                "[data-testid^='canvas-block-']",
-              ),
-            )
-              .filter(isVisible)
-              .map((element) =>
-                (element.dataset.testid ?? "").replace("canvas-block-", ""),
-              )
-              .sort(),
-          };
-        })) as {
-          canvasVisible: boolean;
-          emptyStateVisible: boolean;
-          visibleBlockIds: string[];
-        };
       const expectedBlockIds = proposedBlocks.map((block) => block.id).sort();
       await browser.waitUntil(
         async () => {
-          const audit = await readPreviewAudit();
+          const audit = await readCanvasAudit();
           return (
             audit.canvasVisible &&
-            !audit.emptyStateVisible &&
             JSON.stringify(audit.visibleBlockIds) ===
               JSON.stringify(expectedBlockIds)
           );
@@ -1066,10 +1051,9 @@ describe("Brain Live Views", function () {
           timeoutMsg: "proposed Blocks did not render on the empty Canvas",
         },
       );
-      const previewAudit = await readPreviewAudit();
+      const previewAudit = await readCanvasAudit();
       expect(previewAudit).toEqual({
         canvasVisible: true,
-        emptyStateVisible: false,
         visibleBlockIds: expectedBlockIds,
       });
       await browser.pause(100);
@@ -1108,9 +1092,6 @@ describe("Brain Live Views", function () {
     // Prove the bundled Pi runtime and local model endpoint are ready before
     // exercising the dynamically-created private Canvas session.
     await restartPiAfterInstallSettles(piConversation, "Canvas model");
-    await piConversation.prompt("reply with ready", "Canvas model preflight");
-    await piConversation.waitForRequestCount(1, "Canvas model preflight");
-    await piConversation.clearCaptures();
     piConversation.setResponseDelay(500);
     piConversation.setToolCallSequence([
       {
@@ -1578,10 +1559,10 @@ describe("Brain Live Views", function () {
     await setCssWindowSize(1440, 900);
 
     const timeRange = await waitForTestId("overview-time-range", 10_000);
-    // Freshness reads "Updated <newest> · oldest <oldest> · N waiting" since
-    // #6003 gave bound tasks a cadence. Assert the prefix, not a relative time.
+    // #6474 distinguishes source checks from the age of the underlying data.
+    // Keep the source-check assertion independent of the relative timestamp.
     expect((await timeRange.getAttribute("title"))?.toLowerCase()).toContain(
-      "updated ",
+      "sources checked ",
     );
     expect(await $("[data-testid='overview-data-status']").isExisting()).toBe(
       false,
@@ -1868,7 +1849,7 @@ Refresh the assigned Live View output targets from source-backed activity.
     );
     expect(
       (await timeRangeFreshness.getAttribute("title"))?.toLowerCase(),
-    ).toContain("updated ");
+    ).toContain("sources checked ");
     for (const size of SUPPORTED_WINDOW_SIZES) {
       await setCssWindowSize(size.width, size.height);
       await browser.pause(150);
@@ -2016,7 +1997,7 @@ Refresh the assigned Live View output targets from source-backed activity.
       expect(layout!.clippedControls).toEqual([]);
     }
     await setCssWindowSize(1440, 900);
-    const collapseSidebar = await $("[aria-label='collapse sidebar']");
+    const collapseSidebar = await $("[aria-label='Collapse sidebar']");
     if (await collapseSidebar.isExisting()) {
       await collapseSidebar.click();
     }
@@ -2059,7 +2040,7 @@ Refresh the assigned Live View output targets from source-backed activity.
     const refresh = await waitForTestId("overview-refresh-data", 10_000);
     await refresh.click();
     await browser.waitUntil(
-      async () => (await refresh.getAttribute("aria-label")) === "loading data",
+      async () => (await refresh.getAttribute("aria-label")) === "Loading data",
       { timeout: t(10_000) },
     );
     expect(await dashboardSelector.isEnabled()).toBe(true);
@@ -2095,7 +2076,7 @@ Refresh the assigned Live View output targets from source-backed activity.
     );
     expect(existsSync(fixedEditorScreenshot)).toBe(true);
 
-    const cancelFixedEditor = await $("button=cancel");
+    const cancelFixedEditor = await $("button=Cancel");
     await cancelFixedEditor.click();
     await selectDashboard(SELECTABLE_VIEW_ID);
 
@@ -2192,7 +2173,7 @@ Refresh the assigned Live View output targets from source-backed activity.
     await noteTool.click();
     const compactTools = await waitForTestId("canvas-tools-toggle", 10_000);
     expect(await compactTools.getAttribute("aria-label")).toContain(
-      "note tool active",
+      "Note tool active",
     );
     await clickEmptyCanvasSpace();
     const surface = await waitForTestId("live-view-canvas-surface", 10_000);
@@ -2399,7 +2380,7 @@ Refresh the assigned Live View output targets from source-backed activity.
       expect(existsSync(canvasScreenshot)).toBe(true);
     }
 
-    const expandSidebar = await $("[aria-label='expand sidebar']");
+    const expandSidebar = await $("[aria-label='Expand sidebar']");
     if (await expandSidebar.isExisting()) {
       await expandSidebar.click();
     }

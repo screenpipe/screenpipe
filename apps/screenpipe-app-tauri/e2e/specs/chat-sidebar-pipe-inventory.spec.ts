@@ -29,6 +29,7 @@ import { E2E_DATA_DIR } from "../helpers/app-launcher.js";
 import {
   openHomeWindow,
   reloadAndWaitForHome,
+  setViewportSize,
   t,
   waitForAppReady,
 } from "../helpers/test-utils.js";
@@ -195,7 +196,7 @@ async function chooseRowAction(sessionId: string, action: string): Promise<void>
   const opened = await browser.execute((id: string) => {
     const rowElement = document.querySelector(`[data-testid="chat-row-${id}"]`);
     const button = rowElement?.querySelector<HTMLButtonElement>(
-      'button[aria-label="conversation actions"]',
+      'button[aria-label="Conversation actions"]',
     );
     if (!button) return false;
     button.focus();
@@ -456,13 +457,7 @@ describe("chat sidebar pipe inventory", function () {
     // The conversation inventory must own its vertical scroll once Automations
     // is expanded at the minimum supported window height. It must never
     // stretch the app or push the fixed Settings footer out of reach.
-    const devicePixelRatio = (await browser.execute(
-      () => window.devicePixelRatio || 1,
-    )) as number;
-    await browser.setWindowSize(
-      Math.round(800 * devicePixelRatio),
-      Math.round(600 * devicePixelRatio),
-    );
+    await setViewportSize(800, 600);
     await browser.pause(250);
     const scrollMetrics = await browser.execute(() => {
       const element = document.querySelector<HTMLElement>(
@@ -490,7 +485,7 @@ describe("chat sidebar pipe inventory", function () {
     const clickedShowOlder = await browser.execute((selector: string) => {
       const group = document.querySelector(selector);
       const button = Array.from(group?.querySelectorAll("button") ?? [])
-        .find((candidate) => candidate.textContent?.includes("show older runs"));
+        .find((candidate) => candidate.textContent?.includes("Show older runs"));
       button?.click();
       return Boolean(button);
     }, groupSelector);
@@ -591,7 +586,7 @@ describe("chat sidebar pipe inventory", function () {
       async () => await browser.execute((id: string) => {
         const row = document.querySelector(`[data-testid="chat-row-${id}"]`);
         const pinnedHeader = document.querySelector(
-          '[data-testid="sidebar-section-pinned"]',
+          '[data-testid="sidebar-section-Pinned"]',
         );
         const pinnedSection = pinnedHeader?.parentElement?.parentElement;
         return row !== null && pinnedSection?.contains(row) === true;

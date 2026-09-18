@@ -10,6 +10,7 @@
  * monitors, Defender visibility, local API concurrency, and window routing.
  */
 
+import { SEARCH_INPUT_SELECTOR } from "../helpers/search.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -513,7 +514,7 @@ $uniqueNames = @($names | Sort-Object -Unique)
     await showWindow({ Search: { query: null } });
     await waitForWindowHandle("search", t(10_000));
     await browser.switchToWindow("search");
-    const searchInput = await $('input[placeholder*="search memory"]');
+    const searchInput = await $(SEARCH_INPUT_SELECTOR);
     await searchInput.waitForExist({ timeout: t(15_000) });
 
     const handlesBeforeClose = await browser.getWindowHandles();

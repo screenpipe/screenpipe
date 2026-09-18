@@ -132,7 +132,7 @@ describe('Settings sections', () => {
     await section.waitForExist({ timeout: 8_000 });
     const sectionText = (await section.getText()).toLowerCase();
     expect(sectionText).toContain('screen context capture');
-    expect(sectionText).toContain('screen recording');
+    expect(await section.$('#disableVision').isExisting()).toBe(true);
     expect(sectionText).not.toContain('audio recording');
     expect(sectionText).not.toContain('live meeting notes');
 
@@ -573,7 +573,29 @@ describe('Settings sections', () => {
         `[data-testid="notification-bell-action-${actionable!.id}-0"]`,
       );
       await action.waitForExist({ timeout: t(10_000) });
+      const listenerReady = await browser.executeAsync((done: (ready: boolean) => void) => {
+        const runtime = window as any;
+        runtime.__lowDiskDeepLink = null;
+        runtime.__TAURI__.event.listen("deep-link-received", (event: { payload: unknown }) => {
+          runtime.__lowDiskDeepLink = {
+            type: typeof event.payload,
+            value: event.payload,
+          };
+        }).then((unlisten: () => void) => {
+          runtime.__lowDiskDeepLinkUnlisten = unlisten;
+          done(true);
+        }).catch(() => done(false));
+      });
+      expect(listenerReady).toBe(true);
       await action.click();
+      await browser.waitUntil(async () => Boolean(await browser.execute(() =>
+        (window as any).__lowDiskDeepLink,
+      )), { timeout: t(5_000), timeoutMsg: "notification action did not emit its deep link" });
+      const delivered = await browser.execute(() => {
+        (window as any).__lowDiskDeepLinkUnlisten?.();
+        return (window as any).__lowDiskDeepLink;
+      });
+      expect(delivered).toEqual({ type: "string", value: "screenpipe://settings?section=storage" });
       const storage = await $('[data-testid="section-settings-storage"]');
       await storage.waitForExist({ timeout: t(12_000) });
       expect(await browser.getUrl()).toContain('/settings?section=storage');
@@ -587,6 +609,9 @@ describe('Settings sections', () => {
         enabled: true,
       });
       await invokeOrThrow('plugin:e2e|reset_disk_pressure_notification_latch');
+      // The synthetic low-disk incident stopped the shared engine. Reopen it
+      // with the E2E recording settings before subsequent API/window specs.
+      await invokeOrThrow('start_capture');
     }
   });
 

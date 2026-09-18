@@ -34,6 +34,7 @@
 import {
   openHomeWindow,
   reloadAndWaitForHome,
+  setViewportSize,
   t,
   waitForAppReady,
 } from "../helpers/test-utils.js";
@@ -103,6 +104,9 @@ describe("First-run guide (#5407)", function () {
   before(async () => {
     await waitForAppReady();
     await openHomeWindow();
+    // Other specs exercise the minimum window size. Restore a roomy viewport
+    // so the guide card does not legitimately overlap the composer probe.
+    await setViewportSize(1280, 960);
     await browser.pause(1000);
   });
 

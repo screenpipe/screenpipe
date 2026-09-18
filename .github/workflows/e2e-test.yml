@@ -280,6 +280,10 @@ jobs:
     - name: Verify first-run onboarding and existing-owner checkout bypass
       shell: pwsh
       working-directory: ./apps/screenpipe-app-tauri
+      # The Windows WebDriver listener can remain unavailable after the prior
+      # process exits. Give each subsequent suite its own isolated port.
+      env:
+        SCREENPIPE_E2E_WEBDRIVER_PORT: "4446"
       run: bun run test:e2e:onboarding-first-run
 
     - name: Run E2E Tests
@@ -287,6 +291,7 @@ jobs:
       working-directory: ./apps/screenpipe-app-tauri
       env:
         RECORD_VIDEO: "true"
+        SCREENPIPE_E2E_WEBDRIVER_PORT: "4447"
       run: |
         Remove-Item -LiteralPath ./e2e/results -Recurse -Force -ErrorAction SilentlyContinue
         bun run test:e2e
@@ -296,7 +301,8 @@ jobs:
       working-directory: ./apps/screenpipe-app-tauri
       env:
         RECORD_VIDEO: "true"
-        SCREENPIPE_E2E_SEED: "onboarding,no-audio"
+        SCREENPIPE_E2E_SEED: "onboarding,no-audio,cloud-authenticated"
+        SCREENPIPE_E2E_WEBDRIVER_PORT: "4448"
       run: |
         bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/windows-core-recording.spec.ts
 

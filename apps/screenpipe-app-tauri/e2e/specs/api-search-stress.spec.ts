@@ -60,7 +60,6 @@ describe("Local API search and stability", function () {
     ["/search?limit=5&content_type=all", "all-content search"],
     ["/search?limit=5&content_type=input", "input search"],
     ["/search?limit=5&content_type=accessibility", "accessibility search"],
-    ["/search?limit=5&filter_pii=true", "PII-filtered search"],
     ["/search?limit=5&include_frames=false", "search without frames"],
   ] as const;
 
@@ -71,6 +70,28 @@ describe("Local API search and stability", function () {
       expectNoServerError(res, label);
       expect(res.ok).toBe(true);
       expect(typeof res.body).toBe("object");
+      expect(res.body).toHaveProperty("data");
+      expect(Array.isArray((res.body as { data?: unknown }).data)).toBe(true);
+    });
+  }
+
+  for (const flag of ["true", "1"]) {
+    it(`PII-filtered search (${flag}) returns results or fails closed`, async function () {
+      if (!key) this.skip();
+      const res = await authedGet(`/search?limit=5&filter_pii=${flag}`);
+      // The attested enclave is an external dependency. Its documented
+      // unavailable response must contain only an error, never search data.
+      if (res.status === 503) {
+        expect(res.body).toEqual({
+          error: "privacy_filter_unavailable",
+          message: expect.any(String),
+        });
+        expect((res.body as { message: string }).message.length).toBeGreaterThan(0);
+        console.info("Privacy enclave unavailable: verified fail-closed response; redaction not verified");
+        return;
+      }
+      expectNoServerError(res, `filter_pii=${flag}`);
+      expect(res.status).toBe(200);
       expect(res.body).toHaveProperty("data");
       expect(Array.isArray((res.body as { data?: unknown }).data)).toBe(true);
     });
@@ -174,9 +195,7 @@ describe("Local API search and stability", function () {
     ["/search?limit=2&include_frames=0", "include_frames zero"],
     ["/search?limit=2&include_frames=TRUE", "include_frames uppercase true"],
     ["/search?limit=2&include_frames=FALSE", "include_frames uppercase false"],
-    ["/search?limit=2&filter_pii=true", "filter_pii true"],
     ["/search?limit=2&filter_pii=false", "filter_pii false"],
-    ["/search?limit=2&filter_pii=1", "filter_pii one"],
     ["/search?limit=2&filter_pii=0", "filter_pii zero"],
     ["/search?limit=2&content_type=accessibility&on_screen=true", "on_screen true"],
     ["/search?limit=2&content_type=accessibility&on_screen=false", "on_screen false"],

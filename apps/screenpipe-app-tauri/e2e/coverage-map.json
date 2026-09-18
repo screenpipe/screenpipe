@@ -1537,7 +1537,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Native Home WebView coverage for one active conversation, atomic sidebar-to-panel navigation, clean new-chat drafts, semantic unread state, removal of the duplicate tab strip, and a title-scoped Pin/Rename/Archive menu."
+      "notes": "Native Home WebView coverage for one active conversation, atomic sidebar-to-panel navigation, clean new-chat drafts, semantic unread state, one selected workspace tab matching the sidebar and transcript, and a tab-scoped Pin/Rename/Archive menu."
     },
     {
       "spec": "chat-tool-activity.spec.ts",
@@ -1705,14 +1705,13 @@
       ],
       "features": [
         "onboarding",
-        "first-run-learning",
-        "shortcuts"
+        "first-run-learning"
       ],
       "criticality": "high",
-      "confidence": "strong",
+      "confidence": "partial",
       "ux": "real-user-flow",
-      "tests": 9,
-      "notes": "Post-setup summary on Home under the authenticated seed: immediate runs show a live countdown, an interrupted first attempt gets exactly one quiet recovery, exhausted empty engine results settle with their diagnostic reason preserved, silent states stay silent across reloads, late returns retry in the background, ready summaries remain actionable, a verified shown Chat-shortcut outcome completes the contextual practice lesson while a hidden outcome stays recoverable, and idle/done never render."
+      "tests": 5,
+      "notes": "Seeds the durable native summary record and verifies the Home projection: live countdown, writing identity across renderer reload, empty-result dismissal, ready chat opening without a user turn, and real setup completion arming a new native job. Native generation and retry are outside this fixture; see first-run-ai-summary.spec.ts."
     },
     {
       "spec": "first-run-reset-learning-window.spec.ts",
@@ -1816,7 +1815,7 @@
       "confidence": "partial",
       "ux": "real-user-flow",
       "tests": 2,
-      "notes": "Reads back the real WKWebView/WebView2 history-swipe setting, verifies top-level UI sections are browser-history entries, proves Back to app consumes Settings so the next back action restores the prior Home state, and captures every destination plus the production back/forward gesture-arrow design. Physical OS trackpad input remains manual."
+      "notes": "Reads back the real WKWebView/WebView2 history-swipe setting, verifies top-level UI sections are browser-history entries, proves Back to app consumes Settings so the next back action restores the prior Home state, and verifies native swipes remain disabled with no edge indicator after reload, preserving the intentional behavior in #6590. Physical OS trackpad input remains manual."
     },
     {
       "spec": "home-window.spec.ts",

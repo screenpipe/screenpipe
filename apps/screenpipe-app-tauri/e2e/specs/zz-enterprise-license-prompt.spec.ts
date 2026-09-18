@@ -359,7 +359,7 @@ async function submitLicense(value: string): Promise<void> {
   await input.clearValue();
   await input.setValue(value);
 
-  const button = await $('button*=activate');
+  const button = await $('button*=Activate');
   await button.waitForEnabled({ timeout: t(10000) });
   await button.click();
 }
@@ -459,7 +459,7 @@ describe('Enterprise onboarding activation', () => {
     // organization key. Enter the key path explicitly before exercising the
     // activation form so this remains deterministic from a clean install.
     await waitForBodyText('use enterprise key');
-    const useEnterpriseKey = await $('button*=use enterprise key');
+    const useEnterpriseKey = await $('button*=Use enterprise key');
     await useEnterpriseKey.waitForEnabled({ timeout: t(10_000) });
     await useEnterpriseKey.click();
     await waitForBodyText('activate this device');
@@ -474,7 +474,7 @@ describe('Enterprise onboarding activation', () => {
     await setHeartbeatStatus(403);
     await submitLicense(VALID_LICENSE);
     await waitForBodyText('license seat limit reached - contact your admin to add seats');
-    expect(await (await $('button*=activate')).isEnabled()).toBe(true);
+    expect(await (await $('button*=Activate')).isEnabled()).toBe(true);
 
     await setHeartbeatStatus(200);
     await submitLicense(VALID_LICENSE);

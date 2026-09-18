@@ -692,6 +692,7 @@
         "tests/hybrid_storage.rs",
         "tests/in_place_migration.rs",
         "tests/live_coverage_marker_test.rs",
+        "tests/migration_source_recovery.rs",
         "tests/orphan_chunk_null_poisoning_test.rs",
         "tests/outputs_saf_test.rs",
         "tests/range_export_frame_sources_test.rs",

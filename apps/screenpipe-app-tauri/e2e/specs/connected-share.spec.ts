@@ -575,7 +575,7 @@ describe("connected snapshot sharing", function () {
           });
       });
     };
-    const shareCaret = await $(`[aria-label="more meeting actions"]`);
+    const shareCaret = await $(`[aria-label="More meeting actions"]`);
     await shareCaret.waitForExist({ timeout: t(10_000) });
     expect(
       existsSync(await saveScreenshot("connected-share-meeting-entry")),
@@ -599,7 +599,7 @@ describe("connected snapshot sharing", function () {
     ).toBe(true);
 
     const closeDisconnected = await $(
-      `//*[@data-testid="connected-share-dialog"]//button[normalize-space()="close"]`,
+      `//*[@data-testid="connected-share-dialog"]//button[normalize-space()="Close"]`,
     );
     await closeDisconnected.click();
     await waitForShareDialogClosed();
@@ -624,7 +624,7 @@ describe("connected snapshot sharing", function () {
     const connectedText = (await browser.execute(
       () => document.body?.innerText ?? "",
     )) as string;
-    expect(connectedText).toContain("send unchanged");
+    expect(connectedText).toContain("Send unchanged");
     expect(connectedText).toContain("no new AI processing");
     expect(await shareWrites()).toHaveLength(0);
     expect(
@@ -704,11 +704,11 @@ describe("connected snapshot sharing", function () {
     );
 
     const closeReceipt = await $(
-      `//*[@data-testid="connected-share-dialog"]//button[normalize-space()="close"]`,
+      `//*[@data-testid="connected-share-dialog"]//button[normalize-space()="Close"]`,
     );
     await closeReceipt.click();
     await waitForShareDialogClosed();
-    const backToMeetings = await $(`[aria-label="back to meetings"]`);
+    const backToMeetings = await $(`[aria-label="Back to meetings"]`);
     await backToMeetings.waitForExist({ timeout: t(10_000) });
     await backToMeetings.click();
     const brainNav = await waitForTestId("nav-brain", 10_000);
@@ -850,7 +850,7 @@ describe("connected snapshot sharing", function () {
       ).find(
         (element) =>
           element.textContent?.trim() ===
-          "context from frozen Screenpipe snapshot",
+          "Context from Frozen Screenpipe snapshot",
       );
       label?.parentElement?.parentElement
         ?.querySelector<HTMLButtonElement>("button")
@@ -880,7 +880,7 @@ describe("connected snapshot sharing", function () {
           () => document.body?.innerText ?? "",
         )) as string;
         return (
-          text.includes("frozen Screenpipe snapshot") &&
+          text.includes("Frozen Screenpipe snapshot") &&
           text.includes("Help me share this reviewed snapshot to Notion.") &&
           !text.includes('"kind":"screenpipe_share_context"')
         );

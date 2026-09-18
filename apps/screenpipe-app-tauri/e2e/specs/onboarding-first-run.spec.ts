@@ -29,10 +29,8 @@ import { join } from "node:path";
 import { E2E_DATA_DIR, E2E_SEED_FLAGS } from "../helpers/app-launcher.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import {
-  closeWindow,
   invokeOrThrow,
   showWindow,
-  waitForWindowClosed,
   waitForWindowHandle,
   waitForWindowUrl,
 } from "../helpers/tauri.js";
@@ -64,30 +62,26 @@ const waitForBodyText = async (needle: string, timeout = 10_000) => {
   });
 };
 
-/**
- * Drive the setup flow to a specific slide without a real login round-trip.
- *
- * Re-opens the onboarding window rather than reloading in place: the page
- * restores a saved step only after settings and managed policy hydrate, and a
- * cold packaged app can spend part of that window installing bundled Pi
- * dependencies. Same shape as screen-recording-restart.spec.ts.
- */
-const gotoSlide = async (step: string) => {
-  await invokeOrThrow("set_onboarding_step", { step });
-
-  // Destroy and recreate rather than just showing: showWindow on a live
-  // window only focuses it, so the mount-time restore effect never re-runs
-  // and the flow stays on whatever slide it was already displaying.
-  await showWindow({ Home: { page: null } });
-  await waitForWindowHandle("home", t(20_000));
-  await browser.switchToWindow("home");
-  await closeWindow("Onboarding");
-  await waitForWindowClosed("onboarding", t(15_000));
-
+/** Remount the page so its saved-step restore runs after settings hydrate. */
+const remountOnboarding = async () => {
   await showWindow("Onboarding");
   await waitForWindowHandle("onboarding", t(20_000));
   await browser.switchToWindow("onboarding");
+  // Recreating a driver-managed window label can lose native IPC bindings
+  // (WebView2 async handlers on Windows, protocol routing on WKWebView).
+  // Reloading gives settings and saved-step restoration a fresh React mount
+  // while retaining the native webview and its test-driver connection.
+  await browser.refresh();
   await waitForWindowUrl("/onboarding", undefined, t(20_000));
+};
+
+/** Drive setup to a persisted slide without a real login round-trip. */
+const gotoSlide = async (step: string) => {
+  await invokeOrThrow("set_onboarding_step", { step });
+  await showWindow({ Home: { page: null } });
+  await waitForWindowHandle("home", t(20_000));
+  await browser.switchToWindow("home");
+  await remountOnboarding();
 };
 
 /**
@@ -313,12 +307,7 @@ const seedLearningWindow = async (state: Record<string, unknown>) => {
     await seedFreshOnboardingPremise();
     await clearSetting("acquisitionSource");
 
-    await closeWindow("Onboarding").catch(() => {});
-    await waitForWindowClosed("onboarding", t(15_000)).catch(() => {});
-    await showWindow("Onboarding");
-    await waitForWindowHandle("onboarding", t(20_000));
-    await browser.switchToWindow("onboarding");
-    await waitForWindowUrl("/onboarding", undefined, t(20_000));
+    await remountOnboarding();
     await waitForTestId("login-cta", 20_000);
   });
 

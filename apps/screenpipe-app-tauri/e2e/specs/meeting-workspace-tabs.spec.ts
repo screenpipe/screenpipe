@@ -542,7 +542,7 @@ describe("meeting workspace tabs and responsive layout", function () {
         timeoutMsg: "transcript did not remain at the reader-selected position",
       },
     );
-    const followLive = await $('button[aria-label="follow live transcript"]');
+    const followLive = await $('button[aria-label="Follow live transcript"]');
     await followLive.waitForDisplayed({ timeout: t(5_000) });
     expect(await $('[data-testid="follow-live-unseen"]').isExisting()).toBe(
       false,
@@ -589,7 +589,7 @@ describe("meeting workspace tabs and responsive layout", function () {
     // The unread state rerenders this button after new speech; query the live
     // element again instead of retaining the pre-update WebDriver reference.
     const currentFollowLive = await $(
-      'button[aria-label="follow live transcript"]',
+      'button[aria-label="Follow live transcript"]',
     );
     await browser.execute(
       (element: HTMLButtonElement) => element.click(),

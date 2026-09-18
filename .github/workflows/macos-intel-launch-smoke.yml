@@ -94,12 +94,9 @@ jobs:
     # macos-15-intel is the current — and per actions/runner-images#13027,
     # final — hosted x86_64 macOS image, supported into 2027.
     runs-on: macos-15-intel
-    # Measured cold (no sccache/rust-cache/sidecar-cache warm yet): the Rust
-    # build alone didn't finish in 60min on this runner tier (screenpipe-audio
-    # links whisper.cpp/llama.cpp, which is slow to compile from scratch).
-    # Caches populate as this job runs repeatedly, so later runs should be
-    # much faster than this budget suggests.
-    timeout-minutes: 120
+    # Run 35364456617 reached app build completion after 93 minutes. Leave
+    # time for native test binaries, launch checks, and cache upload.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 
@@ -187,19 +184,18 @@ jobs:
       - name: Smoke-test CoreAudio meeting-process snapshots
         shell: bash
         env:
-          # Reuse the artifacts produced by the Tauri build above instead of
-          # compiling screenpipe-audio's native dependency graph a second time.
+          # Match both the target directory and profile of the Tauri build.
+          # Test-specific features can still require additional compilation.
           CARGO_TARGET_DIR: apps/screenpipe-app-tauri/src-tauri/target
         run: |
-          cargo test -p screenpipe-audio --lib \
+          cargo test -p screenpipe-audio --profile debug-dev --lib \
             meeting_processes::platform::runtime_smoke::repeated_input_process_snapshots_do_not_crash \
             -- --exact --nocapture
 
       - name: Smoke-test meeting UI app discovery under process churn
         shell: bash
         env:
-          # Reuse the artifacts produced by the Tauri build above instead of
-          # compiling screenpipe-engine's native dependency graph again.
+          # Use the same target directory and profile as the preceding builds.
           CARGO_TARGET_DIR: apps/screenpipe-app-tauri/src-tauri/target
         run: |
           set -euo pipefail
@@ -212,7 +208,7 @@ jobs:
             exit 1
           fi
 
-          cargo test -p screenpipe-engine --lib --no-default-features \
+          cargo test -p screenpipe-engine --profile debug-dev --lib --no-default-features \
             meeting_watcher::ui_scan::macos::runtime_smoke \
             -- --nocapture
 

@@ -148,8 +148,10 @@ and placeholder JPEG are distinct from the subsequent real TextEdit captures.
 The packaged app used product commit `c87fa3e65dc39ca93a65dc7865fe2266c886eab7`.
 This is the NAS acceptance build. Subsequent CI repairs update test fixtures,
 the Intel smoke build's sidecar selection, and Windows recovery-owner detection;
-they do not change the NAS filesystem or migration implementation. Their check
-results are recorded in PR #7090. The private source bundle SHA-256 is
+they do not change the NAS filesystem implementation. The branch subsequently
+merged main's element-migration scan optimization (#7094); the recorded desktop
+acceptance predates that merge. Local migration regressions and completed CI
+results for later revisions are recorded in PR #7090. The private source bundle SHA-256 is
 `5da727e13a7d3a6bfbfb898cccce3e023bb208f6bb2df3d9118d06052b1f5b16`.
 The 53-second migration video SHA-256 is
 `5dddb3f77dfe7b49a18f59381327ab5e2beca436022f1b4e290ce2e329372d2b`.

@@ -37,7 +37,9 @@ type JumpMetrics = {
   label: string;
 };
 
-const LONG_ASSISTANT = Array.from({ length: 12 }, (_, index) => (
+// The Linux CI window has a roughly 960px message rail. Twelve paragraphs
+// fit without scrolling there; keep this fixture taller than that viewport.
+const LONG_ASSISTANT = Array.from({ length: 32 }, (_, index) => (
   `Paragraph ${index + 1}. This seeded answer is long enough that the message rail ` +
   `must scroll. The jump control should only become interactive after the ` +
   `viewport leaves the latest message, and it must not announce new content.`

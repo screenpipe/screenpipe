@@ -190,7 +190,7 @@ describe("chat native steering continuation", function () {
     // Wait through the original turn's agent_end and into the steered model
     // request. The continuation must remain active across that exact gap.
     await piConversation.waitForRequestCount(2, "steered continuation");
-    await $('[aria-label="stop reply"]').waitForDisplayed({ timeout: t(10_000) });
+    await $('[aria-label="Stop reply"]').waitForDisplayed({ timeout: t(10_000) });
     const rows = await messageRows();
     const steerIndex = rows.findIndex(
       (row) => row.role === "user" && row.text.includes(STEER_PROMPT),
@@ -213,7 +213,7 @@ describe("chat native steering continuation", function () {
     await browser.waitUntil(
       async () =>
         browser.execute(
-          () => document.querySelector('[aria-label="stop reply"]') === null,
+          () => document.querySelector('[aria-label="Stop reply"]') === null,
         ),
       {
         timeout: t(10_000),

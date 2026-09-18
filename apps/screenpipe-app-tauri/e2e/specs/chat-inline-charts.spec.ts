@@ -309,12 +309,12 @@ describe("Inline charts in chat", function () {
   });
 
   it("offers a Live View handoff from every chart's action menu", async () => {
-    const triggers = await $$('button[aria-label="chart actions"]');
+    const triggers = await $$('button[aria-label="Chart actions"]');
     expect(triggers).toHaveLength(7);
 
     await browser.execute(() => {
       const trigger = document.querySelector<HTMLElement>(
-        'button[aria-label="chart actions"]',
+        'button[aria-label="Chart actions"]',
       );
       if (!trigger) return;
       trigger.scrollIntoView({ block: "center" });

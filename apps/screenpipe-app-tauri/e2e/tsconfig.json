@@ -13,7 +13,7 @@
       "@wdio/globals/types"
     ],
     "outDir": "./dist",
-    "rootDir": ".",
+    "rootDir": "..",
     "baseUrl": ".",
     "paths": {
       "@/*": ["../*"]

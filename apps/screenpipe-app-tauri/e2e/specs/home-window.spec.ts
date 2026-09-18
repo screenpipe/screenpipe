@@ -75,14 +75,14 @@ describe('Home window', () => {
     const recordingStatus = await $('[data-testid="recording-status-trigger"]');
     await recordingStatus.waitForExist({ timeout: t(10000) });
 
-    const collapseSidebar = await $('[aria-label="collapse sidebar"]');
+    const collapseSidebar = await $('[aria-label="Collapse sidebar"]');
     await collapseSidebar.click();
 
     await recordingStatus.waitForExist({
       reverse: true,
       timeout: t(5000),
     });
-    const expandSidebar = await $('[aria-label="expand sidebar"]');
+    const expandSidebar = await $('[aria-label="Expand sidebar"]');
     await expandSidebar.waitForExist({ timeout: t(5000) });
 
     const filepath = await saveScreenshot('home-sidebar-collapsed');

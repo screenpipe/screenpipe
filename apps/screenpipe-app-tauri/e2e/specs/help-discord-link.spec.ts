@@ -71,7 +71,7 @@ describe("Help section", function () {
       "last 5 min unavailable — screen recording is off."
     );
 
-    const addFilesButton = await $("button=add files");
+    const addFilesButton = await $("button=Add files");
     expect(await addFilesButton.isEnabled()).toBe(true);
 
     const filepath = await saveScreenshot("help-recent-recording-disabled");

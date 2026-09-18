@@ -13,6 +13,12 @@ export function t(ms: number): number {
   return ms * CI_TIMEOUT_MULTIPLIER;
 }
 
+/** Native driver dimensions are physical pixels; fixtures describe CSS space. */
+export async function setViewportSize(width: number, height: number): Promise<void> {
+  const scale = await browser.execute(() => window.devicePixelRatio || 1);
+  await browser.setWindowSize(Math.round(width * scale), Math.round(height * scale));
+}
+
 /**
  * Check if audio devices are available by hitting the health endpoint.
  * Returns false on CI runners that lack audio hardware.
@@ -61,13 +67,18 @@ export async function waitForAppReady(): Promise<void> {
  * home-page wait in `finishOpenHomeWindow`.
  */
 export async function reloadAndWaitForHome(timeoutMs = t(30000)): Promise<void> {
-  // The reload itself can race the execution-context teardown — ignore.
-  await browser.execute(() => window.location.reload()).catch(() => {});
+  // The native driver's refresh() only requests location.reload(). Its return
+  // does not prove navigation finished, so reject readiness from the old page.
+  await browser.execute(() => {
+    (window as any).__screenpipeE2EReloadPending = true;
+  });
+  await browser.refresh();
   await browser.waitUntil(
     async () => {
       try {
         return (await browser.execute(
-          () => !!document.querySelector('[data-testid="home-page"]')
+          () => !(window as any).__screenpipeE2EReloadPending &&
+            !!document.querySelector('[data-testid="home-page"]')
         )) as boolean;
       } catch {
         // Transient during the reload (session/context not ready) — retry.
@@ -166,9 +177,9 @@ async function finishOpenHomeWindow(): Promise<void> {
   // nav-pipes / nav-timeline / nav-settings would fail with "element still not
   // existing". Re-expand here so each spec starts from a known-expanded state.
   // The toggle is the only chrome left when collapsed; aria-label flips to
-  // "expand sidebar" in that state, so its presence is the collapse signal.
+  // "Expand sidebar" in that state, so its presence is the collapse signal.
   try {
-    const expandBtn = await $('[aria-label="expand sidebar"]');
+    const expandBtn = await $('[aria-label="Expand sidebar"]');
     if (await expandBtn.isExisting()) {
       await expandBtn.click();
       await browser.pause(t(500));
@@ -208,6 +219,28 @@ export async function openHomeWindow(): Promise<void> {
   );
 
   await finishOpenHomeWindow();
+}
+
+/** Open the full agent editor, where account ownership and all agents appear. */
+export async function openAcpSettingsEditor(): Promise<void> {
+  await openHomeWindow();
+  const navSettings = await $('[data-testid="nav-settings"]');
+  await navSettings.waitForExist({ timeout: t(10_000) });
+  await navSettings.click();
+  const navAi = await $('[data-testid="settings-nav-ai"]');
+  await navAi.waitForExist({ timeout: t(10_000) });
+  await navAi.click();
+
+  const createPreset = await $('button*=Create Preset');
+  const createFirstPreset = await $('button*=Create Your First Preset');
+  const createButton = (await createPreset.isExisting()) ? createPreset : createFirstPreset;
+  await createButton.waitForExist({ timeout: t(10_000) });
+  await createButton.click();
+
+  const codexCard = await $('[role="button"][aria-label="Codex"]');
+  await codexCard.waitForExist({ timeout: t(10_000) });
+  await codexCard.click();
+  await $("#acpAgent").waitForExist({ timeout: t(10_000) });
 }
 
 /**

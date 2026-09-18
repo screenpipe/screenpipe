@@ -213,6 +213,9 @@ async function canvasCenter(): Promise<{
   local: { x: number; y: number };
 }> {
   const surface = await waitForTestId("live-view-canvas-surface", 10_000);
+  // Enter from outside the canvas: WebKitGTK may keep the last pointer position
+  // across specs and omit pointerenter when moveTo targets that same position.
+  await browser.action("pointer").move({ duration: 0, x: 1, y: 1 }).perform();
   await surface.moveTo();
   return (await browser.execute(() => {
     const element = document.querySelector<HTMLElement>(
@@ -407,7 +410,7 @@ describe("Live View canvas pinch zoom", function () {
       y: (center.y - start.y) / start.zoom,
     };
 
-    const zoomIn = await $("[aria-label='zoom in']");
+    const zoomIn = await $("[aria-label='Zoom in']");
     await zoomIn.click();
     await browser.pause(t(200));
     const zoomed = await paintedViewport();
@@ -434,7 +437,7 @@ describe("Live View canvas pinch zoom", function () {
     );
 
     // Zooming out past the floor clamps instead of running away.
-    const zoomOut = await $("[aria-label='zoom out']");
+    const zoomOut = await $("[aria-label='Zoom out']");
     for (let click = 0; click < 20; click += 1) {
       await zoomOut.click();
     }

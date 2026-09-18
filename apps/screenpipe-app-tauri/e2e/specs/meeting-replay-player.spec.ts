@@ -239,7 +239,7 @@ describe("historical meeting silent replay player", function () {
     );
 
     const pause = await waitForTestId("replay-play-toggle", 5_000);
-    expect(await pause.getAttribute("aria-label")).toBe("pause silent replay");
+    expect(await pause.getAttribute("aria-label")).toBe("Pause silent replay");
     await pause.click();
     const pausedFrameId = await $(
       "[data-testid='replay-active-frame']",
@@ -259,7 +259,7 @@ describe("historical meeting silent replay player", function () {
     // coordinates read off the live layout. Both surfaces are addressed by
     // attributes that predate the fix, so this spec fails on the buggy build.
     const scrubber = await waitForTestId("replay-scrubber", 5_000);
-    const progress = await $('[aria-label="silent replay progress"]');
+    const progress = await $('[aria-label="Silent replay progress"]');
     await progress.waitForExist({ timeout: t(5_000) });
     const valueMax = Number(await scrubber.getAttribute("aria-valuemax"));
     expect(valueMax).toBeGreaterThan(0);

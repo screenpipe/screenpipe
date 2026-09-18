@@ -6,7 +6,7 @@
  * Native regression coverage for one coherent active chat in the Home window.
  *
  * This guards the failures that made the sidebar and conversation panel look
- * like two chats were active at once: a second tab strip, a sidebar highlight
+ * like two chats were active at once: a sidebar highlight
  * that moved before the panel, abandoned "untitled" drafts, a literal block
  * glyph for unread state, and a global-looking menu detached from its title.
  */
@@ -75,7 +75,8 @@ type VisualState = {
   selectedId: string | null;
   title: string;
   titleCount: number;
-  legacyTabCount: number;
+  activeTabId: string | null;
+  activeTabCount: number;
 };
 
 async function visualState(): Promise<VisualState> {
@@ -90,7 +91,9 @@ async function visualState(): Promise<VisualState> {
         document.querySelector<HTMLElement>('[data-testid="chat-title"]')
           ?.textContent?.trim() ?? "",
       titleCount: document.querySelectorAll('[data-testid="chat-title"]').length,
-      legacyTabCount: document.querySelectorAll("[data-chat-tab-id]").length,
+      activeTabId: document.querySelector('[data-chat-tab-id] [role="tab"][aria-selected="true"]')
+        ?.closest<HTMLElement>("[data-chat-tab-id]")?.dataset.chatTabId ?? null,
+      activeTabCount: document.querySelectorAll('[data-chat-tab-id] [role="tab"][aria-selected="true"]').length,
     };
   })) as VisualState;
 }
@@ -104,7 +107,7 @@ async function waitForAlignedChat(id: string, title: string): Promise<void> {
         state.selectedId === id &&
         state.title === title &&
         state.titleCount === 1 &&
-        state.legacyTabCount === 0
+        state.activeTabId === id && state.activeTabCount === 1
       );
     },
     {
@@ -203,7 +206,7 @@ describe("Home sidebar has one coherent active chat", function () {
   });
 
   it("switches the sidebar highlight and rendered panel atomically", async () => {
-    expect((await visualState()).legacyTabCount).toBe(0);
+    expect((await visualState()).activeTabCount).toBe(1);
     await beginMismatchAudit({ [CHAT_A]: TITLE_A, [CHAT_B]: TITLE_B });
 
     await clickChat(CHAT_A);
@@ -226,7 +229,7 @@ describe("Home sidebar has one coherent active chat", function () {
         (await browser.execute((id: string) =>
           Boolean(
             document.querySelector(
-              `[data-testid="chat-row-${id}"] [aria-label="unread"]`,
+              `[data-testid="chat-row-${id}"] [aria-label="Unread"]`,
             ),
           ),
         CHAT_B)) as boolean,
@@ -244,7 +247,7 @@ describe("Home sidebar has one coherent active chat", function () {
     expect(rowText).not.toContain("█");
   });
 
-  it("creates one blank chat without a tab or abandoned untitled row", async () => {
+  it("creates one blank tab without an abandoned untitled history row", async () => {
     const untitledBefore = (await browser.execute(() =>
       Array.from(document.querySelectorAll('[data-testid^="chat-row-"]')).filter(
         (row) => row.textContent?.trim().toLowerCase().startsWith("untitled"),
@@ -272,8 +275,8 @@ describe("Home sidebar has one coherent active chat", function () {
           draftId = state.foregroundId;
           return (
             state.selectedId === null &&
-            state.titleCount === 0 &&
-            state.legacyTabCount === 0
+            state.titleCount === 1 &&
+            state.activeTabId === draftId && state.activeTabCount === 1
           );
         }
         return false;
@@ -298,33 +301,30 @@ describe("Home sidebar has one coherent active chat", function () {
     await waitForAlignedChat(draftId as unknown as string, "sidebar e2e fresh chat");
   });
 
-  it("anchors a safe Pin, Rename, Archive menu to the active title", async () => {
+  it("anchors safe Pin, Rename, Archive actions to the active tab", async () => {
     const state = await visualState();
     expect(state.foregroundId).not.toBeNull();
-    const title = state.title;
 
-    const trigger = await $(`[aria-label="chat options for ${title}"]`);
-    await trigger.waitForDisplayed({ timeout: t(5_000) });
-    await trigger.click();
-
-    await browser.waitUntil(
-      async () =>
-        (await browser.execute(() =>
-          Array.from(document.querySelectorAll<HTMLButtonElement>("button")).some(
-            (button) => button.textContent?.trim() === "Archive",
-          ),
-        )) as boolean,
-      { timeout: t(5_000), interval: 100 },
+    // Workspace tabs (#6679) own chat actions via their context menu. The
+    // sidebar, active tab and transcript must still refer to the same chat.
+    await browser.execute((id: string) => {
+      const tab = document.querySelector<HTMLElement>(`[data-chat-tab-id="${id}"]`);
+      if (!tab) throw new Error(`missing active chat tab ${id}`);
+      const rect = tab.getBoundingClientRect();
+      tab.dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true, button: 2, buttons: 2,
+        clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2,
+      }));
+    }, state.foregroundId!);
+    await $('//*[@role="menuitem"][starts-with(normalize-space(.), "Archive")]').waitForDisplayed({ timeout: t(5_000) });
+    const actions = await browser.execute(() =>
+      Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+        .map((item) => item.textContent?.trim() ?? ""),
     );
-    const actions = (await browser.execute(() =>
-      Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
-        .map((button) => button.textContent?.trim())
-        .filter((text): text is string =>
-          ["Pin", "Unpin", "Rename", "Archive", "Delete"].includes(text ?? ""),
-        ),
-    )) as string[];
-    expect(actions).toEqual(["Pin", "Rename", "Archive"]);
-    expect(actions).not.toContain("Delete");
+    for (const label of ["Pin", "Rename", "Archive"]) {
+      expect(actions.some((action) => action.startsWith(label))).toBe(true);
+    }
+    expect(actions.some((action) => action.startsWith("Delete"))).toBe(false);
 
     await browser.pause(250);
     const screenshot = await saveScreenshot("chat-sidebar-single-active");

@@ -214,7 +214,7 @@ describe("Hosted AI retry feedback and follow-up queue", function () {
         timeoutMsg: "queued follow-up did not render in the composer",
       },
     );
-    await $('[aria-label="remove queued message 1"]').waitForExist({
+    await $('[aria-label="Remove queued message 1"]').waitForExist({
       timeout: t(10_000),
     });
 
@@ -239,11 +239,11 @@ describe("Hosted AI retry feedback and follow-up queue", function () {
       4,
       "hosted retry and queued follow-up",
     );
-    await $('[aria-label="remove queued message 1"]').waitForExist({
+    await $('[aria-label="Remove queued message 1"]').waitForExist({
       reverse: true,
       timeout: t(30_000),
     });
-    await $('[aria-label="send message"]').waitForDisplayed({
+    await $('[aria-label="Send message"]').waitForDisplayed({
       timeout: t(30_000),
     });
 

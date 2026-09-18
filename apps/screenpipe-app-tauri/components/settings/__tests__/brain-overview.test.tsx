@@ -1644,7 +1644,9 @@ describe("BrainOverview", () => {
     expect(screen.getByTestId("overview-apply-ai")).toHaveTextContent(
       "create dashboard & load data",
     );
-    expect(screen.queryByText("add your first Block")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /^Add your first Block/ }),
+    ).toBeNull();
     expect(mocks.saveBrainView).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByTestId("overview-apply-ai"));

@@ -62,7 +62,7 @@ import {
                 if (!(prompt instanceof HTMLElement) || !prompt.textContent) {
                   return false;
                 }
-                return prompt.textContent.includes("restart screenpipe");
+                return prompt.textContent.includes("Restart screenpipe");
               },
             ),
           ),

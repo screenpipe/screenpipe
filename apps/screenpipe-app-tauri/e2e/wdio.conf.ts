@@ -12,11 +12,12 @@ import { GatewayRequestProxy } from './helpers/gateway-request-proxy.js';
 import { getReporters, getMochaTimeout } from './helpers/reporter-utils.js';
 import { TestRecorder } from './helpers/test-recorder.js';
 
-// Codex/Desktop can install a wrapped undici dispatcher in the parent process.
-// WebdriverIO passes the current dispatcher explicitly into every WebDriver
-// fetch; that wrapper rejects the explicit `dispatcher` option with
-// UND_ERR_INVALID_ARG. E2E only talks to the local Tauri WebDriver server, so use
-// a plain Agent here.
+// WebdriverIO uses Undici 6 and explicitly passes its dispatcher to fetch.
+// Reset inherited wrappers for the local Tauri connection. The direct Undici
+// dev dependency must match WebDriver's major: Undici 8 installs a legacy
+// wrapper even for a plain Agent, which rejects `dispatcher` with
+// UND_ERR_INVALID_ARG before a session can be created.
+// Knip runs under Bun, whose built-in Undici shim hides this Node dependency.
 setGlobalDispatcher(new Agent());
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

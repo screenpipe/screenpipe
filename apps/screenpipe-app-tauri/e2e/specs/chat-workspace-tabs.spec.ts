@@ -5,7 +5,7 @@
 /** Native proof for the ephemeral chat working set and live split pane. */
 
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
-import { openHomeWindow, t, waitForAppReady } from "../helpers/test-utils.js";
+import { openHomeWindow, setViewportSize, t, waitForAppReady } from "../helpers/test-utils.js";
 
 const CHAT_A = "11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const CHAT_B = "22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -184,6 +184,9 @@ describe("Chat workspace tabs and split", function () {
   before(async () => {
     await waitForAppReady();
     await openHomeWindow();
+    // The browser intentionally hides when the minimum chat and browser widths
+    // cannot fit; another spec exercises an 800px window.
+    await setViewportSize(1440, 960);
     await browser.waitUntil(
       async () =>
         (await browser.execute(
@@ -305,7 +308,10 @@ describe("Chat workspace tabs and split", function () {
 
   it("keeps multiple chats open, swaps the split pane, and closes non-destructively", async () => {
     const initialTabs = await openTabIds();
-    expect(initialTabs).toEqual([CHAT_A, CHAT_B]);
+    // Home retains the working set across specs. Verify our two tabs without
+    // treating another spec's still-open conversation as a duplicate of ours.
+    expect(initialTabs.filter((id) => id === CHAT_A || id === CHAT_B))
+      .toEqual([CHAT_A, CHAT_B]);
 
     // Use native pointer clicks here. DOM element.click() bypasses hit testing
     // and previously let the transparent window-drag layer hide the fact that
@@ -372,11 +378,14 @@ describe("Chat workspace tabs and split", function () {
       true,
     );
 
+    const tabsAfterClose = await openTabIds();
     await $('button[aria-label="New chat tab"]').click();
     await browser.waitUntil(
       async () => {
         const ids = await openTabIds();
-        return ids.length === 2 && ids[0] === CHAT_A && ids[1] !== CHAT_B;
+        return ids.length === tabsAfterClose.length + 1 &&
+          ids.slice(0, -1).every((id, index) => id === tabsAfterClose[index]) &&
+          !initialTabs.includes(ids.at(-1)!);
       },
       {
         timeout: t(8_000),

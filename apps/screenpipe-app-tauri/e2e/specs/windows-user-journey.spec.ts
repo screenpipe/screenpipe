@@ -10,6 +10,8 @@
  * when the risk is broken cross-window UX.
  */
 
+import { SEARCH_INPUT_SELECTOR } from "../helpers/search.js";
+import { DEFAULT_SETTINGS_SECTION } from "../../lib/settings-sections.js";
 import { existsSync } from "node:fs";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
@@ -17,7 +19,6 @@ import { closeWindow, invokeOrThrow, waitForWindowHandle, waitForWindowUrl } fro
 
 const isWindows = process.platform === "win32";
 const SEARCH_QUERY = "screenpipe windows ux journey";
-const SEARCH_INPUT_SELECTOR = 'input[placeholder*="search memory"]';
 const APP_SERVER_PORT = Number(process.env.SCREENPIPE_FOCUS_PORT ?? "11436");
 const APP_SERVER_BASE_URL = `http://127.0.0.1:${APP_SERVER_PORT}`;
 const MAIN_WINDOW_LABELS = ["main", "main-window"] as const;
@@ -387,7 +388,7 @@ async function expectCurrentSettingsSection(section: string, timeoutMs = t(15_00
   await browser.waitUntil(
     async () => {
       const url = new URL(await browser.getUrl());
-      return url.pathname === "/settings" && url.searchParams.get("section") === section;
+      return url.pathname === "/settings" && (url.searchParams.get("section") ?? DEFAULT_SETTINGS_SECTION) === section;
     },
     {
       timeout: timeoutMs,
@@ -423,7 +424,7 @@ describe("Windows user journey", function () {
     const homeSection = await $('[data-testid="section-home"]');
     await homeSection.waitForExist({ timeout: t(20_000) });
 
-    await clickFirstDisplayed('button[aria-label="search"]');
+    await clickFirstDisplayed('button[aria-label="Search"]');
     await waitForWindowHandle("search", t(20_000));
 
     await browser.switchToWindow("search");
@@ -479,7 +480,7 @@ describe("Windows user journey", function () {
         const sectionText = (await screenSection.getText()).toLowerCase();
         return (
           sectionText.includes("screen context capture") &&
-          sectionText.includes("screen recording") &&
+          await screenSection.$("#disableVision").isExisting() &&
           !sectionText.includes("audio recording")
         );
       },
@@ -588,6 +589,7 @@ describe("Windows user journey", function () {
           bodyText.includes("summarizing meeting") ||
           bodyText.includes("summary ready") ||
           bodyText.includes("summary needs attention") ||
+          bodyText.includes("nothing to summarize") ||
           bodyText.includes("new meeting") ||
           bodyText.includes("no meetings yet") ||
           bodyText.includes("no past meetings yet"),
@@ -622,7 +624,7 @@ describe("Windows user journey", function () {
       "Shortcuts settings did not show the open-search hotkey row",
     );
 
-    const recorder = await shortcutRecorderForTitle("open search");
+    const recorder = await shortcutRecorderForTitle("Open search");
     const initialShortcutLabel = (await recorder.getText()).replace(/\s+/g, " ").trim();
 
     await recorder.scrollIntoView();
@@ -647,7 +649,7 @@ describe("Windows user journey", function () {
       },
     );
 
-    const restoredRecorder = await shortcutRecorderForTitle("open search");
+    const restoredRecorder = await shortcutRecorderForTitle("Open search");
     const restoredShortcutLabel = (await restoredRecorder.getText()).replace(/\s+/g, " ").trim();
     expect(restoredShortcutLabel).toBe(initialShortcutLabel);
 
@@ -680,6 +682,10 @@ describe("Windows user journey", function () {
     expect(await $("#shortcut-overlay").isExisting()).toBe(true);
 
     try {
+      // Earlier window tests close the reminder independently of its persisted
+      // preference. Exercise the user's toggle to establish a visible premise.
+      await setSwitchChecked("#shortcut-overlay", false);
+      await setSwitchChecked("#shortcut-overlay", true);
       await expectShortcutReminderVisible(true, t(20_000));
       await waitForWindowHandle("shortcut-reminder", t(20_000));
 

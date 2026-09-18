@@ -82,7 +82,7 @@ async function openHomeForAgentExtensionsCatalog(): Promise<void> {
     throw new Error(`Home did not render Connections navigation: ${JSON.stringify(lastState)}`);
   }
 
-  const expandBtn = await $('[aria-label="expand sidebar"]');
+  const expandBtn = await $('[aria-label="Expand sidebar"]');
   if (await expandBtn.isExisting()) {
     await expandBtn.click();
     await browser.pause(t(500));

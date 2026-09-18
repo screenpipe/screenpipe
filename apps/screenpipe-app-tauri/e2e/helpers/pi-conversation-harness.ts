@@ -91,12 +91,15 @@ export class PiConversationHarness {
    * Point the mounted app at this harness's local provider. Updating the
    * already-loaded Tauri store emits the same cross-window settings event as
    * the real settings UI, so the chat owns Pi startup and keeps its running
-   * snapshot in sync.
+   * snapshot in sync. Hosted UI tests may select Screenpipe Cloud here while
+   * restartPi still substitutes the local transport for gateway responses.
    */
-  async configureAppPreset(): Promise<void> {
+  async configureAppPreset(
+    provider: "custom" | "screenpipe-cloud" = "custom",
+  ): Promise<void> {
     const preset = {
       id: "screenpipe-e2e",
-      provider: "custom",
+      provider,
       url: this.baseUrl,
       model: "screenpipe-e2e",
       apiKey: "screenpipe-e2e-key",
@@ -168,21 +171,6 @@ export class PiConversationHarness {
         systemPrompt: "Reply briefly for a local E2E test.",
       },
     });
-  }
-
-  async waitForRuntimeReady(label: string): Promise<void> {
-    await browser.waitUntil(
-      async () =>
-        (await this.agentEvents()).some((payload) => {
-          const event = payload as { sessionId?: unknown };
-          return event?.sessionId === this.sessionId;
-        }),
-      {
-        timeout: t(20_000),
-        interval: 100,
-        timeoutMsg: `${label} Pi runtime did not emit a ready event`,
-      },
-    );
   }
 
   /**
@@ -303,9 +291,10 @@ export class PiConversationHarness {
   async waitForRequestCount(
     expectedCount: number,
     label: string,
+    timeoutMs = 45_000,
   ): Promise<void> {
     await browser.waitUntil(async () => this.requests.length >= expectedCount, {
-      timeout: t(45_000),
+      timeout: t(timeoutMs),
       interval: 100,
       timeoutMsg: `${label} did not reach ${expectedCount} model requests`,
     });

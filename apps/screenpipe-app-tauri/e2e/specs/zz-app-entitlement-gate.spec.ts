@@ -225,7 +225,7 @@ describe("App entitlement gate", () => {
       //    show and the app navigation must be hidden.
       await setForceGate(true);
 
-      const signIn = await $("button*=sign in");
+      const signIn = await $("button*=Sign in");
       await signIn.waitForExist({ timeout: t(15000) });
       expect(await signIn.isExisting()).toBe(true);
       expect(await (await $('[data-testid="nav-home"]')).isExisting()).toBe(
@@ -238,7 +238,7 @@ describe("App entitlement gate", () => {
       const navHome = await $('[data-testid="nav-home"]');
       await navHome.waitForExist({ timeout: t(15000) });
       expect(await navHome.isExisting()).toBe(true);
-      expect(await (await $("button*=sign in")).isExisting()).toBe(false);
+      expect(await (await $("button*=Sign in")).isExisting()).toBe(false);
     } finally {
       await setForceGate(false).catch(() => {});
     }

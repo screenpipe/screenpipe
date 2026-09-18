@@ -164,7 +164,7 @@ describe("Update banner surfacing", function () {
     });
 
     await toggle.click();
-    const restart = await $("button=restart to update");
+    const restart = await $("button=Restart to update");
     await restart.waitForDisplayed({ timeout: t(10_000) });
     await restart.click();
 

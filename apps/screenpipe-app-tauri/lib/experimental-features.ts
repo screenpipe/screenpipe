@@ -15,7 +15,10 @@ export function isExperimentalFeaturesEnabled(
 
 /** Single rollout gate shared by every experimental navigation entry point. */
 export function useExperimentalFeaturesEnabled(): boolean {
-  return isExperimentalFeaturesEnabled(
-    useFeatureFlagEnabled(EXPERIMENTAL_FEATURES_FLAG),
-  );
+  const flag = useFeatureFlagEnabled(EXPERIMENTAL_FEATURES_FLAG);
+  // E2E builds disable PostHog initialization to avoid production analytics
+  // and live announcement dialogs. Match the ACP gate's build-only fixture
+  // so navigation coverage can exercise the opted-in surfaces offline.
+  if (process.env.NEXT_PUBLIC_SCREENPIPE_E2E === "true") return true;
+  return isExperimentalFeaturesEnabled(flag);
 }

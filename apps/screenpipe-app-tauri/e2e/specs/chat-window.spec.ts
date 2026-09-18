@@ -144,10 +144,10 @@ describe("Chat window", function () {
 
   it("does not open the floating window's chat as a second Home tab", async () => {
     await browser.switchToWindow("home");
-    await browser.waitUntil(async () => (await openHomeChatIds()).length === 1, {
+    await browser.waitUntil(async () => (await openHomeChatIds()).length > 0, {
       timeout: t(15_000),
       interval: 100,
-      timeoutMsg: "Home did not settle on its one initial chat tab",
+      timeoutMsg: "Home did not render its working set of chat tabs",
     });
     const initialHomeTabs = await openHomeChatIds();
 

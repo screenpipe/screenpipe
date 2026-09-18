@@ -361,7 +361,7 @@ describe("Chat tool activity progressive disclosure", function () {
 
     const body = await visibleBodyText();
     expect(body).toContain("I reviewed the information and prepared the summary.");
-    expect(body).not.toContain("failed");
+    expect(body.toLowerCase()).not.toContain("failed");
     expect(body).not.toContain("mystery-command");
     expect(body).not.toContain(RAW_PYTHON_MARKER);
 

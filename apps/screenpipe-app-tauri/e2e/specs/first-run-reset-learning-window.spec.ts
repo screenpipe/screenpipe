@@ -105,15 +105,15 @@ describe("first-run learning window ownership", () => {
     await showWindow("Chat");
     await waitForWindowHandle("chat", t(15_000));
     await browser.switchToWindow("chat");
-    await browser.execute((key: string) => {
-      window.localStorage.removeItem(key);
-      window.location.href = "/chat";
-    }, LEARNING_STORAGE_KEY);
+    const before = await invokeOrThrow<Record<string, unknown>>("get_onboarding_status");
+    await browser.refresh();
     await browser.pause(t(4_000));
 
-    // A recent onboarding completion still exists in Rust. Before this fix,
-    // mounting StandaloneChat here read it and created a second local state.
-    expect(await readStoredPhase()).toBeNull();
+    // Webviews can share storage on Linux. The durable native job is the
+    // authority: Chat must neither re-arm it nor render a second banner.
+    const after = await invokeOrThrow<Record<string, unknown>>("get_onboarding_status");
+    expect(after.firstRunSummaryStartedAt).toBe(before.firstRunSummaryStartedAt);
+    expect(after.firstRunSummaryChatId).toBe(before.firstRunSummaryChatId);
     const count = (await browser.execute(
       () =>
         document.querySelectorAll('[data-testid="first-run-learning-banner"]')

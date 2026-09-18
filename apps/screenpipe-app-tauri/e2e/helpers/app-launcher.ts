@@ -98,6 +98,9 @@ const persistAppLogs = process.env.SCREENPIPE_E2E_PERSIST_APP_LOGS === 'true';
 // src-tauri/src/e2e/seeds.rs) so the search-bugs spec runs inside the normal
 // `test:e2e` job instead of needing a separate CI step. Harmless for other
 // specs (namespaced "vector" frames; the empty-state spec uses its own query).
+// `cloud-authenticated` supplies the existing synthetic account seed so normal
+// app tests can start the local API. First-run/account tests explicitly override
+// SCREENPIPE_E2E_SEED and keep their logged-out premise.
 // `pii-text-redaction` enables only the local text reconciliation worker. The
 // dedicated coordination spec uses it with `no-recording`, then writes a
 // synthetic backlog through `/add` and verifies redaction plus app liveness.
@@ -137,7 +140,8 @@ const persistAppLogs = process.env.SCREENPIPE_E2E_PERSIST_APP_LOGS === 'true';
 // restarting the capture session must bring back the same device set, and the
 // device monitor must survive to recover a device stopped afterwards.
 export const E2E_SEED_FLAGS =
-  process.env.SCREENPIPE_E2E_SEED ?? 'onboarding,no-recording,search-fixture';
+  process.env.SCREENPIPE_E2E_SEED ??
+  'onboarding,no-recording,search-fixture,cloud-authenticated';
 const backgroundAiToolsEnabled = E2E_SEED_FLAGS.split(',').some(
   (flag) => flag.trim().toLowerCase() === 'background-ai-tools',
 );

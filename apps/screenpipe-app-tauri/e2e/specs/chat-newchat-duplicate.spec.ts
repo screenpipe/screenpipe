@@ -39,19 +39,20 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
+import { E2E_DATA_DIR } from "../helpers/app-launcher.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 
-const CHATS_DIR = join(homedir(), ".screenpipe", "chats");
+const CHATS_DIR = join(E2E_DATA_DIR, "chats");
 const MARKER = "E2E-NEWCHAT-DUP-MARKER-K3J8WQ";
 
 // Two ids for ONE logical conversation — the production fork signature.
 const CHAT_X = "44444444-aaaa-4aaa-8aaa-aaaaaaaaaaaa"; // the real one (foreground-saved)
 const CHAT_Y = "55555555-bbbb-4bbb-8bbb-bbbbbbbbbbbb"; // the cross-window twin
 const FIRST_USER_ID = "e2e-duplicate-first-user-message";
-const FIRST_USER_TIMESTAMP = 1_700_000_000_000;
+// Both twins share identity, but must also be recent enough for the capped Recents list.
+const FIRST_USER_TIMESTAMP = Date.now() + 48 * 60 * 60 * 1_000;
 
 function markerFileNames(): string[] {
   let names: string[];
