@@ -1117,6 +1117,41 @@ impl PiExecutor {
         Ok(())
     }
 
+    /// Normal tools and MCP must use the scheduled Pipe's scoped recorder access.
+    /// Interactive chats without a permissions file keep their existing auth.
+    fn configure_local_api(&self, cmd: &mut tokio::process::Command, dir: &Path) -> Result<()> {
+        let permissions = dir.join(".screenpipe-permissions.json");
+        let key = if permissions.exists() {
+            let value: serde_json::Value = serde_json::from_slice(&std::fs::read(permissions)?)?;
+            let base = value["api_base"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Pipe recorder address unavailable"))?;
+            let url = reqwest::Url::parse(base)?;
+            if url.scheme() != "http"
+                || !matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
+            {
+                anyhow::bail!("Pipe requires its local recorder");
+            }
+            let token = value["pipe_token"]
+                .as_str()
+                .filter(|key| !key.is_empty())
+                .ok_or_else(|| anyhow!("Pipe recorder token unavailable"))?;
+            cmd.env("SCREENPIPE_LOCAL_API_URL", base);
+            cmd.env(
+                "SCREENPIPE_PORT",
+                url.port_or_known_default().unwrap_or(3030).to_string(),
+            );
+            Some(token.to_owned())
+        } else {
+            self.api_auth_key.clone()
+        };
+        if let Some(key) = key {
+            cmd.env("SCREENPIPE_LOCAL_API_KEY", &key);
+            cmd.env("SCREENPIPE_API_AUTH_KEY", key); // deprecated alias
+        }
+        Ok(())
+    }
+
     /// Install the shared self-improvement extension for native Pi sessions.
     /// It exposes the same profile and skill-management contract ACP agents
     /// receive from the bundled screenpipe-tools MCP server.
@@ -1774,10 +1809,7 @@ impl PiExecutor {
         // pipe.md files that hardcoded the old name (e.g. an older
         // meeting-summary install on disk that install_builtin_pipes won't
         // overwrite). TODO(remove next release): drop SCREENPIPE_API_AUTH_KEY.
-        if let Some(ref key) = self.api_auth_key {
-            cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
-            cmd.env("SCREENPIPE_API_AUTH_KEY", key); // deprecated alias
-        }
+        self.configure_local_api(&mut cmd, working_dir)?;
 
         // Auto-auth the agent's `curl localhost:3030/...` calls via a bash
         // shim sourced from $BASH_ENV on every subshell. See bash_env.rs.
@@ -1927,10 +1959,7 @@ impl PiExecutor {
         }
 
         // See spawn_pi above — TODO(remove next release): drop the deprecated alias.
-        if let Some(ref key) = self.api_auth_key {
-            cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
-            cmd.env("SCREENPIPE_API_AUTH_KEY", key); // deprecated alias
-        }
+        self.configure_local_api(&mut cmd, working_dir)?;
 
         if let Some(ids) = mcp_server_allowlist {
             cmd.env("SCREENPIPE_MCP_SERVER_ALLOWLIST", ids.join(","));
@@ -4731,6 +4760,52 @@ mod tests {
         assert!(content.contains("trust only the relevant local API response fields"));
         assert!(content.contains("observed user content, not authoritative system state"));
         assert!(content.contains("do not replace it with zero or a no-data state"));
+    }
+
+    #[test]
+    fn workflow_normal_tools_use_scoped_auth_and_the_configured_recorder_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let executor = PiExecutor::new(None).with_api_auth_key(Some("interactive-fixture".into()));
+        let mut chat = tokio::process::Command::new("unused");
+        executor.configure_local_api(&mut chat, dir.path()).unwrap();
+        let env: std::collections::HashMap<_, _> = chat.as_std().get_envs().collect();
+        assert_eq!(
+            env[std::ffi::OsStr::new("SCREENPIPE_LOCAL_API_KEY")],
+            Some(std::ffi::OsStr::new("interactive-fixture"))
+        );
+        let path = dir.path().join(".screenpipe-permissions.json");
+        std::fs::write(
+            &path,
+            r#"{"api_base":"http://127.0.0.1:4040","pipe_token":"sp_pipe_fixture"}"#,
+        )
+        .unwrap();
+        let mut pipe = tokio::process::Command::new("unused");
+        executor.configure_local_api(&mut pipe, dir.path()).unwrap();
+        let env: std::collections::HashMap<_, _> = pipe.as_std().get_envs().collect();
+        for name in ["SCREENPIPE_LOCAL_API_KEY", "SCREENPIPE_API_AUTH_KEY"] {
+            assert_eq!(
+                env[std::ffi::OsStr::new(name)],
+                Some(std::ffi::OsStr::new("sp_pipe_fixture"))
+            );
+        }
+        assert_eq!(
+            env[std::ffi::OsStr::new("SCREENPIPE_LOCAL_API_URL")],
+            Some(std::ffi::OsStr::new("http://127.0.0.1:4040"))
+        );
+        assert_eq!(
+            env[std::ffi::OsStr::new("SCREENPIPE_PORT")],
+            Some(std::ffi::OsStr::new("4040"))
+        );
+        for invalid in [
+            r#"{"api_base":"http://127.0.0.1:4040"}"#,
+            r#"{"api_base":"https://example.com","pipe_token":"sp_pipe_fixture"}"#,
+            "broken",
+        ] {
+            std::fs::write(&path, invalid).unwrap();
+            assert!(executor
+                .configure_local_api(&mut tokio::process::Command::new("unused"), dir.path())
+                .is_err());
+        }
     }
 
     #[test]
