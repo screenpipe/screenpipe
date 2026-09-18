@@ -66,6 +66,7 @@ function job(execution: any): WorkflowAnalysisJob {
       : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_business_required") ? "Automatic workflow discovery requires Business. Your saved workflows are still available."
       : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_usage_unavailable") ? "Could not check AI allowance. Reconnect and try again."
       : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_sign_in_required") ? "Sign in again to resume workflow updates."
+      : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_rollout_disabled") ? "Workflow access could not be confirmed. Retry from the Workflows window."
       : execution.error_type === "missing_output" ? "The update could not be saved. Your previous workflows are still available. Try again."
       : status === "failed" ? "Could not update workflows. Your saved workflows are still available. See the scheduled task for details."
       : status === "processing" ? "Updating workflows" : "Waiting to update workflows",
@@ -131,6 +132,9 @@ export async function getWorkflowJob(id: string): Promise<WorkflowAnalysisJob> {
 
 export async function startWorkflowJob(): Promise<WorkflowAnalysisJob> {
   requireWorkflowsRollout();
+  // The engine resets its grant on restart. Confirm this window's resolved
+  // decision before starting a task instead of racing the periodic sync.
+  await request("/workflows/rollout", { enabled: true });
   const setup = await loadWorkflowTaskSetup();
   if (!setup.enabled) throw new Error("Enable workflow tasks before updating. Open Workflows again to review setup.");
   const tasks = await latestTasks();
