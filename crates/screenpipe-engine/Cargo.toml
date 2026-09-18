@@ -61,7 +61,7 @@ sentry = { workspace = true }
 axum = { workspace = true }
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["server-auto", "tokio", "service"] }
-tower = { version = "0.4", default-features = false }
+tower = { version = "0.4", default-features = false, features = ["util"] }
 tokio = { workspace = true }
 tower-http = { version = "0.5.2", features = ["cors", "trace"] }
 

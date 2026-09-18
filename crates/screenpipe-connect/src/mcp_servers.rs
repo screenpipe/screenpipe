@@ -942,6 +942,33 @@ impl McpServerStore {
     async fn refresh_oauth_token(
         &self,
         id: &str,
+        _current: &McpOAuthToken,
+    ) -> Result<McpOAuthToken> {
+        let key = format!("cloud-custody:mcp:{}", id);
+        let owner = uuid::Uuid::new_v4().to_string();
+        let store = self
+            .secret_store
+            .as_ref()
+            .ok_or_else(|| anyhow!("secret store unavailable"))?;
+        anyhow::ensure!(
+            store.try_acquire_refresh_lease(&key, &owner, 120).await?,
+            "connection refresh or cloud transfer in progress"
+        );
+        let result = async {
+            let current = self
+                .read_oauth_token(id)
+                .await?
+                .ok_or_else(|| anyhow!("connection unavailable"))?;
+            self.refresh_oauth_token_inner(id, &current).await
+        }
+        .await;
+        let _ = store.release_refresh_lease(&key, &owner).await;
+        result
+    }
+
+    async fn refresh_oauth_token_inner(
+        &self,
+        id: &str,
         current: &McpOAuthToken,
     ) -> Result<McpOAuthToken> {
         let refresh_token = current

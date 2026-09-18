@@ -331,7 +331,7 @@ fn normalize_mcp_url(url: &str) -> &str {
 /// Resolve an MCP server URL to the connector id it belongs to (trailing-slash
 /// insensitive, mirroring the frontend's matching). `None` if it isn't one of
 /// the known one-click providers.
-fn connector_id_for_mcp_url(url: &str) -> Option<&'static str> {
+pub(crate) fn connector_id_for_mcp_url(url: &str) -> Option<&'static str> {
     let normalized = normalize_mcp_url(url);
     MCP_OAUTH_PROVIDER_URLS
         .iter()
@@ -577,8 +577,26 @@ async fn connect_integration(
     Json(body): Json<ConnectRequest>,
 ) -> (StatusCode, Json<Value>) {
     let mgr = state.cm.lock().await;
-    match mgr.connect(&id, body.credentials).await {
-        Ok(()) => (StatusCode::OK, Json(json!({ "success": true }))),
+    let existed = mgr
+        .get_credentials(&id)
+        .await
+        .map(|value| value.is_some())
+        .unwrap_or(true);
+    let result = mgr.connect(&id, body.credentials).await;
+    drop(mgr);
+    match result {
+        Ok(()) => {
+            let storage = crate::cloud_connection_desktop::complete_new_connection(
+                (&state).into(),
+                &id,
+                existed,
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(json!({ "success": true, "custody": storage })),
+            )
+        }
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": e.to_string() })),
@@ -717,11 +735,28 @@ async fn connect_instance(
     Json(body): Json<ConnectRequest>,
 ) -> (StatusCode, Json<Value>) {
     let mgr = state.cm.lock().await;
-    match mgr
-        .connect_instance(&id, Some(&instance), body.credentials)
+    let existed = mgr
+        .get_credentials_instance(&id, Some(&instance))
         .await
-    {
-        Ok(()) => (StatusCode::OK, Json(json!({ "success": true }))),
+        .map(|value| value.is_some())
+        .unwrap_or(true);
+    let result = mgr
+        .connect_instance(&id, Some(&instance), body.credentials)
+        .await;
+    drop(mgr);
+    match result {
+        Ok(()) => {
+            let custody = crate::cloud_connection_desktop::complete_new_connection(
+                (&state).into(),
+                &format!("{}:{}", id, instance),
+                existed,
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(json!({"success":true,"custody":custody})),
+            )
+        }
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": e.to_string() })),
@@ -3462,6 +3497,22 @@ where
         browser_pairing: BrowserPairingState::default(),
         api_auth_key,
     };
+    router_with_state(state)
+}
+
+pub(crate) fn router_with_state<S: Clone + Send + Sync + 'static>(
+    state: ConnectionsState,
+) -> Router<S> {
+    provider_routes()
+        .merge(crate::cloud_connections::routes())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::cloud_connection_desktop::broker,
+        ))
+        .with_state(state)
+}
+
+pub(crate) fn provider_routes() -> Router<ConnectionsState> {
     Router::new()
         .route("/", get(list_connections))
         // Browser registry — canonical multi-instance API.
@@ -3541,7 +3592,6 @@ where
                 .delete(disconnect_integration),
         )
         .route("/:id/test", post(test_connection))
-        .with_state(state)
 }
 
 // ---------------------------------------------------------------------------

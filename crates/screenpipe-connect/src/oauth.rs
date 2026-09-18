@@ -1027,6 +1027,39 @@ pub async fn refresh_token_instance(
     integration_id: &str,
     instance: Option<&str>,
 ) -> Result<String> {
+    let effective = load_oauth_json_with_instance(store, integration_id, instance)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("connection unavailable"))?
+        .1;
+    let key = format!(
+        "cloud-custody:oauth:{}{}",
+        integration_id,
+        effective
+            .as_deref()
+            .map(|value| format!(":{}", value))
+            .unwrap_or_default()
+    );
+    let owner = uuid::Uuid::new_v4().to_string();
+    if let Some(store) = store {
+        anyhow::ensure!(
+            store.try_acquire_refresh_lease(&key, &owner, 120).await?,
+            "connection refresh or cloud transfer in progress"
+        );
+    }
+    let result =
+        refresh_token_instance_inner(store, client, integration_id, effective.as_deref()).await;
+    if let Some(store) = store {
+        let _ = store.release_refresh_lease(&key, &owner).await;
+    }
+    result
+}
+
+async fn refresh_token_instance_inner(
+    store: Option<&SecretStore>,
+    client: &reqwest::Client,
+    integration_id: &str,
+    instance: Option<&str>,
+) -> Result<String> {
     let (mut stored, effective_instance) =
         load_oauth_json_with_instance(store, integration_id, instance)
             .await
@@ -1247,6 +1280,27 @@ mod tests {
     async fn mem_store() -> SecretStore {
         let pool = SqlitePool::connect(":memory:").await.unwrap();
         SecretStore::new(pool, None).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn cloud_transfer_lease_blocks_token_refresh_before_network_use() {
+        let store = mem_store().await;
+        store
+            .set_json(
+                "oauth:slack:work",
+                &json!({"access_token":"fixture", "refresh_token":"fixture-refresh"}),
+            )
+            .await
+            .unwrap();
+        assert!(store
+            .try_acquire_refresh_lease("cloud-custody:oauth:slack:work", "cloud-transfer", 120)
+            .await
+            .unwrap());
+        let result =
+            refresh_token_instance(Some(&store), &reqwest::Client::new(), "slack", Some("work"))
+                .await;
+        assert!(result.unwrap_err().to_string().contains("cloud transfer"));
+        assert!(store.get("oauth:slack:work").await.unwrap().is_some());
     }
 
     #[test]
