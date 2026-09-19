@@ -17,7 +17,8 @@ export function classifyGraderError(grader) {
   const summary = [...stdout.matchAll(/^\s*Tests\s+(.+)$/gm)].at(-1)?.[1]?.trim();
   if (summary === "no tests" && /^\s*Test Files\s+\d+ failed/m.test(stdout) &&
       /Failed Suites [1-9]/.test(stderr) &&
-      /^Error: Failed to load url /m.test(stderr)) return "vitest_collection_error";
+      (/^Error: Failed to load url /m.test(stderr) ||
+       /^Error: Cannot find module ['"][^\n]+['"] imported from ['"][^\n]+['"]\.\s*$/m.test(stderr))) return "vitest_collection_error";
   // Only the first thrown-error header classifies a Node failure. Assertion
   // messages may quote complete setup diagnostics on later lines.
   const header = stderr.match(/^([A-Za-z]*Error)(?: \[([A-Z_0-9]+)\])?:[^\n]*/m);
