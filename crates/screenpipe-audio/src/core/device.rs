@@ -610,46 +610,116 @@ fn ensure_usable_stream_config(channels: u16, sample_rate: u32, device_name: &st
     Ok(())
 }
 
-/// How long a cached device list is considered fresh. Audio devices change
-/// rarely (hotplug, sleep/wake) — caching for 30s eliminates >99% of the
-/// CoreAudio enumeration calls without making the UI feel stale.
+/// Cache stable inventories for 30s, but never across a macOS topology change.
 const DEVICE_CACHE_TTL: Duration = Duration::from_secs(30);
 
 struct CachedDevices {
     devices: Vec<AudioDevice>,
     fetched_at: Instant,
+    topology_generation: u64,
 }
 
-/// Single source of truth for the device-list cache. The `AsyncMutex`
-/// serializes refreshes — only one task at a time can hit cpal/CoreAudio.
-/// On macOS this is critical: concurrent `cpal::Device::supports_input`
-/// calls can race the CoreAudio IOThread on macOS 26.x and crash the
-/// process with EXC_BAD_ACCESS at offset 0x410 (NULL deref of an
-/// `AudioObjectID` whose listeners are being torn down).
+/// Serializes enumeration: concurrent cpal/CoreAudio probes can race device
+/// teardown on macOS 26.x. Notifications invalidate data, never this lock.
 fn device_cache() -> &'static AsyncMutex<Option<CachedDevices>> {
     static CACHE: OnceLock<AsyncMutex<Option<CachedDevices>>> = OnceLock::new();
     CACHE.get_or_init(|| AsyncMutex::new(None))
 }
 
-/// List audio devices, served from a 30s cache when fresh.
-///
-/// This is the only public entry point — every caller (HTTP handler,
-/// device manager, CLI) goes through here. Cached results avoid hammering
-/// CoreAudio on every `/audio/list` request and serialize cold refreshes
-/// behind a single mutex so two threads can't enumerate concurrently.
+#[cfg(target_os = "macos")]
+mod inventory_topology {
+    use cidre::{core_audio as ca, os};
+    use std::sync::{
+        atomic::{AtomicU64, Ordering},
+        OnceLock,
+    };
+
+    static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+    // CoreAudio owns this callback thread. No enumeration, allocation, locks,
+    // or async work here. The next inventory read refreshes under its mutex.
+    extern "C-unwind" fn changed(
+        _object: ca::Obj,
+        _count: u32,
+        _addresses: *const ca::PropAddr,
+        _context: *mut std::ffi::c_void,
+    ) -> os::Status {
+        GENERATION.fetch_add(1, Ordering::Release);
+        os::Status(0)
+    }
+
+    pub(super) fn generation() -> u64 {
+        // System object + static callback have process lifetime. Register once
+        // even if many HTTP/monitor callers request inventories concurrently.
+        static REGISTERED: OnceLock<()> = OnceLock::new();
+        REGISTERED.get_or_init(|| {
+            for selector in [
+                ca::PropSelector::HW_DEVICES,
+                ca::PropSelector::HW_DEFAULT_INPUT_DEVICE,
+                ca::PropSelector::HW_DEFAULT_OUTPUT_DEVICE,
+            ] {
+                if let Err(error) = ca::System::OBJ.add_prop_listener::<std::ffi::c_void>(
+                    &selector.global_addr(),
+                    changed,
+                    std::ptr::null_mut(),
+                ) {
+                    tracing::warn!(
+                        ?error,
+                        "audio inventory change listener unavailable; retaining TTL fallback"
+                    );
+                }
+            }
+        });
+        GENERATION.load(Ordering::Acquire)
+    }
+}
+
+fn device_inventory_generation() -> u64 {
+    #[cfg(target_os = "macos")]
+    {
+        inventory_topology::generation()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        0
+    }
+}
+
+/// Cached enumeration shared by HTTP, device startup, and the recovery monitor.
+/// Hotplug/default-device notifications make a cached absence stale immediately.
 pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
-    let mut cache = device_cache().lock().await;
+    list_audio_devices_with_cache(
+        device_cache(),
+        device_inventory_generation,
+        list_audio_devices_uncached,
+    )
+    .await
+}
+
+async fn list_audio_devices_with_cache<F, Fut>(
+    cache: &AsyncMutex<Option<CachedDevices>>,
+    generation: impl Fn() -> u64,
+    enumerate: F,
+) -> Result<Vec<AudioDevice>>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<AudioDevice>>>,
+{
+    let mut cache = cache.lock().await;
+    let topology_generation = generation();
     if let Some(c) = cache.as_ref() {
-        if c.fetched_at.elapsed() < DEVICE_CACHE_TTL {
+        if c.topology_generation == topology_generation && c.fetched_at.elapsed() < DEVICE_CACHE_TTL
+        {
             return Ok(c.devices.clone());
         }
     }
-    // Cache miss or stale — refresh under the lock so concurrent callers
-    // see exactly one underlying enumeration.
-    let devices = list_audio_devices_uncached().await?;
+    let devices = enumerate().await?;
     *cache = Some(CachedDevices {
         devices: devices.clone(),
         fetched_at: Instant::now(),
+        // Capture before enumeration: a change DURING the probe must make the
+        // result stale on the next read, rather than being marked as handled.
+        topology_generation,
     });
     Ok(devices)
 }
@@ -1894,5 +1964,127 @@ mod stream_config_tests {
         assert!(ensure_usable_stream_config(32, 192_000, "Dante").is_ok());
         assert!(ensure_usable_stream_config(64, 384_000, "MADI").is_ok());
         assert!(ensure_usable_stream_config(1, 8_000, "Bluetooth HFP").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod inventory_cache_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+    fn microphone() -> AudioDevice {
+        AudioDevice {
+            name: "Dock mic".to_string(),
+            device_type: DeviceType::Input,
+        }
+    }
+
+    async fn read(
+        cache: &AsyncMutex<Option<CachedDevices>>,
+        generation: &AtomicU64,
+        calls: &AtomicUsize,
+        devices: Vec<AudioDevice>,
+    ) -> Vec<AudioDevice> {
+        list_audio_devices_with_cache(
+            cache,
+            || generation.load(Ordering::Acquire),
+            || async {
+                calls.fetch_add(1, Ordering::Relaxed);
+                tokio::task::yield_now().await;
+                Ok(devices)
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn inventory_cache_reconnect_replaces_cached_absence_before_ttl() {
+        let cache = AsyncMutex::new(None);
+        let generation = AtomicU64::new(0);
+        let calls = AtomicUsize::new(0);
+        assert!(read(&cache, &generation, &calls, vec![]).await.is_empty());
+        generation.fetch_add(1, Ordering::Release);
+        assert_eq!(
+            read(&cache, &generation, &calls, vec![microphone()]).await,
+            vec![microphone()]
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        // Removal and return of the same named microphone are separate edges.
+        generation.fetch_add(1, Ordering::Release);
+        assert!(read(&cache, &generation, &calls, vec![]).await.is_empty());
+        generation.fetch_add(1, Ordering::Release);
+        assert_eq!(
+            read(&cache, &generation, &calls, vec![microphone()]).await,
+            vec![microphone()]
+        );
+    }
+
+    #[tokio::test]
+    async fn inventory_cache_coalesces_event_burst_and_concurrent_readers() {
+        let cache = AsyncMutex::new(None);
+        let generation = AtomicU64::new(0);
+        let calls = AtomicUsize::new(0);
+        read(&cache, &generation, &calls, vec![]).await;
+        generation.fetch_add(3, Ordering::Release);
+        let reads = (0..16).map(|_| read(&cache, &generation, &calls, vec![microphone()]));
+        let results = futures::future::join_all(reads).await;
+        assert!(results.iter().all(|devices| devices == &vec![microphone()]));
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            2,
+            "a change burst needs one refresh, not one per reader"
+        );
+    }
+
+    #[tokio::test]
+    async fn inventory_cache_does_not_lose_change_during_enumeration() {
+        let cache = AsyncMutex::new(None);
+        let generation = AtomicU64::new(0);
+        let calls = AtomicUsize::new(0);
+        list_audio_devices_with_cache(
+            &cache,
+            || generation.load(Ordering::Acquire),
+            || async {
+                generation.fetch_add(1, Ordering::Release);
+                Ok(vec![])
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            read(&cache, &generation, &calls, vec![microphone()]).await,
+            vec![microphone()]
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn inventory_cache_retains_ttl_and_retries_failed_refresh() {
+        let cache = AsyncMutex::new(Some(CachedDevices {
+            devices: vec![],
+            fetched_at: Instant::now() - DEVICE_CACHE_TTL,
+            topology_generation: 0,
+        }));
+        let generation = AtomicU64::new(0);
+        let calls = AtomicUsize::new(0);
+        assert_eq!(
+            read(&cache, &generation, &calls, vec![microphone()]).await,
+            vec![microphone()]
+        );
+        generation.fetch_add(1, Ordering::Release);
+        let failed = list_audio_devices_with_cache(
+            &cache,
+            || generation.load(Ordering::Acquire),
+            || async { Err(anyhow!("transient enumeration failure")) },
+        )
+        .await;
+        assert!(failed.is_err());
+        assert!(read(&cache, &generation, &calls, vec![]).await.is_empty());
+        // An absent device with no new event stays cached, avoiding retry storms.
+        for _ in 0..8 {
+            read(&cache, &generation, &calls, vec![]).await;
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
     }
 }
