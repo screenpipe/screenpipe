@@ -4,6 +4,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
+import { msg, useGT, useMessages } from "gt-react";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
 import { motion, AnimatePresence } from "framer-motion";
@@ -13,8 +14,8 @@ import { ArrowRight } from "lucide-react";
 import { LOCALITY_DETAIL } from "./trust-disclosure";
 
 const FAILURE_COPY: Record<string, string> = {
-  cancelled: "sign in was cancelled in your browser.",
-  timeout: "that sign-in link expired.",
+  cancelled: msg("sign in was cancelled in your browser."),
+  timeout: msg("that sign-in link expired."),
 };
 
 interface OnboardingLoginProps {
@@ -237,6 +238,8 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
   handleNextSlide,
   suppressAutoAdvance = false,
 }) => {
+  const gt = useGT();
+  const m = useMessages();
   const { settings, isSettingsLoaded } = useSettings();
   const hasAdvanced = useRef(false);
   const [showSkip, setShowSkip] = useState(false);
@@ -394,7 +397,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
               >
-                {FAILURE_COPY[browserFailure] ?? "Sign in did not finish."}{" "}
+                {FAILURE_COPY[browserFailure] ? m(FAILURE_COPY[browserFailure]) : gt("Sign in did not finish.")}{" "}
                 try again.
               </motion.p>
             ) : null}
@@ -464,8 +467,8 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
               transition={{ duration: 0.5, delay: 1.0 }}
             >
               {suppressAutoAdvance
-                ? "Sign in with your enterprise account"
-                : "Sign in or create a free account"}
+                ? gt("Sign in with your enterprise account")
+                : gt("Sign in or create a free account")}
             </motion.p>
 
             {/* Locality promise. This slide is the only one every platform
@@ -486,7 +489,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
               animate={{ opacity: 1 }}
               transition={{ duration: 0.5, delay: 1.15 }}
             >
-              {LOCALITY_DETAIL} · pause anytime
+              {m(LOCALITY_DETAIL)} · pause anytime
             </motion.p>
           </>
         )}

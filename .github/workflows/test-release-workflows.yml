@@ -13,6 +13,10 @@ on:
       - .github/actions/install-windows-frontend-dependencies/**
       - .github/scripts/release-workflows.test.ts
       - .github/scripts/enterprise-release.cjs
+      - .github/actions/prepare-desktop-localization/**
+      - apps/screenpipe-app-tauri/scripts/i18n/**
+      - apps/screenpipe-app-tauri/scripts/build-production.ts
+      - apps/screenpipe-app-tauri/gt.config.json
       - .github/actions/setup-persistent-macos-cache/**
       - .github/actions/setup-persistent-linux-cache/**
       - .github/scripts/release-performance.test.ts
@@ -31,6 +35,10 @@ on:
       - .github/actions/install-windows-frontend-dependencies/**
       - .github/scripts/release-workflows.test.ts
       - .github/scripts/enterprise-release.cjs
+      - .github/actions/prepare-desktop-localization/**
+      - apps/screenpipe-app-tauri/scripts/i18n/**
+      - apps/screenpipe-app-tauri/scripts/build-production.ts
+      - apps/screenpipe-app-tauri/gt.config.json
       - .github/actions/setup-persistent-macos-cache/**
       - .github/actions/setup-persistent-linux-cache/**
       - .github/scripts/release-performance.test.ts

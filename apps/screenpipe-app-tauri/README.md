@@ -76,6 +76,60 @@ before considering them complete. This command queues its initial native
 compile across all local Screenpipe worktrees, then releases the queue slot for
 the live app; see [`docs/macos-dev-builds.md`](../../docs/macos-dev-builds.md).
 
+## localization integration
+
+`gt.config.json` owns the source language and bundled languages. The initial
+pilot is Japanese (`ja`), shown as 日本語 in Settings and onboarding. Japanese
+system locales such as `ja-JP` resolve to `ja`. English stays
+in JSX and `useGT()` calls; shared definitions use `msg()` and `useMessages()`.
+Explicit native labels use `ui_text("English")`.
+Generated translations are ignored build artifacts. Never pass recorded text,
+user messages, AI output, executable prompts, or diagnostic logs to these helpers.
+
+Ordinary `dev`, `dev:web`, `dev:tauri`, and `build` commands default to English
+and make no translation requests, even when GT credentials are present.
+
+```bash
+SCREENPIPE_I18N_MODE=cached bun run dev:web    # use existing translations offline
+SCREENPIPE_I18N_MODE=generate bun run dev:web  # generate once before startup
+bun run build:production                     # finalize translations, then build
+```
+
+`cached` and `generate` both validate message structure and placeholders.
+Missing/invalid translations fall back to English. Service unavailability emits
+warnings and coverage; extraction, compilation, and artifact failures are fatal.
+Hot reload does not contact the translation service. Runtime loads only bundled
+data and never uses GT credentials or its CDN.
+
+Generation sends only missing source hashes in immutable batches. Unchanged
+translations are reused, and provider corrections are downloaded from their
+original batch without regenerating it. The provider's policy branch also
+recovers translations when the local/Actions cache is absent. The pinned GT
+collector supplies message formats and component/file context; every submitted
+batch includes the shared English style brief.
+
+One-time setup: create a GT project, configure its shared translation guidance
+from `translationPolicy.context` in `scripts/i18n/config.mjs`, and provide
+`GT_PROJECT_ID` and `GT_API_KEY` through the environment or Actions secrets.
+Manage terminology and corrections in GT. Change the policy revision when
+changing those shared instructions. Add languages only to `gt.config.json`.
+
+Release jobs prepare one snapshot and coverage artifact before platform builds;
+enterprise handoff reuses the consumer run's snapshot. Manual enterprise
+recovery prepares one if no consumer run is supplied. Platform jobs require
+the snapshot to match current source and policy before consulting the frontend
+cache. Local reuse accepts `SCREENPIPE_I18N_SNAPSHOT=/absolute/path/snapshot.json`
+with `SCREENPIPE_I18N_MODE=cached`.
+
+**Rollout status:** real Japanese translations have been generated and validated
+for 2,502 extracted frontend messages and 26 initial native labels. The browser
+mock verifies Japanese General Settings, Appearance, permission explanations,
+the onboarding welcome, and an interpolated toast. Full explicit-string and
+Swift surface coverage and disposable native UI acceptance remain unfinished.
+The browser mock's settings store resets on reload, so it cannot establish
+persistence across app restarts. These counts describe the extracted catalog,
+not full interface coverage.
+
 ## dev builds are isolated from your installed app
 
 `bun run dev:tauri` and `bun run build:tauri:dev` do **not** touch the

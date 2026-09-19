@@ -127,6 +127,7 @@ mod server_core;
 #[allow(deprecated)]
 mod space_monitor;
 mod store;
+mod localization;
 mod suggestions;
 mod sync;
 mod tray;
@@ -1409,6 +1410,7 @@ async fn main() {
             // `NotRequired` without invoking either checker.
             startup_auth::bootstrap(&app_handle, &mut store);
             app.manage(store.clone());
+            localization::initialize(app.handle(), &store.ui_locale);
 
             crate::recording::refresh_history_access_policy(
                 &app.state::<RecordingState>().history_access,

@@ -4,6 +4,7 @@
 "use client";
 
 import React, { Suspense, useState, useEffect, useRef, useCallback } from "react";
+import { useGT } from "gt-react";
 import {
   Brain,
   Video,
@@ -116,6 +117,7 @@ function ReferralSection() {
 }
 
 function SettingsContent() {
+  const gt = useGT();
   const router = useRouter();
   const searchParams = useSearchParams();
   const fromSection = searchParams.get("from");
@@ -187,60 +189,60 @@ function SettingsContent() {
   // off the id, not the label.
   const navGroups = [
     {
-      label: "Capture & data",
+      label: gt("Capture & data"),
       items: [
-        { id: "recording" as const, label: "Screen", icon: <Video className="h-4 w-4" /> },
-        { id: "audio" as const, label: "Audio & meetings", icon: <Mic className="h-4 w-4" /> },
+        { id: "recording" as const, label: gt("Screen"), icon: <Video className="h-4 w-4" /> },
+        { id: "audio" as const, label: gt("Audio & meetings"), icon: <Mic className="h-4 w-4" /> },
         // Speaker identification is meeting work; it does not deserve a group
         // of its own directly below the one it belongs to.
-        { id: "speakers" as const, label: "Speakers", icon: <Users className="h-4 w-4" /> },
-        { id: "storage" as const, label: "Disk & retention", icon: <HardDrive className="h-4 w-4" /> },
-        { id: "privacy" as const, label: "Privacy", icon: <Shield className="h-4 w-4" /> },
+        { id: "speakers" as const, label: gt("Speakers"), icon: <Users className="h-4 w-4" /> },
+        { id: "storage" as const, label: gt("Disk & retention"), icon: <HardDrive className="h-4 w-4" /> },
+        { id: "privacy" as const, label: gt("Privacy"), icon: <Shield className="h-4 w-4" /> },
         ...(showPermissions
-          ? [{ id: "permissions" as const, label: "Permissions", icon: <KeyRound className="h-4 w-4" /> }]
+          ? [{ id: "permissions" as const, label: gt("Permissions"), icon: <KeyRound className="h-4 w-4" /> }]
           : []),
       ].filter((s) => !isSettingsSectionHidden(s.id)),
     },
     {
-      label: "AI",
+      label: gt("AI"),
       items: [
-        { id: "activities" as const, label: "Activities", icon: <ListChecks className="h-4 w-4" /> },
-        { id: "ai-settings" as const, label: "AI features", icon: <SlidersHorizontal className="h-4 w-4" /> },
-        { id: "ai" as const, label: "Models & keys", icon: <Brain className="h-4 w-4" /> },
-        { id: "usage" as const, label: "AI credits", icon: <BarChart3 className="h-4 w-4" /> },
+        { id: "activities" as const, label: gt("Activities"), icon: <ListChecks className="h-4 w-4" /> },
+        { id: "ai-settings" as const, label: gt("AI features"), icon: <SlidersHorizontal className="h-4 w-4" /> },
+        { id: "ai" as const, label: gt("Models & keys"), icon: <Brain className="h-4 w-4" /> },
+        { id: "usage" as const, label: gt("AI credits"), icon: <BarChart3 className="h-4 w-4" /> },
       ].filter((s) => !isSettingsSectionHidden(s.id)),
     },
     {
-      label: "Account",
+      label: gt("Account"),
       items: [
-        { id: "account" as const, label: "Account", icon: <User className="h-4 w-4" /> },
+        { id: "account" as const, label: gt("Account"), icon: <User className="h-4 w-4" /> },
         // Hide "Team" on enterprise builds — those installs are already
         // org-managed; the desktop has nothing to manage. Admins use the
         // /enterprise dashboard on the web. On consumer builds we still
         // surface Team as a marketing entry point to /team.
         ...(isManagedDeployment
           ? []
-          : [{ id: "team" as const, label: "Team", icon: <Users className="h-4 w-4" /> }]),
-        { id: "referral" as const, label: "Get free month", icon: <Gift className="h-4 w-4" /> },
+          : [{ id: "team" as const, label: gt("Team"), icon: <Users className="h-4 w-4" /> }]),
+        { id: "referral" as const, label: gt("Get free month"), icon: <Gift className="h-4 w-4" /> },
       ].filter((s) => !isSectionHidden(s.id)),
     },
     {
-      label: "App",
+      label: gt("App"),
       items: [
         // Keep the legacy `general` section id so existing deep links and
         // automated tests continue to work. The user-facing label is the
         // familiar Apple-style category name.
-        { id: "general" as const, label: "General", icon: <SettingsIcon className="h-4 w-4" /> },
-        { id: "display" as const, label: "Appearance", icon: <Layout className="h-4 w-4" /> },
-        { id: "notifications" as const, label: "Notifications", icon: <Bell className="h-4 w-4" /> },
-        { id: "shortcuts" as const, label: "Shortcuts", icon: <Keyboard className="h-4 w-4" /> },
+        { id: "general" as const, label: gt("General"), icon: <SettingsIcon className="h-4 w-4" /> },
+        { id: "display" as const, label: gt("Appearance"), icon: <Layout className="h-4 w-4" /> },
+        { id: "notifications" as const, label: gt("Notifications"), icon: <Bell className="h-4 w-4" /> },
+        { id: "shortcuts" as const, label: gt("Shortcuts"), icon: <Keyboard className="h-4 w-4" /> },
       ].filter((s) => !isSectionHidden(s.id)),
     },
   ];
 
   type NavItem = { id: string; label: string; icon: React.ReactNode };
   const allItems: NavItem[] = navGroups.flatMap((g) => g.items as NavItem[]);
-  const currentLabel = allItems.find((s) => s.id === section)?.label ?? "Settings";
+  const currentLabel = allItems.find((s) => s.id === section)?.label ?? gt("Settings");
 
   // Search state. Overlay pattern (Claude-style): full nav stays rendered;
   // results float in a popover under the input. activeIndex tracks the

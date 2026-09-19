@@ -1,0 +1,37 @@
+{
+  "$schema": "https://assets.gtx.dev/config-schema.json",
+  "defaultLocale": "en",
+  "locales": [
+    "ja"
+  ],
+  "src": [
+    "app/**/*.{ts,tsx}",
+    "components/**/*.{ts,tsx}",
+    "lib/**/*.{ts,tsx}",
+    "../../packages/workflows-ui/src/**/*.{ts,tsx}",
+    "!**/*.test.*",
+    "!**/__tests__/**",
+    "!lib/i18n/**",
+    "!lib/generated/**",
+    "!lib/skill-content.ts"
+  ],
+  "files": {
+    "gt": {
+      "output": ".localization/gt/[locale].json",
+      "parsingFlags": {
+        "enableAutoJsxInjection": true,
+        "autoderive": false,
+        "includeSourceCodeContext": false,
+        "devHotReload": false
+      }
+    },
+    "json": {
+      "include": [
+        ".localization/native/[locale].json"
+      ]
+    }
+  },
+  "options": {
+    "saveLocal": false
+  }
+}

@@ -1,0 +1,68 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+"use client";
+
+import { createContext, useContext, useEffect, useMemo, useState, type ComponentProps, type ReactNode } from "react";
+import { GTProvider, initializeGT, getLocaleProperties } from "gt-react";
+import { useSettings } from "@/lib/hooks/use-settings";
+import { locale as operatingSystemLocale } from "@tauri-apps/plugin-os";
+import { resolveLocale } from "./locale";
+import bundled from "./empty.json";
+
+type Snapshot = {
+  mode: string; revision: string; defaultLocale: string; locales: string[];
+  translations: ComponentProps<typeof GTProvider>["translations"];
+  coverage: Record<string, unknown>; fallbacks: Record<string, Record<string, string>>; causes: string[];
+};
+export const localizationSnapshot = bundled as Snapshot;
+const { defaultLocale, locales, translations } = localizationSnapshot;
+export const bundledLocales = [defaultLocale, ...locales];
+
+// A local loader is mandatory even with a supplied provider snapshot: GT may
+// ask its cache for a missing locale. Never configure runtime credentials/CDN.
+initializeGT({ defaultLocale, locales, loadTranslations: async (locale) => translations[locale] ?? {}, runtimeUrl: null, _disableDevHotReload: true });
+
+const LocaleContext = createContext(defaultLocale);
+export function useUiLocale() { return useContext(LocaleContext); }
+
+export function LocalizationProvider({ children }: { children: ReactNode }) {
+  const { settings } = useSettings();
+  const [system, setSystem] = useState<readonly string[]>([]);
+  useEffect(() => {
+    let active = true;
+    const update = () => {
+      setSystem([...navigator.languages]);
+      void operatingSystemLocale().then((native) => {
+        if (active && native) setSystem([native, ...navigator.languages]);
+      }).catch(() => { /* Browser preview uses navigator.languages. */ });
+    };
+    update();
+    window.addEventListener("languagechange", update);
+    return () => { active = false; window.removeEventListener("languagechange", update); };
+  }, []);
+  const configured = typeof settings.uiLocale === "string" ? settings.uiLocale : "system";
+  const locale = resolveLocale(configured, system, bundledLocales, defaultLocale);
+  useEffect(() => {
+    document.documentElement.lang = locale;
+    const info = new Intl.Locale(locale) as Intl.Locale & { textInfo?: { direction: string }; getTextInfo?: () => { direction: string } };
+    document.documentElement.dir = info.getTextInfo?.().direction ?? info.textInfo?.direction ?? "ltr";
+    // This is an allow-listed diagnostic summary: no message text or interpolation
+    // values. The bridge includes it in the normal collected support report.
+    console.info("[localization]", JSON.stringify({ configured, resolved: locale, revision: localizationSnapshot.revision, coverage: localizationSnapshot.coverage[locale], causes: localizationSnapshot.causes, fallbackCount: Object.keys(localizationSnapshot.fallbacks[locale] ?? {}).length }));
+  }, [configured, locale]);
+  return <LocaleContext.Provider value={locale}><GTProvider locale={locale} translations={translations}>{children}</GTProvider></LocaleContext.Provider>;
+}
+
+export function localeName(locale: string) {
+  const name = getLocaleProperties(locale).nativeName;
+  return name.charAt(0).toLocaleUpperCase(locale) + name.slice(1);
+}
+
+export function useLocaleFormatters() {
+  const locale = useUiLocale();
+  return useMemo(() => ({
+    number: (value: number, options?: Intl.NumberFormatOptions) => new Intl.NumberFormat(locale, options).format(value),
+    date: (value: Date | number, options?: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat(locale, options).format(value),
+    plural: (value: number) => new Intl.PluralRules(locale).select(value),
+  }), [locale]);
+}

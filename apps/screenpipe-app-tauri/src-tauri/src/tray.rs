@@ -10,6 +10,7 @@ use crate::health::{
     HighFpsCacheEntry, RecordingStatus,
 };
 use crate::process_exit;
+use crate::localization::ui_text;
 use crate::recording::{local_api_context_from_app, RecordingState};
 use crate::store::{OnboardingStore, SettingsStore};
 use crate::updates::{is_enterprise_build, is_source_build};
@@ -852,6 +853,7 @@ fn snapshot_menu_state(data: &TrayMenuData, effective_status: RecordingStatus) -
     let recording_info = get_recording_info();
     let hd = get_high_fps_status();
     MenuState {
+        ui_locale: crate::localization::resolved_locale(),
         workflows_mode: data.workflows_mode,
         shortcuts: {
             let mut m = HashMap::new();
@@ -1004,6 +1006,7 @@ mod menu_refresh_observer {
 
 #[derive(Default, PartialEq, Clone)]
 struct MenuState {
+    ui_locale: String,
     workflows_mode: bool,
     shortcuts: HashMap<String, String>,
     recording_status: Option<RecordingStatus>,
@@ -1252,12 +1255,12 @@ fn create_dynamic_menu(
             .item(&PredefinedMenuItem::separator(app)?);
         if data.trial_activation_locked {
             menu_builder = menu_builder
-                .item(&MenuItemBuilder::with_id("open_app", "Open first summary").build(app)?)
-                .item(&MenuItemBuilder::with_id("settings", "Settings...").build(app)?)
+                .item(&MenuItemBuilder::with_id("open_app", ui_text("Open first summary")).build(app)?)
+                .item(&MenuItemBuilder::with_id("settings", ui_text("Settings...")).build(app)?)
                 .item(&PredefinedMenuItem::separator(app)?);
         }
         menu_builder =
-            menu_builder.item(&MenuItemBuilder::with_id("quit", "Quit screenpipe").build(app)?);
+            menu_builder.item(&MenuItemBuilder::with_id("quit", ui_text("Quit screenpipe")).build(app)?);
 
         return menu_builder.build().map_err(Into::into);
     }
@@ -1273,28 +1276,28 @@ fn create_dynamic_menu(
     // --- Open screenpipe ---
     if !data.app_ui_hidden {
         menu_builder = menu_builder
-            .item(&MenuItemBuilder::with_id("open_app", "Open screenpipe").build(app)?)
+            .item(&MenuItemBuilder::with_id("open_app", ui_text("Open screenpipe")).build(app)?)
             .item(&PredefinedMenuItem::separator(app)?);
     }
 
     // --- Primary actions (most-used first) ---
     // Use native accelerators for right-aligned shortcut display (like Notion Calendar)
     if !data.app_ui_hidden && !is_tray_item_hidden("tray_chat") {
-        let mut item = MenuItemBuilder::with_id("show_chat", "Chat");
+        let mut item = MenuItemBuilder::with_id("show_chat", ui_text("Chat"));
         if !chat_shortcut.is_empty() {
             item = item.accelerator(&to_accelerator(chat_shortcut));
         }
         menu_builder = menu_builder.item(&item.build(app)?);
     }
     if !data.app_ui_hidden && !is_tray_item_hidden("tray_search") {
-        let mut item = MenuItemBuilder::with_id("show_search", "Search");
+        let mut item = MenuItemBuilder::with_id("show_search", ui_text("Search"));
         if !search_shortcut.is_empty() {
             item = item.accelerator(&to_accelerator(search_shortcut));
         }
         menu_builder = menu_builder.item(&item.build(app)?);
     }
     if !data.app_ui_hidden && !is_tray_item_hidden("tray_timeline") && !data.disable_timeline {
-        let mut item = MenuItemBuilder::with_id("show", "Timeline");
+        let mut item = MenuItemBuilder::with_id("show", ui_text("Timeline"));
         if !show_shortcut.is_empty() {
             item = item.accelerator(&to_accelerator(show_shortcut));
         }
@@ -1317,7 +1320,7 @@ fn create_dynamic_menu(
             || effective_status == RecordingStatus::Starting)
     {
         menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("privacy_info", "Your data stays local")
+            &MenuItemBuilder::with_id("privacy_info", ui_text("Your data stays local"))
                 .enabled(false)
                 .build(app)?,
         );
@@ -1405,7 +1408,7 @@ fn create_dynamic_menu(
     // Show "fix permissions" when recording is in error state
     if effective_status == RecordingStatus::Error && data.has_permission_issue {
         menu_builder = menu_builder
-            .item(&MenuItemBuilder::with_id("fix_permissions", "⚠ Fix permissions").build(app)?);
+            .item(&MenuItemBuilder::with_id("fix_permissions", ui_text("⚠ Fix permissions")).build(app)?);
     }
 
     // --- Plan / usage info ---
@@ -1425,7 +1428,7 @@ fn create_dynamic_menu(
         // "Business Ultra plan" reads as a bug to the person paying for Ultra.
         if !has_cloud && !plan_includes_business(data.subscription_plan.as_deref()) {
             menu_builder = menu_builder
-                .item(&MenuItemBuilder::with_id("upgrade", "⚡ Upgrade to Business").build(app)?);
+                .item(&MenuItemBuilder::with_id("upgrade", ui_text("⚡ Upgrade to Business")).build(app)?);
         }
     }
 
@@ -1480,10 +1483,10 @@ fn create_dynamic_menu(
         // after the chosen interval. See cancel_pause_timer / handle_menu_event.
         if is_recording {
             let pause_submenu = SubmenuBuilder::new(app, "Pause for…")
-                .item(&MenuItemBuilder::with_id("pause_5", "5 minutes").build(app)?)
-                .item(&MenuItemBuilder::with_id("pause_15", "15 minutes").build(app)?)
-                .item(&MenuItemBuilder::with_id("pause_30", "30 minutes").build(app)?)
-                .item(&MenuItemBuilder::with_id("pause_60", "1 hour").build(app)?)
+                .item(&MenuItemBuilder::with_id("pause_5", ui_text("5 minutes")).build(app)?)
+                .item(&MenuItemBuilder::with_id("pause_15", ui_text("15 minutes")).build(app)?)
+                .item(&MenuItemBuilder::with_id("pause_30", ui_text("30 minutes")).build(app)?)
+                .item(&MenuItemBuilder::with_id("pause_60", ui_text("1 hour")).build(app)?)
                 .build()?;
             menu_builder = menu_builder.item(&pause_submenu);
         }
@@ -1503,17 +1506,17 @@ fn create_dynamic_menu(
             // the most common "one more demo / one more topic" extension;
             // bigger bumps go via the API or restart timer from scratch.
             menu_builder = menu_builder.item(
-                &MenuItemBuilder::with_id("extend_hd_30", "Extend HD by +30 min").build(app)?,
+                &MenuItemBuilder::with_id("extend_hd_30", ui_text("Extend HD by +30 min")).build(app)?,
             );
         } else if !all_capture_disabled {
             *HD_STOP_MENU_ITEM.lock().unwrap_or_else(|e| e.into_inner()) = None;
             // Idle: offer timer-bound sessions only. The meeting-bound path
             // is reached via the meeting-start notification's "+ HD" action.
             let submenu = SubmenuBuilder::new(app, "Record HD")
-                .item(&MenuItemBuilder::with_id("hd_timer_15", "15 minutes").build(app)?)
-                .item(&MenuItemBuilder::with_id("hd_timer_30", "30 minutes").build(app)?)
-                .item(&MenuItemBuilder::with_id("hd_timer_60", "1 hour").build(app)?)
-                .item(&MenuItemBuilder::with_id("hd_timer_120", "2 hours").build(app)?)
+                .item(&MenuItemBuilder::with_id("hd_timer_15", ui_text("15 minutes")).build(app)?)
+                .item(&MenuItemBuilder::with_id("hd_timer_30", ui_text("30 minutes")).build(app)?)
+                .item(&MenuItemBuilder::with_id("hd_timer_60", ui_text("1 hour")).build(app)?)
+                .item(&MenuItemBuilder::with_id("hd_timer_120", ui_text("2 hours")).build(app)?)
                 .build()?;
             menu_builder = menu_builder.item(&submenu);
         } else {
@@ -1533,13 +1536,13 @@ fn create_dynamic_menu(
     menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
     if !data.app_ui_hidden && !is_tray_item_hidden("tray_settings") {
         menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("settings", "Settings...")
+            &MenuItemBuilder::with_id("settings", ui_text("Settings..."))
                 .accelerator("CmdOrCtrl+,")
                 .build(app)?,
         );
     }
     menu_builder = menu_builder.item(
-        &MenuItemBuilder::with_id("quit", "Quit screenpipe")
+        &MenuItemBuilder::with_id("quit", ui_text("Quit screenpipe"))
             .accelerator("CmdOrCtrl+Q")
             .build(app)?,
     );
@@ -1551,7 +1554,7 @@ fn create_dynamic_menu(
 /// Reuse the normal recording action IDs, timers, settings and Help handlers.
 fn create_workflows_menu(app: &AppHandle, data: &TrayMenuData) -> Result<tauri::menu::Menu<Wry>> {
     let mut menu = MenuBuilder::new(app)
-        .item(&MenuItemBuilder::with_id("open_app", "Open Screenpipe").build(app)?)
+        .item(&MenuItemBuilder::with_id("open_app", ui_text("Open Screenpipe")).build(app)?)
         .item(&PredefinedMenuItem::separator(app)?);
     if !is_tray_item_hidden("tray_recording_controls") {
         let status = get_effective_recording_status();
@@ -1566,8 +1569,8 @@ fn create_workflows_menu(app: &AppHandle, data: &TrayMenuData) -> Result<tauri::
         );
         if recording {
             controls = controls
-                .item(&MenuItemBuilder::with_id("pause_15", "Pause for 15 minutes").build(app)?)
-                .item(&MenuItemBuilder::with_id("pause_60", "Pause for 1 hour").build(app)?);
+                .item(&MenuItemBuilder::with_id("pause_15", ui_text("Pause for 15 minutes")).build(app)?)
+                .item(&MenuItemBuilder::with_id("pause_60", ui_text("Pause for 1 hour")).build(app)?);
         }
         let label = if recording {
             "Pause until resumed"
@@ -1583,7 +1586,7 @@ fn create_workflows_menu(app: &AppHandle, data: &TrayMenuData) -> Result<tauri::
         );
         if status == RecordingStatus::Error && data.has_permission_issue {
             controls = controls
-                .item(&MenuItemBuilder::with_id("fix_permissions", "Fix permissions…").build(app)?);
+                .item(&MenuItemBuilder::with_id("fix_permissions", ui_text("Fix permissions…")).build(app)?);
         }
         menu = menu
             .item(&controls.build()?)
@@ -1591,15 +1594,15 @@ fn create_workflows_menu(app: &AppHandle, data: &TrayMenuData) -> Result<tauri::
     }
     if !is_tray_item_hidden("tray_settings") {
         menu = menu.item(
-            &MenuItemBuilder::with_id("settings", "Settings…")
+            &MenuItemBuilder::with_id("settings", ui_text("Settings…"))
                 .accelerator("CmdOrCtrl+,")
                 .build(app)?,
         );
     }
     menu = menu
-        .item(&MenuItemBuilder::with_id("feedback", "Help").build(app)?)
+        .item(&MenuItemBuilder::with_id("feedback", ui_text("Help")).build(app)?)
         .item(
-            &MenuItemBuilder::with_id("quit", "Quit Screenpipe")
+            &MenuItemBuilder::with_id("quit", ui_text("Quit Screenpipe"))
                 .accelerator("CmdOrCtrl+Q")
                 .build(app)?,
         );

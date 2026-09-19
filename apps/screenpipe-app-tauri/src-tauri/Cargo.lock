@@ -11294,6 +11294,7 @@ dependencies = [
  "specta",
  "specta-typescript",
  "sqlx",
+ "sys-locale",
  "sysinfo",
  "tauri",
  "tauri-build",

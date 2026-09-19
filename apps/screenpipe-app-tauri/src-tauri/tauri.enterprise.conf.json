@@ -4,7 +4,7 @@
   "identifier": "screenpi.pe.enterprise",
   "build": {
     "beforeDevCommand": "bun run dev",
-    "beforeBuildCommand": "bun run build",
+    "beforeBuildCommand": "bun run build:production",
     "frontendDist": "../out",
     "devUrl": "http://localhost:3000"
   },

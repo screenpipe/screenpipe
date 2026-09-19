@@ -638,6 +638,7 @@ async fn run_feedback_upload(
         "{}{}\n\n=== Browser Console Logs ===\n{}\n\n=== Recording Diagnostics ===\n{}\n\n=== Storage Migration Diagnostics ===\n{}",
         request.chat_history, logs, request.console_log, recording_diagnostics, migration_diagnostics
     );
+    let raw_bundle = append_localization_diagnostics(raw_bundle, &crate::localization::diagnostics());
     let redacted_logs =
         crate::feedback_redact::redact_pii_for_feedback(raw_bundle, request.settings_json.clone())
             .await
@@ -656,6 +657,10 @@ async fn run_feedback_upload(
         video,
     )
     .await
+}
+
+pub(crate) fn append_localization_diagnostics(bundle: String, diagnostics: &str) -> String {
+    format!("{bundle}\n\n=== Localization Diagnostics ===\n{diagnostics}")
 }
 
 fn finish(app: &AppHandle, completed: FeedbackUploadCompleted) {

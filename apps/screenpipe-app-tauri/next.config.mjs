@@ -2,11 +2,22 @@
 // https://screenpipe.com
 
 import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
+import { localizationMode } from "./scripts/i18n/config.mjs";
+import { desktopCompiler } from "./scripts/i18n/compiler.mjs";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
     transpilePackages: ['@screenpipe/workflows-ui'],
-    webpack: (config) => {
+  webpack: (config) => {
+    const mode = localizationMode();
+    const emptySnapshot = fileURLToPath(new URL("./lib/i18n/empty.json", import.meta.url));
+    const snapshot = fileURLToPath(new URL("./lib/i18n/generated.json", import.meta.url));
+    if (mode !== "off" && !existsSync(snapshot)) {
+      throw new Error("Localization snapshot missing. Start with bun run dev or bun run build.");
+    }
+    config.resolve.alias[emptySnapshot] = mode === "off" ? emptySnapshot : snapshot;
+    if (mode !== "off") config.plugins.push(desktopCompiler.webpack());
         config.resolve.symlinks = false;
         // This local file dependency changes without a package version bump.
         config.snapshot = { ...config.snapshot, unmanagedPaths: [

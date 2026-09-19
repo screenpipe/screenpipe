@@ -11,7 +11,7 @@ async function status({ github, context, sha, dryRun, state, description }) {
   });
 }
 
-async function dispatchEnterprise({ github, context, sha, version, forceGithubRunners, dryRun }) {
+async function dispatchEnterprise({ github, context, sha, version, forceGithubRunners, dryRun, localizationRunId = "" }) {
   const common = { github, context, sha, dryRun };
   await status({ ...common, state: "pending", description: "Consumer ready; waiting for enterprise artifacts" });
   try {
@@ -24,6 +24,7 @@ async function dispatchEnterprise({ github, context, sha, version, forceGithubRu
         version,
         force_github_runners: String(forceGithubRunners),
         dry_run: String(dryRun),
+        ...(localizationRunId ? { localization_run_id: String(localizationRunId) } : {}),
       },
     });
   } catch (error) {

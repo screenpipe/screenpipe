@@ -2,7 +2,7 @@
   "name": "screenpipe",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 1420",
+    "dev": "bun scripts/dev-frontend.ts",
     "dev:web": "bun scripts/dev-web.ts mock",
     "dev:web:live": "bun scripts/dev-web.ts live",
     "dev:tauri": "bun scripts/native-build-queue.ts dev",
@@ -81,7 +81,9 @@
     "bundle:persistence-installer": "bun scripts/native-build-queue.ts persistence-bundle",
     "bundle:enterprise-test-installer": "bun scripts/native-build-queue.ts enterprise-bundle",
     "tauri:build": "bun scripts/native-build-queue.ts signed",
-    "clean": "rm -rf out && cargo clean --manifest-path src-tauri/Cargo.toml && rm -rf src-tauri/{screenpipe-*,tesseract-*,ffmpeg*,openblas*,bun*,ollama*,ui_monitor*} node_modules"
+    "clean": "rm -rf out && cargo clean --manifest-path src-tauri/Cargo.toml && rm -rf src-tauri/{screenpipe-*,tesseract-*,ffmpeg*,openblas*,bun*,ollama*,ui_monitor*} node_modules",
+    "i18n:prepare": "bun scripts/i18n/prepare.mjs",
+    "build:production": "bun scripts/build-production.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -130,6 +132,7 @@
     "date-fns": "^3.6.0",
     "framer-motion": "^11.18.2",
     "fuse.js": "^7.4.2",
+    "gt-react": "11.4.0",
     "hotkeys-js": "^3.13.15",
     "js-levenshtein": "^1.1.6",
     "localforage": "^1.10.0",
@@ -165,6 +168,8 @@
     "@earendil-works/pi-ai": "0.84.1",
     "@earendil-works/pi-coding-agent": "0.84.1",
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "@generaltranslation/compiler": "1.3.53",
+    "@generaltranslation/icu": "0.1.2",
     "@next/eslint-plugin-next": "14.2.4",
     "@tailwindcss/typography": "^0.5.19",
     "@tauri-apps/cli": "=2.11.2",
@@ -190,6 +195,7 @@
     "eslint-config-next": "14.2.4",
     "eslint-plugin-react-hooks": "4.6.2",
     "eslint-plugin-react-x": "^5.10.1",
+    "gt": "2.21.3",
     "jsdom": "^24.1.3",
     "mocha": "^11.7.5",
     "postcss": "^8.5.8",
@@ -199,6 +205,7 @@
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
+    "unplugin": "2.3.11",
     "vitest": "^1.6.1",
     "wdio-video-reporter": "^6.0.0"
   },

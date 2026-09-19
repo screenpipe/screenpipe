@@ -31,6 +31,7 @@ import crypto from 'crypto'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
+import { prepareLocalization } from './i18n/prepare.mjs'
 
 const appRoot = path.resolve(__dirname, '..')
 const outDir = path.join(appRoot, 'out')
@@ -55,13 +56,13 @@ const MAX_CACHE_ENTRIES = 8
 // pointlessly rebuilding an identical frontend.
 const SKIP_DIRS = new Set([
 	'src-tauri', 'node_modules', '.next', 'out', 'target', '.git', '.turbo', '.vercel',
-	'coverage', '.e2e-data', '.e2e', 'videos', 'screenshots', 'results',
+	'coverage', '.e2e-data', '.e2e', 'videos', 'screenshots', 'results', '.localization',
 ])
 const SKIP_FILES = new Set(['.DS_Store', 'tsconfig.tsbuildinfo'])
 
 // Env vars that change the emitted bundle (see next.config.mjs). Fold them into
 // the hash so toggling one invalidates the cache.
-const INPUT_ENV = ['SHIP_SOURCE_MAPS', 'NODE_ENV']
+const INPUT_ENV = ['SHIP_SOURCE_MAPS', 'NODE_ENV', 'SCREENPIPE_I18N_MODE']
 
 // Next inlines EVERY `NEXT_PUBLIC_*` var into the emitted chunks at build
 // time, so each one is a bundle input — enumerated dynamically because a
@@ -188,6 +189,8 @@ async function pruneCache() {
 }
 
 async function main() {
+	// Finalize the generated bundle before inspecting any frontend artifact cache.
+	await prepareLocalization()
 	const forced = ['1', 'true'].includes(String(process.env.SCREENPIPE_FORCE_FRONTEND_BUILD).toLowerCase())
 	const key = await computeInputHash()
 	const entry = cacheRoot ? path.join(cacheRoot, key) : null

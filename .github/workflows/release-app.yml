@@ -159,8 +159,34 @@ jobs:
       - name: draft placeholder
         run: echo "R2-based releases - no CN draft needed"
 
+  localization:
+    needs: [check_commit]
+    if: github.event_name == 'workflow_dispatch' || needs.check_commit.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      enabled: ${{ steps.localization.outputs.enabled }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check_commit.outputs.release_sha }}
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-workflow
+          sparse-checkout: .github/actions/prepare-desktop-localization
+      - id: localization
+        uses: ./.release-workflow/.github/actions/prepare-desktop-localization
+        with:
+          release-sha: ${{ needs.check_commit.outputs.release_sha }}
+          token: ${{ github.token }}
+          gt-project-id: ${{ secrets.GT_PROJECT_ID }}
+          gt-api-key: ${{ secrets.GT_API_KEY }}
+
   publish-tauri:
-    needs: [check_commit, draft]
+    needs: [check_commit, draft, localization]
     if: github.event_name == 'workflow_dispatch' || needs.check_commit.outputs.should_release == 'true'
     permissions:
       contents: read
@@ -200,6 +226,9 @@ jobs:
 
     runs-on: ${{ matrix.platform == 'windows-desktop-test' && fromJSON('["self-hosted", "windows-desktop-test"]') || matrix.platform }}
     timeout-minutes: 120
+    env:
+      SCREENPIPE_I18N_MODE: cached
+      SCREENPIPE_I18N_SNAPSHOT: ${{ needs.localization.outputs.enabled == 'true' && format('{0}/.release-localization/snapshot.json', github.workspace) || '' }}
     steps:
       - name: Enable Git long paths on Windows
         if: matrix.os_type == 'windows'
@@ -230,6 +259,13 @@ jobs:
         if: runner.environment == 'self-hosted' && matrix.os_type == 'windows'
         shell: pwsh
         run: git clean -ffdx -e apps/screenpipe-app-tauri/node_modules/
+
+      - name: Download finalized localization snapshot
+        if: needs.localization.outputs.enabled == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: desktop-localization-${{ needs.check_commit.outputs.release_sha }}
+          path: .release-localization
 
       - name: Checkout macOS release helpers
         if: matrix.os_type == 'macos'
@@ -1739,7 +1775,7 @@ jobs:
 
   dispatch-enterprise:
     name: Start enterprise after consumer
-    needs: [check_commit, publish-tauri]
+    needs: [check_commit, publish-tauri, localization]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1755,6 +1791,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.check_commit.outputs.release_version }}
           FORCE_GITHUB_RUNNERS: ${{ inputs.force_github_runners }}
           DRY_RUN: ${{ inputs.dry_run }}
+          LOCALIZATION_RUN_ID: ${{ needs.localization.outputs.enabled == 'true' && github.run_id || '' }}
         with:
           script: |
             const { dispatchEnterprise } = require('./.github/scripts/enterprise-release.cjs');
@@ -1764,6 +1801,7 @@ jobs:
               version: process.env.RELEASE_VERSION,
               forceGithubRunners: process.env.FORCE_GITHUB_RUNNERS === 'true',
               dryRun: process.env.DRY_RUN === 'true',
+              localizationRunId: process.env.LOCALIZATION_RUN_ID,
             });
             await core.summary
               .addHeading(`Consumer ${process.env.RELEASE_VERSION} ready; enterprise queued`)

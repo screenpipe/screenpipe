@@ -9,6 +9,31 @@ import path from 'path'
 
 import { computeInputHash } from './build-frontend.js'
 
+test('localization mode and finalized snapshot invalidate the frontend cache; raw downloads do not', async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), 'screenpipe-localization-hash-'))
+	const prior = process.env.SCREENPIPE_I18N_MODE
+	try {
+		process.env.SCREENPIPE_I18N_MODE = 'off'
+		const off = await computeInputHash(root)
+		process.env.SCREENPIPE_I18N_MODE = 'cached'
+		const cached = await computeInputHash(root)
+		expect(cached).not.toBe(off)
+		await fs.mkdir(path.join(root, 'lib/i18n'), { recursive: true })
+		await fs.writeFile(path.join(root, 'lib/i18n/generated.json'), '{"revision":"one"}')
+		const first = await computeInputHash(root)
+		expect(first).not.toBe(cached)
+		await fs.mkdir(path.join(root, '.localization'))
+		await fs.writeFile(path.join(root, '.localization/in-progress.json'), '{}')
+		expect(await computeInputHash(root)).toBe(first)
+		await fs.writeFile(path.join(root, 'lib/i18n/generated.json'), '{"revision":"two"}')
+		expect(await computeInputHash(root)).not.toBe(first)
+	} finally {
+		if (prior === undefined) delete process.env.SCREENPIPE_I18N_MODE
+		else process.env.SCREENPIPE_I18N_MODE = prior
+		await fs.rm(root, { recursive: true, force: true })
+	}
+})
+
 test('native backend changes do not invalidate the frontend input hash', async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), 'screenpipe-frontend-hash-'))
 	try {
