@@ -162,8 +162,8 @@
     "zustand": "^5.0.11"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.84.1",
-    "@earendil-works/pi-coding-agent": "0.84.1",
+    "@earendil-works/pi-ai": "0.85.1",
+    "@earendil-works/pi-coding-agent": "0.85.1",
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@next/eslint-plugin-next": "14.2.4",
     "@tailwindcss/typography": "^0.5.19",

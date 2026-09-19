@@ -59,8 +59,8 @@ fn user_skill_fingerprint(root: &Path) -> std::io::Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-pub const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.84.1";
-pub const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.84.1";
+pub const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.85.1";
+pub const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.85.1";
 pub const TINFOIL_SDK_VERSION: &str = "1.2.1";
 pub const PI_NAMESPACE_DIR: &str = "@earendil-works";
 pub const SCREENPIPE_API_URL: &str = "https://api.screenpipe.com/v1";
@@ -2679,7 +2679,8 @@ pub fn pi_config_dir() -> Result<PathBuf> {
 
 /// Pi's 20k recent-history default leaves too little room for the system prompt,
 /// skill instructions and a summary on 32k models. Use its standard setting for
-/// both chat and Pipes. Explicit user settings (including disabled compaction)
+/// both chat and Pipes. Reserve 8k for the next response rather than compacting
+/// at half of a 32k window. Explicit user settings (including disabled compaction)
 /// remain authoritative; no model selection or summarization logic lives here.
 fn ensure_pi_compaction_default(config_dir: &Path) -> Result<()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -2703,10 +2704,11 @@ fn ensure_pi_compaction_default(config_dir: &Path) -> Result<()> {
     let Some(compaction) = compaction.as_object_mut() else {
         return Ok(());
     };
-    if compaction.contains_key("keepRecentTokens") {
+    if compaction.contains_key("keepRecentTokens") && compaction.contains_key("reserveTokens") {
         return Ok(());
     }
-    compaction.insert("keepRecentTokens".into(), json!(8192));
+    compaction.entry("keepRecentTokens").or_insert(json!(8192));
+    compaction.entry("reserveTokens").or_insert(json!(8192));
     std::fs::create_dir_all(config_dir)?;
     let mut temporary = tempfile::NamedTempFile::new_in(config_dir)?;
     serde_json::to_writer_pretty(temporary.as_file_mut(), &settings)?;
@@ -5511,7 +5513,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         for original in [
-            r#"{"compaction":{"keepRecentTokens":24000}}"#,
+            r#"{"compaction":{"keepRecentTokens":24000,"reserveTokens":4000}}"#,
             "invalid",
             "[]",
             r#"{"compaction":null}"#,
@@ -5529,7 +5531,24 @@ mod tests {
         let settings: serde_json::Value =
             serde_json::from_slice(&std::fs::read(dir.path().join("settings.json")).unwrap())
                 .unwrap();
-        assert_eq!(settings, json!({"compaction":{"keepRecentTokens":8192}}));
+        assert_eq!(
+            settings,
+            json!({"compaction":{"keepRecentTokens":8192,"reserveTokens":8192}})
+        );
+    }
+
+    #[test]
+    fn pi_compaction_default_adds_reserve_to_existing_install() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, r#"{"compaction":{"keepRecentTokens":4000}}"#).unwrap();
+        ensure_pi_compaction_default(dir.path()).unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            settings,
+            json!({"compaction":{"keepRecentTokens":4000,"reserveTokens":8192}})
+        );
     }
 
     /// First-run seed copies config + screenpipe-owned sessions from the

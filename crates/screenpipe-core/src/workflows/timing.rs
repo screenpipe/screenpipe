@@ -35,7 +35,7 @@ pub fn normalize_timing(value: &Value, catalog: &EvidenceCatalog) -> Result<Valu
                 p.timestamp == at
                     && p.app.eq_ignore_ascii_case(app)
                     && matches!(p.source.as_str(), "screen" | "parsed")
-                    && p.detail.contains(quote)
+                    && contains_source_quote(&p.detail, quote)
             })
             .ok_or("Timing boundary does not match captured source text")?;
         Ok((
@@ -100,6 +100,16 @@ mod tests {
         assert_eq!(result["minMinutes"], 10.0);
         assert_eq!(result["maxMinutes"], 60.0);
         assert_eq!(result["basis"], "estimated-elapsed");
+    }
+    #[test]
+    fn wrapped_boundary_quotes_keep_the_same_measured_runs() {
+        let (input, mut catalog) = fixture();
+        for point in &mut catalog.points {
+            point.detail = point.detail.replace(' ', "\n  ");
+        }
+        let result = normalize_timing(&input, &catalog).unwrap();
+        assert_eq!(result["averageMinutes"], 30.0);
+        assert_eq!(result["sampleCount"], 3);
     }
     #[test]
     fn sparse_evidence_without_explicit_runs_is_not_a_duration() {

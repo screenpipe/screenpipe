@@ -125,11 +125,8 @@ Use workflows: [] only after a complete investigation finds no supported change.
 That empty POST is required to record a completed review. Finding no changes
 does not make saving optional; without its receipt, this task is unfinished.
 A failed source read is not evidence of no changes. Defer the affected claim;
-save other independently supported improvements. A readable source that conclusively shows only a plan, assistant report or unrelated
-activity is a resolved exclusion, not an unverifiable candidate. Record that decision;
-if every candidate is conclusively excluded, save workflows: [] to finish this review.
-If all proposed changes remain unverifiable because their sources could not be
-checked, stop with an explicit failure instead of an empty success. Optional
+save other independently supported improvements. If all proposed changes remain
+unverifiable, stop with an explicit failure instead of an empty success. Optional
 screenshots and unknown timing do not block text-supported changes. A missing or
 deleted capture (404/410) may be omitted. Do not advance discovery coverage: copy
 only the completed upstream checkpoint. Never claim success without

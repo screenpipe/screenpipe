@@ -13,7 +13,7 @@ export function sourceEvidence(read: SourceRead, raw: string): Evidence[] {
     const timestamp = value.timestamp || value['content.timestamp'];
     const transcription = value.transcription || value['content.transcription'];
     const app = value.app_name || value['content.app_name'] || value.app ||
-      (transcription ? 'Conversation' : queryApp);
+      (transcription || value.source === 'audio' ? 'Conversation' : queryApp);
     const text = value.text || value['content.text'] || transcription;
     if (typeof timestamp === 'string' && typeof app === 'string' && typeof text === 'string') {
       sources.push({ timestamp, app, text });

@@ -38,3 +38,16 @@ test('evidence checks distinguish source text, timestamp, app and failed reads',
   expect(matchesEvidence({ ...claim, quote: 'Receipt sent' }, sources)).toBe(false);
   expect(sourceEvidence({ ...read, status: 503 }, response)).toEqual([]);
 });
+
+
+test('overview audio snippets retain their timestamp and conversation attribution', async () => {
+  const { sourceEvidence, matchesEvidence } = await import('./eval-workflow-evidence');
+  const response = JSON.stringify({ snippets: [
+    { source: 'audio', app_name: null, timestamp: '2026-01-01T10:00:00Z', text: 'Check the invoice total.' },
+    { source: 'screen', app_name: 'Receipts', timestamp: '2026-01-01T10:01:00Z', text: 'Receipt saved' },
+  ] });
+  const sources = sourceEvidence({ status: 200, contentType: 'application/json', path: '/activity-summary' }, response);
+  expect(sources).toHaveLength(2);
+  expect(matchesEvidence({ timestamp: '2026-01-01T10:00:00Z', app: 'Conversation', quote: 'Check the invoice total.' }, sources)).toBe(true);
+  expect(matchesEvidence({ timestamp: '2026-01-01T10:01:00Z', app: 'Conversation', quote: 'Receipt saved' }, sources)).toBe(false);
+});

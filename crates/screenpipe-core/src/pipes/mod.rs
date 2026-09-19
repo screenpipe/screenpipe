@@ -7816,9 +7816,13 @@ Structured output targets may declare an authoritative time range that overrides
 
     prompt.push_str(&format!(
         r#"Run date: {date}
+Run context time: {}
+Execution budget: {} seconds. Check the clock and reserve time for required writes and verification.
 Timezone: {timezone} (UTC{tz_offset})
 Pipe name: {}
 "#,
+        now.to_rfc3339(),
+        config.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS),
         config.name
     ));
 
@@ -12660,6 +12664,19 @@ Run the scheduled task.
             trigger: None,
         };
         let prompt = render_prompt_with_port(&config, "body text", 3031, None, None);
+        assert!(prompt.contains("Execution budget: 600 seconds."));
+        let timestamp = prompt
+            .lines()
+            .find_map(|line| line.strip_prefix("Run context time: "))
+            .unwrap();
+        let rendered = chrono::DateTime::parse_from_rfc3339(timestamp).unwrap();
+        assert!((Utc::now() - rendered.with_timezone(&Utc)).num_seconds().abs() < 5);
+        let shorter = PipeConfig {
+            timeout: Some(90),
+            ..config.clone()
+        };
+        assert!(render_prompt_with_port(&shorter, "body text", 3031, None, None)
+            .contains("Execution budget: 90 seconds."));
         // User prompt contains a default lookback and the "Execute" instruction.
         assert!(prompt.contains("Default run lookback:"));
         assert!(prompt.contains("authoritative time range"));
