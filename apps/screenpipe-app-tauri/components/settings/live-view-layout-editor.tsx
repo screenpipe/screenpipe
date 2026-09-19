@@ -26,7 +26,7 @@ import type {
   BrainViewSlot,
   BrainViewTimeRange,
 } from "@/lib/utils/tauri";
-import { useGT } from "gt-react";
+import { useGT, useMessages } from "gt-react";
 
 
 type ComponentOption = {
@@ -129,6 +129,7 @@ export function LiveViewLayoutEditor({
 }) {
 
   const ui = useGT();
+  const uiMessages = useMessages();
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
@@ -309,7 +310,7 @@ export function LiveViewLayoutEditor({
             >
               {allowedTimeRangeOptions.map((range) => (
                 <option key={range.value} value={range.value}>
-                  {range.label}
+                  {uiMessages(range.label)}
                 </option>
               ))}
             </select>

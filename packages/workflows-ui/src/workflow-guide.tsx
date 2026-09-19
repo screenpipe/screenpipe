@@ -599,7 +599,7 @@ export function WorkflowGuide({
                     steps: [
                       ...draft.steps,
                       {
-                        title: "New step",
+                        title: ui("New step"),
                         instruction: "",
                         expectedResult: "",
                         sourceStage: null,

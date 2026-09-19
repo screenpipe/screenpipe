@@ -7,6 +7,8 @@ import { useEffect } from "react";
 import { useUsageStatusQuery } from "@/lib/hooks/use-usage-status";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { appServerFetch } from "@/lib/notifications/app-server";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
 
 const STORAGE_PREFIX = "screenpipe.background-pipe-allowance-notify";
 const DEFAULT_COOLDOWN_HOURS = 48;
@@ -67,6 +69,8 @@ export function shouldSendBackgroundPipeAllowanceNotification(input: {
  * gate. This is intentionally not shown for interactive chat.
  */
 export function BackgroundPipeAllowanceNotifier() {
+  const ui = useGT();
+  const uiLocale = useUiLocale();
   const { settings, isSettingsLoaded } = useSettings();
   const { usage } = useUsageStatusQuery(true);
   const advisory = usage?.background_pipe_advisory;
@@ -93,7 +97,7 @@ export function BackgroundPipeAllowanceNotifier() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        title: "Background Pipes are using most of your AI allowance",
+        title: ui("Background Pipes are using most of your AI allowance"),
         body: advisory.message,
         type: "pipe",
         priority: "normal",
@@ -101,14 +105,14 @@ export function BackgroundPipeAllowanceNotifier() {
         actions: [
           {
             id: "open-scheduled",
-            label: "Review scheduled tasks",
+            label: ui("Review scheduled tasks"),
             type: "deeplink",
             url: "screenpipe://scheduled",
             primary: true,
           },
           {
             id: "dismiss",
-            label: "Dismiss",
+            label: ui("Dismiss"),
             type: "dismiss",
           },
         ],
@@ -116,7 +120,7 @@ export function BackgroundPipeAllowanceNotifier() {
     }).catch(() => {
       // Avoid a retry loop that would make an allowance incident noisier.
     });
-  }, [advisory, allowanceWarningsEnabled]);
+  }, [advisory, allowanceWarningsEnabled, uiLocale]);
 
   return null;
 }

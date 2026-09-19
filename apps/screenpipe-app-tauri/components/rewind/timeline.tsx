@@ -52,7 +52,7 @@ import {
 	shouldRestrictTimelineHistory,
 	useAuthoritativeTimelineHistoryAccess,
 } from "@/lib/hooks/use-timeline-cache";
-import { useGT } from "gt-react";
+import { useGT, useMessages } from "gt-react";
 import { useUiLocale } from "@/lib/i18n/provider";
 
 
@@ -109,6 +109,7 @@ const easeOutCubic = (x: number): number => {
 export default function Timeline({ embedded = false }: { embedded?: boolean }) {
   const uiLocale = useUiLocale();
   const ui = useGT();
+  const uiMessages = useMessages();
 	const { isMac } = usePlatform();
 	const { settings } = useSettings();
 	const enterpriseBuild = useEnterpriseBuildStatus();
@@ -1323,7 +1324,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 										Open settings
 									</button>
 								</div>
-							) : screenshotsDisabledCta(health) ? (
+							) : screenshotsDisabledCta(health, uiMessages) ? (
 								<div className="text-center p-8 max-w-md">
 									<div className="mx-auto mb-8 w-24 h-24 flex items-center justify-center">
 										<div className="w-16 h-16 rounded-full bg-muted/50 border border-border flex items-center justify-center">
@@ -1332,10 +1333,10 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 									</div>
 
 									<h3 className="text-xl font-semibold text-foreground mb-3">
-										{screenshotsDisabledCta(health)?.headline}
+										{screenshotsDisabledCta(health, uiMessages)?.headline}
 									</h3>
 									<p className="text-muted-foreground mb-6 leading-relaxed">
-										{screenshotsDisabledCta(health)?.body}
+										{screenshotsDisabledCta(health, uiMessages)?.body}
 									</p>
 
 									<button

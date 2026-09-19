@@ -59,6 +59,35 @@ test("cached invokes only offline extraction and preserves valid translations", 
   expect(result.coverage.ja.frontend.translated).toBe(3);
 });
 
+test("permission descriptions produce locale resources and off removes stale languages", async () => {
+  const f = await fixture();
+  const source = "Record audio & screen";
+  const id = digest(source).slice(0, 16);
+  await fs.mkdir(path.join(f.root, "src-tauri"), { recursive: true });
+  await fs.writeFile(path.join(f.root, "src-tauri/Info.plist"), `<plist><dict>
+    <key>NSMicrophoneUsageDescription</key><string>Record audio &amp; screen</string>
+    <key>PrivateIdentifier</key><string>never extract this</string>
+  </dict></plist>`);
+  expect((await extractNative(f.root)).messages).toEqual({ [id]: source });
+  process.env.GT_API_KEY = "test-only";
+  process.env.GT_PROJECT_ID = "test-only";
+  const run = async (args: string[]) => {
+    const result = await f.run(args);
+    if (args[0] === "translate") await writeJson(path.join(f.root, ".localization/native/ja.json"), { [id]: "音声と画面を記録" });
+    return result;
+  };
+  const snapshot = await prepareLocalization({ ...f, config, mode: "generate", run });
+  expect(snapshot.coverage.ja.native).toEqual({ total: 1, translated: 1, fallback: 0 });
+  const resources = path.join(f.root, ".localization/macos-resources");
+  expect(await fs.readFile(path.join(resources, "ja.lproj/InfoPlist.strings"), "utf8")).toContain('"NSMicrophoneUsageDescription" = "音声と画面を記録";');
+  await prepareLocalization({ ...f, config: { ...config, locales: ["ja", "de"] }, mode: "cached", run });
+  expect(await fs.readFile(path.join(resources, "de.lproj/InfoPlist.strings"), "utf8")).toContain(source);
+  f.calls.length = 0;
+  await prepareLocalization({ ...f, config, mode: "off", run });
+  expect(f.calls).toEqual([]);
+  expect(await fs.readdir(resources)).toEqual(["en.lproj"]);
+});
+
 test("missing credentials and timeout retain valid Japanese with diagnosable causes", async () => {
   const f = await fixture();
   process.env.GT_API_KEY = "test-only"; process.env.GT_PROJECT_ID = "test-only";

@@ -106,7 +106,7 @@ export function LiveViewTemplateGallery({
                 </div>
                 <span className="shrink-0 text-[10px] normal-case tracking-wide text-muted-foreground">
                   {uiPlural("{count, plural, one {# section} other {# sections}}", { count: kit.slots.length })}{" "}
-                  · {getLiveViewTimeRangeOption(kit.timeRange).label}
+                  · {uiMessages(getLiveViewTimeRangeOption(kit.timeRange).label)}
                 </span>
               </div>
               <div

@@ -15,6 +15,7 @@ import {
   replaceComposerMentionAtCursor,
   resolvePinnedMentionIndex,
   TIME_RANGE_MENTION_SUGGESTIONS,
+  COMPOSER_COMMAND_SUGGESTIONS,
   type ComposerCommandId,
   type MentionSuggestion as ChatMentionSuggestion,
   type MentionTrigger,
@@ -23,7 +24,7 @@ import { localFetch } from "@/lib/api";
 import { listConversations } from "@/lib/chat-storage";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { commands } from "@/lib/utils/tauri";
-import { useGT } from "gt-react";
+import { useGT, useMessages } from "gt-react";
 import { useUiLocale as useLocale } from "@/lib/i18n/provider";
 
 
@@ -76,6 +77,7 @@ export function useChatMentions({
 }: UseChatMentionsOptions) {
   const uiLanguage = useLocale();
   const ui = useGT();
+  const uiMessages = useMessages();
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
@@ -412,7 +414,7 @@ export function useChatMentions({
         if (response.ok) {
           const tags = await response.json();
           if (Array.isArray(tags)) {
-            setTagSearchSuggestions(buildTagMentionSuggestions(tags, TAG_AUTOCOMPLETE_LIMIT));
+            setTagSearchSuggestions(buildTagMentionSuggestions(tags, TAG_AUTOCOMPLETE_LIMIT, uiMessages));
           }
         }
       } catch (error) {
@@ -424,7 +426,7 @@ export function useChatMentions({
 
     const debounceTimeout = setTimeout(searchTags, 200);
     return () => clearTimeout(debounceTimeout);
-  }, [mentionFilter, mentionTrigger]);
+  }, [mentionFilter, mentionTrigger, uiLanguage]);
 
   useEffect(() => {
     const query = filterSearch.trim();
@@ -449,7 +451,7 @@ export function useChatMentions({
           const tags = await tagResponse.json();
           setFilterTagResults(
             Array.isArray(tags)
-              ? buildTagMentionSuggestions(tags, TAG_AUTOCOMPLETE_LIMIT)
+              ? buildTagMentionSuggestions(tags, TAG_AUTOCOMPLETE_LIMIT, uiMessages)
               : []
           );
         } else {
@@ -488,7 +490,7 @@ export function useChatMentions({
       cancelled = true;
       clearTimeout(debounceTimeout);
     };
-  }, [appFilterOpen, filterSearch]);
+  }, [appFilterOpen, filterSearch, uiLanguage]);
 
   const filteredMentions = useMemo(() => {
     return filterMentionSuggestions({
@@ -497,7 +499,18 @@ export function useChatMentions({
       atMentionSuggestions,
       recentChatSuggestions,
       skillMentionSuggestions,
-      timeRangeMentionSuggestions: TIME_RANGE_MENTION_SUGGESTIONS,
+      timeRangeMentionSuggestions: TIME_RANGE_MENTION_SUGGESTIONS.map((item) => ({
+        ...item,
+        description: uiMessages(item.description),
+      })),
+      commandSuggestions: COMPOSER_COMMAND_SUGGESTIONS.map((item) => ({
+        ...item,
+        description: uiMessages(item.description),
+        searchTerms: [
+          ...(item.searchTerms ?? []),
+          ...(item.searchTerms?.[0] ? [uiMessages(item.searchTerms[0])] : []),
+        ],
+      })),
       tagMentionSuggestions,
       allTagMentionSuggestions,
       tagSearchSuggestions,
@@ -505,6 +518,7 @@ export function useChatMentions({
       recentSpeakers,
     });
   }, [
+    uiLanguage,
     mentionFilter,
     mentionTrigger,
     atMentionSuggestions,

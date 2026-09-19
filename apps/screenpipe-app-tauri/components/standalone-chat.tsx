@@ -398,12 +398,12 @@ export function StandaloneChat({
     [appItems]
   );
   const tagMentionSuggestions = React.useMemo(
-    () => buildTagMentionSuggestions(tagItems, TAG_SUGGESTION_LIMIT),
-    [tagItems]
+    () => buildTagMentionSuggestions(tagItems, TAG_SUGGESTION_LIMIT, uiMessages),
+    [tagItems, uiLanguage]
   );
   const allTagMentionSuggestions = React.useMemo(
-    () => buildTagMentionSuggestions(tagItems, tagItems.length),
-    [tagItems]
+    () => buildTagMentionSuggestions(tagItems, tagItems.length, uiMessages),
+    [tagItems, uiLanguage]
   );
   const tagMentionSections = React.useMemo(() => {
     type TagCountKey = "memory_count" | "audio_count" | "frame_count";
@@ -425,7 +425,7 @@ export function StandaloneChat({
         .slice(0, TAG_SUGGESTION_LIMIT);
 
       for (const item of picked) used.add(item.name);
-      return buildTagMentionSuggestions(picked, TAG_SUGGESTION_LIMIT);
+      return buildTagMentionSuggestions(picked, TAG_SUGGESTION_LIMIT, uiMessages);
     };
 
     return [

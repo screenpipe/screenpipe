@@ -2671,7 +2671,7 @@ export function BrainOverview({
         previous_time_range: previousView.timeRange,
       });
       toast({
-        title: ui("Showing {value1}", { value1: getLiveViewTimeRangeOption(timeRange).label.toLowerCase() }),
+        title: ui("Showing {value1}", { value1: uiMessages(getLiveViewTimeRangeOption(timeRange).label).toLocaleLowerCase() }),
       });
       void refreshConnectedPipes(result.data, undefined, "time_range");
     } catch (rangeError) {
@@ -3212,7 +3212,7 @@ export function BrainOverview({
                 <SelectContent>
                   {periodRanges.map((range) => (
                     <SelectItem key={range.value} value={range.value}>
-                      {range.label}
+                      {uiMessages(range.label)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -3259,7 +3259,7 @@ export function BrainOverview({
             <div className="min-w-0 flex-1">
               <p className="text-xs font-medium">
                 {freshness.dataOutsideRange
-                  ? ui("Showing data older than {value1}", { value1: getLiveViewTimeRangeOption(view.timeRange).label.toLowerCase() })
+                  ? ui("Showing data older than {value1}", { value1: uiMessages(getLiveViewTimeRangeOption(view.timeRange).label).toLocaleLowerCase() })
                   : stalledSourceCount > 0
                     ? ui("This view will not update by itself")
                     : freshness.waiting > 0

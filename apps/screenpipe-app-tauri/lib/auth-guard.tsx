@@ -4,6 +4,7 @@
 
 "use client";
 
+import { T, useGT } from "gt-react";
 import React, { useEffect, useRef, useCallback } from "react";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { toast } from "@/components/ui/use-toast";
@@ -47,21 +48,22 @@ function openLogin() {
   });
 }
 
+function SignedOutToastAction() {
+  const ui = useGT();
+  return <ToastAction altText={ui("Sign in to screenpipe")} onClick={openLogin}>Sign in</ToastAction>;
+}
+
 function showSignedOutToast() {
   const now = Date.now();
   if (now - lastToastTime < TOAST_COOLDOWN_MS) return;
   lastToastTime = now;
 
   toast({
-    title: "Session expired",
-    description: "Sign in again before recording can continue.",
+    title: <T>Session expired</T>,
+    description: <T>Sign in again before recording can continue.</T>,
     variant: "destructive",
     duration: 30000,
-    action: (
-      <ToastAction altText="Sign in to screenpipe" onClick={openLogin}>
-        Sign in
-      </ToastAction>
-    ),
+    action: <SignedOutToastAction />,
   });
 }
 

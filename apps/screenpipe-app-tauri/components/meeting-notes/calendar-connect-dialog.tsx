@@ -24,7 +24,8 @@ import { Input } from "@/components/ui/input";
 import { commands, type IcsCalendarEntry } from "@/lib/utils/tauri";
 import { getStore, saveAndEncrypt } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
-import { useGT } from "gt-react";
+import { useGT, useLocale, msg, useMessages } from "gt-react";
+import { englishUiMessage, type UiMessage } from "@/lib/i18n/message";
 
 
 export type CalendarProviderId = "native" | "google" | "ics";
@@ -63,27 +64,27 @@ export function nativeCalendarLabel({
 export function calendarProviderOptions(platform: {
   isMac: boolean;
   isWindows: boolean;
-}): CalendarProviderOption[] {
+}, ui: UiMessage = englishUiMessage): CalendarProviderOption[] {
   const nativeLabel = nativeCalendarLabel(platform);
   return [
     {
       id: "native",
       label: nativeLabel,
       description: platform.isMac
-        ? "Use calendars synced through macOS Internet Accounts."
+        ? ui(msg("Use calendars synced through macOS Internet Accounts."))
         : platform.isWindows
-          ? "Use calendars available through Windows Calendar."
-          : "Use calendars available through your operating system.",
+          ? ui(msg("Use calendars available through Windows Calendar."))
+          : ui(msg("Use calendars available through your operating system.")),
     },
     {
       id: "google",
       label: "Google Calendar",
-      description: "Connect directly with Google OAuth.",
+      description: ui(msg("Connect directly with Google OAuth.")),
     },
     {
       id: "ics",
       label: "ICS",
-      description: "Paste a read-only webcal or ICS feed URL.",
+      description: ui(msg("Paste a read-only webcal or ICS feed URL.")),
     },
   ];
 }
@@ -153,13 +154,15 @@ export function CalendarConnectDialog({
   platform,
   onConnected,
 }: CalendarConnectDialogProps) {
+  const uiMessages = useMessages();
+  const language = useLocale();
 
   const option = useMemo(
     () =>
-      calendarProviderOptions(platform).find(
+      calendarProviderOptions(platform, uiMessages).find(
         (candidate) => candidate.id === provider,
       ) ?? null,
-    [platform, provider],
+    [platform, provider, language],
   );
 
   if (!option || !provider) return null;

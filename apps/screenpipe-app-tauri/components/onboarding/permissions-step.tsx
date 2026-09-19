@@ -162,7 +162,7 @@ export default function PermissionsStep({
       id: "mic",
       icon: <Mic className="w-3.5 h-3.5" strokeWidth={1.5} />,
       title: ui("Capture what you say"),
-      subtitle: "Lets Screenpipe transcribe your voice in meetings and calls",
+      subtitle: ui("Lets Screenpipe transcribe your voice in meetings and calls"),
       check: () => commands.checkMicrophonePermission(),
       request: () => commands.requestPermission("microphone"),
     },
@@ -170,7 +170,7 @@ export default function PermissionsStep({
       id: "accessibility",
       icon: <Keyboard className="w-3.5 h-3.5" strokeWidth={1.5} />,
       title: ui("Read on-screen text"),
-      subtitle: "Lets Screenpipe understand app content without OCR",
+      subtitle: ui("Lets Screenpipe understand app content without OCR"),
       // Silent poll until the user asks for it, then the live tccd probe so a
       // grant made in Settings is seen without an app relaunch.
       check: () =>

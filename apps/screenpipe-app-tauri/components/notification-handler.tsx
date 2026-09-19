@@ -21,7 +21,7 @@ import {
   type NotificationAnalyticsContext,
 } from "@/lib/notification-analytics";
 import { appServerFetch } from "@/lib/notifications/app-server";
-import { useGT } from "gt-react";
+import { msg, useGT, useMessages } from "gt-react";
 
 
 // notify_rust on Linux calls block_on for D-Bus inside the tokio runtime,
@@ -39,6 +39,11 @@ type NotificationRequested = {
 const NotificationHandler: React.FC = () => {
 
   const ui = useGT();
+  // Event subscriptions stay mounted while future notifications use the
+  // currently selected language.
+  const uiMessages = useMessages();
+  const uiRef = useRef(uiMessages);
+  uiRef.current = uiMessages;
   const nativeNotificationRef = useRef<NotificationAnalyticsContext | null>(
     null,
   );
@@ -261,8 +266,8 @@ const NotificationHandler: React.FC = () => {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                title: "HD recording started",
-                body: "Capturing this meeting at high frame rate. Stops automatically when the call ends.",
+                title: uiRef.current(msg("HD recording started")),
+                body: uiRef.current(msg("Capturing this meeting at high frame rate. Stops automatically when the call ends.")),
               }),
             }).catch(() => {});
 

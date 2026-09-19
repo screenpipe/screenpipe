@@ -39,7 +39,7 @@ import type {
   BrainViewTimeRange,
   JsonValue,
 } from "@/lib/utils/tauri";
-import { useGT } from "gt-react";
+import { useGT, useMessages } from "gt-react";
 
 
 export type {
@@ -421,6 +421,7 @@ export function LiveViewCard({
 }) {
 
   const ui = useGT();
+  const uiMessages = useMessages();
   const [aiOpen, setAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const [feedbackOpen, setFeedbackOpen] = useState(false);
@@ -467,7 +468,7 @@ export function LiveViewCard({
           <h3 className="truncate text-sm font-medium">{slot.title}</h3>
           <p className="mt-0.5 text-[10px] normal-case tracking-wide text-muted-foreground">
             {COMPONENT_LABELS[slot.component]} · requested:{" "}
-            {getLiveViewTimeRangeOption(timeRange).label}
+            {uiMessages(getLiveViewTimeRangeOption(timeRange).label)}
           </p>
         </div>
       </div>

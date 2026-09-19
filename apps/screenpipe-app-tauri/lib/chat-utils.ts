@@ -6,6 +6,9 @@
 // Shared chat utilities - mention parsing, shortcut formatting, app suggestions
 // ============================================================================
 
+import { msg } from "gt-react";
+import { englishUiMessage, type UiMessage } from "@/lib/i18n/message";
+
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands } from "@/lib/utils/tauri";
@@ -1051,15 +1054,15 @@ export function buildSkillMentionSuggestions(
 }
 
 export const TIME_RANGE_MENTION_SUGGESTIONS: MentionSuggestion[] = [
-  { tag: "~7days", description: "Rolling past 7 days", category: "range" },
-  { tag: "~lastweek", description: "Previous Monday–Sunday", category: "range" },
-  { tag: "~lastmonth", description: "Previous calendar month", category: "range" },
-  { tag: "~april", description: "Most recent April", category: "range" },
-  { tag: "~april2025", description: "April 2025", category: "range" },
-  { tag: "~(03/04/2025)", description: "One day (DD/MM/YYYY)", category: "range" },
+  { tag: "~7days", description: msg("Rolling past 7 days"), category: "range" },
+  { tag: "~lastweek", description: msg("Previous Monday–Sunday"), category: "range" },
+  { tag: "~lastmonth", description: msg("Previous calendar month"), category: "range" },
+  { tag: "~april", description: msg("Most recent April"), category: "range" },
+  { tag: "~april2025", description: msg("April 2025"), category: "range" },
+  { tag: "~(03/04/2025)", description: msg("One day (DD/MM/YYYY)"), category: "range" },
   {
     tag: "~(03/04/2025 - 06/07/2025)",
-    description: "Inclusive range (DD/MM/YYYY)",
+    description: msg("Inclusive range (DD/MM/YYYY)"),
     category: "range",
   },
 ];
@@ -1094,28 +1097,25 @@ export function buildAppMentionSuggestions(
 
 export function buildTagMentionSuggestions(
   items: AppAutocompleteItem[],
-  limit: number
+  limit: number,
+  ui: UiMessage = englishUiMessage,
 ): MentionSuggestion[] {
   return items.slice(0, limit).map((item) => ({
     tag: `#${item.name}`,
-    description: formatTagAutocompleteDescription(item),
+    description: formatTagAutocompleteDescription(item, ui),
     category: "tag" as const,
   }));
 }
 
-function pluralize(count: number, singular: string, plural = `${singular}s`) {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
-
-function formatTagAutocompleteDescription(item: AppAutocompleteItem) {
+function formatTagAutocompleteDescription(item: AppAutocompleteItem, ui: UiMessage) {
   const parts = [
-    item.frame_count ? pluralize(item.frame_count, "frame") : null,
-    item.audio_count ? pluralize(item.audio_count, "audio clip") : null,
-    item.memory_count ? pluralize(item.memory_count, "memory", "memories") : null,
+    item.frame_count ? ui(msg("{count, plural, one {# frame} other {# frames}}"), { count: item.frame_count }) : null,
+    item.audio_count ? ui(msg("{count, plural, one {# audio clip} other {# audio clips}}"), { count: item.audio_count }) : null,
+    item.memory_count ? ui(msg("{count, plural, one {# memory} other {# memories}}"), { count: item.memory_count }) : null,
   ].filter((part): part is string => Boolean(part));
 
   if (parts.length > 0) return parts.join(", ");
-  return pluralize(item.count, "use");
+  return ui(msg("{count, plural, one {# use} other {# uses}}"), { count: item.count });
 }
 
 /**
@@ -1189,6 +1189,7 @@ export interface FilterMentionSuggestionsOptions {
   recentChatSuggestions?: MentionSuggestion[];
   skillMentionSuggestions?: MentionSuggestion[];
   timeRangeMentionSuggestions?: MentionSuggestion[];
+  commandSuggestions?: MentionSuggestion[];
   tagMentionSuggestions: MentionSuggestion[];
   allTagMentionSuggestions: MentionSuggestion[];
   tagSearchSuggestions: MentionSuggestion[];
@@ -1203,6 +1204,7 @@ export function filterMentionSuggestions({
   recentChatSuggestions = [],
   skillMentionSuggestions = [],
   timeRangeMentionSuggestions = [],
+  commandSuggestions = COMPOSER_COMMAND_SUGGESTIONS,
   tagMentionSuggestions,
   allTagMentionSuggestions,
   tagSearchSuggestions,
@@ -1218,7 +1220,7 @@ export function filterMentionSuggestions({
 
   if (mentionTrigger === "/") {
     return [
-      ...COMPOSER_COMMAND_SUGGESTIONS,
+      ...commandSuggestions,
       ...skillMentionSuggestions,
     ].filter(matchesFilter);
   }

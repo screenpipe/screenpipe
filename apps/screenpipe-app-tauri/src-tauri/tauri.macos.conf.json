@@ -6,7 +6,9 @@
             "hardenedRuntime": true,
             "exceptionDomain": "screenpipe.com",
             "provisioningProfile": null,
-            "files": {},
+            "files": {
+                "Resources": "../.localization/macos-resources"
+            },
             "dmg": {
                 "background": "assets/dmg-background.png"
             }

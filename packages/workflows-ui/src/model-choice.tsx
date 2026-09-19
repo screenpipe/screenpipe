@@ -7,7 +7,7 @@ import { ConfidentialVerificationDetails, useConfidentialVerification, type Conf
 
 import { Check, ChevronDown, Shield, Sparkles } from "lucide-react";
 import styles from "./model-choice.module.css";
-import { useGT } from "gt-react";
+import { useGT, msg, useMessages } from "gt-react";
 
 
 export type WorkflowModelMode = "intelligent" | "private";
@@ -17,8 +17,8 @@ export type WorkflowModelPreference = {
   save(mode: WorkflowModelMode): Promise<void>;
 };
 export const WORKFLOW_MODELS = {
-  intelligent: { label: "Intelligent", model: "auto", description: "Automatically chooses a model. Uses your AI allowance." },
-  private: { label: "Private (Beta)", model: "glm-5.3-flash-reap50-iq3m", description: "Experimental encrypted AI processing. Separate usage, subject to capacity limits." },
+  intelligent: { label: msg("Intelligent"), model: "auto", description: msg("Automatically chooses a model. Uses your AI allowance.") },
+  private: { label: msg("Private (Beta)"), model: "glm-5.3-flash-reap50-iq3m", description: msg("Experimental encrypted AI processing. Separate usage, subject to capacity limits.") },
 } as const;
 export function parseWorkflowModel(text: string | null): WorkflowModelMode {
   if (text === null) return "intelligent";
@@ -28,6 +28,7 @@ export function parseWorkflowModel(text: string | null): WorkflowModelMode {
 }
 export function WorkflowModelControl({ preference }: { preference: WorkflowModelPreference }) {
   const ui = useGT();
+  const uiMessages = useMessages();
   const [mode, setMode] = useState<WorkflowModelMode | null>(null);
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -77,7 +78,7 @@ export function WorkflowModelControl({ preference }: { preference: WorkflowModel
         if (["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); setOpen(true); }
       }}>
       {mode === "private" ? <Shield size={15} aria-hidden="true" /> : <Sparkles size={15} aria-hidden="true" />}
-      <span>{busy ? ui("Saving…") : mode ? WORKFLOW_MODELS[mode].label : ui("Choose AI")}</span><ChevronDown size={13} aria-hidden="true" />
+      <span>{busy ? ui("Saving…") : mode ? uiMessages(WORKFLOW_MODELS[mode].label) : ui("Choose AI")}</span><ChevronDown size={13} aria-hidden="true" />
     </button>
     {open && <div ref={menu} id={menuId} className={styles.menu} role="menu" aria-label={ui("Workflows AI")} onKeyDown={event => {
       if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) || (event.target as HTMLElement).closest("dialog")) return;
@@ -88,7 +89,7 @@ export function WorkflowModelControl({ preference }: { preference: WorkflowModel
     }}>
       {Object.entries(WORKFLOW_MODELS).map(([key, value]) => <button type="button" key={key} role="menuitemradio" aria-checked={mode === key} disabled={busy} onClick={() => void choose(key as WorkflowModelMode)}>
         {key === "private" ? <Shield size={16} aria-hidden="true" /> : <Sparkles size={16} aria-hidden="true" />}
-        <span><strong>{value.label}</strong><small>{value.description}</small></span>{mode === key && <Check size={15} aria-hidden="true" />}
+        <span><strong>{uiMessages(value.label)}</strong><small>{uiMessages(value.description)}</small></span>{mode === key && <Check size={15} aria-hidden="true" />}
       </button>)}
       {mode === "private" && <div className={styles.verification}><ConfidentialVerificationDetails current={verification} showLabel triggerRole="menuitem" /></div>}
       <p>Applies to new chats and workflow updates.</p>

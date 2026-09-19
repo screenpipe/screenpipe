@@ -35,6 +35,37 @@ export function verifySnapshot(snapshot) {
   return snapshot;
 }
 
+async function permissionDescriptions(root) {
+  const plist = await fs.readFile(path.join(root, "src-tauri/Info.plist"), "utf8").catch((error) => {
+    if (error.code === "ENOENT") return "";
+    throw error;
+  });
+  const entities = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+  return Object.fromEntries([...plist.matchAll(/<key>(NS[A-Za-z]+UsageDescription|CGRequestScreenCaptureAccess)<\/key>\s*<string>([\s\S]*?)<\/string>/g)].map(([, key, value]) => [key,
+    value.replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (_, entity) => entity[0] === "#"
+      ? String.fromCodePoint(entity[1].toLowerCase() === "x" ? parseInt(entity.slice(2), 16) : Number(entity.slice(1)))
+      : entities[entity]),
+  ]));
+}
+
+// macOS owns the language of its permission dialogs; bundle our explanations
+// as InfoPlist.strings so they follow that OS language, including offline.
+async function writeMacPermissionResources(root, snapshot) {
+  const descriptions = await permissionDescriptions(root);
+  const destination = path.join(root, ".localization/macos-resources");
+  await fs.rm(destination, { recursive: true, force: true });
+  for (const locale of [snapshot.defaultLocale, ...snapshot.locales]) {
+    if (!/^[A-Za-z0-9-]+$/.test(locale)) throw new Error("Invalid localization resource locale");
+    const directory = path.join(destination, `${locale}.lproj`);
+    await fs.mkdir(directory, { recursive: true });
+    const content = Object.entries(descriptions).map(([key, english]) => {
+      const value = snapshot.native[locale]?.[digest(english).slice(0, 16)] ?? english;
+      return `${JSON.stringify(key)} = ${JSON.stringify(value)};`;
+    }).join("\n");
+    await fs.writeFile(path.join(directory, "InfoPlist.strings"), content + "\n");
+  }
+}
+
 export async function extractNative(root, policy = translationPolicy) {
   const messages = {}, metadata = {};
   // Deliberately extract only explicit English-source helpers, never arbitrary
@@ -51,6 +82,12 @@ export async function extractNative(root, policy = translationPolicy) {
       messages[id] = english;
       metadata[id] = { context: `Native desktop interface: ${file}` };
     }
+  }
+  for (const [key, english] of Object.entries(await permissionDescriptions(root))) {
+    const id = digest(english).slice(0, 16);
+    if (messages[id] && messages[id] !== english) throw new Error("Native localization hash collision");
+    messages[id] = english;
+    metadata[id] = { context: `macOS permission explanation: src-tauri/Info.plist ${key}` };
   }
   return { messages, metadata };
 }
@@ -101,6 +138,7 @@ export async function prepareLocalization({ root = appRoot, mode = localizationM
   if (mode === "off") {
     const snapshot = { ...base, revision: digest(base) };
     await writeJson(output, snapshot);
+    await writeMacPermissionResources(root, snapshot);
     return snapshot;
   }
 
@@ -126,6 +164,7 @@ export async function prepareLocalization({ root = appRoot, mode = localizationM
       throw new Error("Localization snapshot does not match this source/configuration/policy");
     }
     await writeJson(output, supplied);
+    await writeMacPermissionResources(root, supplied);
     return supplied;
   }
   const cacheMatches = previous?.policy === policy;
@@ -192,6 +231,7 @@ export async function prepareLocalization({ root = appRoot, mode = localizationM
   const snapshot = { ...payload, revision: digest(payload) };
   await writeJson(path.join(dir, "snapshot.json"), snapshot);
   await writeJson(output, snapshot);
+  await writeMacPermissionResources(root, snapshot);
   await writeJson(path.join(dir, "coverage.json"), { revision: snapshot.revision, coverage: base.coverage, causes: base.causes, fallbacks: base.fallbacks });
   for (const [locale, stats] of Object.entries(base.coverage)) {
     console.log(`[i18n] ${locale}: frontend ${stats.frontend.translated}/${stats.frontend.total}; native ${stats.native.translated}/${stats.native.total}`);

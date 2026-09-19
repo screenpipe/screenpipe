@@ -220,7 +220,7 @@ import {
   hostedAiAllowanceForModel,
   useUsageStatus,
 } from "@/lib/hooks/use-usage-status";
-import { useGT } from "gt-react";
+import { useGT, useMessages } from "gt-react";
 import { useUiLocale as useLocale } from "@/lib/i18n/provider";
 
 
@@ -306,6 +306,7 @@ export function NoteView({
   const uiLanguage = useLocale();
 
   const ui = useGT();
+  const uiMessages = useMessages();
   const { toast } = useToast();
   const [title, setTitle] = useState(meeting.title ?? "");
   const [attendees, setAttendees] = useState(meeting.attendees ?? "");
@@ -1696,62 +1697,62 @@ export function NoteView({
   const summaryStatus = (() => {
     if (isLive) {
       return {
-        title: captureState?.label ?? "Recording meeting",
-        detail: "notes and transcript save automatically",
+        title: captureState?.label ?? ui("Recording meeting"),
+        detail: ui("notes and transcript save automatically"),
       };
     }
     if (resuming) {
       return {
-        title: "Resuming meeting",
-        detail: "reopening this note for live capture",
+        title: ui("Resuming meeting"),
+        detail: ui("reopening this note for live capture"),
       };
     }
     if (summaryPresentation.transitionPhase === "finalizing") {
       return {
-        title: "Meeting saved",
+        title: ui("Meeting saved"),
         detail:
-          "finishing the transcript before summary · you can safely leave",
+          ui("finishing the transcript before summary · you can safely leave"),
       };
     }
     if (summaryWorking) {
       return {
         title: retranscriptionSummaryRefreshWorking
-          ? "Refreshing summary"
-          : "Summarizing meeting",
+          ? ui("Refreshing summary")
+          : ui("Summarizing meeting"),
         detail: retranscriptionSummaryRefreshWorking
-          ? "using the refreshed transcript · it appears here live"
-          : "you can leave · it appears here live and saves when finished",
+          ? ui("using the refreshed transcript · it appears here live")
+          : ui("you can leave · it appears here live and saves when finished"),
       };
     }
     if (visibleSummaryLifecycle.kind === "completed") {
       return {
-        title: "Summary ready",
-        detail: "saved to this meeting note",
+        title: ui("Summary ready"),
+        detail: ui("saved to this meeting note"),
       };
     }
     if (visibleSummaryLifecycle.kind === "failed") {
-      const failure = meetingSummaryFailure(visibleSummaryLifecycle.execution);
+      const failure = meetingSummaryFailure(visibleSummaryLifecycle.execution, uiMessages);
       return {
         // "Nothing to summarize" is a factual outcome, not something the user
         // needs to fix — keep "needs attention" for actionable failures only.
         title:
           failure.kind === "nothing_to_summarize"
-            ? "Nothing to summarize"
-            : "Summary needs attention",
+            ? ui("Nothing to summarize")
+            : ui("Summary needs attention"),
         detail: failure.copy,
       };
     }
     return {
-      title: "Meeting saved",
+      title: ui("Meeting saved"),
       detail:
         autoSummaryEnabled === false
-          ? "automatic summary is off"
-          : "notes and transcript saved locally",
+          ? ui("automatic summary is off")
+          : ui("notes and transcript saved locally"),
     };
   })();
   const summaryFailure =
     visibleSummaryLifecycle.kind === "failed"
-      ? meetingSummaryFailure(visibleSummaryLifecycle.execution)
+      ? meetingSummaryFailure(visibleSummaryLifecycle.execution, uiMessages)
       : null;
   const summaryUpgrade = summaryFailure?.upgrade ?? null;
   const handleSummaryUpgrade = useCallback(async () => {

@@ -15,7 +15,7 @@ import {
 	type CategoryState,
 } from "@/lib/settings/capture-categories";
 import type { UrlRule, WindowRules } from "@/lib/settings/capture-filters";
-import { useGT } from "gt-react";
+import { useGT, useMessages } from "gt-react";
 
 
 interface CategoryRowProps {
@@ -27,6 +27,7 @@ interface CategoryRowProps {
 function CategoryRow({ category, state, onToggle }: CategoryRowProps) {
 
   const ui = useGT();
+  const uiMessages = useMessages();
 	const [showRules, setShowRules] = useState(false);
 	const members = [...category.apps, ...category.domains];
 
@@ -39,9 +40,9 @@ function CategoryRow({ category, state, onToggle }: CategoryRowProps) {
 		>
 			<div className="flex items-center gap-3 py-2">
 				<div className="min-w-0 flex-1">
-					<p className="text-[13px] leading-tight text-foreground">{category.name}</p>
+					<p className="text-[13px] leading-tight text-foreground">{uiMessages(category.name)}</p>
 					<p className="text-[11px] leading-tight text-muted-foreground">
-						{state === "partial" ? ui("Partly on, switch to apply the rest") : category.description}
+						{state === "partial" ? ui("Partly on, switch to apply the rest") : uiMessages(category.description)}
 					</p>
 				</div>
 
@@ -50,7 +51,7 @@ function CategoryRow({ category, state, onToggle }: CategoryRowProps) {
 					onClick={() => setShowRules((open) => !open)}
 					className="flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground hover:text-foreground"
 					aria-expanded={showRules}
-					aria-label={ui("Show the {value1} rules in {value2}", { value1: categorySize(category), value2: category.name })}
+					aria-label={ui("Show the {value1} rules in {value2}", { value1: categorySize(category), value2: uiMessages(category.name) })}
 				>
 					<ChevronRight className={cn("h-3 w-3 transition-transform", showRules && "rotate-90")} />
 					{categorySize(category)}
@@ -59,7 +60,7 @@ function CategoryRow({ category, state, onToggle }: CategoryRowProps) {
 				<Switch
 					checked={state === "on"}
 					onCheckedChange={(next) => onToggle(category, next)}
-					aria-label={ui("Stop recording {value1}", { value1: category.name })}
+					aria-label={ui("Stop recording {value1}", { value1: uiMessages(category.name) })}
 				/>
 			</div>
 
