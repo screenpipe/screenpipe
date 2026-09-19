@@ -7,7 +7,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 /**
  * Context management extension for screenpipe pipes and chat.
  *
- * Four mechanisms that keep pi's existing compaction path effective. The
+ * Five mechanisms that keep pi's existing compaction path effective. The
  * `context` hook is pi's `transformContext` slot, which runs before every LLM
  * call and whose returned messages are what actually gets sent:
  *
@@ -37,6 +37,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
  *    been exceeded." pi's bounded compact-and-retry path does not recognize
  *    that wording, so normalize it to pi's standard overflow marker before
  *    pi decides between ordinary retry and compaction.
+ *
+ * 5. `context` (repeated successful tool calls) — When three consecutive
+ *    serial calls return the same result, add a transient progress reminder.
+ *    Preserve all evidence and permissions; intentional polling remains allowed.
  *
  * Proactive compaction and retained-history budgeting live in the managed
  * Pi runtime (pi-context-compaction.patch), at its safe between-tool-step
@@ -203,6 +207,28 @@ export function boundOversizedMessages(messages: any[], contextWindowTokens: num
   return modified;
 }
 
+/** Detect a stalled serial tool loop without dropping evidence or blocking polling. */
+export function repeatedToolResultHint(messages: any[]): string | undefined {
+  if (messages.length < 6) return;
+  let previous: string | undefined;
+  for (let index = messages.length - 2; index >= messages.length - 6; index -= 2) {
+    const assistant = messages[index];
+    const result = messages[index + 1];
+    const calls = Array.isArray(assistant?.content)
+      ? assistant.content.filter((part: any) => part.type === "toolCall") : [];
+    if (assistant?.role !== "assistant" || assistant.stopReason !== "toolUse"
+      || calls.length !== 1 || result?.role !== "toolResult" || result.isError
+      || result.toolCallId !== calls[0].id) return;
+    const signature = JSON.stringify([calls[0].name, calls[0].arguments, result.content]);
+    if (previous !== undefined && signature !== previous) return;
+    previous = signature;
+  }
+  return "The last three tool calls have already succeeded with identical arguments and identical results. "
+    + "Use the result already present to continue the current task; repeating the same call will not provide new evidence. "
+    + "Complete the requested work within the existing permissions, or explain the concrete blocker. "
+    + "If this is intentional polling, check whether waiting is appropriate before polling again.";
+}
+
 export default function (pi: ExtensionAPI) {
   // Route provider overflow into pi's compact-and-retry path.
   pi.on("message_end", async (event) => {
@@ -274,6 +300,10 @@ export default function (pi: ExtensionAPI) {
     if (!event.messages || !Array.isArray(event.messages)) return;
 
     let modified = false;
+    // Inspect original results before truncation can make different outputs look
+    // identical. This is a transient model hint, not a persisted user request or
+    // permission grant. Tool calls, their results and the audit history remain intact.
+    const repetitionHint = repeatedToolResultHint(event.messages);
 
     // 2. Prune completed requests only. A tool-call response is not a completed
     // request, and a user message can be steering an unfinished tool loop.
@@ -317,6 +347,11 @@ export default function (pi: ExtensionAPI) {
     const windowTokens = resolveContextWindowTokens(ctx);
     if (boundOversizedMessages(event.messages, windowTokens)) modified = true;
 
+    if (repetitionHint) {
+      return { messages: [...event.messages, {
+        role: "user", content: repetitionHint, timestamp: Date.now(),
+      }] };
+    }
     if (modified) {
       return { messages: event.messages };
     }
