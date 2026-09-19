@@ -62,10 +62,20 @@ describe("GLM verified client transport", () => {
       expect(plain.model).toBe(model);
       calls++;
       if (calls === 2) {
-        expect(plain.messages.some((m: any) => m.role === "tool" && m.content === "tool evidence")).toBe(true);
+        const previous = plain.messages.find((m: any) => m.role === "assistant" && m.tool_calls?.length);
+        expect(previous.reasoning_content).toBe("Inspect the source before answering.");
+        expect(previous.content ?? "").not.toContain("Inspect the source before answering.");
+        expect(previous.tool_calls[0].function.name).toBe("read");
+        expect(JSON.parse(previous.tool_calls[0].function.arguments)).toEqual({ path: "file.txt" });
+        expect(plain.messages).toContainEqual(expect.objectContaining({
+          role: "tool", content: "tool evidence", tool_call_id: previous.tool_calls[0].id,
+        }));
       }
       const content = calls === 1 ? '<tool_call>read<arg_key>path</arg_key><arg_value>file.txt</arg_value></tool_call>' : "VERIFIED_FINAL";
-      const sse = `data: ${JSON.stringify({ id: "fixture", choices: [{ index: 0, delta: { content } }] })}\n\ndata: [DONE]\n\n`;
+      const reasoning = calls === 1
+        ? `data: ${JSON.stringify({ id: "fixture", choices: [{ index: 0, delta: { reasoning_content: "Inspect the source before answering." } }] })}\n\n`
+        : "";
+      const sse = reasoning + `data: ${JSON.stringify({ id: "fixture", choices: [{ index: 0, delta: { content } }] })}\n\ndata: [DONE]\n\n`;
       const nonce = crypto.getRandomValues(new Uint8Array(32));
       const secret = await recipient.Export(new TextEncoder().encode(EXPORT_LABEL), EXPORT_LENGTH);
       const keys = await deriveResponseKeys(secret, enc, nonce);
