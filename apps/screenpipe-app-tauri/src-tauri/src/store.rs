@@ -1372,9 +1372,15 @@ pub struct SettingsStore {
 
     #[serde(rename = "devMode")]
     pub dev_mode: bool,
-    #[serde(rename = "ocrEngine")]
+    #[serde(
+        rename = "ocrEngine",
+        deserialize_with = "deserialize_null_as_default"
+    )]
     pub ocr_engine: String,
-    #[serde(rename = "dataDir")]
+    #[serde(
+        rename = "dataDir",
+        deserialize_with = "deserialize_null_as_default"
+    )]
     pub data_dir: String,
     #[serde(
         rename = "embeddedLLM",
@@ -1383,7 +1389,10 @@ pub struct SettingsStore {
     pub embedded_llm: EmbeddedLLM,
     #[serde(rename = "autoStartEnabled")]
     pub auto_start_enabled: bool,
-    #[serde(rename = "platform")]
+    #[serde(
+        rename = "platform",
+        deserialize_with = "deserialize_null_as_default"
+    )]
     pub platform: String,
     #[serde(
         rename = "disabledShortcuts",
@@ -1392,24 +1401,53 @@ pub struct SettingsStore {
     pub disabled_shortcuts: Vec<String>,
     #[serde(rename = "user", deserialize_with = "deserialize_null_as_default")]
     pub user: User,
-    #[serde(rename = "showScreenpipeShortcut")]
+    #[serde(
+        rename = "showScreenpipeShortcut",
+        deserialize_with = "deserialize_null_as_default"
+    )]
     pub show_screenpipe_shortcut: String,
-    #[serde(rename = "startRecordingShortcut")]
+    #[serde(
+        rename = "startRecordingShortcut",
+        deserialize_with = "deserialize_null_as_default"
+    )]
     pub start_recording_shortcut: String,
-    #[serde(rename = "stopRecordingShortcut")]
+    #[serde(
+        rename = "stopRecordingShortcut",
+        deserialize_with = "deserialize_null_as_default"
+    )]
     pub stop_recording_shortcut: String,
-    #[serde(rename = "startAudioShortcut")]
+    #[serde(
+        rename = "startAudioShortcut",
+        deserialize_with = "deserialize_null_as_default"
+    )]
     pub start_audio_shortcut: String,
-    #[serde(rename = "stopAudioShortcut")]
+    #[serde(
+        rename = "stopAudioShortcut",
+        deserialize_with = "deserialize_null_as_default"
+    )]
     pub stop_audio_shortcut: String,
-    #[serde(rename = "showChatShortcut")]
+    #[serde(
+        rename = "showChatShortcut",
+        deserialize_with = "deserialize_null_as_default"
+    )]
     pub show_chat_shortcut: String,
-    #[serde(rename = "searchShortcut")]
+    #[serde(
+        rename = "searchShortcut",
+        deserialize_with = "deserialize_null_as_default"
+    )]
     pub search_shortcut: String,
-    #[serde(rename = "lockVaultShortcut", default)]
+    #[serde(
+        rename = "lockVaultShortcut",
+        default,
+        deserialize_with = "deserialize_null_as_default"
+    )]
     pub lock_vault_shortcut: String,
     /// Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
-    #[serde(rename = "shortcutOverlaySize", default = "default_overlay_size")]
+    #[serde(
+        rename = "shortcutOverlaySize",
+        default = "default_overlay_size",
+        deserialize_with = "deserialize_null_as_default"
+    )]
     pub shortcut_overlay_size: String,
     /// The user's persistent choice for the shortcut reminder. Recording-health
     /// incidents may still reveal their own temporary recovery surface.
@@ -5684,6 +5722,55 @@ mod tests {
         assert!(
             enc_per * 5.0 < old_per || enc_per < 0.05,
             "ciphertext IPC retry must be ≥5x cheaper than unconditional fsync (old {old_per:.3}ms/call, new {enc_per:.3}ms/call)"
+        );
+    }
+
+    /// Regression test for SCREENPIPE-APP-DM: explicit JSON `null` for scalar
+    /// String fields must deserialize as the field's default value, not error.
+    /// `#[serde(default)]` on the struct only fills *absent* keys; explicit nulls
+    /// require `deserialize_with = "deserialize_null_as_default"` on each field.
+    #[test]
+    fn null_string_fields_deserialize_as_defaults() {
+        let defaults = SettingsStore::default();
+        let settings: SettingsStore = serde_json::from_value(json!({
+            "ocrEngine": null,
+            "dataDir": null,
+            "platform": null,
+            "showScreenpipeShortcut": null,
+            "startRecordingShortcut": null,
+            "stopRecordingShortcut": null,
+            "startAudioShortcut": null,
+            "stopAudioShortcut": null,
+            "showChatShortcut": null,
+            "searchShortcut": null,
+            "lockVaultShortcut": null,
+            "shortcutOverlaySize": null,
+        }))
+        .expect("null String fields must deserialize without error");
+
+        assert_eq!(settings.ocr_engine, defaults.ocr_engine);
+        assert_eq!(settings.data_dir, defaults.data_dir);
+        assert_eq!(settings.platform, defaults.platform);
+        assert_eq!(
+            settings.show_screenpipe_shortcut,
+            defaults.show_screenpipe_shortcut
+        );
+        assert_eq!(
+            settings.start_recording_shortcut,
+            defaults.start_recording_shortcut
+        );
+        assert_eq!(
+            settings.stop_recording_shortcut,
+            defaults.stop_recording_shortcut
+        );
+        assert_eq!(settings.start_audio_shortcut, defaults.start_audio_shortcut);
+        assert_eq!(settings.stop_audio_shortcut, defaults.stop_audio_shortcut);
+        assert_eq!(settings.show_chat_shortcut, defaults.show_chat_shortcut);
+        assert_eq!(settings.search_shortcut, defaults.search_shortcut);
+        assert_eq!(settings.lock_vault_shortcut, defaults.lock_vault_shortcut);
+        assert_eq!(
+            settings.shortcut_overlay_size,
+            defaults.shortcut_overlay_size
         );
     }
 }
