@@ -32,7 +32,9 @@ workflows, connect accounts, install skills or send messages.
    through bash when no matching MCP tool is available. Use read only for local
    files, such as skills and saved API responses.
    Inspect readiness, revisions, window, previous.checkedThrough, profile
-   and catalog titles. If ready is false, stop. Start at previous.checkedThrough
+   and context.workflows[].title (an empty workflows array is normal). The
+   context.outputContract is a textual schema for final review, not catalog data
+   or JSON to parse in this stage. If ready is false, stop. Start at previous.checkedThrough
    when inside the window, otherwise window.start. Earlier overlap is only for
    late evidence; retain matching previous episode IDs.
 2. Read /activity-summary for that interval using start_time/end_time,

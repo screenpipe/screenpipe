@@ -47,6 +47,11 @@ A successful response for a different interval does not cover the requested work
   `X-Screenpipe-Agent: unknown`; save with `curl --fail-with-body -o response.json`.
   Inspect the actual row shape before extracting fields:
   `bun -e 'const d=await Bun.file("response.json").json(); console.log(JSON.stringify({pagination:d.pagination,data:d.data?.slice(0,3)}))'`.
+  Bun file reads are asynchronous: await `.json()`/`.text()` before accessing
+  fields or serializing. A Promise can print as `{}` while the saved file is valid.
+  Fix parsing of that file instead of fetching it again. For multiline scripts,
+  use the write tool to create a JavaScript file, then run `bun filename.js`;
+  embedding captured text or long programs in shell quotes can break the command.
   Empty derived objects are a parsing error, not proof of no captured data.
 
 This file is a reference, not a required full-context read. For other operations,

@@ -94,6 +94,7 @@ records.push({type:"OCR",content:{text_source:"accessibility",timestamp:new Date
 let busy = true;
 let stageIndex = 0;
 const outputs: any[] = [];
+let pipelineRevision = reviewOnly ? 4 : 0;
 const metrics: any[] = [];
 let final: any;
 const activityReads = new Set<string>();
@@ -156,7 +157,7 @@ const server = Bun.serve({hostname:"127.0.0.1",port:0,idleTimeout:120,
   if(url.pathname === "/workflows/pipeline") {
     if(req.method === "POST") {
       const body = await req.json();
-      if(body.task !== tasks[stageIndex] || body.expected_revision !== stageIndex || body.input_revision !== stageIndex || !Array.isArray(body.items) || (body.checked_through !== now && !(stageIndex === 0 && Date.parse(body.checked_through) > Date.parse(start) && Date.parse(body.checked_through) < Date.parse(now)))) return Response.json({error:"Use the exact current stage revision and checkpoint."},{status:409});
+      if(body.task !== tasks[stageIndex] || body.expected_revision !== pipelineRevision || body.input_revision !== (outputs[stageIndex-1]?.revision ?? 0) || !Array.isArray(body.items) || (body.checked_through !== now && !(stageIndex === 0 && Date.parse(body.checked_through) > Date.parse(start) && Date.parse(body.checked_through) < Date.parse(now)))) return Response.json({error:"Use the exact current stage revision and checkpoint."},{status:409});
       if(!body.coverage?.length || body.coverage.some((range:any)=>range.complete!==true)) return Response.json({error:"Finish reading all pages before advancing coverage. Each interval requires start, end, complete:true."},{status:422});
       if(stageIndex === 0) {
         if (body.items.some((item:any)=>typeof item.id!=="string" || !["professional","personal","mixed","uncertain"].includes(item.classification) || !Array.isArray(item.sources))) return Response.json({error:"Episodes need a string ID, classification and source references."},{status:409});
@@ -196,13 +197,15 @@ const server = Bun.serve({hostname:"127.0.0.1",port:0,idleTimeout:120,
         if (cursor < Date.parse(body.checked_through)) return Response.json({error:"Your coverage exceeds successfully reviewed activity overview intervals. Read the missing interval; do not relabel five minutes as the full window."},{status:422});
       }
       if (stageIndex === 0) now = body.checked_through;
-      outputs[stageIndex] = {revision:stageIndex+1,checkedThrough:now,items:body.items,coverage:body.coverage};
+      outputs[stageIndex] = {revision:++pipelineRevision,inputRevision:body.input_revision,checkedThrough:now,items:body.items,coverage:body.coverage};
       // Reproduce a real oversized procedure handoff, not just a large profile.
       // Timing must preserve this field using bounded reads and normal file tools.
       if (largeContext && stageIndex === 2 && body.items.length) outputs[2].items[0].sourceNotes = Array.from({length:500},(_,i)=>`Fictional source note ${i}: these receipt occurrences belong to the same procedure. Preserve both exact boundaries.`).join("\n");
-      return Response.json({revision:stageIndex+1,checkedThrough:now});
+      return Response.json({revision:pipelineRevision,checkedThrough:now});
     }
-    return Response.json({task:tasks[stageIndex],stage:stageIndex,revision:stageIndex,inputRevision:stageIndex,catalogRevision:contextRevision,catalogPipelineRevision:final ? 4 : 0,blockedReason:null,upToDate:!!final,reviewRequested:false,ready:stageIndex !== 4 || !final,checkedThrough:now,window:{start:overlappingWindow ? new Date(Date.parse(previousCheckpoint)-2*3600000).toISOString() : start,end:now},input:outputs[stageIndex-1] ?? null,previous:stageIndex===0?{checkedThrough:previousCheckpoint,items:[]}:null});
+    // Verification must expose the accepted stage, like the native API. Returning
+    // its old revision/previous state falsely sends a successful agent into retries.
+    return Response.json({task:tasks[stageIndex],stage:stageIndex,revision:pipelineRevision,inputRevision:outputs[stageIndex-1]?.revision ?? 0,catalogRevision:contextRevision,catalogPipelineRevision:final ? 4 : 0,blockedReason:null,upToDate:!!final,reviewRequested:false,ready:stageIndex === 4 ? !final : !outputs[stageIndex],checkedThrough:now,window:{start:overlappingWindow ? new Date(Date.parse(previousCheckpoint)-2*3600000).toISOString() : start,end:now},input:outputs[stageIndex-1] ?? null,previous:outputs[stageIndex] ?? (stageIndex===0?{checkedThrough:previousCheckpoint,items:[]}:null)});
   }
   if (unavailableReviewImages && stageIndex === 4 && url.pathname.startsWith("/frames/")) {
     return Response.json({error:"Optional screenshot unavailable"},{status:503});
@@ -346,6 +349,30 @@ const server = Bun.serve({hostname:"127.0.0.1",port:0,idleTimeout:120,
   if(url.pathname === "/meetings") return Response.json({data:[],pagination:{total:0,offset:0}});
   return Response.json({error:"No frame imagery exists for this text-only fixture."},{status:404});
 }});
+// Check the fixture's persistence contract without invoking a model. Outcome
+// evaluations must not mistake an inaccurate mock readback for an agent failure.
+if (process.argv.includes("--check-fixture")) {
+  try {
+    const endpoint = `http://127.0.0.1:${server.port}/workflows/pipeline`;
+    const headers = {Authorization:"Bearer fictional-pipeline","Content-Type":"application/json"};
+    const initial = await (await fetch(endpoint,{headers})).json();
+    const row = records[0].content;
+    const items = [{id:"fixture-observation",classification:"professional",start:row.timestamp,end:row.timestamp,sources:[{timestamp:row.timestamp,app:row.app_name,quote:row.text}]}];
+    const body = JSON.stringify({task:tasks[0],expected_revision:initial.revision,input_revision:initial.inputRevision,checked_through:now,items,coverage:[{start:previousCheckpoint,end:now,complete:true}]});
+    const saved = await fetch(endpoint,{method:"POST",headers,body});
+    if (!saved.ok) throw new Error(`Fixture save failed: ${await saved.text()}`);
+    const receipt = await saved.json();
+    const verified = await (await fetch(endpoint,{headers})).json();
+    if (verified.revision !== receipt.revision || verified.ready !== false || verified.previous?.checkedThrough !== now || JSON.stringify(verified.previous?.items) !== JSON.stringify(items)) throw new Error("Fixture verification did not return the saved stage");
+    const duplicate = await fetch(endpoint,{method:"POST",headers,body});
+    if (duplicate.status !== 409) throw new Error("Fixture accepted a stale stage write");
+    console.log(JSON.stringify({passed:true,fixtureSaveReadback:true,staleWriteRejected:true}));
+  } finally {
+    server.stop(true);
+    await rm(directory,{recursive:true,force:true});
+  }
+  process.exit(0);
+}
 try {
   for(stageIndex=reviewOnly?4:0;stageIndex<(activityOnly?1:tasks.length);stageIndex++) {
     const task = tasks[stageIndex], cwd = join(directory,task);
@@ -359,7 +386,11 @@ try {
       await writeFile(join(output,"pipeline.json"), JSON.stringify({ready:true,inputRevision:98,checkedThrough:start,input:{items:[]}}));
       await writeFile(join(output,"catalog-request.json"), JSON.stringify({expected_revision:99,pipeline_revision:98,checked_through:start,workflows:[]}));
       await writeFile(join(output,"catalog-receipt.json"), JSON.stringify({revision:100,created:0,updated:0,checkedThrough:start}));
-      await writeFile(join(output,"review-notes.md"), "Prior attempt: no supported changes. Old input revision 98.\n");
+      // Same-batch notes can be wrong too: matching revisions do not make a
+      // previous model decision authoritative. Reproduce both anchoring errors.
+      await writeFile(join(output,"review-notes.md"), resolvedExclusion
+        ? `Previous attempt, input revision ${outputs[3].revision}, checkedThrough ${now}: the assistant completion report and Finance sidebar support completed user work. Keep these procedure entries; investigate more sources before saving.\n`
+        : `Previous attempt, input revision ${outputs[3].revision}, checkedThrough ${now}: reject every candidate, including the valid procedure entries. No changes should be saved.\n`);
     }
     for (const name of ["screenpipe-api", "screenpipe-workflow-maintenance"]) {
       const skillDir = join(cwd,".pi/skills",name);
