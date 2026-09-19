@@ -151,6 +151,10 @@ export const E2E_BUN_PATH = resolve(
 );
 
 export function getAppPath(): string {
+  // Disposable macOS guests run the same E2E binary inside a TCC-granted app.
+  if (process.env.SCREENPIPE_E2E_APP_PATH) {
+    return resolve(process.env.SCREENPIPE_E2E_APP_PATH);
+  }
   const base = resolve(APP_ROOT, 'src-tauri/target/debug-dev');
   const name = process.platform === 'win32' ? 'screenpipe-app.exe' : 'screenpipe-app';
   return resolve(base, name);

@@ -218,6 +218,28 @@ async fn build_bundle(files: &[LogFile]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn capture_pause_cause_and_resume_survive_support_collection() {
+        // The native focus-warm-pause E2E also asserts these actual messages.
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join("screenpipe-app.2026-09-19.log");
+        tokio::fs::write(&current,
+            "INFO monitor 1: entering pause state (locked=false, power_paused=true, drm=false, schedule=false); releasing capture stream before focus probes\n"
+        ).await.unwrap();
+        tokio::fs::rename(&current, dir.path().join("screenpipe-app.2026-09-19.1.log"))
+            .await
+            .unwrap();
+        tokio::fs::write(&current,
+            "INFO monitor 1: exiting pause state, capture resumes\nINFO contact=private-person@example.com\n"
+        ).await.unwrap();
+        let files = crate::log_files::collect_log_files(&[dir.path().to_path_buf()]).await;
+        let report = redact_files(&owned_log_files(files)).await.unwrap();
+        assert!(report.contains("power_paused=true, drm=false, schedule=false"));
+        assert!(report.contains("releasing capture stream before focus probes"));
+        assert!(report.contains("exiting pause state, capture resumes"));
+        assert!(!report.contains("private-person@example.com"));
+    }
     use tempfile::tempdir;
 
     fn log_file(path: &Path, modified_at: u64) -> LogFile {
