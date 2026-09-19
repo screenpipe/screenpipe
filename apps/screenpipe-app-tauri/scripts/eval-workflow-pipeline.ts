@@ -19,6 +19,8 @@ const overlappingWindow = process.argv.includes("--overlap");
 const activityOnly = process.argv.includes("--activity-only");
 const mismatchedWorkflow = process.argv.includes("--mismatched-workflow");
 const reviewOnly = process.argv.includes("--review-only");
+const staleArtifacts = process.argv.includes("--stale-artifacts");
+if (staleArtifacts && (!reviewOnly || process.argv.includes("--real"))) throw new Error("Stale artifacts require isolated review-only mode");
 const resolvedExclusion = process.argv.includes("--resolved-exclusion");
 if (resolvedExclusion && (!reviewOnly || process.argv.includes("--real"))) throw new Error("Resolved exclusions require isolated review-only mode");
 const noChanges = process.argv.includes("--no-changes");
@@ -218,6 +220,25 @@ const server = Bun.serve({hostname:"127.0.0.1",port:0,idleTimeout:120,
       return Response.json({error:"Service temporarily unavailable"},{status:503});
     }
     if(body.expected_revision !== contextRevision || body.pipeline_revision !== 4 || body.checked_through !== now) return Response.json({error:"Use the catalog revision and exact pipeline revision/checkpoint."},{status:409});
+    // Match the native catalog's shape, useful-step and identity gates. In
+    // particular, jq can accidentally emit several copies of one workflow.
+    if (!Array.isArray(body.workflows) || body.workflows.length > 30) {
+      attempt.status = 422;
+      return Response.json({error:"Expected a workflows array with at most 30 entries."},{status:422});
+    }
+    const seenIds = new Set<string>();
+    for (const workflow of body.workflows) {
+      const steps = Array.isArray(workflow?.stages) ? workflow.stages.flatMap((stage:any)=>Array.isArray(stage?.procedure) ? stage.procedure : []) : [];
+      if (typeof workflow?.title !== "string" || !workflow.title.trim() || !steps.length) {
+        attempt.status = 422;
+        return Response.json({error:"Only save useful steps supported by source quotes."},{status:422});
+      }
+      if (workflow.id && (seenIds.has(workflow.id) || !savedWorkflows.some((saved:any)=>saved.id===workflow.id))) {
+        attempt.status = 422;
+        return Response.json({error:"Use a known workflow ID at most once per commit, or null for a new workflow."},{status:422});
+      }
+      if (workflow.id) seenIds.add(workflow.id);
+    }
     if (real) {
       const invalid: string[] = [];
       for (const workflow of body.workflows || []) {
@@ -327,6 +348,17 @@ try {
   for(stageIndex=reviewOnly?4:0;stageIndex<(activityOnly?1:tasks.length);stageIndex++) {
     const task = tasks[stageIndex], cwd = join(directory,task);
     await mkdir(cwd);
+    if (staleArtifacts) {
+      const output = join(cwd, "output");
+      await mkdir(output);
+      // A real Pipe keeps files across failed attempts. A clean temporary
+      // directory hides stale-input and stale-receipt mistakes on retry.
+      await writeFile(join(output,"context.json"), JSON.stringify({revision:99,workflows:[]}));
+      await writeFile(join(output,"pipeline.json"), JSON.stringify({ready:true,inputRevision:98,checkedThrough:start,input:{items:[]}}));
+      await writeFile(join(output,"catalog-request.json"), JSON.stringify({expected_revision:99,pipeline_revision:98,checked_through:start,workflows:[]}));
+      await writeFile(join(output,"catalog-receipt.json"), JSON.stringify({revision:100,created:0,updated:0,checkedThrough:start}));
+      await writeFile(join(output,"review-notes.md"), "Prior attempt: no supported changes. Old input revision 98.\n");
+    }
     for (const name of ["screenpipe-api", "screenpipe-workflow-maintenance"]) {
       const skillDir = join(cwd,".pi/skills",name);
       await mkdir(skillDir,{recursive:true});
@@ -426,7 +458,7 @@ try {
   }
 } finally {
   if (reportDir) {
-    await writeFile(join(reportDir,"result.json"),JSON.stringify({runtimeVersion,overlappingWindow,model:evalModel,window:{start,end:now,requestedEnd},outputs,catalog:final,savedWorkflows,attempts,successfulCommits,postSaveReads,saveFault,noChanges,resolvedExclusion,reads,metrics,rejectedSaves},null,2),{mode:0o600});
+    await writeFile(join(reportDir,"result.json"),JSON.stringify({runtimeVersion,overlappingWindow,staleArtifacts,model:evalModel,window:{start,end:now,requestedEnd},outputs,catalog:final,savedWorkflows,attempts,successfulCommits,postSaveReads,saveFault,noChanges,resolvedExclusion,reads,metrics,rejectedSaves},null,2),{mode:0o600});
   }
   server.stop(true);await rm(directory,{recursive:true,force:true});
 }
